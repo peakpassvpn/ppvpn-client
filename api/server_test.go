@@ -1,0 +1,126 @@
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
+	"github.com/peakpassvpn/ppvpn-core/profile"
+)
+
+const testSecret = "0123456789abcdef0123456789abcdef"
+
+func apiProfile() *profile.Profile {
+	n := profile.Node{ID: "node", Name: "Tokyo", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}
+	return &profile.Profile{SchemaVersion: 1, Revision: "r1", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}}
+}
+func testServer(t *testing.T) (*Server, *coreruntime.Core) {
+	t.Helper()
+	core := coreruntime.New(profile.PlatformCapabilities{})
+	server, err := NewServer(core, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, core
+}
+func request(t *testing.T, server *Server, path string, body any, authenticated bool) *httptest.ResponseRecorder {
+	t.Helper()
+	var data []byte
+	if body != nil {
+		data, _ = json.Marshal(body)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data))
+	if authenticated {
+		req.Header.Set("Authorization", "Bearer "+testSecret)
+		req.Header.Set("X-Core-API-Version", "1")
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	return rec
+}
+func TestUnauthenticatedRejected(t *testing.T) {
+	server, _ := testServer(t)
+	rec := request(t, server, "/v1/get-version", nil, false)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "UNAUTHENTICATED") {
+		t.Fatal(rec.Body.String())
+	}
+}
+func TestAPIVersionMismatchRejected(t *testing.T) {
+	server, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/get-version", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
+	req.Header.Set("X-Core-API-Version", "99")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "CORE_API_UNSUPPORTED") {
+		t.Fatal(rec.Body.String())
+	}
+}
+func TestApplyAndListNeverExposeCredentials(t *testing.T) {
+	server, _ := testServer(t)
+	rec := request(t, server, "/v1/apply-profile", map[string]any{"profile": apiProfile()}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	listed := request(t, server, "/v1/list-nodes", nil, true)
+	body := listed.Body.String()
+	if strings.Contains(body, "AAAAAAAAAAAAAAAAAAAAAA==") || strings.Contains(body, "credentials") || !strings.Contains(body, "Tokyo") {
+		t.Fatal(body)
+	}
+}
+func TestValidationErrorIsStructuredAndRedacted(t *testing.T) {
+	server, _ := testServer(t)
+	p := apiProfile()
+	p.Nodes[0].Endpoint.IP = "198.18.0.1"
+	rec := request(t, server, "/v1/validate-profile", map[string]any{"profile": p}, true)
+	body := rec.Body.String()
+	if !strings.Contains(body, "ENTRY_IP_NOT_PUBLIC") || !strings.Contains(body, "nodes[0].endpoint.ip") || strings.Contains(body, "AAAAAAAAAAAAAAAAAAAAAA==") {
+		t.Fatal(body)
+	}
+}
+
+func TestUnknownMethodUsesEnvelope(t *testing.T) {
+	server, _ := testServer(t)
+	rec := request(t, server, "/v1/not-real", nil, true)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "API_NOT_FOUND") {
+		t.Fatal(rec.Body.String())
+	}
+}
+
+func TestSystemProxyEndpointErrorsAndNoCredentials(t *testing.T) {
+	server, _ := testServer(t)
+	unavailable := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
+	if unavailable.Code != http.StatusBadRequest || !strings.Contains(unavailable.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
+		t.Fatal(unavailable.Body.String())
+	}
+
+	capabilities := profile.PlatformCapabilities{SystemProxy: profile.SystemProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}}
+	stateDir := t.TempDir()
+	if err := os.Chmod(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(stateDir, "local-proxies.json"))
+	server, err := NewServer(core, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
+	if !strings.Contains(missing.Body.String(), "PROFILE_NOT_APPLIED") {
+		t.Fatal(missing.Body.String())
+	}
+	if _, err = core.ApplyProfile(apiProfile(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
+	body := got.Body.String()
+	if got.Code != http.StatusOK || !strings.Contains(body, `"http"`) || !strings.Contains(body, `"socks5"`) || strings.Contains(body, "username") || strings.Contains(body, "password") {
+		t.Fatal(body)
+	}
+}

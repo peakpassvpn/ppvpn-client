@@ -1,0 +1,56 @@
+{
+  "log": {
+    "disabled": true,
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "selected",
+      "outbounds": [
+        "node-a31fe9656fc8d3a4",
+        "node-d7522a87ef41c1e3",
+        "node-bec91dfe7ac6b2ba"
+      ],
+      "default": "node-a31fe9656fc8d3a4",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "node-a31fe9656fc8d3a4",
+      "server": "edge.example.com",
+      "server_port": 443,
+      "method": "2022-blake3-aes-128-gcm",
+      "password": "AQEBAQEBAQEBAQEBAQEBAQ==:AAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    {
+      "type": "vless",
+      "tag": "node-d7522a87ef41c1e3",
+      "server": "edge.example.com",
+      "server_port": 443,
+      "uuid": "00000000-0000-4000-8000-000000000001",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "edge.example.com",
+        "reality": {
+          "enabled": true,
+          "public_key": "public-key",
+          "short_id": "01"
+        }
+      }
+    },
+    {
+      "type": "anytls",
+      "tag": "node-bec91dfe7ac6b2ba",
+      "server": "edge.example.com",
+      "server_port": 443,
+      "tls": {
+        "enabled": true,
+        "server_name": "edge.example.com"
+      },
+      "password": "anytls-password"
+    }
+  ]
+}

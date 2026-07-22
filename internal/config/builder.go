@@ -1,0 +1,199 @@
+// Package config is the only boundary that knows sing-box option types.
+package config
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/peakpassvpn/ppvpn-core/localproxy"
+	"github.com/peakpassvpn/ppvpn-core/profile"
+	"github.com/peakpassvpn/ppvpn-core/systemproxy"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/auth"
+	"github.com/sagernet/sing/common/json/badoption"
+)
+
+type BuildResult struct {
+	Options  option.Options
+	NodeTags map[string]string
+}
+
+const selectedOutboundTag = "selected"
+
+func Build(p *profile.Profile, platform profile.PlatformCapabilities, now time.Time) (*BuildResult, error) {
+	return BuildWithLocalProxies(p, platform, nil, now)
+}
+
+func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabilities, proxies []localproxy.Endpoint, now time.Time) (*BuildResult, error) {
+	return BuildWithProxyEndpoints(p, platform, proxies, nil, now)
+}
+
+func BuildWithProxyEndpoints(p *profile.Profile, platform profile.PlatformCapabilities, proxies []localproxy.Endpoint, system *systemproxy.Endpoint, now time.Time) (*BuildResult, error) {
+	if err := profile.Validate(p, now); err != nil {
+		return nil, err
+	}
+	if platform.SystemProxy.Enabled {
+		if err := systemproxy.ValidateListen(platform.SystemProxy.Listen); err != nil {
+			return nil, err
+		}
+		if system == nil {
+			return nil, fmt.Errorf("system proxy endpoint is required when capability is enabled")
+		}
+	}
+	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes))}
+	// sing-box logs are disabled at the dependency boundary because upstream
+	// error messages are not guaranteed to preserve our credential policy.
+	// Structured first-party runtime events remain available through WatchEvents.
+	result.Options.Log = &option.LogOptions{Disabled: true, Level: normalizedLogLevel(platform.LogLevel), Timestamp: true}
+	for i := range p.Nodes {
+		n := &p.Nodes[i]
+		tag := nodeTag(n.ID)
+		result.NodeTags[n.ID] = tag
+		out, err := buildOutbound(*n, tag)
+		if err != nil {
+			return nil, fmt.Errorf("build node %q: %w", n.ID, err)
+		}
+		result.Options.Outbounds = append(result.Options.Outbounds, out)
+	}
+	selectedTags := make([]string, 0, len(p.Nodes))
+	for _, node := range p.Nodes {
+		selectedTags = append(selectedTags, result.NodeTags[node.ID])
+	}
+	selector := option.Outbound{Type: C.TypeSelector, Tag: selectedOutboundTag, Options: &option.SelectorOutboundOptions{
+		Outbounds: selectedTags, Default: result.NodeTags[p.Selection.DefaultNodeID], InterruptExistConnections: true,
+	}}
+	result.Options.Outbounds = append([]option.Outbound{selector}, result.Options.Outbounds...)
+	if len(proxies) > 0 {
+		if err := addLocalProxies(result, proxies); err != nil {
+			return nil, err
+		}
+	}
+	if system != nil {
+		if err := addSystemProxy(result, *system); err != nil {
+			return nil, err
+		}
+	}
+	if platform.TUN.Enabled {
+		if err := addTUN(result, platform); err != nil {
+			return nil, err
+		}
+	}
+	if p.Routing.BypassPrivate {
+		addPrivateBypass(result)
+	}
+	return result, nil
+}
+
+func addPrivateBypass(result *BuildResult) {
+	const directTag = "direct"
+	result.Options.Outbounds = append(result.Options.Outbounds, option.Outbound{Type: C.TypeDirect, Tag: directTag, Options: &option.DirectOutboundOptions{}})
+	if result.Options.Route == nil {
+		result.Options.Route = &option.RouteOptions{Final: selectedOutboundTag}
+	}
+	result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{IPIsPrivate: true}, RuleAction: option.RuleAction{Action: C.RuleActionTypeRoute, RouteOptions: option.RouteActionOptions{Outbound: directTag}}}})
+}
+
+func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
+	loopback := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	route := &option.RouteOptions{Final: selectedOutboundTag}
+	for _, endpoint := range proxies {
+		nodeOutbound, ok := result.NodeTags[endpoint.NodeID]
+		if !ok {
+			return fmt.Errorf("local proxy node %q does not exist", endpoint.NodeID)
+		}
+		if endpoint.Listen != "127.0.0.1" || endpoint.Port == 0 || endpoint.Username == "" || endpoint.Password == "" {
+			return fmt.Errorf("invalid local proxy endpoint for node %q", endpoint.NodeID)
+		}
+		inboundTag := "proxy-" + strings.TrimPrefix(nodeOutbound, "node-")
+		result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeMixed, Tag: inboundTag, Options: &option.HTTPMixedInboundOptions{ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: endpoint.Port}, Users: []auth.User{{Username: endpoint.Username, Password: endpoint.Password}}}})
+		route.Rules = append(route.Rules, option.Rule{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{Inbound: badoption.Listable[string]{inboundTag}}, RuleAction: option.RuleAction{Action: C.RuleActionTypeRoute, RouteOptions: option.RouteActionOptions{Outbound: nodeOutbound}}}})
+	}
+	result.Options.Route = route
+	return nil
+}
+
+func addSystemProxy(result *BuildResult, endpoint systemproxy.Endpoint) error {
+	if err := systemproxy.ValidateListen(endpoint.Listen); err != nil {
+		return err
+	}
+	if endpoint.Port == 0 {
+		return fmt.Errorf("system proxy port is required")
+	}
+	address := netip.MustParseAddr(endpoint.Listen)
+	listen := badoption.Addr(address)
+	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{
+		Type: C.TypeMixed,
+		Tag:  "system-proxy",
+		Options: &option.HTTPMixedInboundOptions{ListenOptions: option.ListenOptions{
+			Listen: &listen, ListenPort: endpoint.Port,
+		}},
+	})
+	if result.Options.Route == nil {
+		result.Options.Route = &option.RouteOptions{Final: selectedOutboundTag}
+	}
+	return nil
+}
+
+func addTUN(result *BuildResult, platform profile.PlatformCapabilities) error {
+	stack := platform.TUN.Stack
+	if stack == "" {
+		stack = "mixed"
+	}
+	switch stack {
+	case "mixed", "system", "gvisor":
+	default:
+		return fmt.Errorf("unsupported TUN stack %q", stack)
+	}
+	autoRoute := platform.Platform != "ios" && platform.Platform != "android"
+	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: "tun", Options: &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{netip.MustParsePrefix("172.19.0.1/30")}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}})
+	if result.Options.Route == nil {
+		result.Options.Route = &option.RouteOptions{Final: selectedOutboundTag}
+	}
+	return nil
+}
+
+func buildOutbound(n profile.Node, tag string) (option.Outbound, error) {
+	server := option.ServerOptions{Server: n.Endpoint.Domain, ServerPort: n.Endpoint.Port}
+	switch n.Protocol {
+	case profile.ProtocolShadowsocks:
+		c := n.Credentials.Shadowsocks
+		keys := append(append([]string(nil), c.IdentityKeys...), c.ServerKey)
+		return option.Outbound{Type: C.TypeShadowsocks, Tag: tag, Options: &option.ShadowsocksOutboundOptions{ServerOptions: server, Method: c.Method, Password: strings.Join(keys, ":")}}, nil
+	case profile.ProtocolVLESS:
+		c := n.Credentials.VLESS
+		return option.Outbound{Type: C.TypeVLESS, Tag: tag, Options: &option.VLESSOutboundOptions{ServerOptions: server, UUID: c.UUID, Flow: c.Flow, OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{TLS: buildTLS(n.TLS)}}}, nil
+	case profile.ProtocolAnyTLS:
+		return option.Outbound{Type: C.TypeAnyTLS, Tag: tag, Options: &option.AnyTLSOutboundOptions{ServerOptions: server, Password: n.Credentials.AnyTLS.Password, OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{TLS: buildTLS(n.TLS)}}}, nil
+	default:
+		return option.Outbound{}, fmt.Errorf("unsupported protocol")
+	}
+}
+
+func buildTLS(t *profile.TLS) *option.OutboundTLSOptions {
+	if t == nil {
+		return nil
+	}
+	o := &option.OutboundTLSOptions{Enabled: true, ServerName: t.ServerName, Insecure: t.Insecure, ALPN: badoption.Listable[string](t.ALPN)}
+	if t.Reality != nil {
+		o.Reality = &option.OutboundRealityOptions{Enabled: true, PublicKey: t.Reality.PublicKey, ShortID: t.Reality.ShortID}
+	}
+	return o
+}
+
+func nodeTag(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return "node-" + hex.EncodeToString(sum[:8])
+}
+func normalizedLogLevel(v string) string {
+	switch v {
+	case "trace", "debug", "info", "warn", "error", "fatal", "panic":
+		return v
+	default:
+		return "info"
+	}
+}
