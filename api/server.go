@@ -142,7 +142,17 @@ func (s *Server) probeEntrances(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	timeout := duration(request.TimeoutMS, 5*time.Second)
-	result, err := s.core.ProbeEntrances(r.Context(), timeout, request.Concurrency)
+	var result any
+	if len(request.NodeIDs) > 0 {
+		result, err = s.core.ProbeEntrancesForNodes(
+			r.Context(),
+			timeout,
+			request.Concurrency,
+			request.NodeIDs,
+		)
+	} else {
+		result, err = s.core.ProbeEntrances(r.Context(), timeout, request.Concurrency)
+	}
 	s.respond(w, r, result, err)
 }
 func (s *Server) probeAvailability(w http.ResponseWriter, r *http.Request) {

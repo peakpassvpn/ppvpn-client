@@ -256,12 +256,47 @@ func (c *Core) Connections() []Connection {
 }
 
 func (c *Core) ProbeEntrances(ctx context.Context, timeout time.Duration, concurrency int) ([]probe.EntranceResult, error) {
+	return c.probeEntrances(ctx, timeout, concurrency, nil)
+}
+
+func (c *Core) ProbeEntrancesForNodes(
+	ctx context.Context,
+	timeout time.Duration,
+	concurrency int,
+	nodeIDs []string,
+) ([]probe.EntranceResult, error) {
+	return c.probeEntrances(ctx, timeout, concurrency, nodeIDs)
+}
+
+func (c *Core) probeEntrances(
+	ctx context.Context,
+	timeout time.Duration,
+	concurrency int,
+	nodeIDs []string,
+) ([]probe.EntranceResult, error) {
 	c.mu.RLock()
 	p := c.active
 	c.mu.RUnlock()
 	clone, err := cloneProfile(p)
 	if err != nil {
 		return nil, err
+	}
+	if len(nodeIDs) > 0 {
+		wanted := make(map[string]struct{}, len(nodeIDs))
+		for _, id := range nodeIDs {
+			wanted[id] = struct{}{}
+		}
+		nodes := make([]profile.Node, 0, len(nodeIDs))
+		for _, node := range clone.Nodes {
+			if _, ok := wanted[node.ID]; ok {
+				nodes = append(nodes, node)
+			}
+		}
+		if len(nodes) != len(wanted) {
+			return nil, fmt.Errorf("one or more probe nodes were not found")
+		}
+		clone.Nodes = nodes
+		clone.Selection.DefaultNodeID = nodes[0].ID
 	}
 	results, err := probe.Entrances(ctx, clone, timeout, concurrency, nil)
 	if err == nil {
