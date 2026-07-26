@@ -70,8 +70,10 @@ X-Request-ID: <optional-client-id>
 | GetSelectedNode | `/v1/get-selected-node` | `{}` | NodeSummary |
 | ProbeEntrances | `/v1/probe-entrances` | `{"timeout_ms":5000,"concurrency":4}` | EntranceResult[] |
 | ProbeAvailability | `/v1/probe-availability` | `{"node_id":"stable-id","target":"https://example.com/generate_204","timeout_ms":10000}` | AvailabilityResult |
-| GetLocalProxyEndpoints | `/v1/get-local-proxy-endpoints` | `{}` | LocalProxyEndpoint[] |
-| GetSystemProxyEndpoints | `/v1/get-system-proxy-endpoints` | `{}` | SystemProxyEndpoints |
+| GetLocalProxyMetadata | `/v1/get-local-proxy-metadata` | `{}` | LocalProxyMetadata[] |
+| GetLocalProxyCredential | `/v1/get-local-proxy-credential` | `{"node_id":"stable-id"}` | LocalProxyCredential |
+| GetLocalProxyEndpoints | `/v1/get-local-proxy-endpoints` | `{}` | LocalProxyEndpoint[]（兼容接口） |
+| GetSystemProxyEndpoints | `/v1/get-system-proxy-endpoints` | `{}` | SystemProxyEndpoints（旧兼容） |
 | GetTraffic | `/v1/get-traffic` | `{}` | Traffic |
 | GetConnections | `/v1/get-connections` | `{}` | Connection[] |
 | WatchEvents | `GET /v1/watch-events` | 无 | NDJSON Envelope 流 |
@@ -84,10 +86,11 @@ X-Request-ID: <optional-client-id>
 
 ```json
 {
-  "core_version": "0.2.0",
+  "core_version": "0.3.0",
   "core_api_version": 1,
-  "profile_schema_version": 1,
-  "sing_box_version": "1.13.12"
+  "profile_schema_version": 2,
+  "flow_adapter_version": 1,
+  "local_proxy_contract_version": 1
 }
 ```
 
@@ -117,15 +120,33 @@ X-Request-ID: <optional-client-id>
 
 入口错误码：`CANCELED`、`TIMEOUT`、`CONNECT_FAILED`。可用性错误码：`TARGET_INVALID`、`CANCELED`、`TIMEOUT`、`PROXY_REQUEST_FAILED`、`HTTP_STATUS`。探测失败通常仍是成功的 API 调用，应检查每项 `success` 和 `error_code`。
 
-### LocalProxyEndpoint
+### LocalProxyMetadata 与 LocalProxyCredential
+
+一般 UI 状态只能读取不含 secret 的 metadata：
+
+```json
+[
+  {
+    "node_id":"hk-001",
+    "listen":"127.0.0.1",
+    "port":32145,
+    "protocols":["http","socks5"],
+    "auth_required":true
+  }
+]
+```
+
+只有用户明确打开原生凭据面板时，宿主才能按 node ID 获取该项 credential：
 
 ```json
 {"node_id":"hk-001","listen":"127.0.0.1","port":32145,"username":"...","password":"..."}
 ```
 
-同一端口同时提供认证 HTTP CONNECT 与 SOCKS5。凭据是高敏感设备本地秘密；仅此方法会返回密码。宿主不得把响应传给 WebView、渲染进程、崩溃报告或日志。
+同一端口同时提供认证 HTTP CONNECT 与 SOCKS5。凭据是高敏感设备本地秘密；credential
+方法和旧兼容接口返回密码，宿主不得把响应传给 WebView、渲染进程、崩溃报告或日志。
+旧的 `GetLocalProxyEndpoints` 为 Core API v1 兼容保留，会一次返回所有 credential；新宿主不得调用。
 
-### SystemProxyEndpoints
+### SystemProxyEndpoints（旧兼容）
 
 ```json
 {
@@ -134,7 +155,9 @@ X-Request-ID: <optional-client-id>
 }
 ```
 
-设备系统代理是跟随当前选中节点的回环端点，HTTP 与 SOCKS5 当前共用同一监听端口且不使用认证，供受信桌面宿主写入操作系统代理设置。必须先应用 Profile；能力关闭时返回 `SYSTEM_PROXY_UNAVAILABLE`，尚未应用 Profile 时返回 `PROFILE_NOT_APPLIED`。不要把它与带随机凭据的每节点代理混用。
+该接口只为旧宿主兼容保留。当前 Windows TUN 与 macOS Network Extension 产品不调用它，
+也不写系统 HTTP/SOCKS 设置。兼容能力关闭时返回 `SYSTEM_PROXY_UNAVAILABLE`，尚未应用
+Profile 时返回 `PROFILE_NOT_APPLIED`。
 
 ### Traffic 与 Connection
 
@@ -184,7 +207,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `NODE_ID_INVALID` / `NODE_ID_DUPLICATE` | 修正后端稳定 ID |
 | `ENTRY_IP_NOT_PUBLIC` / `PORT_INVALID` | 修正入口地址 |
 | `CREDENTIALS_INVALID` | 凭据联合体、内容或编码不合法 |
-| `PROTOCOL_UNSUPPORTED` / `TRANSPORT_UNSUPPORTED` | v1 不支持该功能 |
+| `PROTOCOL_UNSUPPORTED` / `TRANSPORT_UNSUPPORTED` | Profile v2 不支持该功能 |
 | `SHADOWSOCKS_METHOD_UNSUPPORTED` / `SHADOWSOCKS_KEY_INVALID` | 修正 SS 2022 方法或密钥长度 |
 | `REALITY_REQUIRED` / `REALITY_SHORT_ID_INVALID` | 修正 REALITY 配置 |
 | `TLS_REQUIRED` / `TLS_SERVER_NAME_MISMATCH` | 修正 TLS 与连接域名 |

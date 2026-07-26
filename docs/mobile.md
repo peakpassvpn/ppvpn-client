@@ -16,8 +16,11 @@
 | `SelectNode(nodeID)` | 稳定节点 ID | 更新选择 |
 | `ProbeEntrances(timeoutMS, concurrency)` | 超时、并发 | EntranceResult[] |
 | `ProbeAvailability(nodeID, target, timeoutMS)` | 节点、HTTP(S) URL、超时 | AvailabilityResult |
-| `LocalProxyEndpoints()` | 无 | 本地代理端点及凭据 |
-| `SystemProxyEndpoints()` | 无 | 当前系统 HTTP/SOCKS5 代理端点 |
+| `LocalProxyMetadata()` | 无 | 不含 secret 的每节点 mixed endpoint metadata |
+| `LocalProxyCredential(nodeID)` | 稳定节点 ID | 仅供原生凭据面板的单节点 secret |
+| `ClassifyFlow(flowJSON)` | 严格 flow DTO | DIRECT/REJECT/PROXY decision |
+| `OpenFlow(flowJSON, decisionJSON, timeoutMS)` | 首次授权 decision 的 PROXY flow | `FlowConnection` |
+| `SystemProxyEndpoints()` | 无 | 旧宿主兼容端点；新产品不调用 |
 | `Traffic()` / `Connections()` | 无 | 第一方遥测 DTO |
 | `WatchEvents(handler)` | 实现 `OnEvent(string)` 的回调 | EventWatcher |
 
@@ -59,6 +62,20 @@ try bridge.start()
 ```
 
 Profile 凭据只留在 Extension 内存。若通过 App Group 文件交换 Profile，写入必须使用数据保护和原子替换，Extension 读完即删除。主 App 不得把 Profile 放入 `UserDefaults`、URL scheme 或通知 payload。
+
+## macOS
+
+`make build-mobile-macos` 生成 module `PPVPNCore` 的 macOS 13+ arm64/x86_64
+XCFramework。System Extension 在 `handleNewFlow` 内只调用无 I/O 的
+`ClassifyFlow`；PROXY flow 在后台把该 decision JSON 传给
+`OpenFlow(flowJSON, decisionJSON, timeoutMS)`，使用
+`FlowConnection.Read/Write/Close` 完成 stream/datagram 转发。decision 带 snapshot
+和 HMAC，防止两次调用之间 selected 切换或 Profile 更新造成重新选路。
+
+UDP 每次 Read/Write 对应一个 datagram；Read buffer 太小会显式失败而不是返回静默截断
+的数据，写入上限为 65507 bytes。FlowConnection 的 I/O `timeoutMS <= 0` 表示无
+deadline；`OpenFlow` 的拨号 `timeoutMS <= 0` 使用 15 秒默认值。
+`scripts/verify-macos-xcframework.sh` 会核对平台、架构、最低系统版本和公开 selector。
 
 ## Android
 
@@ -102,6 +119,7 @@ Bridge 内部串行化生命周期变更；状态读取和事件投递可并发�
 ```sh
 make bootstrap-mobile
 make build-mobile-ios
+make build-mobile-macos
 make build-mobile-android
 ```
 

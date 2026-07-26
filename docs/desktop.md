@@ -1,43 +1,59 @@
 # Desktop 平台接入
 
-## Sidecar 启动
+桌面产品只依赖版本化的 ppvpn-core 公共契约，不感知或选择 core 的内部实现。
 
-macOS 使用私有 Unix Socket，Windows 使用 owner-only Named Pipe。Desktop 创建权限受限的状态目录和 stdin 存活管道，并启动：
+## Windows
 
-```text
-ppvpn-core serve
-  --socket <private socket or pipe>
-  --session-secret-file <private exchange file>
-  --state-dir <private state directory>
-  --platform macos|windows
-  --local-proxy=true
-  --system-proxy=true
-  --system-proxy-listen=127.0.0.1
-  --exit-on-stdin-close
+特权 `ppvpn-service` 作为唯一 runtime owner 启动 Windows x64 core 制品，先读取
+`version` 并要求 Core API v1、Profile Schema v2。service 负责权限、TUN、路由、DNS、
+进程校验和控制通道；Profile 的 `DIRECT`、`REJECT`、selected/fixed-node `PROXY`
+语义只由 core 判定。
+
+每节点本地代理由同一 runtime 创建：一个 node ID 对应一个 loopback mixed
+listener，同一端口支持 HTTP 和 SOCKS5 并固定走该节点。service 可读取完整 endpoint，
+但发往 WebView 的 DTO 只能使用不含 secret 的 metadata；credential 只进入原生凭据
+面板调用栈。
+
+## macOS
+
+`build/PPVPNCore.xcframework` 提供 macOS 13+ universal slice，运行在
+`NETransparentProxyProvider` System Extension 进程内。公开 Objective-C API 包括：
+
+- `MobileBridge.start/applyProfile/stop/status`
+- `classifyFlow`：只读已编译规则快照，不做 host、磁盘或网络 I/O
+- `openFlow(flowJSON, decisionJSON, timeoutMS)`：验证首次决策的 snapshot/HMAC 后，为其中
+  固定的 node 打开 PROXY TCP/UDP outbound；不得按当前 selected 重新分类
+- `MobileFlowConnection.read/write/close`
+- `localProxyMetadata` 与 `localProxyCredential`
+
+Provider 把 Apple flow 的 hostname、目标 IP、端口和 TCP/UDP 编码成严格 JSON DTO。
+`DIRECT` 返回系统处理，`REJECT` 由 Provider 关闭，`PROXY` 在后台把首次 decision 原样
+交给 `openFlow` 并负责双向复制、背压与关闭。`handleNewFlow` 回调内只能调用
+`classifyFlow`，不能同步拨号。selected 在两次调用之间切换时，`openFlow` 仍执行首次
+decision 的 node；Profile snapshot 已替换时则拒绝旧 decision。
+
+Objective-C module 名为 `PPVPNCore`；生成头文件中的关键签名是：
+
+```objc
+- (NSString *)classifyFlow:(NSString *)flowJSON error:(NSError **)error;
+- (MobileFlowConnection *)openFlow:(NSString *)flowJSON
+                      decisionJSON:(NSString *)decisionJSON
+                         timeoutMS:(long)timeoutMS
+                             error:(NSError **)error;
+- (NSData *)read:(long)maxBytes timeoutMS:(long)timeoutMS error:(NSError **)error;
+- (BOOL)write:(NSData *)data timeoutMS:(long)timeoutMS error:(NSError **)error;
 ```
 
-不要从后端 Profile、用户偏好或 WebView 传入 listen、port 或认证配置。Desktop 只决定是否启用本地平台能力。
+UDP 的一次 `read`/`write` 对应一个完整 datagram。若调用方 read buffer 太小，core 消费该
+datagram 并显式返回错误，不会把截断数据当成功结果；单次写入上限为 65507 bytes。
+FlowConnection 的 `timeoutMS <= 0` 表示不安装 I/O deadline，适合长连接空闲等待；
+正值最大 120 秒。`openFlow` 的拨号 `timeoutMS <= 0` 仍使用 15 秒默认值。
 
-## 系统代理调用顺序
+## 固定优先级
 
-1. 读取本次进程的 session secret，建立 Core API v1 客户端。
-2. `POST /v1/apply-profile`。
-3. `POST /v1/start`。
-4. `POST /v1/get-system-proxy-endpoints`。
-5. 将 `http` 设置为系统 HTTP 与 HTTPS proxy，将 `socks5` 设置为系统 SOCKS proxy。mixed 入口通常是同一 `127.0.0.1:port`，不设置用户名或密码。
-6. 节点切换只调用 `POST /v1/select-node`；新连接立即进入新 selected node，端口不变。
-7. 监听 `SystemProxyEndpointReady`。若端口因启动冲突迁移，用事件的新端点原子更新系统设置。
-8. 正常退出时先清除系统代理，再调用 `POST /v1/stop`。sidecar 崩溃或失联时，Desktop 的恢复逻辑也必须清除指向失效端口的系统设置。
+1. 平台安全、控制通道和防递归
+2. 每节点 local-proxy 固定节点
+3. Profile v2 ordered rules
+4. `routing.final`
 
-`GetStatus.system_proxy.available` 是事实来源。不要把端口长期缓存到 Desktop 配置；`system-proxy.json` 由 core 独占。
-
-## 两类本地代理
-
-- `GetSystemProxyEndpoints`：单一免认证 mixed 入口，绑定明确 loopback，跟随 selected，供操作系统代理使用。
-- `GetLocalProxyEndpoints`：每个稳定 node ID 一个独立 mixed 入口，强制随机用户名/密码，固定走对应节点，供指纹浏览器等隔离场景使用。
-
-Desktop 不能把 per-node 凭据模型用于系统代理，也不能把免认证系统入口当作长期第三方隔离代理。
-
-## TUN
-
-`--tun --tun-stack mixed` 会让 core 构建 sing-box TUN inbound，但 core 不包含提权 helper、驱动安装、系统设置或 UI。macOS/Windows 产品只有在 Desktop 提供已签名 privileged helper/service、平台权限和故障回滚后才能启用；当前默认路径应使用应用主代理入口。TUN 能力只由本地宿主决定，永不进入后端 Profile。
+selected-node 切换只影响新 flow；Profile revision 更新走候选构建、受控替换和失败回滚。

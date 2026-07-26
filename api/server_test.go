@@ -19,7 +19,7 @@ const testSecret = "0123456789abcdef0123456789abcdef"
 
 func apiProfile() *profile.Profile {
 	n := profile.Node{ID: "node", Name: "Tokyo", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}
-	return &profile.Profile{SchemaVersion: 1, Revision: "r1", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}}
+	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r1", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 func testServer(t *testing.T) (*Server, *coreruntime.Core) {
 	t.Helper()
@@ -122,5 +122,40 @@ func TestSystemProxyEndpointErrorsAndNoCredentials(t *testing.T) {
 	body := got.Body.String()
 	if got.Code != http.StatusOK || !strings.Contains(body, `"http"`) || !strings.Contains(body, `"socks5"`) || strings.Contains(body, "username") || strings.Contains(body, "password") {
 		t.Fatal(body)
+	}
+}
+
+func TestLocalProxyMetadataAndCredentialAreSeparated(t *testing.T) {
+	capabilities := profile.PlatformCapabilities{
+		LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"},
+	}
+	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(t.TempDir(), "local-proxies.json"))
+	server, err := NewServer(core, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = core.ApplyProfile(apiProfile(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := request(t, server, "/v1/get-local-proxy-metadata", map[string]any{}, true)
+	if metadata.Code != http.StatusOK ||
+		!strings.Contains(metadata.Body.String(), `"protocols":["http","socks5"]`) ||
+		!strings.Contains(metadata.Body.String(), `"auth_required":true`) ||
+		strings.Contains(metadata.Body.String(), "username") ||
+		strings.Contains(metadata.Body.String(), "password") {
+		t.Fatal(metadata.Body.String())
+	}
+
+	credential := request(t, server, "/v1/get-local-proxy-credential", map[string]any{"node_id": "node"}, true)
+	if credential.Code != http.StatusOK ||
+		!strings.Contains(credential.Body.String(), `"username"`) ||
+		!strings.Contains(credential.Body.String(), `"password"`) {
+		t.Fatal(credential.Body.String())
+	}
+	missing := request(t, server, "/v1/get-local-proxy-credential", map[string]any{"node_id": "missing"}, true)
+	if missing.Code != http.StatusBadRequest ||
+		!strings.Contains(missing.Body.String(), `"code":"NODE_NOT_FOUND"`) {
+		t.Fatal(missing.Body.String())
 	}
 }

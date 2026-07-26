@@ -63,3 +63,30 @@ func TestRejectsWeakStatePermissions(t *testing.T) {
 		t.Fatal("weak permissions accepted")
 	}
 }
+
+func TestRemovedNodeMappingIsReclaimed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	manager := NewManager(path)
+	first, err := manager.Ensure([]string{"keep", "remove"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var removed Endpoint
+	for _, endpoint := range first {
+		if endpoint.NodeID == "remove" {
+			removed = endpoint
+		}
+	}
+	if _, err = manager.Ensure([]string{"keep"}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Ensure([]string{"keep", "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range second {
+		if endpoint.NodeID == "new" && endpoint.Username == removed.Username {
+			t.Fatal("deleted node credentials were reused")
+		}
+	}
+}

@@ -25,7 +25,7 @@ func TestProfileToOptionsGolden(t *testing.T) {
 	anytls.ID = "anytls"
 	anytls.Credentials.AnyTLS = &profile.AnyTLSCredentials{Password: "anytls-password"}
 	anytls.TLS = &profile.TLS{ServerName: "edge.example.com"}
-	p := &profile.Profile{SchemaVersion: 1, Revision: "golden", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{ss, vless, anytls}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "ss"}}
+	p := &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "golden", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{ss, vless, anytls}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "ss"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 	built, err := Build(p, profile.PlatformCapabilities{LogLevel: "info"}, time.Now())
 	if err != nil {
 		t.Fatal(err)

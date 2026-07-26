@@ -1,0 +1,32 @@
+stages:
+  - test
+  - build
+
+default:
+  interruptible: true
+
+test:
+  stage: test
+  image: golang:1.25
+  script:
+    - go test ./...
+
+build:desktop-artifact:
+  stage: build
+  tags:
+    - macos
+  before_script:
+    - go version
+    - xcodebuild -version
+    - make bootstrap-mobile
+  script:
+    - make build-desktop-artifact
+  artifacts:
+    name: "ppvpn-core-desktop-${CI_COMMIT_SHA}"
+    expire_in: never
+    paths:
+      - build/ppvpn-core-windows-amd64.exe
+      - build/PPVPNCore.xcframework/
+      - build/desktop-SHA256SUMS
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'

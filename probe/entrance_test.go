@@ -10,7 +10,7 @@ import (
 
 func probeProfile() *profile.Profile {
 	n := profile.Node{ID: "node", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "must-not-resolve.invalid", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}
-	return &profile.Profile{SchemaVersion: 1, Revision: "r", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}}
+	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 func TestEntranceUsesLiteralIP(t *testing.T) {
 	server, client := net.Pipe()

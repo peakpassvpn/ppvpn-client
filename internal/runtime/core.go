@@ -13,6 +13,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
+	"github.com/peakpassvpn/ppvpn-core/routing"
 	"github.com/peakpassvpn/ppvpn-core/systemproxy"
 )
 
@@ -47,20 +48,24 @@ var (
 // event delivery remain concurrent. Profiles are cloned before retention so a
 // caller cannot mutate live configuration after validation.
 type Core struct {
-	operation           sync.Mutex
-	mu                  sync.RWMutex
-	active              *profile.Profile
-	built               *config.BuildResult
-	platform            profile.PlatformCapabilities
-	selected            string
-	bus                 *eventBus
-	factory             engineFactory
-	engine              engine
-	cancel              context.CancelFunc
-	proxyManager        *localproxy.Manager
-	proxyEndpoints      []localproxy.Endpoint
-	systemProxyManager  *systemproxy.Manager
-	systemProxyEndpoint *systemproxy.Endpoint
+	operation            sync.RWMutex
+	mu                   sync.RWMutex
+	active               *profile.Profile
+	built                *config.BuildResult
+	classifier           *routing.Classifier
+	routingGeneration    uint64
+	flowAuthorizationKey [32]byte
+	flowAuthorizationOK  bool
+	platform             profile.PlatformCapabilities
+	selected             string
+	bus                  *eventBus
+	factory              engineFactory
+	engine               engine
+	cancel               context.CancelFunc
+	proxyManager         *localproxy.Manager
+	proxyEndpoints       []localproxy.Endpoint
+	systemProxyManager   *systemproxy.Manager
+	systemProxyEndpoint  *systemproxy.Endpoint
 }
 
 func New(platform profile.PlatformCapabilities) *Core {
@@ -75,13 +80,23 @@ func NewWithLocalProxyState(platform profile.PlatformCapabilities, statePath str
 }
 
 func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core {
-	return &Core{platform: platform, bus: newEventBus(), factory: factory}
+	key, keyOK := newFlowAuthorizationKey()
+	return &Core{
+		platform:             platform,
+		bus:                  newEventBus(),
+		factory:              factory,
+		flowAuthorizationKey: key,
+		flowAuthorizationOK:  keyOK,
+	}
 }
 
 func (c *Core) ApplyProfile(p *profile.Profile, now time.Time) (bool, error) {
 	c.operation.Lock()
 	defer c.operation.Unlock()
+	return c.applyProfileLocked(p, now)
+}
 
+func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, error) {
 	c.mu.RLock()
 	if c.active != nil && p != nil && c.active.Revision == p.Revision {
 		c.mu.RUnlock()
@@ -142,6 +157,11 @@ func (c *Core) ApplyProfile(p *profile.Profile, now time.Time) (bool, error) {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, err
 	}
+	candidateClassifier, err := routing.Compile(candidateProfile, now)
+	if err != nil {
+		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate routing compilation failed"})
+		return false, err
+	}
 
 	var replacement engine
 	var replacementCancel context.CancelFunc
@@ -175,7 +195,8 @@ func (c *Core) ApplyProfile(p *profile.Profile, now time.Time) (bool, error) {
 
 	c.mu.Lock()
 	oldEngine, oldCancel := c.engine, c.cancel
-	c.active, c.built = candidateProfile, candidate
+	c.active, c.built, c.classifier = candidateProfile, candidate, candidateClassifier
+	c.routingGeneration++
 	c.proxyEndpoints = proxyEndpoints
 	c.systemProxyEndpoint = systemEndpoint
 	if c.selected == "" || !hasNode(candidateProfile, c.selected) {
@@ -222,6 +243,39 @@ func (c *Core) LocalProxyEndpoints() []localproxy.Endpoint {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return append([]localproxy.Endpoint(nil), c.proxyEndpoints...)
+}
+
+func (c *Core) LocalProxyMetadata() []localproxy.Metadata {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make([]localproxy.Metadata, len(c.proxyEndpoints))
+	for i, endpoint := range c.proxyEndpoints {
+		result[i] = localproxy.Metadata{
+			NodeID:       endpoint.NodeID,
+			Listen:       endpoint.Listen,
+			Port:         endpoint.Port,
+			Protocols:    []string{"http", "socks5"},
+			AuthRequired: true,
+		}
+	}
+	return result
+}
+
+func (c *Core) LocalProxyCredential(nodeID string) (localproxy.Credential, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, endpoint := range c.proxyEndpoints {
+		if endpoint.NodeID == nodeID {
+			return localproxy.Credential{
+				NodeID:   endpoint.NodeID,
+				Listen:   endpoint.Listen,
+				Port:     endpoint.Port,
+				Username: endpoint.Username,
+				Password: endpoint.Password,
+			}, nil
+		}
+	}
+	return localproxy.Credential{}, fmt.Errorf("local proxy node not found")
 }
 
 func (c *Core) Traffic() Traffic {
@@ -411,21 +465,25 @@ func (c *Core) Stop() error {
 }
 
 func (c *Core) Reload() error {
+	c.operation.Lock()
+	defer c.operation.Unlock()
 	c.mu.RLock()
 	p := c.active
-	c.mu.RUnlock()
 	if p == nil {
+		c.mu.RUnlock()
 		return fmt.Errorf("no profile applied")
 	}
 	clone, err := cloneProfile(p)
+	originalRevision := p.Revision
+	c.mu.RUnlock()
 	if err != nil {
 		return err
 	}
 	clone.Revision += "#reload"
-	_, err = c.ApplyProfile(clone, time.Now())
+	_, err = c.applyProfileLocked(clone, time.Now())
 	if err == nil {
 		c.mu.Lock()
-		c.active.Revision = p.Revision
+		c.active.Revision = originalRevision
 		c.mu.Unlock()
 	}
 	return err
@@ -447,35 +505,26 @@ func (c *Core) startCandidate(candidate *config.BuildResult) (engine, context.Ca
 }
 
 func (c *Core) SelectNode(id string) error {
-	c.mu.RLock()
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	c.mu.Lock()
 	if c.active == nil || !hasNode(c.active, id) {
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		return fmt.Errorf("node not found")
 	}
-	running, current := c.engine != nil, c.active
-	c.mu.RUnlock()
-	if running {
-		candidate, err := cloneProfile(current)
-		if err != nil {
-			return err
+	running, current, built := c.engine, c.active, c.built
+	revision := current.Revision
+	if running != nil {
+		instance, ok := running.(flowEngine)
+		if !ok || built == nil || !instance.selectOutbound(built.NodeTags[id]) {
+			c.mu.Unlock()
+			return fmt.Errorf("runtime does not support node selection")
 		}
-		originalRevision := candidate.Revision
-		candidate.Selection.DefaultNodeID = id
-		candidate.Revision += "#select:" + id
-		if _, err = c.ApplyProfile(candidate, time.Now()); err != nil {
-			return err
-		}
-		c.mu.Lock()
-		c.active.Revision = originalRevision
-		c.selected = id
-		c.mu.Unlock()
-	} else {
-		c.mu.Lock()
-		c.selected = id
-		c.active.Selection.DefaultNodeID = id
-		c.mu.Unlock()
 	}
-	c.emit(Event{Type: EventNodeSelected, At: time.Now(), Revision: current.Revision, NodeID: id})
+	c.selected = id
+	c.active.Selection.DefaultNodeID = id
+	c.mu.Unlock()
+	c.emit(Event{Type: EventNodeSelected, At: time.Now(), Revision: revision, NodeID: id})
 	return nil
 }
 

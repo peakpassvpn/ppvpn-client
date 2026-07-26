@@ -6,6 +6,8 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/sagernet/sing v0.8.10
 	github.com/sagernet/sing-box v1.13.12
+	golang.org/x/net v0.57.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -139,10 +141,8 @@ require (
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/mobile v0.0.0-20260709172247-6129f5bee9d5 // indirect
 	golang.org/x/mod v0.38.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.11.0 // indirect

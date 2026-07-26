@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 type ValidationError struct {
@@ -69,7 +72,7 @@ func Validate(p *Profile, now time.Time) error {
 			return err
 		}
 		if n.Transport != nil && n.Transport.Type != "" {
-			return invalid("TRANSPORT_UNSUPPORTED", base+".transport.type", "transport is not supported in schema version 1")
+			return invalid("TRANSPORT_UNSUPPORTED", base+".transport.type", "transport is not supported in schema version 2")
 		}
 		if !n.Capabilities.TCP && !n.Capabilities.UDP {
 			return invalid("CAPABILITIES_INVALID", base+".capabilities", "at least one network capability is required")
@@ -81,7 +84,178 @@ func Validate(p *Profile, now time.Time) error {
 	if p.Selection.Mode != "manual" {
 		return invalid("SELECTION_MODE_UNSUPPORTED", "selection.mode", "only manual selection is supported")
 	}
+	return validateRouting(p.Routing, seen)
+}
+
+func validateRouting(r Routing, nodeIDs map[string]bool) error {
+	ruleIDs := make(map[string]bool, len(r.Rules))
+	for i, rule := range r.Rules {
+		base := fmt.Sprintf("routing.rules[%d]", i)
+		if !stableID.MatchString(rule.ID) {
+			return invalid("RULE_ID_INVALID", base+".id", "rule id is not stable or valid")
+		}
+		if ruleIDs[rule.ID] {
+			return invalid("RULE_ID_DUPLICATE", base+".id", "rule id must be unique")
+		}
+		ruleIDs[rule.ID] = true
+		if err := validateRoutingMatch(rule.Match, base+".match"); err != nil {
+			return err
+		}
+		if err := validateRoutingAction(rule.Action, nodeIDs, base+".action"); err != nil {
+			return err
+		}
+	}
+	return validateRoutingAction(r.Final, nodeIDs, "routing.final")
+}
+
+func validateRoutingMatch(match RoutingMatch, field string) error {
+	if len(match.Domains) == 0 &&
+		len(match.DomainSuffixes) == 0 &&
+		len(match.IPCIDRs) == 0 &&
+		!match.IPIsPrivate &&
+		len(match.Protocols) == 0 &&
+		len(match.Ports) == 0 &&
+		len(match.PortRanges) == 0 {
+		return invalid("RULE_MATCH_EMPTY", field, "at least one match condition is required")
+	}
+	if err := validateDomains(match.Domains, field+".domains"); err != nil {
+		return err
+	}
+	if err := validateDomains(match.DomainSuffixes, field+".domain_suffixes"); err != nil {
+		return err
+	}
+	seenCIDR := make(map[netip.Prefix]bool, len(match.IPCIDRs))
+	for i, value := range match.IPCIDRs {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return invalid("CIDR_INVALID", fmt.Sprintf("%s.ip_cidrs[%d]", field, i), "CIDR must be valid IPv4 or IPv6")
+		}
+		prefix = prefix.Masked()
+		if seenCIDR[prefix] {
+			return invalid("CIDR_DUPLICATE", fmt.Sprintf("%s.ip_cidrs[%d]", field, i), "CIDR must be unique within a rule")
+		}
+		seenCIDR[prefix] = true
+	}
+	seenProtocol := make(map[string]bool, len(match.Protocols))
+	for i, protocol := range match.Protocols {
+		if protocol != "tcp" && protocol != "udp" {
+			return invalid("NETWORK_UNSUPPORTED", fmt.Sprintf("%s.protocols[%d]", field, i), "protocol must be tcp or udp")
+		}
+		if seenProtocol[protocol] {
+			return invalid("NETWORK_DUPLICATE", fmt.Sprintf("%s.protocols[%d]", field, i), "protocol must be unique within a rule")
+		}
+		seenProtocol[protocol] = true
+	}
+	seenPort := make(map[uint16]bool, len(match.Ports))
+	for i, port := range match.Ports {
+		if port == 0 {
+			return invalid("PORT_INVALID", fmt.Sprintf("%s.ports[%d]", field, i), "port must be non-zero")
+		}
+		if seenPort[port] {
+			return invalid("PORT_DUPLICATE", fmt.Sprintf("%s.ports[%d]", field, i), "port must be unique within a rule")
+		}
+		seenPort[port] = true
+	}
+	seenRange := make(map[string]bool, len(match.PortRanges))
+	for i, value := range match.PortRanges {
+		start, end, err := ParsePortRange(value)
+		if err != nil {
+			return invalid("PORT_RANGE_INVALID", fmt.Sprintf("%s.port_ranges[%d]", field, i), err.Error())
+		}
+		canonical := fmt.Sprintf("%d-%d", start, end)
+		if seenRange[canonical] {
+			return invalid("PORT_RANGE_DUPLICATE", fmt.Sprintf("%s.port_ranges[%d]", field, i), "port range must be unique within a rule")
+		}
+		seenRange[canonical] = true
+	}
 	return nil
+}
+
+func validateDomains(values []string, field string) error {
+	seen := make(map[string]bool, len(values))
+	for i, value := range values {
+		if strings.ContainsAny(value, "*?") {
+			return invalid("DOMAIN_WILDCARD_UNSUPPORTED", fmt.Sprintf("%s[%d]", field, i), "wildcards are not supported")
+		}
+		normalized, ok := NormalizeDomain(value)
+		if !ok {
+			return invalid("DOMAIN_INVALID", fmt.Sprintf("%s[%d]", field, i), "domain must be a valid IDNA name")
+		}
+		if seen[normalized] {
+			return invalid("DOMAIN_DUPLICATE", fmt.Sprintf("%s[%d]", field, i), "domain must be unique within a rule")
+		}
+		seen[normalized] = true
+	}
+	return nil
+}
+
+func validateRoutingAction(action RoutingAction, nodeIDs map[string]bool, field string) error {
+	switch action.Type {
+	case "direct", "reject":
+		if action.Target != "" || action.NodeID != "" {
+			return invalid("ROUTING_ACTION_INVALID", field, "direct and reject actions cannot specify a target or node_id")
+		}
+	case "proxy":
+		switch action.Target {
+		case "selected":
+			if action.NodeID != "" {
+				return invalid("ROUTING_ACTION_INVALID", field+".node_id", "selected proxy action cannot specify node_id")
+			}
+		case "node":
+			if !nodeIDs[action.NodeID] {
+				return invalid("ROUTING_NODE_NOT_FOUND", field+".node_id", "proxy action node does not exist")
+			}
+		default:
+			return invalid("ROUTING_TARGET_UNSUPPORTED", field+".target", "proxy target must be selected or node")
+		}
+	default:
+		return invalid("ROUTING_ACTION_UNSUPPORTED", field+".type", "action must be direct, reject, or proxy")
+	}
+	return nil
+}
+
+// NormalizeDomain implements the Profile v2 comparison contract. It removes
+// exactly one trailing root label, converts Unicode input to an IDNA A-label,
+// and lowercases the ASCII result. IP literals are deliberately excluded.
+func NormalizeDomain(value string) (string, bool) {
+	if strings.HasSuffix(value, ".") {
+		value = strings.TrimSuffix(value, ".")
+	}
+	if value == "" || strings.HasSuffix(value, ".") {
+		return "", false
+	}
+	ascii, err := idna.Lookup.ToASCII(value)
+	if err != nil {
+		return "", false
+	}
+	ascii = strings.ToLower(ascii)
+	if !validDomain(ascii) {
+		return "", false
+	}
+	if _, err = netip.ParseAddr(ascii); err == nil {
+		return "", false
+	}
+	return ascii, true
+}
+
+// ParsePortRange accepts the canonical inclusive "start-end" form.
+func ParsePortRange(value string) (uint16, uint16, error) {
+	if strings.TrimSpace(value) != value || strings.Count(value, "-") != 1 {
+		return 0, 0, fmt.Errorf("port range must use start-end")
+	}
+	parts := strings.SplitN(value, "-", 2)
+	start, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil || start == 0 {
+		return 0, 0, fmt.Errorf("port range start must be between 1 and 65535")
+	}
+	end, err := strconv.ParseUint(parts[1], 10, 16)
+	if err != nil || end == 0 {
+		return 0, 0, fmt.Errorf("port range end must be between 1 and 65535")
+	}
+	if start > end {
+		return 0, 0, fmt.Errorf("port range start must not exceed end")
+	}
+	return uint16(start), uint16(end), nil
 }
 
 func validateCredentials(n *Node, base string) error {

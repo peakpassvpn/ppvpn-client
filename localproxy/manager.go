@@ -20,6 +20,22 @@ type Endpoint struct {
 	Password string `json:"password"`
 }
 
+type Metadata struct {
+	NodeID       string   `json:"node_id"`
+	Listen       string   `json:"listen"`
+	Port         uint16   `json:"port"`
+	Protocols    []string `json:"protocols"`
+	AuthRequired bool     `json:"auth_required"`
+}
+
+type Credential struct {
+	NodeID   string `json:"node_id"`
+	Listen   string `json:"listen"`
+	Port     uint16 `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type diskState struct {
 	Version   int                 `json:"version"`
 	Endpoints map[string]Endpoint `json:"endpoints"`
@@ -42,6 +58,16 @@ func (m *Manager) Ensure(nodeIDs []string) ([]Endpoint, error) {
 		return nil, err
 	}
 	changed := false
+	wanted := make(map[string]struct{}, len(nodeIDs))
+	for _, id := range nodeIDs {
+		wanted[id] = struct{}{}
+	}
+	for id := range state.Endpoints {
+		if _, keep := wanted[id]; !keep {
+			delete(state.Endpoints, id)
+			changed = true
+		}
+	}
 	used := map[uint16]bool{}
 	for _, endpoint := range state.Endpoints {
 		if endpoint.Port == 0 || used[endpoint.Port] {
@@ -143,8 +169,8 @@ func (m *Manager) load() (diskState, error) {
 	if err != nil {
 		return state, err
 	}
-	if !securePermissions(info) {
-		return state, fmt.Errorf("local proxy state permissions must be 0600")
+	if !securePermissions(m.path, info) {
+		return state, fmt.Errorf("local proxy state permissions are not private")
 	}
 	if err = json.Unmarshal(data, &state); err != nil {
 		return state, fmt.Errorf("decode local proxy state: %w", err)
@@ -174,6 +200,9 @@ func (m *Manager) save(state diskState) error {
 	name := tmp.Name()
 	defer os.Remove(name)
 	if err = tmp.Chmod(0o600); err == nil {
+		err = secureFile(name)
+	}
+	if err == nil {
 		_, err = tmp.Write(data)
 	}
 	if closeErr := tmp.Close(); err == nil {

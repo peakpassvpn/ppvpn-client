@@ -13,8 +13,7 @@
         "node-d7522a87ef41c1e3",
         "node-bec91dfe7ac6b2ba"
       ],
-      "default": "node-a31fe9656fc8d3a4",
-      "interrupt_exist_connections": true
+      "default": "node-a31fe9656fc8d3a4"
     },
     {
       "type": "shadowsocks",
@@ -52,5 +51,8 @@
       },
       "password": "anytls-password"
     }
-  ]
+  ],
+  "route": {
+    "final": "selected"
+  }
 }

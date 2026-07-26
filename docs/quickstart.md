@@ -13,12 +13,12 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 预期版本响应：
 
 ```json
-{"core_version":"0.2.0","core_api_version":1,"profile_schema_version":1,"sing_box_version":"1.13.12"}
+{"core_version":"0.3.0","core_api_version":1,"profile_schema_version":2,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
 
-参考 [Backend Profile v1](backend-profile.md) 生成 `profile.json`，将所有演示地址和凭据换成真实服务值，然后先做离线校验：
+参考 [Backend Profile v2](backend-profile.md) 生成 `profile.json`，将所有演示地址和凭据换成真实服务值，然后先做离线校验：
 
 ```sh
 ./build/ppvpn-core validate profile.json
@@ -50,7 +50,9 @@ mkdir -m 700 "$APP_STATE"
   --platform macos
 ```
 
-`serve` 默认启用每节点认证代理和设备系统代理。可用 `--local-proxy=false` 或 `--system-proxy=false` 分别关闭；系统代理监听可通过 `--system-proxy-listen` 指定，但只能是显式回环 IP。
+`serve` 默认启用每节点认证代理、关闭旧系统代理兼容入口。`--local-proxy=false`
+可关闭每节点代理；`--system-proxy=true` 只用于旧宿主兼容，不是当前桌面产品的流量接管
+方式。
 
 生产环境不要使用共享临时目录。macOS 应使用 App Container/Application Support 私有目录；Windows 应使用带当前用户 ACL 的 LocalAppData 目录和 Named Pipe 路径。
 
@@ -86,7 +88,11 @@ curl --unix-socket "$APP_STATE/core.sock" \
   http://localhost/v1/apply-profile
 ```
 
-随后调用 `/v1/start`，再调用 `/v1/get-system-proxy-endpoints`。Desktop 将 `http` 端点写为系统 HTTP/HTTPS 代理，将 `socks5` 端点写为系统 SOCKS 代理；当前 mixed 实现中二者端口相同。节点切换只调用 `/v1/select-node`，无需重写系统代理。退出时先撤销操作系统代理设置，再调用 `/v1/stop`。完整顺序和 DTO 见 [Core API v1](core-api.md)。
+随后调用 `/v1/start`，并用 `/v1/get-local-proxy-metadata` 读取不含 secret 的每节点
+HTTP/SOCKS5 端点；只有原生凭据面板按需调用 `/v1/get-local-proxy-credential`。Windows
+产品由特权 service 以 TUN 模式运行 core，macOS 产品使用 XCFramework 和原生 Network
+Extension；两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1/select-node`，退出时
+调用 `/v1/stop`。完整顺序和 DTO 见 [Core API v1](core-api.md)。
 
 ## 5. 常见问题
 
@@ -94,5 +100,5 @@ curl --unix-socket "$APP_STATE/core.sock" \
 - `ENTRY_IP_NOT_PUBLIC`：`endpoint.ip` 不是可拨号公网单播 IP；不要填域名或文档地址。
 - `TLS_SERVER_NAME_MISMATCH`：TLS SNI 必须等于 `endpoint.domain`。
 - `CORE_OPERATION_FAILED`：上游错误已安全折叠。读取状态、检查第一方事件，并在受控环境用脱敏 `render` 辅助定位。
-- 本地代理端口变更：进程启动时发现持久端口已占用，核心只为冲突节点重新分配；调用 `GetLocalProxyEndpoints` 刷新。
-- 系统代理端口变更：core 会迁移并持久化新端口，`SystemProxyEndpointReady` 携带新端点；Desktop 必须据此原子更新系统代理。
+- 本地代理端口变更：进程启动时发现持久端口已占用，核心只为冲突节点重新分配；调用 `GetLocalProxyMetadata` 刷新。
+- TUN/Network Extension 启动失败：保持未连接并由原生宿主通知用户；不要静默回退到系统代理。

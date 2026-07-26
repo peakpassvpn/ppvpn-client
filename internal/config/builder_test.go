@@ -9,7 +9,14 @@ import (
 )
 
 func base(n profile.Node) *profile.Profile {
-	return &profile.Profile{SchemaVersion: 1, Revision: "rev", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: n.ID}}
+	return &profile.Profile{
+		SchemaVersion: profile.CurrentSchemaVersion,
+		Revision:      "rev",
+		ExpiresAt:     time.Now().Add(time.Hour),
+		Nodes:         []profile.Node{n},
+		Selection:     profile.Selection{Mode: "manual", DefaultNodeID: n.ID},
+		Routing:       profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}},
+	}
 }
 func node(protocol profile.Protocol) profile.Node {
 	return profile.Node{ID: "stable", Protocol: protocol, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Capabilities: profile.Capabilities{TCP: true}}
@@ -63,7 +70,7 @@ func TestGoldenOutboundOptions(t *testing.T) {
 				t.Fatal("outbound count")
 			}
 			selector, ok := got.Options.Outbounds[0].Options.(*option.SelectorOutboundOptions)
-			if !ok || selector.Default != got.NodeTags[tt.n.ID] || !selector.InterruptExistConnections {
+			if !ok || selector.Default != got.NodeTags[tt.n.ID] || selector.InterruptExistConnections {
 				t.Fatalf("selector: %#v", got.Options.Outbounds[0].Options)
 			}
 			tt.assert(t, got.Options.Outbounds[1].Options)

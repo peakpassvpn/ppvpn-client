@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -35,6 +36,42 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	endpoints := core.LocalProxyEndpoints()
 	if len(endpoints) != 2 {
 		t.Fatalf("got %d endpoints", len(endpoints))
+	}
+	metadata := core.LocalProxyMetadata()
+	if len(metadata) != len(endpoints) {
+		t.Fatalf("got %d metadata records", len(metadata))
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(metadataJSON), "username") || strings.Contains(string(metadataJSON), "password") {
+		t.Fatalf("metadata leaked credentials: %s", metadataJSON)
+	}
+	for i := range metadata {
+		if metadata[i].NodeID != endpoints[i].NodeID ||
+			metadata[i].Listen != endpoints[i].Listen ||
+			metadata[i].Port != endpoints[i].Port ||
+			len(metadata[i].Protocols) != 2 ||
+			metadata[i].Protocols[0] != "http" ||
+			metadata[i].Protocols[1] != "socks5" ||
+			!metadata[i].AuthRequired {
+			t.Fatalf("metadata does not describe mixed endpoint: %#v", metadata[i])
+		}
+		credential, credentialErr := core.LocalProxyCredential(metadata[i].NodeID)
+		if credentialErr != nil {
+			t.Fatal(credentialErr)
+		}
+		if credential.NodeID != endpoints[i].NodeID ||
+			credential.Listen != endpoints[i].Listen ||
+			credential.Port != endpoints[i].Port ||
+			credential.Username != endpoints[i].Username ||
+			credential.Password != endpoints[i].Password {
+			t.Fatalf("credential lookup mismatch: %#v", credential)
+		}
+	}
+	if _, err = core.LocalProxyCredential("missing-node"); err == nil {
+		t.Fatal("missing local proxy credential lookup succeeded")
 	}
 	for _, endpoint := range endpoints {
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort(endpoint.Listen, strconv.Itoa(int(endpoint.Port))), time.Second)

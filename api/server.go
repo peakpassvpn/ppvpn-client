@@ -66,6 +66,13 @@ func (s *Server) routes() {
 	}))
 	s.mux.HandleFunc("POST /v1/probe-entrances", s.probeEntrances)
 	s.mux.HandleFunc("POST /v1/probe-availability", s.probeAvailability)
+	s.mux.HandleFunc("POST /v1/get-local-proxy-metadata", s.simple(func(_ *http.Request) (any, error) {
+		return s.core.LocalProxyMetadata(), nil
+	}))
+	s.mux.HandleFunc("POST /v1/get-local-proxy-credential", s.localProxyCredential)
+	// Retained for Core API v1 compatibility. New hosts should use the
+	// metadata and per-node credential methods so secrets never enter general
+	// UI state.
 	s.mux.HandleFunc("POST /v1/get-local-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) { return s.core.LocalProxyEndpoints(), nil }))
 	s.mux.HandleFunc("POST /v1/get-system-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) {
 		endpoints, err := s.core.SystemProxyEndpoints()
@@ -167,6 +174,19 @@ func (s *Server) probeAvailability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respond(w, r, result, nil)
+}
+func (s *Server) localProxyCredential(w http.ResponseWriter, r *http.Request) {
+	request, err := decode(r)
+	if err != nil {
+		s.respond(w, r, nil, err)
+		return
+	}
+	credential, err := s.core.LocalProxyCredential(request.NodeID)
+	if err != nil {
+		s.respond(w, r, nil, apiError("NODE_NOT_FOUND", "node local proxy endpoint not found", "node_id", false))
+		return
+	}
+	s.respond(w, r, credential, nil)
 }
 func (s *Server) watchEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)

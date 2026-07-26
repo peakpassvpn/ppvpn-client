@@ -38,12 +38,14 @@ GOOS=windows GOARCH=arm64 go build -trimpath -o build/ppvpn-core-windows-arm64.e
 ```sh
 make bootstrap-mobile
 make build-mobile-ios
+make build-mobile-macos
 make build-mobile-android
 ```
 
 预期产物：
 
-- `build/PPVPNCore.xcframework`：iOS device arm64，simulator arm64/x86_64。
+- `build/PPVPNCore.xcframework`：由所选目标生成；desktop artifact 必须是 macOS
+  arm64/x86_64 universal slice，最低系统版本 13.0。
 - `build/ppvpn-core.aar`：armeabi-v7a、arm64-v8a、x86、x86_64。
 
 XCFramework 必须由 iOS App/Extension 的 Xcode 流水线签名；AAR 由 Android App 的 Gradle/R8/签名流水线消费。核心仓库本身不保存产品签名密钥。
@@ -58,7 +60,9 @@ unzip -t ppvpn-core.aar
 unzip -l ppvpn-core.aar | grep 'jni/.*/libgojni.so'
 ```
 
-对桌面文件再用 `file` 或平台等价工具确认架构，并逐个运行可执行架构的 `version` 命令。发布元数据必须同时记录 Core、Core API、Profile Schema 和 sing-box 四个版本。
+对桌面文件再用 `file` 或平台等价工具确认架构，并逐个运行可执行架构的 `version`
+命令。发布元数据必须同时记录 Core、Core API、Profile Schema、Flow Adapter 和 Local
+Proxy Contract 版本；上层产品不依赖 core 内部实现版本。
 
 任何源代码或依赖变化后，已有 `SHA256SUMS` 都失效，必须重新构建全部产物并生成新校验和：
 
@@ -77,7 +81,7 @@ shasum -a 256 \
 
 - 所有测试门禁通过，真实 sing-box 集成测试未被跳过。
 - `version` 输出与 `version/version.go`、README 和发布元数据一致。
-- `go.mod` 中 sing-box 与 gomobile 版本没有漂移。
+- `go.mod` 与 Makefile 中固定依赖版本没有漂移。
 - Profile golden 变化已人工审阅，未新增 Clash API 或公开内部 tag。
 - 文档示例与公开 DTO 同步。
 - 四个桌面架构、XCFramework 和 AAR 均从同一提交构建。

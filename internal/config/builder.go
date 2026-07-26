@@ -65,9 +65,13 @@ func BuildWithProxyEndpoints(p *profile.Profile, platform profile.PlatformCapabi
 		selectedTags = append(selectedTags, result.NodeTags[node.ID])
 	}
 	selector := option.Outbound{Type: C.TypeSelector, Tag: selectedOutboundTag, Options: &option.SelectorOutboundOptions{
-		Outbounds: selectedTags, Default: result.NodeTags[p.Selection.DefaultNodeID], InterruptExistConnections: true,
+		Outbounds: selectedTags, Default: result.NodeTags[p.Selection.DefaultNodeID], InterruptExistConnections: false,
 	}}
 	result.Options.Outbounds = append([]option.Outbound{selector}, result.Options.Outbounds...)
+	result.Options.Route = &option.RouteOptions{}
+	if platform.TUN.Enabled {
+		addPlatformSafetyRules(result, p)
+	}
 	if len(proxies) > 0 {
 		if err := addLocalProxies(result, proxies); err != nil {
 			return nil, err
@@ -83,24 +87,31 @@ func BuildWithProxyEndpoints(p *profile.Profile, platform profile.PlatformCapabi
 			return nil, err
 		}
 	}
-	if p.Routing.BypassPrivate {
-		addPrivateBypass(result)
+	if err := addProfileRouting(result, p.Routing); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
 
-func addPrivateBypass(result *BuildResult) {
-	const directTag = "direct"
-	result.Options.Outbounds = append(result.Options.Outbounds, option.Outbound{Type: C.TypeDirect, Tag: directTag, Options: &option.DirectOutboundOptions{}})
-	if result.Options.Route == nil {
-		result.Options.Route = &option.RouteOptions{Final: selectedOutboundTag}
+func addPlatformSafetyRules(result *BuildResult, p *profile.Profile) {
+	ensureDirectOutbound(result)
+	for _, node := range p.Nodes {
+		domain, ok := profile.NormalizeDomain(node.Endpoint.Domain)
+		if ok {
+			result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
+				option.RawDefaultRule{Domain: badoption.Listable[string]{domain}},
+				"direct",
+			))
+		}
+		result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
+			option.RawDefaultRule{IPCIDR: badoption.Listable[string]{netip.MustParseAddr(node.Endpoint.IP).String()}},
+			"direct",
+		))
 	}
-	result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{IPIsPrivate: true}, RuleAction: option.RuleAction{Action: C.RuleActionTypeRoute, RouteOptions: option.RouteActionOptions{Outbound: directTag}}}})
 }
 
 func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 	loopback := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
-	route := &option.RouteOptions{Final: selectedOutboundTag}
 	for _, endpoint := range proxies {
 		nodeOutbound, ok := result.NodeTags[endpoint.NodeID]
 		if !ok {
@@ -111,9 +122,11 @@ func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 		}
 		inboundTag := "proxy-" + strings.TrimPrefix(nodeOutbound, "node-")
 		result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeMixed, Tag: inboundTag, Options: &option.HTTPMixedInboundOptions{ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: endpoint.Port}, Users: []auth.User{{Username: endpoint.Username, Password: endpoint.Password}}}})
-		route.Rules = append(route.Rules, option.Rule{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{Inbound: badoption.Listable[string]{inboundTag}}, RuleAction: option.RuleAction{Action: C.RuleActionTypeRoute, RouteOptions: option.RouteActionOptions{Outbound: nodeOutbound}}}})
+		result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
+			option.RawDefaultRule{Inbound: badoption.Listable[string]{inboundTag}},
+			nodeOutbound,
+		))
 	}
-	result.Options.Route = route
 	return nil
 }
 
@@ -133,9 +146,6 @@ func addSystemProxy(result *BuildResult, endpoint systemproxy.Endpoint) error {
 			Listen: &listen, ListenPort: endpoint.Port,
 		}},
 	})
-	if result.Options.Route == nil {
-		result.Options.Route = &option.RouteOptions{Final: selectedOutboundTag}
-	}
 	return nil
 }
 
@@ -151,10 +161,154 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities) error {
 	}
 	autoRoute := platform.Platform != "ios" && platform.Platform != "android"
 	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: "tun", Options: &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{netip.MustParsePrefix("172.19.0.1/30")}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}})
-	if result.Options.Route == nil {
-		result.Options.Route = &option.RouteOptions{Final: selectedOutboundTag}
+	return nil
+}
+
+func addProfileRouting(result *BuildResult, routing profile.Routing) error {
+	for _, rule := range routing.Rules {
+		raw, err := buildRuleMatch(rule.Match)
+		if err != nil {
+			return fmt.Errorf("build routing rule %q: %w", rule.ID, err)
+		}
+		action, err := buildRuleAction(result, rule.Action)
+		if err != nil {
+			return fmt.Errorf("build routing rule %q: %w", rule.ID, err)
+		}
+		result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: option.DefaultRule{
+				RawDefaultRule: raw,
+				RuleAction:     action,
+			},
+		})
+	}
+	switch routing.Final.Type {
+	case "direct":
+		ensureDirectOutbound(result)
+		result.Options.Route.Final = "direct"
+	case "proxy":
+		target, err := proxyTarget(result, routing.Final)
+		if err != nil {
+			return fmt.Errorf("build final routing action: %w", err)
+		}
+		result.Options.Route.Final = target
+	case "reject":
+		result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: option.DefaultRule{
+				RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+			},
+		})
+	default:
+		return fmt.Errorf("unsupported final routing action")
 	}
 	return nil
+}
+
+func buildRuleMatch(match profile.RoutingMatch) (option.RawDefaultRule, error) {
+	raw := option.RawDefaultRule{
+		Network: badoption.Listable[string](append([]string(nil), match.Protocols...)),
+		Port:    badoption.Listable[uint16](append([]uint16(nil), match.Ports...)),
+	}
+	for _, value := range match.Domains {
+		normalized, ok := profile.NormalizeDomain(value)
+		if !ok {
+			return option.RawDefaultRule{}, fmt.Errorf("invalid exact domain")
+		}
+		raw.Domain = append(raw.Domain, normalized)
+	}
+	for _, value := range match.DomainSuffixes {
+		normalized, ok := profile.NormalizeDomain(value)
+		if !ok {
+			return option.RawDefaultRule{}, fmt.Errorf("invalid domain suffix")
+		}
+		raw.DomainSuffix = append(raw.DomainSuffix, "."+normalized)
+		raw.Domain = append(raw.Domain, normalized)
+	}
+	for _, value := range match.IPCIDRs {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return option.RawDefaultRule{}, fmt.Errorf("invalid CIDR")
+		}
+		raw.IPCIDR = append(raw.IPCIDR, prefix.Masked().String())
+	}
+	if match.IPIsPrivate {
+		raw.IPCIDR = append(raw.IPCIDR,
+			"10.0.0.0/8",
+			"172.16.0.0/12",
+			"192.168.0.0/16",
+			"fc00::/7",
+		)
+	}
+	for _, value := range match.PortRanges {
+		start, end, err := profile.ParsePortRange(value)
+		if err != nil {
+			return option.RawDefaultRule{}, err
+		}
+		raw.PortRange = append(raw.PortRange, fmt.Sprintf("%d:%d", start, end))
+	}
+	return raw, nil
+}
+
+func buildRuleAction(result *BuildResult, action profile.RoutingAction) (option.RuleAction, error) {
+	switch action.Type {
+	case "direct":
+		ensureDirectOutbound(result)
+		return option.RuleAction{
+			Action:       C.RuleActionTypeRoute,
+			RouteOptions: option.RouteActionOptions{Outbound: "direct"},
+		}, nil
+	case "reject":
+		return option.RuleAction{Action: C.RuleActionTypeReject}, nil
+	case "proxy":
+		target, err := proxyTarget(result, action)
+		if err != nil {
+			return option.RuleAction{}, err
+		}
+		return option.RuleAction{
+			Action:       C.RuleActionTypeRoute,
+			RouteOptions: option.RouteActionOptions{Outbound: target},
+		}, nil
+	default:
+		return option.RuleAction{}, fmt.Errorf("unsupported routing action")
+	}
+}
+
+func proxyTarget(result *BuildResult, action profile.RoutingAction) (string, error) {
+	if action.Target == "selected" {
+		return selectedOutboundTag, nil
+	}
+	target, ok := result.NodeTags[action.NodeID]
+	if !ok || action.Target != "node" {
+		return "", fmt.Errorf("fixed proxy node does not exist")
+	}
+	return target, nil
+}
+
+func ensureDirectOutbound(result *BuildResult) {
+	for _, outbound := range result.Options.Outbounds {
+		if outbound.Tag == "direct" {
+			return
+		}
+	}
+	result.Options.Outbounds = append(result.Options.Outbounds, option.Outbound{
+		Type:    C.TypeDirect,
+		Tag:     "direct",
+		Options: &option.DirectOutboundOptions{},
+	})
+}
+
+func routeRule(raw option.RawDefaultRule, outbound string) option.Rule {
+	return option.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: option.DefaultRule{
+			RawDefaultRule: raw,
+			RuleAction: option.RuleAction{
+				Action:       C.RuleActionTypeRoute,
+				RouteOptions: option.RouteActionOptions{Outbound: outbound},
+			},
+		},
+	}
 }
 
 func buildOutbound(n profile.Node, tag string) (option.Outbound, error) {
