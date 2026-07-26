@@ -7,6 +7,7 @@ default:
 
 variables:
   GOPROXY: "https://goproxy.cn,direct"
+  DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer"
 
 test:
   stage: test
@@ -69,11 +70,29 @@ build:ios-artifact:
 
 build:android-artifact:
   stage: build
-  tags:
-    - macos
+  image: golang:1.25
+  variables:
+    ANDROID_HOME: "${CI_PROJECT_DIR}/.android-sdk"
+    ANDROID_SDK_ROOT: "${CI_PROJECT_DIR}/.android-sdk"
+  cache:
+    key: "android-ndk-29.0.14206865"
+    paths:
+      - .android-sdk/ndk/29.0.14206865/
   before_script:
     - go version
-    - test -n "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+    - apt-get update
+    - apt-get install -y --no-install-recommends curl unzip
+    - mkdir -p "${ANDROID_HOME}/ndk"
+    - |
+      if [ ! -x "${ANDROID_HOME}/ndk/29.0.14206865/ndk-build" ]; then
+        curl --fail --location --retry 3 \
+          --output android-ndk-r29-linux.zip \
+          https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+        echo "87e2bb7e9be5d6a1c6cdf5ec40dd4e0c6d07c30b  android-ndk-r29-linux.zip" |
+          sha1sum --check -
+        unzip -q android-ndk-r29-linux.zip
+        mv android-ndk-r29 "${ANDROID_HOME}/ndk/29.0.14206865"
+      fi
     - make bootstrap-mobile
   script:
     - make build-android-artifact
