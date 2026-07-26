@@ -20,7 +20,7 @@ build:macos-artifact:
     - macos
   before_script:
     - go version
-    - export DEVELOPER_DIR="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print -quit)/Contents/Developer"
+    - export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
     - test -d "${DEVELOPER_DIR}"
     - xcodebuild -version
     - make bootstrap-mobile
@@ -56,7 +56,7 @@ build:ios-artifact:
     - macos
   before_script:
     - go version
-    - export DEVELOPER_DIR="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print -quit)/Contents/Developer"
+    - export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
     - test -d "${DEVELOPER_DIR}"
     - xcodebuild -version
     - make bootstrap-mobile
@@ -73,30 +73,15 @@ build:ios-artifact:
 
 build:android-artifact:
   stage: build
-  image: golang:1.25
-  variables:
-    ANDROID_HOME: "${CI_PROJECT_DIR}/.android-sdk"
-    ANDROID_SDK_ROOT: "${CI_PROJECT_DIR}/.android-sdk"
-  cache:
-    key: "android-ndk-29.0.14206865"
-    paths:
-      - .android-sdk/ndk/29.0.14206865/
+  tags:
+    - macos
   before_script:
     - go version
-    - sed -i 's|deb.debian.org/debian|mirrors.aliyun.com/debian|g; s|security.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources
-    - apt-get update -o Acquire::Retries=3
-    - apt-get install -y --no-install-recommends curl unzip
-    - mkdir -p "${ANDROID_HOME}/ndk"
-    - |
-      if [ ! -x "${ANDROID_HOME}/ndk/29.0.14206865/ndk-build" ]; then
-        curl --fail --location --retry 3 \
-          --output android-ndk-r29-linux.zip \
-          https://dl.google.com/android/repository/android-ndk-r29-linux.zip
-        echo "87e2bb7e9be5d6a1c6cdf5ec40dd4e0c6d07c30b  android-ndk-r29-linux.zip" |
-          sha1sum --check -
-        unzip -q android-ndk-r29-linux.zip
-        mv android-ndk-r29 "${ANDROID_HOME}/ndk/29.0.14206865"
-      fi
+    - export JAVA_HOME="${HOME}/Library/Java/JavaVirtualMachines/openjdk.jdk/Contents/Home"
+    - export ANDROID_HOME="${HOME}/Library/Android/sdk"
+    - export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+    - test -x "${JAVA_HOME}/bin/java"
+    - test -x "${ANDROID_HOME}/ndk/29.0.14206865/ndk-build"
     - make bootstrap-mobile
   script:
     - make build-android-artifact
