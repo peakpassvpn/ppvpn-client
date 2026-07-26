@@ -5,13 +5,16 @@ stages:
 default:
   interruptible: true
 
+variables:
+  GOPROXY: "https://goproxy.cn,direct"
+
 test:
   stage: test
   image: golang:1.25
   script:
     - go test ./...
 
-build:desktop-artifact:
+build:macos-artifact:
   stage: build
   tags:
     - macos
@@ -20,13 +23,65 @@ build:desktop-artifact:
     - xcodebuild -version
     - make bootstrap-mobile
   script:
-    - make build-desktop-artifact
+    - make build-macos-artifact
   artifacts:
-    name: "ppvpn-core-desktop-${CI_COMMIT_SHA}"
+    name: "ppvpn-core-macos-${CI_COMMIT_SHA}"
+    expire_in: never
+    paths:
+      - build/PPVPNCore.xcframework/
+      - build/macos-SHA256SUMS
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+
+build:windows-artifact:
+  stage: build
+  image: golang:1.25
+  script:
+    - make build-windows-artifact
+  artifacts:
+    name: "ppvpn-core-windows-${CI_COMMIT_SHA}"
     expire_in: never
     paths:
       - build/ppvpn-core-windows-amd64.exe
-      - build/PPVPNCore.xcframework/
-      - build/desktop-SHA256SUMS
+      - build/ppvpn-core-windows-arm64.exe
+      - build/windows-SHA256SUMS
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+
+build:ios-artifact:
+  stage: build
+  tags:
+    - macos
+  before_script:
+    - go version
+    - xcodebuild -version
+    - make bootstrap-mobile
+  script:
+    - make build-ios-artifact
+  artifacts:
+    name: "ppvpn-core-ios-${CI_COMMIT_SHA}"
+    expire_in: never
+    paths:
+      - build/PPVPNCore.xcframework.zip
+      - build/ios-SHA256SUMS
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+
+build:android-artifact:
+  stage: build
+  tags:
+    - macos
+  before_script:
+    - go version
+    - test -n "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+    - make bootstrap-mobile
+  script:
+    - make build-android-artifact
+  artifacts:
+    name: "ppvpn-core-android-${CI_COMMIT_SHA}"
+    expire_in: never
+    paths:
+      - build/ppvpn-core.aar
+      - build/android-SHA256SUMS
   rules:
     - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'

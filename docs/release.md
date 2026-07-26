@@ -31,6 +31,16 @@ GOOS=windows GOARCH=amd64 go build -trimpath -o build/ppvpn-core-windows-amd64.e
 GOOS=windows GOARCH=arm64 go build -trimpath -o build/ppvpn-core-windows-arm64.exe ./cmd/ppvpn-core
 ```
 
+GitLab CI 按平台拆分桌面产物：
+
+- `build:macos-artifact`：macOS arm64/x86_64 XCFramework 与
+  `macos-SHA256SUMS`。
+- `build:windows-artifact`：Windows amd64/arm64 可执行文件与
+  `windows-SHA256SUMS`。
+
+本地可分别运行 `make build-macos-artifact` 和 `make build-windows-artifact`；
+原有的 `make build-desktop-artifact` 保留为同时构建两者的兼容入口。
+
 这些是未签名核心二进制。最终产品仍需在桌面 App 的发布流水线中完成平台代码签名、安装包封装、公证/信誉链和更新签名。
 
 ## 移动构建
@@ -40,6 +50,8 @@ make bootstrap-mobile
 make build-mobile-ios
 make build-mobile-macos
 make build-mobile-android
+make build-ios-artifact
+make build-android-artifact
 ```
 
 预期产物：
@@ -47,6 +59,11 @@ make build-mobile-android
 - `build/PPVPNCore.xcframework`：由所选目标生成；desktop artifact 必须是 macOS
   arm64/x86_64 universal slice，最低系统版本 13.0。
 - `build/ppvpn-core.aar`：armeabi-v7a、arm64-v8a、x86、x86_64。
+
+GitLab CI 分别通过 `build:ios-artifact` 和 `build:android-artifact` 发布移动产物。
+iOS job 交付 `PPVPNCore.xcframework.zip` 与 `ios-SHA256SUMS`；Android job
+交付 `ppvpn-core.aar` 与 `android-SHA256SUMS`。两个 job 都会在上传前检查
+iOS device/simulator 架构或 Android ABI，并永久保留产物。
 
 XCFramework 必须由 iOS App/Extension 的 Xcode 流水线签名；AAR 由 Android App 的 Gradle/R8/签名流水线消费。核心仓库本身不保存产品签名密钥。
 
