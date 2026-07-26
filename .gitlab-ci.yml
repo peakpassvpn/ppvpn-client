@@ -7,7 +7,6 @@ default:
 
 variables:
   GOPROXY: "https://goproxy.cn,direct"
-  DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer"
 
 test:
   stage: test
@@ -21,6 +20,8 @@ build:macos-artifact:
     - macos
   before_script:
     - go version
+    - export DEVELOPER_DIR="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print -quit)/Contents/Developer"
+    - test -d "${DEVELOPER_DIR}"
     - xcodebuild -version
     - make bootstrap-mobile
   script:
@@ -55,6 +56,8 @@ build:ios-artifact:
     - macos
   before_script:
     - go version
+    - export DEVELOPER_DIR="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print -quit)/Contents/Developer"
+    - test -d "${DEVELOPER_DIR}"
     - xcodebuild -version
     - make bootstrap-mobile
   script:
