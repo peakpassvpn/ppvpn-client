@@ -1,0 +1,77 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+
+  windows-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make build-windows-artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ppvpn-core-windows-${{ github.sha }}
+          path: |
+            build/ppvpn-core-windows-amd64.exe
+            build/ppvpn-core-windows-arm64.exe
+            build/windows-SHA256SUMS
+
+  apple-artifacts:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make bootstrap-mobile
+      - run: make build-macos-artifact build-ios-artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ppvpn-core-apple-${{ github.sha }}
+          path: |
+            build/PPVPNCore.xcframework
+            build/PPVPNCore.xcframework.zip
+            build/macos-SHA256SUMS
+            build/ios-SHA256SUMS
+
+  android-artifact:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: make bootstrap-mobile
+      - run: make build-android-artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ppvpn-core-android-${{ github.sha }}
+          path: |
+            build/ppvpn-core.aar
+            build/android-SHA256SUMS
