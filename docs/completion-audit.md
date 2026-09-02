@@ -8,12 +8,11 @@
 | 稳定节点 ID、字面量公网入口 IP、Fake-IP/保留地址拒绝 | Profile 校验与 `TestReservedEntryIPsRejected` |
 | Shadowsocks 2022 EIH、VLESS REALITY、AnyTLS | 类型化凭据、内部配置构建器、协议与 golden 测试 |
 | 直接构建 `option.Options`、固定 sing-box、公开层无 sing 类型 | `internal/config`、`go.mod`、`version` 及 Go `internal` 编译边界 |
-| 平台/Profile 分离、系统代理和路由 | 结构化 `PlatformCapabilities.system_proxy`、loopback 校验、稳定状态与运行时/API 测试 |
+| 平台/Profile 分离和路由 | 结构化平台能力、稳定状态与运行时/API 测试 |
 | TUN 边界 | 配置构建已接通；桌面提权 helper 与移动 TUN-FD bridge 尚未实现，并在平台文档中明确 |
 | 真实生命周期、revision 幂等、重载、回滚和入口迁移 | `internal/runtime`、假引擎测试与真实 sing-box 重载集成测试 |
 | 入口和端到端可用性探测 | `probe` 的超时、取消、字面量 IP 和认证代理测试 |
 | 每节点稳定独立 HTTP/SOCKS5 | `localproxy`、固定 inbound 路由与真实并发认证测试 |
-| 设备系统 HTTP/SOCKS5 代理 | `systemproxy`、运行时生命周期/状态/事件、Core API 与移动桥 |
 | 流量、连接、事件和凭据安全诊断 | 第一方运行时 tracker、事件总线、脱敏与 API 测试；关闭上游日志 |
 | 不依赖 Clash/私有 tag 的稳定 Core API | `api`、API 文档、认证/版本/脱敏测试 |
 | 认证桌面 IPC 和崩溃退出 | Unix `0600` socket 测试、Windows owner-only Named Pipe、轮换密钥、stdin 父进程存活选项 |

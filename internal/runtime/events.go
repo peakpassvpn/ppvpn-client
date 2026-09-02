@@ -1,33 +1,26 @@
 package runtime
 
-import (
-	"time"
-
-	"github.com/peakpassvpn/ppvpn-core/systemproxy"
-)
+import "time"
 
 type EventType string
 
 const (
-	EventProfileApplied             EventType = "ProfileApplied"
-	EventNodeEndpointChanged        EventType = "NodeEndpointChanged"
-	EventReloadFailed               EventType = "ReloadFailed"
-	EventNodeSelected               EventType = "NodeSelected"
-	EventCoreStarted                EventType = "CoreStarted"
-	EventCoreStopped                EventType = "CoreStopped"
-	EventEntranceProbed             EventType = "EntranceProbed"
-	EventAvailabilityProbed         EventType = "AvailabilityProbed"
-	EventSystemProxyEndpointReady   EventType = "SystemProxyEndpointReady"
-	EventSystemProxyEndpointStopped EventType = "SystemProxyEndpointStopped"
+	EventProfileApplied      EventType = "ProfileApplied"
+	EventNodeEndpointChanged EventType = "NodeEndpointChanged"
+	EventReloadFailed        EventType = "ReloadFailed"
+	EventNodeSelected        EventType = "NodeSelected"
+	EventCoreStarted         EventType = "CoreStarted"
+	EventCoreStopped         EventType = "CoreStopped"
+	EventEntranceProbed      EventType = "EntranceProbed"
+	EventAvailabilityProbed  EventType = "AvailabilityProbed"
 )
 
 type Event struct {
-	Type        EventType              `json:"type"`
-	At          time.Time              `json:"at"`
-	Revision    string                 `json:"revision,omitempty"`
-	NodeID      string                 `json:"node_id,omitempty"`
-	Message     string                 `json:"message,omitempty"`
-	SystemProxy *systemproxy.Endpoints `json:"system_proxy,omitempty"`
+	Type     EventType `json:"type"`
+	At       time.Time `json:"at"`
+	Revision string    `json:"revision,omitempty"`
+	NodeID   string    `json:"node_id,omitempty"`
+	Message  string    `json:"message,omitempty"`
 }
 
 type eventBus struct {

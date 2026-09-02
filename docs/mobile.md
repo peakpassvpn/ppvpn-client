@@ -20,7 +20,6 @@
 | `LocalProxyCredential(nodeID)` | 稳定节点 ID | 仅供原生凭据面板的单节点 secret |
 | `ClassifyFlow(flowJSON)` | 严格 flow DTO | DIRECT/REJECT/PROXY decision |
 | `OpenFlow(flowJSON, decisionJSON, timeoutMS)` | 首次授权 decision 的 PROXY flow | `FlowConnection` |
-| `SystemProxyEndpoints()` | 无 | 旧宿主兼容端点；新产品不调用 |
 | `Traffic()` / `Connections()` | 无 | 第一方遥测 DTO |
 | `WatchEvents(handler)` | 实现 `OnEvent(string)` 的回调 | EventWatcher |
 
@@ -32,7 +31,6 @@ PlatformCapabilities 示例：
 {
   "platform": "android",
   "tun": {"enabled": false},
-  "system_proxy": {"enabled": false},
   "local_proxy": {"enabled": true, "listen": "127.0.0.1"},
   "log_level": "info"
 }
@@ -55,7 +53,7 @@ PlatformCapabilities 示例：
 
 ```swift
 // PacketTunnelProvider 内；错误处理按应用规范展开
-let platform = #"{"platform":"ios","tun":{"enabled":false},"system_proxy":{"enabled":false},"local_proxy":{"enabled":true,"listen":"127.0.0.1"},"log_level":"info"}"#
+let platform = #"{"platform":"ios","tun":{"enabled":false},"local_proxy":{"enabled":true,"listen":"127.0.0.1"},"log_level":"info"}"#
 bridge = try MobileNewBridge(platform, appGroupStateFile.path)
 _ = try bridge.applyProfile(profileJSON)
 try bridge.start()
@@ -94,7 +92,6 @@ Kotlin 示意（具体生成包名以 AAR 为准）：
 val platform = """{
   "platform":"android",
   "tun":{"enabled":false},
-  "system_proxy":{"enabled":false},
   "local_proxy":{"enabled":true,"listen":"127.0.0.1"},
   "log_level":"info"
 }""".trimIndent()

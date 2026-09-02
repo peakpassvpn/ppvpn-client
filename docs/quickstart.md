@@ -50,8 +50,8 @@ mkdir -m 700 "$APP_STATE"
   --platform macos
 ```
 
-`serve` 默认启用每节点认证代理、关闭旧系统代理兼容入口。`--local-proxy=false`
-可关闭每节点代理；`--system-proxy=true` 只用于旧宿主兼容，不是当前桌面产品的流量接管
+`serve` 默认启用每节点认证代理。`--local-proxy=false` 可关闭每节点代理；核心不提供
+无认证的系统代理兼容入口。
 方式。
 
 生产环境不要使用共享临时目录。macOS 应使用 App Container/Application Support 私有目录；Windows 应使用带当前用户 ACL 的 LocalAppData 目录和 Named Pipe 路径。

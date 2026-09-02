@@ -14,7 +14,6 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/profile"
-	"github.com/peakpassvpn/ppvpn-core/systemproxy"
 )
 
 func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
@@ -106,155 +105,10 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	}
 }
 
-func TestRealSingBoxSystemProxyLifecycleAndProtocols(t *testing.T) {
-	platform := profile.PlatformCapabilities{
-		Platform:    "macos",
-		SystemProxy: profile.SystemProxyCapabilities{Enabled: true, Listen: "127.0.0.1"},
-		LocalProxy:  profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"},
-		LogLevel:    "error",
-	}
-	statePath := filepath.Join(t.TempDir(), "local-proxies.json")
-	core := NewWithLocalProxyState(platform, statePath)
-	p := testProfile("r1", "edge.example.com", "8.8.8.8")
-	second := p.Nodes[0]
-	second.ID = "node-2"
-	second.Endpoint.IP = "1.1.1.1"
-	p.Nodes = append(p.Nodes, second)
-	if _, err := core.ApplyProfile(p, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	before, err := core.SystemProxyEndpoints()
-	if err != nil || before.HTTP != before.SOCKS5 || before.HTTP.Listen != "127.0.0.1" {
-		t.Fatalf("prepared endpoint: %#v err=%v", before, err)
-	}
-	occupied, err := net.Listen("tcp", net.JoinHostPort(before.HTTP.Listen, strconv.Itoa(int(before.HTTP.Port))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = core.Start(); err != nil {
-		occupied.Close()
-		t.Fatal(err)
-	}
-	_ = occupied.Close()
-	afterConflict, _ := core.SystemProxyEndpoints()
-	if afterConflict == before {
-		t.Fatal("occupied persisted port was not migrated")
-	}
-	before = afterConflict
-	if status := core.Status(); !status.SystemProxy.Available {
-		t.Fatalf("system proxy not available: %#v", status)
-	}
-	if err = assertSystemHTTPNoAuthentication(before.HTTP); err != nil {
-		t.Fatal(err)
-	}
-	if err = assertSystemSOCKS5NoAuthentication(before.SOCKS5); err != nil {
-		t.Fatal(err)
-	}
-	perNode := core.LocalProxyEndpoints()
-	if len(perNode) != 2 {
-		t.Fatalf("per-node endpoints: %#v", perNode)
-	}
-	if err = assertHTTPAuthChallenge(perNode[0]); err != nil {
-		t.Fatal(err)
-	}
-	if err = core.SelectNode("node-2"); err != nil {
-		t.Fatal(err)
-	}
-	afterSelection, _ := core.SystemProxyEndpoints()
-	if afterSelection != before || core.Status().SelectedNodeID != "node-2" {
-		t.Fatalf("selection changed endpoint or failed: %#v %#v", afterSelection, core.Status())
-	}
-	if err = assertSystemSOCKS5NoAuthentication(afterSelection.SOCKS5); err != nil {
-		t.Fatalf("new connection after selection: %v", err)
-	}
-
-	if err = core.Reload(); err != nil {
-		t.Fatal(err)
-	}
-	afterReload, _ := core.SystemProxyEndpoints()
-	if afterReload != before {
-		t.Fatalf("reload changed endpoint: %#v -> %#v", before, afterReload)
-	}
-	updated := testProfile("r2", "new-edge.example.com", "1.1.1.1")
-	second = updated.Nodes[0]
-	second.ID = "node-2"
-	second.Endpoint.IP = "8.8.4.4"
-	updated.Nodes = append(updated.Nodes, second)
-	if _, err = core.ApplyProfile(updated, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	afterUpdate, _ := core.SystemProxyEndpoints()
-	if afterUpdate != before {
-		t.Fatalf("profile update changed endpoint: %#v -> %#v", before, afterUpdate)
-	}
-	if err = core.Stop(); err != nil {
-		t.Fatal(err)
-	}
-	if core.Status().SystemProxy.Available {
-		t.Fatal("system proxy remains available after stop")
-	}
-	if conn, dialErr := dialSystem(before.HTTP); dialErr == nil {
-		conn.Close()
-		t.Fatal("system proxy listener remained after stop")
-	}
-
-	restarted := NewWithLocalProxyState(platform, statePath)
-	if _, err = restarted.ApplyProfile(updated, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	restored, _ := restarted.SystemProxyEndpoints()
-	if restored != before {
-		t.Fatalf("restart did not restore endpoint: %#v -> %#v", before, restored)
-	}
-}
-
 func dialLocal(endpoint localproxy.Endpoint) (net.Conn, error) {
 	return net.DialTimeout("tcp", net.JoinHostPort(endpoint.Listen, strconv.Itoa(int(endpoint.Port))), time.Second)
 }
 
-func dialSystem(endpoint systemproxy.Endpoint) (net.Conn, error) {
-	return net.DialTimeout("tcp", net.JoinHostPort(endpoint.Listen, strconv.Itoa(int(endpoint.Port))), time.Second)
-}
-
-func assertSystemHTTPNoAuthentication(endpoint systemproxy.Endpoint) error {
-	conn, err := dialSystem(endpoint)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err = conn.Write([]byte("CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n")); err != nil {
-		return err
-	}
-	status, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		return err
-	}
-	if strings.Contains(status, "407") {
-		return fmt.Errorf("system HTTP proxy requested authentication: %q", status)
-	}
-	return nil
-}
-
-func assertSystemSOCKS5NoAuthentication(endpoint systemproxy.Endpoint) error {
-	conn, err := dialSystem(endpoint)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(time.Second))
-	if _, err = conn.Write([]byte{5, 1, 0}); err != nil {
-		return err
-	}
-	reply := make([]byte, 2)
-	if _, err = io.ReadFull(conn, reply); err != nil {
-		return err
-	}
-	if reply[0] != 5 || reply[1] != 0 {
-		return fmt.Errorf("expected SOCKS5 no-auth method, got %v", reply)
-	}
-	return nil
-}
 func assertHTTPAuthChallenge(endpoint localproxy.Endpoint) error {
 	conn, err := dialLocal(endpoint)
 	if err != nil {

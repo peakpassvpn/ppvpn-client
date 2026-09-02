@@ -18,7 +18,7 @@ go vet ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 ```
 
-覆盖重点：Profile 严格解析及安全地址校验、三种协议构建、SS 2022 EIH、golden 配置、入口/可用性探测、热更新回滚、真实 sing-box 启动、每节点 HTTP/SOCKS5 认证、系统代理生命周期、遥测、IPC 权限、API 认证与脱敏、移动端秘密不泄露。
+覆盖重点：Profile 严格解析及安全地址校验、三种协议构建、SS 2022 EIH、golden 配置、入口/可用性探测、热更新回滚、真实 sing-box 启动、每节点 HTTP/SOCKS5 认证、遥测、IPC 权限、API 认证与脱敏、移动端秘密不泄露。
 
 ## 桌面构建
 

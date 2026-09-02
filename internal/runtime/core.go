@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/routing"
-	"github.com/peakpassvpn/ppvpn-core/systemproxy"
 )
 
 type State string
@@ -26,22 +24,14 @@ const (
 )
 
 type Status struct {
-	State          State             `json:"state"`
-	Revision       string            `json:"revision,omitempty"`
-	SelectedNodeID string            `json:"selected_node_id,omitempty"`
-	NodeCount      int               `json:"node_count"`
-	SystemProxy    SystemProxyStatus `json:"system_proxy"`
-}
-
-type SystemProxyStatus struct {
-	Enabled   bool                   `json:"enabled"`
-	Available bool                   `json:"available"`
-	Endpoints *systemproxy.Endpoints `json:"endpoints,omitempty"`
+	State          State  `json:"state"`
+	Revision       string `json:"revision,omitempty"`
+	SelectedNodeID string `json:"selected_node_id,omitempty"`
+	NodeCount      int    `json:"node_count"`
 }
 
 var (
-	ErrSystemProxyUnavailable = errors.New("system proxy capability is unavailable")
-	ErrProfileNotApplied      = errors.New("no profile applied")
+	ErrProfileNotApplied = errors.New("no profile applied")
 )
 
 // Core serializes lifecycle mutations and owns all sing-box values. Reads and
@@ -64,8 +54,6 @@ type Core struct {
 	cancel               context.CancelFunc
 	proxyManager         *localproxy.Manager
 	proxyEndpoints       []localproxy.Endpoint
-	systemProxyManager   *systemproxy.Manager
-	systemProxyEndpoint  *systemproxy.Endpoint
 }
 
 func New(platform profile.PlatformCapabilities) *Core {
@@ -75,7 +63,6 @@ func New(platform profile.PlatformCapabilities) *Core {
 func NewWithLocalProxyState(platform profile.PlatformCapabilities, statePath string) *Core {
 	core := newCore(platform, newSingBox)
 	core.proxyManager = localproxy.NewManager(statePath)
-	core.systemProxyManager = systemproxy.NewManager(filepath.Join(filepath.Dir(statePath), "system-proxy.json"))
 	return core
 }
 
@@ -133,26 +120,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 			return false, fmt.Errorf("prepare local proxies: %w", err)
 		}
 	}
-	var systemEndpoint *systemproxy.Endpoint
-	endpointChanged := false
-	if c.platform.SystemProxy.Enabled {
-		if err = systemproxy.ValidateListen(c.platform.SystemProxy.Listen); err != nil {
-			return false, err
-		}
-		if c.systemProxyManager == nil {
-			return false, fmt.Errorf("system proxy is enabled but no private state path was configured")
-		}
-		reserved := make(map[uint16]bool, len(proxyEndpoints))
-		for _, endpoint := range proxyEndpoints {
-			reserved[endpoint.Port] = true
-		}
-		prepared, changed, prepareErr := c.systemProxyManager.EnsureAvoiding(c.platform.SystemProxy.Listen, !running, reserved)
-		if prepareErr != nil {
-			return false, fmt.Errorf("prepare system proxy: %w", prepareErr)
-		}
-		systemEndpoint, endpointChanged = &prepared, changed
-	}
-	candidate, err := config.BuildWithProxyEndpoints(candidateProfile, c.platform, proxyEndpoints, systemEndpoint, now)
+	candidate, err := config.BuildWithLocalProxies(candidateProfile, c.platform, proxyEndpoints, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, err
@@ -198,7 +166,6 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 	c.active, c.built, c.classifier = candidateProfile, candidate, candidateClassifier
 	c.routingGeneration++
 	c.proxyEndpoints = proxyEndpoints
-	c.systemProxyEndpoint = systemEndpoint
 	if c.selected == "" || !hasNode(candidateProfile, c.selected) {
 		c.selected = candidateProfile.Selection.DefaultNodeID
 	}
@@ -220,23 +187,8 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 			}
 		}
 	}
-	if running && endpointChanged && systemEndpoint != nil {
-		c.emit(Event{Type: EventSystemProxyEndpointReady, At: now, Revision: candidateProfile.Revision, SystemProxy: endpointsPtr(*systemEndpoint)})
-	}
 	c.emit(Event{Type: EventProfileApplied, At: now, Revision: candidateProfile.Revision})
 	return true, nil
-}
-
-func (c *Core) SystemProxyEndpoints() (systemproxy.Endpoints, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if !c.platform.SystemProxy.Enabled {
-		return systemproxy.Endpoints{}, ErrSystemProxyUnavailable
-	}
-	if c.active == nil || c.systemProxyEndpoint == nil {
-		return systemproxy.Endpoints{}, ErrProfileNotApplied
-	}
-	return systemproxy.Both(*c.systemProxyEndpoint), nil
 }
 
 func (c *Core) LocalProxyEndpoints() []localproxy.Endpoint {
@@ -393,52 +345,13 @@ func (c *Core) Start() error {
 		return fmt.Errorf("no profile applied")
 	}
 	instance, cancel, err := c.startCandidate(built)
-	var migrated *systemproxy.Endpoint
-	if err != nil && c.platform.SystemProxy.Enabled && c.systemProxyManager != nil {
-		c.mu.RLock()
-		reserved := make(map[uint16]bool, len(c.proxyEndpoints))
-		for _, localEndpoint := range c.proxyEndpoints {
-			reserved[localEndpoint.Port] = true
-		}
-		c.mu.RUnlock()
-		endpoint, changed, reconcileErr := c.systemProxyManager.EnsureAvoiding(c.platform.SystemProxy.Listen, true, reserved)
-		if reconcileErr != nil {
-			return fmt.Errorf("start runtime: %v; reconcile system proxy: %w", err, reconcileErr)
-		}
-		if changed {
-			c.mu.RLock()
-			active := c.active
-			localEndpoints := append([]localproxy.Endpoint(nil), c.proxyEndpoints...)
-			c.mu.RUnlock()
-			rebuilt, buildErr := config.BuildWithProxyEndpoints(active, c.platform, localEndpoints, &endpoint, time.Now())
-			if buildErr != nil {
-				return fmt.Errorf("rebuild after system proxy migration: %w", buildErr)
-			}
-			instance, cancel, err = c.startCandidate(rebuilt)
-			if err == nil {
-				built = rebuilt
-				migrated = &endpoint
-			}
-		}
-	}
 	if err != nil {
 		return fmt.Errorf("start runtime: %w", err)
 	}
 	c.mu.Lock()
 	c.engine, c.cancel, c.built = instance, cancel, built
-	if migrated != nil {
-		c.systemProxyEndpoint = migrated
-	}
-	endpoint := c.systemProxyEndpoint
-	revision := ""
-	if c.active != nil {
-		revision = c.active.Revision
-	}
 	c.mu.Unlock()
 	c.emit(Event{Type: EventCoreStarted, At: time.Now()})
-	if endpoint != nil {
-		c.emit(Event{Type: EventSystemProxyEndpointReady, At: time.Now(), Revision: revision, SystemProxy: endpointsPtr(*endpoint)})
-	}
 	return nil
 }
 
@@ -447,7 +360,6 @@ func (c *Core) Stop() error {
 	defer c.operation.Unlock()
 	c.mu.Lock()
 	instance, cancel := c.engine, c.cancel
-	endpoint := c.systemProxyEndpoint
 	c.engine, c.cancel = nil, nil
 	c.mu.Unlock()
 	if instance == nil {
@@ -457,9 +369,6 @@ func (c *Core) Stop() error {
 		cancel()
 	}
 	err := instance.Close()
-	if endpoint != nil {
-		c.emit(Event{Type: EventSystemProxyEndpointStopped, At: time.Now(), SystemProxy: endpointsPtr(*endpoint)})
-	}
 	c.emit(Event{Type: EventCoreStopped, At: time.Now()})
 	return err
 }
@@ -532,18 +441,13 @@ func (c *Core) Status() Status {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.active == nil {
-		return Status{State: StateStopped, SystemProxy: SystemProxyStatus{Enabled: c.platform.SystemProxy.Enabled}}
+		return Status{State: StateStopped}
 	}
 	state := StateConfigured
 	if c.engine != nil {
 		state = StateRunning
 	}
-	proxyStatus := SystemProxyStatus{Enabled: c.platform.SystemProxy.Enabled, Available: c.engine != nil && c.systemProxyEndpoint != nil}
-	if c.systemProxyEndpoint != nil {
-		endpoints := systemproxy.Both(*c.systemProxyEndpoint)
-		proxyStatus.Endpoints = &endpoints
-	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SystemProxy: proxyStatus}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes)}
 }
 
 func (c *Core) Nodes() []profile.Node {
@@ -609,9 +513,4 @@ func findNode(p *profile.Profile, id string) (profile.Node, bool) {
 		}
 	}
 	return profile.Node{}, false
-}
-
-func endpointsPtr(endpoint systemproxy.Endpoint) *systemproxy.Endpoints {
-	endpoints := systemproxy.Both(endpoint)
-	return &endpoints
 }

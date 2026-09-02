@@ -28,7 +28,6 @@ flowchart LR
 | `mobile` | gomobile 可绑定的 JSON DTO 桥 | 是 |
 | `probe` | 入口 TCP 和端到端可用性探测 | 是 |
 | `localproxy` | 设备本地节点代理端点与状态 | 是，但凭据只限受信宿主 |
-| `systemproxy` | 旧宿主兼容的回环代理端点；新桌面产品不启用 | 是，但只限本机宿主 |
 | `internal/config` | Profile 到 sing-box `option.Options` 的直接构建 | 否 |
 | `internal/runtime` | 引擎生命周期、热更新、遥测和事件 | 否 |
 | `internal/redact` | 诊断输出脱敏 | 否 |
@@ -54,9 +53,9 @@ stateDiagram-v2
 
 ## Profile 与平台能力分离
 
-Profile 描述“连接到哪些服务以及使用什么协议”；`PlatformCapabilities` 描述“本设备允许核心做什么”。TUN、系统代理、本地监听地址、日志级别和平台名称只能由宿主提供，后端不得下发。
+Profile 描述“连接到哪些服务以及使用什么协议”；`PlatformCapabilities` 描述“本设备允许核心做什么”。TUN、本地监听地址、日志级别和平台名称只能由宿主提供，后端不得下发。
 
-桌面 `serve` 默认启用每节点认证代理并关闭旧系统代理兼容入口。每节点代理为每个稳定
+桌面 `serve` 默认启用每节点认证代理。每节点代理为每个稳定
 node ID 提供一个同时支持 HTTP/SOCKS5 的认证端点。Windows 宿主以特权 TUN 接管流量，
 macOS 宿主使用原生 Network Extension；Profile 不包含系统级隧道配置。
 
@@ -77,4 +76,4 @@ Windows Desktop 必须由已签名 privileged service 提供权限和平台资�
 
 ## 遥测与事件
 
-流量和活动连接由第一方路由跟踪器统计，不依赖 Clash API。公开连接只包含稳定 `node_id`，内部 outbound tag 不会序列化。系统代理准备/停止会产生 `SystemProxyEndpointReady` / `SystemProxyEndpointStopped`。事件是尽力投递：订阅者缓冲区满时丢弃新事件，调用方应在重连后用 `GetStatus` 重新同步当前状态，而不能把事件流当作持久化日志。
+流量和活动连接由第一方路由跟踪器统计，不依赖 Clash API。公开连接只包含稳定 `node_id`，内部 outbound tag 不会序列化。事件是尽力投递：订阅者缓冲区满时丢弃新事件，调用方应在重连后用 `GetStatus` 重新同步当前状态，而不能把事件流当作持久化日志。

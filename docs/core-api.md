@@ -73,7 +73,7 @@ X-Request-ID: <optional-client-id>
 | GetLocalProxyMetadata | `/v1/get-local-proxy-metadata` | `{}` | LocalProxyMetadata[] |
 | GetLocalProxyCredential | `/v1/get-local-proxy-credential` | `{"node_id":"stable-id"}` | LocalProxyCredential |
 | GetLocalProxyEndpoints | `/v1/get-local-proxy-endpoints` | `{}` | LocalProxyEndpoint[]（兼容接口） |
-| GetSystemProxyEndpoints | `/v1/get-system-proxy-endpoints` | `{}` | SystemProxyEndpoints（旧兼容） |
+| GetSystemProxyEndpoints | `/v1/get-system-proxy-endpoints` | `{}` | 固定返回 `SYSTEM_PROXY_UNAVAILABLE`（API v1 兼容路由） |
 | GetTraffic | `/v1/get-traffic` | `{}` | Traffic |
 | GetConnections | `/v1/get-connections` | `{}` | Connection[] |
 | WatchEvents | `GET /v1/watch-events` | 无 | NDJSON Envelope 流 |
@@ -95,10 +95,10 @@ X-Request-ID: <optional-client-id>
 ```
 
 ```json
-{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,"system_proxy":{"enabled":true,"available":true,"endpoints":{"http":{"listen":"127.0.0.1","port":32146},"socks5":{"listen":"127.0.0.1","port":32146}}}}
+{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3}
 ```
 
-`state` 可为 `stopped`、`configured`、`running`。尚未应用 Profile 时返回 `stopped` 且 `node_count=0`。`system_proxy.enabled` 表示宿主能力开关，`available` 仅在运行实例已经监听时为 true；端点不可用时省略 `endpoints`。
+`state` 可为 `stopped`、`configured`、`running`。尚未应用 Profile 时返回 `stopped` 且 `node_count=0`。
 
 ### NodeSummary
 
@@ -146,18 +146,11 @@ X-Request-ID: <optional-client-id>
 方法和旧兼容接口返回密码，宿主不得把响应传给 WebView、渲染进程、崩溃报告或日志。
 旧的 `GetLocalProxyEndpoints` 为 Core API v1 兼容保留，会一次返回所有 credential；新宿主不得调用。
 
-### SystemProxyEndpoints（旧兼容）
+### 已移除的系统代理兼容接口
 
-```json
-{
-  "http":{"listen":"127.0.0.1","port":32146},
-  "socks5":{"listen":"127.0.0.1","port":32146}
-}
-```
-
-该接口只为旧宿主兼容保留。当前 Windows TUN 与 macOS Network Extension 产品不调用它，
-也不写系统 HTTP/SOCKS 设置。兼容能力关闭时返回 `SYSTEM_PROXY_UNAVAILABLE`，尚未应用
-Profile 时返回 `PROFILE_NOT_APPLIED`。
+Core 不再创建无认证 loopback HTTP/SOCKS5 监听器。Core API v1 暂时保留
+`/v1/get-system-proxy-endpoints` 路由，并始终返回 `SYSTEM_PROXY_UNAVAILABLE`；后续 API
+主版本可以删除该路由。
 
 ### Traffic 与 Connection
 
@@ -189,7 +182,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`SystemProxyEndpointReady`、`SystemProxyEndpointStopped`。系统代理事件可附带 `system_proxy` 端点对象；`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 
@@ -214,8 +207,8 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `CAPABILITIES_INVALID` | 至少启用 TCP 或 UDP |
 | `DEFAULT_NODE_NOT_FOUND` / `SELECTION_MODE_UNSUPPORTED` | 修正默认选择 |
 | `NODE_NOT_FOUND` | 刷新节点列表；节点可能已被新 Profile 移除 |
-| `SYSTEM_PROXY_UNAVAILABLE` | 宿主未启用系统代理能力 |
-| `PROFILE_NOT_APPLIED` | 先应用有效 Profile，再获取系统代理端点 |
+| `SYSTEM_PROXY_UNAVAILABLE` | 无认证系统代理能力已移除；调用方不得重试或降级 |
+| `PROFILE_NOT_APPLIED` | 先应用有效 Profile，再执行需要运行配置的方法 |
 | `STREAM_UNSUPPORTED` | 当前 HTTP writer 无法刷新事件流 |
 | `CORE_OPERATION_FAILED` | 安全折叠后的内部失败；读取状态并按产品策略重试/上报 |
 

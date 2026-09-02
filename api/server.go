@@ -75,14 +75,7 @@ func (s *Server) routes() {
 	// UI state.
 	s.mux.HandleFunc("POST /v1/get-local-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) { return s.core.LocalProxyEndpoints(), nil }))
 	s.mux.HandleFunc("POST /v1/get-system-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) {
-		endpoints, err := s.core.SystemProxyEndpoints()
-		if errors.Is(err, coreruntime.ErrSystemProxyUnavailable) {
-			return nil, apiError("SYSTEM_PROXY_UNAVAILABLE", "system proxy capability is unavailable", "", false)
-		}
-		if errors.Is(err, coreruntime.ErrProfileNotApplied) {
-			return nil, apiError("PROFILE_NOT_APPLIED", "no profile has been applied", "", false)
-		}
-		return endpoints, err
+		return nil, apiError("SYSTEM_PROXY_UNAVAILABLE", "system proxy capability has been removed", "", false)
 	}))
 	s.mux.HandleFunc("POST /v1/get-traffic", s.simple(func(_ *http.Request) (any, error) { return s.core.Traffic(), nil }))
 	s.mux.HandleFunc("POST /v1/get-connections", s.simple(func(_ *http.Request) (any, error) { return s.core.Connections(), nil }))

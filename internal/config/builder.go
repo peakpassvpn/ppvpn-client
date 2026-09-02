@@ -11,7 +11,6 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/profile"
-	"github.com/peakpassvpn/ppvpn-core/systemproxy"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/auth"
@@ -30,20 +29,8 @@ func Build(p *profile.Profile, platform profile.PlatformCapabilities, now time.T
 }
 
 func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabilities, proxies []localproxy.Endpoint, now time.Time) (*BuildResult, error) {
-	return BuildWithProxyEndpoints(p, platform, proxies, nil, now)
-}
-
-func BuildWithProxyEndpoints(p *profile.Profile, platform profile.PlatformCapabilities, proxies []localproxy.Endpoint, system *systemproxy.Endpoint, now time.Time) (*BuildResult, error) {
 	if err := profile.Validate(p, now); err != nil {
 		return nil, err
-	}
-	if platform.SystemProxy.Enabled {
-		if err := systemproxy.ValidateListen(platform.SystemProxy.Listen); err != nil {
-			return nil, err
-		}
-		if system == nil {
-			return nil, fmt.Errorf("system proxy endpoint is required when capability is enabled")
-		}
 	}
 	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes))}
 	// sing-box logs are disabled at the dependency boundary because upstream
@@ -74,11 +61,6 @@ func BuildWithProxyEndpoints(p *profile.Profile, platform profile.PlatformCapabi
 	}
 	if len(proxies) > 0 {
 		if err := addLocalProxies(result, proxies); err != nil {
-			return nil, err
-		}
-	}
-	if system != nil {
-		if err := addSystemProxy(result, *system); err != nil {
 			return nil, err
 		}
 	}
@@ -127,25 +109,6 @@ func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 			nodeOutbound,
 		))
 	}
-	return nil
-}
-
-func addSystemProxy(result *BuildResult, endpoint systemproxy.Endpoint) error {
-	if err := systemproxy.ValidateListen(endpoint.Listen); err != nil {
-		return err
-	}
-	if endpoint.Port == 0 {
-		return fmt.Errorf("system proxy port is required")
-	}
-	address := netip.MustParseAddr(endpoint.Listen)
-	listen := badoption.Addr(address)
-	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{
-		Type: C.TypeMixed,
-		Tag:  "system-proxy",
-		Options: &option.HTTPMixedInboundOptions{ListenOptions: option.ListenOptions{
-			Listen: &listen, ListenPort: endpoint.Port,
-		}},
-	})
 	return nil
 }
 

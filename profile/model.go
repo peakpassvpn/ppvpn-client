@@ -120,21 +120,16 @@ type Transport struct {
 }
 
 type PlatformCapabilities struct {
-	Platform    string                  `json:"platform"`
-	TUN         TUNCapabilities         `json:"tun"`
-	SystemProxy SystemProxyCapabilities `json:"system_proxy"`
-	LocalProxy  LocalProxyCapabilities  `json:"local_proxy"`
-	LogLevel    string                  `json:"log_level"`
+	Platform   string                 `json:"platform"`
+	TUN        TUNCapabilities        `json:"tun"`
+	LocalProxy LocalProxyCapabilities `json:"local_proxy"`
+	LogLevel   string                 `json:"log_level"`
 }
 type TUNCapabilities struct {
 	Enabled bool   `json:"enabled"`
 	Stack   string `json:"stack,omitempty"`
 }
 type LocalProxyCapabilities struct {
-	Enabled bool   `json:"enabled"`
-	Listen  string `json:"listen,omitempty"`
-}
-type SystemProxyCapabilities struct {
 	Enabled bool   `json:"enabled"`
 	Listen  string `json:"listen,omitempty"`
 }

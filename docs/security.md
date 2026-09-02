@@ -13,7 +13,6 @@
 | Profile 凭据 | 后端 | 当前 Core Profile | 核心不持久化 | Apply/Validate 输入；不出现在节点/状态 API |
 | 桌面会话密钥 | 核心启动时随机生成 | 核心与桌面宿主 | 临时交换文件；退出删除 | Authorization header |
 | 本地代理凭据 | 核心随机生成 | 核心与宿主 | `local-proxies.json` | 仅 GetLocalProxyEndpoints / Bridge 对应方法 |
-| 系统代理端点 | 核心分配 | 核心与宿主 | `system-proxy.json`（仅监听地址和端口） | Status、GetSystemProxyEndpoints、相关事件 |
 | sing-box 内部 tag | 核心构建 | 核心内部 | 不持久化 | 永不进入公开 DTO |
 
 Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任：使用应用私有目录、原子写入、平台数据保护并在读取后删除。
@@ -33,9 +32,8 @@ Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任
 
 回环监听并不等于无认证：本机其他进程也可访问回环端口。因此宿主必须使用返回的凭据，不能降级为无认证代理，也不得把凭据注入环境变量或子进程命令行。
 
-设备系统代理端点只为旧宿主兼容保留，默认关闭且不用于当前桌面产品。若旧宿主显式
-启用，它只能监听 loopback，但因兼容性不带认证，本机同一用户下的其他进程可能使用；
-Windows TUN 与 macOS Network Extension 产品不得回退到该入口。
+核心不提供无认证 loopback 代理。Core API v1 的旧系统代理查询路由只返回
+`SYSTEM_PROXY_UNAVAILABLE`，不会创建监听器或持久化端点状态。
 
 ## Profile 防护
 
@@ -43,7 +41,7 @@ Windows TUN 与 macOS Network Extension 产品不得回退到该入口。
 - 只接受固定协议集合；Profile v2 拒绝未知 transport。
 - 入口探测 IP 必须是公开单播，并明确拒绝私网、回环、链路本地、CGNAT、文档、基准测试和保留网段。
 - 实际协议连接使用域名；需要 TLS 时 SNI 必须与该域名相等。
-- 后端不能控制平台 TUN、系统代理、本地监听、日志或任何 sing-box/Clash 字段。
+- 后端不能控制平台 TUN、本地监听、日志或任何 sing-box/Clash 字段。
 
 这些约束减少 SSRF 和配置注入面，但可用性探测的 `target` 目前由受信宿主提供。产品层应把目标限制为PPVPN运营的固定 HTTPS 健康检查 URL，不要直接接受网页或不受信 IPC 调用方输入。
 

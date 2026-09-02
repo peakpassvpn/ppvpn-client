@@ -118,13 +118,6 @@ func (b *Bridge) OpenFlow(flowJSON, decisionJSON string, timeoutMS int) (*FlowCo
 	}
 	return &FlowConnection{connection: connection}, nil
 }
-func (b *Bridge) SystemProxyEndpoints() (string, error) {
-	endpoints, err := b.core.SystemProxyEndpoints()
-	if err != nil {
-		return "", safeError(err)
-	}
-	return encode(endpoints)
-}
 func (b *Bridge) Traffic() (string, error)     { return encode(b.core.Traffic()) }
 func (b *Bridge) Connections() (string, error) { return encode(b.core.Connections()) }
 func (b *Bridge) ProbeEntrances(timeoutMS, concurrency int) (string, error) {

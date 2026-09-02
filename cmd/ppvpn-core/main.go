@@ -135,8 +135,6 @@ func serve(args []string) error {
 	stateDir := flags.String("state-dir", "", "private directory for device-local state")
 	platformName := flags.String("platform", "desktop", "platform capability name")
 	localProxy := flags.Bool("local-proxy", true, "enable per-node local HTTP/SOCKS5 proxies")
-	systemProxy := flags.Bool("system-proxy", false, "enable the legacy loopback application HTTP/SOCKS5 proxy")
-	systemProxyListen := flags.String("system-proxy-listen", "127.0.0.1", "application proxy loopback listen address")
 	tun := flags.Bool("tun", false, "enable sing-box TUN inbound (requires host-provided privileges)")
 	tunStack := flags.String("tun-stack", "mixed", "sing-box TUN stack: mixed, system, or gvisor")
 	exitOnStdin := flags.Bool("exit-on-stdin-close", false, "exit when the parent-owned stdin pipe closes")
@@ -155,11 +153,10 @@ func serve(args []string) error {
 	}
 	defer os.Remove(*secretFile)
 	capabilities := profile.PlatformCapabilities{
-		Platform:    *platformName,
-		TUN:         profile.TUNCapabilities{Enabled: *tun, Stack: *tunStack},
-		SystemProxy: profile.SystemProxyCapabilities{Enabled: *systemProxy, Listen: *systemProxyListen},
-		LocalProxy:  profile.LocalProxyCapabilities{Enabled: *localProxy, Listen: "127.0.0.1"},
-		LogLevel:    "info",
+		Platform:   *platformName,
+		TUN:        profile.TUNCapabilities{Enabled: *tun, Stack: *tunStack},
+		LocalProxy: profile.LocalProxyCapabilities{Enabled: *localProxy, Listen: "127.0.0.1"},
+		LogLevel:   "info",
 	}
 	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(*stateDir, "local-proxies.json"))
 	server, err := api.NewServer(core, secret)

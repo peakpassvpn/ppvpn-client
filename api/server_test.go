@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,34 +93,11 @@ func TestUnknownMethodUsesEnvelope(t *testing.T) {
 	}
 }
 
-func TestSystemProxyEndpointErrorsAndNoCredentials(t *testing.T) {
+func TestRemovedSystemProxyEndpointReturnsCompatibilityError(t *testing.T) {
 	server, _ := testServer(t)
 	unavailable := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
 	if unavailable.Code != http.StatusBadRequest || !strings.Contains(unavailable.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
 		t.Fatal(unavailable.Body.String())
-	}
-
-	capabilities := profile.PlatformCapabilities{SystemProxy: profile.SystemProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}}
-	stateDir := t.TempDir()
-	if err := os.Chmod(stateDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(stateDir, "local-proxies.json"))
-	server, err := NewServer(core, testSecret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	missing := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
-	if !strings.Contains(missing.Body.String(), "PROFILE_NOT_APPLIED") {
-		t.Fatal(missing.Body.String())
-	}
-	if _, err = core.ApplyProfile(apiProfile(), time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	got := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
-	body := got.Body.String()
-	if got.Code != http.StatusOK || !strings.Contains(body, `"http"`) || !strings.Contains(body, `"socks5"`) || strings.Contains(body, "username") || strings.Contains(body, "password") {
-		t.Fatal(body)
 	}
 }
 
