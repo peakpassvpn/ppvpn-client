@@ -22,9 +22,16 @@
 go test ./...
 go test -race ./...
 go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 go run ./cmd/ppvpn-core version
 go run ./cmd/ppvpn-core validate profile.json
 go run ./cmd/ppvpn-core probe-entrance --timeout 5s --concurrency 4 profile.json
 ```
 
 桌面客户端只能通过经过认证的 Core API 调用核心；移动端只能通过 `mobile.Bridge` 调用。后端和 App 均不得生成 sing-box JSON、依赖内部 tag 或调用 Clash API。Go 的 `internal/` 包边界会在编译期阻止外部项目导入 sing-box 配置与运行时类型。
+
+## 许可证
+
+`ppvpn-core` 以 [GNU GPL v3 或更高版本](LICENSE) 发布。项目包含和依赖的第三方组件可能适用额外条款；参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+安全问题请勿通过公开 Issue 披露，报告方式见 [SECURITY.md](SECURITY.md)。

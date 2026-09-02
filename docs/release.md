@@ -2,7 +2,7 @@
 
 ## 固定工具链
 
-- Go：以 `go.mod` 的 `go` 指令为准（当前 1.25.0）。
+- Go：以 `go.mod` 的 `go` 指令为准（当前 1.25.13）。
 - sing-box：`v1.13.12`，必须保持直接依赖固定版本。
 - gomobile/gobind：Makefile 的 `MOBILE_VERSION`，禁止 CI 使用 `@latest`。
 - Android：NDK `29.0.14206865`，最低 API 23。
@@ -15,6 +15,7 @@
 go test ./...
 go test -race ./...
 go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 ```
 
 覆盖重点：Profile 严格解析及安全地址校验、三种协议构建、SS 2022 EIH、golden 配置、入口/可用性探测、热更新回滚、真实 sing-box 启动、每节点 HTTP/SOCKS5 认证、系统代理生命周期、遥测、IPC 权限、API 认证与脱敏、移动端秘密不泄露。
@@ -97,6 +98,8 @@ shasum -a 256 \
 ## 发布检查表
 
 - 所有测试门禁通过，真实 sing-box 集成测试未被跳过。
+- `govulncheck` 没有报告可达漏洞。
+- 源码归档包含 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和对应版本的依赖清单。
 - `version` 输出与 `version/version.go`、README 和发布元数据一致。
 - `go.mod` 与 Makefile 中固定依赖版本没有漂移。
 - Profile golden 变化已人工审阅，未新增 Clash API 或公开内部 tag。
