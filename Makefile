@@ -40,7 +40,6 @@ build-desktop-artifact: build-macos-artifact build-windows-artifact
 bootstrap-mobile:
 	go install golang.org/x/mobile/cmd/gomobile@$(MOBILE_VERSION)
 	go install golang.org/x/mobile/cmd/gobind@$(MOBILE_VERSION)
-	$(GO_BIN)/gomobile init
 
 build-mobile-ios:
 	mkdir -p build
