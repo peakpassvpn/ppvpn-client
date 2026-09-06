@@ -53,8 +53,8 @@ jobs:
         with:
           name: ppvpn-core-apple-${{ github.sha }}
           path: |
-            build/PPVPNCore.xcframework
-            build/PPVPNCore.xcframework.zip
+            build/PPVPNCore-macos.xcframework.zip
+            build/PPVPNCore-ios.xcframework.zip
             build/macos-SHA256SUMS
             build/ios-SHA256SUMS
 

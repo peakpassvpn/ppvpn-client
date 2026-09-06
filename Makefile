@@ -22,8 +22,9 @@ build-release-desktop:
 
 build-macos-artifact: build-mobile-macos
 	mkdir -p build
-	rm -f build/macos-SHA256SUMS
-	find build/PPVPNCore.xcframework -type f -print0 | sort -z | xargs -0 shasum -a 256 > build/macos-SHA256SUMS
+	rm -f build/PPVPNCore-macos.xcframework.zip build/macos-SHA256SUMS
+	ditto -c -k --sequesterRsrc --keepParent build/PPVPNCore.xcframework build/PPVPNCore-macos.xcframework.zip
+	shasum -a 256 build/PPVPNCore-macos.xcframework.zip > build/macos-SHA256SUMS
 
 build-windows-artifact:
 	mkdir -p build
@@ -49,9 +50,9 @@ verify-mobile-ios:
 	scripts/verify-ios-xcframework.sh build/PPVPNCore.xcframework
 
 build-ios-artifact: build-mobile-ios verify-mobile-ios
-	rm -f build/PPVPNCore.xcframework.zip build/ios-SHA256SUMS
-	ditto -c -k --sequesterRsrc --keepParent build/PPVPNCore.xcframework build/PPVPNCore.xcframework.zip
-	shasum -a 256 build/PPVPNCore.xcframework.zip > build/ios-SHA256SUMS
+	rm -f build/PPVPNCore-ios.xcframework.zip build/ios-SHA256SUMS
+	ditto -c -k --sequesterRsrc --keepParent build/PPVPNCore.xcframework build/PPVPNCore-ios.xcframework.zip
+	shasum -a 256 build/PPVPNCore-ios.xcframework.zip > build/ios-SHA256SUMS
 
 build-mobile-macos:
 	mkdir -p build
