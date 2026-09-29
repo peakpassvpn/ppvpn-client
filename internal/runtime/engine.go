@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	box "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -47,7 +47,7 @@ func (e *singEngine) selectOutbound(outboundTag string) bool {
 type engineFactory func(context.Context, option.Options) (engine, error)
 
 func newSingBox(ctx context.Context, options option.Options) (engine, error) {
-	instance, err := box.New(box.Options{Context: include.Context(ctx), Options: options})
+	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
 	if err != nil {
 		return nil, err
 	}

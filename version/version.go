@@ -2,7 +2,7 @@ package version
 
 const (
 	CoreAPIVersion            = 1
-	ProfileSchemaVersion      = 2
+	ProfileSchemaVersion      = 1
 	FlowAdapterVersion        = 1
 	LocalProxyContractVersion = 1
 	CoreVersion               = "0.3.0"

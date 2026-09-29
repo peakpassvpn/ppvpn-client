@@ -5,7 +5,7 @@
 ## Windows
 
 特权 `ppvpn-service` 作为唯一 runtime owner 启动 Windows x64 core 制品，先读取
-`version` 并要求 Core API v1、Profile Schema v2。service 负责权限、TUN、路由、DNS、
+`version` 并要求 Core API v1、Profile Schema 1。service 负责权限、TUN、路由、DNS、
 进程校验和控制通道；Profile 的 `DIRECT`、`REJECT`、selected/fixed-node `PROXY`
 语义只由 core 判定。
 
@@ -53,7 +53,7 @@ FlowConnection 的 `timeoutMS <= 0` 表示不安装 I/O deadline，适合长连�
 
 1. 平台安全、控制通道和防递归
 2. 每节点 local-proxy 固定节点
-3. Profile v2 ordered rules
+3. Profile ordered rules
 4. `routing.final`
 
 selected-node 切换只影响新 flow；Profile revision 更新走候选构建、受控替换和失败回滚。

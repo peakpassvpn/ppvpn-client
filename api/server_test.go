@@ -17,7 +17,7 @@ import (
 const testSecret = "0123456789abcdef0123456789abcdef"
 
 func apiProfile() *profile.Profile {
-	n := profile.Node{ID: "node", Name: "Tokyo", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}
+	n := profile.Node{ID: "node", Name: "Tokyo", Exit: profile.Exit{Region: "Tokyo", CountryCode: "JP"}, Capabilities: profile.Capabilities{TCP: true, UDP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}}}
 	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r1", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 func testServer(t *testing.T) (*Server, *coreruntime.Core) {
@@ -77,10 +77,10 @@ func TestApplyAndListNeverExposeCredentials(t *testing.T) {
 func TestValidationErrorIsStructuredAndRedacted(t *testing.T) {
 	server, _ := testServer(t)
 	p := apiProfile()
-	p.Nodes[0].Endpoint.IP = "198.18.0.1"
+	p.Nodes[0].Ingresses[0].Endpoint.IP = "198.18.0.1"
 	rec := request(t, server, "/v1/validate-profile", map[string]any{"profile": p}, true)
 	body := rec.Body.String()
-	if !strings.Contains(body, "ENTRY_IP_NOT_PUBLIC") || !strings.Contains(body, "nodes[0].endpoint.ip") || strings.Contains(body, "AAAAAAAAAAAAAAAAAAAAAA==") {
+	if !strings.Contains(body, "ENTRY_IP_NOT_PUBLIC") || !strings.Contains(body, "nodes[0].ingresses[0].endpoint.ip") || strings.Contains(body, "AAAAAAAAAAAAAAAAAAAAAA==") {
 		t.Fatal(body)
 	}
 }
@@ -133,5 +133,45 @@ func TestLocalProxyMetadataAndCredentialAreSeparated(t *testing.T) {
 	if missing.Code != http.StatusBadRequest ||
 		!strings.Contains(missing.Body.String(), `"code":"NODE_NOT_FOUND"`) {
 		t.Fatal(missing.Body.String())
+	}
+}
+
+func TestProbeEntrancesMethodAndShape(t *testing.T) {
+	server, core := testServer(t)
+	if _, err := core.ApplyProfile(apiProfile(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	bad := request(t, server, "/v1/probe-entrances", map[string]any{"method": "udp"}, true)
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), `"code":"PROBE_METHOD_UNSUPPORTED"`) {
+		t.Fatal(bad.Body.String())
+	}
+	for _, method := range []string{"tcp", "icmp"} {
+		rec := request(t, server, "/v1/probe-entrances", map[string]any{"method": method, "timeout_ms": 50, "node_ids": []string{"node"}}, true)
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, `"method":"`+method+`"`) || !strings.Contains(body, `"ingress_role":"primary"`) ||
+			!strings.Contains(body, `"ingresses":[{"role":"primary"`) || !strings.Contains(body, `"latency_ms"`) || strings.Contains(body, "connect_ms") {
+			t.Fatal(body)
+		}
+	}
+	missing := request(t, server, "/v1/probe-entrances", map[string]any{"node_ids": []string{"missing"}}, true)
+	if !strings.Contains(missing.Body.String(), `"code":"NODE_NOT_FOUND"`) {
+		t.Fatal(missing.Body.String())
+	}
+}
+
+func TestLocalProxyAPIsReportDisabledCore(t *testing.T) {
+	server, core := testServer(t) // local proxy disabled, as with `serve --tun --local-proxy=false`
+	if _, err := core.ApplyProfile(apiProfile(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/v1/get-local-proxy-metadata", "/v1/get-local-proxy-endpoints", "/v1/get-local-proxy-credential", "/v1/probe-availability"} {
+		rec := request(t, server, path, map[string]any{"node_id": "node", "target": "http://example.com"}, true)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"LOCAL_PROXY_DISABLED"`) {
+			t.Fatalf("%s: %s", path, rec.Body.String())
+		}
+	}
+	nodes := request(t, server, "/v1/list-nodes", map[string]any{}, true)
+	if !strings.Contains(nodes.Body.String(), `"protocol":"shadowsocks"`) || !strings.Contains(nodes.Body.String(), `"ingresses":[{"role":"primary","protocol":"shadowsocks"}]`) || !strings.Contains(nodes.Body.String(), `"country_code":"JP"`) {
+		t.Fatal(nodes.Body.String())
 	}
 }

@@ -68,7 +68,7 @@ X-Request-ID: <optional-client-id>
 | ListNodes | `/v1/list-nodes` | `{}` | NodeSummary[] |
 | SelectNode | `/v1/select-node` | `{"node_id":"stable-id"}` | `{"node_id":"stable-id"}` |
 | GetSelectedNode | `/v1/get-selected-node` | `{}` | NodeSummary |
-| ProbeEntrances | `/v1/probe-entrances` | `{"timeout_ms":5000,"concurrency":4}` | EntranceResult[] |
+| ProbeEntrances | `/v1/probe-entrances` | `{"method":"tcp","timeout_ms":5000,"concurrency":4,"node_ids":["stable-id"]}` | EntranceResult[] |
 | ProbeAvailability | `/v1/probe-availability` | `{"node_id":"stable-id","target":"https://example.com/generate_204","timeout_ms":10000}` | AvailabilityResult |
 | GetLocalProxyMetadata | `/v1/get-local-proxy-metadata` | `{}` | LocalProxyMetadata[] |
 | GetLocalProxyCredential | `/v1/get-local-proxy-credential` | `{"node_id":"stable-id"}` | LocalProxyCredential |
@@ -78,7 +78,9 @@ X-Request-ID: <optional-client-id>
 | GetConnections | `/v1/get-connections` | `{}` | Connection[] |
 | WatchEvents | `GET /v1/watch-events` | 无 | NDJSON Envelope 流 |
 
-`timeout_ms <= 0` 时入口探测默认 5 秒、可用性探测默认 10 秒；最大均为 120 秒。`concurrency < 1` 时默认为 4。
+`timeout_ms <= 0` 时入口探测默认 5 秒（每个入口）、可用性探测默认 10 秒；最大均为 120 秒。`concurrency < 1` 时默认为 4（同时探测的入口数）。入口探测的 `method` 为 `tcp`（缺省）或 `icmp`，其他值返回 `PROBE_METHOD_UNSUPPORTED`；`node_ids` 缺省时探测全部节点。
+
+需要本地代理的方法（`get-local-proxy-metadata`、`get-local-proxy-credential`、`get-local-proxy-endpoints`、`probe-availability`）在 `serve --local-proxy=false` 启动的核心上返回 `LOCAL_PROXY_DISABLED`；`probe-availability` 在核心未 `start` 时返回 `CORE_NOT_RUNNING`（可重试）。
 
 ## DTO
 
@@ -88,7 +90,7 @@ X-Request-ID: <optional-client-id>
 {
   "core_version": "0.3.0",
   "core_api_version": 1,
-  "profile_schema_version": 2,
+  "profile_schema_version": 1,
   "flow_adapter_version": 1,
   "local_proxy_contract_version": 1
 }
@@ -103,22 +105,30 @@ X-Request-ID: <optional-client-id>
 ### NodeSummary
 
 ```json
-{"id":"hk-001","name":"香港 01","protocol":"vless","region":"Hong Kong","country_code":"HK","tcp":true,"udp":true}
+{"id":"hk-001","name":"香港 01","protocol":"vless","region":"Hong Kong","country_code":"HK","tcp":true,"udp":true,
+ "ingresses":[{"role":"primary","protocol":"vless"},{"role":"backup","protocol":"shadowsocks"}]}
 ```
 
-节点列表不含入口地址、TLS 参数或协议凭据。
+`protocol` 是 primary 入口的协议。节点列表不含入口地址、TLS 参数或协议凭据。
 
 ### EntranceResult 与 AvailabilityResult
 
 ```json
-{"node_id":"hk-001","connect_ms":82,"success":true,"measured_at":"2026-07-23T12:00:00Z"}
+{"node_id":"hk-001","method":"icmp","success":true,"latency_ms":95,"ingress_role":"backup",
+ "ingresses":[
+   {"role":"primary","success":false,"latency_ms":0,"error_code":"ICMP_TIMEOUT"},
+   {"role":"backup","success":true,"latency_ms":95}
+ ],
+ "measured_at":"2026-07-23T12:00:00Z"}
 ```
+
+每个入口都被单独测量（`ingresses` 与 Profile 中的入口同序）。节点级 `success`/`latency_ms`/`error_code`/`ingress_role`：primary 成功时取 primary；否则取最快的成功 backup；全部失败时报告 primary 的失败。成功时 `latency_ms` 至少为 1（四舍五入到毫秒），失败时为 0。
 
 ```json
 {"node_id":"hk-001","total_ms":241,"success":true,"http_status":204,"measured_at":"2026-07-23T12:00:01Z"}
 ```
 
-入口错误码：`CANCELED`、`TIMEOUT`、`CONNECT_FAILED`。可用性错误码：`TARGET_INVALID`、`CANCELED`、`TIMEOUT`、`PROXY_REQUEST_FAILED`、`HTTP_STATUS`。探测失败通常仍是成功的 API 调用，应检查每项 `success` 和 `error_code`。
+入口错误码：通用 `CANCELED`、`DNS_FAILED`（入口无 IP 且域名解析失败）；`tcp` 为 `TIMEOUT`、`CONNECT_FAILED`；`icmp` 为 `ICMP_TIMEOUT`、`ICMP_UNREACHABLE`、`ICMP_UNSUPPORTED`（系统不允许非特权 ICMP）、`ICMP_FAILED`。可用性错误码：`TARGET_INVALID`、`CANCELED`、`TIMEOUT`、`PROXY_REQUEST_FAILED`、`HTTP_STATUS`。探测失败通常仍是成功的 API 调用，应检查每项 `success` 和 `error_code`。
 
 ### LocalProxyMetadata 与 LocalProxyCredential
 
@@ -200,15 +210,20 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `NODE_ID_INVALID` / `NODE_ID_DUPLICATE` | 修正后端稳定 ID |
 | `ENTRY_IP_NOT_PUBLIC` / `PORT_INVALID` | 修正入口地址 |
 | `CREDENTIALS_INVALID` | 凭据联合体、内容或编码不合法 |
-| `PROTOCOL_UNSUPPORTED` / `TRANSPORT_UNSUPPORTED` | Profile v2 不支持该功能 |
+| `PROTOCOL_UNSUPPORTED` / `TRANSPORT_UNSUPPORTED` | Profile 不支持该功能 |
+| `INGRESS_ROLE_INVALID` / `INGRESS_COUNT_INVALID` | 入口必须是 1 个 primary（排第一）+ 0–7 个 backup |
+| `EXIT_IP_INVALID` | `exit.ip` 不是合法 IP |
 | `SHADOWSOCKS_METHOD_UNSUPPORTED` / `SHADOWSOCKS_KEY_INVALID` | 修正 SS 2022 方法或密钥长度 |
-| `REALITY_REQUIRED` / `REALITY_SHORT_ID_INVALID` | 修正 REALITY 配置 |
+| `REALITY_REQUIRED` / `REALITY_PUBLIC_KEY_INVALID` / `REALITY_SHORT_ID_INVALID` | 修正 REALITY 配置 |
 | `TLS_REQUIRED` / `TLS_SERVER_NAME_MISMATCH` | 修正 TLS 与连接域名 |
 | `CAPABILITIES_INVALID` | 至少启用 TCP 或 UDP |
 | `DEFAULT_NODE_NOT_FOUND` / `SELECTION_MODE_UNSUPPORTED` | 修正默认选择 |
 | `NODE_NOT_FOUND` | 刷新节点列表；节点可能已被新 Profile 移除 |
 | `SYSTEM_PROXY_UNAVAILABLE` | 无认证系统代理能力已移除；调用方不得重试或降级 |
 | `PROFILE_NOT_APPLIED` | 先应用有效 Profile，再执行需要运行配置的方法 |
+| `PROBE_METHOD_UNSUPPORTED` | 入口探测 `method` 只能是 `tcp` 或 `icmp` |
+| `LOCAL_PROXY_DISABLED` | 该核心以 `--local-proxy=false` 启动；改用本地代理核心 |
+| `CORE_NOT_RUNNING` | 先调用 `/v1/start` |
 | `STREAM_UNSUPPORTED` | 当前 HTTP writer 无法刷新事件流 |
 | `CORE_OPERATION_FAILED` | 安全折叠后的内部失败；读取状态并按产品策略重试/上报 |
 

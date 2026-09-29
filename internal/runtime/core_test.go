@@ -90,7 +90,7 @@ func (f *fakeFactory) create(_ context.Context, _ option.Options) (engine, error
 }
 
 func testProfile(rev, domain, ip string) *profile.Profile {
-	n := profile.Node{ID: "node", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}
+	n := profile.Node{ID: "node", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}}}
 	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: rev, ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 func TestAtomicApplyRollback(t *testing.T) {
@@ -159,10 +159,10 @@ func TestSelectNodeChangesOnlyNewFlowSelection(t *testing.T) {
 	factory := &fakeFactory{}
 	c := newCore(profile.PlatformCapabilities{}, factory.create)
 	p := testProfile("r1", "a.example", "8.8.8.8")
-	second := p.Nodes[0]
+	second := cloneNode(p.Nodes[0])
 	second.ID = "second"
-	second.Endpoint.Domain = "b.example"
-	second.Endpoint.IP = "1.1.1.1"
+	second.Ingresses[0].Endpoint.Domain = "b.example"
+	second.Ingresses[0].Endpoint.IP = "1.1.1.1"
 	p.Nodes = append(p.Nodes, second)
 	if _, err := c.ApplyProfile(p, time.Now()); err != nil {
 		t.Fatal(err)
@@ -238,10 +238,10 @@ func TestOpenFlowHonorsAuthorizedClassificationAcrossSelectedSwitch(t *testing.T
 	factory := &fakeFactory{}
 	c := newCore(profile.PlatformCapabilities{}, factory.create)
 	p := testProfile("r1", "a.example", "8.8.8.8")
-	second := p.Nodes[0]
+	second := cloneNode(p.Nodes[0])
 	second.ID = "second"
-	second.Endpoint.Domain = "b.example"
-	second.Endpoint.IP = "1.1.1.1"
+	second.Ingresses[0].Endpoint.Domain = "b.example"
+	second.Ingresses[0].Endpoint.IP = "1.1.1.1"
 	p.Nodes = append(p.Nodes, second)
 	if _, err := c.ApplyProfile(p, time.Now()); err != nil {
 		t.Fatal(err)
@@ -301,4 +301,9 @@ func TestOpenFlowRejectsDecisionFromOldProfileSnapshot(t *testing.T) {
 	if _, err = c.OpenFlow(context.Background(), flow, decision); err == nil {
 		t.Fatal("stale profile decision was accepted")
 	}
+}
+
+func cloneNode(n profile.Node) profile.Node {
+	n.Ingresses = append([]profile.Ingress(nil), n.Ingresses...)
+	return n
 }

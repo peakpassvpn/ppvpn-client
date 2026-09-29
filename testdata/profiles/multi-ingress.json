@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "revision": "2026-09-29T00:00:00Z#1",
+  "generated_at": "2026-09-29T00:00:00Z",
+  "expires_at": "2099-01-01T00:00:00Z",
+  "nodes": [
+    {
+      "id": "jp-tyo-01",
+      "name": "Tokyo 01",
+      "exit": {"ip": "8.8.4.4", "region": "Tokyo", "country_code": "JP"},
+      "capabilities": {"tcp": true, "udp": true},
+      "ingresses": [
+        {
+          "role": "primary",
+          "protocol": "vless",
+          "endpoint": {"domain": "tyo-01.edge.example.com", "ip": "8.8.8.8", "port": 443},
+          "credentials": {"vless": {"uuid": "00000000-0000-4000-8000-000000000001", "flow": "xtls-rprx-vision"}},
+          "tls": {"server_name": "tyo-01.edge.example.com", "reality": {"public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", "short_id": "01"}},
+          "capabilities": {"tcp": true, "udp": true}
+        },
+        {
+          "role": "backup",
+          "protocol": "shadowsocks",
+          "endpoint": {"domain": "tyo-01-relay.edge.example.com", "port": 8443},
+          "credentials": {"shadowsocks": {"method": "2022-blake3-aes-128-gcm", "server_key": "AAAAAAAAAAAAAAAAAAAAAA=="}},
+          "capabilities": {"tcp": true, "udp": true}
+        }
+      ]
+    },
+    {
+      "id": "us-sjc-01",
+      "name": "San Jose 01",
+      "exit": {"region": "San Jose", "country_code": "US"},
+      "capabilities": {"tcp": true, "udp": false},
+      "ingresses": [
+        {
+          "role": "primary",
+          "protocol": "anytls",
+          "endpoint": {"domain": "sjc-01.edge.example.com", "ip": "1.1.1.1", "port": 443},
+          "credentials": {"anytls": {"password": "anytls-password"}},
+          "tls": {"server_name": "sjc-01.edge.example.com"},
+          "capabilities": {"tcp": true, "udp": false}
+        }
+      ]
+    }
+  ],
+  "selection": {"mode": "manual", "default_node_id": "jp-tyo-01"},
+  "routing": {
+    "rules": [
+      {"id": "lan", "match": {"ip_is_private": true}, "action": {"type": "direct"}},
+      {"id": "video", "match": {"domain_suffixes": ["video.example"]}, "action": {"type": "proxy", "target": "node", "node_id": "us-sjc-01"}}
+    ],
+    "final": {"type": "proxy", "target": "selected"}
+  }
+}

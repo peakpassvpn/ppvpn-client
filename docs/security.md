@@ -38,7 +38,7 @@ Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任
 ## Profile 防护
 
 - JSON 严格解码，未知字段、歧义 credential union 和尾随值全部失败关闭。
-- 只接受固定协议集合；Profile v2 拒绝未知 transport。
+- 只接受固定协议集合；Profile 拒绝未知 transport。
 - 入口探测 IP 必须是公开单播，并明确拒绝私网、回环、链路本地、CGNAT、文档、基准测试和保留网段。
 - 实际协议连接使用域名；需要 TLS 时 SNI 必须与该域名相等。
 - 后端不能控制平台 TUN、本地监听、日志或任何 sing-box/Clash 字段。

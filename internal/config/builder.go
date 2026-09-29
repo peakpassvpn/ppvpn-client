@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	C "github.com/sagernet/sing-box/constant"
@@ -18,8 +19,13 @@ import (
 )
 
 type BuildResult struct {
-	Options  option.Options
+	Options option.Options
+	// NodeTags maps a logical node id to the outbound that represents it: the
+	// ingress outbound itself for single-ingress nodes, or the failover group.
 	NodeTags map[string]string
+	// OutboundNodes maps every node and ingress outbound tag back to its
+	// logical node id (used to attribute connections).
+	OutboundNodes map[string]string
 }
 
 const selectedOutboundTag = "selected"
@@ -32,20 +38,17 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 	if err := profile.Validate(p, now); err != nil {
 		return nil, err
 	}
-	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes))}
+	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes)), OutboundNodes: map[string]string{}}
 	// sing-box logs are disabled at the dependency boundary because upstream
 	// error messages are not guaranteed to preserve our credential policy.
 	// Structured first-party runtime events remain available through WatchEvents.
 	result.Options.Log = &option.LogOptions{Disabled: true, Level: normalizedLogLevel(platform.LogLevel), Timestamp: true}
 	for i := range p.Nodes {
-		n := &p.Nodes[i]
-		tag := nodeTag(n.ID)
-		result.NodeTags[n.ID] = tag
-		out, err := buildOutbound(*n, tag)
+		outbounds, err := buildNode(result, p.Nodes[i])
 		if err != nil {
-			return nil, fmt.Errorf("build node %q: %w", n.ID, err)
+			return nil, fmt.Errorf("build node %q: %w", p.Nodes[i].ID, err)
 		}
-		result.Options.Outbounds = append(result.Options.Outbounds, out)
+		result.Options.Outbounds = append(result.Options.Outbounds, outbounds...)
 	}
 	selectedTags := make([]string, 0, len(p.Nodes))
 	for _, node := range p.Nodes {
@@ -65,7 +68,7 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 		}
 	}
 	if platform.TUN.Enabled {
-		if err := addTUN(result, platform); err != nil {
+		if err := addTUN(result, platform, ingressPrefixes(p)); err != nil {
 			return nil, err
 		}
 	}
@@ -77,18 +80,31 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 
 func addPlatformSafetyRules(result *BuildResult, p *profile.Profile) {
 	ensureDirectOutbound(result)
+	// Every ingress (primary and backups) must bypass the tunnel, otherwise
+	// failing over to a backup would route its handshake back into the TUN.
+	seenDomain, seenIP := map[string]bool{}, map[string]bool{}
 	for _, node := range p.Nodes {
-		domain, ok := profile.NormalizeDomain(node.Endpoint.Domain)
-		if ok {
+		for _, ingress := range node.Ingresses {
+			if domain, ok := profile.NormalizeDomain(ingress.Endpoint.Domain); ok && !seenDomain[domain] {
+				seenDomain[domain] = true
+				result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
+					option.RawDefaultRule{Domain: badoption.Listable[string]{domain}},
+					"direct",
+				))
+			}
+			if ingress.Endpoint.IP == "" {
+				continue
+			}
+			ip := netip.MustParseAddr(ingress.Endpoint.IP).String()
+			if seenIP[ip] {
+				continue
+			}
+			seenIP[ip] = true
 			result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
-				option.RawDefaultRule{Domain: badoption.Listable[string]{domain}},
+				option.RawDefaultRule{IPCIDR: badoption.Listable[string]{ip}},
 				"direct",
 			))
 		}
-		result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
-			option.RawDefaultRule{IPCIDR: badoption.Listable[string]{netip.MustParseAddr(node.Endpoint.IP).String()}},
-			"direct",
-		))
 	}
 }
 
@@ -112,7 +128,26 @@ func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 	return nil
 }
 
-func addTUN(result *BuildResult, platform profile.PlatformCapabilities) error {
+// ingressPrefixes returns a host prefix for every ingress IP of every node.
+func ingressPrefixes(p *profile.Profile) []netip.Prefix {
+	seen := map[netip.Addr]bool{}
+	var out []netip.Prefix
+	for _, node := range p.Nodes {
+		for _, ingress := range node.Ingresses {
+			if ingress.Endpoint.IP == "" {
+				continue
+			}
+			ip := netip.MustParseAddr(ingress.Endpoint.IP).Unmap()
+			if !seen[ip] {
+				seen[ip] = true
+				out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
+			}
+		}
+	}
+	return out
+}
+
+func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded []netip.Prefix) error {
 	stack := platform.TUN.Stack
 	if stack == "" {
 		stack = "mixed"
@@ -123,7 +158,20 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities) error {
 		return fmt.Errorf("unsupported TUN stack %q", stack)
 	}
 	autoRoute := platform.Platform != "ios" && platform.Platform != "android"
-	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: "tun", Options: &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{netip.MustParsePrefix("172.19.0.1/30")}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}})
+	if autoRoute {
+		// Desktop TUN owns the default route; bind the core's own outbound
+		// sockets (ingress handshakes, direct traffic) to the physical
+		// interface so they cannot loop back into the tunnel.
+		result.Options.Route.AutoDetectInterface = true
+	}
+	options := &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{netip.MustParsePrefix("172.19.0.1/30")}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}
+	if autoRoute {
+		// Keep every ingress IP (primary and backups) out of the tunnel at the
+		// OS routing level too, so handshakes and ICMP/TCP probes from any
+		// process (including an unprivileged sibling core) never loop.
+		options.RouteExcludeAddress = excluded
+	}
+	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: "tun", Options: options})
 	return nil
 }
 
@@ -274,7 +322,37 @@ func routeRule(raw option.RawDefaultRule, outbound string) option.Rule {
 	}
 }
 
-func buildOutbound(n profile.Node, tag string) (option.Outbound, error) {
+// buildNode renders one logical node. A single-ingress node is the ingress
+// outbound itself (tagged with the node tag); a multi-ingress node renders one
+// outbound per ingress plus a failover group carrying the node tag.
+func buildNode(result *BuildResult, n profile.Node) ([]option.Outbound, error) {
+	tag := nodeTag(n.ID)
+	result.NodeTags[n.ID] = tag
+	result.OutboundNodes[tag] = n.ID
+	if len(n.Ingresses) == 1 {
+		out, err := buildOutbound(n.Ingresses[0], tag)
+		if err != nil {
+			return nil, err
+		}
+		return []option.Outbound{out}, nil
+	}
+	outbounds := make([]option.Outbound, 0, len(n.Ingresses)+1)
+	members := make([]string, 0, len(n.Ingresses))
+	for i, ingress := range n.Ingresses {
+		ingressTag := fmt.Sprintf("%s-%d", tag, i)
+		out, err := buildOutbound(ingress, ingressTag)
+		if err != nil {
+			return nil, fmt.Errorf("ingress %d: %w", i, err)
+		}
+		result.OutboundNodes[ingressTag] = n.ID
+		members = append(members, ingressTag)
+		outbounds = append(outbounds, out)
+	}
+	group := option.Outbound{Type: failover.Type, Tag: tag, Options: &failover.Options{Outbounds: members}}
+	return append([]option.Outbound{group}, outbounds...), nil
+}
+
+func buildOutbound(n profile.Ingress, tag string) (option.Outbound, error) {
 	server := option.ServerOptions{Server: n.Endpoint.Domain, ServerPort: n.Endpoint.Port}
 	switch n.Protocol {
 	case profile.ProtocolShadowsocks:
@@ -298,6 +376,9 @@ func buildTLS(t *profile.TLS) *option.OutboundTLSOptions {
 	o := &option.OutboundTLSOptions{Enabled: true, ServerName: t.ServerName, Insecure: t.Insecure, ALPN: badoption.Listable[string](t.ALPN)}
 	if t.Reality != nil {
 		o.Reality = &option.OutboundRealityOptions{Enabled: true, PublicKey: t.Reality.PublicKey, ShortID: t.Reality.ShortID}
+		// sing-box's REALITY client is implemented on uTLS: it must be enabled
+		// here and the binary must be built with the with_utls tag.
+		o.UTLS = &option.OutboundUTLSOptions{Enabled: true, Fingerprint: "chrome"}
 	}
 	return o
 }

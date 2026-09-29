@@ -2,7 +2,9 @@ package profile
 
 import "time"
 
-const CurrentSchemaVersion = 2
+// CurrentSchemaVersion is the only accepted profile format. There is no
+// version negotiation: a profile with any other schema_version is rejected.
+const CurrentSchemaVersion = 1
 
 type Profile struct {
 	SchemaVersion int       `json:"schema_version"`
@@ -14,17 +16,41 @@ type Profile struct {
 	Routing       Routing   `json:"routing,omitempty"`
 }
 
+// Node is a logical node: one exit identity reachable through one or more
+// ingresses. Everything that addresses a node (selection, routing node_id,
+// local proxies, probes) uses Node.ID; ingresses are an implementation detail
+// of how the core reaches that exit.
 type Node struct {
 	ID           string       `json:"id"`
 	Name         string       `json:"name"`
+	Exit         Exit         `json:"exit"`
+	Capabilities Capabilities `json:"capabilities"`
+	Ingresses    []Ingress    `json:"ingresses"`
+}
+
+type IngressRole string
+
+const (
+	IngressRolePrimary IngressRole = "primary"
+	IngressRoleBackup  IngressRole = "backup"
+)
+
+// Ingress is one concrete way to reach a logical node's exit. The first
+// ingress must be the primary; any following ingresses are backups tried in
+// order when the primary is unhealthy.
+type Ingress struct {
+	Role         IngressRole  `json:"role"`
 	Protocol     Protocol     `json:"protocol"`
 	Endpoint     Endpoint     `json:"endpoint"`
-	Exit         *Exit        `json:"exit,omitempty"`
 	Credentials  Credentials  `json:"credentials"`
 	TLS          *TLS         `json:"tls,omitempty"`
 	Transport    *Transport   `json:"transport,omitempty"`
 	Capabilities Capabilities `json:"capabilities"`
 }
+
+// Primary returns the node's primary ingress. It must only be called on a
+// validated profile.
+func (n Node) Primary() Ingress { return n.Ingresses[0] }
 
 type Protocol string
 
@@ -32,15 +58,18 @@ const (
 	ProtocolShadowsocks Protocol = "shadowsocks"
 	ProtocolVLESS       Protocol = "vless"
 	ProtocolAnyTLS      Protocol = "anytls"
-	// Reserved for later schema revisions; v2 validation intentionally rejects them.
+	// Reserved; validation intentionally rejects them.
 	ProtocolHysteria2 Protocol = "hysteria2"
 	ProtocolTrojan    Protocol = "trojan"
 	ProtocolWireGuard Protocol = "wireguard"
 )
 
+// Endpoint is an ingress address. Domain is always required (it is also the
+// TLS server name); IP is optional and, when present, must be a public
+// unicast address that is used for probing and TUN route exclusion.
 type Endpoint struct {
 	Domain string `json:"domain"`
-	IP     string `json:"ip"`
+	IP     string `json:"ip,omitempty"`
 	Port   uint16 `json:"port"`
 }
 type Exit struct {
@@ -87,7 +116,7 @@ type RoutingAction struct {
 	NodeID string `json:"node_id,omitempty"`
 }
 
-// Credentials is a tagged union. Exactly one member matching Node.Protocol is required.
+// Credentials is a tagged union. Exactly one member matching Ingress.Protocol is required.
 type Credentials struct {
 	Shadowsocks *ShadowsocksCredentials `json:"shadowsocks,omitempty"`
 	VLESS       *VLESSCredentials       `json:"vless,omitempty"`

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
+	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/routing"
 	"github.com/peakpassvpn/ppvpn-core/version"
@@ -64,17 +65,30 @@ func (b *Bridge) Start() error            { return safeError(b.core.Start()) }
 func (b *Bridge) Stop() error             { return safeError(b.core.Stop()) }
 func (b *Bridge) Status() (string, error) { return encode(b.core.Status()) }
 func (b *Bridge) ListNodes() (string, error) {
-	type summary struct {
-		ID       string `json:"id"`
-		Name     string `json:"name"`
+	type ingress struct {
+		Role     string `json:"role"`
 		Protocol string `json:"protocol"`
-		TCP      bool   `json:"tcp"`
-		UDP      bool   `json:"udp"`
+	}
+	type summary struct {
+		ID          string    `json:"id"`
+		Name        string    `json:"name"`
+		Protocol    string    `json:"protocol"`
+		Region      string    `json:"region,omitempty"`
+		CountryCode string    `json:"country_code,omitempty"`
+		TCP         bool      `json:"tcp"`
+		UDP         bool      `json:"udp"`
+		Ingresses   []ingress `json:"ingresses"`
 	}
 	nodes := b.core.Nodes()
 	result := make([]summary, len(nodes))
 	for i, n := range nodes {
-		result[i] = summary{ID: n.ID, Name: n.Name, Protocol: string(n.Protocol), TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP}
+		result[i] = summary{ID: n.ID, Name: n.Name, Region: n.Exit.Region, CountryCode: n.Exit.CountryCode, TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP, Ingresses: make([]ingress, len(n.Ingresses))}
+		for j, in := range n.Ingresses {
+			result[i].Ingresses[j] = ingress{Role: string(in.Role), Protocol: string(in.Protocol)}
+		}
+		if len(n.Ingresses) > 0 {
+			result[i].Protocol = string(n.Ingresses[0].Protocol)
+		}
 	}
 	return encode(result)
 }
@@ -120,8 +134,19 @@ func (b *Bridge) OpenFlow(flowJSON, decisionJSON string, timeoutMS int) (*FlowCo
 }
 func (b *Bridge) Traffic() (string, error)     { return encode(b.core.Traffic()) }
 func (b *Bridge) Connections() (string, error) { return encode(b.core.Connections()) }
+
+// ProbeEntrances measures every ingress with a TCP connect.
 func (b *Bridge) ProbeEntrances(timeoutMS, concurrency int) (string, error) {
-	results, err := b.core.ProbeEntrances(context.Background(), mobileDuration(timeoutMS, 5*time.Second), concurrency)
+	return b.ProbeEntrancesWithMethod("tcp", timeoutMS, concurrency)
+}
+
+// ProbeEntrancesWithMethod measures every ingress with "tcp" or "icmp".
+func (b *Bridge) ProbeEntrancesWithMethod(method string, timeoutMS, concurrency int) (string, error) {
+	parsed, err := probe.ParseMethod(method)
+	if err != nil {
+		return "", safeError(err)
+	}
+	results, err := b.core.ProbeEntrances(context.Background(), parsed, mobileDuration(timeoutMS, 5*time.Second), concurrency)
 	if err != nil {
 		return "", safeError(err)
 	}

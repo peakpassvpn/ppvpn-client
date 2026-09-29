@@ -31,7 +31,10 @@ type Status struct {
 }
 
 var (
-	ErrProfileNotApplied = errors.New("no profile applied")
+	ErrProfileNotApplied  = errors.New("no profile applied")
+	ErrLocalProxyDisabled = errors.New("local proxy is disabled for this core")
+	ErrCoreNotRunning     = errors.New("core is not running")
+	ErrNodeNotFound       = errors.New("node not found")
 )
 
 // Core serializes lifecycle mutations and owns all sing-box values. Reads and
@@ -182,7 +185,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 	}
 	if oldProfile != nil {
 		for _, n := range candidateProfile.Nodes {
-			if before, ok := findNode(oldProfile, n.ID); ok && before.Endpoint != n.Endpoint {
+			if before, ok := findNode(oldProfile, n.ID); ok && !sameIngressEndpoints(before, n) {
 				c.emit(Event{Type: EventNodeEndpointChanged, At: now, Revision: candidateProfile.Revision, NodeID: n.ID})
 			}
 		}
@@ -214,6 +217,9 @@ func (c *Core) LocalProxyMetadata() []localproxy.Metadata {
 }
 
 func (c *Core) LocalProxyCredential(nodeID string) (localproxy.Credential, error) {
+	if !c.platform.LocalProxy.Enabled {
+		return localproxy.Credential{}, ErrLocalProxyDisabled
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, endpoint := range c.proxyEndpoints {
@@ -227,7 +233,7 @@ func (c *Core) LocalProxyCredential(nodeID string) (localproxy.Credential, error
 			}, nil
 		}
 	}
-	return localproxy.Credential{}, fmt.Errorf("local proxy node not found")
+	return localproxy.Credential{}, ErrNodeNotFound
 }
 
 func (c *Core) Traffic() Traffic {
@@ -249,11 +255,9 @@ func (c *Core) Connections() []Connection {
 		return []Connection{}
 	}
 	_, connections := source.telemetrySnapshot()
-	reverse := map[string]string{}
+	var reverse map[string]string
 	if built != nil {
-		for id, tag := range built.NodeTags {
-			reverse[tag] = id
-		}
+		reverse = built.OutboundNodes
 	}
 	for i := range connections {
 		connections[i].NodeID = reverse[connections[i].OutboundTag]
@@ -261,21 +265,25 @@ func (c *Core) Connections() []Connection {
 	return connections
 }
 
-func (c *Core) ProbeEntrances(ctx context.Context, timeout time.Duration, concurrency int) ([]probe.EntranceResult, error) {
-	return c.probeEntrances(ctx, timeout, concurrency, nil)
+// ProbeEntrances measures every ingress of every node with the given method
+// ("tcp" when empty). It needs an applied profile but not a running core.
+func (c *Core) ProbeEntrances(ctx context.Context, method probe.Method, timeout time.Duration, concurrency int) ([]probe.EntranceResult, error) {
+	return c.probeEntrances(ctx, method, timeout, concurrency, nil)
 }
 
 func (c *Core) ProbeEntrancesForNodes(
 	ctx context.Context,
+	method probe.Method,
 	timeout time.Duration,
 	concurrency int,
 	nodeIDs []string,
 ) ([]probe.EntranceResult, error) {
-	return c.probeEntrances(ctx, timeout, concurrency, nodeIDs)
+	return c.probeEntrances(ctx, method, timeout, concurrency, nodeIDs)
 }
 
 func (c *Core) probeEntrances(
 	ctx context.Context,
+	method probe.Method,
 	timeout time.Duration,
 	concurrency int,
 	nodeIDs []string,
@@ -283,6 +291,9 @@ func (c *Core) probeEntrances(
 	c.mu.RLock()
 	p := c.active
 	c.mu.RUnlock()
+	if p == nil {
+		return nil, ErrProfileNotApplied
+	}
 	clone, err := cloneProfile(p)
 	if err != nil {
 		return nil, err
@@ -299,12 +310,13 @@ func (c *Core) probeEntrances(
 			}
 		}
 		if len(nodes) != len(wanted) {
-			return nil, fmt.Errorf("one or more probe nodes were not found")
+			return nil, fmt.Errorf("one or more probe nodes were not found: %w", ErrNodeNotFound)
 		}
 		clone.Nodes = nodes
 		clone.Selection.DefaultNodeID = nodes[0].ID
+		clone.Routing = profile.Routing{Final: profile.RoutingAction{Type: "direct"}}
 	}
-	results, err := probe.Entrances(ctx, clone, timeout, concurrency, nil)
+	results, err := probe.Entrances(ctx, clone, probe.Options{Method: method, Timeout: timeout, Concurrency: concurrency})
 	if err == nil {
 		for _, result := range results {
 			message := result.ErrorCode
@@ -316,7 +328,23 @@ func (c *Core) probeEntrances(
 	}
 	return results, err
 }
+
+// ProbeAvailability performs the end-to-end "connect" test through the node's
+// authenticated local proxy. It requires a core started with local proxies
+// enabled (e.g. `serve --tun=false --local-proxy=true`).
 func (c *Core) ProbeAvailability(ctx context.Context, nodeID, target string, timeout time.Duration) (probe.AvailabilityResult, error) {
+	if !c.platform.LocalProxy.Enabled {
+		return probe.AvailabilityResult{}, ErrLocalProxyDisabled
+	}
+	c.mu.RLock()
+	active, running := c.active != nil, c.engine != nil
+	c.mu.RUnlock()
+	if !active {
+		return probe.AvailabilityResult{}, ErrProfileNotApplied
+	}
+	if !running {
+		return probe.AvailabilityResult{}, ErrCoreNotRunning
+	}
 	for _, endpoint := range c.LocalProxyEndpoints() {
 		if endpoint.NodeID == nodeID {
 			result := probe.Availability(ctx, endpoint, target, timeout)
@@ -328,7 +356,7 @@ func (c *Core) ProbeAvailability(ctx context.Context, nodeID, target string, tim
 			return result, nil
 		}
 	}
-	return probe.AvailabilityResult{}, fmt.Errorf("node local proxy endpoint not found")
+	return probe.AvailabilityResult{}, ErrNodeNotFound
 }
 
 func (c *Core) Start() error {
@@ -503,6 +531,21 @@ func cloneProfile(p *profile.Profile) (*profile.Profile, error) {
 		return nil, err
 	}
 	return &clone, nil
+}
+
+// LocalProxyEnabled reports whether this core runs per-node local proxies.
+func (c *Core) LocalProxyEnabled() bool { return c.platform.LocalProxy.Enabled }
+
+func sameIngressEndpoints(a, b profile.Node) bool {
+	if len(a.Ingresses) != len(b.Ingresses) {
+		return false
+	}
+	for i := range a.Ingresses {
+		if a.Ingresses[i].Endpoint != b.Ingresses[i].Endpoint {
+			return false
+		}
+	}
+	return true
 }
 
 func hasNode(p *profile.Profile, id string) bool { _, ok := findNode(p, id); return ok }

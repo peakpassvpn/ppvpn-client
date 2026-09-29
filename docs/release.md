@@ -39,8 +39,10 @@ GitHub Actions 按平台拆分桌面产物：
 - `build:windows-artifact`：Windows amd64/arm64 可执行文件与
   `windows-SHA256SUMS`。
 
-本地可分别运行 `make build-macos-artifact` 和 `make build-windows-artifact`；
-原有的 `make build-desktop-artifact` 保留为同时构建两者的兼容入口。
+本地可分别运行 `make build-macos-artifact`、`make build-macos-cli-artifact`
+（`CGO_ENABLED=0` 的 arm64/x86_64 `ppvpn-core serve` CLI，经 `lipo` 合并为
+`build/ppvpn-core-darwin-universal`，并写入 `macos-cli-SHA256SUMS`）和
+`make build-windows-artifact`；`make build-desktop-artifact` 同时构建三者。
 
 这些是未签名核心二进制。最终产品仍需在桌面 App 的发布流水线中完成平台代码签名、安装包封装、公证/信誉链和更新签名。
 

@@ -11,7 +11,7 @@ import (
 func TestEachLocalProxyRoutesToItsNode(t *testing.T) {
 	a := node(profile.ProtocolShadowsocks)
 	a.ID = "a"
-	a.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	a.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	b := a
 	b.ID = "b"
 	p := &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{a, b}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "a"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
@@ -37,7 +37,7 @@ func TestEachLocalProxyRoutesToItsNode(t *testing.T) {
 
 func TestPlatformCapabilitiesStayOutsideProfile(t *testing.T) {
 	n := node(profile.ProtocolShadowsocks)
-	n.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	p := base(n)
 	proxy := localproxy.Endpoint{NodeID: n.ID, Listen: "127.0.0.1", Port: 10001, Username: "u", Password: "p"}
 	got, err := BuildWithLocalProxies(p, profile.PlatformCapabilities{Platform: "macos", TUN: profile.TUNCapabilities{Enabled: true, Stack: "mixed"}}, []localproxy.Endpoint{proxy}, time.Now())
@@ -56,7 +56,7 @@ func TestPlatformCapabilitiesStayOutsideProfile(t *testing.T) {
 
 func TestPrivateBypassRuleFollowsPerNodeRules(t *testing.T) {
 	n := node(profile.ProtocolShadowsocks)
-	n.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	p := base(n)
 	p.Routing.Rules = []profile.RoutingRule{{
 		ID:     "private-direct",
@@ -79,9 +79,9 @@ func TestPrivateBypassRuleFollowsPerNodeRules(t *testing.T) {
 	}
 }
 
-func TestV2RuleMappingAndFixedPriority(t *testing.T) {
+func TestRuleMappingAndFixedPriority(t *testing.T) {
 	n := node(profile.ProtocolShadowsocks)
-	n.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	p := base(n)
 	p.Routing.Rules = []profile.RoutingRule{{
 		ID: "ordered",
