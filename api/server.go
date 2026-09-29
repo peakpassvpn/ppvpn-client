@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
@@ -24,7 +25,11 @@ type Server struct {
 	core   *coreruntime.Core
 	secret string
 	mux    *http.ServeMux
+	log    *corelog.Logger
 }
+
+// SetLogger sets where the causes of folded errors are logged.
+func (s *Server) SetLogger(log *corelog.Logger) { s.log = log }
 
 func NewServer(core *coreruntime.Core, sessionSecret string) (*Server, error) {
 	if core == nil {
@@ -33,7 +38,7 @@ func NewServer(core *coreruntime.Core, sessionSecret string) (*Server, error) {
 	if len(sessionSecret) < 32 {
 		return nil, fmt.Errorf("session secret must contain at least 32 characters")
 	}
-	s := &Server{core: core, secret: sessionSecret, mux: http.NewServeMux()}
+	s := &Server{core: core, secret: sessionSecret, mux: http.NewServeMux(), log: corelog.Discard()}
 	s.routes()
 	return s, nil
 }
@@ -238,22 +243,35 @@ func (s *Server) watchEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// lifecyclePaths are logged on success too, so the log shows the sequence
+// that led to a failure.
+var lifecyclePaths = map[string]bool{"/v1/apply-profile": true, "/v1/start": true, "/v1/stop": true, "/v1/reload": true, "/v1/set-system-proxy": true}
+
 func (s *Server) respond(w http.ResponseWriter, r *http.Request, data any, err error) {
+	id := requestID(r)
 	if err == nil {
-		write(w, http.StatusOK, Envelope{RequestID: requestID(r), OK: true, Data: data})
+		if lifecyclePaths[r.URL.Path] {
+			s.log.Info("request ok", "path", r.URL.Path, "request_id", id)
+		}
+		write(w, http.StatusOK, Envelope{RequestID: id, OK: true, Data: data})
 		return
 	}
 	var structured *profile.ValidationError
 	if errors.As(err, &structured) {
-		write(w, http.StatusBadRequest, Envelope{RequestID: requestID(r), OK: false, Error: &Error{Code: structured.Code, Message: structured.Message, Field: structured.Field, Retryable: structured.Retryable}})
+		s.log.Info("request rejected", "path", r.URL.Path, "request_id", id, "code", structured.Code, "field", structured.Field, "stage", coreruntime.Stages(err))
+		write(w, http.StatusBadRequest, Envelope{RequestID: id, OK: false, Error: &Error{Code: structured.Code, Message: structured.Message, Field: structured.Field, Retryable: structured.Retryable}})
 		return
 	}
 	var ae *apiErr
 	if errors.As(err, &ae) {
-		write(w, http.StatusBadRequest, Envelope{RequestID: requestID(r), OK: false, Error: &ae.Detail})
+		s.log.Info("request rejected", "path", r.URL.Path, "request_id", id, "code", ae.Detail.Code)
+		write(w, http.StatusBadRequest, Envelope{RequestID: id, OK: false, Error: &ae.Detail})
 		return
 	}
-	write(w, http.StatusBadRequest, Envelope{RequestID: requestID(r), OK: false, Error: &Error{Code: "CORE_OPERATION_FAILED", Message: "core operation failed"}})
+	// The response stays folded; the cause, its stage and wrap chain go to
+	// the core log only.
+	s.log.Error("CORE_OPERATION_FAILED", "path", r.URL.Path, "request_id", id, "stage", coreruntime.Stages(err), "error", err, "chain", corelog.Chain(err))
+	write(w, http.StatusBadRequest, Envelope{RequestID: id, OK: false, Error: &Error{Code: "CORE_OPERATION_FAILED", Message: "core operation failed"}})
 }
 func decode(r *http.Request) (rawRequest, error) {
 	defer r.Body.Close()
