@@ -12,7 +12,17 @@ package privateacl
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
+
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 )
+
+var logger atomic.Pointer[corelog.Logger]
+
+// SetLogger sets the diagnostic log that records a successful repair of the
+// ppvpn-core 0.4.0 ACL. Only paths and ACLs are logged, never file contents.
+// A nil logger (the default) logs nothing.
+func SetLogger(l *corelog.Logger) { logger.Store(l) }
 
 // ErrNotPrivate reports an existing file whose permissions are broader than
 // private. It is never repaired automatically: the secret may have leaked.

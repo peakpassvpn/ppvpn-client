@@ -259,3 +259,76 @@ func TestSharedLocalProxyRoutesByUsername(t *testing.T) {
 	}
 	conn.Close()
 }
+
+// TestSharedLocalProxyConnectAuthFailureChallenges runs the real core: a
+// CONNECT without Proxy-Authorization, with a wrong password or for an unknown
+// user reads back a 407 Basic challenge and then a clean EOF (browsers need
+// the challenge to prompt), and a correct CONNECT still tunnels.
+func TestSharedLocalProxyConnectAuthFailureChallenges(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer target.Close()
+	targetAddress := strings.TrimPrefix(target.URL, "http://")
+	serverPort := startShadowsocksServer(t)
+	p := &profile.Profile{
+		SchemaVersion: profile.CurrentSchemaVersion, Revision: "challenge-1", ExpiresAt: time.Now().Add(time.Hour),
+		Nodes: []profile.Node{{ID: "alpha-1", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true},
+			Ingresses: []profile.Ingress{localSSIngress(profile.IngressRolePrimary, "a0", 0, serverPort)}}},
+		Selection: profile.Selection{Mode: "manual", DefaultNodeID: "alpha-1"},
+		Routing:   profile.Routing{Final: profile.RoutingAction{Type: "reject"}},
+	}
+	platform := profile.PlatformCapabilities{Platform: "windows", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
+	core := newLocalProxyTestCore(t, platform)
+	if _, err := core.ApplyProfile(p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	endpoints := core.LocalProxyEndpoints()
+	if len(endpoints) != 1 {
+		t.Fatalf("endpoints: %#v", endpoints)
+	}
+	alpha := endpoints[0]
+	prefix, _, _ := localproxy.ParseUsername(alpha.Username)
+	authorization := func(username, password string) string {
+		return "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password)) + "\r\n"
+	}
+	head := "CONNECT " + targetAddress + " HTTP/1.1\r\nHost: " + targetAddress + "\r\n"
+	for name, request := range map[string]string{
+		"no auth":        head + "\r\n",
+		"wrong password": head + authorization(alpha.Username, alpha.Password+"x") + "\r\n",
+		"unknown user":   head + authorization(localproxy.FormatUsername(prefix, "missing"), alpha.Password) + "\r\n",
+	} {
+		conn, err := net.DialTimeout("tcp", proxyAddress(alpha), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err = io.WriteString(conn, request); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		reader := bufio.NewReader(conn)
+		response, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			t.Fatalf("%s: no 407: %v", name, err)
+		}
+		if response.StatusCode != http.StatusProxyAuthRequired || !strings.HasPrefix(response.Header.Get("Proxy-Authenticate"), `Basic realm="ppvpn"`) ||
+			response.ContentLength != 0 || !response.Close {
+			t.Fatalf("%s: %q %v", name, response.Status, response.Header)
+		}
+		if n, err := reader.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+			t.Fatalf("%s: after 407: %d %v", name, n, err)
+		}
+		conn.Close()
+	}
+
+	conn, status, err := httpConnect(alpha, alpha.Username, alpha.Password, targetAddress)
+	if err != nil || !strings.HasPrefix(status, "200") {
+		t.Fatalf("authorized CONNECT: %q %v", status, err)
+	}
+	defer conn.Close()
+	if code, err := tunnelGet(conn, targetAddress); err != nil || code != http.StatusNoContent {
+		t.Fatalf("tunnel request: %d %v", code, err)
+	}
+}

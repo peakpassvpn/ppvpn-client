@@ -86,13 +86,18 @@ func privateACL(sids []*windows.SID, directory bool) (*windows.ACL, error) {
 }
 
 func apply(path string, directory bool) error {
-	sids, _, err := currentTrustees()
+	sids, system, err := currentTrustees()
 	if err != nil {
 		return err
 	}
 	acl, err := privateACL(sids, directory)
 	if err != nil {
 		return err
+	}
+	// Only to log a repair; the owner can always read the DACL.
+	var legacyACL string
+	if !system {
+		legacyACL = legacyDACL(path)
 	}
 	// Setting the DACL needs WRITE_DAC, which the owner always has, so this
 	// also repairs objects whose DACL no longer grants this user anything.
@@ -101,7 +106,33 @@ func apply(path string, directory bool) error {
 	if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		return accessError(path, err)
 	}
+	if err == nil && legacyACL != "" {
+		logger.Load().Info("repaired ppvpn-core 0.4.0 private ACL", "path", path, "old_acl", legacyACL, "new_acl", daclSDDL(path))
+	}
 	return err
+}
+
+// legacyDACL returns the SDDL of path's DACL when it is the 0.4.0
+// SYSTEM/Administrators-only ACL, otherwise "".
+func legacyDACL(path string) string {
+	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return ""
+	}
+	legacy, err := legacyTrustees()
+	if err != nil || !privateFor(descriptor, legacy) {
+		return ""
+	}
+	return descriptor.String()
+}
+
+// daclSDDL returns the SDDL of path's DACL, or "unknown" if it cannot be read.
+func daclSDDL(path string) string {
+	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return "unknown"
+	}
+	return descriptor.String()
 }
 
 func accessError(path string, err error) error {
