@@ -168,6 +168,7 @@ func serve(args []string) error {
 }
 
 func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformName string, localProxy, tun bool, tunStack string, exitOnStdinClose bool) error {
+	privateacl.SetLogger(log)
 	info := version.Get()
 	log.Info("serve starting", "core_version", info.CoreVersion, "os", goruntime.GOOS, "arch", goruntime.GOARCH,
 		"platform", platformName, "tun", tun, "tun_stack", tunStack, "local_proxy", localProxy, "state_dir", stateDir, "socket", socket)

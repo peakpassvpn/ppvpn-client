@@ -3,12 +3,15 @@
 package privateacl
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"golang.org/x/sys/windows"
 )
 
@@ -148,6 +151,9 @@ func TestRepairsLegacyACLAsOwner(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var log bytes.Buffer
+	SetLogger(corelog.New(&log))
+	t.Cleanup(func() { SetLogger(nil) })
 	if err = SecureDirectory(dir); err != nil {
 		t.Fatalf("repair directory as owner: %v", err)
 	}
@@ -156,6 +162,31 @@ func TestRepairsLegacyACLAsOwner(t *testing.T) {
 	}
 	if data, err := os.ReadFile(path); err != nil || string(data) != "secret" {
 		t.Fatalf("read after repair: %q %v", data, err)
+	}
+	// One info line per repaired object with path and old/new ACL, and no
+	// file contents.
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(lines) != 2 || strings.Contains(log.String(), "secret") {
+		t.Fatalf("repair log: %s", log.String())
+	}
+	for i, p := range []string{dir, path} {
+		line := lines[i]
+		if !strings.Contains(line, "path="+p+" ") && !strings.Contains(line, "path="+strconv.Quote(p)+" ") {
+			t.Errorf("line %d missing path %s: %s", i, p, line)
+		}
+		for _, want := range []string{"level=info", "repaired ppvpn-core 0.4.0 private ACL", "old_acl=", "(A;;FA;;;BA)", "new_acl=", user.String()} {
+			if !strings.Contains(line, want) {
+				t.Errorf("line %d missing %q: %s", i, want, line)
+			}
+		}
+	}
+	// An already private object is not logged again.
+	log.Reset()
+	if err = SecureDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = CheckFile(path); err != nil || log.Len() != 0 {
+		t.Fatalf("second pass: %v %q", err, log.String())
 	}
 }
 
