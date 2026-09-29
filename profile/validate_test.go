@@ -123,7 +123,7 @@ func TestIngressFailoverShapes(t *testing.T) {
 	}
 	// A backup's own credentials are validated with the same rules.
 	p = validProfile(ProtocolShadowsocks)
-	backup := backupIngress(ProtocolVLESS, 1, "backup.example.com", "")
+	backup := backupIngress(ProtocolAnyTLS, 1, "backup.example.com", "")
 	backup.TLS.ServerName = "other.example.com"
 	p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backup)
 	err := Validate(p, time.Now())
@@ -250,11 +250,25 @@ func TestProtocolFieldsFailClosed(t *testing.T) {
 }
 
 func TestTLSServerNameMustMatchEndpointDomain(t *testing.T) {
-	p := validProfile(ProtocolVLESS)
+	p := validProfile(ProtocolAnyTLS)
 	p.Nodes[0].Ingresses[0].TLS.ServerName = "different.example.com"
 	err := Validate(p, time.Now())
 	var validation *ValidationError
 	if !errors.As(err, &validation) || validation.Code != "TLS_SERVER_NAME_MISMATCH" {
+		t.Fatalf("%#v", err)
+	}
+}
+
+func TestRealityServerNameIsBorrowed(t *testing.T) {
+	p := validProfile(ProtocolVLESS)
+	p.Nodes[0].Ingresses[0].TLS.ServerName = "cloudflare-dns.com"
+	if err := Validate(p, time.Now()); err != nil {
+		t.Fatalf("borrowed REALITY SNI rejected: %v", err)
+	}
+	p.Nodes[0].Ingresses[0].TLS.ServerName = "not a domain"
+	err := Validate(p, time.Now())
+	var validation *ValidationError
+	if !errors.As(err, &validation) || validation.Code != "TLS_SERVER_NAME_INVALID" {
 		t.Fatalf("%#v", err)
 	}
 }

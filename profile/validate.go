@@ -375,8 +375,10 @@ func validateCredentials(n *Ingress, base string) error {
 		if n.TLS == nil || n.TLS.Reality == nil || n.TLS.ServerName == "" || n.TLS.Reality.PublicKey == "" {
 			return invalid("REALITY_REQUIRED", base+".tls.reality", "VLESS REALITY settings are required")
 		}
-		if n.TLS.ServerName != n.Endpoint.Domain {
-			return invalid("TLS_SERVER_NAME_MISMATCH", base+".tls.server_name", "TLS server name must equal endpoint domain")
+		// REALITY borrows a third-party site's SNI, so it deliberately differs
+		// from the endpoint domain; it only has to be a valid host name.
+		if !validDomain(n.TLS.ServerName) {
+			return invalid("TLS_SERVER_NAME_INVALID", base+".tls.server_name", "REALITY server name must be a valid domain")
 		}
 		if !validRealityPublicKey(n.TLS.Reality.PublicKey) {
 			return invalid("REALITY_PUBLIC_KEY_INVALID", base+".tls.reality.public_key", "REALITY public key must be a base64url X25519 key")

@@ -41,7 +41,7 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 | `endpoint_key` | 必填，副本的稳定标识，正则 `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`，在整个 Profile 内唯一。核心用它生成稳定的 outbound tag，并在节点列表/探测结果中标识副本 |
 | `replica_ordinal` | 必填（`0` 也必须显式给出），非负整数；同一 Node 内唯一且按数组顺序严格递增（不要求连续） |
 | `protocol` | `shadowsocks`、`vless` 或 `anytls` |
-| `endpoint.domain` | 实际连接域名，同时必须等于 TLS `server_name`（需要 TLS 的协议） |
+| `endpoint.domain` | 实际连接域名；AnyTLS 的 TLS `server_name` 必须等于它（REALITY 不要求） |
 | `endpoint.ip` | 可选。存在时必须是公网单播 IP，用于入口探测和 TUN 路由排除；缺省时探测解析 `domain` |
 | `endpoint.port` | 1–65535 |
 | `credentials` | 必须且只能包含与该入口协议同名的一项 |
@@ -203,7 +203,7 @@ RFC 4193 IPv6 ULA（`fc00::/7`），不把 loopback、link-local 或文档网段
 - 必须提供 REALITY；`public_key` 是 base64url（无填充）编码的 32 字节 X25519 公钥（`sing-box generate reality-keypair` 的输出格式）。
 - 核心为 REALITY 启用 uTLS（`chrome` 指纹）；发布构建必须带 `with_utls` 构建标签（Makefile 默认）。
 - `short_id` 是最长 16 个字符的偶数长度十六进制字符串，也允许空字符串。
-- `tls.server_name` 必须与 `endpoint.domain` 完全相同。
+- `tls.server_name` 是借用的第三方站点 SNI（如 `cloudflare-dns.com`），与 `endpoint.domain` 不同是正常的；只要求是合法域名，否则以 `TLS_SERVER_NAME_INVALID` 拒绝。
 
 ### AnyTLS
 
