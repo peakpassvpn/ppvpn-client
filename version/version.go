@@ -5,7 +5,7 @@ const (
 	ProfileSchemaVersion      = 1
 	FlowAdapterVersion        = 1
 	LocalProxyContractVersion = 1
-	CoreVersion               = "0.3.0"
+	CoreVersion               = "0.4.0"
 )
 
 type Info struct {

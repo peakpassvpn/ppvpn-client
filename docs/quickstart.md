@@ -13,7 +13,7 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 预期版本响应：
 
 ```json
-{"core_version":"0.3.0","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"0.4.0","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
