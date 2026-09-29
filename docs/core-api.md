@@ -89,7 +89,7 @@ X-Request-ID: <optional-client-id>
 
 ```json
 {
-  "core_version": "0.4.0",
+  "core_version": "0.4.1",
   "core_api_version": 1,
   "profile_schema_version": 1,
   "flow_adapter_version": 1,
