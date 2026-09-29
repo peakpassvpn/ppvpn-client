@@ -13,6 +13,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -66,6 +67,22 @@ func Register(registry *inbound.Registry) {
 }
 
 var errAuthFailed = errors.New("local proxy authentication failed")
+
+// errHTTPAuthChallenged means a 407 was written and the connection must be
+// closed gracefully so the client can read it.
+var errHTTPAuthChallenged = fmt.Errorf("%w: http proxy authentication required", errAuthFailed)
+
+// authChallenge is the reply to any HTTP request (CONNECT or plain) whose
+// first Proxy-Authorization is missing or wrong.
+const authChallenge = "HTTP/1.1 407 Proxy Authentication Required\r\n" +
+	"Proxy-Authenticate: Basic realm=\"ppvpn\", charset=\"UTF-8\"\r\n" +
+	"Content-Length: 0\r\nConnection: close\r\n\r\n"
+
+// Bounds on draining a rejected HTTP client before the final close.
+const (
+	challengeDrainTimeout = 2 * time.Second
+	challengeDrainBytes   = 64 << 10
+)
 
 // verifier checks credentials. The password comparison is constant time and
 // runs even for unknown usernames, so a response does not reveal which part
@@ -155,7 +172,17 @@ func (h *Inbound) Close() error { return common.Close(h.listener) }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	err := h.newConnection(ctx, conn, metadata, onClose)
-	N.CloseOnHandshakeFailure(conn, onClose, err)
+	if errors.Is(err, errHTTPAuthChallenged) {
+		// CloseOnHandshakeFailure sets SO_LINGER=0, whose RST discards the
+		// 407 still in flight (and on Windows also what the client already
+		// received), so a CONNECT client never sees the challenge.
+		closeAfterChallenge(conn)
+		if onClose != nil {
+			onClose(err)
+		}
+	} else {
+		N.CloseOnHandshakeFailure(conn, onClose, err)
+	}
 	if err != nil && !E.IsClosedOrCanceled(err) {
 		// Never include credentials in the message: logs are disabled today,
 		// but this keeps the credential policy independent of that.
@@ -195,15 +222,27 @@ func (h *Inbound) handleHTTP(ctx context.Context, conn net.Conn, reader *std_buf
 	}
 	username, password, ok := basicProxyAuth(request.Header.Get("Proxy-Authorization"))
 	if !ok || !h.verifier.verify(username, password) {
-		response := "HTTP/1.1 407 Proxy Authentication Required\r\n" +
-			"Proxy-Authenticate: Basic realm=\"ppvpn\", charset=\"UTF-8\"\r\n" +
-			"Content-Length: 0\r\nConnection: close\r\n\r\n"
-		if _, writeErr := io.WriteString(conn, response); writeErr != nil {
+		if _, writeErr := io.WriteString(conn, authChallenge); writeErr != nil {
 			return writeErr
 		}
-		return errAuthFailed
+		return errHTTPAuthChallenged
 	}
 	return singhttp.HandleConnectionEx(ctx, conn, reader, h.authenticator, handler, source, onClose)
+}
+
+// closeAfterChallenge ends a connection whose 407 has been written: it
+// half-closes so the client reads the response and then EOF, drains what the
+// client still sends (a request body or pipelined bytes left unread would make
+// the final close send RST), and only then closes.
+func closeAfterChallenge(conn net.Conn) {
+	defer conn.Close()
+	if closer, ok := common.Cast[interface{ CloseWrite() error }](conn); ok {
+		if closer.CloseWrite() != nil {
+			return
+		}
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(challengeDrainTimeout))
+	_, _ = io.CopyN(io.Discard, conn, challengeDrainBytes)
 }
 
 func peekRequestHead(reader *std_bufio.Reader) ([]byte, error) {

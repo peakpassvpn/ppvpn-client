@@ -164,9 +164,10 @@ X-Request-ID: <optional-client-id>
   更新后保持不变。
 - 端口优先使用上次持久化的端口，其次 7890；启动时二者都被占用则改用任意空闲端口并持久化，
   下次优先尝试它。metadata/credential 返回的 `port` 始终是实际监听端口。
-- 未知用户名（包括已从 Profile 删除的节点）或错误密码一律拒绝：HTTP 返回
-  `407 Proxy Authentication Required` 与 `Proxy-Authenticate: Basic`，SOCKS5 返回 RFC 1929
-  认证失败；不支持无认证方法和 SOCKS4。secret 使用常量时间比较。
+- 缺少认证、未知用户名（包括已从 Profile 删除的节点）或错误密码一律拒绝：HTTP（含
+  `CONNECT`）返回 `407 Proxy Authentication Required`、`Proxy-Authenticate: Basic realm="ppvpn"`、
+  `Content-Length: 0` 与 `Connection: close`，随后正常关闭连接（FIN，不发 RST），浏览器据此弹出
+  认证；SOCKS5 返回 RFC 1929 认证失败；不支持无认证方法和 SOCKS4。secret 使用常量时间比较。
 - 每个用户名的流量固定走该节点（多入口节点走其故障转移组），不受 selected 节点或 Profile
   规则影响；流量统计、连接归属和 `probe-availability` 与之前一致。
 
