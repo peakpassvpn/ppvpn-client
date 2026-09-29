@@ -25,6 +25,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/version"
+	singtun "github.com/sagernet/sing-tun"
 	singjson "github.com/sagernet/sing/common/json"
 )
 
@@ -171,6 +172,9 @@ func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformNam
 		"platform", platformName, "tun", tun, "tun_stack", tunStack, "local_proxy", localProxy, "state_dir", stateDir, "socket", socket)
 	if socket == "" || secretFile == "" || stateDir == "" {
 		return fmt.Errorf("serve requires --socket, --session-secret-file and --state-dir")
+	}
+	if tun && (tunStack == "mixed" || tunStack == "gvisor") && !singtun.WithGVisor {
+		return fmt.Errorf("TUN stack %q needs a core built with the with_gvisor tag (use the Makefile desktop targets) or --tun-stack=system", tunStack)
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)

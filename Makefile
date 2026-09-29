@@ -4,6 +4,11 @@ CLANG_MODULE_CACHE_PATH ?= /tmp/ppvpn-core-clang-cache
 # VLESS REALITY needs sing-box's uTLS support, which is behind a build tag.
 GO_TAGS ?= with_utls
 export GO_TAGS
+# Desktop CLI cores also run sing-box TUN (`serve --tun`). The default and
+# service-selected TUN stack "mixed" (and "gvisor") only exist with the
+# with_gvisor tag; without it TUN start fails with "gVisor is not included".
+# Mobile builds keep GO_TAGS: they use the platform tunnel, not this stack.
+DESKTOP_TAGS ?= $(GO_TAGS),with_gvisor
 export PATH := $(GO_BIN):$(PATH)
 
 .PHONY: test test-race build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android
@@ -15,14 +20,14 @@ test-race:
 	go test -tags $(GO_TAGS) -race ./...
 
 build-desktop:
-	go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
+	go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 
 build-release-desktop:
 	mkdir -p build
-	GOOS=darwin GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
-	GOOS=darwin GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
-	GOOS=windows GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
-	GOOS=linux GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
+	GOOS=darwin GOARCH=arm64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
+	GOOS=darwin GOARCH=amd64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
+	GOOS=windows GOARCH=amd64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
+	GOOS=linux GOARCH=amd64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
 
 build-macos-artifact: build-mobile-macos
 	mkdir -p build
@@ -32,26 +37,28 @@ build-macos-artifact: build-mobile-macos
 
 build-macos-cli-artifact:
 	mkdir -p build
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
 	lipo -create -output build/ppvpn-core-darwin-universal build/ppvpn-core-darwin-arm64 build/ppvpn-core-darwin-amd64
 	lipo build/ppvpn-core-darwin-universal -verify_arch arm64 x86_64
 	shasum -a 256 build/ppvpn-core-darwin-universal > build/macos-cli-SHA256SUMS
 
 build-windows-artifact:
 	mkdir -p build
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
-	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-windows-arm64.exe ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-windows-arm64.exe ./cmd/ppvpn-core
 	go version -m build/ppvpn-core-windows-amd64.exe | grep -Eq 'build[[:space:]]+GOOS=windows'
 	go version -m build/ppvpn-core-windows-amd64.exe | grep -Eq 'build[[:space:]]+GOARCH=amd64'
 	go version -m build/ppvpn-core-windows-arm64.exe | grep -Eq 'build[[:space:]]+GOOS=windows'
 	go version -m build/ppvpn-core-windows-arm64.exe | grep -Eq 'build[[:space:]]+GOARCH=arm64'
+	go version -m build/ppvpn-core-windows-amd64.exe | grep -Eq 'build[[:space:]]+-tags=.*with_gvisor'
+	go version -m build/ppvpn-core-windows-arm64.exe | grep -Eq 'build[[:space:]]+-tags=.*with_gvisor'
 	shasum -a 256 build/ppvpn-core-windows-amd64.exe build/ppvpn-core-windows-arm64.exe > build/windows-SHA256SUMS
 
 build-linux-artifact:
 	mkdir -p build
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-arm64 ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-linux-arm64 ./cmd/ppvpn-core
 	go version -m build/ppvpn-core-linux-amd64 | grep -Eq 'build[[:space:]]+GOOS=linux'
 	go version -m build/ppvpn-core-linux-amd64 | grep -Eq 'build[[:space:]]+GOARCH=amd64'
 	go version -m build/ppvpn-core-linux-arm64 | grep -Eq 'build[[:space:]]+GOOS=linux'

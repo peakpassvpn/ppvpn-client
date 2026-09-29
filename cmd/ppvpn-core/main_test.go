@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	singtun "github.com/sagernet/sing-tun"
 )
 
 func TestRotateSessionSecret(t *testing.T) {
@@ -44,3 +46,18 @@ func TestServeLogsToFileEvenWhenStartupFails(t *testing.T) {
 	}
 }
 
+func TestServeRejectsTUNStackMissingFromBuild(t *testing.T) {
+	if singtun.WithGVisor {
+		t.Skip("this build includes gVisor")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "ppvpn-core.log")
+	err := run([]string{"serve", "--socket", filepath.Join(dir, "core.sock"), "--session-secret-file", filepath.Join(dir, "session.secret"),
+		"--state-dir", filepath.Join(dir, "state"), "--tun", "--tun-stack=mixed", "--local-proxy=false", "--log-file", logPath})
+	if err == nil || !strings.Contains(err.Error(), "with_gvisor") {
+		t.Fatalf("err = %v", err)
+	}
+	if data, _ := os.ReadFile(logPath); !strings.Contains(string(data), "with_gvisor") {
+		t.Fatalf("log: %s", data)
+	}
+}
