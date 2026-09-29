@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main, dev]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -61,6 +62,9 @@ jobs:
             build/linux-SHA256SUMS
 
   apple-artifacts:
+    # macOS runner minutes are expensive: build the Apple frameworks only when
+    # dispatched by hand (e.g. for a mobile release).
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,7 +84,7 @@ jobs:
             build/ios-SHA256SUMS
 
   android-artifact:
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
