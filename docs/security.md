@@ -21,6 +21,11 @@ Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任
 
 - Unix socket 创建为 `0600`；只在旧路径确实是 socket 时清理，拒绝覆盖普通文件或符号目标。
 - Windows Named Pipe 使用当前 owner-only ACL；状态目录必须位于当前用户私有 LocalAppData。
+- Windows 上状态目录、状态文件（含写入用临时文件）和会话密钥文件使用受保护（不继承）的 DACL：普通用户运行的核心只授予
+  进程令牌中的当前用户和 SYSTEM；以 LocalSystem 运行的特权服务核心（ProgramData）授予 SYSTEM 和 Administrators。
+  读取时逐条检查 ACE（拒绝 ACE 忽略），任何其他账户被授予访问即视为不私有并拒绝，不自动修复。
+  ppvpn-core 0.4.0 在用户目录下写入的“仅 SYSTEM + Administrators”ACL 会由该用户（作为 owner，拥有 WRITE_DAC）自动改回；
+  无法修改时报错并在日志中给出路径和处理方法（管理员执行 `icacls "<路径>" /reset /t /c` 或删除该目录），不会删除任何文件。
 - 每次启动轮换至少 256 bit 随机会话密钥；Unix 交换文件为 `0600`。
 - Bearer 比较使用恒定时间比较。所有调用都要发送认证，事件流也不例外。
 - 生产宿主应使用 `--exit-on-stdin-close` 的父进程存活管道，并在启动超时、异常退出时回收子进程。

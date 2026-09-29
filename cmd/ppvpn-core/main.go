@@ -19,6 +19,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
+	"github.com/peakpassvpn/ppvpn-core/internal/privateacl"
 	"github.com/peakpassvpn/ppvpn-core/internal/redact"
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
 	"github.com/peakpassvpn/ppvpn-core/ipc"
@@ -241,7 +242,10 @@ func rotateSessionSecret(path string) (string, error) {
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if err = tmp.Chmod(0o600); err == nil {
+	// Private to this account before the secret is written: 0600 on Unix,
+	// this user + SYSTEM (SYSTEM + Administrators for the service core) on
+	// Windows, where Chmod cannot restrict readers.
+	if err = privateacl.SecureFile(name); err == nil {
 		_, err = tmp.WriteString(secret)
 	}
 	if closeErr := tmp.Close(); err == nil {
