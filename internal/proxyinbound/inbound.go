@@ -68,9 +68,15 @@ func Register(registry *inbound.Registry) {
 
 var errAuthFailed = errors.New("local proxy authentication failed")
 
-// errHTTPAuthChallenged means a 407 was written and the connection must be
-// closed gracefully so the client can read it.
-var errHTTPAuthChallenged = fmt.Errorf("%w: http proxy authentication required", errAuthFailed)
+// errAuthReplied means an authentication failure reply (HTTP 407 or RFC 1929
+// failure) was written and the connection must be closed gracefully so the
+// client can read it.
+var errAuthReplied = fmt.Errorf("%w: failure reply sent", errAuthFailed)
+
+var (
+	errHTTPAuthChallenged = fmt.Errorf("http proxy authentication required: %w", errAuthReplied)
+	errSOCKS5AuthRejected = fmt.Errorf("socks5 username/password rejected: %w", errAuthReplied)
+)
 
 // authChallenge is the reply to any HTTP request (CONNECT or plain) whose
 // first Proxy-Authorization is missing or wrong.
@@ -172,10 +178,11 @@ func (h *Inbound) Close() error { return common.Close(h.listener) }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	err := h.newConnection(ctx, conn, metadata, onClose)
-	if errors.Is(err, errHTTPAuthChallenged) {
+	if errors.Is(err, errAuthReplied) {
 		// CloseOnHandshakeFailure sets SO_LINGER=0, whose RST discards the
-		// 407 still in flight (and on Windows also what the client already
-		// received), so a CONNECT client never sees the challenge.
+		// failure reply still in flight (and on Windows also what the client
+		// already received), so a CONNECT client never sees the 407 and a
+		// SOCKS5 client never sees the RFC 1929 status.
 		closeAfterChallenge(conn)
 		if onClose != nil {
 			onClose(err)
@@ -230,10 +237,10 @@ func (h *Inbound) handleHTTP(ctx context.Context, conn net.Conn, reader *std_buf
 	return singhttp.HandleConnectionEx(ctx, conn, reader, h.authenticator, handler, source, onClose)
 }
 
-// closeAfterChallenge ends a connection whose 407 has been written: it
-// half-closes so the client reads the response and then EOF, drains what the
-// client still sends (a request body or pipelined bytes left unread would make
-// the final close send RST), and only then closes.
+// closeAfterChallenge ends a connection whose authentication failure reply
+// has been written: it half-closes so the client reads the reply and then
+// EOF, drains what the client still sends (a request body or pipelined bytes
+// left unread would make the final close send RST), and only then closes.
 func closeAfterChallenge(conn net.Conn) {
 	defer conn.Close()
 	if closer, ok := common.Cast[interface{ CloseWrite() error }](conn); ok {
@@ -322,7 +329,7 @@ func (h *Inbound) handleSOCKS5(ctx context.Context, conn net.Conn, reader *std_b
 		return err
 	}
 	if !accepted {
-		return errAuthFailed
+		return errSOCKS5AuthRejected
 	}
 	ctx = auth.ContextWithUser(ctx, credentials.Username)
 	request, err := socks5.ReadRequest(reader)

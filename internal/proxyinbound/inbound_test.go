@@ -154,3 +154,50 @@ func TestHTTPAuthFailureReturns407ThenClosesGracefully(t *testing.T) {
 		})
 	}
 }
+
+// TestSOCKS5AuthFailureRepliesThenClosesGracefully covers a wrong password and
+// an unknown user: the client reads the complete RFC 1929 failure reply and
+// then a clean EOF, never a reset, even with a CONNECT request pipelined
+// behind the credentials.
+func TestSOCKS5AuthFailureRepliesThenClosesGracefully(t *testing.T) {
+	const user, secret = "u8f2k-node-1", "secret"
+	addr := serveOne(t, []User{{Username: user, Password: secret}})
+	credentials := func(u, p string) []byte {
+		out := append([]byte{1, byte(len(u))}, u...)
+		return append(append(out, byte(len(p))), p...)
+	}
+	connect := []byte{5, 1, 0, 1, 127, 0, 0, 1, 0, 80}
+	for name, request := range map[string][]byte{
+		"wrong password":           credentials(user, "wrong"),
+		"unknown user":             credentials("u8f2k-missing", secret),
+		"wrong password pipelined": append(credentials(user, "wrong"), connect...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			if _, err = conn.Write([]byte{5, 1, 2}); err != nil {
+				t.Fatal(err)
+			}
+			reply := make([]byte, 2)
+			if _, err = io.ReadFull(conn, reply); err != nil || reply[0] != 5 || reply[1] != 2 {
+				t.Fatalf("method reply %v %v", reply, err)
+			}
+			if _, err = conn.Write(request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = io.ReadFull(conn, reply); err != nil {
+				t.Fatalf("read auth reply: %v", err)
+			}
+			if reply[0] != 1 || reply[1] == 0 {
+				t.Fatalf("auth reply %v", reply)
+			}
+			if n, err := conn.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
+				t.Fatalf("after failure reply: %d %v", n, err)
+			}
+		})
+	}
+}
