@@ -3,7 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	singtun "github.com/sagernet/sing-tun"
 )
 
 func TestRotateSessionSecret(t *testing.T) {
@@ -22,5 +25,39 @@ func TestRotateSessionSecret(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("permissions: %v %v", info.Mode().Perm(), err)
+	}
+}
+
+func TestServeLogsToFileEvenWhenStartupFails(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "ppvpn-core.log")
+	err := run([]string{"serve", "--tun", "--local-proxy=false", "--log-file", logPath})
+	if err == nil {
+		t.Fatal("serve without socket succeeded")
+	}
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	log := string(data)
+	for _, want := range []string{`msg="serve starting"`, "tun=true", "local_proxy=false", "level=error", `msg="serve failed"`} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log missing %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestServeRejectsTUNStackMissingFromBuild(t *testing.T) {
+	if singtun.WithGVisor {
+		t.Skip("this build includes gVisor")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "ppvpn-core.log")
+	err := run([]string{"serve", "--socket", filepath.Join(dir, "core.sock"), "--session-secret-file", filepath.Join(dir, "session.secret"),
+		"--state-dir", filepath.Join(dir, "state"), "--tun", "--tun-stack=mixed", "--local-proxy=false", "--log-file", logPath})
+	if err == nil || !strings.Contains(err.Error(), "with_gvisor") {
+		t.Fatalf("err = %v", err)
+	}
+	if data, _ := os.ReadFile(logPath); !strings.Contains(string(data), "with_gvisor") {
+		t.Fatalf("log: %s", data)
 	}
 }

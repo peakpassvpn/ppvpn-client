@@ -251,7 +251,7 @@ func (m *Manager) load() (state diskState, changed bool, err error) {
 		return state, false, err
 	}
 	if !securePermissions(m.path, info) {
-		return state, false, fmt.Errorf("local proxy state permissions are not private")
+		return state, false, fmt.Errorf("local proxy state permissions are not private: %s", m.path)
 	}
 	var header struct {
 		Version int `json:"version"`

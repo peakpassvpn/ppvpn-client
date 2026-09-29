@@ -89,7 +89,7 @@ X-Request-ID: <optional-client-id>
 
 ```json
 {
-  "core_version": "0.3.0",
+  "core_version": "0.4.0",
   "core_api_version": 1,
   "profile_schema_version": 1,
   "flow_adapter_version": 1,
@@ -285,7 +285,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `LOCAL_PROXY_DISABLED` | 该核心以 `--local-proxy=false` 启动；改用本地代理核心 |
 | `CORE_NOT_RUNNING` | 先调用 `/v1/start` |
 | `STREAM_UNSUPPORTED` | 当前 HTTP writer 无法刷新事件流 |
-| `CORE_OPERATION_FAILED` | 安全折叠后的内部失败；读取状态并按产品策略重试/上报 |
+| `CORE_OPERATION_FAILED` | 安全折叠后的内部失败；读取状态并按产品策略重试/上报。响应不含原因；原因、阶段（如 `apply/local-proxy-state`、`start > engine-start/tun-open`）和错误链以同一 `request_id` 写入核心日志 |
 
 ## Unix Socket 调试示例
 

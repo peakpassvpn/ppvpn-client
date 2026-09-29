@@ -11,11 +11,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"syscall"
 	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/api"
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/redact"
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
@@ -23,6 +25,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/version"
+	singtun "github.com/sagernet/sing-tun"
 	singjson "github.com/sagernet/sing/common/json"
 )
 
@@ -143,51 +146,79 @@ func serve(args []string) error {
 	tun := flags.Bool("tun", false, "enable sing-box TUN inbound (requires host-provided privileges)")
 	tunStack := flags.String("tun-stack", "mixed", "sing-box TUN stack: mixed, system, or gvisor")
 	exitOnStdin := flags.Bool("exit-on-stdin-close", false, "exit when the parent-owned stdin pipe closes")
+	logFile := flags.String("log-file", "", "append the core diagnostic log to this file (default: stderr)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *socket == "" || *secretFile == "" || *stateDir == "" {
+	log := corelog.New(os.Stderr)
+	if *logFile != "" {
+		fileLog, file, err := corelog.OpenFile(*logFile)
+		if err != nil {
+			return fmt.Errorf("open log file: %w", err)
+		}
+		defer file.Close()
+		log = fileLog
+	}
+	err := serveWithLog(log, *socket, *secretFile, *stateDir, *platformName, *localProxy, *tun, *tunStack, *exitOnStdin)
+	if err != nil {
+		log.Error("serve failed", "error", err, "chain", corelog.Chain(err))
+	}
+	return err
+}
+
+func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformName string, localProxy, tun bool, tunStack string, exitOnStdinClose bool) error {
+	info := version.Get()
+	log.Info("serve starting", "core_version", info.CoreVersion, "os", goruntime.GOOS, "arch", goruntime.GOARCH,
+		"platform", platformName, "tun", tun, "tun_stack", tunStack, "local_proxy", localProxy, "state_dir", stateDir, "socket", socket)
+	if socket == "" || secretFile == "" || stateDir == "" {
 		return fmt.Errorf("serve requires --socket, --session-secret-file and --state-dir")
 	}
-	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
-		return err
+	if tun && (tunStack == "mixed" || tunStack == "gvisor") && !singtun.WithGVisor {
+		return fmt.Errorf("TUN stack %q needs a core built with the with_gvisor tag (use the Makefile desktop targets) or --tun-stack=system", tunStack)
 	}
-	secret, err := rotateSessionSecret(*secretFile)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	secret, err := rotateSessionSecret(secretFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("write session secret: %w", err)
 	}
-	defer os.Remove(*secretFile)
+	defer os.Remove(secretFile)
 	capabilities := profile.PlatformCapabilities{
-		Platform:   *platformName,
-		TUN:        profile.TUNCapabilities{Enabled: *tun, Stack: *tunStack},
-		LocalProxy: profile.LocalProxyCapabilities{Enabled: *localProxy, Listen: "127.0.0.1"},
+		Platform:   platformName,
+		TUN:        profile.TUNCapabilities{Enabled: tun, Stack: tunStack},
+		LocalProxy: profile.LocalProxyCapabilities{Enabled: localProxy, Listen: "127.0.0.1"},
 		LogLevel:   "info",
 	}
-	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(*stateDir, "local-proxies.json"))
+	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(stateDir, "local-proxies.json"))
 	server, err := api.NewServer(core, secret)
 	if err != nil {
 		return err
 	}
-	desktop, err := ipc.Listen(*socket, server.Handler())
+	server.SetLogger(log)
+	desktop, err := ipc.Listen(socket, server.Handler())
 	if err != nil {
-		return err
+		return fmt.Errorf("listen on %s: %w", socket, err)
 	}
+	log.Info("serve ready", "socket", socket)
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- desktop.Serve() }()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 	var stdinClosed <-chan struct{}
-	if *exitOnStdin {
+	if exitOnStdinClose {
 		ch := make(chan struct{})
 		stdinClosed = ch
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin); close(ch) }()
 	}
 	select {
 	case err = <-serveDone:
-		return err
+		return fmt.Errorf("ipc serve: %w", err)
 	case <-signals:
+		log.Info("serve stopping", "reason", "signal")
 	case <-stdinClosed:
+		log.Info("serve stopping", "reason", "stdin closed")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

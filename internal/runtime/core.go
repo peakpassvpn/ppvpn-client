@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,26 +160,26 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 			proxyEndpoints, err = c.proxyManager.ReconcileForStartup(ids)
 		}
 		if err != nil {
-			return false, fmt.Errorf("prepare local proxies: %w", err)
+			return false, stageError("apply/local-proxy-state", fmt.Errorf("prepare local proxies: %w", err))
 		}
 	}
 	candidate, err := config.BuildWithLocalProxies(candidateProfile, c.platform, proxyEndpoints, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
-		return false, err
+		return false, stageError("apply/build", err)
 	}
 	systemPort := uint16(0)
 	if c.systemProxyEnabled {
 		// A running listener keeps its port; before start, re-check it.
 		if systemPort, err = c.proxyManager.SystemProxyPort(!running, sharedPort(proxyEndpoints)); err != nil {
-			return false, fmt.Errorf("prepare system proxy: %w", err)
+			return false, stageError("apply/system-proxy", fmt.Errorf("prepare system proxy: %w", err))
 		}
 		candidate = config.WithSystemProxy(candidate, systemPort)
 	}
 	candidateClassifier, err := routing.Compile(candidateProfile, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate routing compilation failed"})
-		return false, err
+		return false, stageError("apply/routing", err)
 	}
 
 	var replacement engine
@@ -203,11 +204,11 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 					c.engine, c.cancel = nil, nil
 					c.mu.Unlock()
 					c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate start and runtime rollback failed"})
-					return false, fmt.Errorf("start candidate: %v; rollback runtime: %w", err, rollbackErr)
+					return false, stageError("apply/rollback", fmt.Errorf("start candidate: %v; rollback runtime: %w", err, rollbackErr))
 				}
 			}
 			c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate runtime start failed"})
-			return false, fmt.Errorf("start candidate runtime: %w", err)
+			return false, stageError("apply", fmt.Errorf("start candidate runtime: %w", err))
 		}
 	}
 
@@ -427,7 +428,7 @@ func (c *Core) Start() error {
 		// The port may have been taken while the core was stopped.
 		port, err := c.proxyManager.SystemProxyPort(true, localPort)
 		if err != nil {
-			return fmt.Errorf("prepare system proxy: %w", err)
+			return stageError("start/system-proxy", fmt.Errorf("prepare system proxy: %w", err))
 		}
 		if port != systemPort {
 			built, systemPort = config.WithSystemProxy(built, port), port
@@ -435,7 +436,7 @@ func (c *Core) Start() error {
 	}
 	instance, cancel, err := c.startCandidate(built)
 	if err != nil {
-		return fmt.Errorf("start runtime: %w", err)
+		return stageError("start", fmt.Errorf("start runtime: %w", err))
 	}
 	// The built selector default predates any SelectNode call made while the
 	// core was stopped; apply the current selection to the new instance.
@@ -499,12 +500,16 @@ func (c *Core) startCandidate(candidate *config.BuildResult) (engine, context.Ca
 	instance, err := c.factory(ctx, candidate.Options)
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, stageError("engine-create", err)
 	}
 	if err = instance.Start(); err != nil {
 		cancel()
 		_ = instance.Close()
-		return nil, nil, err
+		stage := "engine-start"
+		if c.platform.TUN.Enabled && strings.Contains(err.Error(), "inbound/tun[") {
+			stage = "engine-start/tun-open"
+		}
+		return nil, nil, stageError(stage, err)
 	}
 	return instance, cancel, nil
 }

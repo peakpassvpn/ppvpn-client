@@ -13,7 +13,7 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 预期版本响应：
 
 ```json
-{"core_version":"0.3.0","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"0.4.0","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
@@ -62,6 +62,8 @@ mkdir -m 700 "$APP_STATE"
 
 生产环境不要使用共享临时目录。macOS 应使用 App Container/Application Support 私有目录；Windows 应使用带当前用户 ACL 的 LocalAppData 目录和 Named Pipe 路径。
 
+`serve` 把第一方诊断日志写到 stderr（每行一次写入并刷盘），或用 `--log-file <path>` 追加到文件；
+启动时记录版本、平台、`tun`/`local_proxy` 参数和状态目录，生命周期请求（apply/start/stop/reload）的成功与所有失败原因都会记录。
 `serve` 每次启动覆盖生成新的会话密钥，正常退出时删除密钥文件。产品桌面端还应启用 `--exit-on-stdin-close`，并保持传入核心的 stdin 写端存活，使父 App 崩溃后核心自动退出。
 
 ## 4. 调用 API
@@ -105,6 +107,7 @@ Extension；两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1
 - `SCHEMA_UNSUPPORTED`：核心和后端的 Profile Schema 不兼容，先停止应用配置。
 - `ENTRY_IP_NOT_PUBLIC`：入口 `endpoint.ip` 不是可拨号公网单播 IP；不要填域名或文档地址（不知道 IP 时可省略该字段）。
 - `TLS_SERVER_NAME_MISMATCH`：AnyTLS 的 TLS SNI 必须等于 `endpoint.domain`（REALITY 的 SNI 是借用站点，不受此限）。
-- `CORE_OPERATION_FAILED`：上游错误已安全折叠。读取状态、检查第一方事件，并在受控环境用脱敏 `render` 辅助定位。
+- `CORE_OPERATION_FAILED`：上游错误已安全折叠。核心日志（默认 stderr，或 `--log-file`）中有一行 `level=error msg=CORE_OPERATION_FAILED`，包含 `path`、`request_id`、`stage`、`error` 和 `chain`（错误链类型，OS 错误附带数值，如 `syscall.Errno(5)`）。
+- TUN 启动失败并提示 `gVisor is not included`：核心未带 `with_gvisor` 构建，而 `mixed`/`gvisor` 栈需要它；使用 Makefile 的桌面目标构建（`serve` 会在启动时直接拒绝这种组合）。
 - 本地代理端口变更：核心启动前发现持久端口（或 7890）已占用时改用空闲端口并持久化；`start` 后调用 `GetLocalProxyMetadata` 刷新。
 - TUN/Network Extension 启动失败：保持未连接并由原生宿主通知用户；不要静默回退到系统代理。

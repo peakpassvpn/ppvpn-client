@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 )
@@ -216,5 +218,34 @@ func TestLocalProxyAPIsReportDisabledCore(t *testing.T) {
 	if !strings.Contains(nodes.Body.String(), `"protocol":"shadowsocks"`) || !strings.Contains(nodes.Body.String(), `"ingresses":[{"endpoint_key":"9001","label":"Tokyo A","replica_ordinal":0,"role":"primary","protocol":"shadowsocks"}]`) ||
 		!strings.Contains(nodes.Body.String(), `"entry_key":"cn-optimized","entry_label":"CN Optimized"`) || strings.Contains(nodes.Body.String(), "country_code") {
 		t.Fatal(nodes.Body.String())
+	}
+}
+
+func TestFoldedErrorIsLoggedWithStageButNotReturned(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "local-proxies.json")
+	if err := os.WriteFile(statePath, []byte(`{"version":2,"prefix":"abcde","password":"secret","port":7890}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	core := coreruntime.NewWithLocalProxyState(profile.PlatformCapabilities{LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}}, statePath)
+	server, err := NewServer(core, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	server.SetLogger(corelog.New(&logged))
+	rec := request(t, server, "/v1/apply-profile", map[string]any{"profile": apiProfile()}, true)
+	body := rec.Body.String()
+	if !strings.Contains(body, `"code":"CORE_OPERATION_FAILED"`) || strings.Contains(body, "private") || strings.Contains(body, "local-proxies") {
+		t.Fatalf("response not folded: %s", body)
+	}
+	line := logged.String()
+	for _, want := range []string{"level=error", "msg=CORE_OPERATION_FAILED", "path=/v1/apply-profile", "stage=apply/local-proxy-state", "not private", "*runtime.StageError > *fmt.wrapError"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log missing %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "secret") {
+		t.Fatalf("log leaked state secret: %s", line)
 	}
 }
