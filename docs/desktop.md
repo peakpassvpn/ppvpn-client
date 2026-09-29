@@ -9,8 +9,8 @@
 进程校验和控制通道；Profile 的 `DIRECT`、`REJECT`、selected/fixed-node `PROXY`
 语义只由 core 判定。
 
-每节点本地代理由同一 runtime 创建：一个 node ID 对应一个 loopback mixed
-listener，同一端口支持 HTTP 和 SOCKS5 并固定走该节点。service 可读取完整 endpoint，
+共享本地代理由同一 runtime 创建：所有节点共用一个 loopback 端口（优先 7890），同一端口
+支持 HTTP 和 SOCKS5，用户名 `<prefix>-<node_id>` 选择并固定走该节点。service 可读取完整 endpoint，
 但发往 WebView 的 DTO 只能使用不含 secret 的 metadata；credential 只进入原生凭据
 面板调用栈。
 
@@ -52,7 +52,7 @@ FlowConnection 的 `timeoutMS <= 0` 表示不安装 I/O deadline，适合长连�
 ## 固定优先级
 
 1. 平台安全、控制通道和防递归
-2. 每节点 local-proxy 固定节点
+2. 共享 local-proxy 按用户名固定节点（未知用户名在认证阶段即被拒绝）
 3. Profile ordered rules
 4. `routing.final`
 

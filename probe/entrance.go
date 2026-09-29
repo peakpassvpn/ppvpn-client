@@ -66,6 +66,7 @@ func (e *Error) Unwrap() error { return e.Err }
 // IngressResult is one replica's measurement, listed in failover order.
 type IngressResult struct {
 	EndpointKey    string              `json:"endpoint_key"`
+	Label          string              `json:"label,omitempty"`
 	ReplicaOrdinal int                 `json:"replica_ordinal"`
 	Role           profile.IngressRole `json:"role"`
 	Success        bool                `json:"success"`
@@ -147,6 +148,7 @@ func Entrances(ctx context.Context, p *profile.Profile, opts Options) ([]Entranc
 			go func(target *IngressResult, ingress profile.Ingress) {
 				defer wg.Done()
 				target.EndpointKey, target.ReplicaOrdinal, target.Role = ingress.EndpointKey, ingress.ReplicaOrdinal, ingress.Role
+				target.Label = ingress.DisplayLabel()
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():

@@ -39,6 +39,7 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 | --- | --- |
 | `role` | 必填。`ingresses[0]` 为 `primary`，其余全部为 `backup`；与位置不符以 `INGRESS_ROLE_INVALID` 拒绝 |
 | `endpoint_key` | 必填，副本的稳定标识，正则 `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`，在整个 Profile 内唯一。核心用它生成稳定的 outbound tag，并在节点列表/探测结果中标识副本 |
+| `label` | 可选，仅用于展示的副本名称（例如 `东京中转`），不是标识符：核心不用它生成 tag、路由或故障转移。存在时必须非空、首尾无空白、不含控制字符、最多 32 个字符（Unicode 码点），否则以 `INGRESS_LABEL_INVALID` 拒绝。核心在节点列表、入口探测结果和 `selected_ingress` 中以 `label` 原样返回 |
 | `replica_ordinal` | 必填（`0` 也必须显式给出），非负整数；同一 Node 内唯一且按数组顺序严格递增（不要求连续） |
 | `protocol` | `shadowsocks`、`vless` 或 `anytls` |
 | `endpoint.domain` | 实际连接域名；AnyTLS 的 TLS `server_name` 必须等于它（REALITY 不要求） |

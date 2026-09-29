@@ -67,6 +67,7 @@ func (b *Bridge) Status() (string, error) { return encode(b.core.Status()) }
 func (b *Bridge) ListNodes() (string, error) {
 	type ingress struct {
 		EndpointKey    string `json:"endpoint_key"`
+		Label          string `json:"label,omitempty"`
 		ReplicaOrdinal int    `json:"replica_ordinal"`
 		Role           string `json:"role"`
 		Protocol       string `json:"protocol"`
@@ -87,7 +88,7 @@ func (b *Bridge) ListNodes() (string, error) {
 	for i, n := range nodes {
 		result[i] = summary{ID: n.ID, Name: n.Name, EntryKey: n.EntryKey, EntryLabel: n.EntryLabel, Region: n.Exit.Region, TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP, Ingresses: make([]ingress, len(n.Ingresses))}
 		for j, in := range n.Ingresses {
-			result[i].Ingresses[j] = ingress{EndpointKey: in.EndpointKey, ReplicaOrdinal: in.ReplicaOrdinal, Role: string(in.Role), Protocol: string(in.Protocol)}
+			result[i].Ingresses[j] = ingress{EndpointKey: in.EndpointKey, Label: in.DisplayLabel(), ReplicaOrdinal: in.ReplicaOrdinal, Role: string(in.Role), Protocol: string(in.Protocol)}
 		}
 		if len(n.Ingresses) > 0 {
 			result[i].Protocol = string(n.Ingresses[0].Protocol)

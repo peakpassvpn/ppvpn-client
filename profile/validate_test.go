@@ -96,6 +96,13 @@ func TestIngressFailoverShapes(t *testing.T) {
 			other.ID = "node-2"
 			p.Nodes = append(p.Nodes, other)
 		}},
+		{"INGRESS_LABEL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Label = ptr("") }},
+		{"INGRESS_LABEL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Label = ptr("   ") }},
+		{"INGRESS_LABEL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Label = ptr(" Tokyo") }},
+		{"INGRESS_LABEL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Label = ptr("Tokyo\n2") }},
+		{"INGRESS_LABEL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Label = ptr("a\u0000b") }},
+		{"INGRESS_LABEL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Label = ptr(strings.Repeat("a", 33)) }},
+		{"INGRESS_LABEL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Label = ptr("\xff") }},
 		{"REPLICA_ORDINAL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].ReplicaOrdinal = -1 }},
 		{"REPLICA_ORDINAL_INVALID", func(p *Profile) {
 			p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backupIngress(ProtocolShadowsocks, 0, "backup.example.com", ""))
@@ -186,7 +193,8 @@ func TestFixtureProfileParsesAndValidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(p.Nodes) != 2 || len(p.Nodes[0].Ingresses) != 2 || p.Nodes[0].Ingresses[1].Role != IngressRoleBackup || p.Nodes[0].Ingresses[1].Endpoint.IP != "" ||
-		p.Nodes[0].EntryKey != "cn-optimized" || p.Nodes[0].Ingresses[1].EndpointKey != "9002" || p.Nodes[0].Ingresses[1].ReplicaOrdinal != 1 {
+		p.Nodes[0].EntryKey != "cn-optimized" || p.Nodes[0].Ingresses[1].EndpointKey != "9002" || p.Nodes[0].Ingresses[1].ReplicaOrdinal != 1 ||
+		p.Nodes[0].Ingresses[1].DisplayLabel() != "Tokyo relay" || p.Nodes[0].Ingresses[0].Label != nil {
 		t.Fatalf("unexpected fixture shape: %#v", p.Nodes)
 	}
 }
@@ -353,5 +361,28 @@ func TestRoutingActionUnionIsStrict(t *testing.T) {
 		if err := Validate(p, time.Now()); err == nil {
 			t.Fatalf("invalid action accepted: %#v", action)
 		}
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+func TestIngressLabelIsOptionalDisplayOnly(t *testing.T) {
+	for _, label := range []string{"Tokyo 2", "东京 CN2 优化线路", strings.Repeat("字", MaxIngressLabelLength), "a"} {
+		p := validProfile(ProtocolShadowsocks)
+		p.Nodes[0].Ingresses[0].Label = ptr(label)
+		if err := Validate(p, time.Now()); err != nil {
+			t.Errorf("label %q rejected: %v", label, err)
+		}
+	}
+	data := []byte(`{"schema_version":1,"revision":"r","expires_at":"2999-01-01T00:00:00Z","nodes":[{"id":"n","entry_key":"cn","capabilities":{"tcp":true},"ingresses":[{"role":"primary","endpoint_key":"9001","label":"Tokyo 2","replica_ordinal":0,"protocol":"shadowsocks","endpoint":{"domain":"edge.example.com","port":443},"credentials":{"shadowsocks":{"method":"2022-blake3-aes-128-gcm","server_key":"AAAAAAAAAAAAAAAAAAAAAA=="}},"capabilities":{"tcp":true}}]}],"selection":{"mode":"manual","default_node_id":"n"},"routing":{"final":{"type":"proxy","target":"selected"}}}`)
+	p, err := Parse(data)
+	if err != nil {
+		t.Fatalf("strict decoding rejected label: %v", err)
+	}
+	if got := p.Nodes[0].Ingresses[0].DisplayLabel(); got != "Tokyo 2" {
+		t.Fatalf("label %q", got)
+	}
+	if (Ingress{}).DisplayLabel() != "" {
+		t.Fatal("absent label must read as empty")
 	}
 }

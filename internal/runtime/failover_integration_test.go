@@ -2,12 +2,13 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 		Nodes: []profile.Node{
 			{ID: "failover", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
 				localSSIngress(profile.IngressRolePrimary, "f0", 0, deadPort),
-				localSSIngress(profile.IngressRoleBackup, "f1", 1, serverPort),
+				labeledIngress(localSSIngress(profile.IngressRoleBackup, "f1", 1, serverPort), "Relay F1"),
 			}},
 			{ID: "healthy", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
 				localSSIngress(profile.IngressRolePrimary, "h0", 0, serverPort),
@@ -87,21 +88,46 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 		Routing:   profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}},
 	}
 	platform := profile.PlatformCapabilities{Platform: "macos", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
-	core := NewWithLocalProxyState(platform, filepath.Join(t.TempDir(), "proxy-state.json"))
+	core := newLocalProxyTestCore(t, platform)
 	if _, err := core.ApplyProfile(p, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := core.ProbeAvailability(context.Background(), "failover", target.URL, time.Second); !errors.Is(err, ErrCoreNotRunning) {
 		t.Fatalf("probe before start: %v", err)
 	}
+	if core.Status().SelectedIngress != nil {
+		t.Fatal("selected ingress reported before start")
+	}
+	events := core.Subscribe(t.Context(), 16)
 	if err := core.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer core.Stop()
+	if ingress := core.Status().SelectedIngress; ingress == nil || ingress.EndpointKey != "f0" || ingress.Role != "primary" || ingress.Label != "" || ingress.PreviousEndpointKey != "" || ingress.SwitchedAt != nil {
+		t.Fatalf("selected ingress before traffic: %#v", ingress)
+	}
 	for _, id := range []string{"failover", "healthy"} {
 		result, err := core.ProbeAvailability(context.Background(), id, target.URL, 5*time.Second)
 		if err != nil || !result.Success || result.HTTPStatus != http.StatusNoContent {
 			t.Fatalf("%s: %v %#v", id, err, result)
+		}
+	}
+	// The dead primary pushed the selected node's traffic to its backup.
+	ingress := core.Status().SelectedIngress
+	if ingress == nil || ingress.EndpointKey != "f1" || ingress.Label != "Relay F1" || ingress.PreviousEndpointKey != "f0" || ingress.Role != "backup" || ingress.SwitchedAt == nil {
+		t.Fatalf("selected ingress after failover: %#v", ingress)
+	}
+	statusJSON, _ := json.Marshal(core.Status())
+	if !strings.Contains(string(statusJSON), `"selected_ingress":{"endpoint_key":"f1","label":"Relay F1","previous_endpoint_key":"f0","role":"backup","switched_at":"`) {
+		t.Fatalf("status JSON: %s", statusJSON)
+	}
+	switched := false
+	for !switched {
+		select {
+		case event := <-events:
+			switched = event.Type == EventNodeIngressSwitched && event.NodeID == "failover" && event.EndpointKey == "f1" && event.PreviousEndpointKey == "f0"
+		case <-time.After(2 * time.Second):
+			t.Fatal("no NodeIngressSwitched event")
 		}
 	}
 	result, err := core.ProbeAvailability(context.Background(), "down", target.URL, 5*time.Second)
@@ -114,6 +140,9 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 	// Selecting a logical node still works with failover groups underneath.
 	if err = core.SelectNode("healthy"); err != nil {
 		t.Fatal(err)
+	}
+	if ingress := core.Status().SelectedIngress; ingress == nil || ingress.EndpointKey != "h0" || ingress.Role != "primary" || ingress.PreviousEndpointKey != "" {
+		t.Fatalf("selected ingress of healthy node: %#v", ingress)
 	}
 }
 
@@ -136,10 +165,19 @@ func TestTUNOnlyCoreRejectsLocalProxyAPIs(t *testing.T) {
 	if _, err := c.LocalProxyCredential("node"); !errors.Is(err, ErrLocalProxyDisabled) {
 		t.Fatalf("credential: %v", err)
 	}
+	// TUN cores report the selected node's ingress too.
+	if ingress := c.Status().SelectedIngress; ingress == nil || ingress.EndpointKey != "9001" || ingress.Role != "primary" {
+		t.Fatalf("TUN core selected ingress: %#v", ingress)
+	}
 	built := c.built.Options
 	for _, inbound := range built.Inbounds {
 		if inbound.Type != C.TypeTun {
 			t.Fatalf("unexpected inbound %s", inbound.Type)
 		}
 	}
+}
+
+func labeledIngress(ingress profile.Ingress, label string) profile.Ingress {
+	ingress.Label = &label
+	return ingress
 }

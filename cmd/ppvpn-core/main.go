@@ -139,7 +139,7 @@ func serve(args []string) error {
 	secretFile := flags.String("session-secret-file", "", "private file used to exchange the random session secret")
 	stateDir := flags.String("state-dir", "", "private directory for device-local state")
 	platformName := flags.String("platform", "desktop", "platform capability name")
-	localProxy := flags.Bool("local-proxy", true, "enable per-node local HTTP/SOCKS5 proxies")
+	localProxy := flags.Bool("local-proxy", true, "enable the shared authenticated local HTTP/SOCKS5 proxy (one port, node chosen by username)")
 	tun := flags.Bool("tun", false, "enable sing-box TUN inbound (requires host-provided privileges)")
 	tunStack := flags.String("tun-stack", "mixed", "sing-box TUN stack: mixed, system, or gvisor")
 	exitOnStdin := flags.Bool("exit-on-stdin-close", false, "exit when the parent-owned stdin pipe closes")

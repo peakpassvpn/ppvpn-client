@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/idna"
 )
@@ -288,6 +290,9 @@ func validateIngresses(n *Node, base string, endpointKeys map[string]bool) error
 			return invalid("ENDPOINT_KEY_DUPLICATE", field+".endpoint_key", "endpoint key must be unique within the profile")
 		}
 		endpointKeys[in.EndpointKey] = true
+		if in.Label != nil && !validLabel(*in.Label) {
+			return invalid("INGRESS_LABEL_INVALID", field+".label", "ingress label must be 1-32 characters, trimmed, without control characters")
+		}
 		if in.ReplicaOrdinal < 0 {
 			return invalid("REPLICA_ORDINAL_INVALID", field+".replica_ordinal", "replica ordinal must be non-negative")
 		}
@@ -455,4 +460,21 @@ func mustPrefixes(values ...string) []netip.Prefix {
 		out[i] = netip.MustParsePrefix(v)
 	}
 	return out
+}
+
+// MaxIngressLabelLength is the maximum ingress label length in characters.
+const MaxIngressLabelLength = 32
+
+// validLabel accepts a non-empty, already-trimmed display string of at most
+// MaxIngressLabelLength characters without control characters.
+func validLabel(label string) bool {
+	if label == "" || label != strings.TrimSpace(label) || !utf8.ValidString(label) || utf8.RuneCountInString(label) > MaxIngressLabelLength {
+		return false
+	}
+	for _, r := range label {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }

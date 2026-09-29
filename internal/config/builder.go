@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
+	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
@@ -26,6 +26,9 @@ type BuildResult struct {
 	// OutboundNodes maps every node and ingress outbound tag back to its
 	// logical node id (used to attribute connections).
 	OutboundNodes map[string]string
+	// IngressKeys maps every outbound that is one ingress (a single-ingress
+	// node tag, or a failover member tag) to the ingress endpoint_key.
+	IngressKeys map[string]string
 }
 
 const selectedOutboundTag = "selected"
@@ -38,7 +41,7 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 	if err := profile.Validate(p, now); err != nil {
 		return nil, err
 	}
-	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes)), OutboundNodes: map[string]string{}}
+	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes)), OutboundNodes: map[string]string{}, IngressKeys: map[string]string{}}
 	// sing-box logs are disabled at the dependency boundary because upstream
 	// error messages are not guaranteed to preserve our credential policy.
 	// Structured first-party runtime events remain available through WatchEvents.
@@ -108,23 +111,48 @@ func addPlatformSafetyRules(result *BuildResult, p *profile.Profile) {
 	}
 }
 
+// LocalProxyInboundTag is the shared authenticated local proxy inbound.
+const LocalProxyInboundTag = "local-proxy"
+
+// addLocalProxies renders one shared loopback inbound for every node. The
+// inbound accepts exactly the per-node usernames, and one auth_user rule per
+// node pins that user's traffic to the node outbound (the failover group for
+// multi-ingress nodes). A final inbound rule rejects anything else, so local
+// proxy traffic can never fall through to profile rules or the selected node.
 func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
-	loopback := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	first := proxies[0]
+	prefix, _, ok := localproxy.ParseUsername(first.Username)
+	if !ok || first.Listen != localproxy.Listen || first.Port == 0 || first.Password == "" {
+		return fmt.Errorf("invalid local proxy endpoint for node %q", first.NodeID)
+	}
+	users := make([]proxyinbound.User, 0, len(proxies))
 	for _, endpoint := range proxies {
 		nodeOutbound, ok := result.NodeTags[endpoint.NodeID]
 		if !ok {
 			return fmt.Errorf("local proxy node %q does not exist", endpoint.NodeID)
 		}
-		if endpoint.Listen != "127.0.0.1" || endpoint.Port == 0 || endpoint.Username == "" || endpoint.Password == "" {
+		if endpoint.Listen != first.Listen || endpoint.Port != first.Port || endpoint.Password != first.Password ||
+			endpoint.Username != localproxy.FormatUsername(prefix, endpoint.NodeID) {
 			return fmt.Errorf("invalid local proxy endpoint for node %q", endpoint.NodeID)
 		}
-		inboundTag := "proxy-" + strings.TrimPrefix(nodeOutbound, "node-")
-		result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeMixed, Tag: inboundTag, Options: &option.HTTPMixedInboundOptions{ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: endpoint.Port}, Users: []auth.User{{Username: endpoint.Username, Password: endpoint.Password}}}})
+		users = append(users, proxyinbound.User{Username: endpoint.Username, Password: endpoint.Password})
 		result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
-			option.RawDefaultRule{Inbound: badoption.Listable[string]{inboundTag}},
+			option.RawDefaultRule{Inbound: badoption.Listable[string]{LocalProxyInboundTag}, AuthUser: badoption.Listable[string]{endpoint.Username}},
 			nodeOutbound,
 		))
 	}
+	result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: option.DefaultRule{
+			RawDefaultRule: option.RawDefaultRule{Inbound: badoption.Listable[string]{LocalProxyInboundTag}},
+			RuleAction:     option.RuleAction{Action: C.RuleActionTypeReject},
+		},
+	})
+	loopback := badoption.Addr(netip.MustParseAddr(localproxy.Listen))
+	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: proxyinbound.Type, Tag: LocalProxyInboundTag, Options: &proxyinbound.Options{
+		ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: first.Port},
+		Users:         users,
+	}})
 	return nil
 }
 
@@ -334,6 +362,7 @@ func buildNode(result *BuildResult, n profile.Node) ([]option.Outbound, error) {
 		if err != nil {
 			return nil, err
 		}
+		result.IngressKeys[tag] = n.Ingresses[0].EndpointKey
 		return []option.Outbound{out}, nil
 	}
 	outbounds := make([]option.Outbound, 0, len(n.Ingresses)+1)
@@ -348,6 +377,7 @@ func buildNode(result *BuildResult, n profile.Node) ([]option.Outbound, error) {
 			return nil, fmt.Errorf("ingress %d: %w", i, err)
 		}
 		result.OutboundNodes[ingressTag] = n.ID
+		result.IngressKeys[ingressTag] = ingress.EndpointKey
 		members = append(members, ingressTag)
 		outbounds = append(outbounds, out)
 	}
@@ -405,4 +435,35 @@ func normalizedLogLevel(v string) string {
 	default:
 		return "info"
 	}
+}
+
+// SystemProxyInboundTag is the opt-in unauthenticated loopback HTTP/SOCKS5
+// listener used for OS proxy settings.
+const SystemProxyInboundTag = "system-proxy"
+
+// SystemProxyInbound renders the system proxy listener. It is a stock mixed
+// inbound without users (OS proxy settings cannot carry credentials), bound
+// to 127.0.0.1 only. It has no route rules of its own, so its traffic takes
+// the same path as TUN traffic: profile rules, then the selected node.
+func SystemProxyInbound(port uint16) option.Inbound {
+	loopback := badoption.Addr(netip.MustParseAddr(localproxy.Listen))
+	return option.Inbound{Type: C.TypeMixed, Tag: SystemProxyInboundTag, Options: &option.HTTPMixedInboundOptions{
+		ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: port},
+	}}
+}
+
+// WithSystemProxy returns a copy of result whose inbounds include the system
+// proxy on port, or exclude it when port is 0. result is not modified.
+func WithSystemProxy(result *BuildResult, port uint16) *BuildResult {
+	next := *result
+	next.Options.Inbounds = make([]option.Inbound, 0, len(result.Options.Inbounds)+1)
+	for _, inbound := range result.Options.Inbounds {
+		if inbound.Tag != SystemProxyInboundTag {
+			next.Options.Inbounds = append(next.Options.Inbounds, inbound)
+		}
+	}
+	if port != 0 {
+		next.Options.Inbounds = append(next.Options.Inbounds, SystemProxyInbound(port))
+	}
+	return &next
 }

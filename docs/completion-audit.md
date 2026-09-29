@@ -12,7 +12,7 @@
 | TUN 边界 | 配置构建已接通；桌面提权 helper 与移动 TUN-FD bridge 尚未实现，并在平台文档中明确 |
 | 真实生命周期、revision 幂等、重载、回滚和入口迁移 | `internal/runtime`、假引擎测试与真实 sing-box 重载集成测试 |
 | 入口和端到端可用性探测 | `probe` 的超时、取消、字面量 IP 和认证代理测试 |
-| 每节点稳定独立 HTTP/SOCKS5 | `localproxy`、固定 inbound 路由与真实并发认证测试 |
+| 共享端口 HTTP/SOCKS5，用户名选节点 | `localproxy`、`internal/proxyinbound`、`auth_user` 路由与真实认证测试 |
 | 流量、连接、事件和凭据安全诊断 | 第一方运行时 tracker、事件总线、脱敏与 API 测试；关闭上游日志 |
 | 不依赖 Clash/私有 tag 的稳定 Core API | `api`、API 文档、认证/版本/脱敏测试 |
 | 认证桌面 IPC 和崩溃退出 | Unix `0600` socket 测试、Windows owner-only Named Pipe、轮换密钥、stdin 父进程存活选项 |

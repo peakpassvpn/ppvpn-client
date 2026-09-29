@@ -71,8 +71,8 @@ func TestMultiIngressProfileGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxies := []localproxy.Endpoint{
-		{NodeID: jpNode, Listen: "127.0.0.1", Port: 20001, Username: "u1", Password: "p1"},
-		{NodeID: usNode, Listen: "127.0.0.1", Port: 20002, Username: "u2", Password: "p2"},
+		{NodeID: jpNode, Listen: "127.0.0.1", Port: 7890, Username: localproxy.FormatUsername("u8f2k", jpNode), Password: "shared"},
+		{NodeID: usNode, Listen: "127.0.0.1", Port: 7890, Username: localproxy.FormatUsername("u8f2k", usNode), Password: "shared"},
 	}
 	built, err := BuildWithLocalProxies(p, profile.PlatformCapabilities{Platform: "macos", TUN: profile.TUNCapabilities{Enabled: true}, LogLevel: "info"}, proxies, time.Now())
 	if err != nil {

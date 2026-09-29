@@ -24,6 +24,7 @@
         {
           "role": "backup",
           "endpoint_key": "9002",
+          "label": "Tokyo relay",
           "replica_ordinal": 1,
           "protocol": "shadowsocks",
           "endpoint": {"domain": "tyo-01-relay.edge.example.com", "port": 8443},

@@ -50,8 +50,11 @@ const (
 // the profile); ReplicaOrdinal is its position within the node (unique and
 // strictly increasing in array order, not necessarily contiguous).
 type Ingress struct {
-	Role           IngressRole  `json:"role"`
-	EndpointKey    string       `json:"endpoint_key"`
+	Role        IngressRole `json:"role"`
+	EndpointKey string      `json:"endpoint_key"`
+	// Label is an optional display name (at most 32 characters). It is not
+	// an identifier: routing, tags and failover never use it.
+	Label          *string      `json:"label,omitempty"`
 	ReplicaOrdinal int          `json:"replica_ordinal"`
 	Protocol       Protocol     `json:"protocol"`
 	Endpoint       Endpoint     `json:"endpoint"`
@@ -59,6 +62,14 @@ type Ingress struct {
 	TLS            *TLS         `json:"tls,omitempty"`
 	Transport      *Transport   `json:"transport,omitempty"`
 	Capabilities   Capabilities `json:"capabilities"`
+}
+
+// DisplayLabel returns the label, or "" when absent.
+func (in Ingress) DisplayLabel() string {
+	if in.Label == nil {
+		return ""
+	}
+	return *in.Label
 }
 
 // Primary returns the node's primary ingress. It must only be called on a

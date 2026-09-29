@@ -17,6 +17,9 @@
 //     and every backup are checked on a shorter interval, and the group returns
 //     to the primary as soon as a check succeeds.
 //   - Existing connections are never interrupted by a switch.
+//   - The group remembers which member carried its latest connection, the
+//     member before the latest switch and when it switched (Active), and
+//     reports every switch to a SwitchObserver found in its context.
 package failover
 
 import (
@@ -59,6 +62,25 @@ type Options struct {
 	URL       string   `json:"url,omitempty"`
 }
 
+// Active describes the member that carried the group's latest connection.
+// Before any connection it is the primary, with no previous member.
+type Active struct {
+	Current    string
+	Previous   string
+	SwitchedAt time.Time
+}
+
+// SwitchObserver is told about every switch; it must not block.
+type SwitchObserver func(group string, active Active)
+
+type observerKey struct{}
+
+// WithSwitchObserver returns a context whose failover groups report switches
+// to observer.
+func WithSwitchObserver(ctx context.Context, observer SwitchObserver) context.Context {
+	return context.WithValue(ctx, observerKey{}, observer)
+}
+
 // Register adds the failover outbound type to a sing-box outbound registry.
 func Register(registry *outbound.Registry) {
 	outbound.Register[Options](registry, Type, New)
@@ -85,6 +107,10 @@ type Group struct {
 	interval        time.Duration
 	recoverInterval time.Duration
 	idleTimeout     time.Duration
+	observer        SwitchObserver
+
+	activeMu sync.Mutex
+	active   Active
 
 	started    atomic.Bool
 	lastActive atomic.Int64
@@ -132,6 +158,8 @@ func New(ctx context.Context, _ adapter.Router, logger log.ContextLogger, tag st
 		wake:            make(chan struct{}, 1),
 	}
 	g.check = func(ctx context.Context, m adapter.Outbound) error { return httpCheck(ctx, target, m) }
+	g.observer, _ = ctx.Value(observerKey{}).(SwitchObserver)
+	g.active.Current = g.tags[0]
 	return g, nil
 }
 
@@ -176,6 +204,29 @@ func (g *Group) Now() string {
 
 func (g *Group) All() []string { return slices.Clone(g.tags) }
 
+// Active reports the member in use and the latest switch.
+func (g *Group) Active() Active {
+	g.activeMu.Lock()
+	defer g.activeMu.Unlock()
+	return g.active
+}
+
+// used records that m carried a new connection.
+func (g *Group) used(m *member) {
+	tag := m.outbound.Tag()
+	g.activeMu.Lock()
+	if g.active.Current == tag {
+		g.activeMu.Unlock()
+		return
+	}
+	g.active = Active{Current: tag, Previous: g.active.Current, SwitchedAt: time.Now()}
+	active := g.active
+	g.activeMu.Unlock()
+	if g.observer != nil {
+		g.observer(g.Tag(), active)
+	}
+}
+
 func (g *Group) preferred(network string) *member {
 	var fallback *member
 	for _, m := range g.members {
@@ -216,6 +267,7 @@ func (g *Group) DialContext(ctx context.Context, network string, destination M.S
 	for _, m := range g.candidates(N.NetworkName(network)) {
 		conn, err := m.outbound.DialContext(ctx, network, destination)
 		if err == nil {
+			g.used(m)
 			return conn, nil
 		}
 		lastErr = err
@@ -236,6 +288,7 @@ func (g *Group) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.
 	for _, m := range g.candidates(N.NetworkUDP) {
 		conn, err := m.outbound.ListenPacket(ctx, destination)
 		if err == nil {
+			g.used(m)
 			return conn, nil
 		}
 		lastErr = err

@@ -17,7 +17,8 @@ import (
 const testSecret = "0123456789abcdef0123456789abcdef"
 
 func apiProfile() *profile.Profile {
-	n := profile.Node{ID: "node", Name: "Tokyo", EntryKey: "cn-optimized", EntryLabel: "CN Optimized", Exit: profile.Exit{Region: "Tokyo"}, Capabilities: profile.Capabilities{TCP: true, UDP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, EndpointKey: "9001", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}}}
+	label := "Tokyo A"
+	n := profile.Node{ID: "node", Name: "Tokyo", EntryKey: "cn-optimized", EntryLabel: "CN Optimized", Exit: profile.Exit{Region: "Tokyo"}, Capabilities: profile.Capabilities{TCP: true, UDP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, EndpointKey: "9001", Label: &label, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}}}
 	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r1", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 func testServer(t *testing.T) (*Server, *coreruntime.Core) {
@@ -93,11 +94,52 @@ func TestUnknownMethodUsesEnvelope(t *testing.T) {
 	}
 }
 
-func TestRemovedSystemProxyEndpointReturnsCompatibilityError(t *testing.T) {
+func TestSystemProxyUnavailableWithoutStateOrInTUNCore(t *testing.T) {
 	server, _ := testServer(t)
-	unavailable := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
-	if unavailable.Code != http.StatusBadRequest || !strings.Contains(unavailable.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
-		t.Fatal(unavailable.Body.String())
+	for _, path := range []string{"/v1/get-system-proxy-endpoints", "/v1/set-system-proxy"} {
+		rec := request(t, server, path, map[string]any{"enabled": true}, true)
+		if path == "/v1/get-system-proxy-endpoints" {
+			rec = request(t, server, path, map[string]any{}, true)
+		}
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
+			t.Fatalf("%s: %s", path, rec.Body.String())
+		}
+	}
+	tun := coreruntime.NewWithLocalProxyState(profile.PlatformCapabilities{TUN: profile.TUNCapabilities{Enabled: true}}, filepath.Join(t.TempDir(), "local-proxies.json"))
+	tunServer, err := NewServer(tun, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := request(t, tunServer, "/v1/set-system-proxy", map[string]any{"enabled": true}, true); !strings.Contains(rec.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
+		t.Fatal(rec.Body.String())
+	}
+}
+
+func TestSetSystemProxyToggleAndStatus(t *testing.T) {
+	core := coreruntime.NewWithLocalProxyState(profile.PlatformCapabilities{}, filepath.Join(t.TempDir(), "local-proxies.json"))
+	server, err := NewServer(core, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := request(t, server, "/v1/get-status", map[string]any{}, true)
+	if !strings.Contains(status.Body.String(), `"system_proxy":{"available":true,"enabled":false,"listening":false}`) {
+		t.Fatal(status.Body.String())
+	}
+	if rec := request(t, server, "/v1/set-system-proxy", map[string]any{}, true); !strings.Contains(rec.Body.String(), "REQUEST_INVALID") {
+		t.Fatal(rec.Body.String())
+	}
+	enabled := request(t, server, "/v1/set-system-proxy", map[string]any{"enabled": true}, true)
+	body := enabled.Body.String()
+	if enabled.Code != http.StatusOK || !strings.Contains(body, `"enabled":true`) || !strings.Contains(body, `"listening":false`) ||
+		!strings.Contains(body, `"listen":"127.0.0.1"`) || !strings.Contains(body, `"protocols":["http","socks5"]`) {
+		t.Fatal(body)
+	}
+	if rec := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true); !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Fatal(rec.Body.String())
+	}
+	disabled := request(t, server, "/v1/set-system-proxy", map[string]any{"enabled": false}, true)
+	if disabled.Code != http.StatusOK || !strings.Contains(disabled.Body.String(), `"enabled":false`) || strings.Contains(disabled.Body.String(), `"port"`) {
+		t.Fatal(disabled.Body.String())
 	}
 }
 
@@ -149,7 +191,7 @@ func TestProbeEntrancesMethodAndShape(t *testing.T) {
 		rec := request(t, server, "/v1/probe-entrances", map[string]any{"method": method, "timeout_ms": 50, "node_ids": []string{"node"}}, true)
 		body := rec.Body.String()
 		if rec.Code != http.StatusOK || !strings.Contains(body, `"method":"`+method+`"`) || !strings.Contains(body, `"endpoint_key":"9001","ingress_role":"primary"`) ||
-			!strings.Contains(body, `"ingresses":[{"endpoint_key":"9001","replica_ordinal":0,"role":"primary"`) || !strings.Contains(body, `"latency_ms"`) || strings.Contains(body, "connect_ms") {
+			!strings.Contains(body, `"ingresses":[{"endpoint_key":"9001","label":"Tokyo A","replica_ordinal":0,"role":"primary"`) || !strings.Contains(body, `"latency_ms"`) || strings.Contains(body, "connect_ms") {
 			t.Fatal(body)
 		}
 	}
@@ -171,7 +213,7 @@ func TestLocalProxyAPIsReportDisabledCore(t *testing.T) {
 		}
 	}
 	nodes := request(t, server, "/v1/list-nodes", map[string]any{}, true)
-	if !strings.Contains(nodes.Body.String(), `"protocol":"shadowsocks"`) || !strings.Contains(nodes.Body.String(), `"ingresses":[{"endpoint_key":"9001","replica_ordinal":0,"role":"primary","protocol":"shadowsocks"}]`) ||
+	if !strings.Contains(nodes.Body.String(), `"protocol":"shadowsocks"`) || !strings.Contains(nodes.Body.String(), `"ingresses":[{"endpoint_key":"9001","label":"Tokyo A","replica_ordinal":0,"role":"primary","protocol":"shadowsocks"}]`) ||
 		!strings.Contains(nodes.Body.String(), `"entry_key":"cn-optimized","entry_label":"CN Optimized"`) || strings.Contains(nodes.Body.String(), "country_code") {
 		t.Fatal(nodes.Body.String())
 	}
