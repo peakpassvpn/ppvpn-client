@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
+	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
@@ -28,6 +29,20 @@ type Status struct {
 	Revision       string `json:"revision,omitempty"`
 	SelectedNodeID string `json:"selected_node_id,omitempty"`
 	NodeCount      int    `json:"node_count"`
+	// SelectedIngress is omitted while it is unknown (no profile, or the
+	// core is not running).
+	SelectedIngress *IngressStatus `json:"selected_ingress,omitempty"`
+}
+
+// IngressStatus is the ingress (replica) a node is actually using. For a
+// multi-ingress node it is the member that carried the node's latest
+// connection (the primary before any traffic); PreviousEndpointKey and
+// SwitchedAt describe the latest switch and are omitted before the first one.
+type IngressStatus struct {
+	EndpointKey         string     `json:"endpoint_key"`
+	PreviousEndpointKey string     `json:"previous_endpoint_key,omitempty"`
+	Role                string     `json:"role"`
+	SwitchedAt          *time.Time `json:"switched_at,omitempty"`
 }
 
 var (
@@ -433,6 +448,7 @@ func (c *Core) Reload() error {
 
 func (c *Core) startCandidate(candidate *config.BuildResult) (engine, context.CancelFunc, error) {
 	ctx, cancel := context.WithCancel(context.Background())
+	ctx = failover.WithSwitchObserver(ctx, c.ingressObserver(candidate))
 	instance, err := c.factory(ctx, candidate.Options)
 	if err != nil {
 		cancel()
@@ -480,7 +496,50 @@ func (c *Core) Status() Status {
 	if c.engine != nil {
 		state = StateRunning
 	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes)}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked()}
+}
+
+func (c *Core) selectedIngressLocked() *IngressStatus {
+	source, ok := c.engine.(ingressEngine)
+	if !ok || c.built == nil {
+		return nil
+	}
+	node, ok := findNode(c.active, c.selected)
+	if !ok {
+		return nil
+	}
+	active, ok := source.activeIngress(c.built.NodeTags[node.ID])
+	if !ok {
+		return nil
+	}
+	key, ok := c.built.IngressKeys[active.Current]
+	if !ok {
+		return nil
+	}
+	status := &IngressStatus{EndpointKey: key, PreviousEndpointKey: c.built.IngressKeys[active.Previous]}
+	for _, ingress := range node.Ingresses {
+		if ingress.EndpointKey == key {
+			status.Role = string(ingress.Role)
+		}
+	}
+	if !active.SwitchedAt.IsZero() {
+		at := active.SwitchedAt.UTC()
+		status.SwitchedAt = &at
+	}
+	return status
+}
+
+// ingressObserver turns failover switches of the instance built from
+// candidate into NodeIngressSwitched events.
+func (c *Core) ingressObserver(candidate *config.BuildResult) failover.SwitchObserver {
+	return func(group string, active failover.Active) {
+		nodeID, ok := candidate.OutboundNodes[group]
+		key, known := candidate.IngressKeys[active.Current]
+		if !ok || !known {
+			return
+		}
+		c.emit(Event{Type: EventNodeIngressSwitched, At: active.SwitchedAt, NodeID: nodeID, EndpointKey: key, PreviousEndpointKey: candidate.IngressKeys[active.Previous]})
+	}
 }
 
 func (c *Core) Nodes() []profile.Node {

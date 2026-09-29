@@ -22,11 +22,27 @@ type flowEngine interface {
 	dialFlow(ctx context.Context, network, outboundTag, host string, port uint16) (net.Conn, error)
 	selectOutbound(outboundTag string) bool
 }
+
+// ingressEngine reports which ingress a node outbound is using.
+type ingressEngine interface {
+	activeIngress(nodeTag string) (failover.Active, bool)
+}
 type singEngine struct {
 	*box.Box
 	tracker *telemetry
 }
 
+func (e *singEngine) activeIngress(nodeTag string) (failover.Active, bool) {
+	outbound, ok := e.Outbound().Outbound(nodeTag)
+	if !ok {
+		return failover.Active{}, false
+	}
+	if group, ok := outbound.(*failover.Group); ok {
+		return group.Active(), true
+	}
+	// A single-ingress node is the ingress outbound itself.
+	return failover.Active{Current: nodeTag}, true
+}
 func (e *singEngine) telemetrySnapshot() (Traffic, []Connection) { return e.tracker.snapshot() }
 func (e *singEngine) dialFlow(ctx context.Context, network, outboundTag, host string, port uint16) (net.Conn, error) {
 	outbound, ok := e.Outbound().Outbound(outboundTag)

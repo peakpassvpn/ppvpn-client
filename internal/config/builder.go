@@ -26,6 +26,9 @@ type BuildResult struct {
 	// OutboundNodes maps every node and ingress outbound tag back to its
 	// logical node id (used to attribute connections).
 	OutboundNodes map[string]string
+	// IngressKeys maps every outbound that is one ingress (a single-ingress
+	// node tag, or a failover member tag) to the ingress endpoint_key.
+	IngressKeys map[string]string
 }
 
 const selectedOutboundTag = "selected"
@@ -38,7 +41,7 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 	if err := profile.Validate(p, now); err != nil {
 		return nil, err
 	}
-	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes)), OutboundNodes: map[string]string{}}
+	result := &BuildResult{NodeTags: make(map[string]string, len(p.Nodes)), OutboundNodes: map[string]string{}, IngressKeys: map[string]string{}}
 	// sing-box logs are disabled at the dependency boundary because upstream
 	// error messages are not guaranteed to preserve our credential policy.
 	// Structured first-party runtime events remain available through WatchEvents.
@@ -359,6 +362,7 @@ func buildNode(result *BuildResult, n profile.Node) ([]option.Outbound, error) {
 		if err != nil {
 			return nil, err
 		}
+		result.IngressKeys[tag] = n.Ingresses[0].EndpointKey
 		return []option.Outbound{out}, nil
 	}
 	outbounds := make([]option.Outbound, 0, len(n.Ingresses)+1)
@@ -373,6 +377,7 @@ func buildNode(result *BuildResult, n profile.Node) ([]option.Outbound, error) {
 			return nil, fmt.Errorf("ingress %d: %w", i, err)
 		}
 		result.OutboundNodes[ingressTag] = n.ID
+		result.IngressKeys[ingressTag] = ingress.EndpointKey
 		members = append(members, ingressTag)
 		outbounds = append(outbounds, out)
 	}

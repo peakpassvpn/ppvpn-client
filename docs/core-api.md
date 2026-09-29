@@ -97,10 +97,25 @@ X-Request-ID: <optional-client-id>
 ```
 
 ```json
-{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3}
+{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,
+ "selected_ingress":{"endpoint_key":"9002","previous_endpoint_key":"9001","role":"backup","switched_at":"2026-07-23T12:00:00Z"}}
 ```
 
 `state` 可为 `stopped`、`configured`、`running`。尚未应用 Profile 时返回 `stopped` 且 `node_count=0`。
+
+`selected_ingress` 是 selected 节点实际使用的入口副本，标准核心与 TUN 核心都会返回；核心未运行或无法
+确定时省略该字段：
+
+- `endpoint_key` / `role`：当前副本及其角色（`primary`/`backup`），取自 Profile。多入口节点指承载该节点
+  最近一个新连接的副本；该节点尚无流量时为 primary。单入口节点始终是唯一的入口。
+- `previous_endpoint_key` / `switched_at`：最近一次切换前的副本和切换时间（RFC 3339，UTC）；从未切换时省略。
+  切换包括故障转移到 backup，以及 primary 恢复后回到 primary。重启核心或应用新 revision 后重新计算。
+
+每次切换还会发出 `NodeIngressSwitched` 事件（任意节点，不限 selected）：
+
+```json
+{"type":"NodeIngressSwitched","at":"2026-07-23T12:00:00Z","node_id":"hk-001","endpoint_key":"9002","previous_endpoint_key":"9001"}
+```
 
 ### NodeSummary
 
@@ -210,7 +225,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 

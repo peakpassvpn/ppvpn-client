@@ -229,3 +229,66 @@ func TestHTTPCheck(t *testing.T) {
 		t.Fatal("https health URL accepted")
 	}
 }
+
+func TestActiveTracksSwitchesAndNotifiesObserver(t *testing.T) {
+	primary := &fakeOutbound{tag: "p", network: []string{N.NetworkTCP, N.NetworkUDP}}
+	backup := &fakeOutbound{tag: "b", network: []string{N.NetworkTCP, N.NetworkUDP}}
+	var mu sync.Mutex
+	var switches []Active
+	ctx := WithSwitchObserver(context.Background(), func(group string, active Active) {
+		if group != "node" {
+			t.Errorf("group %q", group)
+		}
+		mu.Lock()
+		switches = append(switches, active)
+		mu.Unlock()
+	})
+	out, err := New(ctx, nil, log.NewNOPFactory().NewLogger("test"), "node", Options{Outbounds: []string{"p", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := out.(*Group)
+	for _, m := range []*fakeOutbound{primary, backup} {
+		member := &member{outbound: m}
+		member.healthy.Store(true)
+		g.members = append(g.members, member)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+
+	if active := g.Active(); active.Current != "p" || active.Previous != "" || !active.SwitchedAt.IsZero() {
+		t.Fatalf("initial: %#v", active)
+	}
+	dial(t, g)
+	if active := g.Active(); active.Current != "p" || active.Previous != "" || len(switches) != 0 {
+		t.Fatalf("primary use is not a switch: %#v %v", active, switches)
+	}
+	primary.fail.Store(true)
+	before := time.Now()
+	dial(t, g)
+	failedOver := g.Active()
+	if failedOver.Current != "b" || failedOver.Previous != "p" || failedOver.SwitchedAt.Before(before) {
+		t.Fatalf("after failover: %#v", failedOver)
+	}
+	dial(t, g)
+	if g.Active() != failedOver {
+		t.Fatal("repeated use of the same member recorded a switch")
+	}
+	// Recovery: the next connection returns to the primary.
+	primary.fail.Store(false)
+	g.members[0].healthy.Store(true)
+	ctxUDP, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	packet, err := g.ListenPacket(ctxUDP, M.ParseSocksaddr("1.1.1.1:53"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet.Close()
+	if active := g.Active(); active.Current != "p" || active.Previous != "b" {
+		t.Fatalf("after recovery: %#v", active)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(switches) != 2 || switches[0] != failedOver || switches[1].Current != "p" {
+		t.Fatalf("observer saw %#v", switches)
+	}
+}

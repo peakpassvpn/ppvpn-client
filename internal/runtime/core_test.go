@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/routing"
 	"github.com/sagernet/sing-box/option"
@@ -71,6 +72,9 @@ func (e *fakeEngine) dialFlow(_ context.Context, network, outbound, host string,
 		return nil, errors.New("not implemented")
 	}
 	return e.dialConn, nil
+}
+func (e *fakeEngine) activeIngress(nodeTag string) (failover.Active, bool) {
+	return failover.Active{Current: nodeTag}, true
 }
 func (e *fakeEngine) selectOutbound(tag string) bool {
 	e.selected = tag
