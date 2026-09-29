@@ -74,7 +74,7 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 		Nodes: []profile.Node{
 			{ID: "failover", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
 				localSSIngress(profile.IngressRolePrimary, "f0", 0, deadPort),
-				localSSIngress(profile.IngressRoleBackup, "f1", 1, serverPort),
+				labeledIngress(localSSIngress(profile.IngressRoleBackup, "f1", 1, serverPort), "Relay F1"),
 			}},
 			{ID: "healthy", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
 				localSSIngress(profile.IngressRolePrimary, "h0", 0, serverPort),
@@ -103,7 +103,7 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer core.Stop()
-	if ingress := core.Status().SelectedIngress; ingress == nil || ingress.EndpointKey != "f0" || ingress.Role != "primary" || ingress.PreviousEndpointKey != "" || ingress.SwitchedAt != nil {
+	if ingress := core.Status().SelectedIngress; ingress == nil || ingress.EndpointKey != "f0" || ingress.Role != "primary" || ingress.Label != "" || ingress.PreviousEndpointKey != "" || ingress.SwitchedAt != nil {
 		t.Fatalf("selected ingress before traffic: %#v", ingress)
 	}
 	for _, id := range []string{"failover", "healthy"} {
@@ -114,11 +114,11 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 	}
 	// The dead primary pushed the selected node's traffic to its backup.
 	ingress := core.Status().SelectedIngress
-	if ingress == nil || ingress.EndpointKey != "f1" || ingress.PreviousEndpointKey != "f0" || ingress.Role != "backup" || ingress.SwitchedAt == nil {
+	if ingress == nil || ingress.EndpointKey != "f1" || ingress.Label != "Relay F1" || ingress.PreviousEndpointKey != "f0" || ingress.Role != "backup" || ingress.SwitchedAt == nil {
 		t.Fatalf("selected ingress after failover: %#v", ingress)
 	}
 	statusJSON, _ := json.Marshal(core.Status())
-	if !strings.Contains(string(statusJSON), `"selected_ingress":{"endpoint_key":"f1","previous_endpoint_key":"f0","role":"backup","switched_at":"`) {
+	if !strings.Contains(string(statusJSON), `"selected_ingress":{"endpoint_key":"f1","label":"Relay F1","previous_endpoint_key":"f0","role":"backup","switched_at":"`) {
 		t.Fatalf("status JSON: %s", statusJSON)
 	}
 	switched := false
@@ -175,4 +175,9 @@ func TestTUNOnlyCoreRejectsLocalProxyAPIs(t *testing.T) {
 			t.Fatalf("unexpected inbound %s", inbound.Type)
 		}
 	}
+}
+
+func labeledIngress(ingress profile.Ingress, label string) profile.Ingress {
+	ingress.Label = &label
+	return ingress
 }

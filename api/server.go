@@ -273,7 +273,7 @@ func duration(ms int, fallback time.Duration) time.Duration {
 func summarize(n profile.Node) NodeSummary {
 	summary := NodeSummary{ID: n.ID, Name: n.Name, EntryKey: n.EntryKey, EntryLabel: n.EntryLabel, Region: n.Exit.Region, TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP, Ingresses: make([]IngressSummary, len(n.Ingresses))}
 	for i, ingress := range n.Ingresses {
-		summary.Ingresses[i] = IngressSummary{EndpointKey: ingress.EndpointKey, ReplicaOrdinal: ingress.ReplicaOrdinal, Role: string(ingress.Role), Protocol: string(ingress.Protocol)}
+		summary.Ingresses[i] = IngressSummary{EndpointKey: ingress.EndpointKey, Label: ingress.DisplayLabel(), ReplicaOrdinal: ingress.ReplicaOrdinal, Role: string(ingress.Role), Protocol: string(ingress.Protocol)}
 	}
 	if len(n.Ingresses) > 0 {
 		summary.Protocol = string(n.Ingresses[0].Protocol)

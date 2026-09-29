@@ -78,10 +78,13 @@ func TestEntranceDNSFailure(t *testing.T) {
 }
 
 func TestEntranceFallsBackToBestBackup(t *testing.T) {
+	labeled := ssIngress(profile.IngressRoleBackup, "c.example.com", "9.9.9.9")
+	label := "Relay C"
+	labeled.Label = &label
 	p := probeProfile(
 		ssIngress(profile.IngressRolePrimary, "a.example.com", "8.8.8.8"),
 		ssIngress(profile.IngressRoleBackup, "b.example.com", "1.1.1.1"),
-		ssIngress(profile.IngressRoleBackup, "c.example.com", "9.9.9.9"),
+		labeled,
 	)
 	ping := func(_ context.Context, addr netip.Addr, _ time.Duration) (time.Duration, error) {
 		switch addr.String() {
@@ -102,7 +105,8 @@ func TestEntranceFallsBackToBestBackup(t *testing.T) {
 		t.Fatalf("%#v", r)
 	}
 	if r.Ingresses[0].Success || r.Ingresses[0].ErrorCode != CodeICMPTimeout || r.Ingresses[0].Role != profile.IngressRolePrimary || !r.Ingresses[2].Success ||
-		r.Ingresses[0].EndpointKey != "a.example.com" || r.Ingresses[2].EndpointKey != "c.example.com" || r.Ingresses[2].ReplicaOrdinal != 2 {
+		r.Ingresses[0].EndpointKey != "a.example.com" || r.Ingresses[2].EndpointKey != "c.example.com" || r.Ingresses[2].ReplicaOrdinal != 2 ||
+		r.Ingresses[2].Label != "Relay C" || r.Ingresses[0].Label != "" {
 		t.Fatalf("%#v", r.Ingresses)
 	}
 }

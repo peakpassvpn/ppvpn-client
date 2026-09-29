@@ -106,7 +106,7 @@ X-Request-ID: <optional-client-id>
 `selected_ingress` 是 selected 节点实际使用的入口副本，标准核心与 TUN 核心都会返回；核心未运行或无法
 确定时省略该字段：
 
-- `endpoint_key` / `role`：当前副本及其角色（`primary`/`backup`），取自 Profile。多入口节点指承载该节点
+- `endpoint_key` / `role`：当前副本及其角色（`primary`/`backup`），取自 Profile；副本有 `label` 时一并返回。多入口节点指承载该节点
   最近一个新连接的副本；该节点尚无流量时为 primary。单入口节点始终是唯一的入口。
 - `previous_endpoint_key` / `switched_at`：最近一次切换前的副本和切换时间（RFC 3339，UTC）；从未切换时省略。
   切换包括故障转移到 backup，以及 primary 恢复后回到 primary。重启核心或应用新 revision 后重新计算。
@@ -126,7 +126,9 @@ X-Request-ID: <optional-client-id>
               {"endpoint_key":"9002","replica_ordinal":1,"role":"backup","protocol":"shadowsocks"}]}
 ```
 
-`entry_key` / `entry_label` 原样透传自 Profile（`entry_label` 缺省时省略）。`ingresses` 按故障转移顺序列出；`protocol` 是第一个（primary）入口的协议。节点列表不含入口地址、TLS 参数或协议凭据。
+`entry_key` / `entry_label` 原样透传自 Profile（`entry_label` 缺省时省略）。入口的可选展示名
+`label` 同样原样透传（缺省时省略），也出现在入口探测结果的 `ingresses[]` 和 `selected_ingress` 中；它只用于展示，
+副本以 `endpoint_key` 标识。`ingresses` 按故障转移顺序列出；`protocol` 是第一个（primary）入口的协议。节点列表不含入口地址、TLS 参数或协议凭据。
 
 ### EntranceResult 与 AvailabilityResult
 
@@ -247,6 +249,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `INGRESS_ROLE_INVALID` / `INGRESS_COUNT_INVALID` | 入口为 1–64 个；`ingresses[0]` 为 primary，其余为 backup |
 | `ENTRY_KEY_INVALID` | `entry_key` 缺失或不符合 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` |
 | `ENDPOINT_KEY_INVALID` / `ENDPOINT_KEY_DUPLICATE` | `endpoint_key` 缺失、格式不符或在 Profile 内重复 |
+| `INGRESS_LABEL_INVALID` | 可选的 `ingresses[].label` 为空、首尾有空白、含控制字符或超过 32 个字符 |
 | `REPLICA_ORDINAL_INVALID` | `replica_ordinal` 为负，或在 Node 内未按数组顺序严格递增（缺失报 `FIELD_REQUIRED`） |
 | `EXIT_IP_INVALID` | `exit.ip` 不是合法 IP |
 | `SHADOWSOCKS_METHOD_UNSUPPORTED` / `SHADOWSOCKS_KEY_INVALID` | 修正 SS 2022 方法或密钥长度 |

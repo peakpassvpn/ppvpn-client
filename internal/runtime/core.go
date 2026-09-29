@@ -40,6 +40,7 @@ type Status struct {
 // SwitchedAt describe the latest switch and are omitted before the first one.
 type IngressStatus struct {
 	EndpointKey         string     `json:"endpoint_key"`
+	Label               string     `json:"label,omitempty"`
 	PreviousEndpointKey string     `json:"previous_endpoint_key,omitempty"`
 	Role                string     `json:"role"`
 	SwitchedAt          *time.Time `json:"switched_at,omitempty"`
@@ -519,7 +520,7 @@ func (c *Core) selectedIngressLocked() *IngressStatus {
 	status := &IngressStatus{EndpointKey: key, PreviousEndpointKey: c.built.IngressKeys[active.Previous]}
 	for _, ingress := range node.Ingresses {
 		if ingress.EndpointKey == key {
-			status.Role = string(ingress.Role)
+			status.Role, status.Label = string(ingress.Role), ingress.DisplayLabel()
 		}
 	}
 	if !active.SwitchedAt.IsZero() {

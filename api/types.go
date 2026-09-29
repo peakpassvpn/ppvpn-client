@@ -31,6 +31,7 @@ type NodeSummary struct {
 }
 type IngressSummary struct {
 	EndpointKey    string `json:"endpoint_key"`
+	Label          string `json:"label,omitempty"`
 	ReplicaOrdinal int    `json:"replica_ordinal"`
 	Role           string `json:"role"`
 	Protocol       string `json:"protocol"`

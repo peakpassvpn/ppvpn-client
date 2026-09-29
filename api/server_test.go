@@ -17,7 +17,8 @@ import (
 const testSecret = "0123456789abcdef0123456789abcdef"
 
 func apiProfile() *profile.Profile {
-	n := profile.Node{ID: "node", Name: "Tokyo", EntryKey: "cn-optimized", EntryLabel: "CN Optimized", Exit: profile.Exit{Region: "Tokyo"}, Capabilities: profile.Capabilities{TCP: true, UDP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, EndpointKey: "9001", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}}}
+	label := "Tokyo A"
+	n := profile.Node{ID: "node", Name: "Tokyo", EntryKey: "cn-optimized", EntryLabel: "CN Optimized", Exit: profile.Exit{Region: "Tokyo"}, Capabilities: profile.Capabilities{TCP: true, UDP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, EndpointKey: "9001", Label: &label, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}}}
 	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r1", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 func testServer(t *testing.T) (*Server, *coreruntime.Core) {
@@ -149,7 +150,7 @@ func TestProbeEntrancesMethodAndShape(t *testing.T) {
 		rec := request(t, server, "/v1/probe-entrances", map[string]any{"method": method, "timeout_ms": 50, "node_ids": []string{"node"}}, true)
 		body := rec.Body.String()
 		if rec.Code != http.StatusOK || !strings.Contains(body, `"method":"`+method+`"`) || !strings.Contains(body, `"endpoint_key":"9001","ingress_role":"primary"`) ||
-			!strings.Contains(body, `"ingresses":[{"endpoint_key":"9001","replica_ordinal":0,"role":"primary"`) || !strings.Contains(body, `"latency_ms"`) || strings.Contains(body, "connect_ms") {
+			!strings.Contains(body, `"ingresses":[{"endpoint_key":"9001","label":"Tokyo A","replica_ordinal":0,"role":"primary"`) || !strings.Contains(body, `"latency_ms"`) || strings.Contains(body, "connect_ms") {
 			t.Fatal(body)
 		}
 	}
@@ -171,7 +172,7 @@ func TestLocalProxyAPIsReportDisabledCore(t *testing.T) {
 		}
 	}
 	nodes := request(t, server, "/v1/list-nodes", map[string]any{}, true)
-	if !strings.Contains(nodes.Body.String(), `"protocol":"shadowsocks"`) || !strings.Contains(nodes.Body.String(), `"ingresses":[{"endpoint_key":"9001","replica_ordinal":0,"role":"primary","protocol":"shadowsocks"}]`) ||
+	if !strings.Contains(nodes.Body.String(), `"protocol":"shadowsocks"`) || !strings.Contains(nodes.Body.String(), `"ingresses":[{"endpoint_key":"9001","label":"Tokyo A","replica_ordinal":0,"role":"primary","protocol":"shadowsocks"}]`) ||
 		!strings.Contains(nodes.Body.String(), `"entry_key":"cn-optimized","entry_label":"CN Optimized"`) || strings.Contains(nodes.Body.String(), "country_code") {
 		t.Fatal(nodes.Body.String())
 	}
