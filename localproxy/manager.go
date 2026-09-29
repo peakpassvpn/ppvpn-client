@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/peakpassvpn/ppvpn-core/internal/privateacl"
 	"net"
 	"os"
 	"path/filepath"
@@ -239,19 +240,22 @@ func (m *Manager) prepare(nodeIDs []string, probe bool) ([]Endpoint, error) {
 // persist the regenerated settings.
 func (m *Manager) load() (state diskState, changed bool, err error) {
 	state = diskState{Version: StateVersion}
-	data, err := os.ReadFile(m.path)
-	if os.IsNotExist(err) {
-		return state, false, nil
-	}
-	if err != nil {
-		return state, false, fmt.Errorf("read local proxy state: %w", err)
-	}
-	info, err := os.Stat(m.path)
-	if err != nil {
+	// Secure (and, if it carries the 0.4.0 ACL, repair) the directory and
+	// check the file before reading: an unreadable file must fail with the
+	// path and a remedy, not a bare "Access is denied".
+	if err = m.prepareDirectory(); err != nil {
 		return state, false, err
 	}
-	if !securePermissions(m.path, info) {
-		return state, false, fmt.Errorf("local proxy state permissions are not private: %s", m.path)
+	exists, err := privateacl.CheckFile(m.path)
+	if err != nil {
+		return state, false, fmt.Errorf("local proxy state: %w", err)
+	}
+	if !exists {
+		return state, false, nil
+	}
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		return state, false, fmt.Errorf("read local proxy state: %w", err)
 	}
 	var header struct {
 		Version int `json:"version"`
@@ -279,12 +283,23 @@ func (m *Manager) load() (state diskState, changed bool, err error) {
 	}
 }
 
-func (m *Manager) save(state diskState) error {
+// prepareDirectory creates the state directory and applies the private
+// ACL, which also repairs a directory this account owns but was locked out
+// of by an older ACL.
+func (m *Manager) prepareDirectory() error {
 	dir := filepath.Dir(m.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+		return fmt.Errorf("create local proxy state directory: %w", err)
 	}
-	if err := secureDirectory(dir); err != nil {
+	if err := privateacl.SecureDirectory(dir); err != nil {
+		return fmt.Errorf("secure local proxy state directory: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) save(state diskState) error {
+	dir := filepath.Dir(m.path)
+	if err := m.prepareDirectory(); err != nil {
 		return err
 	}
 	data, err := json.Marshal(state)
@@ -298,7 +313,7 @@ func (m *Manager) save(state diskState) error {
 	name := tmp.Name()
 	defer os.Remove(name)
 	if err = tmp.Chmod(0o600); err == nil {
-		err = secureFile(name)
+		err = privateacl.SecureFile(name)
 	}
 	if err == nil {
 		_, err = tmp.Write(data)
