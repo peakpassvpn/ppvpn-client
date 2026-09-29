@@ -367,7 +367,7 @@ func (c *Core) Start() error {
 		c.mu.RUnlock()
 		return nil
 	}
-	built := c.built
+	built, selected := c.built, c.selected
 	c.mu.RUnlock()
 	if built == nil {
 		return fmt.Errorf("no profile applied")
@@ -375,6 +375,11 @@ func (c *Core) Start() error {
 	instance, cancel, err := c.startCandidate(built)
 	if err != nil {
 		return fmt.Errorf("start runtime: %w", err)
+	}
+	// The built selector default predates any SelectNode call made while the
+	// core was stopped; apply the current selection to the new instance.
+	if selector, ok := instance.(flowEngine); ok && selected != "" {
+		selector.selectOutbound(built.NodeTags[selected])
 	}
 	c.mu.Lock()
 	c.engine, c.cancel, c.built = instance, cancel, built
