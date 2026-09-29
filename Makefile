@@ -6,7 +6,7 @@ GO_TAGS ?= with_utls
 export GO_TAGS
 export PATH := $(GO_BIN):$(PATH)
 
-.PHONY: test test-race build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-macos-cli-artifact build-windows-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android
+.PHONY: test test-race build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android
 
 test:
 	go test -tags $(GO_TAGS) ./...
@@ -22,6 +22,7 @@ build-release-desktop:
 	GOOS=darwin GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
 	GOOS=darwin GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
 	GOOS=windows GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
+	GOOS=linux GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
 
 build-macos-artifact: build-mobile-macos
 	mkdir -p build
@@ -47,7 +48,17 @@ build-windows-artifact:
 	go version -m build/ppvpn-core-windows-arm64.exe | grep -Eq 'build[[:space:]]+GOARCH=arm64'
 	shasum -a 256 build/ppvpn-core-windows-amd64.exe build/ppvpn-core-windows-arm64.exe > build/windows-SHA256SUMS
 
-build-desktop-artifact: build-macos-artifact build-macos-cli-artifact build-windows-artifact
+build-linux-artifact:
+	mkdir -p build
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-arm64 ./cmd/ppvpn-core
+	go version -m build/ppvpn-core-linux-amd64 | grep -Eq 'build[[:space:]]+GOOS=linux'
+	go version -m build/ppvpn-core-linux-amd64 | grep -Eq 'build[[:space:]]+GOARCH=amd64'
+	go version -m build/ppvpn-core-linux-arm64 | grep -Eq 'build[[:space:]]+GOOS=linux'
+	go version -m build/ppvpn-core-linux-arm64 | grep -Eq 'build[[:space:]]+GOARCH=arm64'
+	shasum -a 256 build/ppvpn-core-linux-amd64 build/ppvpn-core-linux-arm64 > build/linux-SHA256SUMS
+
+build-desktop-artifact: build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact
 
 bootstrap-mobile:
 	go install golang.org/x/mobile/cmd/gomobile@$(MOBILE_VERSION)

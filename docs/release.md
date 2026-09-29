@@ -30,6 +30,8 @@ GOOS=darwin GOARCH=arm64 go build -trimpath -o build/ppvpn-core-darwin-arm64 ./c
 GOOS=darwin GOARCH=amd64 go build -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
 GOOS=windows GOARCH=amd64 go build -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
 GOOS=windows GOARCH=arm64 go build -trimpath -o build/ppvpn-core-windows-arm64.exe ./cmd/ppvpn-core
+GOOS=linux GOARCH=amd64 go build -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
+GOOS=linux GOARCH=arm64 go build -trimpath -o build/ppvpn-core-linux-arm64 ./cmd/ppvpn-core
 ```
 
 GitHub Actions 按平台拆分桌面产物：
@@ -38,11 +40,13 @@ GitHub Actions 按平台拆分桌面产物：
   `macos-SHA256SUMS`。
 - `build:windows-artifact`：Windows amd64/arm64 可执行文件与
   `windows-SHA256SUMS`。
+- `build:linux-artifact`：Linux amd64/arm64 静态可执行文件与
+  `linux-SHA256SUMS`。
 
 本地可分别运行 `make build-macos-artifact`、`make build-macos-cli-artifact`
 （`CGO_ENABLED=0` 的 arm64/x86_64 `ppvpn-core serve` CLI，经 `lipo` 合并为
 `build/ppvpn-core-darwin-universal`，并写入 `macos-cli-SHA256SUMS`）和
-`make build-windows-artifact`；`make build-desktop-artifact` 同时构建三者。
+`make build-windows-artifact`、`make build-linux-artifact`；`make build-desktop-artifact` 同时构建四者。
 
 这些是未签名核心二进制。最终产品仍需在桌面 App 的发布流水线中完成平台代码签名、安装包封装、公证/信誉链和更新签名。
 
@@ -93,6 +97,8 @@ shasum -a 256 \
   ppvpn-core-darwin-amd64 \
   ppvpn-core-windows-amd64.exe \
   ppvpn-core-windows-arm64.exe \
+  ppvpn-core-linux-amd64 \
+  ppvpn-core-linux-arm64 \
   PPVPNCore.xcframework.zip \
   ppvpn-core.aar > SHA256SUMS
 ```
