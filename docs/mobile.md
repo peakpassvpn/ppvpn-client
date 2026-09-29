@@ -14,7 +14,8 @@
 | `Status()` | 无 | Status |
 | `ListNodes()` | 无 | 安全节点摘要数组 |
 | `SelectNode(nodeID)` | 稳定节点 ID | 更新选择 |
-| `ProbeEntrances(timeoutMS, concurrency)` | 超时、并发 | EntranceResult[] |
+| `ProbeEntrances(timeoutMS, concurrency)` | 超时、并发 | EntranceResult[]（TCP） |
+| `ProbeEntrancesWithMethod(method, timeoutMS, concurrency)` | `tcp`/`icmp`、超时、并发 | EntranceResult[]（非特权 ICMP：iOS 用 DGRAM ICMP socket，Android 依赖 `ping_group_range`） |
 | `ProbeAvailability(nodeID, target, timeoutMS)` | 节点、HTTP(S) URL、超时 | AvailabilityResult |
 | `LocalProxyMetadata()` | 无 | 不含 secret 的每节点 mixed endpoint metadata |
 | `LocalProxyCredential(nodeID)` | 稳定节点 ID | 仅供原生凭据面板的单节点 secret |

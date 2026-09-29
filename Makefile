@@ -1,24 +1,28 @@
 MOBILE_VERSION := v0.0.0-20260709172247-6129f5bee9d5
 GO_BIN := $(shell go env GOPATH)/bin
 CLANG_MODULE_CACHE_PATH ?= /tmp/ppvpn-core-clang-cache
+# VLESS REALITY needs sing-box's uTLS support, which is behind a build tag.
+GO_TAGS ?= with_utls
+export GO_TAGS
 export PATH := $(GO_BIN):$(PATH)
 
-.PHONY: test test-race build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-windows-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android
+.PHONY: test test-race build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android
 
 test:
-	go test ./...
+	go test -tags $(GO_TAGS) ./...
 
 test-race:
-	go test -race ./...
+	go test -tags $(GO_TAGS) -race ./...
 
 build-desktop:
-	go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
+	go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 
 build-release-desktop:
 	mkdir -p build
-	GOOS=darwin GOARCH=arm64 go build -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
-	GOOS=darwin GOARCH=amd64 go build -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
-	GOOS=windows GOARCH=amd64 go build -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
+	GOOS=darwin GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
+	GOOS=darwin GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
+	GOOS=windows GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
+	GOOS=linux GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
 
 build-macos-artifact: build-mobile-macos
 	mkdir -p build
@@ -26,17 +30,35 @@ build-macos-artifact: build-mobile-macos
 	ditto -c -k --sequesterRsrc --keepParent build/PPVPNCore.xcframework build/PPVPNCore-macos.xcframework.zip
 	shasum -a 256 build/PPVPNCore-macos.xcframework.zip > build/macos-SHA256SUMS
 
+build-macos-cli-artifact:
+	mkdir -p build
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
+	lipo -create -output build/ppvpn-core-darwin-universal build/ppvpn-core-darwin-arm64 build/ppvpn-core-darwin-amd64
+	lipo build/ppvpn-core-darwin-universal -verify_arch arm64 x86_64
+	shasum -a 256 build/ppvpn-core-darwin-universal > build/macos-cli-SHA256SUMS
+
 build-windows-artifact:
 	mkdir -p build
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
-	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -o build/ppvpn-core-windows-arm64.exe ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-windows-amd64.exe ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-windows-arm64.exe ./cmd/ppvpn-core
 	go version -m build/ppvpn-core-windows-amd64.exe | grep -Eq 'build[[:space:]]+GOOS=windows'
 	go version -m build/ppvpn-core-windows-amd64.exe | grep -Eq 'build[[:space:]]+GOARCH=amd64'
 	go version -m build/ppvpn-core-windows-arm64.exe | grep -Eq 'build[[:space:]]+GOOS=windows'
 	go version -m build/ppvpn-core-windows-arm64.exe | grep -Eq 'build[[:space:]]+GOARCH=arm64'
 	shasum -a 256 build/ppvpn-core-windows-amd64.exe build/ppvpn-core-windows-arm64.exe > build/windows-SHA256SUMS
 
-build-desktop-artifact: build-macos-artifact build-windows-artifact
+build-linux-artifact:
+	mkdir -p build
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-amd64 ./cmd/ppvpn-core
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags $(GO_TAGS) -trimpath -o build/ppvpn-core-linux-arm64 ./cmd/ppvpn-core
+	go version -m build/ppvpn-core-linux-amd64 | grep -Eq 'build[[:space:]]+GOOS=linux'
+	go version -m build/ppvpn-core-linux-amd64 | grep -Eq 'build[[:space:]]+GOARCH=amd64'
+	go version -m build/ppvpn-core-linux-arm64 | grep -Eq 'build[[:space:]]+GOOS=linux'
+	go version -m build/ppvpn-core-linux-arm64 | grep -Eq 'build[[:space:]]+GOARCH=arm64'
+	shasum -a 256 build/ppvpn-core-linux-amd64 build/ppvpn-core-linux-arm64 > build/linux-SHA256SUMS
+
+build-desktop-artifact: build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact
 
 bootstrap-mobile:
 	go install golang.org/x/mobile/cmd/gomobile@$(MOBILE_VERSION)
@@ -44,7 +66,7 @@ bootstrap-mobile:
 
 build-mobile-ios:
 	mkdir -p build
-	CLANG_MODULE_CACHE_PATH=$(CLANG_MODULE_CACHE_PATH) $(GO_BIN)/gomobile bind -target=ios -o build/PPVPNCore.xcframework ./mobile
+	CLANG_MODULE_CACHE_PATH=$(CLANG_MODULE_CACHE_PATH) $(GO_BIN)/gomobile bind -tags $(GO_TAGS) -target=ios -o build/PPVPNCore.xcframework ./mobile
 
 verify-mobile-ios:
 	scripts/verify-ios-xcframework.sh build/PPVPNCore.xcframework
@@ -63,7 +85,7 @@ verify-mobile-macos:
 
 build-mobile-android:
 	mkdir -p build
-	$(GO_BIN)/gomobile bind -target=android -androidapi 23 -o build/ppvpn-core.aar ./mobile
+	$(GO_BIN)/gomobile bind -tags $(GO_TAGS) -target=android -androidapi 23 -o build/ppvpn-core.aar ./mobile
 
 verify-mobile-android:
 	scripts/verify-android-aar.sh build/ppvpn-core.aar

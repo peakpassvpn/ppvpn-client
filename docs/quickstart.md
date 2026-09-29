@@ -13,16 +13,17 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 预期版本响应：
 
 ```json
-{"core_version":"0.3.0","core_api_version":1,"profile_schema_version":2,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"0.3.0","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
 
-参考 [Backend Profile v2](backend-profile.md) 生成 `profile.json`，将所有演示地址和凭据换成真实服务值，然后先做离线校验：
+参考 [Backend Profile](backend-profile.md) 生成 `profile.json`，将所有演示地址和凭据换成真实服务值，然后先做离线校验：
 
 ```sh
 ./build/ppvpn-core validate profile.json
-./build/ppvpn-core probe-entrance --timeout 5s --concurrency 4 profile.json
+./build/ppvpn-core probe-entrance --method tcp --timeout 5s --concurrency 4 profile.json
+./build/ppvpn-core probe-entrance --method icmp profile.json
 ```
 
 `validate` 成功输出 `profile valid`。入口探测只验证公网字面量 IP 的 TCP 可达性，不等价于节点协议可用。
@@ -51,7 +52,11 @@ mkdir -m 700 "$APP_STATE"
 ```
 
 `serve` 默认启用每节点认证代理。`--local-proxy=false` 可关闭每节点代理；核心不提供
-无认证的系统代理兼容入口。
+无认证的系统代理兼容入口。桌面端的推荐组合是：登录期间常驻一个非特权核心
+`--tun=false --local-proxy=true`（每个逻辑节点一个本地端口，`probe-availability` 通过它工作），
+增强模式另起一个特权核心 `--tun --local-proxy=false`（本地代理相关 API 返回
+`LOCAL_PROXY_DISABLED`）。TUN 核心会把所有入口 IP 加入 `route_exclude_address`，
+因此非特权核心到入口的连接和探测不会进入隧道。
 方式。
 
 生产环境不要使用共享临时目录。macOS 应使用 App Container/Application Support 私有目录；Windows 应使用带当前用户 ACL 的 LocalAppData 目录和 Named Pipe 路径。
@@ -97,8 +102,8 @@ Extension；两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1
 ## 5. 常见问题
 
 - `SCHEMA_UNSUPPORTED`：核心和后端的 Profile Schema 不兼容，先停止应用配置。
-- `ENTRY_IP_NOT_PUBLIC`：`endpoint.ip` 不是可拨号公网单播 IP；不要填域名或文档地址。
-- `TLS_SERVER_NAME_MISMATCH`：TLS SNI 必须等于 `endpoint.domain`。
+- `ENTRY_IP_NOT_PUBLIC`：入口 `endpoint.ip` 不是可拨号公网单播 IP；不要填域名或文档地址（不知道 IP 时可省略该字段）。
+- `TLS_SERVER_NAME_MISMATCH`：AnyTLS 的 TLS SNI 必须等于 `endpoint.domain`（REALITY 的 SNI 是借用站点，不受此限）。
 - `CORE_OPERATION_FAILED`：上游错误已安全折叠。读取状态、检查第一方事件，并在受控环境用脱敏 `render` 辅助定位。
 - 本地代理端口变更：进程启动时发现持久端口已占用，核心只为冲突节点重新分配；调用 `GetLocalProxyMetadata` 刷新。
 - TUN/Network Extension 启动失败：保持未连接并由原生宿主通知用户；不要静默回退到系统代理。

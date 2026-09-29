@@ -33,9 +33,13 @@
       "tls": {
         "enabled": true,
         "server_name": "edge.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
         "reality": {
           "enabled": true,
-          "public_key": "public-key",
+          "public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
           "short_id": "01"
         }
       }

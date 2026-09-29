@@ -18,6 +18,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go test ./...
+      - run: go test -tags with_utls ./internal/... ./probe/...
       - run: go test -race ./...
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
@@ -38,6 +39,23 @@ jobs:
             build/ppvpn-core-windows-amd64.exe
             build/ppvpn-core-windows-arm64.exe
             build/windows-SHA256SUMS
+
+  linux-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make build-linux-artifact
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ppvpn-core-linux-${{ github.sha }}
+          path: |
+            build/ppvpn-core-linux-amd64
+            build/ppvpn-core-linux-arm64
+            build/linux-SHA256SUMS
 
   apple-artifacts:
     runs-on: macos-14

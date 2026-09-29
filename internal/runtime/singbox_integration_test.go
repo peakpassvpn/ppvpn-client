@@ -20,10 +20,11 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	platform := profile.PlatformCapabilities{Platform: "macos", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
 	core := NewWithLocalProxyState(platform, filepath.Join(t.TempDir(), "proxy-state.json"))
 	p := testProfile("r1", "edge.example.com", "8.8.8.8")
-	p.Nodes[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
-	second := p.Nodes[0]
+	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
+	second := cloneNode(p.Nodes[0])
 	second.ID = "node-2"
-	second.Endpoint.IP = "1.1.1.1"
+	second.Ingresses[0].EndpointKey = "9002"
+	second.Ingresses[0].Endpoint.IP = "1.1.1.1"
 	p.Nodes = append(p.Nodes, second)
 	if _, err := core.ApplyProfile(p, time.Now()); err != nil {
 		t.Fatal(err)
@@ -86,10 +87,11 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 		t.Fatal(err)
 	}
 	migrated := testProfile("r2", "new-edge.example.com", "1.1.1.1")
-	migrated.Nodes[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
-	second = migrated.Nodes[0]
+	migrated.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
+	second = cloneNode(migrated.Nodes[0])
 	second.ID = "node-2"
-	second.Endpoint.IP = "8.8.4.4"
+	second.Ingresses[0].EndpointKey = "9002"
+	second.Ingresses[0].Endpoint.IP = "8.8.4.4"
 	migrated.Nodes = append(migrated.Nodes, second)
 	if applied, err := core.ApplyProfile(migrated, time.Now()); err != nil || !applied {
 		t.Fatalf("hot reload: %v", err)

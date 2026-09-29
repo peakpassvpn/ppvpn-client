@@ -16,6 +16,7 @@ fi
 mkdir -p "${repository_root}/build"
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-${work_directory}/clang-cache}" \
   "${gomobile}" bind \
+  -tags "${GO_TAGS:-with_utls}" \
   -target=macos \
   -macosversion=13.0 \
   -trimpath \

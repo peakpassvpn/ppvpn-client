@@ -25,6 +25,8 @@ func invalid(code, field, message string) error {
 }
 
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var entryKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+var endpointKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 var hexPattern = regexp.MustCompile(`^[0-9a-fA-F]*$`)
 
@@ -33,7 +35,7 @@ func Validate(p *Profile, now time.Time) error {
 		return invalid("PROFILE_REQUIRED", "", "profile is required")
 	}
 	if p.SchemaVersion != CurrentSchemaVersion {
-		return invalid("SCHEMA_UNSUPPORTED", "schema_version", "unsupported profile schema version")
+		return invalid("SCHEMA_UNSUPPORTED", "schema_version", "only profile schema_version 1 is supported")
 	}
 	if strings.TrimSpace(p.Revision) == "" {
 		return invalid("FIELD_REQUIRED", "revision", "revision is required")
@@ -48,6 +50,7 @@ func Validate(p *Profile, now time.Time) error {
 		return invalid("FIELD_REQUIRED", "nodes", "at least one node is required")
 	}
 	seen := map[string]bool{}
+	endpointKeys := map[string]bool{}
 	for i := range p.Nodes {
 		n := &p.Nodes[i]
 		base := fmt.Sprintf("nodes[%d]", i)
@@ -58,24 +61,19 @@ func Validate(p *Profile, now time.Time) error {
 			return invalid("NODE_ID_DUPLICATE", base+".id", "node id must be unique")
 		}
 		seen[n.ID] = true
-		if !validDomain(n.Endpoint.Domain) {
-			return invalid("FIELD_REQUIRED", base+".endpoint.domain", "connection domain is required")
+		if !entryKeyPattern.MatchString(n.EntryKey) {
+			return invalid("ENTRY_KEY_INVALID", base+".entry_key", "entry key is required and must be a stable identifier of at most 64 characters")
 		}
-		if n.Endpoint.Port == 0 {
-			return invalid("PORT_INVALID", base+".endpoint.port", "port must be non-zero")
-		}
-		ip, err := netip.ParseAddr(n.Endpoint.IP)
-		if err != nil || !isPublicUnicast(ip) {
-			return invalid("ENTRY_IP_NOT_PUBLIC", base+".endpoint.ip", "entry IP must be a public unicast address")
-		}
-		if err := validateCredentials(n, base); err != nil {
-			return err
-		}
-		if n.Transport != nil && n.Transport.Type != "" {
-			return invalid("TRANSPORT_UNSUPPORTED", base+".transport.type", "transport is not supported in schema version 2")
+		if n.Exit.IP != "" {
+			if _, err := netip.ParseAddr(n.Exit.IP); err != nil {
+				return invalid("EXIT_IP_INVALID", base+".exit.ip", "exit IP must be a valid IP address")
+			}
 		}
 		if !n.Capabilities.TCP && !n.Capabilities.UDP {
 			return invalid("CAPABILITIES_INVALID", base+".capabilities", "at least one network capability is required")
+		}
+		if err := validateIngresses(n, base, endpointKeys); err != nil {
+			return err
 		}
 	}
 	if !seen[p.Selection.DefaultNodeID] {
@@ -214,7 +212,7 @@ func validateRoutingAction(action RoutingAction, nodeIDs map[string]bool, field 
 	return nil
 }
 
-// NormalizeDomain implements the Profile v2 comparison contract. It removes
+// NormalizeDomain implements the profile domain comparison contract. It removes
 // exactly one trailing root label, converts Unicode input to an IDNA A-label,
 // and lowercases the ASCII result. IP literals are deliberately excluded.
 func NormalizeDomain(value string) (string, bool) {
@@ -258,7 +256,81 @@ func ParsePortRange(value string) (uint16, uint16, error) {
 	return uint16(start), uint16(end), nil
 }
 
-func validateCredentials(n *Node, base string) error {
+// MaxIngressesPerNode bounds failover fan-out for one logical node.
+const MaxIngressesPerNode = 64
+
+func validateIngresses(n *Node, base string, endpointKeys map[string]bool) error {
+	if len(n.Ingresses) == 0 {
+		return invalid("FIELD_REQUIRED", base+".ingresses", "at least one ingress is required")
+	}
+	if len(n.Ingresses) > MaxIngressesPerNode {
+		return invalid("INGRESS_COUNT_INVALID", base+".ingresses", fmt.Sprintf("at most %d ingresses are supported", MaxIngressesPerNode))
+	}
+	for i := range n.Ingresses {
+		in := &n.Ingresses[i]
+		field := fmt.Sprintf("%s.ingresses[%d]", base, i)
+		switch in.Role {
+		case IngressRolePrimary:
+			if i != 0 {
+				return invalid("INGRESS_ROLE_INVALID", field+".role", "exactly one primary ingress is required and it must be listed first")
+			}
+		case IngressRoleBackup:
+			if i == 0 {
+				return invalid("INGRESS_ROLE_INVALID", field+".role", "the first ingress must be the primary")
+			}
+		default:
+			return invalid("INGRESS_ROLE_INVALID", field+".role", "ingress role must be primary or backup")
+		}
+		if !endpointKeyPattern.MatchString(in.EndpointKey) {
+			return invalid("ENDPOINT_KEY_INVALID", field+".endpoint_key", "endpoint key is required and must be a stable identifier of at most 128 characters")
+		}
+		if endpointKeys[in.EndpointKey] {
+			return invalid("ENDPOINT_KEY_DUPLICATE", field+".endpoint_key", "endpoint key must be unique within the profile")
+		}
+		endpointKeys[in.EndpointKey] = true
+		if in.ReplicaOrdinal < 0 {
+			return invalid("REPLICA_ORDINAL_INVALID", field+".replica_ordinal", "replica ordinal must be non-negative")
+		}
+		if i > 0 && in.ReplicaOrdinal <= n.Ingresses[i-1].ReplicaOrdinal {
+			return invalid("REPLICA_ORDINAL_INVALID", field+".replica_ordinal", "replica ordinals must be unique and strictly increasing in failover order")
+		}
+		if err := validateIngress(in, field); err != nil {
+			return err
+		}
+	}
+	primary := n.Ingresses[0].Capabilities
+	if (n.Capabilities.TCP && !primary.TCP) || (n.Capabilities.UDP && !primary.UDP) {
+		return invalid("CAPABILITIES_INVALID", base+".capabilities", "node capabilities must be supported by the primary (first) ingress")
+	}
+	return nil
+}
+
+func validateIngress(in *Ingress, base string) error {
+	if !validDomain(in.Endpoint.Domain) {
+		return invalid("FIELD_REQUIRED", base+".endpoint.domain", "connection domain is required")
+	}
+	if in.Endpoint.Port == 0 {
+		return invalid("PORT_INVALID", base+".endpoint.port", "port must be non-zero")
+	}
+	if in.Endpoint.IP != "" {
+		ip, err := netip.ParseAddr(in.Endpoint.IP)
+		if err != nil || !isPublicUnicast(ip) {
+			return invalid("ENTRY_IP_NOT_PUBLIC", base+".endpoint.ip", "entry IP must be a public unicast address")
+		}
+	}
+	if err := validateCredentials(in, base); err != nil {
+		return err
+	}
+	if in.Transport != nil && in.Transport.Type != "" {
+		return invalid("TRANSPORT_UNSUPPORTED", base+".transport.type", "transport is not supported")
+	}
+	if !in.Capabilities.TCP && !in.Capabilities.UDP {
+		return invalid("CAPABILITIES_INVALID", base+".capabilities", "at least one network capability is required")
+	}
+	return nil
+}
+
+func validateCredentials(n *Ingress, base string) error {
 	count := 0
 	if n.Credentials.Shadowsocks != nil {
 		count++
@@ -303,8 +375,13 @@ func validateCredentials(n *Node, base string) error {
 		if n.TLS == nil || n.TLS.Reality == nil || n.TLS.ServerName == "" || n.TLS.Reality.PublicKey == "" {
 			return invalid("REALITY_REQUIRED", base+".tls.reality", "VLESS REALITY settings are required")
 		}
-		if n.TLS.ServerName != n.Endpoint.Domain {
-			return invalid("TLS_SERVER_NAME_MISMATCH", base+".tls.server_name", "TLS server name must equal endpoint domain")
+		// REALITY borrows a third-party site's SNI, so it deliberately differs
+		// from the endpoint domain; it only has to be a valid host name.
+		if !validDomain(n.TLS.ServerName) {
+			return invalid("TLS_SERVER_NAME_INVALID", base+".tls.server_name", "REALITY server name must be a valid domain")
+		}
+		if !validRealityPublicKey(n.TLS.Reality.PublicKey) {
+			return invalid("REALITY_PUBLIC_KEY_INVALID", base+".tls.reality.public_key", "REALITY public key must be a base64url X25519 key")
 		}
 		if !hexPattern.MatchString(n.TLS.Reality.ShortID) || len(n.TLS.Reality.ShortID)%2 != 0 || len(n.TLS.Reality.ShortID) > 16 {
 			return invalid("REALITY_SHORT_ID_INVALID", base+".tls.reality.short_id", "REALITY short ID must be even-length hexadecimal up to 16 characters")
@@ -324,6 +401,13 @@ func validateCredentials(n *Node, base string) error {
 		return invalid("PROTOCOL_UNSUPPORTED", base+".protocol", "protocol is not supported")
 	}
 	return nil
+}
+
+// validRealityPublicKey accepts the base64url (unpadded, as printed by
+// `sing-box generate reality-keypair` / `xray x25519`) 32-byte X25519 key.
+func validRealityPublicKey(value string) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	return err == nil && len(decoded) == 32
 }
 
 func validKey(value string, want int) bool {

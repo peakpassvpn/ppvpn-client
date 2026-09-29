@@ -14,14 +14,26 @@ type Error struct {
 	Field     string `json:"field,omitempty"`
 	Retryable bool   `json:"retryable"`
 }
+
+// NodeSummary describes a logical node without credentials or addresses.
+// Protocol is the primary (first) ingress protocol; Ingresses are listed in
+// failover order.
 type NodeSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol"`
-	Region      string `json:"region,omitempty"`
-	CountryCode string `json:"country_code,omitempty"`
-	TCP         bool   `json:"tcp"`
-	UDP         bool   `json:"udp"`
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	EntryKey   string           `json:"entry_key"`
+	EntryLabel string           `json:"entry_label,omitempty"`
+	Protocol   string           `json:"protocol"`
+	Region     string           `json:"region,omitempty"`
+	TCP        bool             `json:"tcp"`
+	UDP        bool             `json:"udp"`
+	Ingresses  []IngressSummary `json:"ingresses"`
+}
+type IngressSummary struct {
+	EndpointKey    string `json:"endpoint_key"`
+	ReplicaOrdinal int    `json:"replica_ordinal"`
+	Role           string `json:"role"`
+	Protocol       string `json:"protocol"`
 }
 type rawRequest struct {
 	Profile     json.RawMessage `json:"profile"`
@@ -30,4 +42,5 @@ type rawRequest struct {
 	TimeoutMS   int             `json:"timeout_ms"`
 	Concurrency int             `json:"concurrency"`
 	Target      string          `json:"target"`
+	Method      string          `json:"method"`
 }

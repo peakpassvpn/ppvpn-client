@@ -1,4 +1,4 @@
-// Package routing compiles Profile v2 routing into an immutable, allocation
+// Package routing compiles profile routing into an immutable, allocation
 // bounded classifier shared by packet and flow platform adapters.
 package routing
 

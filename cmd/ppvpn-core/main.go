@@ -16,13 +16,13 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/api"
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
+	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/redact"
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
 	"github.com/peakpassvpn/ppvpn-core/ipc"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/version"
-	"github.com/sagernet/sing-box/include"
 	singjson "github.com/sagernet/sing/common/json"
 )
 
@@ -80,7 +80,7 @@ func render(args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := singjson.MarshalContext(include.Context(context.Background()), built.Options)
+	data, err := singjson.MarshalContext(failover.Context(context.Background()), built.Options)
 	if err != nil {
 		return fmt.Errorf("render configuration failed")
 	}
@@ -94,19 +94,24 @@ func render(args []string) error {
 }
 func probeEntrance(args []string) error {
 	flags := flag.NewFlagSet("probe-entrance", flag.ContinueOnError)
-	timeout := flags.Duration("timeout", 5*time.Second, "per-node TCP timeout")
-	concurrency := flags.Int("concurrency", 4, "maximum concurrent probes")
+	timeout := flags.Duration("timeout", 5*time.Second, "per-ingress timeout")
+	concurrency := flags.Int("concurrency", 4, "maximum concurrent ingress probes")
+	methodName := flags.String("method", "tcp", "probe method: tcp (TCP connect) or icmp (unprivileged echo)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return fmt.Errorf("usage: ppvpn-core probe-entrance profile.json")
+		return fmt.Errorf("usage: ppvpn-core probe-entrance [--method tcp|icmp] [--timeout 5s] [--concurrency 4] profile.json")
+	}
+	method, err := probe.ParseMethod(*methodName)
+	if err != nil {
+		return err
 	}
 	p, err := readProfile(flags.Arg(0))
 	if err != nil {
 		return err
 	}
-	results, err := probe.Entrances(context.Background(), p, *timeout, *concurrency, nil)
+	results, err := probe.Entrances(context.Background(), p, probe.Options{Method: method, Timeout: *timeout, Concurrency: *concurrency})
 	if err != nil {
 		return err
 	}

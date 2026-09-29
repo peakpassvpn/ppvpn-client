@@ -13,6 +13,7 @@ import (
 	"time"
 
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
+	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/version"
 )
@@ -67,13 +68,21 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/probe-entrances", s.probeEntrances)
 	s.mux.HandleFunc("POST /v1/probe-availability", s.probeAvailability)
 	s.mux.HandleFunc("POST /v1/get-local-proxy-metadata", s.simple(func(_ *http.Request) (any, error) {
+		if !s.core.LocalProxyEnabled() {
+			return nil, coreError(coreruntime.ErrLocalProxyDisabled)
+		}
 		return s.core.LocalProxyMetadata(), nil
 	}))
 	s.mux.HandleFunc("POST /v1/get-local-proxy-credential", s.localProxyCredential)
 	// Retained for Core API v1 compatibility. New hosts should use the
 	// metadata and per-node credential methods so secrets never enter general
 	// UI state.
-	s.mux.HandleFunc("POST /v1/get-local-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) { return s.core.LocalProxyEndpoints(), nil }))
+	s.mux.HandleFunc("POST /v1/get-local-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) {
+		if !s.core.LocalProxyEnabled() {
+			return nil, coreError(coreruntime.ErrLocalProxyDisabled)
+		}
+		return s.core.LocalProxyEndpoints(), nil
+	}))
 	s.mux.HandleFunc("POST /v1/get-system-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) {
 		return nil, apiError("SYSTEM_PROXY_UNAVAILABLE", "system proxy capability has been removed", "", false)
 	}))
@@ -141,19 +150,25 @@ func (s *Server) probeEntrances(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, r, nil, err)
 		return
 	}
+	method, err := probe.ParseMethod(request.Method)
+	if err != nil {
+		s.respond(w, r, nil, apiError("PROBE_METHOD_UNSUPPORTED", "probe method must be tcp or icmp", "method", false))
+		return
+	}
 	timeout := duration(request.TimeoutMS, 5*time.Second)
 	var result any
 	if len(request.NodeIDs) > 0 {
 		result, err = s.core.ProbeEntrancesForNodes(
 			r.Context(),
+			method,
 			timeout,
 			request.Concurrency,
 			request.NodeIDs,
 		)
 	} else {
-		result, err = s.core.ProbeEntrances(r.Context(), timeout, request.Concurrency)
+		result, err = s.core.ProbeEntrances(r.Context(), method, timeout, request.Concurrency)
 	}
-	s.respond(w, r, result, err)
+	s.respond(w, r, result, coreError(err))
 }
 func (s *Server) probeAvailability(w http.ResponseWriter, r *http.Request) {
 	request, err := decode(r)
@@ -163,7 +178,7 @@ func (s *Server) probeAvailability(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.core.ProbeAvailability(r.Context(), request.NodeID, request.Target, duration(request.TimeoutMS, 10*time.Second))
 	if err != nil {
-		s.respond(w, r, nil, apiError("NODE_NOT_FOUND", "node local proxy endpoint not found", "node_id", false))
+		s.respond(w, r, nil, coreError(err))
 		return
 	}
 	s.respond(w, r, result, nil)
@@ -176,7 +191,7 @@ func (s *Server) localProxyCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	credential, err := s.core.LocalProxyCredential(request.NodeID)
 	if err != nil {
-		s.respond(w, r, nil, apiError("NODE_NOT_FOUND", "node local proxy endpoint not found", "node_id", false))
+		s.respond(w, r, nil, coreError(err))
 		return
 	}
 	s.respond(w, r, credential, nil)
@@ -256,12 +271,32 @@ func duration(ms int, fallback time.Duration) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 func summarize(n profile.Node) NodeSummary {
-	summary := NodeSummary{ID: n.ID, Name: n.Name, Protocol: string(n.Protocol), TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP}
-	if n.Exit != nil {
-		summary.Region = n.Exit.Region
-		summary.CountryCode = n.Exit.CountryCode
+	summary := NodeSummary{ID: n.ID, Name: n.Name, EntryKey: n.EntryKey, EntryLabel: n.EntryLabel, Region: n.Exit.Region, TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP, Ingresses: make([]IngressSummary, len(n.Ingresses))}
+	for i, ingress := range n.Ingresses {
+		summary.Ingresses[i] = IngressSummary{EndpointKey: ingress.EndpointKey, ReplicaOrdinal: ingress.ReplicaOrdinal, Role: string(ingress.Role), Protocol: string(ingress.Protocol)}
+	}
+	if len(n.Ingresses) > 0 {
+		summary.Protocol = string(n.Ingresses[0].Protocol)
 	}
 	return summary
+}
+
+// coreError maps runtime sentinel errors to stable API error codes.
+func coreError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, coreruntime.ErrLocalProxyDisabled):
+		return apiError("LOCAL_PROXY_DISABLED", "this core was started without local proxies (--local-proxy=false)", "", false)
+	case errors.Is(err, coreruntime.ErrCoreNotRunning):
+		return apiError("CORE_NOT_RUNNING", "the core must be started before local proxies accept connections", "", true)
+	case errors.Is(err, coreruntime.ErrProfileNotApplied):
+		return apiError("PROFILE_NOT_APPLIED", "no profile has been applied", "", false)
+	case errors.Is(err, coreruntime.ErrNodeNotFound):
+		return apiError("NODE_NOT_FOUND", "node not found", "node_id", false)
+	default:
+		return err
+	}
 }
 
 type apiErr struct{ Detail Error }

@@ -1,0 +1,156 @@
+{
+  "log": {
+    "disabled": true,
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "proxy-9144f403bb85417e",
+      "listen": "127.0.0.1",
+      "listen_port": 20001,
+      "users": [
+        {
+          "Username": "u1",
+          "Password": "p1"
+        }
+      ]
+    },
+    {
+      "type": "mixed",
+      "tag": "proxy-55b02d505a37e662",
+      "listen": "127.0.0.1",
+      "listen_port": 20002,
+      "users": [
+        {
+          "Username": "u2",
+          "Password": "p2"
+        }
+      ]
+    },
+    {
+      "type": "tun",
+      "tag": "tun",
+      "address": "172.19.0.1/30",
+      "auto_route": true,
+      "strict_route": true,
+      "route_exclude_address": [
+        "8.8.8.8/32",
+        "1.1.1.1/32"
+      ],
+      "stack": "mixed"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "selected",
+      "outbounds": [
+        "node-9144f403bb85417e",
+        "node-55b02d505a37e662"
+      ],
+      "default": "node-9144f403bb85417e"
+    },
+    {
+      "type": "ppvpn-failover",
+      "tag": "node-9144f403bb85417e",
+      "outbounds": [
+        "node-9144f403bb85417e-13b7994f",
+        "node-9144f403bb85417e-e609d533"
+      ]
+    },
+    {
+      "type": "vless",
+      "tag": "node-9144f403bb85417e-13b7994f",
+      "server": "tyo-01.edge.example.com",
+      "server_port": 443,
+      "uuid": "00000000-0000-4000-8000-000000000001",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "tyo-01.edge.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+          "short_id": "01"
+        }
+      }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "node-9144f403bb85417e-e609d533",
+      "server": "tyo-01-relay.edge.example.com",
+      "server_port": 8443,
+      "method": "2022-blake3-aes-128-gcm",
+      "password": "AQEBAQEBAQEBAQEBAQEBAQ==:AAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    {
+      "type": "anytls",
+      "tag": "node-55b02d505a37e662",
+      "server": "sjc-01.edge.example.com",
+      "server_port": 443,
+      "tls": {
+        "enabled": true,
+        "server_name": "sjc-01.edge.example.com"
+      },
+      "password": "anytls-password"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "domain": "tyo-01.edge.example.com",
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": "8.8.8.8",
+        "outbound": "direct"
+      },
+      {
+        "domain": "tyo-01-relay.edge.example.com",
+        "outbound": "direct"
+      },
+      {
+        "domain": "sjc-01.edge.example.com",
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": "1.1.1.1",
+        "outbound": "direct"
+      },
+      {
+        "inbound": "proxy-9144f403bb85417e",
+        "outbound": "node-9144f403bb85417e"
+      },
+      {
+        "inbound": "proxy-55b02d505a37e662",
+        "outbound": "node-55b02d505a37e662"
+      },
+      {
+        "ip_cidr": [
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "fc00::/7"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "domain": "video.example",
+        "domain_suffix": ".video.example",
+        "outbound": "node-55b02d505a37e662"
+      }
+    ],
+    "final": "selected",
+    "auto_detect_interface": true
+  }
+}
