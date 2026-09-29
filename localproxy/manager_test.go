@@ -7,7 +7,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
+
+// holdPort binds 127.0.0.1:port for the test. A concurrent test package may
+// probe the same well-known port for an instant, so retry briefly; if it is
+// still taken, another process owns it and it is busy either way.
+func holdPort(t *testing.T, port uint16) {
+	t.Helper()
+	for attempt := 0; attempt < 20; attempt++ {
+		listener, err := net.Listen("tcp", net.JoinHostPort(Listen, strconv.Itoa(int(port))))
+		if err == nil {
+			t.Cleanup(func() { listener.Close() })
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 func readState(t *testing.T, path string) diskState {
 	t.Helper()
@@ -110,11 +126,7 @@ func TestParseUsername(t *testing.T) {
 }
 
 func TestStartupPrefers7890AndFallsBackWhenBusy(t *testing.T) {
-	// Hold 7890 for the whole test. If another process already owns it, the
-	// port is busy either way, which is exactly the case under test.
-	if listener, err := net.Listen("tcp", "127.0.0.1:7890"); err == nil {
-		defer listener.Close()
-	}
+	holdPort(t, PreferredPort)
 	path := filepath.Join(t.TempDir(), "state.json")
 	first, err := NewManager(path).ReconcileForStartup([]string{"node"})
 	if err != nil {
@@ -260,5 +272,47 @@ func TestRemovedNodeHasNoEndpoint(t *testing.T) {
 	}
 	if len(second) != 1 || second[0].NodeID != "keep" {
 		t.Fatalf("removed node still served: %#v", second)
+	}
+}
+
+func TestSystemProxyPortPrefers7891FallsBackAndPersists(t *testing.T) {
+	holdPort(t, SystemProxyPreferredPort)
+	path := filepath.Join(t.TempDir(), "state.json")
+	m := NewManager(path).WithPreferredPort(0)
+	local, err := m.ReconcileForStartup([]string{"node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := m.SystemProxyPort(true, local[0].Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == 0 || first == SystemProxyPreferredPort || first == local[0].Port {
+		t.Fatalf("system proxy port %d (local %d)", first, local[0].Port)
+	}
+	state := readState(t, path)
+	if state.SystemProxyPort != first || state.Port != local[0].Port || state.Prefix == "" {
+		t.Fatalf("persisted state: %#v", state)
+	}
+	again, err := NewManager(path).SystemProxyPort(true, local[0].Port)
+	if err != nil || again != first {
+		t.Fatalf("persisted system proxy port not reused: %d -> %d %v", first, again, err)
+	}
+	// The local proxy never takes the system proxy port, and vice versa.
+	if port, err := NewManager(path).WithSystemProxyPreferredPort(0).SystemProxyPort(true, first); err != nil || port == first {
+		t.Fatalf("avoided port reused: %d %v", port, err)
+	}
+}
+
+func TestSystemProxyPortUsesPreferredWhenFree(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferred := uint16(probe.Addr().(*net.TCPAddr).Port)
+	probe.Close()
+	port, err := NewManager(filepath.Join(t.TempDir(), "state.json")).WithSystemProxyPreferredPort(preferred).SystemProxyPort(true, 0)
+	if err != nil || port != preferred {
+		t.Fatalf("port %d, want %d: %v", port, preferred, err)
 	}
 }

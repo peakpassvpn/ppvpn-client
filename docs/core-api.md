@@ -73,7 +73,8 @@ X-Request-ID: <optional-client-id>
 | GetLocalProxyMetadata | `/v1/get-local-proxy-metadata` | `{}` | LocalProxyMetadata[] |
 | GetLocalProxyCredential | `/v1/get-local-proxy-credential` | `{"node_id":"stable-id"}` | LocalProxyCredential |
 | GetLocalProxyEndpoints | `/v1/get-local-proxy-endpoints` | `{}` | LocalProxyEndpoint[]（兼容接口） |
-| GetSystemProxyEndpoints | `/v1/get-system-proxy-endpoints` | `{}` | 固定返回 `SYSTEM_PROXY_UNAVAILABLE`（API v1 兼容路由） |
+| SetSystemProxy | `/v1/set-system-proxy` | `{"enabled":true}` | SystemProxyStatus |
+| GetSystemProxyEndpoints | `/v1/get-system-proxy-endpoints` | `{}` | SystemProxyStatus |
 | GetTraffic | `/v1/get-traffic` | `{}` | Traffic |
 | GetConnections | `/v1/get-connections` | `{}` | Connection[] |
 | WatchEvents | `GET /v1/watch-events` | 无 | NDJSON Envelope 流 |
@@ -98,7 +99,8 @@ X-Request-ID: <optional-client-id>
 
 ```json
 {"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,
- "selected_ingress":{"endpoint_key":"9002","previous_endpoint_key":"9001","role":"backup","switched_at":"2026-07-23T12:00:00Z"}}
+ "selected_ingress":{"endpoint_key":"9002","previous_endpoint_key":"9001","role":"backup","switched_at":"2026-07-23T12:00:00Z"},
+ "system_proxy":{"available":true,"enabled":false,"listening":false}}
 ```
 
 `state` 可为 `stopped`、`configured`、`running`。尚未应用 Profile 时返回 `stopped` 且 `node_count=0`。
@@ -191,11 +193,29 @@ X-Request-ID: <optional-client-id>
 WebView、渲染进程、崩溃报告或日志。旧的 `GetLocalProxyEndpoints` 为 Core API v1 兼容保留，
 会一次返回所有 credential（同一形状）；新宿主不得调用。
 
-### 已移除的系统代理兼容接口
+### SystemProxyStatus（可选的系统代理监听器）
 
-Core 不再创建无认证 loopback HTTP/SOCKS5 监听器。Core API v1 暂时保留
-`/v1/get-system-proxy-endpoints` 路由，并始终返回 `SYSTEM_PROXY_UNAVAILABLE`；后续 API
-主版本可以删除该路由。
+供宿主的「兼容模式」使用：操作系统代理设置无法携带凭据，所以这是一个**无认证**的回环
+HTTP/SOCKS5 监听器（同一端口）。它默认关闭，由宿主在运行时开关：
+
+```json
+{"available":true,"enabled":true,"listening":true,"listen":"127.0.0.1","port":7891,"protocols":["http","socks5"]}
+```
+
+- `POST /v1/set-system-proxy {"enabled":true|false}`：幂等；缺少 `enabled` 返回 `REQUEST_INVALID`。
+  核心运行时只增删这一个监听器，不重启核心、不中断其他连接；核心未运行时开启，在下次 `start` 后监听。
+  关闭立即停止监听。开关状态不持久化，核心每次启动都是关闭的。
+- `get-status` 总是带 `system_proxy`；`/v1/get-system-proxy-endpoints` 返回同样的内容。`enabled=false`
+  时省略 `listen`、`port`、`protocols`；`listening` 仅在运行中的实例实际接受连接时为 true。
+- 只绑定 `127.0.0.1`。端口优先使用上次持久化的端口，其次 7891，都被占用则用任意空闲端口，
+  写入本地代理状态文件（`system_proxy_port`），且不与共享本地代理端口相同。
+- 路由：先匹配 Profile 规则（含 DIRECT 分流），其余流量走 selected 节点；`select-node` 对新连接立即生效；
+  流量计入 `get-traffic` 与 `get-connections`。
+- 特权 TUN 核心不提供该监听器（`available=false`，开启返回 `SYSTEM_PROXY_UNAVAILABLE`）。
+
+安全边界：开启期间，本机任何进程都可以不经认证使用该端口访问网络。宿主只应在用户选择兼容模式
+并且处于已连接状态时开启，断开、切换到增强模式、退出登录或退出时立即关闭。每个节点的共享本地代理
+仍然要求凭据，不受影响。
 
 ### Traffic 与 Connection
 
@@ -227,7 +247,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 
@@ -258,7 +278,8 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `CAPABILITIES_INVALID` | 至少启用 TCP 或 UDP |
 | `DEFAULT_NODE_NOT_FOUND` / `SELECTION_MODE_UNSUPPORTED` | 修正默认选择 |
 | `NODE_NOT_FOUND` | 刷新节点列表；节点可能已被新 Profile 移除 |
-| `SYSTEM_PROXY_UNAVAILABLE` | 无认证系统代理能力已移除；调用方不得重试或降级 |
+| `SYSTEM_PROXY_UNAVAILABLE` | 该核心不提供系统代理监听器（TUN 核心，或没有私有状态目录）；不可重试 |
+| `SYSTEM_PROXY_START_FAILED` | 系统代理监听端口无法打开；可重试 |
 | `PROFILE_NOT_APPLIED` | 先应用有效 Profile，再执行需要运行配置的方法 |
 | `PROBE_METHOD_UNSUPPORTED` | 入口探测 `method` 只能是 `tcp` 或 `icmp` |
 | `LOCAL_PROXY_DISABLED` | 该核心以 `--local-proxy=false` 启动；改用本地代理核心 |

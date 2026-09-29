@@ -83,8 +83,14 @@ func (s *Server) routes() {
 		}
 		return s.core.LocalProxyEndpoints(), nil
 	}))
+	// Opt-in unauthenticated loopback proxy for OS proxy settings. It is off
+	// whenever the core starts; its state is also part of get-status.
+	s.mux.HandleFunc("POST /v1/set-system-proxy", s.setSystemProxy)
 	s.mux.HandleFunc("POST /v1/get-system-proxy-endpoints", s.simple(func(_ *http.Request) (any, error) {
-		return nil, apiError("SYSTEM_PROXY_UNAVAILABLE", "system proxy capability has been removed", "", false)
+		if !s.core.SystemProxyAvailable() {
+			return nil, coreError(coreruntime.ErrSystemProxyUnavailable)
+		}
+		return s.core.SystemProxyStatus(), nil
 	}))
 	s.mux.HandleFunc("POST /v1/get-traffic", s.simple(func(_ *http.Request) (any, error) { return s.core.Traffic(), nil }))
 	s.mux.HandleFunc("POST /v1/get-connections", s.simple(func(_ *http.Request) (any, error) { return s.core.Connections(), nil }))
@@ -196,6 +202,23 @@ func (s *Server) localProxyCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	s.respond(w, r, credential, nil)
 }
+func (s *Server) setSystemProxy(w http.ResponseWriter, r *http.Request) {
+	request, err := decode(r)
+	if err != nil {
+		s.respond(w, r, nil, err)
+		return
+	}
+	if request.Enabled == nil {
+		s.respond(w, r, nil, apiError("REQUEST_INVALID", "enabled is required", "enabled", false))
+		return
+	}
+	status, err := s.core.SetSystemProxy(*request.Enabled)
+	if err != nil {
+		s.respond(w, r, nil, coreError(err))
+		return
+	}
+	s.respond(w, r, status, nil)
+}
 func (s *Server) watchEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -292,6 +315,10 @@ func coreError(err error) error {
 		return apiError("CORE_NOT_RUNNING", "the core must be started before local proxies accept connections", "", true)
 	case errors.Is(err, coreruntime.ErrProfileNotApplied):
 		return apiError("PROFILE_NOT_APPLIED", "no profile has been applied", "", false)
+	case errors.Is(err, coreruntime.ErrSystemProxyUnavailable):
+		return apiError("SYSTEM_PROXY_UNAVAILABLE", "this core cannot host the system proxy (TUN core or no state directory)", "", false)
+	case errors.Is(err, coreruntime.ErrSystemProxyStartFailed):
+		return apiError("SYSTEM_PROXY_START_FAILED", "the system proxy listener could not be opened", "", true)
 	case errors.Is(err, coreruntime.ErrNodeNotFound):
 		return apiError("NODE_NOT_FOUND", "node not found", "node_id", false)
 	default:

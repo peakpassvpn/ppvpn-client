@@ -436,3 +436,34 @@ func normalizedLogLevel(v string) string {
 		return "info"
 	}
 }
+
+// SystemProxyInboundTag is the opt-in unauthenticated loopback HTTP/SOCKS5
+// listener used for OS proxy settings.
+const SystemProxyInboundTag = "system-proxy"
+
+// SystemProxyInbound renders the system proxy listener. It is a stock mixed
+// inbound without users (OS proxy settings cannot carry credentials), bound
+// to 127.0.0.1 only. It has no route rules of its own, so its traffic takes
+// the same path as TUN traffic: profile rules, then the selected node.
+func SystemProxyInbound(port uint16) option.Inbound {
+	loopback := badoption.Addr(netip.MustParseAddr(localproxy.Listen))
+	return option.Inbound{Type: C.TypeMixed, Tag: SystemProxyInboundTag, Options: &option.HTTPMixedInboundOptions{
+		ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: port},
+	}}
+}
+
+// WithSystemProxy returns a copy of result whose inbounds include the system
+// proxy on port, or exclude it when port is 0. result is not modified.
+func WithSystemProxy(result *BuildResult, port uint16) *BuildResult {
+	next := *result
+	next.Options.Inbounds = make([]option.Inbound, 0, len(result.Options.Inbounds)+1)
+	for _, inbound := range result.Options.Inbounds {
+		if inbound.Tag != SystemProxyInboundTag {
+			next.Options.Inbounds = append(next.Options.Inbounds, inbound)
+		}
+	}
+	if port != 0 {
+		next.Options.Inbounds = append(next.Options.Inbounds, SystemProxyInbound(port))
+	}
+	return &next
+}

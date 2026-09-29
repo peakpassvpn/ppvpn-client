@@ -16,6 +16,8 @@ const (
 	// EventNodeIngressSwitched: a node's failover group moved its traffic to
 	// another ingress (to a backup, or back to the primary).
 	EventNodeIngressSwitched EventType = "NodeIngressSwitched"
+	// EventSystemProxyChanged carries "enabled" or "disabled" in Message.
+	EventSystemProxyChanged EventType = "SystemProxyChanged"
 )
 
 type Event struct {

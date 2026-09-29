@@ -94,11 +94,52 @@ func TestUnknownMethodUsesEnvelope(t *testing.T) {
 	}
 }
 
-func TestRemovedSystemProxyEndpointReturnsCompatibilityError(t *testing.T) {
+func TestSystemProxyUnavailableWithoutStateOrInTUNCore(t *testing.T) {
 	server, _ := testServer(t)
-	unavailable := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true)
-	if unavailable.Code != http.StatusBadRequest || !strings.Contains(unavailable.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
-		t.Fatal(unavailable.Body.String())
+	for _, path := range []string{"/v1/get-system-proxy-endpoints", "/v1/set-system-proxy"} {
+		rec := request(t, server, path, map[string]any{"enabled": true}, true)
+		if path == "/v1/get-system-proxy-endpoints" {
+			rec = request(t, server, path, map[string]any{}, true)
+		}
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
+			t.Fatalf("%s: %s", path, rec.Body.String())
+		}
+	}
+	tun := coreruntime.NewWithLocalProxyState(profile.PlatformCapabilities{TUN: profile.TUNCapabilities{Enabled: true}}, filepath.Join(t.TempDir(), "local-proxies.json"))
+	tunServer, err := NewServer(tun, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := request(t, tunServer, "/v1/set-system-proxy", map[string]any{"enabled": true}, true); !strings.Contains(rec.Body.String(), "SYSTEM_PROXY_UNAVAILABLE") {
+		t.Fatal(rec.Body.String())
+	}
+}
+
+func TestSetSystemProxyToggleAndStatus(t *testing.T) {
+	core := coreruntime.NewWithLocalProxyState(profile.PlatformCapabilities{}, filepath.Join(t.TempDir(), "local-proxies.json"))
+	server, err := NewServer(core, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := request(t, server, "/v1/get-status", map[string]any{}, true)
+	if !strings.Contains(status.Body.String(), `"system_proxy":{"available":true,"enabled":false,"listening":false}`) {
+		t.Fatal(status.Body.String())
+	}
+	if rec := request(t, server, "/v1/set-system-proxy", map[string]any{}, true); !strings.Contains(rec.Body.String(), "REQUEST_INVALID") {
+		t.Fatal(rec.Body.String())
+	}
+	enabled := request(t, server, "/v1/set-system-proxy", map[string]any{"enabled": true}, true)
+	body := enabled.Body.String()
+	if enabled.Code != http.StatusOK || !strings.Contains(body, `"enabled":true`) || !strings.Contains(body, `"listening":false`) ||
+		!strings.Contains(body, `"listen":"127.0.0.1"`) || !strings.Contains(body, `"protocols":["http","socks5"]`) {
+		t.Fatal(body)
+	}
+	if rec := request(t, server, "/v1/get-system-proxy-endpoints", map[string]any{}, true); !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Fatal(rec.Body.String())
+	}
+	disabled := request(t, server, "/v1/set-system-proxy", map[string]any{"enabled": false}, true)
+	if disabled.Code != http.StatusOK || !strings.Contains(disabled.Body.String(), `"enabled":false`) || strings.Contains(disabled.Body.String(), `"port"`) {
+		t.Fatal(disabled.Body.String())
 	}
 }
 

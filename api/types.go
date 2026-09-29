@@ -44,4 +44,5 @@ type rawRequest struct {
 	Concurrency int             `json:"concurrency"`
 	Target      string          `json:"target"`
 	Method      string          `json:"method"`
+	Enabled     *bool           `json:"enabled"`
 }

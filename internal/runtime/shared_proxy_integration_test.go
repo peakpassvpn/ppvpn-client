@@ -18,13 +18,13 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/profile"
 )
 
-// newLocalProxyTestCore is NewWithLocalProxyState without the 7890
-// preference, so parallel test packages and a developer's running proxy never
+// newLocalProxyTestCore is NewWithLocalProxyState without the 7890/7891
+// preferences, so parallel test packages and a developer's running proxy never
 // compete for the same port.
 func newLocalProxyTestCore(t *testing.T, platform profile.PlatformCapabilities) *Core {
 	t.Helper()
 	core := NewWithLocalProxyState(platform, filepath.Join(t.TempDir(), "proxy-state.json"))
-	core.proxyManager.WithPreferredPort(0)
+	core.proxyManager.WithPreferredPort(0).WithSystemProxyPreferredPort(0)
 	return core
 }
 

@@ -31,7 +31,8 @@ type Status struct {
 	NodeCount      int    `json:"node_count"`
 	// SelectedIngress is omitted while it is unknown (no profile, or the
 	// core is not running).
-	SelectedIngress *IngressStatus `json:"selected_ingress,omitempty"`
+	SelectedIngress *IngressStatus    `json:"selected_ingress,omitempty"`
+	SystemProxy     SystemProxyStatus `json:"system_proxy"`
 }
 
 // IngressStatus is the ingress (replica) a node is actually using. For a
@@ -46,11 +47,29 @@ type IngressStatus struct {
 	SwitchedAt          *time.Time `json:"switched_at,omitempty"`
 }
 
+// SystemProxyStatus describes the opt-in unauthenticated loopback listener
+// for OS proxy settings. Available reports whether this core can host it;
+// Enabled is the host's toggle; Listening is true only while a running
+// instance accepts connections on Listen:Port.
+type SystemProxyStatus struct {
+	Available bool     `json:"available"`
+	Enabled   bool     `json:"enabled"`
+	Listening bool     `json:"listening"`
+	Listen    string   `json:"listen,omitempty"`
+	Port      uint16   `json:"port,omitempty"`
+	Protocols []string `json:"protocols,omitempty"`
+}
+
 var (
 	ErrProfileNotApplied  = errors.New("no profile applied")
 	ErrLocalProxyDisabled = errors.New("local proxy is disabled for this core")
 	ErrCoreNotRunning     = errors.New("core is not running")
 	ErrNodeNotFound       = errors.New("node not found")
+	// ErrSystemProxyUnavailable: this core cannot host the system proxy (a
+	// TUN core, or no private state directory to persist its port).
+	ErrSystemProxyUnavailable = errors.New("system proxy is unavailable in this core")
+	// ErrSystemProxyStartFailed: the listener could not be opened.
+	ErrSystemProxyStartFailed = errors.New("system proxy listener could not be started")
 )
 
 // Core serializes lifecycle mutations and owns all sing-box values. Reads and
@@ -73,6 +92,10 @@ type Core struct {
 	cancel               context.CancelFunc
 	proxyManager         *localproxy.Manager
 	proxyEndpoints       []localproxy.Endpoint
+	// The system proxy is only toggled at runtime and always starts
+	// disabled; both fields change under the operation lock.
+	systemProxyEnabled bool
+	systemProxyPort    uint16
 }
 
 func New(platform profile.PlatformCapabilities) *Core {
@@ -144,6 +167,14 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, err
 	}
+	systemPort := uint16(0)
+	if c.systemProxyEnabled {
+		// A running listener keeps its port; before start, re-check it.
+		if systemPort, err = c.proxyManager.SystemProxyPort(!running, sharedPort(proxyEndpoints)); err != nil {
+			return false, fmt.Errorf("prepare system proxy: %w", err)
+		}
+		candidate = config.WithSystemProxy(candidate, systemPort)
+	}
 	candidateClassifier, err := routing.Compile(candidateProfile, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate routing compilation failed"})
@@ -185,6 +216,9 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 	c.active, c.built, c.classifier = candidateProfile, candidate, candidateClassifier
 	c.routingGeneration++
 	c.proxyEndpoints = proxyEndpoints
+	if systemPort != 0 {
+		c.systemProxyPort = systemPort
+	}
 	if c.selected == "" || !hasNode(candidateProfile, c.selected) {
 		c.selected = candidateProfile.Selection.DefaultNodeID
 	}
@@ -383,10 +417,21 @@ func (c *Core) Start() error {
 		c.mu.RUnlock()
 		return nil
 	}
-	built, selected := c.built, c.selected
+	built, selected, systemPort := c.built, c.selected, c.systemProxyPort
+	localPort := sharedPort(c.proxyEndpoints)
 	c.mu.RUnlock()
 	if built == nil {
 		return fmt.Errorf("no profile applied")
+	}
+	if c.systemProxyEnabled {
+		// The port may have been taken while the core was stopped.
+		port, err := c.proxyManager.SystemProxyPort(true, localPort)
+		if err != nil {
+			return fmt.Errorf("prepare system proxy: %w", err)
+		}
+		if port != systemPort {
+			built, systemPort = config.WithSystemProxy(built, port), port
+		}
 	}
 	instance, cancel, err := c.startCandidate(built)
 	if err != nil {
@@ -399,6 +444,7 @@ func (c *Core) Start() error {
 	}
 	c.mu.Lock()
 	c.engine, c.cancel, c.built = instance, cancel, built
+	c.systemProxyPort = systemPort
 	c.mu.Unlock()
 	c.emit(Event{Type: EventCoreStarted, At: time.Now()})
 	return nil
@@ -491,13 +537,13 @@ func (c *Core) Status() Status {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.active == nil {
-		return Status{State: StateStopped}
+		return Status{State: StateStopped, SystemProxy: c.systemProxyStatusLocked()}
 	}
 	state := StateConfigured
 	if c.engine != nil {
 		state = StateRunning
 	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked()}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked()}
 }
 
 func (c *Core) selectedIngressLocked() *IngressStatus {
@@ -530,6 +576,29 @@ func (c *Core) selectedIngressLocked() *IngressStatus {
 	return status
 }
 
+// SystemProxyAvailable reports whether this core can host the system proxy:
+// it needs the private state directory for its port, and a privileged TUN
+// core never exposes an unauthenticated listener.
+func (c *Core) SystemProxyAvailable() bool {
+	return c.proxyManager != nil && !c.platform.TUN.Enabled
+}
+
+func (c *Core) SystemProxyStatus() SystemProxyStatus {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.systemProxyStatusLocked()
+}
+
+func (c *Core) systemProxyStatusLocked() SystemProxyStatus {
+	status := SystemProxyStatus{Available: c.SystemProxyAvailable(), Enabled: c.systemProxyEnabled}
+	if c.systemProxyEnabled && c.systemProxyPort != 0 {
+		status.Listen, status.Port = localproxy.Listen, c.systemProxyPort
+		status.Protocols = []string{"http", "socks5"}
+		status.Listening = c.engine != nil
+	}
+	return status
+}
+
 // ingressObserver turns failover switches of the instance built from
 // candidate into NodeIngressSwitched events.
 func (c *Core) ingressObserver(candidate *config.BuildResult) failover.SwitchObserver {
@@ -541,6 +610,75 @@ func (c *Core) ingressObserver(candidate *config.BuildResult) failover.SwitchObs
 		}
 		c.emit(Event{Type: EventNodeIngressSwitched, At: active.SwitchedAt, NodeID: nodeID, EndpointKey: key, PreviousEndpointKey: candidate.IngressKeys[active.Previous]})
 	}
+}
+
+// SetSystemProxy opens or closes the unauthenticated loopback system proxy.
+// It is idempotent. On a running core the listener is added or removed in
+// place, so other connections are not interrupted; otherwise the toggle
+// takes effect on the next start. Disabling always closes the listener.
+func (c *Core) SetSystemProxy(enabled bool) (SystemProxyStatus, error) {
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	if !c.SystemProxyAvailable() {
+		return SystemProxyStatus{}, ErrSystemProxyUnavailable
+	}
+	if enabled == c.systemProxyEnabled {
+		return c.SystemProxyStatus(), nil
+	}
+	c.mu.RLock()
+	instance, built, revision := c.engine, c.built, ""
+	localPort := sharedPort(c.proxyEndpoints)
+	if c.active != nil {
+		revision = c.active.Revision
+	}
+	c.mu.RUnlock()
+	var dynamic inboundEngine
+	if instance != nil {
+		var ok bool
+		if dynamic, ok = instance.(inboundEngine); !ok {
+			return SystemProxyStatus{}, ErrSystemProxyUnavailable
+		}
+	}
+	port := uint16(0)
+	if enabled {
+		var err error
+		if port, err = c.proxyManager.SystemProxyPort(true, localPort); err != nil {
+			return SystemProxyStatus{}, fmt.Errorf("%w: %v", ErrSystemProxyStartFailed, err)
+		}
+		if dynamic != nil {
+			if err = dynamic.addInbound(config.SystemProxyInbound(port)); err != nil {
+				_ = dynamic.removeInbound(config.SystemProxyInboundTag)
+				return SystemProxyStatus{}, fmt.Errorf("%w: %v", ErrSystemProxyStartFailed, err)
+			}
+		}
+	} else if dynamic != nil {
+		if err := dynamic.removeInbound(config.SystemProxyInboundTag); err != nil {
+			return SystemProxyStatus{}, fmt.Errorf("close system proxy: %w", err)
+		}
+	}
+	c.mu.Lock()
+	c.systemProxyEnabled = enabled
+	if enabled {
+		c.systemProxyPort = port
+	}
+	if built != nil {
+		c.built = config.WithSystemProxy(built, port)
+	}
+	status := c.systemProxyStatusLocked()
+	c.mu.Unlock()
+	message := "disabled"
+	if enabled {
+		message = "enabled"
+	}
+	c.emit(Event{Type: EventSystemProxyChanged, At: time.Now(), Revision: revision, Message: message})
+	return status, nil
+}
+
+func sharedPort(endpoints []localproxy.Endpoint) uint16 {
+	if len(endpoints) == 0 {
+		return 0
+	}
+	return endpoints[0].Port
 }
 
 func (c *Core) Nodes() []profile.Node {

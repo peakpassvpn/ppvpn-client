@@ -27,8 +27,16 @@ type flowEngine interface {
 type ingressEngine interface {
 	activeIngress(nodeTag string) (failover.Active, bool)
 }
+
+// inboundEngine can open and close one listener without restarting, so
+// toggling the system proxy never drops other connections.
+type inboundEngine interface {
+	addInbound(inbound option.Inbound) error
+	removeInbound(tag string) error
+}
 type singEngine struct {
 	*box.Box
+	ctx     context.Context
 	tracker *telemetry
 }
 
@@ -43,6 +51,16 @@ func (e *singEngine) activeIngress(nodeTag string) (failover.Active, bool) {
 	// A single-ingress node is the ingress outbound itself.
 	return failover.Active{Current: nodeTag}, true
 }
+func (e *singEngine) addInbound(inbound option.Inbound) error {
+	return e.Inbound().Create(e.ctx, e.Router(), e.LogFactory().NewLogger("inbound/"+inbound.Tag), inbound.Tag, inbound.Type, inbound.Options)
+}
+func (e *singEngine) removeInbound(tag string) error {
+	if _, ok := e.Inbound().Get(tag); !ok {
+		return nil
+	}
+	return e.Inbound().Remove(tag)
+}
+
 func (e *singEngine) telemetrySnapshot() (Traffic, []Connection) { return e.tracker.snapshot() }
 func (e *singEngine) dialFlow(ctx context.Context, network, outboundTag, host string, port uint16) (net.Conn, error) {
 	outbound, ok := e.Outbound().Outbound(outboundTag)
@@ -63,11 +81,14 @@ func (e *singEngine) selectOutbound(outboundTag string) bool {
 type engineFactory func(context.Context, option.Options) (engine, error)
 
 func newSingBox(ctx context.Context, options option.Options) (engine, error) {
-	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
+	// box.New registers its services in the registry carried by this
+	// context, so the same context can create inbounds later.
+	ctx = failover.Context(ctx)
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
 	if err != nil {
 		return nil, err
 	}
 	tracker := newTelemetry()
 	instance.Router().AppendTracker(tracker)
-	return &singEngine{Box: instance, tracker: tracker}, nil
+	return &singEngine{Box: instance, ctx: ctx, tracker: tracker}, nil
 }

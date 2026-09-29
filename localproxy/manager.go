@@ -52,6 +52,9 @@ const (
 	// shared port, username prefix and password.
 	StateVersion = 2
 	prefixLength = 5
+	// SystemProxyPreferredPort is the first choice for the optional
+	// unauthenticated system proxy listener.
+	SystemProxyPreferredPort uint16 = 7891
 )
 
 const prefixAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -61,6 +64,9 @@ type diskState struct {
 	Prefix   string `json:"prefix"`
 	Password string `json:"password"`
 	Port     uint16 `json:"port,omitempty"`
+	// SystemProxyPort is the last port of the opt-in system proxy. Whether
+	// it is enabled is deliberately not persisted: it starts disabled.
+	SystemProxyPort uint16 `json:"system_proxy_port,omitempty"`
 }
 
 // legacyState is the version 1 layout, kept only to validate it before an
@@ -71,15 +77,68 @@ type legacyState struct {
 }
 
 // Manager persists only device-local proxy settings: the username prefix,
-// the shared password and the last bound port. The state file must live in an
+// the shared password and the last bound ports. The state file must live in an
 // app-private directory and is always written mode 0600.
 type Manager struct {
 	mu            sync.Mutex
 	path          string
 	preferredPort uint16
+	systemPort    uint16
 }
 
-func NewManager(path string) *Manager { return &Manager{path: path, preferredPort: PreferredPort} }
+func NewManager(path string) *Manager {
+	return &Manager{path: path, preferredPort: PreferredPort, systemPort: SystemProxyPreferredPort}
+}
+
+// WithSystemProxyPreferredPort overrides SystemProxyPreferredPort; 0 means
+// any free loopback port.
+func (m *Manager) WithSystemProxyPreferredPort(port uint16) *Manager {
+	m.systemPort = port
+	return m
+}
+
+// SystemProxyPort returns the port for the system proxy listener: the
+// persisted port when it is free, otherwise SystemProxyPreferredPort, otherwise
+// any free loopback port, never avoid (the shared local proxy port). With
+// probe=false a persisted port is returned unchecked, for a listener that is
+// already running on it. The choice is persisted.
+func (m *Manager) SystemProxyPort(probe bool, avoid uint16) (uint16, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, changed, err := m.load()
+	if err != nil {
+		return 0, err
+	}
+	port := state.SystemProxyPort
+	if port == 0 || port == avoid || probe {
+		if port == avoid {
+			port = 0
+		}
+		preferred := m.systemPort
+		if preferred == avoid {
+			preferred = 0
+		}
+		if port, err = choosePort(port, preferred); err != nil {
+			return 0, err
+		}
+		if port == avoid {
+			// Only reachable when avoid is not bound yet; take another port.
+			if port, err = choosePort(0, 0); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if port != state.SystemProxyPort {
+		state.SystemProxyPort = port
+		changed = true
+	}
+	if changed {
+		if err = m.save(state); err != nil {
+			return 0, err
+		}
+	}
+	return port, nil
+}
 
 // WithPreferredPort overrides PreferredPort; 0 means no preferred port, so a
 // fresh or displaced port is any free loopback port.
@@ -150,6 +209,10 @@ func (m *Manager) prepare(nodeIDs []string, probe bool) ([]Endpoint, error) {
 	}
 	if state.Port == 0 || probe {
 		port, err := choosePort(state.Port, m.preferredPort)
+		if err == nil && port != 0 && port == state.SystemProxyPort {
+			// Never share a port with the system proxy listener.
+			port, err = choosePort(0, 0)
+		}
 		if err != nil {
 			return nil, err
 		}
