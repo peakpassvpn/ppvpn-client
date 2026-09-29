@@ -6,26 +6,18 @@
   },
   "inbounds": [
     {
-      "type": "mixed",
-      "tag": "proxy-9144f403bb85417e",
+      "type": "ppvpn-local-proxy",
+      "tag": "local-proxy",
       "listen": "127.0.0.1",
-      "listen_port": 20001,
+      "listen_port": 7890,
       "users": [
         {
-          "Username": "u1",
-          "Password": "p1"
-        }
-      ]
-    },
-    {
-      "type": "mixed",
-      "tag": "proxy-55b02d505a37e662",
-      "listen": "127.0.0.1",
-      "listen_port": 20002,
-      "users": [
+          "username": "u8f2k-3f2c9a1e-0000-4000-8000-000000000001-128",
+          "password": "shared"
+        },
         {
-          "Username": "u2",
-          "Password": "p2"
+          "username": "u8f2k-3f2c9a1e-0000-4000-8000-000000000002-129",
+          "password": "shared"
         }
       ]
     },
@@ -128,12 +120,18 @@
         "outbound": "direct"
       },
       {
-        "inbound": "proxy-9144f403bb85417e",
+        "inbound": "local-proxy",
+        "auth_user": "u8f2k-3f2c9a1e-0000-4000-8000-000000000001-128",
         "outbound": "node-9144f403bb85417e"
       },
       {
-        "inbound": "proxy-55b02d505a37e662",
+        "inbound": "local-proxy",
+        "auth_user": "u8f2k-3f2c9a1e-0000-4000-8000-000000000002-129",
         "outbound": "node-55b02d505a37e662"
+      },
+      {
+        "inbound": "local-proxy",
+        "action": "reject"
       },
       {
         "ip_cidr": [

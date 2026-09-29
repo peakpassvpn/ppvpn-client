@@ -134,29 +134,45 @@ X-Request-ID: <optional-client-id>
 
 ### LocalProxyMetadata 与 LocalProxyCredential
 
-一般 UI 状态只能读取不含 secret 的 metadata：
+所有节点共用**一个** loopback 端口（`127.0.0.1`，同一端口同时提供认证 HTTP 代理/CONNECT
+与 SOCKS5），由代理用户名选择节点：
+
+- 用户名 `<prefix>-<node_id>`：`prefix` 是每台设备随机生成的 5 位小写字母数字（如
+  `u8f2k`），不含 `-`，因此 `node_id` 本身可以含 `-`（按第一个 `-` 切分）。
+- 密码是每台设备一个随机 secret，所有节点共用。桌面端以设备码登录、没有账户密码，
+  设计稿中“密码同账户”即指这个设备 secret。
+- prefix、密码和最终端口在首次使用时生成并写入私有状态文件（0600），重启和 Profile
+  更新后保持不变。
+- 端口优先使用上次持久化的端口，其次 7890；启动时二者都被占用则改用任意空闲端口并持久化，
+  下次优先尝试它。metadata/credential 返回的 `port` 始终是实际监听端口。
+- 未知用户名（包括已从 Profile 删除的节点）或错误密码一律拒绝：HTTP 返回
+  `407 Proxy Authentication Required` 与 `Proxy-Authenticate: Basic`，SOCKS5 返回 RFC 1929
+  认证失败；不支持无认证方法和 SOCKS4。secret 使用常量时间比较。
+- 每个用户名的流量固定走该节点（多入口节点走其故障转移组），不受 selected 节点或 Profile
+  规则影响；流量统计、连接归属和 `probe-availability` 与之前一致。
+
+一般 UI 状态只能读取不含 secret 的 metadata。每个节点一项，`listen`/`port` 对所有节点相同：
 
 ```json
 [
-  {
-    "node_id":"hk-001",
-    "listen":"127.0.0.1",
-    "port":32145,
-    "protocols":["http","socks5"],
-    "auth_required":true
-  }
+  {"node_id":"hk-001","listen":"127.0.0.1","port":7890,"protocols":["http","socks5"],"auth_required":true},
+  {"node_id":"jp-002","listen":"127.0.0.1","port":7890,"protocols":["http","socks5"],"auth_required":true}
 ]
 ```
 
 只有用户明确打开原生凭据面板时，宿主才能按 node ID 获取该项 credential：
 
 ```json
-{"node_id":"hk-001","listen":"127.0.0.1","port":32145,"username":"...","password":"..."}
+{"node_id":"hk-001","listen":"127.0.0.1","port":7890,"username":"u8f2k-hk-001","password":"..."}
 ```
 
-同一端口同时提供认证 HTTP CONNECT 与 SOCKS5。凭据是高敏感设备本地秘密；credential
-方法和旧兼容接口返回密码，宿主不得把响应传给 WebView、渲染进程、崩溃报告或日志。
-旧的 `GetLocalProxyEndpoints` 为 Core API v1 兼容保留，会一次返回所有 credential；新宿主不得调用。
+字段与之前相同，宿主可以继续把每个节点当作独立的 `{host, port, username, password}` 使用。
+端口只可能在核心未运行时应用 Profile（即启动前的端口协调）时改变；宿主应在 `start`
+之后（以及每次重新启动核心后）重新读取 metadata，而不是缓存旧端口。
+
+凭据是高敏感设备本地秘密；credential 方法和旧兼容接口返回密码，宿主不得把响应传给
+WebView、渲染进程、崩溃报告或日志。旧的 `GetLocalProxyEndpoints` 为 Core API v1 兼容保留，
+会一次返回所有 credential（同一形状）；新宿主不得调用。
 
 ### 已移除的系统代理兼容接口
 

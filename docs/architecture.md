@@ -15,7 +15,7 @@ flowchart LR
   Builder -->|"option.Options（仅内部）"| SingBox["sing-box 1.13.12"]
   Runtime --> Probe["入口与可用性探测"]
   Runtime --> Telemetry["第一方流量、连接、事件"]
-  Runtime --> LocalProxy["每节点认证 HTTP/SOCKS5 代理"]
+  Runtime --> LocalProxy["共享端口认证 HTTP/SOCKS5 代理（用户名选节点）"]
 ```
 
 ## 包边界
@@ -27,7 +27,8 @@ flowchart LR
 | `ipc` | Unix Domain Socket / Windows Named Pipe | 是 |
 | `mobile` | gomobile 可绑定的 JSON DTO 桥 | 是 |
 | `probe` | 入口 TCP 和端到端可用性探测 | 是 |
-| `localproxy` | 设备本地节点代理端点与状态 | 是，但凭据只限受信宿主 |
+| `localproxy` | 设备本地共享代理端点、用户名与状态 | 是，但凭据只限受信宿主 |
+| `internal/proxyinbound` | 共享代理 sing-box inbound（常量时间认证） | 否 |
 | `internal/config` | Profile 到 sing-box `option.Options` 的直接构建 | 否 |
 | `internal/runtime` | 引擎生命周期、热更新、遥测和事件 | 否 |
 | `internal/redact` | 诊断输出脱敏 | 否 |
@@ -46,7 +47,7 @@ stateDiagram-v2
 
 - 未应用 Profile 时，状态是 `stopped`；此时调用 `Start` 失败。
 - `ApplyProfile` 会先复制、校验并构建候选配置。revision 与当前值相同则返回 `applied=false`，不触发重载。
-- 运行中应用新 revision 时，核心启动替换实例。存在固定本地代理端口时会先停止旧实例以释放端口；若候选启动失败，则用旧构建结果恢复运行。
+- 运行中应用新 revision 时，核心启动替换实例。存在共享本地代理端口时会先停止旧实例以释放端口；若候选启动失败，则用旧构建结果恢复运行。
 - `SelectNode` 原子更新 `selected` selector，不重建 runtime。已有 TCP/UDP flow 保持原节点，新 flow 使用新节点。
 - `Reload` 重建当前 Profile，但对外保留原 revision。
 - `Stop` 和重复 `Start`/`Stop` 是幂等的。

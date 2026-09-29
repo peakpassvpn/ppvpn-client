@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
+	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
@@ -108,23 +108,48 @@ func addPlatformSafetyRules(result *BuildResult, p *profile.Profile) {
 	}
 }
 
+// LocalProxyInboundTag is the shared authenticated local proxy inbound.
+const LocalProxyInboundTag = "local-proxy"
+
+// addLocalProxies renders one shared loopback inbound for every node. The
+// inbound accepts exactly the per-node usernames, and one auth_user rule per
+// node pins that user's traffic to the node outbound (the failover group for
+// multi-ingress nodes). A final inbound rule rejects anything else, so local
+// proxy traffic can never fall through to profile rules or the selected node.
 func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
-	loopback := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	first := proxies[0]
+	prefix, _, ok := localproxy.ParseUsername(first.Username)
+	if !ok || first.Listen != localproxy.Listen || first.Port == 0 || first.Password == "" {
+		return fmt.Errorf("invalid local proxy endpoint for node %q", first.NodeID)
+	}
+	users := make([]proxyinbound.User, 0, len(proxies))
 	for _, endpoint := range proxies {
 		nodeOutbound, ok := result.NodeTags[endpoint.NodeID]
 		if !ok {
 			return fmt.Errorf("local proxy node %q does not exist", endpoint.NodeID)
 		}
-		if endpoint.Listen != "127.0.0.1" || endpoint.Port == 0 || endpoint.Username == "" || endpoint.Password == "" {
+		if endpoint.Listen != first.Listen || endpoint.Port != first.Port || endpoint.Password != first.Password ||
+			endpoint.Username != localproxy.FormatUsername(prefix, endpoint.NodeID) {
 			return fmt.Errorf("invalid local proxy endpoint for node %q", endpoint.NodeID)
 		}
-		inboundTag := "proxy-" + strings.TrimPrefix(nodeOutbound, "node-")
-		result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeMixed, Tag: inboundTag, Options: &option.HTTPMixedInboundOptions{ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: endpoint.Port}, Users: []auth.User{{Username: endpoint.Username, Password: endpoint.Password}}}})
+		users = append(users, proxyinbound.User{Username: endpoint.Username, Password: endpoint.Password})
 		result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
-			option.RawDefaultRule{Inbound: badoption.Listable[string]{inboundTag}},
+			option.RawDefaultRule{Inbound: badoption.Listable[string]{LocalProxyInboundTag}, AuthUser: badoption.Listable[string]{endpoint.Username}},
 			nodeOutbound,
 		))
 	}
+	result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: option.DefaultRule{
+			RawDefaultRule: option.RawDefaultRule{Inbound: badoption.Listable[string]{LocalProxyInboundTag}},
+			RuleAction:     option.RuleAction{Action: C.RuleActionTypeReject},
+		},
+	})
+	loopback := badoption.Addr(netip.MustParseAddr(localproxy.Listen))
+	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: proxyinbound.Type, Tag: LocalProxyInboundTag, Options: &proxyinbound.Options{
+		ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: first.Port},
+		Users:         users,
+	}})
 	return nil
 }
 

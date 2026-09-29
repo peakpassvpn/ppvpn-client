@@ -533,7 +533,7 @@ func cloneProfile(p *profile.Profile) (*profile.Profile, error) {
 	return &clone, nil
 }
 
-// LocalProxyEnabled reports whether this core runs per-node local proxies.
+// LocalProxyEnabled reports whether this core runs the shared local proxy.
 func (c *Core) LocalProxyEnabled() bool { return c.platform.LocalProxy.Enabled }
 
 func sameIngressEndpoints(a, b profile.Node) bool {

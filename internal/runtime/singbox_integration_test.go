@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,7 +17,7 @@ import (
 
 func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	platform := profile.PlatformCapabilities{Platform: "macos", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
-	core := NewWithLocalProxyState(platform, filepath.Join(t.TempDir(), "proxy-state.json"))
+	core := newLocalProxyTestCore(t, platform)
 	p := testProfile("r1", "edge.example.com", "8.8.8.8")
 	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
 	second := cloneNode(p.Nodes[0])

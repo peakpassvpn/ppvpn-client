@@ -4,7 +4,6 @@ package runtime
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -24,7 +23,7 @@ func TestFixtureWithRealityStartsInLocalProxyMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	platform := profile.PlatformCapabilities{Platform: "macos", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
-	core := NewWithLocalProxyState(platform, filepath.Join(t.TempDir(), "proxy-state.json"))
+	core := newLocalProxyTestCore(t, platform)
 	if _, err = core.ApplyProfile(p, time.Now()); err != nil {
 		t.Fatal(err)
 	}

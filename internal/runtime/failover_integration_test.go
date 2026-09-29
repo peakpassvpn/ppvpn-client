@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -87,7 +86,7 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 		Routing:   profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}},
 	}
 	platform := profile.PlatformCapabilities{Platform: "macos", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
-	core := NewWithLocalProxyState(platform, filepath.Join(t.TempDir(), "proxy-state.json"))
+	core := newLocalProxyTestCore(t, platform)
 	if _, err := core.ApplyProfile(p, time.Now()); err != nil {
 		t.Fatal(err)
 	}

@@ -51,9 +51,10 @@ mkdir -m 700 "$APP_STATE"
   --platform macos
 ```
 
-`serve` 默认启用每节点认证代理。`--local-proxy=false` 可关闭每节点代理；核心不提供
+`serve` 默认启用共享认证本地代理：所有节点共用一个 loopback 端口（优先 7890），用户名
+`<prefix>-<node_id>` 选择节点，密码为设备 secret。`--local-proxy=false` 可关闭它；核心不提供
 无认证的系统代理兼容入口。桌面端的推荐组合是：登录期间常驻一个非特权核心
-`--tun=false --local-proxy=true`（每个逻辑节点一个本地端口，`probe-availability` 通过它工作），
+`--tun=false --local-proxy=true`（共享本地代理端口，`probe-availability` 通过它工作），
 增强模式另起一个特权核心 `--tun --local-proxy=false`（本地代理相关 API 返回
 `LOCAL_PROXY_DISABLED`）。TUN 核心会把所有入口 IP 加入 `route_exclude_address`，
 因此非特权核心到入口的连接和探测不会进入隧道。
@@ -94,7 +95,7 @@ curl --unix-socket "$APP_STATE/core.sock" \
 ```
 
 随后调用 `/v1/start`，并用 `/v1/get-local-proxy-metadata` 读取不含 secret 的每节点
-HTTP/SOCKS5 端点；只有原生凭据面板按需调用 `/v1/get-local-proxy-credential`。Windows
+HTTP/SOCKS5 端点（所有节点同一端口）；只有原生凭据面板按需调用 `/v1/get-local-proxy-credential`。Windows
 产品由特权 service 以 TUN 模式运行 core，macOS 产品使用 XCFramework 和原生 Network
 Extension；两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1/select-node`，退出时
 调用 `/v1/stop`。完整顺序和 DTO 见 [Core API v1](core-api.md)。
@@ -105,5 +106,5 @@ Extension；两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1
 - `ENTRY_IP_NOT_PUBLIC`：入口 `endpoint.ip` 不是可拨号公网单播 IP；不要填域名或文档地址（不知道 IP 时可省略该字段）。
 - `TLS_SERVER_NAME_MISMATCH`：AnyTLS 的 TLS SNI 必须等于 `endpoint.domain`（REALITY 的 SNI 是借用站点，不受此限）。
 - `CORE_OPERATION_FAILED`：上游错误已安全折叠。读取状态、检查第一方事件，并在受控环境用脱敏 `render` 辅助定位。
-- 本地代理端口变更：进程启动时发现持久端口已占用，核心只为冲突节点重新分配；调用 `GetLocalProxyMetadata` 刷新。
+- 本地代理端口变更：核心启动前发现持久端口（或 7890）已占用时改用空闲端口并持久化；`start` 后调用 `GetLocalProxyMetadata` 刷新。
 - TUN/Network Extension 启动失败：保持未连接并由原生宿主通知用户；不要静默回退到系统代理。

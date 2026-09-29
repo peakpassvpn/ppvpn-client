@@ -1,6 +1,7 @@
 package localproxy
 
 import (
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -8,22 +9,52 @@ import (
 	"testing"
 )
 
-func TestStableDistinctEndpointsAndPermissions(t *testing.T) {
+func readState(t *testing.T, path string) diskState {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state diskState
+	if err = json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func TestSharedEndpointsAreStableAndPrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	m := NewManager(path)
-	first, err := m.Ensure([]string{"b", "a"})
+	first, err := m.ReconcileForStartup([]string{"b", "a"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first) != 2 || first[0].Port == first[1].Port || first[0].Password == first[1].Password {
-		t.Fatal("endpoints not independent")
+	if len(first) != 2 || first[0].NodeID != "a" || first[1].NodeID != "b" {
+		t.Fatalf("endpoints: %#v", first)
 	}
-	again, err := m.Ensure([]string{"a", "b"})
+	prefix, nodeID, ok := ParseUsername(first[0].Username)
+	if !ok || nodeID != "a" || len(prefix) != 5 {
+		t.Fatalf("username %q", first[0].Username)
+	}
+	for _, e := range first {
+		if e.Listen != "127.0.0.1" || e.Port == 0 || e.Port != first[0].Port || e.Password != first[0].Password || len(e.Password) < 40 {
+			t.Fatalf("endpoint not shared: %#v", e)
+		}
+		if e.Username != FormatUsername(prefix, e.NodeID) {
+			t.Fatalf("username %q", e.Username)
+		}
+	}
+	// A new manager (restart) and a profile update keep prefix, password and port.
+	again, err := NewManager(path).Ensure([]string{"a", "b", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first[0] != again[0] || first[1] != again[1] {
-		t.Fatal("endpoints not stable")
+	if again[0] != first[0] || again[1] != first[1] || again[2].Username != FormatUsername(prefix, "c") || again[2].Port != first[0].Port {
+		t.Fatalf("endpoints not stable: %#v -> %#v", first, again)
+	}
+	state := readState(t, path)
+	if state.Version != StateVersion || state.Prefix != prefix || state.Password != first[0].Password || state.Port != first[0].Port {
+		t.Fatalf("persisted state: %#v", state)
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
@@ -34,10 +65,101 @@ func TestStableDistinctEndpointsAndPermissions(t *testing.T) {
 	}
 }
 
-func TestStartupReallocatesOnlyOccupiedPort(t *testing.T) {
+func TestPrefixesAreRandomLowercaseAlphanumerics(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 32; i++ {
+		prefix, err := randomPrefix()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !validPrefix(prefix) {
+			t.Fatalf("prefix %q", prefix)
+		}
+		seen[prefix] = true
+	}
+	if len(seen) < 30 {
+		t.Fatalf("prefixes repeat too often: %d distinct", len(seen))
+	}
+}
+
+func TestParseUsername(t *testing.T) {
+	for _, tc := range []struct {
+		username, prefix, nodeID string
+		ok                       bool
+	}{
+		{"u8f2k-hk-001", "u8f2k", "hk-001", true},
+		{"u8f2k-3f2c9a1e-0000-4000-8000-000000000001-128", "u8f2k", "3f2c9a1e-0000-4000-8000-000000000001-128", true},
+		{"u8f2k--leading", "u8f2k", "-leading", true},
+		{"u8f2k-a.b_c", "u8f2k", "a.b_c", true},
+		{"u8f2k-", "", "", false},
+		{"u8f2k", "", "", false},
+		{"U8F2K-node", "", "", false},
+		{"u8f2-node", "", "", false},
+		{"u8f2kk-node", "", "", false},
+		{"-node", "", "", false},
+		{"", "", "", false},
+	} {
+		prefix, nodeID, ok := ParseUsername(tc.username)
+		if prefix != tc.prefix || nodeID != tc.nodeID || ok != tc.ok {
+			t.Errorf("ParseUsername(%q) = %q, %q, %v", tc.username, prefix, nodeID, ok)
+		}
+		if tc.ok && FormatUsername(prefix, nodeID) != tc.username {
+			t.Errorf("round trip %q", tc.username)
+		}
+	}
+}
+
+func TestStartupPrefers7890AndFallsBackWhenBusy(t *testing.T) {
+	// Hold 7890 for the whole test. If another process already owns it, the
+	// port is busy either way, which is exactly the case under test.
+	if listener, err := net.Listen("tcp", "127.0.0.1:7890"); err == nil {
+		defer listener.Close()
+	}
+	path := filepath.Join(t.TempDir(), "state.json")
+	first, err := NewManager(path).ReconcileForStartup([]string{"node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[0].Port == PreferredPort || first[0].Port == 0 {
+		t.Fatalf("busy preferred port chosen: %d", first[0].Port)
+	}
+	if readState(t, path).Port != first[0].Port {
+		t.Fatal("fallback port not persisted")
+	}
+	// The persisted fallback port is tried first next time.
+	second, err := NewManager(path).ReconcileForStartup([]string{"node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second[0] != first[0] {
+		t.Fatalf("persisted port not reused: %#v -> %#v", first[0], second[0])
+	}
+}
+
+func TestStartupUsesPreferredPortWhenFree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	m := NewManager(path)
+	// Use a port known to be free instead of 7890, which may be taken on a
+	// developer machine.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.preferredPort = uint16(probe.Addr().(*net.TCPAddr).Port)
+	probe.Close()
+	got, err := m.ReconcileForStartup([]string{"node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Port != m.preferredPort {
+		t.Fatalf("port %d, want preferred %d", got[0].Port, m.preferredPort)
+	}
+}
+
+func TestStartupReplacesOccupiedPersistedPortOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	manager := NewManager(path)
-	first, err := manager.Ensure([]string{"node"})
+	first, err := manager.ReconcileForStartup([]string{"node"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +168,11 @@ func TestStartupReallocatesOnlyOccupiedPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
+	// A running core (Ensure) keeps its port even though it is "occupied".
+	running, err := manager.Ensure([]string{"node"})
+	if err != nil || running[0] != first[0] {
+		t.Fatalf("running core port changed: %#v %v", running, err)
+	}
 	reconciled, err := manager.ReconcileForStartup([]string{"node"})
 	if err != nil {
 		t.Fatal(err)
@@ -54,9 +181,66 @@ func TestStartupReallocatesOnlyOccupiedPort(t *testing.T) {
 		t.Fatalf("unexpected reconciliation: %#v -> %#v", first[0], reconciled[0])
 	}
 }
+
+func TestMigratesVersion1StateInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	legacy := `{"version":1,"endpoints":{"hk-001":{"node_id":"hk-001","listen":"127.0.0.1","port":32145,"username":"old-user","password":"old-password"}}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewManager(path).Ensure([]string{"hk-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Username == "old-user" || got[0].Password == "old-password" || got[0].Port == 0 {
+		t.Fatalf("legacy credentials survived: %#v", got[0])
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err = json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["version"] != float64(StateVersion) || raw["endpoints"] != nil {
+		t.Fatalf("state not upgraded: %s", data)
+	}
+	state := readState(t, path)
+	if !validPrefix(state.Prefix) || state.Password != got[0].Password || state.Port != got[0].Port {
+		t.Fatalf("upgraded state: %#v", state)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions after upgrade: %v", err)
+	}
+	// The upgrade happens once: the next load keeps the generated values.
+	again, err := NewManager(path).Ensure([]string{"hk-001"})
+	if err != nil || again[0] != got[0] {
+		t.Fatalf("upgraded state not stable: %#v %v", again, err)
+	}
+}
+
+func TestRejectsUnsupportedOrCorruptState(t *testing.T) {
+	for name, content := range map[string]string{
+		"future":         `{"version":3}`,
+		"legacy-no-map":  `{"version":1}`,
+		"bad-prefix":     `{"version":2,"prefix":"UPPER","password":"x","port":7890}`,
+		"prefix-no-pass": `{"version":2,"prefix":"abcde","password":"","port":7890}`,
+		"not-json":       `{`,
+	} {
+		path := filepath.Join(t.TempDir(), "state.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewManager(path).Ensure([]string{"a"}); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
 func TestRejectsWeakStatePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"endpoints":{}}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"prefix":"abcde","password":"secret","port":7890}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewManager(path).Ensure([]string{"a"}); err == nil {
@@ -64,29 +248,17 @@ func TestRejectsWeakStatePermissions(t *testing.T) {
 	}
 }
 
-func TestRemovedNodeMappingIsReclaimed(t *testing.T) {
+func TestRemovedNodeHasNoEndpoint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	manager := NewManager(path)
-	first, err := manager.Ensure([]string{"keep", "remove"})
+	if _, err := manager.Ensure([]string{"keep", "remove"}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Ensure([]string{"keep"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var removed Endpoint
-	for _, endpoint := range first {
-		if endpoint.NodeID == "remove" {
-			removed = endpoint
-		}
-	}
-	if _, err = manager.Ensure([]string{"keep"}); err != nil {
-		t.Fatal(err)
-	}
-	second, err := manager.Ensure([]string{"keep", "new"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, endpoint := range second {
-		if endpoint.NodeID == "new" && endpoint.Username == removed.Username {
-			t.Fatal("deleted node credentials were reused")
-		}
+	if len(second) != 1 || second[0].NodeID != "keep" {
+		t.Fatalf("removed node still served: %#v", second)
 	}
 }
