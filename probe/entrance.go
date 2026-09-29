@@ -63,22 +63,27 @@ func (e *Error) Error() string {
 }
 func (e *Error) Unwrap() error { return e.Err }
 
+// IngressResult is one replica's measurement, listed in failover order.
 type IngressResult struct {
-	Role      profile.IngressRole `json:"role"`
-	Success   bool                `json:"success"`
-	LatencyMS int64               `json:"latency_ms"`
-	ErrorCode string              `json:"error_code,omitempty"`
+	EndpointKey    string              `json:"endpoint_key"`
+	ReplicaOrdinal int                 `json:"replica_ordinal"`
+	Role           profile.IngressRole `json:"role"`
+	Success        bool                `json:"success"`
+	LatencyMS      int64               `json:"latency_ms"`
+	ErrorCode      string              `json:"error_code,omitempty"`
 }
 
 // EntranceResult is the per-logical-node result. The node-level fields report
-// the primary ingress when it succeeded, otherwise the fastest successful
-// backup; when every ingress failed they report the primary's failure.
+// the primary (first) ingress when it succeeded, otherwise the fastest
+// successful backup; when every ingress failed they report the primary's
+// failure. EndpointKey / IngressRole identify the replica they describe.
 type EntranceResult struct {
 	NodeID      string              `json:"node_id"`
 	Method      Method              `json:"method"`
 	Success     bool                `json:"success"`
 	LatencyMS   int64               `json:"latency_ms"`
 	ErrorCode   string              `json:"error_code,omitempty"`
+	EndpointKey string              `json:"endpoint_key"`
 	IngressRole profile.IngressRole `json:"ingress_role"`
 	Ingresses   []IngressResult     `json:"ingresses"`
 	MeasuredAt  time.Time           `json:"measured_at"`
@@ -141,7 +146,7 @@ func Entrances(ctx context.Context, p *profile.Profile, opts Options) ([]Entranc
 			wg.Add(1)
 			go func(target *IngressResult, ingress profile.Ingress) {
 				defer wg.Done()
-				target.Role = ingress.Role
+				target.EndpointKey, target.ReplicaOrdinal, target.Role = ingress.EndpointKey, ingress.ReplicaOrdinal, ingress.Role
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
@@ -184,7 +189,7 @@ func summarize(r *EntranceResult) {
 		}
 	}
 	in := r.Ingresses[chosen]
-	r.Success, r.LatencyMS, r.ErrorCode, r.IngressRole = in.Success, in.LatencyMS, in.ErrorCode, in.Role
+	r.Success, r.LatencyMS, r.ErrorCode, r.EndpointKey, r.IngressRole = in.Success, in.LatencyMS, in.ErrorCode, in.EndpointKey, in.Role
 }
 
 func probeIngress(ctx context.Context, method Method, ingress profile.Ingress, opts Options) (time.Duration, error) {

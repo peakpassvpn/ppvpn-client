@@ -23,6 +23,7 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
 	second := cloneNode(p.Nodes[0])
 	second.ID = "node-2"
+	second.Ingresses[0].EndpointKey = "9002"
 	second.Ingresses[0].Endpoint.IP = "1.1.1.1"
 	p.Nodes = append(p.Nodes, second)
 	if _, err := core.ApplyProfile(p, time.Now()); err != nil {
@@ -89,6 +90,7 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	migrated.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
 	second = cloneNode(migrated.Nodes[0])
 	second.ID = "node-2"
+	second.Ingresses[0].EndpointKey = "9002"
 	second.Ingresses[0].Endpoint.IP = "8.8.4.4"
 	migrated.Nodes = append(migrated.Nodes, second)
 	if applied, err := core.ApplyProfile(migrated, time.Now()); err != nil || !applied {

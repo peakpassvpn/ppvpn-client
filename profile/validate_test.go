@@ -2,7 +2,9 @@ package profile
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,13 +17,15 @@ func validProfile(protocol Protocol) *Profile {
 		Selection:     Selection{Mode: "manual", DefaultNodeID: "node-1"},
 		Routing:       Routing{Final: RoutingAction{Type: "proxy", Target: "selected"}},
 	}
-	n := Node{ID: "node-1", Name: "Tokyo", Exit: Exit{IP: "203.0.114.9", Region: "Tokyo", CountryCode: "JP"}, Capabilities: Capabilities{TCP: true, UDP: true}, Ingresses: []Ingress{validIngress(protocol, IngressRolePrimary, "edge.example.com", "8.8.8.8")}}
+	n := Node{ID: "node-1", Name: "Tokyo", EntryKey: "cn-optimized", Exit: Exit{IP: "203.0.114.9", Region: "Tokyo"}, Capabilities: Capabilities{TCP: true, UDP: true}, Ingresses: []Ingress{validIngress(protocol, IngressRolePrimary, "edge.example.com", "8.8.8.8")}}
 	p.Nodes = []Node{n}
 	return p
 }
 
+// validIngress keys the replica by its domain; ordinal defaults to 0 and
+// callers appending backups use backupIngress.
 func validIngress(protocol Protocol, role IngressRole, domain, ip string) Ingress {
-	in := Ingress{Role: role, Protocol: protocol, Endpoint: Endpoint{Domain: domain, IP: ip, Port: 443}, Capabilities: Capabilities{TCP: true, UDP: true}}
+	in := Ingress{Role: role, EndpointKey: domain, Protocol: protocol, Endpoint: Endpoint{Domain: domain, IP: ip, Port: 443}, Capabilities: Capabilities{TCP: true, UDP: true}}
 	switch protocol {
 	case ProtocolShadowsocks:
 		in.Credentials.Shadowsocks = &ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
@@ -32,6 +36,12 @@ func validIngress(protocol Protocol, role IngressRole, domain, ip string) Ingres
 		in.Credentials.AnyTLS = &AnyTLSCredentials{Password: "secret"}
 		in.TLS = &TLS{ServerName: domain}
 	}
+	return in
+}
+
+func backupIngress(protocol Protocol, ordinal int, domain, ip string) Ingress {
+	in := validIngress(protocol, IngressRoleBackup, domain, ip)
+	in.ReplicaOrdinal = ordinal
 	return in
 }
 
@@ -51,8 +61,8 @@ func validationCode(t *testing.T, p *Profile) string {
 func TestIngressFailoverShapes(t *testing.T) {
 	p := validProfile(ProtocolShadowsocks)
 	p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses,
-		validIngress(ProtocolVLESS, IngressRoleBackup, "backup.example.com", ""),
-		validIngress(ProtocolAnyTLS, IngressRoleBackup, "backup2.example.com", "2606:4700::1111"),
+		backupIngress(ProtocolVLESS, 1, "backup.example.com", ""),
+		backupIngress(ProtocolAnyTLS, 5, "backup2.example.com", "2606:4700::1111"),
 	)
 	if code := validationCode(t, p); code != "" {
 		t.Fatalf("primary+2 backups rejected: %s", code)
@@ -65,13 +75,40 @@ func TestIngressFailoverShapes(t *testing.T) {
 		{"INGRESS_ROLE_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Role = IngressRoleBackup }},
 		{"INGRESS_ROLE_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Role = "standby" }},
 		{"INGRESS_ROLE_INVALID", func(p *Profile) {
-			p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, validIngress(ProtocolShadowsocks, IngressRolePrimary, "second.example.com", ""))
+			second := validIngress(ProtocolShadowsocks, IngressRolePrimary, "second.example.com", "")
+			second.ReplicaOrdinal = 1
+			p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, second)
+		}},
+		{"ENTRY_KEY_INVALID", func(p *Profile) { p.Nodes[0].EntryKey = "" }},
+		{"ENTRY_KEY_INVALID", func(p *Profile) { p.Nodes[0].EntryKey = "-cn" }},
+		{"ENTRY_KEY_INVALID", func(p *Profile) { p.Nodes[0].EntryKey = strings.Repeat("a", 65) }},
+		{"ENDPOINT_KEY_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].EndpointKey = "" }},
+		{"ENDPOINT_KEY_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].EndpointKey = "a/b" }},
+		{"ENDPOINT_KEY_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].EndpointKey = strings.Repeat("a", 129) }},
+		{"ENDPOINT_KEY_DUPLICATE", func(p *Profile) {
+			backup := backupIngress(ProtocolShadowsocks, 1, "backup.example.com", "")
+			backup.EndpointKey = p.Nodes[0].Ingresses[0].EndpointKey
+			p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backup)
+		}},
+		{"ENDPOINT_KEY_DUPLICATE", func(p *Profile) {
+			// Unique across the whole profile, not just within a node.
+			other := p.Nodes[0]
+			other.ID = "node-2"
+			p.Nodes = append(p.Nodes, other)
+		}},
+		{"REPLICA_ORDINAL_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].ReplicaOrdinal = -1 }},
+		{"REPLICA_ORDINAL_INVALID", func(p *Profile) {
+			p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backupIngress(ProtocolShadowsocks, 0, "backup.example.com", ""))
+		}},
+		{"REPLICA_ORDINAL_INVALID", func(p *Profile) {
+			p.Nodes[0].Ingresses[0].ReplicaOrdinal = 3
+			p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backupIngress(ProtocolShadowsocks, 2, "backup.example.com", ""))
 		}},
 		{"ENTRY_IP_NOT_PUBLIC", func(p *Profile) { p.Nodes[0].Ingresses[0].Endpoint.IP = "not-an-ip" }},
 		{"CAPABILITIES_INVALID", func(p *Profile) { p.Nodes[0].Ingresses[0].Capabilities.UDP = false }},
 		{"EXIT_IP_INVALID", func(p *Profile) { p.Nodes[0].Exit.IP = "999.1.1.1" }},
 		{"REALITY_PUBLIC_KEY_INVALID", func(p *Profile) {
-			backup := validIngress(ProtocolVLESS, IngressRoleBackup, "backup.example.com", "")
+			backup := backupIngress(ProtocolVLESS, 1, "backup.example.com", "")
 			backup.TLS.Reality.PublicKey = "not-a-key"
 			p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backup)
 		}},
@@ -86,13 +123,44 @@ func TestIngressFailoverShapes(t *testing.T) {
 	}
 	// A backup's own credentials are validated with the same rules.
 	p = validProfile(ProtocolShadowsocks)
-	backup := validIngress(ProtocolVLESS, IngressRoleBackup, "backup.example.com", "")
+	backup := backupIngress(ProtocolVLESS, 1, "backup.example.com", "")
 	backup.TLS.ServerName = "other.example.com"
 	p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backup)
 	err := Validate(p, time.Now())
 	var ve *ValidationError
 	if !errors.As(err, &ve) || ve.Code != "TLS_SERVER_NAME_MISMATCH" || ve.Field != "nodes[0].ingresses[1].tls.server_name" {
 		t.Fatalf("%#v", err)
+	}
+}
+
+func TestMaxIngressesAccepted(t *testing.T) {
+	p := validProfile(ProtocolShadowsocks)
+	for i := 1; i < MaxIngressesPerNode; i++ {
+		p.Nodes[0].Ingresses = append(p.Nodes[0].Ingresses, backupIngress(ProtocolShadowsocks, i, fmt.Sprintf("r%d.example.com", i), ""))
+	}
+	if code := validationCode(t, p); code != "" {
+		t.Fatalf("%d ingresses rejected: %s", MaxIngressesPerNode, code)
+	}
+}
+
+func TestReplicaOrdinalPresenceRequired(t *testing.T) {
+	data, err := os.ReadFile("../testdata/profiles/multi-ingress.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, replacement := range []string{``, `"replica_ordinal": null,`} {
+		mutated := strings.Replace(string(data), `"replica_ordinal": 0,`, replacement, 1)
+		if mutated == string(data) {
+			t.Fatal("fixture has no replica_ordinal 0")
+		}
+		_, err = Parse([]byte(mutated))
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Code != "FIELD_REQUIRED" || ve.Field != "nodes[0].ingresses[0].replica_ordinal" {
+			t.Fatalf("%q: %#v", replacement, err)
+		}
+	}
+	if _, err = Parse([]byte(strings.Replace(string(data), `"endpoint_key"`, `"role_hint":"x","endpoint_key"`, 1))); err == nil {
+		t.Fatal("unknown ingress field accepted")
 	}
 }
 
@@ -117,7 +185,8 @@ func TestFixtureProfileParsesAndValidates(t *testing.T) {
 	if err = Validate(p, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Nodes) != 2 || len(p.Nodes[0].Ingresses) != 2 || p.Nodes[0].Ingresses[1].Role != IngressRoleBackup || p.Nodes[0].Ingresses[1].Endpoint.IP != "" {
+	if len(p.Nodes) != 2 || len(p.Nodes[0].Ingresses) != 2 || p.Nodes[0].Ingresses[1].Role != IngressRoleBackup || p.Nodes[0].Ingresses[1].Endpoint.IP != "" ||
+		p.Nodes[0].EntryKey != "cn-optimized" || p.Nodes[0].Ingresses[1].EndpointKey != "9002" || p.Nodes[0].Ingresses[1].ReplicaOrdinal != 1 {
 		t.Fatalf("unexpected fixture shape: %#v", p.Nodes)
 	}
 }

@@ -66,25 +66,28 @@ func (b *Bridge) Stop() error             { return safeError(b.core.Stop()) }
 func (b *Bridge) Status() (string, error) { return encode(b.core.Status()) }
 func (b *Bridge) ListNodes() (string, error) {
 	type ingress struct {
-		Role     string `json:"role"`
-		Protocol string `json:"protocol"`
+		EndpointKey    string `json:"endpoint_key"`
+		ReplicaOrdinal int    `json:"replica_ordinal"`
+		Role           string `json:"role"`
+		Protocol       string `json:"protocol"`
 	}
 	type summary struct {
-		ID          string    `json:"id"`
-		Name        string    `json:"name"`
-		Protocol    string    `json:"protocol"`
-		Region      string    `json:"region,omitempty"`
-		CountryCode string    `json:"country_code,omitempty"`
-		TCP         bool      `json:"tcp"`
-		UDP         bool      `json:"udp"`
-		Ingresses   []ingress `json:"ingresses"`
+		ID         string    `json:"id"`
+		Name       string    `json:"name"`
+		EntryKey   string    `json:"entry_key"`
+		EntryLabel string    `json:"entry_label,omitempty"`
+		Protocol   string    `json:"protocol"`
+		Region     string    `json:"region,omitempty"`
+		TCP        bool      `json:"tcp"`
+		UDP        bool      `json:"udp"`
+		Ingresses  []ingress `json:"ingresses"`
 	}
 	nodes := b.core.Nodes()
 	result := make([]summary, len(nodes))
 	for i, n := range nodes {
-		result[i] = summary{ID: n.ID, Name: n.Name, Region: n.Exit.Region, CountryCode: n.Exit.CountryCode, TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP, Ingresses: make([]ingress, len(n.Ingresses))}
+		result[i] = summary{ID: n.ID, Name: n.Name, EntryKey: n.EntryKey, EntryLabel: n.EntryLabel, Region: n.Exit.Region, TCP: n.Capabilities.TCP, UDP: n.Capabilities.UDP, Ingresses: make([]ingress, len(n.Ingresses))}
 		for j, in := range n.Ingresses {
-			result[i].Ingresses[j] = ingress{Role: string(in.Role), Protocol: string(in.Protocol)}
+			result[i].Ingresses[j] = ingress{EndpointKey: in.EndpointKey, ReplicaOrdinal: in.ReplicaOrdinal, Role: string(in.Role), Protocol: string(in.Protocol)}
 		}
 		if len(n.Ingresses) > 0 {
 			result[i].Protocol = string(n.Ingresses[0].Protocol)

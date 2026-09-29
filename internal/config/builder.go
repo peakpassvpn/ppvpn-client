@@ -339,7 +339,10 @@ func buildNode(result *BuildResult, n profile.Node) ([]option.Outbound, error) {
 	outbounds := make([]option.Outbound, 0, len(n.Ingresses)+1)
 	members := make([]string, 0, len(n.Ingresses))
 	for i, ingress := range n.Ingresses {
-		ingressTag := fmt.Sprintf("%s-%d", tag, i)
+		ingressTag := ingressTag(n.ID, ingress.EndpointKey)
+		if _, dup := result.OutboundNodes[ingressTag]; dup {
+			return nil, fmt.Errorf("ingress %d: outbound tag collision", i)
+		}
 		out, err := buildOutbound(ingress, ingressTag)
 		if err != nil {
 			return nil, fmt.Errorf("ingress %d: %w", i, err)
@@ -386,6 +389,14 @@ func buildTLS(t *profile.TLS) *option.OutboundTLSOptions {
 func nodeTag(id string) string {
 	sum := sha256.Sum256([]byte(id))
 	return "node-" + hex.EncodeToString(sum[:8])
+}
+
+// ingressTag derives a failover member tag from the node id and the replica's
+// endpoint_key, so a replica keeps its outbound tag across profile revisions
+// regardless of its position in the failover order.
+func ingressTag(nodeID, endpointKey string) string {
+	sum := sha256.Sum256([]byte(endpointKey))
+	return nodeTag(nodeID) + "-" + hex.EncodeToString(sum[:4])
 }
 func normalizedLogLevel(v string) string {
 	switch v {

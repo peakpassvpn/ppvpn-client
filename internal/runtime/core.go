@@ -541,7 +541,7 @@ func sameIngressEndpoints(a, b profile.Node) bool {
 		return false
 	}
 	for i := range a.Ingresses {
-		if a.Ingresses[i].Endpoint != b.Ingresses[i].Endpoint {
+		if a.Ingresses[i].Endpoint != b.Ingresses[i].Endpoint || a.Ingresses[i].EndpointKey != b.Ingresses[i].EndpointKey {
 			return false
 		}
 	}

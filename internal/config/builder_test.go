@@ -19,13 +19,13 @@ func base(n profile.Node) *profile.Profile {
 	}
 }
 func node(protocol profile.Protocol) profile.Node {
-	return profile.Node{ID: "stable", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{ingress(protocol, profile.IngressRolePrimary, "edge.example.com", "8.8.8.8")}}
+	return profile.Node{ID: "stable", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{ingress(protocol, profile.IngressRolePrimary, "edge.example.com", "8.8.8.8")}}
 }
 
 // ingress returns an ingress with protocol-appropriate TLS but no
 // credentials; tests fill in credentials explicitly.
 func ingress(protocol profile.Protocol, role profile.IngressRole, domain, ip string) profile.Ingress {
-	in := profile.Ingress{Role: role, Protocol: protocol, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}
+	in := profile.Ingress{Role: role, EndpointKey: domain, Protocol: protocol, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}
 	switch protocol {
 	case profile.ProtocolShadowsocks:
 		in.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}

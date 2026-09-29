@@ -90,7 +90,7 @@ func (f *fakeFactory) create(_ context.Context, _ option.Options) (engine, error
 }
 
 func testProfile(rev, domain, ip string) *profile.Profile {
-	n := profile.Node{ID: "node", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}}}
+	n := profile.Node{ID: "node", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, EndpointKey: "9001", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}}}
 	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: rev, ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 func TestAtomicApplyRollback(t *testing.T) {
@@ -161,6 +161,7 @@ func TestSelectNodeChangesOnlyNewFlowSelection(t *testing.T) {
 	p := testProfile("r1", "a.example", "8.8.8.8")
 	second := cloneNode(p.Nodes[0])
 	second.ID = "second"
+	second.Ingresses[0].EndpointKey = "9002"
 	second.Ingresses[0].Endpoint.Domain = "b.example"
 	second.Ingresses[0].Endpoint.IP = "1.1.1.1"
 	p.Nodes = append(p.Nodes, second)
@@ -240,6 +241,7 @@ func TestOpenFlowHonorsAuthorizedClassificationAcrossSelectedSwitch(t *testing.T
 	p := testProfile("r1", "a.example", "8.8.8.8")
 	second := cloneNode(p.Nodes[0])
 	second.ID = "second"
+	second.Ingresses[0].EndpointKey = "9002"
 	second.Ingresses[0].Endpoint.Domain = "b.example"
 	second.Ingresses[0].Endpoint.IP = "1.1.1.1"
 	p.Nodes = append(p.Nodes, second)

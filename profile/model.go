@@ -21,8 +21,14 @@ type Profile struct {
 // local proxies, probes) uses Node.ID; ingresses are an implementation detail
 // of how the core reaches that exit.
 type Node struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// EntryKey identifies the entry tier this logical node belongs to (for
+	// example "cn-optimized"). It is opaque to the core and passed through to
+	// node listings; clients must not assume a fixed set of values.
+	EntryKey string `json:"entry_key"`
+	// EntryLabel is an optional display name for the entry tier.
+	EntryLabel   string       `json:"entry_label,omitempty"`
 	Exit         Exit         `json:"exit"`
 	Capabilities Capabilities `json:"capabilities"`
 	Ingresses    []Ingress    `json:"ingresses"`
@@ -35,17 +41,24 @@ const (
 	IngressRoleBackup  IngressRole = "backup"
 )
 
-// Ingress is one concrete way to reach a logical node's exit. The first
-// ingress must be the primary; any following ingresses are backups tried in
-// order when the primary is unhealthy.
+// Ingress is one concrete way to reach a logical node's exit (one replica of
+// the node's entry). Array order is failover order: ingresses[0] is the
+// primary (role "primary"); every following ingress is a backup (role
+// "backup") tried in order while the ones before it are unhealthy.
+//
+// EndpointKey is the backend's stable identity for the replica (unique within
+// the profile); ReplicaOrdinal is its position within the node (unique and
+// strictly increasing in array order, not necessarily contiguous).
 type Ingress struct {
-	Role         IngressRole  `json:"role"`
-	Protocol     Protocol     `json:"protocol"`
-	Endpoint     Endpoint     `json:"endpoint"`
-	Credentials  Credentials  `json:"credentials"`
-	TLS          *TLS         `json:"tls,omitempty"`
-	Transport    *Transport   `json:"transport,omitempty"`
-	Capabilities Capabilities `json:"capabilities"`
+	Role           IngressRole  `json:"role"`
+	EndpointKey    string       `json:"endpoint_key"`
+	ReplicaOrdinal int          `json:"replica_ordinal"`
+	Protocol       Protocol     `json:"protocol"`
+	Endpoint       Endpoint     `json:"endpoint"`
+	Credentials    Credentials  `json:"credentials"`
+	TLS            *TLS         `json:"tls,omitempty"`
+	Transport      *Transport   `json:"transport,omitempty"`
+	Capabilities   Capabilities `json:"capabilities"`
 }
 
 // Primary returns the node's primary ingress. It must only be called on a
@@ -73,9 +86,8 @@ type Endpoint struct {
 	Port   uint16 `json:"port"`
 }
 type Exit struct {
-	IP          string `json:"ip,omitempty"`
-	Region      string `json:"region,omitempty"`
-	CountryCode string `json:"country_code,omitempty"`
+	IP     string `json:"ip,omitempty"`
+	Region string `json:"region,omitempty"`
 }
 type Capabilities struct {
 	TCP bool `json:"tcp"`

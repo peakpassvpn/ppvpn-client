@@ -54,8 +54,8 @@ func startShadowsocksServer(t *testing.T) uint16 {
 	return port
 }
 
-func localSSIngress(role profile.IngressRole, port uint16) profile.Ingress {
-	return profile.Ingress{Role: role, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "localhost", Port: port}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: testSSKey}}, Capabilities: profile.Capabilities{TCP: true}}
+func localSSIngress(role profile.IngressRole, key string, ordinal int, port uint16) profile.Ingress {
+	return profile.Ingress{Role: role, EndpointKey: key, ReplicaOrdinal: ordinal, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "localhost", Port: port}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: testSSKey}}, Capabilities: profile.Capabilities{TCP: true}}
 }
 
 // TestLocalProxyOnlyCoreFailsOverToBackupIngress runs the real sing-box
@@ -71,16 +71,16 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 	p := &profile.Profile{
 		SchemaVersion: profile.CurrentSchemaVersion, Revision: "failover", ExpiresAt: time.Now().Add(time.Hour),
 		Nodes: []profile.Node{
-			{ID: "failover", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
-				localSSIngress(profile.IngressRolePrimary, deadPort),
-				localSSIngress(profile.IngressRoleBackup, serverPort),
+			{ID: "failover", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
+				localSSIngress(profile.IngressRolePrimary, "f0", 0, deadPort),
+				localSSIngress(profile.IngressRoleBackup, "f1", 1, serverPort),
 			}},
-			{ID: "healthy", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
-				localSSIngress(profile.IngressRolePrimary, serverPort),
-				localSSIngress(profile.IngressRoleBackup, deadPort),
+			{ID: "healthy", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
+				localSSIngress(profile.IngressRolePrimary, "h0", 0, serverPort),
+				localSSIngress(profile.IngressRoleBackup, "h1", 1, deadPort),
 			}},
-			{ID: "down", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
-				localSSIngress(profile.IngressRolePrimary, deadPort),
+			{ID: "down", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
+				localSSIngress(profile.IngressRolePrimary, "d0", 0, deadPort),
 			}},
 		},
 		Selection: profile.Selection{Mode: "manual", DefaultNodeID: "failover"},

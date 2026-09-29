@@ -105,24 +105,26 @@ X-Request-ID: <optional-client-id>
 ### NodeSummary
 
 ```json
-{"id":"hk-001","name":"香港 01","protocol":"vless","region":"Hong Kong","country_code":"HK","tcp":true,"udp":true,
- "ingresses":[{"role":"primary","protocol":"vless"},{"role":"backup","protocol":"shadowsocks"}]}
+{"id":"3f2c…-128","name":"香港-203.0.113.10","entry_key":"cn-optimized","entry_label":"CN Optimized",
+ "protocol":"vless","region":"香港","tcp":true,"udp":true,
+ "ingresses":[{"endpoint_key":"9001","replica_ordinal":0,"role":"primary","protocol":"vless"},
+              {"endpoint_key":"9002","replica_ordinal":1,"role":"backup","protocol":"shadowsocks"}]}
 ```
 
-`protocol` 是 primary 入口的协议。节点列表不含入口地址、TLS 参数或协议凭据。
+`entry_key` / `entry_label` 原样透传自 Profile（`entry_label` 缺省时省略）。`ingresses` 按故障转移顺序列出；`protocol` 是第一个（primary）入口的协议。节点列表不含入口地址、TLS 参数或协议凭据。
 
 ### EntranceResult 与 AvailabilityResult
 
 ```json
-{"node_id":"hk-001","method":"icmp","success":true,"latency_ms":95,"ingress_role":"backup",
+{"node_id":"3f2c…-128","method":"icmp","success":true,"latency_ms":95,"endpoint_key":"9002","ingress_role":"backup",
  "ingresses":[
-   {"role":"primary","success":false,"latency_ms":0,"error_code":"ICMP_TIMEOUT"},
-   {"role":"backup","success":true,"latency_ms":95}
+   {"endpoint_key":"9001","replica_ordinal":0,"role":"primary","success":false,"latency_ms":0,"error_code":"ICMP_TIMEOUT"},
+   {"endpoint_key":"9002","replica_ordinal":1,"role":"backup","success":true,"latency_ms":95}
  ],
  "measured_at":"2026-07-23T12:00:00Z"}
 ```
 
-每个入口都被单独测量（`ingresses` 与 Profile 中的入口同序）。节点级 `success`/`latency_ms`/`error_code`/`ingress_role`：primary 成功时取 primary；否则取最快的成功 backup；全部失败时报告 primary 的失败。成功时 `latency_ms` 至少为 1（四舍五入到毫秒），失败时为 0。
+每个入口都被单独测量（`ingresses` 与 Profile 中的入口同序）。节点级 `success`/`latency_ms`/`error_code`/`endpoint_key`/`ingress_role` 描述同一个副本：primary 成功时取 primary；否则取最快的成功 backup；全部失败时报告 primary 的失败。成功时 `latency_ms` 至少为 1（四舍五入到毫秒），失败时为 0。
 
 ```json
 {"node_id":"hk-001","total_ms":241,"success":true,"http_status":204,"measured_at":"2026-07-23T12:00:01Z"}
@@ -211,7 +213,10 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `ENTRY_IP_NOT_PUBLIC` / `PORT_INVALID` | 修正入口地址 |
 | `CREDENTIALS_INVALID` | 凭据联合体、内容或编码不合法 |
 | `PROTOCOL_UNSUPPORTED` / `TRANSPORT_UNSUPPORTED` | Profile 不支持该功能 |
-| `INGRESS_ROLE_INVALID` / `INGRESS_COUNT_INVALID` | 入口必须是 1 个 primary（排第一）+ 0–7 个 backup |
+| `INGRESS_ROLE_INVALID` / `INGRESS_COUNT_INVALID` | 入口为 1–64 个；`ingresses[0]` 为 primary，其余为 backup |
+| `ENTRY_KEY_INVALID` | `entry_key` 缺失或不符合 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` |
+| `ENDPOINT_KEY_INVALID` / `ENDPOINT_KEY_DUPLICATE` | `endpoint_key` 缺失、格式不符或在 Profile 内重复 |
+| `REPLICA_ORDINAL_INVALID` | `replica_ordinal` 为负，或在 Node 内未按数组顺序严格递增（缺失报 `FIELD_REQUIRED`） |
 | `EXIT_IP_INVALID` | `exit.ip` 不是合法 IP |
 | `SHADOWSOCKS_METHOD_UNSUPPORTED` / `SHADOWSOCKS_KEY_INVALID` | 修正 SS 2022 方法或密钥长度 |
 | `REALITY_REQUIRED` / `REALITY_PUBLIC_KEY_INVALID` / `REALITY_SHORT_ID_INVALID` | 修正 REALITY 配置 |

@@ -7,7 +7,7 @@
   "inbounds": [
     {
       "type": "mixed",
-      "tag": "proxy-bf69714ec05c22e4",
+      "tag": "proxy-9144f403bb85417e",
       "listen": "127.0.0.1",
       "listen_port": 20001,
       "users": [
@@ -19,7 +19,7 @@
     },
     {
       "type": "mixed",
-      "tag": "proxy-68a37c5cb83761b0",
+      "tag": "proxy-55b02d505a37e662",
       "listen": "127.0.0.1",
       "listen_port": 20002,
       "users": [
@@ -47,22 +47,22 @@
       "type": "selector",
       "tag": "selected",
       "outbounds": [
-        "node-bf69714ec05c22e4",
-        "node-68a37c5cb83761b0"
+        "node-9144f403bb85417e",
+        "node-55b02d505a37e662"
       ],
-      "default": "node-bf69714ec05c22e4"
+      "default": "node-9144f403bb85417e"
     },
     {
       "type": "ppvpn-failover",
-      "tag": "node-bf69714ec05c22e4",
+      "tag": "node-9144f403bb85417e",
       "outbounds": [
-        "node-bf69714ec05c22e4-0",
-        "node-bf69714ec05c22e4-1"
+        "node-9144f403bb85417e-13b7994f",
+        "node-9144f403bb85417e-e609d533"
       ]
     },
     {
       "type": "vless",
-      "tag": "node-bf69714ec05c22e4-0",
+      "tag": "node-9144f403bb85417e-13b7994f",
       "server": "tyo-01.edge.example.com",
       "server_port": 443,
       "uuid": "00000000-0000-4000-8000-000000000001",
@@ -83,15 +83,15 @@
     },
     {
       "type": "shadowsocks",
-      "tag": "node-bf69714ec05c22e4-1",
+      "tag": "node-9144f403bb85417e-e609d533",
       "server": "tyo-01-relay.edge.example.com",
       "server_port": 8443,
       "method": "2022-blake3-aes-128-gcm",
-      "password": "AAAAAAAAAAAAAAAAAAAAAA=="
+      "password": "AQEBAQEBAQEBAQEBAQEBAQ==:AAAAAAAAAAAAAAAAAAAAAA=="
     },
     {
       "type": "anytls",
-      "tag": "node-68a37c5cb83761b0",
+      "tag": "node-55b02d505a37e662",
       "server": "sjc-01.edge.example.com",
       "server_port": 443,
       "tls": {
@@ -128,12 +128,12 @@
         "outbound": "direct"
       },
       {
-        "inbound": "proxy-bf69714ec05c22e4",
-        "outbound": "node-bf69714ec05c22e4"
+        "inbound": "proxy-9144f403bb85417e",
+        "outbound": "node-9144f403bb85417e"
       },
       {
-        "inbound": "proxy-68a37c5cb83761b0",
-        "outbound": "node-68a37c5cb83761b0"
+        "inbound": "proxy-55b02d505a37e662",
+        "outbound": "node-55b02d505a37e662"
       },
       {
         "ip_cidr": [
@@ -147,7 +147,7 @@
       {
         "domain": "video.example",
         "domain_suffix": ".video.example",
-        "outbound": "node-68a37c5cb83761b0"
+        "outbound": "node-55b02d505a37e662"
       }
     ],
     "final": "selected",

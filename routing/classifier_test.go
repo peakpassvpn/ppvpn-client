@@ -10,11 +10,13 @@ import (
 func testProfile() *profile.Profile {
 	node := profile.Node{
 		ID:           "node-a",
+		EntryKey:     "cn-optimized",
 		Capabilities: profile.Capabilities{TCP: true, UDP: true},
 		Ingresses: []profile.Ingress{{
-			Role:     profile.IngressRolePrimary,
-			Protocol: profile.ProtocolShadowsocks,
-			Endpoint: profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443},
+			Role:        profile.IngressRolePrimary,
+			EndpointKey: "9001",
+			Protocol:    profile.ProtocolShadowsocks,
+			Endpoint:    profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443},
 			Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{
 				Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA==",
 			}},
@@ -23,6 +25,8 @@ func testProfile() *profile.Profile {
 	}
 	other := node
 	other.ID = "node-b"
+	other.Ingresses = append([]profile.Ingress(nil), node.Ingresses...)
+	other.Ingresses[0].EndpointKey = "9002"
 	return &profile.Profile{
 		SchemaVersion: profile.CurrentSchemaVersion,
 		Revision:      "rules",

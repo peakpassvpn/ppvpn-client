@@ -14,6 +14,8 @@ func TestEachLocalProxyRoutesToItsNode(t *testing.T) {
 	a.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	b := a
 	b.ID = "b"
+	b.Ingresses = append([]profile.Ingress(nil), a.Ingresses...)
+	b.Ingresses[0].EndpointKey = "b-9001"
 	p := &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{a, b}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "a"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 	proxies := []localproxy.Endpoint{{NodeID: "a", Listen: "127.0.0.1", Port: 10001, Username: "ua", Password: "pa"}, {NodeID: "b", Listen: "127.0.0.1", Port: 10002, Username: "ub", Password: "pb"}}
 	got, err := BuildWithLocalProxies(p, profile.PlatformCapabilities{}, proxies, time.Now())

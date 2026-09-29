@@ -5,13 +5,16 @@
   "expires_at": "2099-01-01T00:00:00Z",
   "nodes": [
     {
-      "id": "jp-tyo-01",
-      "name": "Tokyo 01",
-      "exit": {"ip": "8.8.4.4", "region": "Tokyo", "country_code": "JP"},
+      "id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+      "name": "日本-203.0.113.10",
+      "entry_key": "cn-optimized",
+      "exit": {"ip": "203.0.113.10", "region": "日本"},
       "capabilities": {"tcp": true, "udp": true},
       "ingresses": [
         {
           "role": "primary",
+          "endpoint_key": "9001",
+          "replica_ordinal": 0,
           "protocol": "vless",
           "endpoint": {"domain": "tyo-01.edge.example.com", "ip": "8.8.8.8", "port": 443},
           "credentials": {"vless": {"uuid": "00000000-0000-4000-8000-000000000001", "flow": "xtls-rprx-vision"}},
@@ -20,21 +23,27 @@
         },
         {
           "role": "backup",
+          "endpoint_key": "9002",
+          "replica_ordinal": 1,
           "protocol": "shadowsocks",
           "endpoint": {"domain": "tyo-01-relay.edge.example.com", "port": 8443},
-          "credentials": {"shadowsocks": {"method": "2022-blake3-aes-128-gcm", "server_key": "AAAAAAAAAAAAAAAAAAAAAA=="}},
+          "credentials": {"shadowsocks": {"method": "2022-blake3-aes-128-gcm", "server_key": "AAAAAAAAAAAAAAAAAAAAAA==", "identity_keys": ["AQEBAQEBAQEBAQEBAQEBAQ=="]}},
           "capabilities": {"tcp": true, "udp": true}
         }
       ]
     },
     {
-      "id": "us-sjc-01",
-      "name": "San Jose 01",
-      "exit": {"region": "San Jose", "country_code": "US"},
+      "id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+      "name": "美国-203.0.113.20",
+      "entry_key": "cn-optimized",
+      "entry_label": "CN Optimized",
+      "exit": {"region": "美国"},
       "capabilities": {"tcp": true, "udp": false},
       "ingresses": [
         {
           "role": "primary",
+          "endpoint_key": "9003",
+          "replica_ordinal": 0,
           "protocol": "anytls",
           "endpoint": {"domain": "sjc-01.edge.example.com", "ip": "1.1.1.1", "port": 443},
           "credentials": {"anytls": {"password": "anytls-password"}},
@@ -44,11 +53,11 @@
       ]
     }
   ],
-  "selection": {"mode": "manual", "default_node_id": "jp-tyo-01"},
+  "selection": {"mode": "manual", "default_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128"},
   "routing": {
     "rules": [
-      {"id": "lan", "match": {"ip_is_private": true}, "action": {"type": "direct"}},
-      {"id": "video", "match": {"domain_suffixes": ["video.example"]}, "action": {"type": "proxy", "target": "node", "node_id": "us-sjc-01"}}
+      {"id": "bypass-private", "match": {"ip_is_private": true}, "action": {"type": "direct"}},
+      {"id": "video", "match": {"domain_suffixes": ["video.example"]}, "action": {"type": "proxy", "target": "node", "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129"}}
     ],
     "final": {"type": "proxy", "target": "selected"}
   }

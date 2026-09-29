@@ -13,14 +13,17 @@ import (
 )
 
 func ssIngress(role profile.IngressRole, domain, ip string) profile.Ingress {
-	return profile.Ingress{Role: role, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}
+	return profile.Ingress{Role: role, EndpointKey: domain, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}
 }
 
 func probeProfile(ingresses ...profile.Ingress) *profile.Profile {
 	if len(ingresses) == 0 {
 		ingresses = []profile.Ingress{ssIngress(profile.IngressRolePrimary, "must-not-resolve.invalid", "8.8.8.8")}
 	}
-	n := profile.Node{ID: "node", Capabilities: profile.Capabilities{TCP: true}, Ingresses: ingresses}
+	for i := range ingresses {
+		ingresses[i].ReplicaOrdinal = i
+	}
+	n := profile.Node{ID: "node", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: ingresses}
 	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: "r", ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}
 }
 
@@ -95,10 +98,11 @@ func TestEntranceFallsBackToBestBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := got[0]
-	if !r.Success || r.LatencyMS != 30 || r.IngressRole != profile.IngressRoleBackup || r.Method != MethodICMP || r.ErrorCode != "" {
+	if !r.Success || r.LatencyMS != 30 || r.IngressRole != profile.IngressRoleBackup || r.EndpointKey != "c.example.com" || r.Method != MethodICMP || r.ErrorCode != "" {
 		t.Fatalf("%#v", r)
 	}
-	if r.Ingresses[0].Success || r.Ingresses[0].ErrorCode != CodeICMPTimeout || r.Ingresses[0].Role != profile.IngressRolePrimary || !r.Ingresses[2].Success {
+	if r.Ingresses[0].Success || r.Ingresses[0].ErrorCode != CodeICMPTimeout || r.Ingresses[0].Role != profile.IngressRolePrimary || !r.Ingresses[2].Success ||
+		r.Ingresses[0].EndpointKey != "a.example.com" || r.Ingresses[2].EndpointKey != "c.example.com" || r.Ingresses[2].ReplicaOrdinal != 2 {
 		t.Fatalf("%#v", r.Ingresses)
 	}
 }
@@ -115,7 +119,7 @@ func TestEntrancePrimaryWinsWhenHealthy(t *testing.T) {
 		return 10 * time.Millisecond, nil
 	}
 	got, err := Entrances(context.Background(), p, Options{Method: MethodICMP, Ping: ping})
-	if err != nil || got[0].IngressRole != profile.IngressRolePrimary || got[0].LatencyMS != 90 {
+	if err != nil || got[0].IngressRole != profile.IngressRolePrimary || got[0].EndpointKey != "a.example.com" || got[0].LatencyMS != 90 {
 		t.Fatalf("%v %#v", err, got)
 	}
 }

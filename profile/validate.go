@@ -25,6 +25,8 @@ func invalid(code, field, message string) error {
 }
 
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var entryKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+var endpointKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 var hexPattern = regexp.MustCompile(`^[0-9a-fA-F]*$`)
 
@@ -48,6 +50,7 @@ func Validate(p *Profile, now time.Time) error {
 		return invalid("FIELD_REQUIRED", "nodes", "at least one node is required")
 	}
 	seen := map[string]bool{}
+	endpointKeys := map[string]bool{}
 	for i := range p.Nodes {
 		n := &p.Nodes[i]
 		base := fmt.Sprintf("nodes[%d]", i)
@@ -58,6 +61,9 @@ func Validate(p *Profile, now time.Time) error {
 			return invalid("NODE_ID_DUPLICATE", base+".id", "node id must be unique")
 		}
 		seen[n.ID] = true
+		if !entryKeyPattern.MatchString(n.EntryKey) {
+			return invalid("ENTRY_KEY_INVALID", base+".entry_key", "entry key is required and must be a stable identifier of at most 64 characters")
+		}
 		if n.Exit.IP != "" {
 			if _, err := netip.ParseAddr(n.Exit.IP); err != nil {
 				return invalid("EXIT_IP_INVALID", base+".exit.ip", "exit IP must be a valid IP address")
@@ -66,7 +72,7 @@ func Validate(p *Profile, now time.Time) error {
 		if !n.Capabilities.TCP && !n.Capabilities.UDP {
 			return invalid("CAPABILITIES_INVALID", base+".capabilities", "at least one network capability is required")
 		}
-		if err := validateIngresses(n, base); err != nil {
+		if err := validateIngresses(n, base, endpointKeys); err != nil {
 			return err
 		}
 	}
@@ -251,9 +257,9 @@ func ParsePortRange(value string) (uint16, uint16, error) {
 }
 
 // MaxIngressesPerNode bounds failover fan-out for one logical node.
-const MaxIngressesPerNode = 8
+const MaxIngressesPerNode = 64
 
-func validateIngresses(n *Node, base string) error {
+func validateIngresses(n *Node, base string, endpointKeys map[string]bool) error {
 	if len(n.Ingresses) == 0 {
 		return invalid("FIELD_REQUIRED", base+".ingresses", "at least one ingress is required")
 	}
@@ -275,13 +281,26 @@ func validateIngresses(n *Node, base string) error {
 		default:
 			return invalid("INGRESS_ROLE_INVALID", field+".role", "ingress role must be primary or backup")
 		}
+		if !endpointKeyPattern.MatchString(in.EndpointKey) {
+			return invalid("ENDPOINT_KEY_INVALID", field+".endpoint_key", "endpoint key is required and must be a stable identifier of at most 128 characters")
+		}
+		if endpointKeys[in.EndpointKey] {
+			return invalid("ENDPOINT_KEY_DUPLICATE", field+".endpoint_key", "endpoint key must be unique within the profile")
+		}
+		endpointKeys[in.EndpointKey] = true
+		if in.ReplicaOrdinal < 0 {
+			return invalid("REPLICA_ORDINAL_INVALID", field+".replica_ordinal", "replica ordinal must be non-negative")
+		}
+		if i > 0 && in.ReplicaOrdinal <= n.Ingresses[i-1].ReplicaOrdinal {
+			return invalid("REPLICA_ORDINAL_INVALID", field+".replica_ordinal", "replica ordinals must be unique and strictly increasing in failover order")
+		}
 		if err := validateIngress(in, field); err != nil {
 			return err
 		}
 	}
 	primary := n.Ingresses[0].Capabilities
 	if (n.Capabilities.TCP && !primary.TCP) || (n.Capabilities.UDP && !primary.UDP) {
-		return invalid("CAPABILITIES_INVALID", base+".capabilities", "node capabilities must be supported by the primary ingress")
+		return invalid("CAPABILITIES_INVALID", base+".capabilities", "node capabilities must be supported by the primary (first) ingress")
 	}
 	return nil
 }

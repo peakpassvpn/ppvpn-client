@@ -70,9 +70,9 @@ Windows Desktop 必须由已签名 privileged service 提供权限和平台资�
 
 ## 探测语义
 
-- 入口探测逐个测量每个入口：`tcp` 方法直接 TCP 连接 `endpoint.ip:endpoint.port`（无 IP 时先解析 `endpoint.domain`，解析时间不计入），不做协议握手；`icmp` 方法发送一个 ICMP echo。结果字段是 `latency_ms`，节点级结果取 primary，primary 失败时取最快的成功 backup。
+- 入口探测逐个测量每个入口：`tcp` 方法直接 TCP 连接 `endpoint.ip:endpoint.port`（无 IP 时先解析 `endpoint.domain`，解析时间不计入），不做协议握手；`icmp` 方法发送一个 ICMP echo。结果字段是 `latency_ms`，节点级结果取 primary（`ingresses[0]`），primary 失败时取最快的成功 backup；每个入口结果带 `endpoint_key`/`replica_ordinal`/`role`。
 - ICMP 始终不需要特权：macOS/iOS 与 Linux/Android 使用 `SOCK_DGRAM` ICMP socket（`golang.org/x/net/icmp` 的 `udp4`/`udp6`；Linux 需要 `net.ipv4.ping_group_range` 包含当前组，否则报告 `ICMP_UNSUPPORTED`），Windows 使用 IP Helper `IcmpSendEcho2`/`Icmp6SendEcho2`。
-- 每个逻辑节点的入口渲染为独立 outbound；多入口节点由核心注册的 `ppvpn-failover` outbound 组合，primary 优先、拨号失败立即转 backup、健康检查发现 primary 恢复后切回（见 [Backend Profile](backend-profile.md#故障转移语义)）。
+- 每个逻辑节点的入口渲染为独立 outbound；多入口节点由核心注册的 `ppvpn-failover` outbound 组合，primary（`ingresses[0]`）优先、按数组顺序拨号失败立即转 backup（只在同一 Node 内）、健康检查发现 primary 恢复后切回（见 [Backend Profile](backend-profile.md#故障转移语义)）。
 - 可用性探测通过指定节点的认证本地 HTTP 代理发起完整 HTTP 请求；结果字段是 `total_ms`。它包含代理握手、节点连接和目标响应时间，不能当作入口延迟。
 - 两类探测都有明确的超时、取消和稳定错误码，且会产生结构化事件。
 
