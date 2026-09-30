@@ -249,6 +249,25 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		t.Fatal("fake-ip address without a domain was sent to the node")
 	}
 
+	// 5b. Plain HTTP to a fake-ip address sniffs its Host header, which is
+	// the IP literal itself: that is not a domain, so it is rejected as well.
+	started = time.Now()
+	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("198.18.1.28:80"))
+	_, _ = conn.Write([]byte("GET / HTTP/1.1\r\nHost: 198.18.1.28\r\nUser-Agent: curl/8.0\r\nAccept: */*\r\n\r\n"))
+	_, err = io.Copy(io.Discard, conn)
+	elapsed = time.Since(started)
+	conn.Close()
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatal("fake-ip HTTP connection with an IP Host was left open")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("fake-ip HTTP connection with an IP Host took %s to fail", elapsed)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if recorder.has("198.18.1.28:80") {
+		t.Fatal("fake-ip address with an IP-literal Host was sent to the node")
+	}
+
 	// 6. DNS to an IPv6 resolver is hijacked the same way (desktop TUN routes
 	// IPv6 into the tunnel, so an ISP's IPv6 DNS must not escape).
 	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("[2001:db8::53]:53"))

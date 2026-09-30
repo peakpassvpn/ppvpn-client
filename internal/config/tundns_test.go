@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"slices"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func TestTUNSniffHijackAndFakeIPRejectComeFirst(t *testing.T) {
 			if !slices.Equal(inRange.IPCIDR, []string{"198.18.0.0/15"}) || !slices.Equal(inRange.Inbound, []string{TUNInboundTag}) || inRange.Invert {
 				t.Fatalf("fake-ip range: %#v", inRange)
 			}
-			if !slices.Equal(noDomain.DomainRegex, []string{"."}) || !noDomain.Invert {
+			if !slices.Equal(noDomain.DomainRegex, []string{knownDomainRegex}) || !noDomain.Invert {
 				t.Fatalf("no-domain condition: %#v", noDomain)
 			}
 		})
@@ -172,6 +173,22 @@ func TestNoTUNKeepsRoutingUnchanged(t *testing.T) {
 		}
 		if r.DefaultOptions.Action == C.RuleActionTypeReject && r.DefaultOptions.RejectOptions.Method != C.RuleActionRejectMethodDefault {
 			t.Fatalf("reject without method: %#v", r)
+		}
+	}
+}
+
+// The fake-ip rule must treat an IP literal (what the HTTP sniffer reports
+// for a request to a bare address) as "no domain".
+func TestKnownDomainRegexRejectsIPLiterals(t *testing.T) {
+	re := regexp.MustCompile(knownDomainRegex)
+	for _, domain := range []string{"example.com", "a.b", "fake.test", "1password.com", "123.example", "xn--fiqs8s.cn", "localhost", "a-1.2"} {
+		if !re.MatchString(domain) {
+			t.Errorf("%q should be a domain", domain)
+		}
+	}
+	for _, literal := range []string{"", "198.18.1.117", "198.18.1.117.", "::1", "2001:db8::7", "[2001:db8::7]", "::ffff:198.18.1.1", "fe80::1%en0"} {
+		if re.MatchString(literal) {
+			t.Errorf("%q should not be a domain", literal)
 		}
 	}
 }
