@@ -197,7 +197,7 @@ func (r compiledRule) matches(flow Flow) bool {
 	if len(r.cidrs) > 0 || r.ipPrivate {
 		ip, err := netip.ParseAddr(flow.DestinationIP)
 		if err == nil {
-			addressMatched = addressMatched || r.ipPrivate && ip.IsPrivate()
+			addressMatched = addressMatched || r.ipPrivate && profile.IsPrivateIP(ip)
 			for _, prefix := range r.cidrs {
 				addressMatched = addressMatched || prefix.Contains(ip)
 			}

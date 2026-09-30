@@ -158,3 +158,22 @@ func TestClassifierSkipsRuleSetOnlyRules(t *testing.T) {
 		t.Fatalf("mixed rule lost its domain matcher: %+v", d)
 	}
 }
+
+// ip_is_private matches the same ranges as the sing-box rules
+// (profile.PrivatePrefixes), not just Go's RFC 1918/ULA IsPrivate.
+func TestClassifierPrivateMatchesSharedRanges(t *testing.T) {
+	classifier, err := Compile(testProfile(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ip := range []string{"100.64.1.1", "169.254.1.1", "224.0.0.251", "239.255.255.250", "255.255.255.255", "127.0.0.1", "fe80::1", "ff02::fb", "::1", "fd00::1", "::ffff:192.168.1.1"} {
+		if got := classifier.Classify(Flow{DestinationIP: ip, Protocol: "udp", DestinationPort: 5353}, "node-a"); got.RuleID != "private" {
+			t.Errorf("%s: %#v", ip, got)
+		}
+	}
+	for _, ip := range []string{"1.1.1.1", "2606:4700::1111", "198.51.100.1"} {
+		if got := classifier.Classify(Flow{DestinationIP: ip, Protocol: "udp", DestinationPort: 5353}, "node-a"); got.RuleID == "private" {
+			t.Errorf("%s matched private: %#v", ip, got)
+		}
+	}
+}

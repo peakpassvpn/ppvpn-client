@@ -229,12 +229,35 @@ const (
 	tunIPRoute2RuleIndex  = 9091
 )
 
-// Tunnel addresses. The peer address (.2 / ::2) is what sing-tun announces
-// as the tunnel DNS server where it configures one.
+// Tunnel addresses. The peer address (.90 / ::2) is what sing-tun announces
+// as the tunnel DNS server where it configures one. They are fixed, rarely
+// used values: sing-tun's defaults (172.19.0.1/30, fdfe:dcba:9876::1/126)
+// are also every other sing-box based client's (mihomo/Clash Verge), and two
+// TUNs with the same address fail to start ("object already exists"). The
+// desktop service hard-codes the same values.
 var (
-	tunInet4Address = netip.MustParsePrefix("172.19.0.1/30")
-	// tunInet6Address is a ULA (RFC 4193) /126, desktop only.
-	tunInet6Address = netip.MustParsePrefix("fdfe:dcba:9876::1/126")
+	// tunInet4Address is a /30 drawn at random from 10/8 away from ranges
+	// commonly used by Docker, Kubernetes, Tailscale and corporate VPNs.
+	tunInet4Address = netip.MustParsePrefix("10.60.159.89/30")
+	// tunInet6Address is a /126 of our own random ULA (RFC 4193)
+	// fde2:ec40:9312::/48, desktop only.
+	tunInet6Address = netip.MustParsePrefix("fde2:ec40:9312:c7fd::1/126")
+	// tunPrefixes are the tunnel's own networks (see addTUNTrafficRules).
+	tunPrefixes = []netip.Prefix{tunInet4Address.Masked(), tunInet6Address.Masked()}
+	// tunLegacyPrefixes were the tunnel networks before 0.5.7; a host may
+	// still carry them as a stale system DNS entry.
+	tunLegacyPrefixes = []netip.Prefix{netip.MustParsePrefix("172.19.0.0/30"), netip.MustParsePrefix("fdfe:dcba:9876::/126")}
+	// tunRouteExcluded never enter the desktop tunnel at the OS routing
+	// level: multicast, limited broadcast and link-local traffic (mDNS, SSDP,
+	// LAN device discovery, HomeKit/Thread) must stay on the physical
+	// interface, where direct rules could not reliably send it back out.
+	tunRouteExcluded = []netip.Prefix{
+		netip.MustParsePrefix("224.0.0.0/4"),
+		netip.MustParsePrefix("255.255.255.255/32"),
+		netip.MustParsePrefix("169.254.0.0/16"),
+		netip.MustParsePrefix("fe80::/10"),
+		netip.MustParsePrefix("ff00::/8"),
+	}
 )
 
 func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded []netip.Prefix, ipv6 bool) error {
@@ -265,12 +288,15 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 		// hosts with IPv6 disabled (nothing can leak around the tunnel there).
 		if ipv6 {
 			options.Address = append(options.Address, tunInet6Address)
-		} else {
-			excluded = inet4Only(excluded)
 		}
 		// Keep every ingress IP (primary and backups) out of the tunnel at the
 		// OS routing level too, so handshakes and ICMP/TCP probes from any
-		// process (including an unprivileged sibling core) never loop.
+		// process (including an unprivileged sibling core) never loop; and
+		// keep multicast, broadcast and link-local traffic on the LAN.
+		excluded = append(append([]netip.Prefix(nil), excluded...), tunRouteExcluded...)
+		if !ipv6 {
+			excluded = inet4Only(excluded)
+		}
 		options.RouteExcludeAddress = excluded
 		options.IPRoute2TableIndex = tunIPRoute2TableIndex
 		options.IPRoute2RuleIndex = tunIPRoute2RuleIndex
@@ -388,12 +414,9 @@ func buildRuleMatch(match profile.RoutingMatch) (option.RawDefaultRule, error) {
 		raw.IPCIDR = append(raw.IPCIDR, prefix.Masked().String())
 	}
 	if match.IPIsPrivate {
-		raw.IPCIDR = append(raw.IPCIDR,
-			"10.0.0.0/8",
-			"172.16.0.0/12",
-			"192.168.0.0/16",
-			"fc00::/7",
-		)
+		for _, prefix := range profile.PrivatePrefixes {
+			raw.IPCIDR = append(raw.IPCIDR, prefix.String())
+		}
 	}
 	for _, value := range match.PortRanges {
 		start, end, err := profile.ParsePortRange(value)
