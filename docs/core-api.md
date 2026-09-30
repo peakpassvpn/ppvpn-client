@@ -156,15 +156,22 @@ X-Request-ID: <optional-client-id>
 所有节点共用**一个** loopback 端口（`127.0.0.1`，同一端口同时提供认证 HTTP 代理/CONNECT
 与 SOCKS5），由代理用户名选择节点：
 
-- 用户名 `<prefix>-<node_id>`：`prefix` 是每台设备随机生成的 5 位小写字母数字（如
-  `u8f2k`），不含 `-`，因此 `node_id` 本身可以含 `-`（按第一个 `-` 切分）。
+- 用户名 `<prefix>-<alias>`（如 `u8f2k-bwl7qh`）：`prefix` 是每台设备随机生成的 5 位小写字母
+  数字（如 `u8f2k`），不含 `-`，按第一个 `-` 切分。`alias` 是节点短别名：对 node ID 的 UTF-8
+  字节取 SHA-256，用 RFC 4648 base32 字母表（小写 `a-z2-7`，无填充）编码后取前 6 个字符，
+  例如 `hk-001` → `bwl7qh`。别名只取决于 node ID，node ID 不变则用户在其他应用里配置的用户名
+  在 Profile 刷新后仍然有效。当前 Profile 中若有节点别名相同，冲突的节点一律加长 2 个字符
+  （8、10、…）直到唯一；结果只取决于节点 ID 集合，与 Profile 中的顺序无关。
+- 用户名不区分大小写（`U8F2K-BWL7QH` 等同 `u8f2k-bwl7qh`），按当前 Profile 的节点集合解析别名。
+  宿主应把 credential 返回的 `username` 当作不透明字符串原样展示，不要自行计算或解析。
+  完整 node ID 形式 `<prefix>-<node_id>` 不再被接受。
 - 密码是每台设备一个随机 secret，所有节点共用。桌面端以设备码登录、没有账户密码，
   设计稿中“密码同账户”即指这个设备 secret。
 - prefix、密码和最终端口在首次使用时生成并写入私有状态文件（0600），重启和 Profile
   更新后保持不变。
 - 端口优先使用上次持久化的端口，其次 7890；启动时二者都被占用则改用任意空闲端口并持久化，
   下次优先尝试它。metadata/credential 返回的 `port` 始终是实际监听端口。
-- 缺少认证、未知用户名（包括已从 Profile 删除的节点）或错误密码一律拒绝：HTTP（含
+- 缺少认证、未知用户名（包括未知别名、已从 Profile 删除的节点和完整 node ID 形式）或错误密码一律拒绝：HTTP（含
   `CONNECT`）返回 `407 Proxy Authentication Required`、`Proxy-Authenticate: Basic realm="ppvpn"`、
   `Content-Length: 0` 与 `Connection: close`，随后正常关闭连接（FIN，不发 RST），浏览器据此弹出
   认证；SOCKS5 返回 RFC 1929 认证失败（同样随后正常关闭，不发 RST）；不支持无认证方法和 SOCKS4。secret 使用常量时间比较。
@@ -183,7 +190,7 @@ X-Request-ID: <optional-client-id>
 只有用户明确打开原生凭据面板时，宿主才能按 node ID 获取该项 credential：
 
 ```json
-{"node_id":"hk-001","listen":"127.0.0.1","port":7890,"username":"u8f2k-hk-001","password":"..."}
+{"node_id":"hk-001","listen":"127.0.0.1","port":7890,"username":"u8f2k-bwl7qh","password":"..."}
 ```
 
 字段与之前相同，宿主可以继续把每个节点当作独立的 `{host, port, username, password}` 使用。

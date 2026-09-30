@@ -10,7 +10,7 @@
 语义只由 core 判定。
 
 共享本地代理由同一 runtime 创建：所有节点共用一个 loopback 端口（优先 7890），同一端口
-支持 HTTP 和 SOCKS5，用户名 `<prefix>-<node_id>` 选择并固定走该节点。service 可读取完整 endpoint，
+支持 HTTP 和 SOCKS5，用户名 `<prefix>-<alias>`（node ID 的 6 位短别名，不区分大小写）选择并固定走该节点。service 可读取完整 endpoint，
 但发往 WebView 的 DTO 只能使用不含 secret 的 metadata；credential 只进入原生凭据
 面板调用栈。
 
