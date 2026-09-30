@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -166,8 +167,8 @@ func TestReplicaOrdinalPresenceRequired(t *testing.T) {
 			t.Fatalf("%q: %#v", replacement, err)
 		}
 	}
-	if _, err = Parse([]byte(strings.Replace(string(data), `"endpoint_key"`, `"role_hint":"x","endpoint_key"`, 1))); err == nil {
-		t.Fatal("unknown ingress field accepted")
+	if _, err = Parse([]byte(strings.Replace(string(data), `"endpoint_key"`, `"role_hint":"x","endpoint_key"`, 1))); err != nil {
+		t.Fatalf("unknown ingress field must be ignored: %v", err)
 	}
 }
 
@@ -228,10 +229,49 @@ func TestSchemaIncompatible(t *testing.T) {
 		}
 	}
 }
-func TestParseRejectsSingBoxFields(t *testing.T) {
-	_, err := Parse([]byte(`{"schema_version":1,"outbounds":[]}`))
+func TestParseRejectsSingBoxConfig(t *testing.T) {
+	// A sing-box config is not a profile: unknown fields are ignored, but
+	// the required profile fields are missing.
+	p, err := Parse([]byte(`{"schema_version":1,"outbounds":[]}`))
 	if err == nil {
-		t.Fatal("expected unknown field rejection")
+		err = Validate(p, time.Now())
+	}
+	if err == nil {
+		t.Fatal("expected a sing-box config to be rejected")
+	}
+}
+
+func TestParseIgnoresUnknownFields(t *testing.T) {
+	data, err := os.ReadFile("../testdata/profiles/multi-ingress.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["future_top_level"] = map[string]any{"x": 1}
+	node := doc["nodes"].([]any)[0].(map[string]any)
+	node["future_node_field"] = "x"
+	exit, _ := node["exit"].(map[string]any)
+	if exit == nil {
+		exit = map[string]any{}
+		node["exit"] = exit
+	}
+	exit["country_code"] = "CN"
+	exit["future_exit_field"] = true
+	ingress := node["ingresses"].([]any)[0].(map[string]any)
+	ingress["future_ingress_field"] = []int{1}
+	mutated, _ := json.Marshal(doc)
+	p, err := Parse(mutated)
+	if err != nil {
+		t.Fatalf("unknown fields must be ignored: %v", err)
+	}
+	if got := p.Nodes[0].Exit.CountryCode; got != "CN" {
+		t.Fatalf("country_code = %q", got)
+	}
+	if err := Validate(p, time.Now()); err != nil {
+		t.Fatalf("profile with unknown fields must validate: %v", err)
 	}
 }
 
@@ -343,8 +383,8 @@ func TestRoutingValidationIDNAPortsCIDRAndStrictJSON(t *testing.T) {
 		"selection":{"mode":"manual","default_node_id":"n"},
 		"routing":{"rules":[],"final":{"type":"direct"},"unknown":true}
 	}`))
-	if err == nil {
-		t.Fatal("unknown routing field accepted")
+	if err != nil {
+		t.Fatalf("unknown routing field must be ignored: %v", err)
 	}
 }
 

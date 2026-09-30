@@ -7,14 +7,18 @@ import (
 	"io"
 )
 
+// Parse decodes a proxy profile. Unknown fields are ignored so a backend can
+// add optional fields without breaking clients that shipped earlier; missing
+// or invalid required fields still fail (here or in Validate). Fields that
+// were removed or renamed are rejected with a coded error, because silently
+// ignoring them would hide a backend sending the old shape.
 func Parse(data []byte) (*Profile, error) {
+	if removed := rejectRemovedFields(data); removed != nil {
+		return nil, removed
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var p Profile
 	if err := dec.Decode(&p); err != nil {
-		if removed := rejectRemovedFields(data); removed != nil {
-			return nil, removed
-		}
 		return nil, fmt.Errorf("decode profile: %w", err)
 	}
 	if err := ensureEOF(dec); err != nil {
@@ -50,8 +54,8 @@ func requirePresence(data []byte) error {
 	return nil
 }
 
-// rejectRemovedFields turns the strict decoder's generic unknown-field error
-// into a coded one for fields that were renamed. shadowsocks.server_key was
+// rejectRemovedFields rejects fields that were renamed or removed, with a
+// coded error. shadowsocks.server_key was
 // replaced by the SIP022 pair identity_keys (server iPSKs) + user_key (uPSK);
 // a backend still sending it had the two roles swapped.
 func rejectRemovedFields(data []byte) error {
