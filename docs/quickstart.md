@@ -77,7 +77,9 @@ mkdir -m 700 "$APP_STATE"
 - `debug`：再为每条被路由的连接记一行 `msg=connection`：`inbound`、`network`、`destination`、
   `route_domain`（路由规则匹配用的域名：嗅探所得或 DNS 反查；HTTP 嗅探可能留下地址本身）、`protocol`、
   `rule`、`outbound`（实际节点）、`target`（交给节点的目标）与 `target_kind`（`domain`/`ip`）。
-  被 reject 或 hijack-dns 的连接不经过此处。**debug 日志包含用户访问的域名，只能在排查时临时开启，
+  被 reject 或 hijack-dns 的连接不经过此处。
+  另外每次发往上游 DNS 服务器的查询记一行 `msg=dns`：`name`、`type`、`server`（`dns-local`/`dns-remote`）、
+  `rcode` 与 `answers`，或 `error`，以及 `ms`。命中 DNS 缓存的查询不会发往上游，因此不记录。**debug 日志包含用户访问的域名，只能在排查时临时开启，
   不得常开或默认开启。**
 `serve` 每次启动覆盖生成新的会话密钥，正常退出时删除密钥文件。产品桌面端还应启用 `--exit-on-stdin-close`，并保持传入核心的 stdin 写端存活，使父 App 崩溃后核心自动退出。
 
