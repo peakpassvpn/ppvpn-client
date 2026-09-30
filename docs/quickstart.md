@@ -65,6 +65,13 @@ mkdir -m 700 "$APP_STATE"
 `serve` 把第一方诊断日志写到 stderr（每行一次写入并刷盘），或用 `--log-file <path>` 追加到文件；
 启动时记录版本、平台、`tun`/`local_proxy` 参数和状态目录，生命周期请求（apply/start/stop/reload）的成功与所有失败原因都会记录。
 
+`--local-dns-servers <list>`（仅与 `--tun` 一起使用）：逗号分隔的物理网络 DNS 服务器（IP、IP:port 或
+`[IPv6%zone]:port`，默认端口 53），应在宿主把系统 DNS 指向隧道之前读取。核心取其中第一个不在隧道地址段
+（`172.19.0.0/30`、`fdfe:dcba:9876::/126`）内的地址，作为 `dns-local` 的 UDP 上游（绑定物理网卡），用来
+解析路由为直连的域名。非法项会让 `serve` 启动失败。不传或全部被过滤时，`dns-local` 使用 sing-box 的 local
+解析器：macOS 在有 TUN 时查询 DHCP 下发的服务器，否则退回系统解析器，而桌面端已把它指向隧道，会形成回环，
+因此 macOS 宿主应当传入。列表在启动时固定，运行中切换网络需要重连。
+
 `--log-level info|debug`（默认 `info`，由宿主 service 传入）：
 
 - `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：

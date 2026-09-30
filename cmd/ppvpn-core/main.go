@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	goruntime "runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -146,6 +147,7 @@ func serve(args []string) error {
 	localProxy := flags.Bool("local-proxy", true, "enable the shared authenticated local HTTP/SOCKS5 proxy (one port, node chosen by username)")
 	tun := flags.Bool("tun", false, "enable sing-box TUN inbound (requires host-provided privileges)")
 	tunStack := flags.String("tun-stack", "mixed", "sing-box TUN stack: mixed, system, or gvisor")
+	localDNS := flags.String("local-dns-servers", "", "with --tun: comma-separated physical-network resolvers (IP, IP:port or [IPv6]:port) read before system DNS was pointed at the tunnel; the first outside the tunnel answers direct-routed names over UDP")
 	exitOnStdin := flags.Bool("exit-on-stdin-close", false, "exit when the parent-owned stdin pipe closes")
 	logFile := flags.String("log-file", "", "append the core diagnostic log to this file (default: stderr)")
 	logLevel := flags.String("log-level", corelog.LevelInfo, "diagnostic log level: info, or debug (adds one line per routed connection, including the domains visited; enable only while diagnosing)")
@@ -164,14 +166,25 @@ func serve(args []string) error {
 	if err := log.SetLevel(*logLevel); err != nil {
 		return err
 	}
-	err := serveWithLog(log, *socket, *secretFile, *stateDir, *platformName, *localProxy, *tun, *tunStack, *exitOnStdin)
+	err := serveWithLog(log, *socket, *secretFile, *stateDir, *platformName, *localProxy, *tun, *tunStack, splitList(*localDNS), *exitOnStdin)
 	if err != nil {
 		log.Error("serve failed", "error", err, "chain", corelog.Chain(err))
 	}
 	return err
 }
 
-func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformName string, localProxy, tun bool, tunStack string, exitOnStdinClose bool) error {
+// splitList splits a comma-separated flag value, dropping empty items.
+func splitList(value string) []string {
+	var out []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformName string, localProxy, tun bool, tunStack string, localDNS []string, exitOnStdinClose bool) error {
 	privateacl.SetLogger(log)
 	info := version.Get()
 	logLevel := corelog.LevelInfo
@@ -180,6 +193,20 @@ func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformNam
 	}
 	log.Info("serve starting", "core_version", info.CoreVersion, "os", goruntime.GOOS, "arch", goruntime.GOARCH, "log_level", logLevel,
 		"platform", platformName, "tun", tun, "tun_stack", tunStack, "local_proxy", localProxy, "state_dir", stateDir, "socket", socket)
+	if len(localDNS) > 0 {
+		server, ok, err := config.LocalDNSServer(localDNS)
+		if err != nil {
+			return err
+		}
+		if !tun {
+			return fmt.Errorf("--local-dns-servers requires --tun")
+		}
+		selected := "none (all inside the tunnel)"
+		if ok {
+			selected = server.String()
+		}
+		log.Info("local dns servers", "given", strings.Join(localDNS, ","), "selected", selected)
+	}
 	if socket == "" || secretFile == "" || stateDir == "" {
 		return fmt.Errorf("serve requires --socket, --session-secret-file and --state-dir")
 	}
@@ -196,7 +223,7 @@ func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformNam
 	defer os.Remove(secretFile)
 	capabilities := profile.PlatformCapabilities{
 		Platform:   platformName,
-		TUN:        profile.TUNCapabilities{Enabled: tun, Stack: tunStack},
+		TUN:        profile.TUNCapabilities{Enabled: tun, Stack: tunStack, LocalDNSServers: localDNS},
 		LocalProxy: profile.LocalProxyCapabilities{Enabled: localProxy, Listen: "127.0.0.1"},
 		LogLevel:   "info",
 	}
