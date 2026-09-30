@@ -67,6 +67,7 @@ X-Request-ID: <optional-client-id>
 | GetStatus | `/v1/get-status` | `{}` | Status |
 | ListNodes | `/v1/list-nodes` | `{}` | NodeSummary[] |
 | SelectNode | `/v1/select-node` | `{"node_id":"stable-id"}` | `{"node_id":"stable-id"}` |
+| PinIngress | `/v1/pin-ingress` | `{"node_id":"stable-id","endpoint_key":"9002"}`（`null` 为自动） | `{"node_id":"stable-id","endpoint_key":"9002"}` |
 | GetSelectedNode | `/v1/get-selected-node` | `{}` | NodeSummary |
 | ProbeEntrances | `/v1/probe-entrances` | `{"method":"tcp","timeout_ms":5000,"concurrency":4,"node_ids":["stable-id"]}` | EntranceResult[] |
 | ProbeAvailability | `/v1/probe-availability` | `{"node_id":"stable-id","target":"https://example.com/generate_204","timeout_ms":10000}` | AvailabilityResult |
@@ -114,7 +115,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 
 ```json
 {
-  "core_version": "0.5.6",
+  "core_version": "0.5.7",
   "core_api_version": 1,
   "profile_schema_version": 1,
   "flow_adapter_version": 1,
@@ -145,6 +146,29 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 ```json
 {"type":"NodeIngressSwitched","at":"2026-07-23T12:00:00Z","node_id":"hk-001","endpoint_key":"9002","previous_endpoint_key":"9001"}
 ```
+
+### 入口固定与各入口健康（核心 0.5.7 起）
+
+`pin-ingress` 把节点固定到一个入口（`endpoint_key`），`endpoint_key: null` 恢复自动故障转移。它直接作用于运行中的引擎，
+不重建引擎、不改变 revision；核心未运行时先记下，`start` 时生效。固定后该节点只用这一个入口：入口不健康时拨号直接失败，
+不回退到其他入口；健康检查照常进行，用来报告它是否可用。固定在同一个核心进程内跨 `apply-profile` 保留，不写入磁盘
+（由宿主持久化并在连接后重新下发）；新 Profile 中已没有该节点或该 `endpoint_key` 时自动清除，并发出
+`NodeIngressPinCleared` 事件。错误码：`PROFILE_NOT_APPLIED`、`NODE_NOT_FOUND`、`INGRESS_NOT_FOUND`（`endpoint_key`
+不属于该节点，或为空字符串）。单入口节点也接受固定，不改变任何行为。
+
+`get-status` 的 `nodes` 按 Profile 顺序列出每个节点：
+
+```json
+"nodes":[{"node_id":"hk-001","pinned_endpoint_key":null,
+          "ingresses":[{"endpoint_key":"9001","role":"primary","healthy":false,"last_check_at":"2026-07-23T12:00:00Z","consecutive_failures":2,"active":false},
+                       {"endpoint_key":"9002","role":"backup","label":"线路 2","healthy":true,"last_check_at":"2026-07-23T12:00:00Z","consecutive_failures":0,"active":true}]}]
+```
+
+- `pinned_endpoint_key`：固定的入口；自动模式为 `null`。
+- `healthy`、`last_check_at`、`consecutive_failures` 来自经过入口的健康检查（见 backend-profile.md）；单入口节点和核心未运行时
+  省略 `healthy` 与 `last_check_at`，节点空闲期间不检查，所以 `last_check_at` 可能较旧或缺省。“当前入口不可用”应以 `healthy`
+  为准：入口探测（`probe-entrances`）只测 TCP/ICMP 可达性，测不出“能连上但不转发”。
+- `active`：承载该节点最近一个新连接的入口。
 
 ### RuleSetStatus
 
@@ -297,7 +321,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`NodeIngressPinned`（附 `endpoint_key`，恢复自动时为空）、`NodeIngressPinCleared`（附 `endpoint_key` 与新 `revision`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 

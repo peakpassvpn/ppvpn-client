@@ -115,7 +115,7 @@ func TestReturnsToPrimaryAfterRecovery(t *testing.T) {
 	primary := &fakeOutbound{tag: "p", network: []string{N.NetworkTCP}}
 	backup := &fakeOutbound{tag: "b", network: []string{N.NetworkTCP}}
 	g := newTestGroup(t, primary, backup)
-	g.recoverInterval = 10 * time.Millisecond
+	g.interval, g.minDwell = 10*time.Millisecond, 0
 	g.Start(adapter.StartStateStarted)
 	primary.fail.Store(true)
 	dial(t, g)
@@ -136,7 +136,7 @@ func TestReturnsToPrimaryAfterRecovery(t *testing.T) {
 	}
 }
 
-func TestHealthLoopIsLazyAndChecksOnlyPrimaryWhenHealthy(t *testing.T) {
+func TestHealthLoopIsLazyAndChecksEveryMember(t *testing.T) {
 	primary := &fakeOutbound{tag: "p", network: []string{N.NetworkTCP}}
 	backup := &fakeOutbound{tag: "b", network: []string{N.NetworkTCP}}
 	g := newTestGroup(t, primary, backup)
@@ -169,10 +169,17 @@ func TestHealthLoopIsLazyAndChecksOnlyPrimaryWhenHealthy(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if checked["b"] != 0 {
-		t.Fatalf("backup checked while primary healthy: %v", checked)
+	for {
+		mu.Lock()
+		n := checked["b"]
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("backup never checked")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -225,7 +232,7 @@ func TestHTTPCheck(t *testing.T) {
 	if err := httpCheck(ctx, target, member); err == nil {
 		t.Fatal("5xx accepted")
 	}
-	if _, err := New(context.Background(), nil, log.NewNOPFactory().NewLogger("test"), "node", Options{Outbounds: []string{"a"}, URL: "https://example.com"}); err == nil {
+	if _, err := New(context.Background(), nil, log.NewNOPFactory().NewLogger("test"), "node", Options{Outbounds: []string{"a"}, URLs: []string{"https://example.com"}}); err == nil {
 		t.Fatal("https health URL accepted")
 	}
 }
@@ -248,6 +255,7 @@ func TestActiveTracksSwitchesAndNotifiesObserver(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := out.(*Group)
+	g.minDwell = 0 // switch back as soon as the primary is healthy
 	for _, m := range []*fakeOutbound{primary, backup} {
 		member := &member{outbound: m}
 		member.healthy.Store(true)
@@ -290,5 +298,174 @@ func TestActiveTracksSwitchesAndNotifiesObserver(t *testing.T) {
 	defer mu.Unlock()
 	if len(switches) != 2 || switches[0] != failedOver || switches[1].Current != "p" {
 		t.Fatalf("observer saw %#v", switches)
+	}
+}
+
+// Checks mark a member unhealthy only after UnhealthyAfter consecutive
+// failures, and healthy again only after RecoverAfter consecutive passes; a
+// failed dial marks it unhealthy at once.
+func TestProbeThresholds(t *testing.T) {
+	primary := &fakeOutbound{tag: "p", network: []string{N.NetworkTCP}}
+	g := newTestGroup(t, primary)
+	m := g.members[0]
+	primary.fail.Store(true)
+	for i := 1; i < UnhealthyAfter; i++ {
+		g.probe(m)
+		if !m.healthy.Load() {
+			t.Fatalf("unhealthy after %d failed check(s)", i)
+		}
+	}
+	g.probe(m)
+	if m.healthy.Load() || g.Members()[0].ConsecutiveFailures != UnhealthyAfter || g.Members()[0].LastCheck.IsZero() {
+		t.Fatalf("after %d failures: %+v", UnhealthyAfter, g.Members()[0])
+	}
+	primary.fail.Store(false)
+	for i := 1; i < RecoverAfter; i++ {
+		g.probe(m)
+		if m.healthy.Load() {
+			t.Fatalf("recovered after %d pass(es)", i)
+		}
+	}
+	g.probe(m)
+	if !m.healthy.Load() || g.Members()[0].ConsecutiveFailures != 0 {
+		t.Fatalf("not recovered: %+v", g.Members()[0])
+	}
+	// One failed check in between resets the pass count.
+	g.markUnhealthy(m, errors.New("dial failed"))
+	g.probe(m)
+	g.probe(m)
+	primary.fail.Store(true)
+	g.probe(m)
+	primary.fail.Store(false)
+	g.probe(m)
+	g.probe(m)
+	if m.healthy.Load() {
+		t.Fatal("recovered without RecoverAfter consecutive passes")
+	}
+}
+
+// Within minDwell of a switch the backup keeps leading even once the primary
+// is healthy again; afterwards the primary leads.
+func TestDwellKeepsBackupAfterSwitch(t *testing.T) {
+	primary := &fakeOutbound{tag: "p", network: []string{N.NetworkTCP}}
+	backup := &fakeOutbound{tag: "b", network: []string{N.NetworkTCP}}
+	g := newTestGroup(t, primary, backup)
+	g.minDwell = time.Hour
+	primary.fail.Store(true)
+	dial(t, g)
+	if g.Now() != "b" {
+		t.Fatalf("now=%s", g.Now())
+	}
+	primary.fail.Store(false)
+	g.members[0].healthy.Store(true)
+	if g.Now() != "b" {
+		t.Fatal("switched back to the primary within the dwell")
+	}
+	// An explicit unpin is a choice, not a flap: it clears the dwell.
+	if err := g.Pin(""); err != nil || g.Now() != "p" {
+		t.Fatalf("unpin kept the dwell: %v %s", err, g.Now())
+	}
+	dial(t, g) // the primary carries traffic again
+	primary.fail.Store(true)
+	dial(t, g)
+	primary.fail.Store(false)
+	g.members[0].healthy.Store(true)
+	if g.Now() != "b" {
+		t.Fatal("automatic switch did not start a dwell")
+	}
+	g.minDwell = 0
+	if g.Now() != "p" {
+		t.Fatalf("primary not preferred after the dwell: %s", g.Now())
+	}
+}
+
+// A pinned member carries every connection alone, with no fallback even
+// while it fails; unpinning restores automatic selection. Unknown tags are
+// rejected, and a pin set before Start applies once members exist.
+func TestPinnedMemberHasNoFallback(t *testing.T) {
+	primary := &fakeOutbound{tag: "p", network: []string{N.NetworkTCP}}
+	backup := &fakeOutbound{tag: "b", network: []string{N.NetworkTCP}}
+	g := newTestGroup(t, primary, backup)
+	if err := g.Pin("x"); !errors.Is(err, ErrUnknownMember) {
+		t.Fatalf("unknown tag: %v", err)
+	}
+	if err := g.Pin("b"); err != nil || g.Pinned() != "b" || g.Now() != "b" {
+		t.Fatalf("pin: %v %q %q", err, g.Pinned(), g.Now())
+	}
+	dial(t, g)
+	if primary.dials.Load() != 0 || backup.dials.Load() != 1 {
+		t.Fatal("pinned dial used another member")
+	}
+	backup.fail.Store(true)
+	if _, err := g.DialContext(context.Background(), N.NetworkTCP, M.ParseSocksaddr("example.com:443")); err == nil || primary.dials.Load() != 0 {
+		t.Fatalf("pinned failure fell back: %v, primary dials %d", err, primary.dials.Load())
+	}
+	if err := g.Pin(""); err != nil || g.Pinned() != "" {
+		t.Fatal("unpin")
+	}
+	dial(t, g)
+	if primary.dials.Load() != 1 {
+		t.Fatal("automatic selection not restored")
+	}
+
+	out, err := New(context.Background(), nil, log.NewNOPFactory().NewLogger("test"), "early", Options{Outbounds: []string{"p", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	early := out.(*Group)
+	if err = early.Pin("b"); err != nil || early.Pinned() != "b" {
+		t.Fatalf("pin before start: %v %q", err, early.Pinned())
+	}
+}
+
+type slowOutbound struct{ fakeOutbound }
+
+func (s *slowOutbound) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+	s.dials.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A member that hangs costs dialTimeout, then the next member serves the
+// same dial.
+func TestDialTimeoutMovesToTheNextMember(t *testing.T) {
+	primary := &slowOutbound{fakeOutbound{tag: "p", network: []string{N.NetworkTCP}}}
+	backup := &fakeOutbound{tag: "b", network: []string{N.NetworkTCP}}
+	out, err := New(context.Background(), nil, log.NewNOPFactory().NewLogger("test"), "node", Options{Outbounds: []string{"p", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := out.(*Group)
+	g.dialTimeout = 50 * time.Millisecond
+	for _, o := range []adapter.Outbound{primary, backup} {
+		m := &member{outbound: o}
+		m.healthy.Store(true)
+		g.members = append(g.members, m)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	started := time.Now()
+	dial(t, g)
+	if elapsed := time.Since(started); elapsed > time.Second || backup.dials.Load() != 1 || g.members[0].healthy.Load() {
+		t.Fatalf("elapsed %s, backup dials %d", elapsed, backup.dials.Load())
+	}
+}
+
+// checkAny passes when a later URL answers although the first does not.
+func TestCheckFallsBackToTheSecondURL(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	defer down.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer up.Close()
+	first, _ := url.Parse(down.URL + "/generate_204")
+	second, _ := url.Parse(up.URL + "/generate_204")
+	member := &directOutbound{fakeOutbound{tag: "d", network: []string{N.NetworkTCP}}}
+	if err := checkAny(context.Background(), []*url.URL{first, second}, member); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAny(context.Background(), []*url.URL{first}, member); err == nil {
+		t.Fatal("failing URL passed")
+	}
+	if CheckURLs[0] != "http://www.gstatic.com/generate_204" || CheckURLs[1] != "http://cp.cloudflare.com/generate_204" {
+		t.Fatalf("check URLs %v", CheckURLs)
 	}
 }

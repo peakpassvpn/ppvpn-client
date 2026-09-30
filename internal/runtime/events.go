@@ -16,6 +16,12 @@ const (
 	// EventNodeIngressSwitched: a node's failover group moved its traffic to
 	// another ingress (to a backup, or back to the primary).
 	EventNodeIngressSwitched EventType = "NodeIngressSwitched"
+	// EventNodeIngressPinned: the host pinned a node to EndpointKey, or
+	// returned it to automatic failover (EndpointKey empty).
+	EventNodeIngressPinned EventType = "NodeIngressPinned"
+	// EventNodeIngressPinCleared: an applied profile no longer has the
+	// pinned node or ingress (EndpointKey), so the pin was dropped.
+	EventNodeIngressPinCleared EventType = "NodeIngressPinCleared"
 	// EventSystemProxyChanged carries "enabled" or "disabled" in Message.
 	EventSystemProxyChanged EventType = "SystemProxyChanged"
 	// EventRuleSetChanged: a rule set changed state. RuleSetID names it,
@@ -30,7 +36,8 @@ type Event struct {
 	Revision string    `json:"revision,omitempty"`
 	NodeID   string    `json:"node_id,omitempty"`
 	Message  string    `json:"message,omitempty"`
-	// EndpointKey and PreviousEndpointKey are set on NodeIngressSwitched.
+	// EndpointKey is set on NodeIngressSwitched, NodeIngressPinned and
+	// NodeIngressPinCleared; PreviousEndpointKey on NodeIngressSwitched.
 	EndpointKey         string `json:"endpoint_key,omitempty"`
 	PreviousEndpointKey string `json:"previous_endpoint_key,omitempty"`
 	RuleSetID           string `json:"rule_set_id,omitempty"`

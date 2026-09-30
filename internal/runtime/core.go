@@ -45,6 +45,8 @@ type Status struct {
 	// RoutingMode is the mode the applied profile runs in; omitted before
 	// a profile is applied.
 	RoutingMode RoutingMode `json:"routing_mode,omitempty"`
+	// Nodes reports each node's ingress pin and health, in profile order.
+	Nodes []NodeStatus `json:"nodes,omitempty"`
 }
 
 // IngressStatus is the ingress (replica) a node is actually using. For a
@@ -117,6 +119,8 @@ type Core struct {
 	hostIPv6 func() bool
 	// routingMode is the mode the active profile was applied in.
 	routingMode RoutingMode
+	// pins maps a node ID to the endpoint_key it is pinned to (PinIngress).
+	pins map[string]string
 	// log is the first-party diagnostic log (phase timings; per-connection
 	// lines at debug level).
 	log *corelog.Logger
@@ -241,13 +245,15 @@ func (c *Core) ApplyProfileWithOptions(p *profile.Profile, now time.Time, option
 	if err != nil {
 		return false, err
 	}
-	return c.applyProfileLocked(p, now, append([]string(nil), options.AllowedRuleSetHosts...), mode, true)
+	return c.applyProfileLocked(p, now, append([]string(nil), options.AllowedRuleSetHosts...), mode, false)
 }
 
-// applyProfileLocked applies p in mode. allowedHosts pins its rule set URLs;
-// downloadRuleSets is false for rebuilds, which only use cached copies (the
-// refresh loop owns retries). The same revision in the same mode is a no-op.
-func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, mode RoutingMode, downloadRuleSets bool) (applied bool, err error) {
+// applyProfileLocked applies p in mode. allowedHosts pins its rule set URLs.
+// The same revision in the same mode is a no-op, except for a rebuild
+// (reload, rule set refresh), which re-applies the active profile as is and
+// only uses cached rule sets (the refresh loop owns retries).
+func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, mode RoutingMode, rebuild bool) (applied bool, err error) {
+	downloadRuleSets := !rebuild
 	timer := newPhaseTimer()
 	defer func() {
 		if applied || err != nil {
@@ -255,7 +261,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		}
 	}()
 	c.mu.RLock()
-	if c.active != nil && p != nil && c.active.Revision == p.Revision && c.routingMode == mode {
+	if !rebuild && c.active != nil && p != nil && c.active.Revision == p.Revision && c.routingMode == mode {
 		c.mu.RUnlock()
 		return false, nil
 	}
@@ -371,6 +377,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 	oldEngine, oldCancel := c.engine, c.cancel
 	c.active, c.built, c.classifier = candidateProfile, candidate, candidateClassifier
 	c.routingMode = mode
+	pinEvents := c.prunePinsLocked(candidateProfile, now)
 	c.routingGeneration++
 	c.proxyEndpoints = proxyEndpoints
 	c.allowedRuleSetHosts = allowedHosts
@@ -398,6 +405,9 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 				c.emit(Event{Type: EventNodeEndpointChanged, At: now, Revision: candidateProfile.Revision, NodeID: n.ID})
 			}
 		}
+	}
+	for _, event := range pinEvents {
+		c.emit(event)
 	}
 	c.emit(Event{Type: EventProfileApplied, At: now, Revision: candidateProfile.Revision})
 	return true, nil
@@ -648,18 +658,12 @@ func (c *Core) reload() error {
 		return ErrProfileNotApplied
 	}
 	clone, err := cloneProfile(p)
-	originalRevision, allowedHosts, mode := p.Revision, c.allowedRuleSetHosts, c.routingMode
+	allowedHosts, mode := c.allowedRuleSetHosts, c.routingMode
 	c.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	clone.Revision += "#reload"
-	_, err = c.applyProfileLocked(clone, time.Now(), allowedHosts, mode, false)
-	if err == nil {
-		c.mu.Lock()
-		c.active.Revision = originalRevision
-		c.mu.Unlock()
-	}
+	_, err = c.applyProfileLocked(clone, time.Now(), allowedHosts, mode, true)
 	return err
 }
 
@@ -679,6 +683,7 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 	if logged, ok := instance.(connectionLogEngine); ok {
 		logged.setConnectionLog(c.log)
 	}
+	c.applyPins(instance, candidate)
 	timer.mark("engine_create")
 	err = instance.Start()
 	timer.mark("engine_start")
@@ -728,7 +733,7 @@ func (c *Core) Status() Status {
 	if c.engine != nil {
 		state = StateRunning
 	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses(), RoutingMode: c.routingMode}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses(), RoutingMode: c.routingMode, Nodes: c.nodeStatusesLocked()}
 }
 
 func (c *Core) selectedIngressLocked() *IngressStatus {

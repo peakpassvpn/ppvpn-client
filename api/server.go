@@ -61,6 +61,7 @@ func (s *Server) routes() {
 		return out, nil
 	}))
 	s.mux.HandleFunc("POST /v1/select-node", s.selectNode)
+	s.mux.HandleFunc("POST /v1/pin-ingress", s.pinIngress)
 	s.mux.HandleFunc("POST /v1/get-selected-node", s.simple(func(_ *http.Request) (any, error) {
 		status := s.core.Status()
 		for _, n := range s.core.Nodes() {
@@ -167,6 +168,23 @@ func (s *Server) selectNode(w http.ResponseWriter, r *http.Request) {
 	}
 	s.respond(w, r, map[string]string{"node_id": request.NodeID}, err)
 }
+
+// pinIngress pins a node to one ingress ({"node_id", "endpoint_key"}), or
+// returns it to automatic failover ("endpoint_key": null).
+func (s *Server) pinIngress(w http.ResponseWriter, r *http.Request) {
+	request, err := decode(r)
+	key := ""
+	if err == nil && request.EndpointKey != nil {
+		if key = *request.EndpointKey; key == "" {
+			err = apiError("INGRESS_NOT_FOUND", "endpoint_key must be an ingress endpoint_key or null", "endpoint_key", false)
+		}
+	}
+	if err == nil {
+		err = coreError(s.core.PinIngress(request.NodeID, key))
+	}
+	s.respond(w, r, map[string]any{"node_id": request.NodeID, "endpoint_key": request.EndpointKey}, err)
+}
+
 func (s *Server) probeEntrances(w http.ResponseWriter, r *http.Request) {
 	request, err := decode(r)
 	if err != nil {
@@ -257,7 +275,7 @@ func (s *Server) watchEvents(w http.ResponseWriter, r *http.Request) {
 
 // lifecyclePaths are logged on success too, so the log shows the sequence
 // that led to a failure.
-var lifecyclePaths = map[string]bool{"/v1/apply-profile": true, "/v1/start": true, "/v1/stop": true, "/v1/reload": true, "/v1/set-system-proxy": true}
+var lifecyclePaths = map[string]bool{"/v1/apply-profile": true, "/v1/start": true, "/v1/stop": true, "/v1/reload": true, "/v1/set-system-proxy": true, "/v1/pin-ingress": true}
 
 func (s *Server) respond(w http.ResponseWriter, r *http.Request, data any, err error) {
 	id := requestID(r)
@@ -351,6 +369,8 @@ func coreError(err error) error {
 		return apiError("SYSTEM_PROXY_START_FAILED", "the system proxy listener could not be opened", "", true)
 	case errors.Is(err, coreruntime.ErrNodeNotFound):
 		return apiError("NODE_NOT_FOUND", "node not found", "node_id", false)
+	case errors.Is(err, coreruntime.ErrIngressNotFound):
+		return apiError("INGRESS_NOT_FOUND", "the node has no ingress with this endpoint_key", "endpoint_key", false)
 	default:
 		return err
 	}

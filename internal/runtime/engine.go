@@ -52,6 +52,15 @@ type singEngine struct {
 	tracker *telemetry
 }
 
+func (e *singEngine) ingressGroup(nodeTag string) (*failover.Group, bool) {
+	outbound, ok := e.Outbound().Outbound(nodeTag)
+	if !ok {
+		return nil, false
+	}
+	group, ok := outbound.(*failover.Group)
+	return group, ok
+}
+
 func (e *singEngine) activeIngress(nodeTag string) (failover.Active, bool) {
 	outbound, ok := e.Outbound().Outbound(nodeTag)
 	if !ok {

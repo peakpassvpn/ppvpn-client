@@ -317,3 +317,39 @@ func TestRoutingModeOnApplyAndStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestPinIngressEndpoint(t *testing.T) {
+	server, core := testServer(t)
+	if rec := request(t, server, "/v1/pin-ingress", map[string]any{"node_id": "node", "endpoint_key": "9001"}, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "PROFILE_NOT_APPLIED") {
+		t.Fatalf("before apply: %d %s", rec.Code, rec.Body.String())
+	}
+	p := apiProfile()
+	if rec := request(t, server, "/v1/apply-profile", map[string]any{"profile": p}, true); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	node, key := p.Nodes[0].ID, p.Nodes[0].Ingresses[0].EndpointKey
+	for _, step := range []struct {
+		body map[string]any
+		code int
+		want string
+	}{
+		{map[string]any{"node_id": "missing", "endpoint_key": key}, http.StatusBadRequest, `"code":"NODE_NOT_FOUND"`},
+		{map[string]any{"node_id": node, "endpoint_key": "missing"}, http.StatusBadRequest, `"code":"INGRESS_NOT_FOUND"`},
+		{map[string]any{"node_id": node, "endpoint_key": ""}, http.StatusBadRequest, `"code":"INGRESS_NOT_FOUND"`},
+		{map[string]any{"node_id": node, "endpoint_key": key}, http.StatusOK, `"endpoint_key":"` + key + `"`},
+	} {
+		rec := request(t, server, "/v1/pin-ingress", step.body, true)
+		if rec.Code != step.code || !strings.Contains(rec.Body.String(), step.want) {
+			t.Fatalf("%v: %d %s", step.body, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := request(t, server, "/v1/get-status", nil, true); !strings.Contains(rec.Body.String(), `"pinned_endpoint_key":"`+key+`"`) {
+		t.Fatalf("status: %s", rec.Body.String())
+	}
+	if rec := request(t, server, "/v1/pin-ingress", map[string]any{"node_id": node, "endpoint_key": nil}, true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"endpoint_key":null`) {
+		t.Fatalf("unpin: %d %s", rec.Code, rec.Body.String())
+	}
+	if status := core.Status(); len(status.Nodes) != 1 || status.Nodes[0].PinnedEndpointKey != nil {
+		t.Fatalf("status after unpin: %+v", status.Nodes)
+	}
+}
