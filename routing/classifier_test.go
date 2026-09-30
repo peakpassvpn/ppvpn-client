@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -136,5 +137,24 @@ func TestAddressMatchersAreORWhileProtocolAndPortAreAND(t *testing.T) {
 	}
 	if got := classifier.Classify(Flow{Hostname: "a.example.com", Protocol: "tcp", DestinationPort: 80}, "node-a"); got.Type != "proxy" {
 		t.Fatalf("port was not ANDed: %#v", got)
+	}
+}
+
+func TestClassifierSkipsRuleSetOnlyRules(t *testing.T) {
+	p := testProfile()
+	p.Routing.RuleSets = []profile.RuleSet{{ID: "cn", URL: "https://api.example.com/cn.srs", SHA256: strings.Repeat("a", 64)}}
+	p.Routing.Rules = []profile.RoutingRule{
+		{ID: "set-only", Match: profile.RoutingMatch{RuleSetIDs: []string{"cn"}}, Action: profile.RoutingAction{Type: "reject"}},
+		{ID: "mixed", Match: profile.RoutingMatch{RuleSetIDs: []string{"cn"}, Domains: []string{"example.com"}}, Action: profile.RoutingAction{Type: "direct"}},
+	}
+	c, err := Compile(p, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := c.Classify(Flow{Entry: EntryTransparent, Hostname: "other.test", DestinationPort: 443, Protocol: "tcp"}, "node-a"); d.RuleID != "" {
+		t.Fatalf("rule-set-only rule matched: %+v", d)
+	}
+	if d := c.Classify(Flow{Entry: EntryTransparent, Hostname: "example.com", DestinationPort: 443, Protocol: "tcp"}, "node-a"); d.RuleID != "mixed" {
+		t.Fatalf("mixed rule lost its domain matcher: %+v", d)
 	}
 }

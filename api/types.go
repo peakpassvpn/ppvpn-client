@@ -45,4 +45,7 @@ type rawRequest struct {
 	Target      string          `json:"target"`
 	Method      string          `json:"method"`
 	Enabled     *bool           `json:"enabled"`
+	// AllowedRuleSetHosts (apply-profile, validate-profile) pins rule set
+	// URLs to the authorities of the API the profile came from.
+	AllowedRuleSetHosts []string `json:"allowed_rule_set_hosts"`
 }

@@ -59,8 +59,8 @@ X-Request-ID: <optional-client-id>
 | 方法 | 路径 | 请求 `data`/请求体 | 成功响应 `data` |
 | --- | --- | --- | --- |
 | GetVersion | `/v1/get-version` | `{}` | VersionInfo |
-| ValidateProfile | `/v1/validate-profile` | `{"profile": <Profile>}` | `{"valid":true}` |
-| ApplyProfile | `/v1/apply-profile` | `{"profile": <Profile>}` | `{"applied":true|false}` |
+| ValidateProfile | `/v1/validate-profile` | `{"profile": <Profile>, "allowed_rule_set_hosts": ["api.example.com"]}` | `{"valid":true}` |
+| ApplyProfile | `/v1/apply-profile` | `{"profile": <Profile>, "allowed_rule_set_hosts": ["api.example.com"]}` | `{"applied":true|false}` |
 | Start | `/v1/start` | `{}` | `{}` |
 | Stop | `/v1/stop` | `{}` | `{}` |
 | Reload | `/v1/reload` | `{}` | `{}` |
@@ -81,6 +81,18 @@ X-Request-ID: <optional-client-id>
 
 `timeout_ms <= 0` 时入口探测默认 5 秒（每个入口）、可用性探测默认 10 秒；最大均为 120 秒。`concurrency < 1` 时默认为 4（同时探测的入口数）。入口探测的 `method` 为 `tcp`（缺省）或 `icmp`，其他值返回 `PROBE_METHOD_UNSUPPORTED`；`node_ids` 缺省时探测全部节点。
 
+`allowed_rule_set_hosts`（可选，字符串数组）是宿主获取 Profile 所用 API 的 authority：`host` 或
+`host:port`，不带 scheme、路径或 userinfo，例如 API base `https://api.example.com/api/v1` 对应
+`"api.example.com"`（比较时忽略大小写，`:443` 等同于省略端口；IPv6 写作 `[2001:db8::1]`）。
+Profile 中每个 `routing.rule_sets[].url` 的主机都必须在其中，否则 `validate-profile` / `apply-profile`
+返回 `RULE_SET_HOST_NOT_ALLOWED`；数组中有无法解析的值返回 `RULE_SET_HOSTS_INVALID`。省略该字段时
+Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NOT_PINNED`；已缓存且 sha256 匹配的副本
+仍会使用）。同 revision 的 `apply-profile` 仍直接返回 `applied=false`，不重新下载。
+
+`apply-profile` 在构建配置前准备规则集：`<state_dir>/rule-sets/<id>.srs` 已存在且 sha256 匹配时立即使用；
+否则直连下载，总计最多等待 10 秒，超时或失败时按降级规则构建（见 backend-profile.md），不会因规则集而失败。
+宿主的 `apply-profile` 调用超时应大于 10 秒。
+
 需要本地代理的方法（`get-local-proxy-metadata`、`get-local-proxy-credential`、`get-local-proxy-endpoints`、`probe-availability`）在 `serve --local-proxy=false` 启动的核心上返回 `LOCAL_PROXY_DISABLED`；`probe-availability` 在核心未 `start` 时返回 `CORE_NOT_RUNNING`（可重试）。
 
 ## DTO
@@ -100,7 +112,9 @@ X-Request-ID: <optional-client-id>
 ```json
 {"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,
  "selected_ingress":{"endpoint_key":"9002","previous_endpoint_key":"9001","role":"backup","switched_at":"2026-07-23T12:00:00Z"},
- "system_proxy":{"available":true,"enabled":false,"listening":false}}
+ "system_proxy":{"available":true,"enabled":false,"listening":false},
+ "rule_sets":[{"id":"cn-ip","state":"ready","updated_at":"2026-07-23T12:00:00Z"},
+              {"id":"cn-site","state":"unavailable","error":"RULE_SET_DOWNLOAD_FAILED"}]}
 ```
 
 `state` 可为 `stopped`、`configured`、`running`。尚未应用 Profile 时返回 `stopped` 且 `node_count=0`。
@@ -117,6 +131,28 @@ X-Request-ID: <optional-client-id>
 
 ```json
 {"type":"NodeIngressSwitched","at":"2026-07-23T12:00:00Z","node_id":"hk-001","endpoint_key":"9002","previous_endpoint_key":"9001"}
+```
+
+### RuleSetStatus
+
+`rule_sets` 按 Profile 顺序列出已应用 Profile 的每个规则集；Profile 未声明规则集时省略。
+
+- `state`：`ready`（本地副本的 sha256 等于 Profile 中的值，正在使用）、`stale`（Profile 的新版本未能获取，
+  正在使用更早的已校验副本）、`unavailable`（没有任何副本，引用它的规则被跳过或去掉该规则集）。
+- `updated_at`：最近一次确认副本（下载成功、304 或启动时读到匹配的缓存文件）的时间，RFC 3339 UTC；未知时省略。
+- `error`：仅在非 `ready` 时出现，取值：`RULE_SET_HOST_NOT_PINNED`（未提供/未包含该主机的
+  `allowed_rule_set_hosts`）、`RULE_SET_DOWNLOAD_FAILED`（连接/TLS/超时）、`RULE_SET_HTTP_STATUS`
+  （非 200/304，含重定向）、`RULE_SET_TOO_LARGE`（超过 32 MiB）、`RULE_SET_SHA256_MISMATCH`、
+  `RULE_SET_INVALID`（不是可读的二进制规则集）、`RULE_SET_STORAGE_FAILED`（写文件失败）、
+  `RULE_SET_STORAGE_UNAVAILABLE`（核心没有状态目录）。
+
+核心按 `update_interval_seconds` 刷新 `ready` 的规则集（带 `If-None-Match`）；`stale`/`unavailable` 的以
+30 秒起指数退避重试（最长 15 分钟，且不超过更新间隔）。某个规则集从 `unavailable` 变为可用时，核心用缓存副本
+重建配置（等同 `reload`，运行中的实例会被替换）；已在使用的规则集文件内容更新时由 sing-box 就地重新加载，
+不重启实例。状态每次变化都会发出 `RuleSetChanged` 事件：
+
+```json
+{"type":"RuleSetChanged","at":"2026-07-23T12:00:00Z","rule_set_id":"cn-ip","message":"unavailable","code":"RULE_SET_DOWNLOAD_FAILED"}
 ```
 
 ### NodeSummary
@@ -248,7 +284,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 
@@ -279,6 +315,11 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `TLS_REQUIRED` / `TLS_SERVER_NAME_MISMATCH` / `TLS_SERVER_NAME_INVALID` | 修正 TLS 与连接域名（AnyTLS 须相等；REALITY 须为合法域名） |
 | `CAPABILITIES_INVALID` | 至少启用 TCP 或 UDP |
 | `DEFAULT_NODE_NOT_FOUND` / `SELECTION_MODE_UNSUPPORTED` | 修正默认选择 |
+| `RULE_SET_ID_INVALID` / `RULE_SET_ID_DUPLICATE` / `RULE_SET_COUNT_INVALID` | 修正 `routing.rule_sets` 的 id 或数量（最多 32） |
+| `RULE_SET_URL_INVALID` / `RULE_SET_SHA256_INVALID` / `RULE_SET_INTERVAL_INVALID` | 规则集 URL 必须是 https；sha256 为 64 位 hex；更新间隔不能为负 |
+| `RULE_SET_NOT_FOUND` / `RULE_SET_REF_DUPLICATE` | `match.rule_set_ids` 引用了不存在或重复的规则集 |
+| `RULE_SET_HOST_NOT_ALLOWED` | 规则集 URL 的主机不在 `allowed_rule_set_hosts` 中；后端配置错误，不可重试 |
+| `RULE_SET_HOSTS_INVALID` | `allowed_rule_set_hosts` 中有无法解析的 authority |
 | `NODE_NOT_FOUND` | 刷新节点列表；节点可能已被新 Profile 移除 |
 | `SYSTEM_PROXY_UNAVAILABLE` | 该核心不提供系统代理监听器（TUN 核心，或没有私有状态目录）；不可重试 |
 | `SYSTEM_PROXY_START_FAILED` | 系统代理监听端口无法打开；可重试 |

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -37,7 +38,12 @@ func NewBridge(platformJSON, statePath string) (*Bridge, error) {
 	if err := json.Unmarshal([]byte(platformJSON), &platform); err != nil {
 		return nil, fmt.Errorf("decode platform capabilities: %w", err)
 	}
-	return &Bridge{core: coreruntime.NewWithLocalProxyState(platform, statePath)}, nil
+	core := coreruntime.NewWithLocalProxyState(platform, statePath)
+	if statePath != "" {
+		// Rule set files live next to the local proxy state.
+		core.EnableRuleSets(filepath.Join(filepath.Dir(statePath), "rule-sets"))
+	}
+	return &Bridge{core: core}, nil
 }
 func (b *Bridge) Version() (string, error) { return encode(version.Get()) }
 func (b *Bridge) ValidateProfile(profileJSON string) (string, error) {
@@ -51,11 +57,23 @@ func (b *Bridge) ValidateProfile(profileJSON string) (string, error) {
 	return `{"valid":true}`, nil
 }
 func (b *Bridge) ApplyProfile(profileJSON string) (string, error) {
+	return b.ApplyProfileWithOptions(profileJSON, "{}")
+}
+
+// ApplyProfileWithOptions is ApplyProfile with the apply-profile options
+// JSON object ({"allowed_rule_set_hosts": ["api.example.com"]}).
+func (b *Bridge) ApplyProfileWithOptions(profileJSON, optionsJSON string) (string, error) {
+	var options struct {
+		AllowedRuleSetHosts []string `json:"allowed_rule_set_hosts"`
+	}
+	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
+		return "", fmt.Errorf("decode apply options: %w", err)
+	}
 	p, err := profile.Parse([]byte(profileJSON))
 	if err != nil {
 		return "", safeError(err)
 	}
-	applied, err := b.core.ApplyProfile(p, time.Now())
+	applied, err := b.core.ApplyProfileWithOptions(p, time.Now(), coreruntime.ApplyOptions{AllowedRuleSetHosts: options.AllowedRuleSetHosts})
 	if err != nil {
 		return "", safeError(err)
 	}

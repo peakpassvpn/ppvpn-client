@@ -42,6 +42,30 @@ func Build(p *profile.Profile, platform profile.PlatformCapabilities, now time.T
 }
 
 func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabilities, proxies []localproxy.Endpoint, now time.Time) (*BuildResult, error) {
+	return BuildWithOptions(p, platform, BuildOptions{LocalProxies: proxies}, now)
+}
+
+// BuildOptions carries the device-local inputs of a build.
+type BuildOptions struct {
+	LocalProxies []localproxy.Endpoint
+	// RuleSets maps a profile rule set id to its verified local copy. A rule
+	// set without an entry is unavailable: see addProfileRouting.
+	RuleSets map[string]RuleSetFile
+}
+
+// RuleSetFile is a verified local copy of a profile rule set.
+type RuleSetFile struct {
+	// Path is the absolute path of the binary (.srs) file.
+	Path string
+	// MirrorDNS is true when the set matches domains and no destination IP
+	// CIDRs. Only such sets are mirrored into DNS rules: a DNS rule whose
+	// rule set carries CIDRs would resolve every name through that rule's
+	// server first to test the answer.
+	MirrorDNS bool
+}
+
+func BuildWithOptions(p *profile.Profile, platform profile.PlatformCapabilities, opts BuildOptions, now time.Time) (*BuildResult, error) {
+	proxies := opts.LocalProxies
 	if err := profile.Validate(p, now); err != nil {
 		return nil, err
 	}
@@ -81,11 +105,11 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 			return nil, err
 		}
 	}
-	if err := addProfileRouting(result, p.Routing); err != nil {
+	if err := addProfileRouting(result, p.Routing, opts.RuleSets); err != nil {
 		return nil, err
 	}
 	if platform.TUN.Enabled {
-		addTUNDNS(result, p.Routing.Final)
+		addTUNDNS(result, p.Routing.Final, dnsRuleSetTags(opts.RuleSets))
 	}
 	return result, nil
 }
@@ -229,12 +253,32 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 	return nil
 }
 
-func addProfileRouting(result *BuildResult, routing profile.Routing) error {
+// RuleSetTag is the sing-box tag of a profile rule set.
+func RuleSetTag(id string) string { return "rule-set-" + id }
+
+// addProfileRouting renders the profile rules. A rule set is referenced only
+// when it has a verified local copy (files); otherwise it is unavailable and
+// dropped from every rule naming it. A rule that loses all of its address
+// matchers that way is dropped entirely, so it can never widen to "match
+// everything" (or everything on its ports).
+func addProfileRouting(result *BuildResult, routing profile.Routing, files map[string]RuleSetFile) error {
+	used := map[string]bool{}
 	for _, rule := range routing.Rules {
+		var tags []string
+		for _, id := range rule.Match.RuleSetIDs {
+			if _, ok := files[id]; ok {
+				tags = append(tags, RuleSetTag(id))
+				used[id] = true
+			}
+		}
+		if len(rule.Match.RuleSetIDs) > 0 && len(tags) == 0 && !rule.Match.HasAddressMatch() {
+			continue
+		}
 		raw, err := buildRuleMatch(rule.Match)
 		if err != nil {
 			return fmt.Errorf("build routing rule %q: %w", rule.ID, err)
 		}
+		raw.RuleSet = tags
 		action, err := buildRuleAction(result, rule.Action)
 		if err != nil {
 			return fmt.Errorf("build routing rule %q: %w", rule.ID, err)
@@ -246,6 +290,14 @@ func addProfileRouting(result *BuildResult, routing profile.Routing) error {
 				RuleAction:     action,
 			},
 		})
+	}
+	for _, set := range routing.RuleSets {
+		if used[set.ID] {
+			result.Options.Route.RuleSet = append(result.Options.Route.RuleSet, option.RuleSet{
+				Type: C.RuleSetTypeLocal, Tag: RuleSetTag(set.ID), Format: C.RuleSetFormatBinary,
+				LocalOptions: option.LocalRuleSet{Path: files[set.ID].Path},
+			})
+		}
 	}
 	switch routing.Final.Type {
 	case "direct":

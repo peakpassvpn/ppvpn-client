@@ -249,3 +249,32 @@ func TestFoldedErrorIsLoggedWithStageButNotReturned(t *testing.T) {
 		t.Fatalf("log leaked state secret: %s", line)
 	}
 }
+
+func TestRuleSetHostsArePinnedAtValidateAndApply(t *testing.T) {
+	server, core := testServer(t)
+	p := apiProfile()
+	p.Routing.RuleSets = []profile.RuleSet{{ID: "cn-ip", URL: "https://api.example.com/api/v1/proxy-profile/rule-sets/cn-ip.srs", SHA256: strings.Repeat("0", 64)}}
+	p.Routing.Rules = []profile.RoutingRule{{ID: "geoip-cn", Match: profile.RoutingMatch{RuleSetIDs: []string{"cn-ip"}}, Action: profile.RoutingAction{Type: "direct"}}}
+	for _, path := range []string{"/v1/validate-profile", "/v1/apply-profile"} {
+		rec := request(t, server, path, map[string]any{"profile": p, "allowed_rule_set_hosts": []string{"evil.example"}}, true)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "RULE_SET_HOST_NOT_ALLOWED") {
+			t.Fatalf("%s: %s", path, rec.Body.String())
+		}
+	}
+	rec := request(t, server, "/v1/validate-profile", map[string]any{"profile": p, "allowed_rule_set_hosts": []string{"api.example.com"}}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	// No state directory: the profile applies and the set is reported.
+	rec = request(t, server, "/v1/apply-profile", map[string]any{"profile": p, "allowed_rule_set_hosts": []string{"api.example.com"}}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	if status := core.Status(); len(status.RuleSets) != 1 || status.RuleSets[0].State != "unavailable" || status.RuleSets[0].Error != "RULE_SET_STORAGE_UNAVAILABLE" {
+		t.Fatalf("status: %+v", status.RuleSets)
+	}
+	rec = request(t, server, "/v1/get-status", nil, true)
+	if !strings.Contains(rec.Body.String(), `"rule_sets":[{"id":"cn-ip","state":"unavailable","error":"RULE_SET_STORAGE_UNAVAILABLE"}]`) {
+		t.Fatal(rec.Body.String())
+	}
+}

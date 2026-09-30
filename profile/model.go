@@ -112,8 +112,21 @@ type Selection struct {
 }
 
 type Routing struct {
-	Rules []RoutingRule `json:"rules,omitempty"`
-	Final RoutingAction `json:"final"`
+	// RuleSets are sing-box binary rule sets (.srs) the core downloads,
+	// verifies and caches itself; rules reference them by id.
+	RuleSets []RuleSet     `json:"rule_sets,omitempty"`
+	Rules    []RoutingRule `json:"rules,omitempty"`
+	Final    RoutingAction `json:"final"`
+}
+
+// RuleSet is one downloadable sing-box binary rule set. URL must be https on
+// a host the host application pinned (see ValidateRuleSetHosts); SHA256 is
+// the lowercase or uppercase hex digest the downloaded file must have.
+type RuleSet struct {
+	ID                    string `json:"id"`
+	URL                   string `json:"url"`
+	SHA256                string `json:"sha256"`
+	UpdateIntervalSeconds int64  `json:"update_interval_seconds,omitempty"`
 }
 
 // RoutingRule is evaluated in array order. Alternatives within the address
@@ -133,6 +146,9 @@ type RoutingMatch struct {
 	Protocols      []string `json:"protocols,omitempty"`
 	Ports          []uint16 `json:"ports,omitempty"`
 	PortRanges     []string `json:"port_ranges,omitempty"`
+	// RuleSetIDs reference Routing.RuleSets. They are address matchers:
+	// ORed with domains, suffixes, CIDRs and ip_is_private.
+	RuleSetIDs []string `json:"rule_set_ids,omitempty"`
 }
 
 type RoutingAction struct {

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
+	"github.com/peakpassvpn/ppvpn-core/internal/rulesets"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
@@ -34,6 +36,9 @@ type Status struct {
 	// core is not running).
 	SelectedIngress *IngressStatus    `json:"selected_ingress,omitempty"`
 	SystemProxy     SystemProxyStatus `json:"system_proxy"`
+	// RuleSets reports every rule set of the applied profile, in profile
+	// order; omitted when the profile declares none.
+	RuleSets []rulesets.Status `json:"rule_sets,omitempty"`
 }
 
 // IngressStatus is the ingress (replica) a node is actually using. For a
@@ -97,7 +102,24 @@ type Core struct {
 	// disabled; both fields change under the operation lock.
 	systemProxyEnabled bool
 	systemProxyPort    uint16
+	// ruleSets owns the profile's rule set files; allowedRuleSetHosts are
+	// the hosts the applied profile's rule set URLs were pinned to.
+	ruleSets            *rulesets.Manager
+	allowedRuleSetHosts []string
 }
+
+// ApplyOptions are the host-supplied inputs of apply-profile besides the
+// profile itself.
+type ApplyOptions struct {
+	// AllowedRuleSetHosts are the authorities (host or host:port) of the API
+	// the profile was fetched from. Every rule set URL must be on one of
+	// them; without any, rule sets are never downloaded.
+	AllowedRuleSetHosts []string
+}
+
+// RuleSetPrepareTimeout bounds how long apply-profile waits for rule set
+// downloads before building with whatever is available.
+const RuleSetPrepareTimeout = 10 * time.Second
 
 func New(platform profile.PlatformCapabilities) *Core {
 	return newCore(platform, newSingBox)
@@ -111,22 +133,89 @@ func NewWithLocalProxyState(platform profile.PlatformCapabilities, statePath str
 
 func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core {
 	key, keyOK := newFlowAuthorizationKey()
-	return &Core{
+	core := &Core{
 		platform:             platform,
 		bus:                  newEventBus(),
 		factory:              factory,
 		flowAuthorizationKey: key,
 		flowAuthorizationOK:  keyOK,
 	}
+	core.ruleSets = rulesets.New(core.ruleSetOptions(""))
+	return core
+}
+
+// EnableRuleSets stores rule set files in dir (normally
+// <state_dir>/rule-sets). Without it, rule sets are always unavailable. It
+// must be called before the first ApplyProfile.
+func (c *Core) EnableRuleSets(dir string) { c.enableRuleSets(dir, nil) }
+
+// enableRuleSets lets tests adjust the manager options.
+func (c *Core) enableRuleSets(dir string, adjust func(*rulesets.Options)) {
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	options := c.ruleSetOptions(dir)
+	if adjust != nil {
+		adjust(&options)
+	}
+	c.mu.Lock()
+	previous := c.ruleSets
+	c.ruleSets = rulesets.New(options)
+	c.mu.Unlock()
+	previous.Close()
+}
+
+func (c *Core) ruleSetOptions(dir string) rulesets.Options {
+	return rulesets.Options{
+		Dir:  dir,
+		Dial: c.dialRuleSet,
+		OnState: func(status rulesets.Status) {
+			c.emit(Event{Type: EventRuleSetChanged, At: time.Now(), RuleSetID: status.ID, Message: string(status.State), Code: status.Error})
+		},
+		OnRebuild: c.rebuildForRuleSets,
+	}
+}
+
+// dialRuleSet opens the direct connection of a rule set download. While a
+// TUN instance runs, it goes through that instance's direct outbound, which
+// is bound to the physical interface (auto_detect_interface), so it can
+// neither enter the tunnel nor reach a node. Otherwise no tunnel of this
+// core exists and a plain socket is direct.
+func (c *Core) dialRuleSet(ctx context.Context, network, address string) (net.Conn, error) {
+	c.mu.RLock()
+	instance := c.engine
+	c.mu.RUnlock()
+	if instance != nil && c.platform.TUN.Enabled {
+		direct, ok := instance.(directEngine)
+		if !ok {
+			return nil, fmt.Errorf("runtime has no direct dialer")
+		}
+		return direct.dialDirect(ctx, network, address)
+	}
+	return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, address)
+}
+
+// rebuildForRuleSets rebuilds the configuration after a background refresh
+// changed which rule sets are available.
+func (c *Core) rebuildForRuleSets() {
+	if err := c.reload(); err != nil && !errors.Is(err, ErrProfileNotApplied) {
+		c.emit(Event{Type: EventReloadFailed, At: time.Now(), Message: "rule set rebuild failed"})
+	}
 }
 
 func (c *Core) ApplyProfile(p *profile.Profile, now time.Time) (bool, error) {
-	c.operation.Lock()
-	defer c.operation.Unlock()
-	return c.applyProfileLocked(p, now)
+	return c.ApplyProfileWithOptions(p, now, ApplyOptions{})
 }
 
-func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, error) {
+func (c *Core) ApplyProfileWithOptions(p *profile.Profile, now time.Time, options ApplyOptions) (bool, error) {
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	return c.applyProfileLocked(p, now, append([]string(nil), options.AllowedRuleSetHosts...), true)
+}
+
+// applyProfileLocked applies p. allowedHosts pins its rule set URLs;
+// downloadRuleSets is false for rebuilds, which only use cached copies (the
+// refresh loop owns retries).
+func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, downloadRuleSets bool) (bool, error) {
 	c.mu.RLock()
 	if c.active != nil && p != nil && c.active.Revision == p.Revision {
 		c.mu.RUnlock()
@@ -144,6 +233,20 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 	}
 	if selected != "" && hasNode(candidateProfile, selected) {
 		candidateProfile.Selection.DefaultNodeID = selected
+	}
+	// Validate before any rule set URL is contacted.
+	if err = profile.Validate(candidateProfile, now); err == nil && len(allowedHosts) > 0 {
+		err = profile.ValidateRuleSetHosts(candidateProfile, allowedHosts)
+	}
+	if err != nil {
+		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
+		return false, stageError("apply/build", err)
+	}
+	var ruleSets *rulesets.Snapshot
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), RuleSetPrepareTimeout)
+		ruleSets = c.ruleSets.Prepare(ctx, candidateProfile.Routing.RuleSets, allowedHosts, downloadRuleSets)
+		cancel()
 	}
 	var proxyEndpoints []localproxy.Endpoint
 	if c.platform.LocalProxy.Enabled {
@@ -163,7 +266,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 			return false, stageError("apply/local-proxy-state", fmt.Errorf("prepare local proxies: %w", err))
 		}
 	}
-	candidate, err := config.BuildWithLocalProxies(candidateProfile, c.platform, proxyEndpoints, now)
+	candidate, err := config.BuildWithOptions(candidateProfile, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files()}, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)
@@ -217,6 +320,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 	c.active, c.built, c.classifier = candidateProfile, candidate, candidateClassifier
 	c.routingGeneration++
 	c.proxyEndpoints = proxyEndpoints
+	c.allowedRuleSetHosts = allowedHosts
 	if systemPort != 0 {
 		c.systemProxyPort = systemPort
 	}
@@ -228,6 +332,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 	}
 	c.mu.Unlock()
 
+	c.ruleSets.Activate(ruleSets)
 	if oldCancel != nil && running && !reusePorts {
 		oldCancel()
 	}
@@ -470,22 +575,30 @@ func (c *Core) Stop() error {
 }
 
 func (c *Core) Reload() error {
+	err := c.reload()
+	if errors.Is(err, ErrProfileNotApplied) {
+		return fmt.Errorf("no profile applied")
+	}
+	return err
+}
+
+func (c *Core) reload() error {
 	c.operation.Lock()
 	defer c.operation.Unlock()
 	c.mu.RLock()
 	p := c.active
 	if p == nil {
 		c.mu.RUnlock()
-		return fmt.Errorf("no profile applied")
+		return ErrProfileNotApplied
 	}
 	clone, err := cloneProfile(p)
-	originalRevision := p.Revision
+	originalRevision, allowedHosts := p.Revision, c.allowedRuleSetHosts
 	c.mu.RUnlock()
 	if err != nil {
 		return err
 	}
 	clone.Revision += "#reload"
-	_, err = c.applyProfileLocked(clone, time.Now())
+	_, err = c.applyProfileLocked(clone, time.Now(), allowedHosts, false)
 	if err == nil {
 		c.mu.Lock()
 		c.active.Revision = originalRevision
@@ -548,7 +661,7 @@ func (c *Core) Status() Status {
 	if c.engine != nil {
 		state = StateRunning
 	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked()}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses()}
 }
 
 func (c *Core) selectedIngressLocked() *IngressStatus {

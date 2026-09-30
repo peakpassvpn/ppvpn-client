@@ -108,6 +108,29 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   WFP 过滤器位于动态会话和随机 sublayer 中，会话关闭即自动移除。两个应用之间没有共享状态可被误删，
   但同样存在“谁的路由度量更优谁接管流量”的功能抢占。
 
+## 规则集下载
+
+规则集（`routing.rule_sets`）由核心自己下载和缓存，不使用 sing-box 的 remote 规则集：
+
+- **主机固定**：URL 必须是 https，且主机必须在宿主通过 `apply-profile` 传入的
+  `allowed_rule_set_hosts`（获取 Profile 的 API 主机）中，否则整份 Profile 以
+  `RULE_SET_HOST_NOT_ALLOWED` 拒绝。宿主未传该字段时核心不发起任何规则集请求。核心不跟随重定向，
+  不使用环境变量代理，不发送任何凭据或 Cookie。这样后端（或篡改的 Profile）无法让核心向任意主机发请求。
+- **内容固定**：下载内容的 SHA-256 必须等于 Profile 中的 `sha256`，否则丢弃（`RULE_SET_SHA256_MISMATCH`），
+  不写盘；还必须能被解析为 sing-box 二进制规则集，且不超过 32 MiB。Profile 本身经已认证的 API 获取，
+  因此 `sha256` 是信任锚：即使下载通道或缓存被篡改，也不会加载未经 Profile 认可的内容。
+  缓存文件在每次使用前重新计算 SHA-256。
+- **始终直连**：下载从不经过节点或 TUN。TUN 核心运行时通过当前实例的 `direct` 出站拨号，该出站借
+  `auto_detect_interface` 绑定物理网卡；核心未运行时本核心没有隧道，直接用普通 socket。
+- **原子写与保留旧副本**：文件写在 `<state_dir>/rule-sets/<id>.srs`（目录 0700、文件 0600），先写临时文件、
+  fsync 后 rename。失败的下载不会覆盖上一个已校验副本；不再被 Profile 引用的文件在下次应用时删除。
+- **失败降级而非失败关闭**：规则集缺失只会让引用它的规则被跳过（见 backend-profile.md），核心仍然启动；
+  跳过的规则集在 `get-status` 与 `RuleSetChanged` 事件中可见。注意这意味着规则集不可用期间，本应直连的流量
+  会按 `routing.final` 走节点，本应拒绝的流量不会被拒绝。
+
+已知边界：sing-box 1.13 读取二进制规则集后不关闭文件句柄（留给 GC）。Windows 上替换正被引用的文件时核心
+会触发 GC 并重试 rename；仍失败则报告 `RULE_SET_STORAGE_FAILED` 并在下次刷新重试。
+
 ## Profile 防护
 
 - JSON 严格解码，未知字段、歧义 credential union 和尾随值全部失败关闭。
