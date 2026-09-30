@@ -359,3 +359,46 @@ func cloneNode(n profile.Node) profile.Node {
 	n.Ingresses = append([]profile.Ingress(nil), n.Ingresses...)
 	return n
 }
+
+// At debug level an apply logs fingerprints of each REALITY ingress's
+// parameters, never the values themselves.
+func TestApplyLogsRealityFingerprintsAtDebug(t *testing.T) {
+	p := testProfile("reality", "edge.example.com", "8.8.8.8")
+	key, shortID := "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", "0123456789abcdef"
+	p.Nodes[0].Ingresses[0].Protocol = profile.ProtocolVLESS
+	p.Nodes[0].Ingresses[0].Credentials = profile.Credentials{VLESS: &profile.VLESSCredentials{UUID: "00000000-0000-4000-8000-000000000001", Flow: "xtls-rprx-vision"}}
+	p.Nodes[0].Ingresses[0].TLS = &profile.TLS{ServerName: "www.microsoft.com", Reality: &profile.Reality{PublicKey: key, ShortID: shortID}}
+	for _, debug := range []bool{false, true} {
+		var b strings.Builder
+		log := corelog.New(&b)
+		if debug {
+			_ = log.SetLevel(corelog.LevelDebug)
+		}
+		core := newCore(profile.PlatformCapabilities{}, (&fakeFactory{}).create)
+		core.SetLogger(log)
+		applied, err := core.ApplyProfile(p, time.Now())
+		if err != nil || !applied {
+			t.Fatalf("apply: %v %v", applied, err)
+		}
+		logged := b.String()
+		if !debug {
+			if strings.Contains(logged, "ingress tls") {
+				t.Fatalf("logged at info: %s", logged)
+			}
+			continue
+		}
+		want := `msg="ingress tls" node_id=node endpoint_key=9001 protocol=vless server_name=www.microsoft.com public_key_sha256=` + shortDigest(key) +
+			` public_key_len=43 public_key_encoding="unpadded url-or-std" short_id_sha256=` + shortDigest(shortID) + ` short_id_len=16 fingerprint=chrome flow=xtls-rprx-vision`
+		if !strings.Contains(logged, want) {
+			t.Fatalf("want %q in:\n%s", want, logged)
+		}
+		if strings.Contains(logged, key) || strings.Contains(logged, shortID) {
+			t.Fatalf("raw REALITY values logged:\n%s", logged)
+		}
+	}
+	for value, want := range map[string]string{"ab+c=": "padded std", "a+b": "unpadded std", "a-b": "unpadded url", "abc": "unpadded url-or-std"} {
+		if got := base64Flavor(value); got != want {
+			t.Errorf("%q: %q", value, got)
+		}
+	}
+}
