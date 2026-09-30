@@ -88,6 +88,10 @@ func Validate(p *Profile, now time.Time) error {
 }
 
 func validateRouting(r Routing, nodeIDs map[string]bool) error {
+	ruleSetIDs, err := validateRuleSets(r.RuleSets)
+	if err != nil {
+		return err
+	}
 	ruleIDs := make(map[string]bool, len(r.Rules))
 	for i, rule := range r.Rules {
 		base := fmt.Sprintf("routing.rules[%d]", i)
@@ -99,6 +103,9 @@ func validateRouting(r Routing, nodeIDs map[string]bool) error {
 		}
 		ruleIDs[rule.ID] = true
 		if err := validateRoutingMatch(rule.Match, base+".match"); err != nil {
+			return err
+		}
+		if err := validateRuleSetRefs(rule.Match.RuleSetIDs, ruleSetIDs, base+".match.rule_set_ids"); err != nil {
 			return err
 		}
 		if err := validateRoutingAction(rule.Action, nodeIDs, base+".action"); err != nil {
@@ -115,7 +122,8 @@ func validateRoutingMatch(match RoutingMatch, field string) error {
 		!match.IPIsPrivate &&
 		len(match.Protocols) == 0 &&
 		len(match.Ports) == 0 &&
-		len(match.PortRanges) == 0 {
+		len(match.PortRanges) == 0 &&
+		len(match.RuleSetIDs) == 0 {
 		return invalid("RULE_MATCH_EMPTY", field, "at least one match condition is required")
 	}
 	if err := validateDomains(match.Domains, field+".domains"); err != nil {
