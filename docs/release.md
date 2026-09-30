@@ -1,8 +1,16 @@
 # 构建与发布
 
+## 分支与版本
+
+- 只有 `main` 一个长期分支，与 PPVPN Desktop 一致；功能与修复分支都向 `main` 提 PR。
+- 发版：在 PR 中更新 `version/version.go` 的 `CoreVersion`（以及 README、`docs/core-api.md`、
+  `docs/quickstart.md` 中的示例版本），合入后在该合并提交上打注解 tag `vX.Y.Z`。
+- Desktop 的 `vendor/ppvpn-core/<ver>/manifest.json` 以 `source.commit` 固定完整 SHA，
+  该 SHA 必须就是 `vX.Y.Z` 指向的提交。
+
 ## 固定工具链
 
-- Go：以 `go.mod` 的 `go` 指令为准（当前 1.25.13）。
+- Go：以 `go.mod` 的 `go` 指令为准（当前 1.26.8）。
 - sing-box：`v1.13.12`，必须保持直接依赖固定版本。
 - gomobile/gobind：Makefile 的 `MOBILE_VERSION`，禁止 CI 使用 `@latest`。
 - Android：NDK `29.0.14206865`，最低 API 23。
