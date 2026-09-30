@@ -27,8 +27,10 @@ import (
 //     through the system resolver dialed direct ("dns-local"); a domain routed
 //     to a proxy resolves through DoT to 1.1.1.1 dialed through the selected
 //     node ("dns-remote"); a rejected domain is refused. dns.final follows
-//     route.final. reverse_mapping remembers which domain each answered
-//     address belongs to.
+//     route.final. Domain rule sets referenced by a route rule are mirrored
+//     the same way; rule sets carrying IP CIDRs never affect DNS.
+//     reverse_mapping remembers which domain each answered address belongs
+//     to.
 //   - every proxy route target is wrapped by domaindest, which hands the known
 //     domain (sniffed, or from DNS) to the node instead of the address.
 
@@ -99,7 +101,7 @@ func ensureDomainDestination(result *BuildResult, target string) string {
 // addTUNDNS renders the DNS module that answers hijacked queries, and makes
 // outbounds resolve domain destinations (node server names, direct
 // connections) through the system resolver.
-func addTUNDNS(result *BuildResult, final profile.RoutingAction) {
+func addTUNDNS(result *BuildResult, final profile.RoutingAction, dnsRuleSets map[string]bool) {
 	result.Options.DNS = &option.DNSOptions{RawDNSOptions: option.RawDNSOptions{
 		Servers: []option.DNSServerOptions{
 			// sing-box's local transport is TUN-aware: it asks the physical
@@ -113,7 +115,7 @@ func addTUNDNS(result *BuildResult, final profile.RoutingAction) {
 				DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: RemoteDNSServer},
 			}}},
 		},
-		Rules:          mirrorDNSRules(result.Options.Route.Rules),
+		Rules:          mirrorDNSRules(result.Options.Route.Rules, dnsRuleSets),
 		Final:          DNSRemoteTag,
 		ReverseMapping: true,
 	}}
@@ -123,19 +125,38 @@ func addTUNDNS(result *BuildResult, final profile.RoutingAction) {
 	result.Options.Route.DefaultDomainResolver = &option.DomainResolveOptions{Server: DNSLocalTag}
 }
 
+// dnsRuleSetTags returns the tags of the rule sets DNS rules may reference
+// (see RuleSetFile.MirrorDNS).
+func dnsRuleSetTags(files map[string]RuleSetFile) map[string]bool {
+	tags := map[string]bool{}
+	for id, file := range files {
+		if file.MirrorDNS {
+			tags[RuleSetTag(id)] = true
+		}
+	}
+	return tags
+}
+
 // mirrorDNSRules turns every inbound-independent route rule that matches
 // domains into a DNS rule with the same domain matchers. Only the domain part
 // is mirrored (port, network and CIDR conditions are unknown when a name is
 // resolved), and order is kept, so the first route rule naming a domain
-// decides where it resolves.
-func mirrorDNSRules(rules []option.Rule) []option.DNSRule {
+// decides where it resolves. Domain rule sets (dnsRuleSets) count as domain
+// matchers; rule sets carrying IP CIDRs are left out.
+func mirrorDNSRules(rules []option.Rule, dnsRuleSets map[string]bool) []option.DNSRule {
 	var out []option.DNSRule
 	for _, rule := range rules {
 		if rule.Type != C.RuleTypeDefault {
 			continue
 		}
 		raw := rule.DefaultOptions.RawDefaultRule
-		if len(raw.Inbound) > 0 || len(raw.Domain)+len(raw.DomainSuffix) == 0 {
+		var ruleSets badoption.Listable[string]
+		for _, tag := range raw.RuleSet {
+			if dnsRuleSets[tag] {
+				ruleSets = append(ruleSets, tag)
+			}
+		}
+		if len(raw.Inbound) > 0 || len(raw.Domain)+len(raw.DomainSuffix)+len(ruleSets) == 0 {
 			continue
 		}
 		var action option.DNSRuleAction
@@ -155,6 +176,7 @@ func mirrorDNSRules(rules []option.Rule) []option.DNSRule {
 			RawDefaultDNSRule: option.RawDefaultDNSRule{
 				Domain:       append(badoption.Listable[string](nil), raw.Domain...),
 				DomainSuffix: append(badoption.Listable[string](nil), raw.DomainSuffix...),
+				RuleSet:      ruleSets,
 			},
 			DNSRuleAction: action,
 		}})
