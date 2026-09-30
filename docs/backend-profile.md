@@ -17,7 +17,9 @@
 | `routing.rules` | RoutingRule[] | 否 | 数组顺序、first-match-wins，rule ID 必须唯一 |
 | `routing.final` | RoutingAction | 是 | 没有显式规则命中时执行 |
 
-解析器拒绝未知字段、尾随 JSON、未知协议/传输和不匹配的凭据联合体。不要通过“客户端忽略未知字段”做灰度。
+解析器**忽略未知字段**（0.4.4 起），以便后端新增可选字段时不破坏已发布的客户端；缺少或非法的必填字段、尾随 JSON、未知协议/传输和不匹配的凭据联合体仍然拒绝。
+已删除或改名的字段会以带编码的错误拒绝（例如 `shadowsocks.server_key` → `SHADOWSOCKS_SERVER_KEY_REMOVED`），避免后端仍发旧形状时被静默忽略。
+新增字段必须是可选的、客户端不理解时可以安全忽略的；改变已有字段语义或新增必填字段需要新的 `schema_version`。
 
 ## Node（逻辑节点）
 
@@ -29,7 +31,7 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 | `name` | 展示名称；不用于路由身份 |
 | `entry_key` | 必填，入口层级标识（例如 `cn-optimized`），正则 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`；核心不解释其取值，原样透传到节点列表，客户端不得假设固定取值集合 |
 | `entry_label` | 可选，入口层级的展示名称；原样透传到节点列表 |
-| `exit` | 对象，字段均可选：`ip`（存在时必须是合法 IP）、`region` |
+| `exit` | 对象，字段均可选：`ip`（存在时必须是合法 IP）、`region`、`country_code`（ISO 3166-1 alpha-2，仅展示） |
 | `capabilities` | `tcp`、`udp` 至少一个为 true；每一项都必须被第一个（primary）入口支持 |
 | `ingresses` | Ingress[]，1–64 个；数组顺序即故障转移顺序。`ingresses[0]` 的 `role` 必须为 `primary`，其余必须为 `backup` |
 
@@ -79,7 +81,7 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
       "id": "3f2c9a1e-5b7d-4c1e-9f00-123456789abc-128",
       "name": "日本-203.0.113.10",
       "entry_key": "cn-optimized",
-      "exit": {"ip": "203.0.113.10", "region": "日本"},
+      "exit": {"ip": "203.0.113.10", "region": "日本", "country_code": "JP"},
       "capabilities": {"tcp": true, "udp": true},
       "ingresses": [
         {
@@ -119,7 +121,7 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
       "id": "3f2c9a1e-5b7d-4c1e-9f00-123456789abc-129",
       "name": "美国-203.0.113.20",
       "entry_key": "cn-optimized",
-      "exit": {"region": "美国"},
+      "exit": {"region": "美国", "country_code": "US"},
       "capabilities": {"tcp": true, "udp": false},
       "ingresses": [
         {
@@ -165,7 +167,7 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 `protocols`（仅 `tcp`/`udp`）、`ports` 和包含首尾的 `port_ranges`
 （`start-end`）。域名、suffix、CIDR 和 private 构成一个“目标地址”类别并互为 OR；
 单端口与端口范围互为 OR；目标地址、协议、端口三个非空类别之间为 AND。空 matcher、
-空 suffix、通配符、非法 CIDR/端口范围、重复 rule ID 和未知字段都会被拒绝。
+空 suffix、通配符、非法 CIDR/端口范围和重复 rule ID 都会被拒绝（未知字段按上文忽略）。
 
 域名在比较前去掉一个末尾 `.`、转换成 IDNA ASCII A-label 并转为小写。suffix 只在 DNS
 label 边界匹配：`example.com` 匹配自身和 `a.example.com`，不匹配

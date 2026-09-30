@@ -99,6 +99,8 @@ type Endpoint struct {
 type Exit struct {
 	IP     string `json:"ip,omitempty"`
 	Region string `json:"region,omitempty"`
+	// CountryCode is the exit's ISO 3166-1 alpha-2 code (display only).
+	CountryCode string `json:"country_code,omitempty"`
 }
 type Capabilities struct {
 	TCP bool `json:"tcp"`
