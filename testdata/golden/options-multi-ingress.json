@@ -11,7 +11,7 @@
         "tag": "dns-local"
       },
       {
-        "type": "https",
+        "type": "tls",
         "tag": "dns-remote",
         "detour": "selected",
         "server": "1.1.1.1"

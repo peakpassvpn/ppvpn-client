@@ -363,9 +363,6 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		c.engine, c.cancel = replacement, replacementCancel
 	}
 	c.mu.Unlock()
-	if warmer, ok := replacement.(dnsWarmEngine); ok && c.platform.TUN.Enabled {
-		warmer.warmUpDNS()
-	}
 
 	c.ruleSets.Activate(ruleSets)
 	if oldCancel != nil && running && !reusePorts {
@@ -585,11 +582,6 @@ func (c *Core) Start() (err error) {
 	// core was stopped; apply the current selection to the new instance.
 	if selector, ok := instance.(flowEngine); ok && selected != "" {
 		selector.selectOutbound(built.NodeTags[selected])
-	}
-	// After the selection, so the connection is opened through the node
-	// that will carry the queries.
-	if warmer, ok := instance.(dnsWarmEngine); ok && c.platform.TUN.Enabled {
-		warmer.warmUpDNS()
 	}
 	c.mu.Lock()
 	c.engine, c.cancel, c.built = instance, cancel, built
