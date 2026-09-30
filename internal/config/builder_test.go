@@ -38,6 +38,7 @@ func ingress(protocol profile.Protocol, role profile.IngressRole, domain, ip str
 	}
 	return in
 }
+
 // A node outbound dials the ingress IP when the profile gives one, so
 // reaching a node never needs DNS (in TUN mode the lookup can loop into the
 // core's own tunnel DNS); the TLS/REALITY server name stays the domain.

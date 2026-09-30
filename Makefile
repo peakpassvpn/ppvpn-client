@@ -7,8 +7,12 @@ export GO_TAGS
 # Desktop CLI cores also run sing-box TUN (`serve --tun`). The default and
 # service-selected TUN stack "mixed" (and "gvisor") only exist with the
 # with_gvisor tag; without it TUN start fails with "gVisor is not included".
+# with_dhcp lets sing-box's local DNS transport on Darwin query the resolvers
+# DHCP advertised while a TUN exists, instead of falling back to the system
+# resolver (which the desktop points at the tunnel). Hosts should still pass
+# --local-dns-servers; DHCP is the fallback.
 # Mobile builds keep GO_TAGS: they use the platform tunnel, not this stack.
-DESKTOP_TAGS ?= $(GO_TAGS),with_gvisor
+DESKTOP_TAGS ?= $(GO_TAGS),with_gvisor,with_dhcp
 export PATH := $(GO_BIN):$(PATH)
 
 .PHONY: test test-race build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android

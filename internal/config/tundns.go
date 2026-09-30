@@ -1,6 +1,10 @@
 package config
 
 import (
+	"fmt"
+	"net/netip"
+	"strings"
+
 	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	C "github.com/sagernet/sing-box/constant"
@@ -109,15 +113,14 @@ func ensureDomainDestination(result *BuildResult, target string) string {
 // addTUNDNS renders the DNS module that answers hijacked queries, and makes
 // outbounds resolve domain destinations (node server names, direct
 // connections) through the system resolver.
-func addTUNDNS(result *BuildResult, final profile.RoutingAction, dnsRuleSets map[string]bool) {
+func addTUNDNS(result *BuildResult, platform profile.PlatformCapabilities, final profile.RoutingAction, dnsRuleSets map[string]bool) error {
+	local, err := localDNSServerOptions(platform.TUN.LocalDNSServers)
+	if err != nil {
+		return err
+	}
 	result.Options.DNS = &option.DNSOptions{RawDNSOptions: option.RawDNSOptions{
 		Servers: []option.DNSServerOptions{
-			// sing-box's local transport is TUN-aware: it asks the physical
-			// side for its resolvers (systemd-resolved link DNS of the default
-			// interface on Linux, non-tunnel adapters on Windows, DHCP on
-			// Darwin when a TUN exists) and, with auto_detect_interface, dials
-			// them bound to that interface, so it never loops into the TUN.
-			{Type: C.DNSTypeLocal, Tag: DNSLocalTag, Options: &option.LocalDNSServerOptions{}},
+			local,
 			{Type: C.DNSTypeTLS, Tag: DNSRemoteTag, Options: &option.RemoteTLSDNSServerOptions{RemoteDNSServerOptions: option.RemoteDNSServerOptions{
 				RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: selectedOutboundTag}},
 				DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: RemoteDNSServer},
@@ -131,6 +134,67 @@ func addTUNDNS(result *BuildResult, final profile.RoutingAction, dnsRuleSets map
 		result.Options.DNS.Final = DNSLocalTag
 	}
 	result.Options.Route.DefaultDomainResolver = &option.DomainResolveOptions{Server: DNSLocalTag}
+	return nil
+}
+
+// Tunnel prefixes: a resolver inside them is the core's own tunnel DNS (a
+// stale system DNS entry left by the host), and querying it would loop.
+var tunnelPrefixes = []netip.Prefix{netip.MustParsePrefix("172.19.0.0/30"), netip.MustParsePrefix("fdfe:dcba:9876::/126")}
+
+// LocalDNSServer validates the host-supplied physical resolvers and returns
+// the first one outside the tunnel. ok is false when none is left. Every
+// entry must be an IP, IP:port or [IPv6]:port (zones allowed); the default
+// port is 53.
+func LocalDNSServer(entries []string) (server netip.AddrPort, ok bool, err error) {
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		address, err := netip.ParseAddrPort(entry)
+		if err != nil {
+			ip, ipErr := netip.ParseAddr(entry)
+			if ipErr != nil {
+				return netip.AddrPort{}, false, fmt.Errorf("invalid local DNS server %q: want an IP, IP:port or [IPv6]:port", entry)
+			}
+			address = netip.AddrPortFrom(ip, 53)
+		}
+		if address.Port() == 0 || !address.Addr().IsValid() || address.Addr().IsUnspecified() {
+			return netip.AddrPort{}, false, fmt.Errorf("invalid local DNS server %q", entry)
+		}
+		address = netip.AddrPortFrom(address.Addr().Unmap(), address.Port())
+		if !ok && !inTunnel(address.Addr()) {
+			server, ok = address, true
+		}
+	}
+	return server, ok, nil
+}
+
+func inTunnel(ip netip.Addr) bool {
+	for _, prefix := range tunnelPrefixes {
+		if prefix.Contains(ip.WithZone("")) {
+			return true
+		}
+	}
+	return false
+}
+
+// localDNSServerOptions renders dns-local. With a host-supplied physical
+// resolver it is a plain UDP server; auto_detect_interface binds its socket
+// to the physical interface, so it never enters the tunnel. Without one it
+// is sing-box's local transport: on Linux it asks systemd-resolved for the
+// default interface's link DNS, on Windows it reads non-tunnel adapters, and
+// on Darwin with a TUN it asks DHCP (desktop builds include with_dhcp) and
+// otherwise falls back to the system resolver, which the desktop points at
+// the tunnel, so Darwin hosts should pass their resolvers.
+func localDNSServerOptions(entries []string) (option.DNSServerOptions, error) {
+	server, ok, err := LocalDNSServer(entries)
+	if err != nil {
+		return option.DNSServerOptions{}, err
+	}
+	if !ok {
+		return option.DNSServerOptions{Type: C.DNSTypeLocal, Tag: DNSLocalTag, Options: &option.LocalDNSServerOptions{}}, nil
+	}
+	return option.DNSServerOptions{Type: C.DNSTypeUDP, Tag: DNSLocalTag, Options: &option.RemoteDNSServerOptions{
+		DNSServerAddressOptions: option.DNSServerAddressOptions{Server: server.Addr().String(), ServerPort: server.Port()},
+	}}, nil
 }
 
 // dnsRuleSetTags returns the tags of the rule sets DNS rules may reference

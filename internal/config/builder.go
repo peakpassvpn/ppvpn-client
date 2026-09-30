@@ -113,7 +113,9 @@ func BuildWithOptions(p *profile.Profile, platform profile.PlatformCapabilities,
 		return nil, err
 	}
 	if platform.TUN.Enabled {
-		addTUNDNS(result, p.Routing.Final, dnsRuleSetTags(opts.RuleSets))
+		if err := addTUNDNS(result, platform, p.Routing.Final, dnsRuleSetTags(opts.RuleSets)); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }

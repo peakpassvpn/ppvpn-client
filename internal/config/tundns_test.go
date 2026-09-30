@@ -192,3 +192,47 @@ func TestKnownDomainRegexRejectsIPLiterals(t *testing.T) {
 		}
 	}
 }
+
+// A host-supplied physical resolver becomes a UDP dns-local (the first one
+// outside the tunnel); tunnel addresses are skipped; with none left dns-local
+// stays sing-box's local transport; a malformed entry fails the build.
+func TestLocalDNSServers(t *testing.T) {
+	build := func(servers ...string) (*BuildResult, error) {
+		return Build(base(node(profile.ProtocolShadowsocks)), profile.PlatformCapabilities{Platform: "macos", TUN: profile.TUNCapabilities{Enabled: true, LocalDNSServers: servers}}, time.Now())
+	}
+	cases := []struct {
+		servers    []string
+		wantServer string
+		wantPort   uint16
+	}{
+		{[]string{"10.10.0.3"}, "10.10.0.3", 53},
+		{[]string{"172.19.0.2", "fdfe:dcba:9876::2", "192.168.1.1:5353"}, "192.168.1.1", 5353},
+		{[]string{"[fe80::1%en0]:53"}, "fe80::1%en0", 53},
+		{[]string{"::ffff:10.0.0.1"}, "10.0.0.1", 53},
+	}
+	for _, tc := range cases {
+		got, err := build(tc.servers...)
+		if err != nil {
+			t.Fatalf("%v: %v", tc.servers, err)
+		}
+		local := got.Options.DNS.Servers[0]
+		options, ok := local.Options.(*option.RemoteDNSServerOptions)
+		if local.Type != C.DNSTypeUDP || local.Tag != DNSLocalTag || !ok || options.Server != tc.wantServer || options.ServerPort != tc.wantPort || options.Detour != "" {
+			t.Fatalf("%v: %#v", tc.servers, local)
+		}
+	}
+	for _, servers := range [][]string{nil, {"172.19.0.2", "fdfe:dcba:9876::2"}} {
+		got, err := build(servers...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if local := got.Options.DNS.Servers[0]; local.Type != C.DNSTypeLocal || local.Tag != DNSLocalTag {
+			t.Fatalf("%v: %#v", servers, local)
+		}
+	}
+	for _, bad := range []string{"dns.example", "10.0.0.1:0", "0.0.0.0", "[::1]:abc"} {
+		if _, err := build(bad); err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+}

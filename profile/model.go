@@ -203,6 +203,11 @@ type PlatformCapabilities struct {
 type TUNCapabilities struct {
 	Enabled bool   `json:"enabled"`
 	Stack   string `json:"stack,omitempty"`
+	// LocalDNSServers are the host's physical-network resolvers (IP, or
+	// IP:port / [IPv6%zone]:port), read before the host points system DNS at
+	// the tunnel. When set, dns-local queries the first usable one over UDP
+	// instead of the platform resolver; see config.LocalDNSServer.
+	LocalDNSServers []string `json:"local_dns_servers,omitempty"`
 }
 type LocalProxyCapabilities struct {
 	Enabled bool   `json:"enabled"`
