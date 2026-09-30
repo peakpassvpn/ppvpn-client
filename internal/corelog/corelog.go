@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,9 +21,35 @@ import (
 )
 
 type Logger struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu    sync.Mutex
+	w     io.Writer
+	debug atomic.Bool
 }
+
+// Levels accepted by SetLevel. Info is the default.
+const (
+	LevelInfo  = "info"
+	LevelDebug = "debug"
+)
+
+// SetLevel selects info (lifecycle events and errors) or debug (also one line
+// per routed connection, which names the domains the user visits: enable it
+// only while diagnosing).
+func (l *Logger) SetLevel(level string) error {
+	switch level {
+	case LevelInfo:
+		l.debug.Store(false)
+	case LevelDebug:
+		l.debug.Store(true)
+	default:
+		return fmt.Errorf("unknown log level %q (want info or debug)", level)
+	}
+	return nil
+}
+
+// DebugEnabled reports whether Debug lines are written; callers use it to
+// skip building fields on hot paths.
+func (l *Logger) DebugEnabled() bool { return l != nil && l.debug.Load() }
 
 // New logs to w; a nil w discards.
 func New(w io.Writer) *Logger {
@@ -44,10 +71,18 @@ func OpenFile(path string) (*Logger, *os.File, error) {
 	return New(file), file, nil
 }
 
-func (l *Logger) Info(msg string, fields ...any)  { l.write("info", msg, fields) }
-func (l *Logger) Error(msg string, fields ...any) { l.write("error", msg, fields) }
+func (l *Logger) Info(msg string, fields ...any)  { l.write("info", msg, fields, true) }
+func (l *Logger) Error(msg string, fields ...any) { l.write("error", msg, fields, true) }
 
-func (l *Logger) write(level, msg string, fields []any) {
+// Debug writes only at debug level, and without the per-line flush: it runs
+// once per connection.
+func (l *Logger) Debug(msg string, fields ...any) {
+	if l.DebugEnabled() {
+		l.write("debug", msg, fields, false)
+	}
+}
+
+func (l *Logger) write(level, msg string, fields []any, flush bool) {
 	if l == nil {
 		return
 	}
@@ -68,7 +103,7 @@ func (l *Logger) write(level, msg string, fields []any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	_, _ = io.WriteString(l.w, line)
-	if file, ok := l.w.(*os.File); ok {
+	if file, ok := l.w.(*os.File); ok && flush {
 		_ = file.Sync() // FlushFileBuffers on Windows; best effort for pipes
 	}
 }

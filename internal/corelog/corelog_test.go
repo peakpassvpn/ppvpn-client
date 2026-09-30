@@ -51,3 +51,22 @@ func TestFileLogIsWrittenImmediately(t *testing.T) {
 	nilLogger.Error("ignored")
 	Discard().Error("ignored")
 }
+
+func TestDebugLinesOnlyAtDebugLevel(t *testing.T) {
+	var b strings.Builder
+	log := New(&b)
+	log.Debug("hidden", "k", "v")
+	if b.Len() != 0 || log.DebugEnabled() {
+		t.Fatalf("debug written at info level: %q", b.String())
+	}
+	if err := log.SetLevel(LevelDebug); err != nil {
+		t.Fatal(err)
+	}
+	log.Debug("connection", "domain", "example.com")
+	if !strings.Contains(b.String(), "level=debug msg=connection domain=example.com") {
+		t.Fatalf("debug line: %q", b.String())
+	}
+	if err := log.SetLevel("trace"); err == nil {
+		t.Fatal("unknown level accepted")
+	}
+}

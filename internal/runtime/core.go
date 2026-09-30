@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/hostipv6"
 	"github.com/peakpassvpn/ppvpn-core/internal/rulesets"
@@ -110,6 +111,17 @@ type Core struct {
 	// hostIPv6 probes whether the desktop TUN can carry IPv6 on this host;
 	// tests replace it.
 	hostIPv6 func() bool
+	// log is the first-party diagnostic log (phase timings; per-connection
+	// lines at debug level).
+	log *corelog.Logger
+}
+
+// SetLogger sets the diagnostic log. It must be called before the first
+// ApplyProfile.
+func (c *Core) SetLogger(log *corelog.Logger) {
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	c.log = log
 }
 
 // ApplyOptions are the host-supplied inputs of apply-profile besides the
@@ -144,6 +156,7 @@ func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core
 		flowAuthorizationKey: key,
 		flowAuthorizationOK:  keyOK,
 		hostIPv6:             hostipv6.Available,
+		log:                  corelog.Discard(),
 	}
 	core.ruleSets = rulesets.New(core.ruleSetOptions(""))
 	return core
@@ -220,7 +233,13 @@ func (c *Core) ApplyProfileWithOptions(p *profile.Profile, now time.Time, option
 // applyProfileLocked applies p. allowedHosts pins its rule set URLs;
 // downloadRuleSets is false for rebuilds, which only use cached copies (the
 // refresh loop owns retries).
-func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, downloadRuleSets bool) (bool, error) {
+func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, downloadRuleSets bool) (applied bool, err error) {
+	timer := newPhaseTimer()
+	defer func() {
+		if applied || err != nil {
+			timer.log(c.log, "apply timing", err, "tun", c.platform.TUN.Enabled)
+		}
+	}()
 	c.mu.RLock()
 	if c.active != nil && p != nil && c.active.Revision == p.Revision {
 		c.mu.RUnlock()
@@ -231,7 +250,8 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 	selected := c.selected
 	c.mu.RUnlock()
 
-	candidateProfile, err := cloneProfile(p)
+	var candidateProfile *profile.Profile
+	candidateProfile, err = cloneProfile(p)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate profile copy failed"})
 		return false, err
@@ -247,12 +267,14 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)
 	}
+	timer.mark("validate")
 	var ruleSets *rulesets.Snapshot
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), RuleSetPrepareTimeout)
 		ruleSets = c.ruleSets.Prepare(ctx, candidateProfile.Routing.RuleSets, allowedHosts, downloadRuleSets)
 		cancel()
 	}
+	timer.mark("rule_sets")
 	var proxyEndpoints []localproxy.Endpoint
 	if c.platform.LocalProxy.Enabled {
 		if c.proxyManager == nil {
@@ -271,7 +293,10 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 			return false, stageError("apply/local-proxy-state", fmt.Errorf("prepare local proxies: %w", err))
 		}
 	}
-	candidate, err := config.BuildWithOptions(candidateProfile, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files(), DisableTUNIPv6: c.platform.TUN.Enabled && !c.hostIPv6()}, now)
+	timer.mark("local_proxy")
+	disableIPv6 := c.platform.TUN.Enabled && !c.hostIPv6()
+	timer.mark("host_ipv6")
+	candidate, err := config.BuildWithOptions(candidateProfile, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files(), DisableTUNIPv6: disableIPv6}, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)
@@ -284,11 +309,13 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		}
 		candidate = config.WithSystemProxy(candidate, systemPort)
 	}
+	timer.mark("build")
 	candidateClassifier, err := routing.Compile(candidateProfile, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate routing compilation failed"})
 		return false, stageError("apply/routing", err)
 	}
+	timer.mark("routing")
 
 	var replacement engine
 	var replacementCancel context.CancelFunc
@@ -300,10 +327,10 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 			}
 			_ = oldInstance.Close()
 		}
-		replacement, replacementCancel, err = c.startCandidate(candidate)
+		replacement, replacementCancel, err = c.startCandidate(candidate, timer)
 		if err != nil {
 			if reusePorts && oldBuilt != nil {
-				rollback, rollbackCancel, rollbackErr := c.startCandidate(oldBuilt)
+				rollback, rollbackCancel, rollbackErr := c.startCandidate(oldBuilt, nil)
 				c.mu.Lock()
 				c.engine, c.cancel = rollback, rollbackCancel
 				c.mu.Unlock()
@@ -336,6 +363,9 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		c.engine, c.cancel = replacement, replacementCancel
 	}
 	c.mu.Unlock()
+	if warmer, ok := replacement.(dnsWarmEngine); ok && c.platform.TUN.Enabled {
+		warmer.warmUpDNS()
+	}
 
 	c.ruleSets.Activate(ruleSets)
 	if oldCancel != nil && running && !reusePorts {
@@ -520,7 +550,7 @@ func (c *Core) ProbeAvailability(ctx context.Context, nodeID, target string, tim
 	return probe.AvailabilityResult{}, ErrNodeNotFound
 }
 
-func (c *Core) Start() error {
+func (c *Core) Start() (err error) {
 	c.operation.Lock()
 	defer c.operation.Unlock()
 	c.mu.RLock()
@@ -528,6 +558,8 @@ func (c *Core) Start() error {
 		c.mu.RUnlock()
 		return nil
 	}
+	timer := newPhaseTimer()
+	defer func() { timer.log(c.log, "start timing", err, "tun", c.platform.TUN.Enabled) }()
 	built, selected, systemPort := c.built, c.selected, c.systemProxyPort
 	localPort := sharedPort(c.proxyEndpoints)
 	c.mu.RUnlock()
@@ -543,8 +575,9 @@ func (c *Core) Start() error {
 		if port != systemPort {
 			built, systemPort = config.WithSystemProxy(built, port), port
 		}
+		timer.mark("system_proxy")
 	}
-	instance, cancel, err := c.startCandidate(built)
+	instance, cancel, err := c.startCandidate(built, timer)
 	if err != nil {
 		return stageError("start", fmt.Errorf("start runtime: %w", err))
 	}
@@ -552,6 +585,11 @@ func (c *Core) Start() error {
 	// core was stopped; apply the current selection to the new instance.
 	if selector, ok := instance.(flowEngine); ok && selected != "" {
 		selector.selectOutbound(built.NodeTags[selected])
+	}
+	// After the selection, so the connection is opened through the node
+	// that will carry the queries.
+	if warmer, ok := instance.(dnsWarmEngine); ok && c.platform.TUN.Enabled {
+		warmer.warmUpDNS()
 	}
 	c.mu.Lock()
 	c.engine, c.cancel, c.built = instance, cancel, built
@@ -612,7 +650,11 @@ func (c *Core) reload() error {
 	return err
 }
 
-func (c *Core) startCandidate(candidate *config.BuildResult) (engine, context.CancelFunc, error) {
+// startCandidate creates and starts an engine; timer (optional) records
+// engine_create (sing-box option parsing and object setup) and engine_start
+// (sing-box start: outbounds, DNS, router and rule sets, inbounds including
+// opening the TUN and installing its routes).
+func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) (engine, context.CancelFunc, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = failover.WithSwitchObserver(ctx, c.ingressObserver(candidate))
 	instance, err := c.factory(ctx, candidate.Options)
@@ -620,7 +662,13 @@ func (c *Core) startCandidate(candidate *config.BuildResult) (engine, context.Ca
 		cancel()
 		return nil, nil, stageError("engine-create", err)
 	}
-	if err = instance.Start(); err != nil {
+	if logged, ok := instance.(connectionLogEngine); ok {
+		logged.setConnectionLog(c.log)
+	}
+	timer.mark("engine_create")
+	err = instance.Start()
+	timer.mark("engine_start")
+	if err != nil {
 		cancel()
 		_ = instance.Close()
 		stage := "engine-start"

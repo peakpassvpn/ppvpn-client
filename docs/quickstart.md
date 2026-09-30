@@ -13,7 +13,7 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 预期版本响应：
 
 ```json
-{"core_version":"0.5.1","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"0.5.2","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
@@ -64,6 +64,21 @@ mkdir -m 700 "$APP_STATE"
 
 `serve` 把第一方诊断日志写到 stderr（每行一次写入并刷盘），或用 `--log-file <path>` 追加到文件；
 启动时记录版本、平台、`tun`/`local_proxy` 参数和状态目录，生命周期请求（apply/start/stop/reload）的成功与所有失败原因都会记录。
+
+`--log-level info|debug`（默认 `info`，由宿主 service 传入）：
+
+- `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：
+  - `msg="apply timing"`：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`local_proxy_ms`、
+    `host_ipv6_ms`（主机 IPv6 探测）、`build_ms`、`routing_ms`，运行中 apply 还有
+    `engine_create_ms`/`engine_start_ms`；
+  - `msg="start timing"`：`system_proxy_ms`（启用时）、`engine_create_ms`（sing-box 解析与构造）、
+    `engine_start_ms`（sing-box 启动：出站、DNS、路由与规则集、入站，含打开 TUN 与安装 `auto_route`
+    路由）、`total_ms`。sing-box 内部各组件不再细分：其计时只在上游日志里，而上游日志保持关闭。
+- `debug`：再为每条被路由的连接记一行 `msg=connection`：`inbound`、`network`、`destination`、
+  `route_domain`（路由规则匹配用的域名：嗅探所得或 DNS 反查；HTTP 嗅探可能留下地址本身）、`protocol`、
+  `rule`、`outbound`（实际节点）、`target`（交给节点的目标）与 `target_kind`（`domain`/`ip`）。
+  被 reject 或 hijack-dns 的连接不经过此处。**debug 日志包含用户访问的域名，只能在排查时临时开启，
+  不得常开或默认开启。**
 `serve` 每次启动覆盖生成新的会话密钥，正常退出时删除密钥文件。产品桌面端还应启用 `--exit-on-stdin-close`，并保持传入核心的 stdin 写端存活，使父 App 崩溃后核心自动退出。
 
 ## 4. 调用 API

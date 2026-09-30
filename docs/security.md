@@ -71,7 +71,10 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   - `dns-local`：sing-box `local` 服务器，即系统解析器，直连。它会跳过 TUN 本身（Linux 通过
     systemd-resolved 取默认物理网卡的链路 DNS，Windows 跳过隧道网卡，Darwin 在有 TUN 时走
     DHCP），并借 `auto_detect_interface` 绑定物理网卡，不会绕回隧道。
-  - `dns-remote`：DoT 到 `1.1.1.1:853`，经所选节点（`selected`）拨出，查询不出现在本地网络上。
+  - `dns-remote`：DoH 到 `https://1.1.1.1/dns-query`（HTTP/2），经所选节点（`selected`）拨出，查询
+    不出现在本地网络上。选 DoH 而非 DoT：HTTP/2 让所有并发查询共用一条连接，DoT 连接池在没有空闲
+    连接时每个并发查询都要重新拨号（节点握手 + TLS）；明文 TCP 每次查询都拨号，UDP 要求节点支持 UDP。
+    核心启动后在后台发一次预热查询，提前建好这条连接（并顺带解析节点域名）。
   - DNS 规则镜像路由规则中的域名部分，顺序不变：路由为直连的域名（包括所有入口节点域名）走
     `dns-local`，路由为代理的走 `dns-remote`，路由为拒绝的直接拒绝；未命中规则时跟随
     `routing.final`：final 为 direct 时走 `dns-local`，否则走 `dns-remote`。端口、协议、CIDR 条件
@@ -176,7 +179,8 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 
 ## 日志、错误与诊断
 
-sing-box 上游日志被关闭，因为其文本没有第一方脱敏保证。公开事件只含稳定节点 ID、revision 和安全摘要。未知运行时错误统一折叠为 `CORE_OPERATION_FAILED` / `core operation failed`，不回传上游错误文本；原因只写入本机核心日志（stderr 或 `--log-file`，文件 0600），并经过代理 URL 凭据脱敏。日志不含 Profile 凭据、会话密钥或本地代理密码。
+sing-box 上游日志被关闭，因为其文本没有第一方脱敏保证。公开事件只含稳定节点 ID、revision 和安全摘要。未知运行时错误统一折叠为 `CORE_OPERATION_FAILED` / `core operation failed`，不回传上游错误文本；原因只写入本机核心日志（stderr 或 `--log-file`，文件 0600），并经过代理 URL 凭据脱敏。日志不含 Profile 凭据、会话密钥或本地代理密码。`--log-level debug` 另外逐连接记录目标地址与域名（即浏览记录），
+只供排查时临时开启；默认 `info` 不含任何连接目标。
 
 CLI `render` 会对已知敏感 JSON 键和代理 URL 认证信息脱敏，但脱敏输出仍可能暴露拓扑、域名、IP 和节点数量。仅在受控开发环境使用，不要自动上传。
 

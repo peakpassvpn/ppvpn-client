@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	box "github.com/sagernet/sing-box"
@@ -67,6 +69,10 @@ func (r *destinationRecorder) wait(t *testing.T, destination string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // startFakeDNS answers A queries over TCP from a fixed table.
 func startFakeDNS(t *testing.T, answers map[string]string) uint16 {
@@ -135,7 +141,7 @@ func socksConnect(t *testing.T, port uint16, destination netip.AddrPort) net.Con
 // configuration on a real sing-box. The TUN inbound needs privileges, so a
 // SOCKS inbound carrying the TUN tag feeds IP destinations into the same
 // rules. The remote DNS server is swapped for a local fake over plain TCP
-// (instead of DoT to 1.1.1.1), still dialed through the selected node.
+// (instead of DoH to 1.1.1.1), still dialed through the selected node.
 func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	recorder := &destinationRecorder{}
 	serverPort := startShadowsocksServerWithTracker(t, recorder)
@@ -163,7 +169,7 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		if server.Tag != config.DNSRemoteTag {
 			continue
 		}
-		detour := server.Options.(*option.RemoteTLSDNSServerOptions).Detour
+		detour := server.Options.(*option.RemoteHTTPSDNSServerOptions).Detour
 		options.DNS.Servers[i] = option.DNSServerOptions{Type: C.DNSTypeTCP, Tag: config.DNSRemoteTag, Options: &option.RemoteDNSServerOptions{
 			RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: detour}},
 			DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: "127.0.0.1", ServerPort: dnsPort},
@@ -175,14 +181,31 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
+	boxCtx := failover.Context(ctx)
+	instance, err := box.New(box.Options{Context: boxCtx, Options: options})
 	if err != nil {
 		t.Fatal(err)
 	}
+	var debugLog strings.Builder
+	var debugMu sync.Mutex
+	connectionLog := corelog.New(writerFunc(func(p []byte) (int, error) {
+		debugMu.Lock()
+		defer debugMu.Unlock()
+		return debugLog.Write(p)
+	}))
+	_ = connectionLog.SetLevel(corelog.LevelDebug)
+	tracker := newTelemetry()
+	tracker.log.Store(connectionLog)
+	instance.Router().AppendTracker(tracker)
 	if err = instance.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer instance.Close()
+
+	// 0. The start-up warm-up opens the remote DNS connection through the
+	// node before any query arrives.
+	warmUpRemoteDNS(boxCtx)
+	recorder.wait(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(dnsPort))))
 
 	// 1. DNS sent to any address on port 53 is hijacked into the DNS module
 	// and, for a proxied name, resolved through the node.
@@ -213,6 +236,15 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("203.0.113.7:80"))
 	_, _ = conn.Write([]byte("GET / HTTP/1.1\r\nHost: 203.0.113.7\r\n\r\n"))
 	recorder.wait(t, "proxied.test:80")
+	// At debug level the connection line says the node got the domain, even
+	// though the HTTP sniffer saw only the address as Host (route_domain):
+	// domaindest fell back to the DNS reverse mapping.
+	debugMu.Lock()
+	logged := debugLog.String()
+	debugMu.Unlock()
+	if !strings.Contains(logged, "destination=203.0.113.7:80 route_domain=203.0.113.7 protocol=http") || !strings.Contains(logged, "target=proxied.test:80 target_kind=domain") {
+		t.Fatalf("debug connection line:\n%s", logged)
+	}
 	conn.Close()
 
 	// 3. A sniffed TLS server name reaches the node instead of the address.

@@ -9,8 +9,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
+	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
 
@@ -37,16 +41,22 @@ type telemetry struct {
 	upload, download atomic.Uint64
 	mu               sync.RWMutex
 	connections      map[string]*tracked
+	// log receives one debug line per routed connection; nil logs nothing.
+	log atomic.Pointer[corelog.Logger]
 }
 
 func newTelemetry() *telemetry { return &telemetry{connections: map[string]*tracked{}} }
-func (t *telemetry) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, _ adapter.Rule, outbound adapter.Outbound) net.Conn {
+func (t *telemetry) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
+	conn = takeCachedConn(conn)
 	item := t.add(metadata, outbound)
+	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	counted := bufio.NewCounterConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
 	return &trackedConn{ExtendedConn: counted, onClose: func() { t.remove(item.connection.ID) }}
 }
-func (t *telemetry) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, outbound adapter.Outbound) N.PacketConn {
+func (t *telemetry) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
+	conn = takeCachedPacketConn(conn)
 	item := t.add(metadata, outbound)
+	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	counted := bufio.NewCounterPacketConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
 	return &trackedPacketConn{PacketConn: counted, onClose: func() { t.remove(item.connection.ID) }}
 }
@@ -61,6 +71,38 @@ func (t *telemetry) add(metadata adapter.InboundContext, outbound adapter.Outbou
 	t.mu.Unlock()
 	return item
 }
+
+// logRouted writes the debug line of a routed connection: where it came from,
+// the domain route rules matched against (route_domain: sniffed, or from the
+// DNS reverse mapping; the HTTP sniffer may leave an address there), the
+// rule, the outbound, and what the node is asked to connect to (target_kind
+// "domain" when domaindest hands over a name).
+func (t *telemetry) logRouted(id string, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) {
+	log := t.log.Load()
+	if !log.DebugEnabled() {
+		return
+	}
+	tag, target := "", metadata
+	if outbound != nil {
+		tag = adapter.OutboundTag(outbound)
+		if wrapper, ok := outbound.(*domaindest.Outbound); ok {
+			wrapper.Restore(&target)
+			tag = wrapper.Now()
+		}
+	}
+	kind := "ip"
+	if target.Destination.IsFqdn() {
+		kind = "domain"
+	}
+	ruleName := "final"
+	if rule != nil {
+		ruleName = rule.String()
+	}
+	log.Debug("connection", "id", id, "inbound", metadata.Inbound, "network", metadata.Network,
+		"destination", metadata.Destination.String(), "route_domain", metadata.Domain, "protocol", metadata.Protocol,
+		"rule", ruleName, "outbound", tag, "target", target.Destination.String(), "target_kind", kind)
+}
+
 func (t *telemetry) remove(id string) { t.mu.Lock(); delete(t.connections, id); t.mu.Unlock() }
 func (t *telemetry) snapshot() (Traffic, []Connection) {
 	traffic := Traffic{UploadBytes: t.upload.Load(), DownloadBytes: t.download.Load(), MeasuredAt: time.Now()}
@@ -98,3 +140,98 @@ type trackedPacketConn struct {
 }
 
 func (c *trackedPacketConn) Close() error { c.once.Do(c.onClose); return c.PacketConn.Close() }
+
+// A sniffed connection arrives as bufio.CachedConn / CachedPacketConn holding
+// the sniffed bytes. Once wrapped by the counters, sing-box's copy loop can no
+// longer take that cache atomically (ReadCached) and reads it through
+// Read/ReadPacket, which clear the buffer unsynchronized while Close from the
+// other copy direction reads it: a data race that can release the pooled
+// buffer twice. So the tracker takes the cache itself (atomically, marking it
+// taken so Close leaves it alone), copies the bytes into a prefix only the
+// reader touches, and releases the buffer at once.
+
+func takeCachedConn(conn net.Conn) net.Conn {
+	var prefix []byte
+	for {
+		cached, ok := conn.(*bufio.CachedConn)
+		if !ok {
+			break
+		}
+		// The outermost cache is read first.
+		if buffer := cached.ReadCached(); buffer != nil {
+			prefix = append(prefix, buffer.Bytes()...)
+			buffer.Release()
+		}
+		conn = cached.Conn
+	}
+	if len(prefix) == 0 {
+		return conn
+	}
+	return &prefixConn{Conn: conn, prefix: prefix}
+}
+
+// prefixConn serves prefix before reading conn. Only the reading goroutine
+// touches prefix.
+type prefixConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	if len(c.prefix) > 0 {
+		n := copy(p, c.prefix)
+		c.prefix = c.prefix[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *prefixConn) Upstream() any { return c.Conn }
+
+func takeCachedPacketConn(conn N.PacketConn) N.PacketConn {
+	var packets []cachedPacket
+	for {
+		cached, ok := conn.(*bufio.CachedPacketConn)
+		if !ok {
+			break
+		}
+		if packet := cached.ReadCachedPacket(); packet != nil {
+			if packet.Buffer != nil {
+				packets = append(packets, cachedPacket{data: append([]byte(nil), packet.Buffer.Bytes()...), destination: packet.Destination})
+				packet.Buffer.Release()
+			}
+			N.PutPacketBuffer(packet)
+		}
+		conn = cached.PacketConn
+	}
+	if len(packets) == 0 {
+		return conn
+	}
+	return &prefixPacketConn{PacketConn: conn, packets: packets}
+}
+
+type cachedPacket struct {
+	data        []byte
+	destination M.Socksaddr
+}
+
+// prefixPacketConn returns the cached packets before reading conn. Only the
+// reading goroutine touches packets.
+type prefixPacketConn struct {
+	N.PacketConn
+	packets []cachedPacket
+}
+
+func (c *prefixPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
+	if len(c.packets) > 0 {
+		packet := c.packets[0]
+		c.packets = c.packets[1:]
+		if _, err := buffer.Write(packet.data); err != nil {
+			return M.Socksaddr{}, err
+		}
+		return packet.destination, nil
+	}
+	return c.PacketConn.ReadPacket(buffer)
+}
+
+func (c *prefixPacketConn) Upstream() any { return c.PacketConn }

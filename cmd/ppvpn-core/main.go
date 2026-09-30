@@ -148,6 +148,7 @@ func serve(args []string) error {
 	tunStack := flags.String("tun-stack", "mixed", "sing-box TUN stack: mixed, system, or gvisor")
 	exitOnStdin := flags.Bool("exit-on-stdin-close", false, "exit when the parent-owned stdin pipe closes")
 	logFile := flags.String("log-file", "", "append the core diagnostic log to this file (default: stderr)")
+	logLevel := flags.String("log-level", corelog.LevelInfo, "diagnostic log level: info, or debug (adds one line per routed connection, including the domains visited; enable only while diagnosing)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -160,6 +161,9 @@ func serve(args []string) error {
 		defer file.Close()
 		log = fileLog
 	}
+	if err := log.SetLevel(*logLevel); err != nil {
+		return err
+	}
 	err := serveWithLog(log, *socket, *secretFile, *stateDir, *platformName, *localProxy, *tun, *tunStack, *exitOnStdin)
 	if err != nil {
 		log.Error("serve failed", "error", err, "chain", corelog.Chain(err))
@@ -170,7 +174,11 @@ func serve(args []string) error {
 func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformName string, localProxy, tun bool, tunStack string, exitOnStdinClose bool) error {
 	privateacl.SetLogger(log)
 	info := version.Get()
-	log.Info("serve starting", "core_version", info.CoreVersion, "os", goruntime.GOOS, "arch", goruntime.GOARCH,
+	logLevel := corelog.LevelInfo
+	if log.DebugEnabled() {
+		logLevel = corelog.LevelDebug
+	}
+	log.Info("serve starting", "core_version", info.CoreVersion, "os", goruntime.GOOS, "arch", goruntime.GOARCH, "log_level", logLevel,
 		"platform", platformName, "tun", tun, "tun_stack", tunStack, "local_proxy", localProxy, "state_dir", stateDir, "socket", socket)
 	if socket == "" || secretFile == "" || stateDir == "" {
 		return fmt.Errorf("serve requires --socket, --session-secret-file and --state-dir")
@@ -193,6 +201,7 @@ func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformNam
 		LogLevel:   "info",
 	}
 	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(stateDir, "local-proxies.json"))
+	core.SetLogger(log)
 	core.EnableRuleSets(filepath.Join(stateDir, "rule-sets"))
 	server, err := api.NewServer(core, secret)
 	if err != nil {
