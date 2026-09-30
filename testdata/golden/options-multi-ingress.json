@@ -178,7 +178,7 @@
             "ip_cidr": "198.18.0.0/15"
           },
           {
-            "domain_regex": ".",
+            "domain_regex": "^[^:]*[^0-9.:][^:]*$",
             "invert": true
           }
         ],

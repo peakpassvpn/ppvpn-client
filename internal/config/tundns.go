@@ -45,6 +45,13 @@ const (
 	RemoteDNSServer = "1.1.1.1"
 	// FakeIPRange is the benchmark range fake-ip DNS servers answer from.
 	FakeIPRange = "198.18.0.0/15"
+	// knownDomainRegex matches a domain name but not an IP literal. The HTTP
+	// sniffer copies the Host header as is, so plain HTTP to an address
+	// (curl http://198.18.1.117/) "sniffs" the address itself: an IPv4
+	// literal has only digits and dots, an IPv6 literal has colons, and a
+	// domain name always has another character (its TLD is never numeric)
+	// and never a colon.
+	knownDomainRegex = `^[^:]*[^0-9.:][^:]*$`
 	// domainDestinationPrefix names the wrapper of a proxy route target.
 	domainDestinationPrefix = "domain-"
 )
@@ -67,8 +74,8 @@ func addTUNTrafficRules(result *BuildResult) {
 			RuleAction:     option.RuleAction{Action: C.RuleActionTypeHijackDNS},
 		}},
 		// Domain and ip_cidr items of one default rule are OR-ed, so "in the
-		// fake-ip range AND no domain" needs a logical rule. domain_regex "."
-		// matches any known domain (sniffed, reverse-mapped or requested);
+		// fake-ip range AND no domain" needs a logical rule. knownDomainRegex
+		// matches a known domain name (sniffed, reverse-mapped or requested);
 		// inverted it matches connections without one.
 		option.Rule{Type: C.RuleTypeLogical, LogicalOptions: option.LogicalRule{
 			RawLogicalRule: option.RawLogicalRule{Mode: C.LogicalTypeAnd, Rules: []option.Rule{
@@ -76,7 +83,7 @@ func addTUNTrafficRules(result *BuildResult) {
 					Inbound: tun, IPCIDR: badoption.Listable[string]{FakeIPRange},
 				}}},
 				{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{
-					DomainRegex: badoption.Listable[string]{"."}, Invert: true,
+					DomainRegex: badoption.Listable[string]{knownDomainRegex}, Invert: true,
 				}}},
 			}},
 			RuleAction: rejectAction(),
