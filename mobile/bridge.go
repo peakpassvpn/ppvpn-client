@@ -119,7 +119,13 @@ func (b *Bridge) ListNodes() (string, error) {
 	}
 	return encode(result)
 }
-func (b *Bridge) SelectNode(nodeID string) error       { return safeError(b.core.SelectNode(nodeID)) }
+func (b *Bridge) SelectNode(nodeID string) error { return safeError(b.core.SelectNode(nodeID)) }
+
+// PinIngress pins a node to one ingress; an empty endpointKey returns it to
+// automatic failover.
+func (b *Bridge) PinIngress(nodeID, endpointKey string) error {
+	return safeError(b.core.PinIngress(nodeID, endpointKey))
+}
 func (b *Bridge) LocalProxyEndpoints() (string, error) { return encode(b.core.LocalProxyEndpoints()) }
 func (b *Bridge) LocalProxyMetadata() (string, error) {
 	return encode(b.core.LocalProxyMetadata())

@@ -51,4 +51,6 @@ type rawRequest struct {
 	// RoutingMode (apply-profile, validate-profile): "rules" (default) or
 	// "global".
 	RoutingMode string `json:"routing_mode"`
+	// EndpointKey (pin-ingress): the ingress to pin, or null for automatic.
+	EndpointKey *string `json:"endpoint_key"`
 }

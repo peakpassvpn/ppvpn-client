@@ -59,8 +59,14 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 每个入口渲染为一个独立的 sing-box outbound；多入口 Node 渲染为核心内置的 `ppvpn-failover` 组（单入口 Node 直接使用该入口 outbound）：
 
 - primary 即 `ingresses[0]`，backup 为其余入口，按数组顺序尝试；故障转移只在同一 Node 的入口之间进行，绝不跨 Node。
-- 新连接总是优先使用 primary；拨号失败（非调用方取消）时立即在同一次拨号中尝试下一个 backup，并把 primary 标记为不健康。
-- 健康检查是经过入口发出的 HTTP 204 请求，只在该节点被使用时运行（空闲 30 分钟后停止）。primary 健康时每 3 分钟只检查 primary；primary 不健康时每 20 秒检查全部入口，primary 一旦恢复即切回。
+- 新连接按顺序优先使用健康的入口（primary 在前）；除最后一个候选外每个入口的拨号超时为 2 秒，拨号失败（非调用方取消）
+  时立即在同一次拨号中尝试下一个入口，并把失败的入口标记为不健康。不健康的入口仍作为最后手段排在健康入口之后。
+- 健康检查（核心 0.5.7 起）是经过入口发出的 HTTP 204 请求：依次请求 `http://www.gstatic.com/generate_204` 与
+  `http://cp.cloudflare.com/generate_204`（各 5 秒超时），任意一个返回 2xx/3xx 即通过；两者在中国大陆与海外出口均已实测可达。
+  节点被使用时每 15 秒检查全部入口，空闲 30 分钟后停止。连续 2 次检查失败判为不健康，不健康的入口需连续 3 次检查通过才恢复。
+- 迟滞：自动切换后 60 秒内，只要当前入口健康就不切回更靠前的入口，避免在恢复中的 primary 上来回抖动。
+- 宿主可用 `pin-ingress`（见 core-api.md）把节点固定到某个入口：固定后只用该入口，不健康也不回退，检查照常进行以报告
+  它是否可用；取消固定立即回到自动选择。固定不改变 revision，也不写入 Profile。
 - 切换不会中断已建立的连接。
 - 多入口 Node 的成员 outbound tag 为 `node-<sha256(node.id) 前 8 字节>-<sha256(endpoint_key) 前 4 字节>`（十六进制），只依赖 Node `id` 与 `endpoint_key`，与数组位置无关；因此 revision 间调整顺序或增删其他副本不会改变已有副本的 tag。Node 自身的 tag（选择器、本地代理、路由目标）只依赖 Node `id`。
 
