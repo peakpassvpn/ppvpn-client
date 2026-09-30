@@ -15,6 +15,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -36,6 +37,14 @@ func freePort(t *testing.T) uint16 {
 // that forwards to the destination directly, standing in for a real ingress.
 func startShadowsocksServer(t *testing.T) uint16 {
 	t.Helper()
+	return startShadowsocksServerWithTracker(t, nil)
+}
+
+// startShadowsocksServerWithTracker is startShadowsocksServer with a tracker
+// that sees every connection the server routes, including the destination
+// the client asked for.
+func startShadowsocksServerWithTracker(t *testing.T, tracker adapter.ConnectionTracker) uint16 {
+	t.Helper()
 	port := freePort(t)
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,6 +55,9 @@ func startShadowsocksServer(t *testing.T) uint16 {
 	if err != nil {
 		cancel()
 		t.Fatal(err)
+	}
+	if tracker != nil {
+		server.Router().AppendTracker(tracker)
 	}
 	if err = server.Start(); err != nil {
 		cancel()

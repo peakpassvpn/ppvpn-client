@@ -54,6 +54,41 @@ rename。启动时持久端口（或 7890）被占用才改用其他端口；宿
   因此宿主只能在用户选择兼容模式并处于已连接状态时开启，断开、切换到增强模式、退出登录或退出时关闭。
 - 每个节点的共享本地代理不受影响，仍然要求凭据。
 
+## 增强模式（TUN）的 DNS 与防泄漏
+
+TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全部失效；不接管 DNS，系统解析器的查询
+会绕过隧道明文发出（被投毒，或者在带 fake-ip 网关的局域网里得到 `198.18.x.x`，节点连不上，要等
+约 2 分钟才超时）。因此启用 TUN 时，核心生成的配置固定包含以下内容（本地代理、系统代理、兼容模式
+不受影响，它们本来就携带域名）：
+
+- **嗅探**：`tun` 入站的每个连接先执行 sing-box `sniff` 动作（全部嗅探器：TLS SNI、HTTP Host、
+  QUIC、DNS 等），域名规则因此能在 TUN 下命中。
+- **DNS 劫持**：`tun` 入站中协议为 `dns`、或目标端口为 53 的流量执行 `hijack-dns`，交给核心的 DNS
+  模块。TUN 把自身对端地址（`172.19.0.2`）通告为接口 DNS，Linux systemd-resolved、Windows 和
+  macOS 发往它的查询都由核心应答；发往其他地址 53 端口的明文查询只要进了隧道也同样被劫持。
+- **按路由选择解析器**：
+  - `dns-local`：sing-box `local` 服务器，即系统解析器，直连。它会跳过 TUN 本身（Linux 通过
+    systemd-resolved 取默认物理网卡的链路 DNS，Windows 跳过隧道网卡，Darwin 在有 TUN 时走
+    DHCP），并借 `auto_detect_interface` 绑定物理网卡，不会绕回隧道。
+  - `dns-remote`：DoT 到 `1.1.1.1:853`，经所选节点（`selected`）拨出，查询不出现在本地网络上。
+  - DNS 规则镜像路由规则中的域名部分，顺序不变：路由为直连的域名（包括所有入口节点域名）走
+    `dns-local`，路由为代理的走 `dns-remote`，路由为拒绝的直接拒绝；未命中规则时跟随
+    `routing.final`：final 为 direct 时走 `dns-local`，否则走 `dns-remote`。端口、协议、CIDR 条件
+    在解析时未知，不参与镜像。
+  - `route.default_domain_resolver` 为 `dns-local`：节点入口域名和直连目标都用系统解析器解析。
+- **把域名交给节点**：sing-box 1.13 已删除 `sniff_override_destination`，嗅探到的域名只用于匹配规则，
+  不会改写目标地址。核心在每个代理出站（selected 及固定节点）前加一层 `ppvpn-domain-destination`：
+  对来自 `tun` 的连接，只要已知域名（嗅探结果优先，其次是核心 DNS 的 `reverse_mapping`），就把目标
+  改写为域名再交给节点，由节点远端解析；直连路径保持 IP 不变。
+- **fake-ip 快速失败**：`tun` 入站目标位于 `198.18.0.0/15` 且没有已知域名的连接立即拒绝（等待嗅探
+  最多约 300ms），不会发给节点空等。已知域名时照常按域名代理。核心自己不使用 fake-ip。
+
+移动端的 TUN 配置（不启用 `auto_route`）生成同样的嗅探、DNS 与拒绝规则；宿主应把隧道 DNS 设为
+隧道内地址（如 `172.19.0.2`），让查询进入 TUN 被劫持。
+
+已知边界：IPv6 目前不进入 TUN（TUN 只有 IPv4 地址），核心也不过滤 AAAA；应用自带 DoH/DoT
+的查询不会被劫持，但其连接仍会被嗅探并按域名路由。
+
 ## Profile 防护
 
 - JSON 严格解码，未知字段、歧义 credential union 和尾随值全部失败关闭。

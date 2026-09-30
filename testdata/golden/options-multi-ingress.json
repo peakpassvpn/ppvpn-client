@@ -4,6 +4,41 @@
     "level": "info",
     "timestamp": true
   },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "dns-local"
+      },
+      {
+        "type": "tls",
+        "tag": "dns-remote",
+        "detour": "selected",
+        "server": "1.1.1.1"
+      }
+    ],
+    "rules": [
+      {
+        "domain": "tyo-01.edge.example.com",
+        "server": "dns-local"
+      },
+      {
+        "domain": "tyo-01-relay.edge.example.com",
+        "server": "dns-local"
+      },
+      {
+        "domain": "sjc-01.edge.example.com",
+        "server": "dns-local"
+      },
+      {
+        "domain": "video.example",
+        "domain_suffix": ".video.example",
+        "server": "dns-remote"
+      }
+    ],
+    "final": "dns-remote",
+    "reverse_mapping": true
+  },
   "inbounds": [
     {
       "type": "ppvpn-local-proxy",
@@ -95,10 +130,55 @@
     {
       "type": "direct",
       "tag": "direct"
+    },
+    {
+      "type": "ppvpn-domain-destination",
+      "tag": "domain-node-55b02d505a37e662",
+      "outbound": "node-55b02d505a37e662",
+      "inbounds": [
+        "tun"
+      ]
+    },
+    {
+      "type": "ppvpn-domain-destination",
+      "tag": "domain-selected",
+      "outbound": "selected",
+      "inbounds": [
+        "tun"
+      ]
     }
   ],
   "route": {
     "rules": [
+      {
+        "inbound": "tun",
+        "action": "sniff"
+      },
+      {
+        "inbound": "tun",
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "inbound": "tun",
+        "port": 53,
+        "action": "hijack-dns"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "inbound": "tun",
+            "ip_cidr": "198.18.0.0/15"
+          },
+          {
+            "domain_regex": ".",
+            "invert": true
+          }
+        ],
+        "action": "reject"
+      },
       {
         "domain": "tyo-01.edge.example.com",
         "outbound": "direct"
@@ -145,10 +225,11 @@
       {
         "domain": "video.example",
         "domain_suffix": ".video.example",
-        "outbound": "node-55b02d505a37e662"
+        "outbound": "domain-node-55b02d505a37e662"
       }
     ],
-    "final": "selected",
-    "auto_detect_interface": true
+    "final": "domain-selected",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-local"
   }
 }

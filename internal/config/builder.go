@@ -29,6 +29,10 @@ type BuildResult struct {
 	// IngressKeys maps every outbound that is one ingress (a single-ingress
 	// node tag, or a failover member tag) to the ingress endpoint_key.
 	IngressKeys map[string]string
+
+	// tun is set while building a TUN configuration: proxy route targets
+	// then go through a domain-destination wrapper (see tundns.go).
+	tun bool
 }
 
 const selectedOutboundTag = "selected"
@@ -63,6 +67,8 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 	result.Options.Outbounds = append([]option.Outbound{selector}, result.Options.Outbounds...)
 	result.Options.Route = &option.RouteOptions{}
 	if platform.TUN.Enabled {
+		result.tun = true
+		addTUNTrafficRules(result)
 		addPlatformSafetyRules(result, p)
 	}
 	if len(proxies) > 0 {
@@ -77,6 +83,9 @@ func BuildWithLocalProxies(p *profile.Profile, platform profile.PlatformCapabili
 	}
 	if err := addProfileRouting(result, p.Routing); err != nil {
 		return nil, err
+	}
+	if platform.TUN.Enabled {
+		addTUNDNS(result, p.Routing.Final)
 	}
 	return result, nil
 }
@@ -145,7 +154,7 @@ func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 		Type: C.RuleTypeDefault,
 		DefaultOptions: option.DefaultRule{
 			RawDefaultRule: option.RawDefaultRule{Inbound: badoption.Listable[string]{LocalProxyInboundTag}},
-			RuleAction:     option.RuleAction{Action: C.RuleActionTypeReject},
+			RuleAction:     rejectAction(),
 		},
 	})
 	loopback := badoption.Addr(netip.MustParseAddr(localproxy.Listen))
@@ -199,7 +208,7 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 		// process (including an unprivileged sibling core) never loop.
 		options.RouteExcludeAddress = excluded
 	}
-	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: "tun", Options: options})
+	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: TUNInboundTag, Options: options})
 	return nil
 }
 
@@ -235,7 +244,7 @@ func addProfileRouting(result *BuildResult, routing profile.Routing) error {
 		result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: option.DefaultRule{
-				RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+				RuleAction: rejectAction(),
 			},
 		})
 	default:
@@ -298,7 +307,7 @@ func buildRuleAction(result *BuildResult, action profile.RoutingAction) (option.
 			RouteOptions: option.RouteActionOptions{Outbound: "direct"},
 		}, nil
 	case "reject":
-		return option.RuleAction{Action: C.RuleActionTypeReject}, nil
+		return rejectAction(), nil
 	case "proxy":
 		target, err := proxyTarget(result, action)
 		if err != nil {
@@ -314,12 +323,16 @@ func buildRuleAction(result *BuildResult, action profile.RoutingAction) (option.
 }
 
 func proxyTarget(result *BuildResult, action profile.RoutingAction) (string, error) {
-	if action.Target == "selected" {
-		return selectedOutboundTag, nil
+	target := selectedOutboundTag
+	if action.Target != "selected" {
+		var ok bool
+		target, ok = result.NodeTags[action.NodeID]
+		if !ok || action.Target != "node" {
+			return "", fmt.Errorf("fixed proxy node does not exist")
+		}
 	}
-	target, ok := result.NodeTags[action.NodeID]
-	if !ok || action.Target != "node" {
-		return "", fmt.Errorf("fixed proxy node does not exist")
+	if result.tun {
+		return ensureDomainDestination(result, target), nil
 	}
 	return target, nil
 }
@@ -335,6 +348,14 @@ func ensureDirectOutbound(result *BuildResult) {
 		Tag:     "direct",
 		Options: &option.DirectOutboundOptions{},
 	})
+}
+
+// rejectAction renders a reject action. The method must be explicit: option
+// structs handed to box.New skip JSON decoding, which is what normally turns
+// an empty method into "default", and sing-box 1.13 panics ("unknown reject
+// method") the first time a rule with an empty method matches.
+func rejectAction() option.RuleAction {
+	return option.RuleAction{Action: C.RuleActionTypeReject, RejectOptions: option.RejectActionOptions{Method: C.RuleActionRejectMethodDefault}}
 }
 
 func routeRule(raw option.RawDefaultRule, outbound string) option.Rule {
