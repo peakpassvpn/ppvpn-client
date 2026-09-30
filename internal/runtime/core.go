@@ -12,7 +12,7 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
-	"github.com/peakpassvpn/ppvpn-core/internal/dnslog"
+	"github.com/peakpassvpn/ppvpn-core/internal/dnstransport"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/hostipv6"
 	"github.com/peakpassvpn/ppvpn-core/internal/rulesets"
@@ -670,7 +670,7 @@ func (c *Core) reload() error {
 func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) (engine, context.CancelFunc, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = failover.WithSwitchObserver(ctx, c.ingressObserver(candidate))
-	ctx = dnslog.WithLogger(ctx, c.log)
+	ctx = dnstransport.WithLogger(ctx, c.log)
 	instance, err := c.factory(ctx, candidate.Options)
 	if err != nil {
 		cancel()
