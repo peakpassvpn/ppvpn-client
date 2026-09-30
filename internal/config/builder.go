@@ -145,7 +145,7 @@ func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 		Type: C.RuleTypeDefault,
 		DefaultOptions: option.DefaultRule{
 			RawDefaultRule: option.RawDefaultRule{Inbound: badoption.Listable[string]{LocalProxyInboundTag}},
-			RuleAction:     option.RuleAction{Action: C.RuleActionTypeReject},
+			RuleAction:     rejectAction(),
 		},
 	})
 	loopback := badoption.Addr(netip.MustParseAddr(localproxy.Listen))
@@ -235,7 +235,7 @@ func addProfileRouting(result *BuildResult, routing profile.Routing) error {
 		result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: option.DefaultRule{
-				RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+				RuleAction: rejectAction(),
 			},
 		})
 	default:
@@ -298,7 +298,7 @@ func buildRuleAction(result *BuildResult, action profile.RoutingAction) (option.
 			RouteOptions: option.RouteActionOptions{Outbound: "direct"},
 		}, nil
 	case "reject":
-		return option.RuleAction{Action: C.RuleActionTypeReject}, nil
+		return rejectAction(), nil
 	case "proxy":
 		target, err := proxyTarget(result, action)
 		if err != nil {
@@ -335,6 +335,14 @@ func ensureDirectOutbound(result *BuildResult) {
 		Tag:     "direct",
 		Options: &option.DirectOutboundOptions{},
 	})
+}
+
+// rejectAction renders a reject action. The method must be explicit: option
+// structs handed to box.New skip JSON decoding, which is what normally turns
+// an empty method into "default", and sing-box 1.13 panics ("unknown reject
+// method") the first time a rule with an empty method matches.
+func rejectAction() option.RuleAction {
+	return option.RuleAction{Action: C.RuleActionTypeReject, RejectOptions: option.RejectActionOptions{Method: C.RuleActionRejectMethodDefault}}
 }
 
 func routeRule(raw option.RawDefaultRule, outbound string) option.Rule {
