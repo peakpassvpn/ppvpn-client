@@ -115,7 +115,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 
 ```json
 {
-  "core_version": "0.5.7",
+  "core_version": "0.5.8",
   "core_api_version": 1,
   "profile_schema_version": 1,
   "flow_adapter_version": 1,
