@@ -2,7 +2,7 @@
 
 `ppvpn-core` 是PPVPN第一方网络核心。后端只下发版本化、平台无关的 Proxy Profile；核心负责严格校验、转换为固定版本的内部运行配置，并统一管理路由判定、运行时、探测、共享端口认证本地代理（用户名选节点）、流量统计、桌面 IPC 和平台绑定。
 
-当前版本：Core `0.5.3`、Core API `v1`、Profile Schema `1`、Flow Adapter `v1`。支持 Shadowsocks 2022（含多用户/EIH）、VLESS + REALITY 和 AnyTLS。
+当前版本：Core `0.5.4`、Core API `v1`、Profile Schema `1`、Flow Adapter `v1`。支持 Shadowsocks 2022（含多用户/EIH）、VLESS + REALITY 和 AnyTLS。
 
 ## 文档导航
 

@@ -512,7 +512,7 @@ func buildNode(result *BuildResult, n profile.Node) ([]option.Outbound, error) {
 }
 
 func buildOutbound(n profile.Ingress, tag string) (option.Outbound, error) {
-	server := option.ServerOptions{Server: n.Endpoint.Domain, ServerPort: n.Endpoint.Port}
+	server := option.ServerOptions{Server: dialAddress(n.Endpoint), ServerPort: n.Endpoint.Port}
 	switch n.Protocol {
 	case profile.ProtocolShadowsocks:
 		c := n.Credentials.Shadowsocks
@@ -527,6 +527,21 @@ func buildOutbound(n profile.Ingress, tag string) (option.Outbound, error) {
 	default:
 		return option.Outbound{}, fmt.Errorf("unsupported protocol")
 	}
+}
+
+// dialAddress is where a node outbound connects: the ingress IP when the
+// profile gives one, else its domain. Dialing the IP keeps the node reachable
+// without any DNS lookup, which in TUN mode goes through the system resolver
+// and can loop into the core's own tunnel DNS (Darwin's local transport falls
+// back to the system resolver, which the desktop points at the tunnel); the
+// standard core's lookups would enter the tunnel too. TLS and REALITY keep
+// their explicit server_name, so the handshake is unchanged, and the TUN
+// route exclusion and entrance probes already rely on the same IP.
+func dialAddress(endpoint profile.Endpoint) string {
+	if endpoint.IP != "" {
+		return netip.MustParseAddr(endpoint.IP).Unmap().String()
+	}
+	return endpoint.Domain
 }
 
 func buildTLS(t *profile.TLS) *option.OutboundTLSOptions {

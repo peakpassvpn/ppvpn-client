@@ -38,6 +38,39 @@ func ingress(protocol profile.Protocol, role profile.IngressRole, domain, ip str
 	}
 	return in
 }
+// A node outbound dials the ingress IP when the profile gives one, so
+// reaching a node never needs DNS (in TUN mode the lookup can loop into the
+// core's own tunnel DNS); the TLS/REALITY server name stays the domain.
+// Without an IP it dials the domain.
+func TestNodeOutboundDialsIngressIP(t *testing.T) {
+	cases := []struct {
+		name, ip, want string
+	}{
+		{"ip", "8.8.8.8", "8.8.8.8"},
+		{"mapped ipv4", "::ffff:8.8.4.4", "8.8.4.4"},
+		{"ipv6", "2606:4700:4700::1111", "2606:4700:4700::1111"},
+		{"no ip", "", "edge.example.com"},
+	}
+	for _, tc := range cases {
+		n := node(profile.ProtocolVLESS)
+		n.Ingresses[0].Endpoint.IP = tc.ip
+		n.Ingresses[0].Credentials.VLESS = &profile.VLESSCredentials{UUID: "00000000-0000-4000-8000-000000000001"}
+		got, err := Build(base(n), profile.PlatformCapabilities{}, time.Now())
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var o *option.VLESSOutboundOptions
+		for _, out := range got.Options.Outbounds {
+			if v, ok := out.Options.(*option.VLESSOutboundOptions); ok {
+				o = v
+			}
+		}
+		if o == nil || o.Server != tc.want || o.TLS == nil || o.TLS.ServerName != "edge.example.com" {
+			t.Fatalf("%s: %#v", tc.name, o)
+		}
+	}
+}
+
 func TestGoldenOutboundOptions(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -50,7 +83,7 @@ func TestGoldenOutboundOptions(t *testing.T) {
 			return n
 		}(), func(t *testing.T, v any) {
 			o, ok := v.(*option.ShadowsocksOutboundOptions)
-			if !ok || o.Method != "2022-blake3-aes-128-gcm" || o.Server != "edge.example.com" || o.Password != "AQEBAQEBAQEBAQEBAQEBAQ==:AAAAAAAAAAAAAAAAAAAAAA==" {
+			if !ok || o.Method != "2022-blake3-aes-128-gcm" || o.Server != "8.8.8.8" || o.Password != "AQEBAQEBAQEBAQEBAQEBAQ==:AAAAAAAAAAAAAAAAAAAAAA==" {
 				t.Fatalf("%#v", v)
 			}
 		}},

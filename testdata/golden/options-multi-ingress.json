@@ -95,7 +95,7 @@
     {
       "type": "vless",
       "tag": "node-9144f403bb85417e-13b7994f",
-      "server": "tyo-01.edge.example.com",
+      "server": "8.8.8.8",
       "server_port": 443,
       "uuid": "00000000-0000-4000-8000-000000000001",
       "flow": "xtls-rprx-vision",
@@ -124,7 +124,7 @@
     {
       "type": "anytls",
       "tag": "node-55b02d505a37e662",
-      "server": "sjc-01.edge.example.com",
+      "server": "1.1.1.1",
       "server_port": 443,
       "tls": {
         "enabled": true,

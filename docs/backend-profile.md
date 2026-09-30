@@ -45,14 +45,14 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 | `replica_ordinal` | 必填（`0` 也必须显式给出），非负整数；同一 Node 内唯一且按数组顺序严格递增（不要求连续） |
 | `protocol` | `shadowsocks`、`vless` 或 `anytls` |
 | `endpoint.domain` | 实际连接域名；AnyTLS 的 TLS `server_name` 必须等于它（REALITY 不要求） |
-| `endpoint.ip` | 可选。存在时必须是公网单播 IP，用于入口探测和 TUN 路由排除；缺省时探测解析 `domain` |
+| `endpoint.ip` | 可选。存在时必须是公网单播 IP，核心直接拨这个 IP 连接节点（TLS/REALITY 仍用 `tls.server_name`），并用于入口探测和 TUN 路由排除；缺省时拨号和探测都解析 `domain` |
 | `endpoint.port` | 1–65535 |
 | `credentials` | 必须且只能包含与该入口协议同名的一项 |
 | `tls` | VLESS REALITY 与 AnyTLS 必须提供 |
 | `transport` | 只能缺省或 `type` 为空；非空传输会被拒绝 |
 | `capabilities` | `tcp`、`udp` 至少一个为 true |
 
-`endpoint.ip` 会拒绝私网、回环、链路本地、组播、未指定、文档网段、基准测试网段、CGNAT 和其他保留地址。建议后端为每个入口（包括 backup）都提供 IP：桌面 TUN 只能对已知 IP 做操作系统级路由排除。
+`endpoint.ip` 会拒绝私网、回环、链路本地、组播、未指定、文档网段、基准测试网段、CGNAT 和其他保留地址。建议后端为每个入口（包括 backup）都提供 IP：桌面 TUN 只能对已知 IP 做操作系统级路由排除；没有 IP 的入口每次连接前都要解析域名，TUN 模式下这次解析可能绕回隧道自身的 DNS。
 
 ### 故障转移语义
 
