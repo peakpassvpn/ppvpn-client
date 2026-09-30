@@ -157,8 +157,11 @@ func (c *Core) enableRuleSets(dir string, adjust func(*rulesets.Options)) {
 	if adjust != nil {
 		adjust(&options)
 	}
-	c.ruleSets.Close()
+	c.mu.Lock()
+	previous := c.ruleSets
 	c.ruleSets = rulesets.New(options)
+	c.mu.Unlock()
+	previous.Close()
 }
 
 func (c *Core) ruleSetOptions(dir string) rulesets.Options {

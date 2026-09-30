@@ -152,11 +152,13 @@ func (m *Manager) Prepare(ctx context.Context, sets []profile.RuleSet, allowedHo
 			snapshot.pinned[normalized] = true
 		}
 	}
+	// Copy the previous entries under the lock: the refresh loop updates
+	// them in place.
 	m.mu.Lock()
-	previous := map[string]*entry{}
+	previous := map[string]entry{}
 	if m.current != nil {
 		for _, e := range m.current.entries {
-			previous[e.set.ID] = e
+			previous[e.set.ID] = *e
 		}
 	}
 	m.mu.Unlock()
