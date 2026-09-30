@@ -93,7 +93,10 @@ mkdir -m 700 "$APP_STATE"
 另外（0.5.9 起）每次连接节点失败记一行 `msg="outbound failed"`：`stage`（`dial`：TCP 连接失败，VLESS/REALITY
 与 AnyTLS 的 TLS 握手也在这一步；`closed before any response`：连上后节点没回任何数据就关闭，例如 Shadowsocks
 密钥被拒）、`node_id`、`endpoint_key`、`outbound`、`protocol`、`network`、`destination`、`error` 与 `ms`。不记录
-任何凭据；只在 debug 级别记录。
+任何凭据；只在 debug 级别记录。每次 apply（不含 reload/规则集重建）还为每个带 TLS 的入口记一行
+`msg="ingress tls"`，用于和服务端核对参数而不暴露原文：`server_name`、`flow`，REALITY 入口另有
+`public_key_sha256`/`short_id_sha256`（按收到的字符串原样取 SHA-256 的前 10 个十六进制字符）、两者长度、
+`public_key_encoding`（`padded`/`unpadded` 与 `url`/`std`/`url-or-std` 字母表）和 uTLS `fingerprint`。
 
 `dns-remote`（经所选节点的 DoT）带有防半开连接的保护：每次尝试最多 3 秒，失败（超时、EOF、连接重置等）
 即换连接重试，最多 3 次、总计不超过 10 秒；DNS 应答（包括 NXDOMAIN、SERVFAIL）不重试。距上次成功超过

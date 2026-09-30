@@ -423,6 +423,9 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 			}
 		}
 	}
+	if !rebuild {
+		c.logIngressTLS(candidateProfile)
+	}
 	for _, event := range pinEvents {
 		c.emit(event)
 	}
