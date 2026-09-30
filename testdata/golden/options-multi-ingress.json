@@ -61,6 +61,8 @@
       "tag": "tun",
       "address": "172.19.0.1/30",
       "auto_route": true,
+      "iproute2_table_index": 2091,
+      "iproute2_rule_index": 9091,
       "strict_route": true,
       "route_exclude_address": [
         "8.8.8.8/32",
