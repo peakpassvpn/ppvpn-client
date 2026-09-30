@@ -12,6 +12,9 @@ func Parse(data []byte) (*Profile, error) {
 	dec.DisallowUnknownFields()
 	var p Profile
 	if err := dec.Decode(&p); err != nil {
+		if removed := rejectRemovedFields(data); removed != nil {
+			return nil, removed
+		}
 		return nil, fmt.Errorf("decode profile: %w", err)
 	}
 	if err := ensureEOF(dec); err != nil {
@@ -41,6 +44,33 @@ func requirePresence(data []byte) error {
 		for j, in := range n.Ingresses {
 			if in.ReplicaOrdinal == nil || string(*in.ReplicaOrdinal) == "null" {
 				return invalid("FIELD_REQUIRED", fmt.Sprintf("nodes[%d].ingresses[%d].replica_ordinal", i, j), "replica ordinal is required")
+			}
+		}
+	}
+	return nil
+}
+
+// rejectRemovedFields turns the strict decoder's generic unknown-field error
+// into a coded one for fields that were renamed. shadowsocks.server_key was
+// replaced by the SIP022 pair identity_keys (server iPSKs) + user_key (uPSK);
+// a backend still sending it had the two roles swapped.
+func rejectRemovedFields(data []byte) error {
+	var shape struct {
+		Nodes []struct {
+			Ingresses []struct {
+				Credentials struct {
+					Shadowsocks map[string]json.RawMessage `json:"shadowsocks"`
+				} `json:"credentials"`
+			} `json:"ingresses"`
+		} `json:"nodes"`
+	}
+	if json.Unmarshal(data, &shape) != nil {
+		return nil
+	}
+	for i, n := range shape.Nodes {
+		for j, in := range n.Ingresses {
+			if _, ok := in.Credentials.Shadowsocks["server_key"]; ok {
+				return invalid("SHADOWSOCKS_SERVER_KEY_REMOVED", fmt.Sprintf("nodes[%d].ingresses[%d].credentials.shadowsocks.server_key", i, j), "server_key was removed; send the server iPSKs as identity_keys and the user uPSK as user_key")
 			}
 		}
 	}

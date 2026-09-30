@@ -28,7 +28,7 @@
           "replica_ordinal": 1,
           "protocol": "shadowsocks",
           "endpoint": {"domain": "tyo-01-relay.edge.example.com", "port": 8443},
-          "credentials": {"shadowsocks": {"method": "2022-blake3-aes-128-gcm", "server_key": "AAAAAAAAAAAAAAAAAAAAAA==", "identity_keys": ["AQEBAQEBAQEBAQEBAQEBAQ=="]}},
+          "credentials": {"shadowsocks": {"method": "2022-blake3-aes-128-gcm", "user_key": "AAAAAAAAAAAAAAAAAAAAAA==", "identity_keys": ["AQEBAQEBAQEBAQEBAQEBAQ=="]}},
           "capabilities": {"tcp": true, "udp": true}
         }
       ]

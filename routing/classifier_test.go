@@ -18,7 +18,7 @@ func testProfile() *profile.Profile {
 			Protocol:    profile.ProtocolShadowsocks,
 			Endpoint:    profile.Endpoint{Domain: "edge.example.com", IP: "8.8.8.8", Port: 443},
 			Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{
-				Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA==",
+				Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA==",
 			}},
 			Capabilities: profile.Capabilities{TCP: true, UDP: true},
 		}},

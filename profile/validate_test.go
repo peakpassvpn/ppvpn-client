@@ -28,7 +28,7 @@ func validIngress(protocol Protocol, role IngressRole, domain, ip string) Ingres
 	in := Ingress{Role: role, EndpointKey: domain, Protocol: protocol, Endpoint: Endpoint{Domain: domain, IP: ip, Port: 443}, Capabilities: Capabilities{TCP: true, UDP: true}}
 	switch protocol {
 	case ProtocolShadowsocks:
-		in.Credentials.Shadowsocks = &ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+		in.Credentials.Shadowsocks = &ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	case ProtocolVLESS:
 		in.Credentials.VLESS = &VLESSCredentials{UUID: "00000000-0000-4000-8000-000000000001", Flow: "xtls-rprx-vision"}
 		in.TLS = &TLS{ServerName: domain, Reality: &Reality{PublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", ShortID: "01"}}
@@ -237,10 +237,10 @@ func TestParseRejectsSingBoxFields(t *testing.T) {
 
 func TestProtocolFieldsFailClosed(t *testing.T) {
 	p := validProfile(ProtocolShadowsocks)
-	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "short"
+	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.UserKey = "short"
 	err := Validate(p, time.Now())
 	var ve *ValidationError
-	if !errors.As(err, &ve) || ve.Code != "SHADOWSOCKS_KEY_INVALID" {
+	if !errors.As(err, &ve) || ve.Code != "SHADOWSOCKS_KEY_INVALID" || ve.Field != "nodes[0].ingresses[0].credentials.shadowsocks.user_key" {
 		t.Fatalf("%#v", err)
 	}
 	p = validProfile(ProtocolVLESS)
@@ -374,7 +374,7 @@ func TestIngressLabelIsOptionalDisplayOnly(t *testing.T) {
 			t.Errorf("label %q rejected: %v", label, err)
 		}
 	}
-	data := []byte(`{"schema_version":1,"revision":"r","expires_at":"2999-01-01T00:00:00Z","nodes":[{"id":"n","entry_key":"cn","capabilities":{"tcp":true},"ingresses":[{"role":"primary","endpoint_key":"9001","label":"Tokyo 2","replica_ordinal":0,"protocol":"shadowsocks","endpoint":{"domain":"edge.example.com","port":443},"credentials":{"shadowsocks":{"method":"2022-blake3-aes-128-gcm","server_key":"AAAAAAAAAAAAAAAAAAAAAA=="}},"capabilities":{"tcp":true}}]}],"selection":{"mode":"manual","default_node_id":"n"},"routing":{"final":{"type":"proxy","target":"selected"}}}`)
+	data := []byte(`{"schema_version":1,"revision":"r","expires_at":"2999-01-01T00:00:00Z","nodes":[{"id":"n","entry_key":"cn","capabilities":{"tcp":true},"ingresses":[{"role":"primary","endpoint_key":"9001","label":"Tokyo 2","replica_ordinal":0,"protocol":"shadowsocks","endpoint":{"domain":"edge.example.com","port":443},"credentials":{"shadowsocks":{"method":"2022-blake3-aes-128-gcm","user_key":"AAAAAAAAAAAAAAAAAAAAAA=="}},"capabilities":{"tcp":true}}]}],"selection":{"mode":"manual","default_node_id":"n"},"routing":{"final":{"type":"proxy","target":"selected"}}}`)
 	p, err := Parse(data)
 	if err != nil {
 		t.Fatalf("strict decoding rejected label: %v", err)
@@ -384,5 +384,42 @@ func TestIngressLabelIsOptionalDisplayOnly(t *testing.T) {
 	}
 	if (Ingress{}).DisplayLabel() != "" {
 		t.Fatal("absent label must read as empty")
+	}
+}
+
+func TestShadowsocksServerKeyRejected(t *testing.T) {
+	data, err := os.ReadFile("../testdata/profiles/multi-ingress.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Parse(data); err != nil {
+		t.Fatalf("fixture rejected: %v", err)
+	}
+	for name, replacement := range map[string]string{
+		"renamed":    `"server_key"`,
+		"additional": `"server_key": "AAAAAAAAAAAAAAAAAAAAAA==", "user_key"`,
+	} {
+		mutated := strings.Replace(string(data), `"user_key"`, replacement, 1)
+		if mutated == string(data) {
+			t.Fatal("fixture has no user_key")
+		}
+		_, err = Parse([]byte(mutated))
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Code != "SHADOWSOCKS_SERVER_KEY_REMOVED" || !strings.HasSuffix(ve.Field, ".credentials.shadowsocks.server_key") || !strings.HasPrefix(ve.Field, "nodes[0].ingresses[") {
+			t.Fatalf("%s: %#v", name, err)
+		}
+	}
+}
+
+func TestShadowsocksUserKeyRequiredIdentityKeysOptional(t *testing.T) {
+	p := validProfile(ProtocolShadowsocks)
+	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.IdentityKeys = nil
+	if err := Validate(p, time.Now()); err != nil {
+		t.Fatalf("single-user SS2022 rejected: %v", err)
+	}
+	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.UserKey = ""
+	var ve *ValidationError
+	if err := Validate(p, time.Now()); !errors.As(err, &ve) || ve.Code != "CREDENTIALS_INVALID" {
+		t.Fatalf("missing user_key accepted: %#v", err)
 	}
 }

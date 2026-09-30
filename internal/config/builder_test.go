@@ -28,7 +28,7 @@ func ingress(protocol profile.Protocol, role profile.IngressRole, domain, ip str
 	in := profile.Ingress{Role: role, EndpointKey: domain, Protocol: protocol, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Capabilities: profile.Capabilities{TCP: true, UDP: true}}
 	switch protocol {
 	case profile.ProtocolShadowsocks:
-		in.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+		in.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	case profile.ProtocolVLESS:
 		in.Credentials.VLESS = &profile.VLESSCredentials{UUID: "00000000-0000-4000-8000-000000000002"}
 		in.TLS = &profile.TLS{ServerName: domain, Reality: &profile.Reality{PublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", ShortID: "02"}}
@@ -46,7 +46,7 @@ func TestGoldenOutboundOptions(t *testing.T) {
 	}{
 		{"shadowsocks2022", func() profile.Node {
 			n := node(profile.ProtocolShadowsocks)
-			n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA==", IdentityKeys: []string{"AQEBAQEBAQEBAQEBAQEBAQ=="}}
+			n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA==", IdentityKeys: []string{"AQEBAQEBAQEBAQEBAQEBAQ=="}}
 			return n
 		}(), func(t *testing.T, v any) {
 			o, ok := v.(*option.ShadowsocksOutboundOptions)
@@ -96,12 +96,41 @@ func TestGoldenOutboundOptions(t *testing.T) {
 }
 func TestStableTagAcrossEndpointMigration(t *testing.T) {
 	n := node(profile.ProtocolShadowsocks)
-	n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 	a, _ := Build(base(n), profile.PlatformCapabilities{}, time.Now())
 	n.Ingresses[0].Endpoint.Domain = "new.example.com"
 	n.Ingresses[0].Endpoint.IP = "1.1.1.1"
 	b, _ := Build(base(n), profile.PlatformCapabilities{}, time.Now())
 	if a.NodeTags[n.ID] != b.NodeTags[n.ID] {
 		t.Fatal("tag changed")
+	}
+}
+
+// SIP022: identity_keys are the server iPSKs, outermost first, and user_key is
+// the user's uPSK; the EIH password is iPSK1:...:iPSKn:uPSK.
+func TestShadowsocksEIHPasswordOrder(t *testing.T) {
+	const (
+		ipsk1 = "AQEBAQEBAQEBAQEBAQEBAQ=="
+		ipsk2 = "AgICAgICAgICAgICAgICAg=="
+		upsk  = "AwMDAwMDAwMDAwMDAwMDAw=="
+	)
+	for _, tc := range []struct {
+		identity []string
+		want     string
+	}{
+		{nil, upsk},
+		{[]string{ipsk1}, ipsk1 + ":" + upsk},
+		{[]string{ipsk1, ipsk2}, ipsk1 + ":" + ipsk2 + ":" + upsk},
+	} {
+		in := ingress(profile.ProtocolShadowsocks, profile.IngressRolePrimary, "edge.example.com", "8.8.8.8")
+		in.Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", IdentityKeys: tc.identity, UserKey: upsk}
+		out, err := buildOutbound(in, "tag")
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, ok := out.Options.(*option.ShadowsocksOutboundOptions)
+		if !ok || o.Password != tc.want {
+			t.Fatalf("identity %v: %#v", tc.identity, out.Options)
+		}
 	}
 }

@@ -13,7 +13,7 @@ import (
 )
 
 func ssIngress(role profile.IngressRole, domain, ip string) profile.Ingress {
-	return profile.Ingress{Role: role, EndpointKey: domain, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}
+	return profile.Ingress{Role: role, EndpointKey: domain, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}
 }
 
 func probeProfile(ingresses ...profile.Ingress) *profile.Profile {

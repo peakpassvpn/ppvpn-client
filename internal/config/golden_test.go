@@ -19,7 +19,7 @@ func TestProfileToOptionsGolden(t *testing.T) {
 	ss := node(profile.ProtocolShadowsocks)
 	ss.ID = "ss"
 	ss.Ingresses[0].EndpointKey = "ss-9001"
-	ss.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: "AAAAAAAAAAAAAAAAAAAAAA==", IdentityKeys: []string{"AQEBAQEBAQEBAQEBAQEBAQ=="}}
+	ss.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA==", IdentityKeys: []string{"AQEBAQEBAQEBAQEBAQEBAQ=="}}
 	vless := node(profile.ProtocolVLESS)
 	vless.ID = "vless"
 	vless.Ingresses[0].EndpointKey = "vless-9001"

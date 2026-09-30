@@ -56,7 +56,7 @@ func startShadowsocksServer(t *testing.T) uint16 {
 }
 
 func localSSIngress(role profile.IngressRole, key string, ordinal int, port uint16) profile.Ingress {
-	return profile.Ingress{Role: role, EndpointKey: key, ReplicaOrdinal: ordinal, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "localhost", Port: port}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", ServerKey: testSSKey}}, Capabilities: profile.Capabilities{TCP: true}}
+	return profile.Ingress{Role: role, EndpointKey: key, ReplicaOrdinal: ordinal, Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: "localhost", Port: port}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: testSSKey}}, Capabilities: profile.Capabilities{TCP: true}}
 }
 
 // TestLocalProxyOnlyCoreFailsOverToBackupIngress runs the real sing-box

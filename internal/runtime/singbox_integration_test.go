@@ -19,7 +19,7 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	platform := profile.PlatformCapabilities{Platform: "macos", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
 	core := newLocalProxyTestCore(t, platform)
 	p := testProfile("r1", "edge.example.com", "8.8.8.8")
-	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
+	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.UserKey = "AAAAAAAAAAAAAAAAAAAAAA=="
 	second := cloneNode(p.Nodes[0])
 	second.ID = "node-2"
 	second.Ingresses[0].EndpointKey = "9002"
@@ -86,7 +86,7 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 		t.Fatal(err)
 	}
 	migrated := testProfile("r2", "new-edge.example.com", "1.1.1.1")
-	migrated.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = "AAAAAAAAAAAAAAAAAAAAAA=="
+	migrated.Nodes[0].Ingresses[0].Credentials.Shadowsocks.UserKey = "AAAAAAAAAAAAAAAAAAAAAA=="
 	second = cloneNode(migrated.Nodes[0])
 	second.ID = "node-2"
 	second.Ingresses[0].EndpointKey = "9002"

@@ -390,7 +390,8 @@ func buildOutbound(n profile.Ingress, tag string) (option.Outbound, error) {
 	switch n.Protocol {
 	case profile.ProtocolShadowsocks:
 		c := n.Credentials.Shadowsocks
-		keys := append(append([]string(nil), c.IdentityKeys...), c.ServerKey)
+		// SIP022 EIH password: server iPSKs outermost first, then the user uPSK.
+		keys := append(append([]string(nil), c.IdentityKeys...), c.UserKey)
 		return option.Outbound{Type: C.TypeShadowsocks, Tag: tag, Options: &option.ShadowsocksOutboundOptions{ServerOptions: server, Method: c.Method, Password: strings.Join(keys, ":")}}, nil
 	case profile.ProtocolVLESS:
 		c := n.Credentials.VLESS
