@@ -130,7 +130,7 @@ func TestLifecycleLogsPhaseTimings(t *testing.T) {
 	defer core.Stop()
 	lines := b.String()
 	for _, want := range []string{
-		"msg=\"apply timing\" outcome=ok tun=true validate_ms=", "rule_sets_ms=", "host_ipv6_ms=", "build_ms=", "routing_ms=",
+		"msg=\"apply timing\" outcome=ok tun=true rebuild=false rule_sets_ready=0 rule_sets_stale=0 rule_sets_unavailable=0 validate_ms=", "rule_sets_ms=", "host_ipv6_ms=", "build_ms=", "routing_ms=",
 		"msg=\"start timing\" outcome=ok tun=true engine_create_ms=", "engine_start_ms=", "total_ms=",
 	} {
 		if !strings.Contains(lines, want) {

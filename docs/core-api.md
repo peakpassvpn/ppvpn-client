@@ -115,7 +115,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 
 ```json
 {
-  "core_version": "0.5.7",
+  "core_version": "0.5.8",
   "core_api_version": 1,
   "profile_schema_version": 1,
   "flow_adapter_version": 1,
@@ -182,11 +182,18 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
   （非 200/304，含重定向）、`RULE_SET_TOO_LARGE`（超过 32 MiB）、`RULE_SET_SHA256_MISMATCH`、
   `RULE_SET_INVALID`（不是可读的二进制规则集）、`RULE_SET_STORAGE_FAILED`（写文件失败）、
   `RULE_SET_STORAGE_UNAVAILABLE`（核心没有状态目录）。
+- `failures`（0.5.8 起）：非 `ready` 时连续下载失败的次数；为 0 时省略。
+- `next_retry_at`（0.5.8 起）：非 `ready` 时下次重试的时间（RFC 3339 UTC）；`RULE_SET_HOST_NOT_PINNED` 与
+  `RULE_SET_STORAGE_UNAVAILABLE` 在下次 `apply-profile` 之前不会变化，此时省略。
 
 核心按 `update_interval_seconds` 刷新 `ready` 的规则集（带 `If-None-Match`）；`stale`/`unavailable` 的以
-30 秒起指数退避重试（最长 15 分钟，且不超过更新间隔）。某个规则集从 `unavailable` 变为可用时，核心用缓存副本
-重建配置（等同 `reload`，运行中的实例会被替换）；已在使用的规则集文件内容更新时由 sing-box 就地重新加载，
-不重启实例。状态每次变化都会发出 `RuleSetChanged` 事件：
+5 秒起指数退避重试（5、10、20 秒……最长 15 分钟，且不超过更新间隔）。同时到期的规则集并发下载（最多 4 个）。
+某个非 `ready` 的规则集恢复时，核心认为网络已经恢复，立即重试其余所有非 `ready` 的规则集，而不是各自等待退避。
+有规则集从 `unavailable` 变为可用（或反之）时，核心在这一轮到期的下载全部结束后只重建一次配置（等同
+`reload`，运行中的实例会被替换，**已建立的连接会断开**，监听端口不变）；已在使用的规则集文件内容更新时由
+sing-box 就地重新加载，不重启实例，也不断开连接。状态每次变化都会发出 `RuleSetChanged` 事件，并在核心日志记一行
+`msg="rule set"`（`id`、`state`、`error`、`failures`、`next_retry_at`）；`apply timing` 一行附带
+`rule_sets_ready`/`rule_sets_stale`/`rule_sets_unavailable` 与 `rebuild`（规则集或 `reload` 触发的重建为 `true`）：
 
 ```json
 {"type":"RuleSetChanged","at":"2026-07-23T12:00:00Z","rule_set_id":"cn-ip","message":"unavailable","code":"RULE_SET_DOWNLOAD_FAILED"}

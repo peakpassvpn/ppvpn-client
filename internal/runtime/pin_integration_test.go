@@ -73,7 +73,8 @@ func TestPinIngressOnARunningCore(t *testing.T) {
 	}
 
 	// Pinned to a dead ingress: the probe fails and nothing falls back.
-	*primaryHits, *backupHits = destinationRecorder{}, destinationRecorder{}
+	primaryHits.reset()
+	backupHits.reset()
 	if err := core.PinIngress("node", "c"); err != nil {
 		t.Fatal(err)
 	}

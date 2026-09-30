@@ -52,6 +52,12 @@ func (r *destinationRecorder) RoutedPacketConnection(_ context.Context, conn N.P
 	return conn
 }
 
+func (r *destinationRecorder) reset() {
+	r.mu.Lock()
+	r.seen = nil
+	r.mu.Unlock()
+}
+
 func (r *destinationRecorder) has(destination string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

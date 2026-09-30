@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -304,4 +305,76 @@ func TestDownloadsRefuseRedirects(t *testing.T) {
 	if status := statusOf(t, manager.Statuses(), "cn-site"); status.State != StateUnavailable || status.Error != ErrHTTPStatus || target.requests.Load() != 0 {
 		t.Fatalf("status: %+v, target requests %d", status, target.requests.Load())
 	}
+}
+
+// When one set recovers, every other set that is not ready is retried at
+// once (not on its own, possibly long, backoff), the downloads run
+// concurrently, and the configuration is rebuilt once for the whole round.
+func TestRecoverySweepsAllSetsAndRebuildsOnce(t *testing.T) {
+	body := buildSRS(t, nil, []string{"1.0.1.0/24"})
+	server := newRuleSetServer(t, body)
+	server.set(body, true)
+	var rebuilds atomic.Int32
+	manager := newManager(t, server, t.TempDir(), Options{
+		RetryMin:  time.Hour, // nothing retries on its own during the test
+		OnRebuild: func() { rebuilds.Add(1) },
+	})
+	var sets []profile.RuleSet
+	for i := range 15 {
+		sets = append(sets, server.ruleSet(fmt.Sprintf("set-%02d", i), body))
+	}
+	snapshot := manager.Prepare(context.Background(), sets, []string{server.host()}, true)
+	for _, status := range statusesOf(manager, snapshot) {
+		if status.State != StateUnavailable || status.Failures != 1 || status.NextRetryAt == nil {
+			t.Fatalf("failed set status: %+v", status)
+		}
+	}
+	// Staggered backoffs, as after a long outage: one set is due now, the
+	// others an hour from now.
+	manager.mu.Lock()
+	for i, e := range snapshot.entries {
+		e.due = time.Now().Add(time.Hour)
+		if i == 0 {
+			e.due = time.Now()
+		}
+	}
+	manager.mu.Unlock()
+	server.set(body, false)
+	started := time.Now()
+	manager.Activate(snapshot)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ready := 0
+		for _, status := range manager.Statuses() {
+			if status.State == StateReady {
+				ready++
+			}
+		}
+		if ready == len(sets) && rebuilds.Load() > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d sets ready, %d rebuilds after %s", ready, len(sets), rebuilds.Load(), time.Since(started))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := rebuilds.Load(); n != 1 {
+		t.Fatalf("%d rebuilds for one recovery", n)
+	}
+	for _, status := range manager.Statuses() {
+		if status.Failures != 0 || status.NextRetryAt != nil {
+			t.Fatalf("ready set status: %+v", status)
+		}
+	}
+}
+
+func statusesOf(m *Manager, snapshot *Snapshot) []Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Status, 0, len(snapshot.entries))
+	for _, e := range snapshot.entries {
+		out = append(out, e.status())
+	}
+	return out
 }
