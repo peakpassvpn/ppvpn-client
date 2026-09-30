@@ -64,6 +64,12 @@ type Status struct {
 	State     State      `json:"state"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 	Error     string     `json:"error,omitempty"`
+	// Failures counts consecutive failed downloads (omitted when zero).
+	Failures int `json:"failures,omitempty"`
+	// NextRetryAt is when a set that is not ready is retried; omitted when
+	// ready, or when nothing can change before the next apply-profile
+	// (RULE_SET_HOST_NOT_PINNED, RULE_SET_STORAGE_UNAVAILABLE).
+	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
 }
 
 // DialFunc opens a direct connection that bypasses the tunnel.
@@ -85,7 +91,8 @@ type Options struct {
 	// files and reloads them in place.
 	OnRebuild func()
 	// RetryMin and RetryMax bound the retry backoff of sets that are not
-	// ready (defaults 30s and 15m, never above the set's update interval).
+	// ready: RetryMin, doubling per consecutive failure up to RetryMax
+	// (defaults 5s and 15m, never above the set's update interval).
 	RetryMin, RetryMax time.Duration
 	// FetchTimeout bounds one background download (default 60s).
 	FetchTimeout time.Duration
@@ -126,7 +133,7 @@ type localCopy struct {
 
 func New(opts Options) *Manager {
 	if opts.RetryMin <= 0 {
-		opts.RetryMin = 30 * time.Second
+		opts.RetryMin = 5 * time.Second
 	}
 	if opts.RetryMax <= 0 {
 		opts.RetryMax = 15 * time.Minute
@@ -287,8 +294,28 @@ func (e *entry) status() Status {
 	}
 	if e.state != StateReady {
 		status.Error = e.err
+		status.Failures = e.failures
+		if !e.due.IsZero() && e.err != ErrHostNotPinned && e.err != ErrStorageUnavailable {
+			at := e.due.UTC()
+			status.NextRetryAt = &at
+		}
 	}
 	return status
+}
+
+// Counts summarizes a snapshot's sets by state (apply timing).
+func (s *Snapshot) Counts() (ready, stale, unavailable int) {
+	for _, e := range s.entries {
+		switch e.state {
+		case StateReady:
+			ready++
+		case StateStale:
+			stale++
+		default:
+			unavailable++
+		}
+	}
+	return
 }
 
 func (m *Manager) notify(changed []Status) {
@@ -300,9 +327,18 @@ func (m *Manager) notify(changed []Status) {
 	}
 }
 
+// refreshConcurrency bounds the parallel downloads of one refresh round.
+const refreshConcurrency = 4
+
 // loop refreshes every set when it is due: ready sets on their update
-// interval, the others with a bounded backoff.
+// interval, the others with a bounded backoff. Due sets are refreshed
+// concurrently. When a set that was not ready recovers, the connectivity it
+// was waiting for is probably back, so every other set that is not ready is
+// retried at once instead of on its own backoff. The configuration is rebuilt
+// once, after the refreshes that are due right now have all finished, not
+// once per set (a rebuild replaces the engine and drops open connections).
 func (m *Manager) loop(ctx context.Context, generation uint64) {
+	rebuildPending := false
 	for {
 		m.mu.Lock()
 		if m.generation != generation {
@@ -322,6 +358,10 @@ func (m *Manager) loop(ctx context.Context, generation uint64) {
 		snapshot := m.current
 		m.mu.Unlock()
 		if len(due) == 0 {
+			if rebuildPending && m.opts.OnRebuild != nil {
+				go m.opts.OnRebuild()
+			}
+			rebuildPending = false
 			if next.IsZero() {
 				return
 			}
@@ -334,13 +374,45 @@ func (m *Manager) loop(ctx context.Context, generation uint64) {
 			}
 			continue
 		}
+		var wg sync.WaitGroup
+		var resultMu sync.Mutex
+		recovered := false
+		slots := make(chan struct{}, refreshConcurrency)
 		for _, e := range due {
-			m.refresh(ctx, generation, snapshot, e)
+			wg.Add(1)
+			slots <- struct{}{}
+			go func(e *entry) {
+				defer wg.Done()
+				defer func() { <-slots }()
+				rebuild, back := m.refresh(ctx, generation, snapshot, e)
+				resultMu.Lock()
+				rebuildPending = rebuildPending || rebuild
+				recovered = recovered || back
+				resultMu.Unlock()
+			}(e)
+		}
+		wg.Wait()
+		if ctx.Err() != nil {
+			return
+		}
+		if recovered {
+			m.mu.Lock()
+			if m.generation == generation {
+				now := m.opts.Now()
+				for _, e := range m.current.entries {
+					if e.state != StateReady && e.err != ErrHostNotPinned && e.err != ErrStorageUnavailable && e.due.After(now) {
+						e.due = now
+					}
+				}
+			}
+			m.mu.Unlock()
 		}
 	}
 }
 
-func (m *Manager) refresh(ctx context.Context, generation uint64, snapshot *Snapshot, e *entry) {
+// refresh fetches one set. rebuild reports that the configuration must be
+// rebuilt; recovered that a set which was not ready now is.
+func (m *Manager) refresh(ctx context.Context, generation uint64, snapshot *Snapshot, e *entry) (rebuild, recovered bool) {
 	m.mu.Lock()
 	candidate := *e
 	m.mu.Unlock()
@@ -350,25 +422,24 @@ func (m *Manager) refresh(ctx context.Context, generation uint64, snapshot *Snap
 		cancel()
 	}
 	if ctx.Err() != nil {
-		return
+		return false, false
 	}
 	m.mu.Lock()
 	if m.generation != generation {
 		m.mu.Unlock()
-		return
+		return false, false
 	}
 	before := *e
 	*e = candidate
 	e.due = m.nextDue(e, m.opts.Now())
+	status := e.status()
 	m.mu.Unlock()
 	if before.state != e.state {
-		m.notify([]Status{e.status()})
+		m.notify([]Status{status})
 	}
-	rebuild := (before.state == StateUnavailable) != (e.state == StateUnavailable) ||
+	rebuild = (before.state == StateUnavailable) != (e.state == StateUnavailable) ||
 		(before.local != nil && e.local != nil && before.local.mirrorDNS != e.local.mirrorDNS)
-	if rebuild && m.opts.OnRebuild != nil {
-		go m.opts.OnRebuild()
-	}
+	return rebuild, before.state != StateReady && e.state == StateReady
 }
 
 func (m *Manager) nextDue(e *entry, now time.Time) time.Time {

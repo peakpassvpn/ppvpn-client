@@ -201,6 +201,7 @@ func (c *Core) ruleSetOptions(dir string) rulesets.Options {
 		Dir:  dir,
 		Dial: c.dialRuleSet,
 		OnState: func(status rulesets.Status) {
+			c.logRuleSet(status)
 			c.emit(Event{Type: EventRuleSetChanged, At: time.Now(), RuleSetID: status.ID, Message: string(status.State), Code: status.Error})
 		},
 		OnRebuild: c.rebuildForRuleSets,
@@ -234,6 +235,18 @@ func (c *Core) rebuildForRuleSets() {
 	}
 }
 
+// logRuleSet writes one info line per rule set state change.
+func (c *Core) logRuleSet(status rulesets.Status) {
+	fields := []any{"id", status.ID, "state", status.State}
+	if status.Error != "" {
+		fields = append(fields, "error", status.Error, "failures", status.Failures)
+	}
+	if status.NextRetryAt != nil {
+		fields = append(fields, "next_retry_at", status.NextRetryAt.Format(time.RFC3339))
+	}
+	c.log.Info("rule set", fields...)
+}
+
 func (c *Core) ApplyProfile(p *profile.Profile, now time.Time) (bool, error) {
 	return c.ApplyProfileWithOptions(p, now, ApplyOptions{})
 }
@@ -255,9 +268,11 @@ func (c *Core) ApplyProfileWithOptions(p *profile.Profile, now time.Time, option
 func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, mode RoutingMode, rebuild bool) (applied bool, err error) {
 	downloadRuleSets := !rebuild
 	timer := newPhaseTimer()
+	var setsReady, setsStale, setsUnavailable int
 	defer func() {
 		if applied || err != nil {
-			timer.log(c.log, "apply timing", err, "tun", c.platform.TUN.Enabled)
+			timer.log(c.log, "apply timing", err, "tun", c.platform.TUN.Enabled, "rebuild", rebuild,
+				"rule_sets_ready", setsReady, "rule_sets_stale", setsStale, "rule_sets_unavailable", setsUnavailable)
 		}
 	}()
 	c.mu.RLock()
@@ -301,6 +316,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		cancel()
 	}
 	timer.mark("rule_sets")
+	setsReady, setsStale, setsUnavailable = ruleSets.Counts()
 	var proxyEndpoints []localproxy.Endpoint
 	if c.platform.LocalProxy.Enabled {
 		if c.proxyManager == nil {
