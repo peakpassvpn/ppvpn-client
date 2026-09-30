@@ -26,7 +26,7 @@ import (
 //     would hang for the node's whole connect timeout.
 //   - DNS rules mirror the route rules: a domain routed direct resolves
 //     through the system resolver dialed direct ("dns-local"); a domain routed
-//     to a proxy resolves through DoT to 1.1.1.1 dialed through the selected
+//     to a proxy resolves through DoH to 1.1.1.1 dialed through the selected
 //     node ("dns-remote"); a rejected domain is refused. dns.final follows
 //     route.final. Domain rule sets referenced by a route rule are mirrored
 //     the same way; rule sets carrying IP CIDRs never affect DNS.
@@ -41,7 +41,8 @@ const TUNInboundTag = "tun"
 const (
 	DNSLocalTag  = "dns-local"
 	DNSRemoteTag = "dns-remote"
-	// RemoteDNSServer is queried over DoT through the selected node.
+	// RemoteDNSServer is queried over DoH (https://1.1.1.1/dns-query)
+	// through the selected node.
 	RemoteDNSServer = "1.1.1.1"
 	// FakeIPRange is the benchmark range fake-ip DNS servers answer from.
 	FakeIPRange = "198.18.0.0/15"
@@ -118,10 +119,14 @@ func addTUNDNS(result *BuildResult, final profile.RoutingAction, dnsRuleSets map
 			// Darwin when a TUN exists) and, with auto_detect_interface, dials
 			// them bound to that interface, so it never loops into the TUN.
 			{Type: C.DNSTypeLocal, Tag: DNSLocalTag, Options: &option.LocalDNSServerOptions{}},
-			{Type: C.DNSTypeTLS, Tag: DNSRemoteTag, Options: &option.RemoteTLSDNSServerOptions{RemoteDNSServerOptions: option.RemoteDNSServerOptions{
+			// DoH rather than DoT: HTTP/2 carries every concurrent query on
+			// one connection, where the DoT pool dials a new connection
+			// (node handshake + TLS) for each query that finds none idle.
+			// Plain TCP dials per query and UDP needs a UDP-capable node.
+			{Type: C.DNSTypeHTTPS, Tag: DNSRemoteTag, Options: &option.RemoteHTTPSDNSServerOptions{RemoteTLSDNSServerOptions: option.RemoteTLSDNSServerOptions{RemoteDNSServerOptions: option.RemoteDNSServerOptions{
 				RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: selectedOutboundTag}},
 				DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: RemoteDNSServer},
-			}}},
+			}}}},
 		},
 		Rules:          mirrorDNSRules(result.Options.Route.Rules, dnsRuleSets),
 		Final:          DNSRemoteTag,

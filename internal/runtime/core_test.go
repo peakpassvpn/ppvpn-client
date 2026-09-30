@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
@@ -24,6 +25,8 @@ type fakeEngine struct {
 	dialOutbound    string
 	dialHost        string
 	dialPort        uint16
+	// warmedThrough is the selected outbound at each DNS warm-up.
+	warmedThrough []string
 }
 
 func TestConcurrentLifecycleOperationsDoNotLeakEngines(t *testing.T) {
@@ -76,6 +79,7 @@ func (e *fakeEngine) dialFlow(_ context.Context, network, outbound, host string,
 func (e *fakeEngine) activeIngress(nodeTag string) (failover.Active, bool) {
 	return failover.Active{Current: nodeTag}, true
 }
+func (e *fakeEngine) warmUpDNS() { e.warmedThrough = append(e.warmedThrough, e.selected) }
 func (e *fakeEngine) selectOutbound(tag string) bool {
 	e.selected = tag
 	return true
@@ -109,6 +113,40 @@ func TestApplyProfileProbesHostIPv6ForTUN(t *testing.T) {
 		if want := map[bool]int{false: 1, true: 2}[ipv6]; len(tun.Address) != want {
 			t.Fatalf("host ipv6=%v: address %v", ipv6, tun.Address)
 		}
+	}
+}
+
+// A TUN core warms the remote DNS connection once per start, after the
+// current selection is applied, so it is opened through the node that will
+// carry the queries. Without TUN there is no remote DNS to warm.
+func TestStartWarmsRemoteDNSThroughSelectedNode(t *testing.T) {
+	for _, tun := range []bool{true, false} {
+		factory := &fakeFactory{}
+		core := newCore(profile.PlatformCapabilities{Platform: "linux", TUN: profile.TUNCapabilities{Enabled: tun}}, factory.create)
+		core.hostIPv6 = func() bool { return true }
+		p := testProfile("warm", "a.example", "8.8.8.8")
+		second := testProfile("warm", "b.example", "8.8.4.4").Nodes[0]
+		second.ID = "second"
+		second.Ingresses[0].EndpointKey = "9002"
+		p.Nodes = append(p.Nodes, second)
+		if _, err := core.ApplyProfile(p, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := core.SelectNode("second"); err != nil {
+			t.Fatal(err)
+		}
+		if err := core.Start(); err != nil {
+			t.Fatal(err)
+		}
+		engine := factory.engines[len(factory.engines)-1]
+		want := []string(nil)
+		if tun {
+			want = []string{core.built.NodeTags["second"]}
+		}
+		if !slices.Equal(engine.warmedThrough, want) {
+			t.Fatalf("tun=%v: warmed through %v, want %v", tun, engine.warmedThrough, want)
+		}
+		_ = core.Stop()
 	}
 }
 

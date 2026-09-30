@@ -135,7 +135,7 @@ func socksConnect(t *testing.T, port uint16, destination netip.AddrPort) net.Con
 // configuration on a real sing-box. The TUN inbound needs privileges, so a
 // SOCKS inbound carrying the TUN tag feeds IP destinations into the same
 // rules. The remote DNS server is swapped for a local fake over plain TCP
-// (instead of DoT to 1.1.1.1), still dialed through the selected node.
+// (instead of DoH to 1.1.1.1), still dialed through the selected node.
 func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	recorder := &destinationRecorder{}
 	serverPort := startShadowsocksServerWithTracker(t, recorder)
@@ -163,7 +163,7 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		if server.Tag != config.DNSRemoteTag {
 			continue
 		}
-		detour := server.Options.(*option.RemoteTLSDNSServerOptions).Detour
+		detour := server.Options.(*option.RemoteHTTPSDNSServerOptions).Detour
 		options.DNS.Servers[i] = option.DNSServerOptions{Type: C.DNSTypeTCP, Tag: config.DNSRemoteTag, Options: &option.RemoteDNSServerOptions{
 			RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: detour}},
 			DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: "127.0.0.1", ServerPort: dnsPort},
@@ -175,7 +175,8 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
+	boxCtx := failover.Context(ctx)
+	instance, err := box.New(box.Options{Context: boxCtx, Options: options})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +184,11 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
+
+	// 0. The start-up warm-up opens the remote DNS connection through the
+	// node before any query arrives.
+	warmUpRemoteDNS(boxCtx)
+	recorder.wait(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(dnsPort))))
 
 	// 1. DNS sent to any address on port 53 is hijacked into the DNS module
 	// and, for a proxied name, resolved through the node.
