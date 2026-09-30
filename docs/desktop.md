@@ -9,7 +9,8 @@
 进程校验和控制通道；Profile 的 `DIRECT`、`REJECT`、selected/fixed-node `PROXY`
 语义只由 core 判定。
 
-增强模式（TUN）下 DNS 由 core 接管：TUN 通告的 DNS（`172.19.0.2`）以及隧道内任何 53 端口查询都被
+增强模式（TUN）下 DNS 由 core 接管：TUN 同时持有 IPv4 与 IPv6 地址，IPv6 也进入隧道；TUN 通告的 DNS
+（`172.19.0.2`、`fdfe:dcba:9876::2`）以及隧道内任何 53 端口查询（不分 IPv4/IPv6）都被
 劫持到 core，按 Profile 路由分流到系统解析器或经节点的 DoT。service 不要另行改写系统 DNS，也不要
 把 TUN 接口的 DNS 指向其他地址。详见 [安全模型](security.md#增强模式tun的-dns-与防泄漏)。
 

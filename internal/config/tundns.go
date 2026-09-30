@@ -17,9 +17,10 @@ import (
 //   - route rule 0 sniffs every TUN connection (all sniffers: TLS SNI, HTTP
 //     Host, QUIC, DNS, ...), so profile domain rules match.
 //   - route rules 1-2 hijack DNS (sniffed protocol dns, or port 53) into the
-//     DNS module. The TUN announces its peer address (172.19.0.2) as the
-//     interface DNS server, so every OS query is answered by the core and none
-//     leaks around the tunnel.
+//     DNS module. The TUN announces its peer addresses (172.19.0.2 and, on
+//     desktop, fdfe:dcba:9876::2) as the interface DNS servers where sing-tun
+//     configures DNS, and desktop routes both IPv4 and IPv6 into the TUN, so
+//     OS queries to any routed resolver are answered by the core.
 //   - route rule 3 rejects a TUN connection to 198.18.0.0/15 whose domain is
 //     unknown: that is a LAN fake-ip answer no node can reach, and proxying it
 //     would hang for the node's whole connect timeout.
