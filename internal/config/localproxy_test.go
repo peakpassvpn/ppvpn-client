@@ -2,13 +2,14 @@ package config
 
 import (
 	"net/netip"
+	"testing"
+	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/sagernet/sing-box/option"
-	"testing"
-	"time"
+	tunpkg "github.com/sagernet/sing-tun"
 )
 
 func proxyEndpoint(nodeID string) localproxy.Endpoint {
@@ -95,6 +96,25 @@ func TestPlatformCapabilitiesStayOutsideProfile(t *testing.T) {
 	tun := got.Options.Inbounds[1].Options.(*option.TunInboundOptions)
 	if len(shared.Users) != 1 || !tun.AutoRoute || tun.Stack != "mixed" {
 		t.Fatalf("shared=%#v tun=%#v", shared, tun)
+	}
+}
+
+func TestDesktopTUNUsesOwnIPRoute2Namespace(t *testing.T) {
+	n := node(profile.ProtocolShadowsocks)
+	n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	for _, platform := range []string{"linux", "macos", "windows"} {
+		got, err := Build(base(n), profile.PlatformCapabilities{Platform: platform, TUN: profile.TUNCapabilities{Enabled: true}}, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		tun := got.Options.Inbounds[len(got.Options.Inbounds)-1].Options.(*option.TunInboundOptions)
+		if tun.IPRoute2TableIndex != 2091 || tun.IPRoute2RuleIndex != 9091 {
+			t.Fatalf("%s: table=%d rule=%d", platform, tun.IPRoute2TableIndex, tun.IPRoute2RuleIndex)
+		}
+		// sing-tun owns [rule, rule+10]; it must not overlap its defaults.
+		if tun.IPRoute2TableIndex == tunpkg.DefaultIPRoute2TableIndex || tun.IPRoute2RuleIndex <= tunpkg.DefaultIPRoute2RuleIndex+10 {
+			t.Fatalf("%s: collides with sing-tun defaults", platform)
+		}
 	}
 }
 

@@ -208,6 +208,21 @@ func ingressPrefixes(p *profile.Profile) []netip.Prefix {
 	return out
 }
 
+// Linux policy-routing namespace for the desktop TUN. sing-tun defaults to
+// iproute2 table 2022 and rule priorities 9000..9010, and so does every other
+// sing-tun based app (mihomo/Clash Meta, Clash Verge, plain sing-box, ...).
+// sing-tun's cleanup (run both before installing rules and on Close) deletes
+// every rule whose priority is in [ruleIndex, ruleIndex+10], whoever owns it,
+// so sharing the defaults let a failed start of ours wipe mihomo's rules and
+// leave its default route in table 2022 unreachable. Our own table and the
+// disjoint priority range [9091, 9101] keep the two installs apart. The values
+// avoid the defaults above, Tailscale (table 52, 5210..5270), wg-quick
+// (table/fwmark 51820, 32764..32765) and the kernel's 0/32766/32767 rules.
+const (
+	tunIPRoute2TableIndex = 2091
+	tunIPRoute2RuleIndex  = 9091
+)
+
 func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded []netip.Prefix) error {
 	stack := platform.TUN.Stack
 	if stack == "" {
@@ -231,6 +246,8 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 		// OS routing level too, so handshakes and ICMP/TCP probes from any
 		// process (including an unprivileged sibling core) never loop.
 		options.RouteExcludeAddress = excluded
+		options.IPRoute2TableIndex = tunIPRoute2TableIndex
+		options.IPRoute2RuleIndex = tunIPRoute2RuleIndex
 	}
 	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: TUNInboundTag, Options: options})
 	return nil
