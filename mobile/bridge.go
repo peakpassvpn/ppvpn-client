@@ -61,19 +61,24 @@ func (b *Bridge) ApplyProfile(profileJSON string) (string, error) {
 }
 
 // ApplyProfileWithOptions is ApplyProfile with the apply-profile options
-// JSON object ({"allowed_rule_set_hosts": ["api.example.com"]}).
+// JSON object ({"allowed_rule_set_hosts": ["api.example.com"], "routing_mode": "rules"|"global"}).
 func (b *Bridge) ApplyProfileWithOptions(profileJSON, optionsJSON string) (string, error) {
 	var options struct {
 		AllowedRuleSetHosts []string `json:"allowed_rule_set_hosts"`
+		RoutingMode         string   `json:"routing_mode"`
 	}
 	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
 		return "", fmt.Errorf("decode apply options: %w", err)
+	}
+	mode, err := coreruntime.ParseRoutingMode(options.RoutingMode)
+	if err != nil {
+		return "", err
 	}
 	p, err := profile.Parse([]byte(profileJSON))
 	if err != nil {
 		return "", safeError(err)
 	}
-	applied, err := b.core.ApplyProfileWithOptions(p, time.Now(), coreruntime.ApplyOptions{AllowedRuleSetHosts: options.AllowedRuleSetHosts})
+	applied, err := b.core.ApplyProfileWithOptions(p, time.Now(), coreruntime.ApplyOptions{AllowedRuleSetHosts: options.AllowedRuleSetHosts, RoutingMode: mode})
 	if err != nil {
 		return "", safeError(err)
 	}

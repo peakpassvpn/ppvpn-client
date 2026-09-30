@@ -128,6 +128,10 @@ func (s *Server) validateProfile(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, r, nil, err)
 		return
 	}
+	if _, modeErr := routingMode(request); modeErr != nil {
+		s.respond(w, r, nil, modeErr)
+		return
+	}
 	p, err := profile.Parse(request.Profile)
 	if err == nil {
 		err = profile.Validate(p, time.Now())
@@ -143,12 +147,17 @@ func (s *Server) applyProfile(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, r, nil, err)
 		return
 	}
+	mode, err := routingMode(request)
+	if err != nil {
+		s.respond(w, r, nil, err)
+		return
+	}
 	p, err := profile.Parse(request.Profile)
 	if err != nil {
 		s.respond(w, r, nil, err)
 		return
 	}
-	applied, err := s.core.ApplyProfileWithOptions(p, time.Now(), coreruntime.ApplyOptions{AllowedRuleSetHosts: request.AllowedRuleSetHosts})
+	applied, err := s.core.ApplyProfileWithOptions(p, time.Now(), coreruntime.ApplyOptions{AllowedRuleSetHosts: request.AllowedRuleSetHosts, RoutingMode: mode})
 	s.respond(w, r, map[string]bool{"applied": applied}, err)
 }
 func (s *Server) selectNode(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +359,16 @@ func coreError(err error) error {
 type apiErr struct{ Detail Error }
 
 func (e *apiErr) Error() string { return e.Detail.Message }
+
+// routingMode reads the optional routing_mode of apply/validate-profile.
+func routingMode(request rawRequest) (coreruntime.RoutingMode, error) {
+	mode, err := coreruntime.ParseRoutingMode(request.RoutingMode)
+	if err != nil {
+		return "", apiError("ROUTING_MODE_INVALID", "routing_mode must be rules or global", "routing_mode", false)
+	}
+	return mode, nil
+}
+
 func apiError(code, message, field string, retryable bool) error {
 	return &apiErr{Error{Code: code, Message: message, Field: field, Retryable: retryable}}
 }

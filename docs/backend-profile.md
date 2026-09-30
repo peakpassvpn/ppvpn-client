@@ -169,6 +169,10 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 单端口与端口范围互为 OR；目标地址、协议、端口三个非空类别之间为 AND。空 matcher、
 空 suffix、通配符、非法 CIDR/端口范围和重复 rule ID 都会被拒绝（未知字段按上文忽略）。
 
+规则可带可选的 `baseline: true`（缺省 `false`，缺省时不必下发）：宿主以全局模式（`routing_mode: "global"`，见
+core-api.md）应用 Profile 时，只保留 baseline 规则，其余规则丢弃、`final` 固定为代理。适合标为 baseline 的是
+任何模式下都必须生效的规则，例如 `bypass-private`、官方 API 直连。0.5.6 之前的核心忽略该字段。
+
 域名在比较前去掉一个末尾 `.`、转换成 IDNA ASCII A-label 并转为小写。suffix 只在 DNS
 label 边界匹配：`example.com` 匹配自身和 `a.example.com`，不匹配
 `badexample.com`；IP literal 不进入域名匹配。
