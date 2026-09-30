@@ -352,7 +352,7 @@ func validateCredentials(n *Ingress, base string) error {
 	switch n.Protocol {
 	case ProtocolShadowsocks:
 		c := n.Credentials.Shadowsocks
-		if c == nil || c.Method == "" || c.ServerKey == "" {
+		if c == nil || c.Method == "" || c.UserKey == "" {
 			return invalid("CREDENTIALS_INVALID", base+".credentials.shadowsocks", "shadowsocks credentials are incomplete")
 		}
 		keyLength := 0
@@ -364,8 +364,8 @@ func validateCredentials(n *Ingress, base string) error {
 		default:
 			return invalid("SHADOWSOCKS_METHOD_UNSUPPORTED", base+".credentials.shadowsocks.method", "only Shadowsocks 2022 methods are supported")
 		}
-		if !validKey(c.ServerKey, keyLength) {
-			return invalid("SHADOWSOCKS_KEY_INVALID", base+".credentials.shadowsocks.server_key", "server key has invalid encoding or length")
+		if !validKey(c.UserKey, keyLength) {
+			return invalid("SHADOWSOCKS_KEY_INVALID", base+".credentials.shadowsocks.user_key", "user key has invalid encoding or length")
 		}
 		for i, key := range c.IdentityKeys {
 			if !validKey(key, keyLength) {

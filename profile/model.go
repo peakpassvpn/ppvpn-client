@@ -145,10 +145,15 @@ type Credentials struct {
 	VLESS       *VLESSCredentials       `json:"vless,omitempty"`
 	AnyTLS      *AnyTLSCredentials      `json:"anytls,omitempty"`
 }
+
+// ShadowsocksCredentials follow SIP022 naming. IdentityKeys are the server's
+// identity PSKs (iPSKs) for the Extensible Identity Headers, ordered outermost
+// first; they may be absent for single-user SS2022. UserKey is this user's
+// PSK (uPSK). The core builds the password iPSK1:...:iPSKn:uPSK.
 type ShadowsocksCredentials struct {
 	Method       string   `json:"method"`
-	ServerKey    string   `json:"server_key"`
 	IdentityKeys []string `json:"identity_keys,omitempty"`
+	UserKey      string   `json:"user_key"`
 }
 type VLESSCredentials struct {
 	UUID string `json:"uuid"`

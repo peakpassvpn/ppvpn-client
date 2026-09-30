@@ -107,8 +107,8 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
           "credentials": {
             "shadowsocks": {
               "method": "2022-blake3-aes-128-gcm",
-              "server_key": "MDEyMzQ1Njc4OWFiY2RlZg==",
-              "identity_keys": ["ZmVkY2JhOTg3NjU0MzIxMA=="]
+              "identity_keys": ["ZmVkY2JhOTg3NjU0MzIxMA=="],
+              "user_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
             }
           },
           "capabilities": {"tcp": true, "udp": true}
@@ -190,13 +190,22 @@ RFC 4193 IPv6 ULA（`fc00::/7`），不把 loopback、link-local 或文档网段
 
 支持的方法和解码后的 Base64 密钥长度：
 
-| method | `server_key` / 每个 `identity_key` |
+| method | `user_key` / 每个 `identity_keys` 元素 |
 | --- | --- |
 | `2022-blake3-aes-128-gcm` | 16 bytes |
 | `2022-blake3-aes-256-gcm` | 32 bytes |
 | `2022-blake3-chacha20-poly1305` | 32 bytes |
 
-后端分别发送 `server_key` 和有顺序的 `identity_keys`。核心在内部构造 EIH 密码，后端不得预拼接。
+凭据字段按 SIP022 命名：
+
+| 字段 | 含义 | 是否必需 |
+| --- | --- | --- |
+| `identity_keys` | 服务端的 identity PSK（iPSK）列表，用于 EIH（Extensible Identity Headers），按顺序由外到内（最外层中继的 iPSK 在前） | 可选；单用户、无 EIH 的 SS2022 可省略或为空数组 |
+| `user_key` | 当前用户自己的 PSK（uPSK） | 必需 |
+
+后端分别发送 `identity_keys` 和 `user_key`，不得预拼接。核心在内部构造 EIH 密码 `iPSK1:…:iPSKn:uPSK`（即 `identity_keys` 依次以 `:` 连接，最后接 `user_key`）；没有 `identity_keys` 时密码就是 `user_key`。
+
+旧字段 `server_key` 已删除，不做兼容：Profile 只要在 `credentials.shadowsocks` 中带有 `server_key`，解析即以 `SHADOWSOCKS_SERVER_KEY_REMOVED` 拒绝（`field` 指向该 `server_key`）。旧版后端把 uPSK 放在 `identity_keys[0]`、把服务端 iPSK 放在 `server_key`，与核心的拼接顺序正好相反，服务端会报 `shadowsocks: invalid request`。
 
 ### VLESS + REALITY
 

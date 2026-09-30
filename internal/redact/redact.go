@@ -8,7 +8,7 @@ import (
 
 const Hidden = "[REDACTED]"
 
-var sensitive = map[string]bool{"password": true, "server_key": true, "identity_keys": true, "uuid": true, "public_key": true, "short_id": true, "token": true, "secret": true, "authorization": true}
+var sensitive = map[string]bool{"password": true, "server_key": true, "user_key": true, "identity_keys": true, "uuid": true, "public_key": true, "short_id": true, "token": true, "secret": true, "authorization": true}
 
 func JSON(data []byte) []byte {
 	var value any

@@ -191,7 +191,7 @@ func TestSystemProxyStartFallsBackWhenPortTaken(t *testing.T) {
 	platform := profile.PlatformCapabilities{Platform: "macos", LocalProxy: profile.LocalProxyCapabilities{Enabled: true, Listen: "127.0.0.1"}, LogLevel: "error"}
 	core := newLocalProxyTestCore(t, platform)
 	p := testProfile("r1", "edge.example.com", "8.8.8.8")
-	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.ServerKey = testSSKey
+	p.Nodes[0].Ingresses[0].Credentials.Shadowsocks.UserKey = testSSKey
 	if _, err := core.ApplyProfile(p, time.Now()); err != nil {
 		t.Fatal(err)
 	}

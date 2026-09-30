@@ -89,7 +89,7 @@ X-Request-ID: <optional-client-id>
 
 ```json
 {
-  "core_version": "0.4.2",
+  "core_version": "0.4.3",
   "core_api_version": 1,
   "profile_schema_version": 1,
   "flow_adapter_version": 1,
@@ -274,6 +274,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 | `REPLICA_ORDINAL_INVALID` | `replica_ordinal` 为负，或在 Node 内未按数组顺序严格递增（缺失报 `FIELD_REQUIRED`） |
 | `EXIT_IP_INVALID` | `exit.ip` 不是合法 IP |
 | `SHADOWSOCKS_METHOD_UNSUPPORTED` / `SHADOWSOCKS_KEY_INVALID` | 修正 SS 2022 方法或密钥长度 |
+| `SHADOWSOCKS_SERVER_KEY_REMOVED` | Profile 仍带已删除的 `shadowsocks.server_key`；改为 `identity_keys`（服务端 iPSK）+ `user_key`（用户 uPSK），见 backend-profile.md |
 | `REALITY_REQUIRED` / `REALITY_PUBLIC_KEY_INVALID` / `REALITY_SHORT_ID_INVALID` | 修正 REALITY 配置 |
 | `TLS_REQUIRED` / `TLS_SERVER_NAME_MISMATCH` / `TLS_SERVER_NAME_INVALID` | 修正 TLS 与连接域名（AnyTLS 须相等；REALITY 须为合法域名） |
 | `CAPABILITIES_INVALID` | 至少启用 TCP 或 UDP |
