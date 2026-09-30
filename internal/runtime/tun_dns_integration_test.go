@@ -20,7 +20,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
-	"github.com/peakpassvpn/ppvpn-core/internal/dnslog"
+	"github.com/peakpassvpn/ppvpn-core/internal/dnstransport"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	box "github.com/sagernet/sing-box"
@@ -188,7 +188,7 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		return debugLog.Write(p)
 	}))
 	_ = connectionLog.SetLevel(corelog.LevelDebug)
-	ctx, cancel := context.WithCancel(dnslog.WithLogger(context.Background(), connectionLog))
+	ctx, cancel := context.WithCancel(dnstransport.WithLogger(context.Background(), connectionLog))
 	defer cancel()
 	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
 	if err != nil {
@@ -229,7 +229,7 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	debugMu.Lock()
 	dnsLogged := debugLog.String()
 	debugMu.Unlock()
-	if !strings.Contains(dnsLogged, "msg=dns name=proxied.test. type=A server=dns-remote rcode=NOERROR answers=1 ms=") {
+	if !strings.Contains(dnsLogged, "msg=dns name=proxied.test. type=A server=dns-remote attempt=1 rcode=NOERROR answers=1 ms=") {
 		t.Fatalf("debug dns line:\n%s", dnsLogged)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/dnstransport"
 	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	C "github.com/sagernet/sing-box/constant"
@@ -234,5 +235,12 @@ func TestLocalDNSServers(t *testing.T) {
 		if _, err := build(bad); err == nil {
 			t.Fatalf("%q accepted", bad)
 		}
+	}
+}
+
+// The DNS transport guard is keyed on the remote server's tag.
+func TestGuardedDNSTagIsTheRemoteServer(t *testing.T) {
+	if dnstransport.GuardedTag != DNSRemoteTag {
+		t.Fatalf("guarded %q, remote %q", dnstransport.GuardedTag, DNSRemoteTag)
 	}
 }
