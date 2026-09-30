@@ -41,3 +41,14 @@ func TestFlowIOTimeoutZeroMeansNoDeadline(t *testing.T) {
 		t.Fatalf("timeout cap: %v", got)
 	}
 }
+
+func TestBridgeRejectsUnknownRoutingMode(t *testing.T) {
+	platform, _ := json.Marshal(profile.PlatformCapabilities{Platform: "ios"})
+	bridge, err := NewBridge(string(platform), filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = bridge.ApplyProfileWithOptions("{}", `{"routing_mode":"smart"}`); err == nil || !strings.Contains(err.Error(), "routing mode") {
+		t.Fatalf("err = %v", err)
+	}
+}

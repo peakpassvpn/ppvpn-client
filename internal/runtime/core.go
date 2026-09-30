@@ -42,6 +42,9 @@ type Status struct {
 	// RuleSets reports every rule set of the applied profile, in profile
 	// order; omitted when the profile declares none.
 	RuleSets []rulesets.Status `json:"rule_sets,omitempty"`
+	// RoutingMode is the mode the applied profile runs in; omitted before
+	// a profile is applied.
+	RoutingMode RoutingMode `json:"routing_mode,omitempty"`
 }
 
 // IngressStatus is the ingress (replica) a node is actually using. For a
@@ -112,6 +115,8 @@ type Core struct {
 	// hostIPv6 probes whether the desktop TUN can carry IPv6 on this host;
 	// tests replace it.
 	hostIPv6 func() bool
+	// routingMode is the mode the active profile was applied in.
+	routingMode RoutingMode
 	// log is the first-party diagnostic log (phase timings; per-connection
 	// lines at debug level).
 	log *corelog.Logger
@@ -132,6 +137,10 @@ type ApplyOptions struct {
 	// the profile was fetched from. Every rule set URL must be on one of
 	// them; without any, rule sets are never downloaded.
 	AllowedRuleSetHosts []string
+	// RoutingMode selects which profile rules apply; empty means rules. A
+	// different mode re-applies a profile even when its revision is
+	// unchanged.
+	RoutingMode RoutingMode
 }
 
 // RuleSetPrepareTimeout bounds how long apply-profile waits for rule set
@@ -228,13 +237,17 @@ func (c *Core) ApplyProfile(p *profile.Profile, now time.Time) (bool, error) {
 func (c *Core) ApplyProfileWithOptions(p *profile.Profile, now time.Time, options ApplyOptions) (bool, error) {
 	c.operation.Lock()
 	defer c.operation.Unlock()
-	return c.applyProfileLocked(p, now, append([]string(nil), options.AllowedRuleSetHosts...), true)
+	mode, err := ParseRoutingMode(string(options.RoutingMode))
+	if err != nil {
+		return false, err
+	}
+	return c.applyProfileLocked(p, now, append([]string(nil), options.AllowedRuleSetHosts...), mode, true)
 }
 
-// applyProfileLocked applies p. allowedHosts pins its rule set URLs;
+// applyProfileLocked applies p in mode. allowedHosts pins its rule set URLs;
 // downloadRuleSets is false for rebuilds, which only use cached copies (the
-// refresh loop owns retries).
-func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, downloadRuleSets bool) (applied bool, err error) {
+// refresh loop owns retries). The same revision in the same mode is a no-op.
+func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHosts []string, mode RoutingMode, downloadRuleSets bool) (applied bool, err error) {
 	timer := newPhaseTimer()
 	defer func() {
 		if applied || err != nil {
@@ -242,7 +255,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		}
 	}()
 	c.mu.RLock()
-	if c.active != nil && p != nil && c.active.Revision == p.Revision {
+	if c.active != nil && p != nil && c.active.Revision == p.Revision && c.routingMode == mode {
 		c.mu.RUnlock()
 		return false, nil
 	}
@@ -268,11 +281,17 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)
 	}
+	// Rule sets, the sing-box options and the flow classifier are all built
+	// from the rules the mode keeps; c.active keeps the whole profile.
+	effective, err := effectiveProfile(candidateProfile, mode)
+	if err != nil {
+		return false, stageError("apply/build", err)
+	}
 	timer.mark("validate")
 	var ruleSets *rulesets.Snapshot
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), RuleSetPrepareTimeout)
-		ruleSets = c.ruleSets.Prepare(ctx, candidateProfile.Routing.RuleSets, allowedHosts, downloadRuleSets)
+		ruleSets = c.ruleSets.Prepare(ctx, effective.Routing.RuleSets, allowedHosts, downloadRuleSets)
 		cancel()
 	}
 	timer.mark("rule_sets")
@@ -297,7 +316,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 	timer.mark("local_proxy")
 	disableIPv6 := c.platform.TUN.Enabled && !c.hostIPv6()
 	timer.mark("host_ipv6")
-	candidate, err := config.BuildWithOptions(candidateProfile, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files(), DisableTUNIPv6: disableIPv6}, now)
+	candidate, err := config.BuildWithOptions(effective, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files(), DisableTUNIPv6: disableIPv6}, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)
@@ -311,7 +330,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		candidate = config.WithSystemProxy(candidate, systemPort)
 	}
 	timer.mark("build")
-	candidateClassifier, err := routing.Compile(candidateProfile, now)
+	candidateClassifier, err := routing.Compile(effective, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate routing compilation failed"})
 		return false, stageError("apply/routing", err)
@@ -351,6 +370,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 	c.mu.Lock()
 	oldEngine, oldCancel := c.engine, c.cancel
 	c.active, c.built, c.classifier = candidateProfile, candidate, candidateClassifier
+	c.routingMode = mode
 	c.routingGeneration++
 	c.proxyEndpoints = proxyEndpoints
 	c.allowedRuleSetHosts = allowedHosts
@@ -628,13 +648,13 @@ func (c *Core) reload() error {
 		return ErrProfileNotApplied
 	}
 	clone, err := cloneProfile(p)
-	originalRevision, allowedHosts := p.Revision, c.allowedRuleSetHosts
+	originalRevision, allowedHosts, mode := p.Revision, c.allowedRuleSetHosts, c.routingMode
 	c.mu.RUnlock()
 	if err != nil {
 		return err
 	}
 	clone.Revision += "#reload"
-	_, err = c.applyProfileLocked(clone, time.Now(), allowedHosts, false)
+	_, err = c.applyProfileLocked(clone, time.Now(), allowedHosts, mode, false)
 	if err == nil {
 		c.mu.Lock()
 		c.active.Revision = originalRevision
@@ -708,7 +728,7 @@ func (c *Core) Status() Status {
 	if c.engine != nil {
 		state = StateRunning
 	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses()}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses(), RoutingMode: c.routingMode}
 }
 
 func (c *Core) selectedIngressLocked() *IngressStatus {

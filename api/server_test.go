@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -276,5 +277,43 @@ func TestRuleSetHostsArePinnedAtValidateAndApply(t *testing.T) {
 	rec = request(t, server, "/v1/get-status", nil, true)
 	if !strings.Contains(rec.Body.String(), `"rule_sets":[{"id":"cn-ip","state":"unavailable","error":"RULE_SET_STORAGE_UNAVAILABLE"}]`) {
 		t.Fatal(rec.Body.String())
+	}
+}
+
+// routing_mode is optional on validate/apply-profile, strictly checked, and
+// reported by get-status; switching it re-applies the same revision.
+func TestRoutingModeOnApplyAndStatus(t *testing.T) {
+	server, _ := testServer(t)
+	p := apiProfile()
+	for _, path := range []string{"/v1/validate-profile", "/v1/apply-profile"} {
+		rec := request(t, server, path, map[string]any{"profile": p, "routing_mode": "smart"}, true)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"ROUTING_MODE_INVALID"`) || !strings.Contains(rec.Body.String(), `"field":"routing_mode"`) {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := request(t, server, "/v1/validate-profile", map[string]any{"profile": p, "routing_mode": "global"}, true); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	for _, step := range []struct {
+		mode    any
+		applied bool
+		status  string
+	}{
+		{nil, true, `"routing_mode":"rules"`},
+		{"global", true, `"routing_mode":"global"`},
+		{"global", false, `"routing_mode":"global"`},
+		{"rules", true, `"routing_mode":"rules"`},
+	} {
+		body := map[string]any{"profile": p}
+		if step.mode != nil {
+			body["routing_mode"] = step.mode
+		}
+		rec := request(t, server, "/v1/apply-profile", body, true)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), fmt.Sprintf(`"applied":%v`, step.applied)) {
+			t.Fatalf("mode %v: %d %s", step.mode, rec.Code, rec.Body.String())
+		}
+		if rec = request(t, server, "/v1/get-status", nil, true); !strings.Contains(rec.Body.String(), step.status) {
+			t.Fatalf("mode %v: status %s", step.mode, rec.Body.String())
+		}
 	}
 }

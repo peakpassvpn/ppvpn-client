@@ -48,4 +48,7 @@ type rawRequest struct {
 	// AllowedRuleSetHosts (apply-profile, validate-profile) pins rule set
 	// URLs to the authorities of the API the profile came from.
 	AllowedRuleSetHosts []string `json:"allowed_rule_set_hosts"`
+	// RoutingMode (apply-profile, validate-profile): "rules" (default) or
+	// "global".
+	RoutingMode string `json:"routing_mode"`
 }

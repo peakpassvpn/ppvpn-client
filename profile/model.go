@@ -136,6 +136,9 @@ type RoutingRule struct {
 	ID     string        `json:"id"`
 	Match  RoutingMatch  `json:"match"`
 	Action RoutingAction `json:"action"`
+	// Baseline rules (bypass-private, the official API) also apply in the
+	// global routing mode, where every other profile rule is dropped.
+	Baseline bool `json:"baseline,omitempty"`
 }
 
 type RoutingMatch struct {

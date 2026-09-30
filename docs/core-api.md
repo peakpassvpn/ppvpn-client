@@ -59,8 +59,8 @@ X-Request-ID: <optional-client-id>
 | 方法 | 路径 | 请求 `data`/请求体 | 成功响应 `data` |
 | --- | --- | --- | --- |
 | GetVersion | `/v1/get-version` | `{}` | VersionInfo |
-| ValidateProfile | `/v1/validate-profile` | `{"profile": <Profile>, "allowed_rule_set_hosts": ["api.example.com"]}` | `{"valid":true}` |
-| ApplyProfile | `/v1/apply-profile` | `{"profile": <Profile>, "allowed_rule_set_hosts": ["api.example.com"]}` | `{"applied":true|false}` |
+| ValidateProfile | `/v1/validate-profile` | `{"profile": <Profile>, "allowed_rule_set_hosts": ["api.example.com"], "routing_mode": "rules"}` | `{"valid":true}` |
+| ApplyProfile | `/v1/apply-profile` | `{"profile": <Profile>, "allowed_rule_set_hosts": ["api.example.com"], "routing_mode": "rules"}` | `{"applied":true|false}` |
 | Start | `/v1/start` | `{}` | `{}` |
 | Stop | `/v1/stop` | `{}` | `{}` |
 | Reload | `/v1/reload` | `{}` | `{}` |
@@ -87,7 +87,20 @@ X-Request-ID: <optional-client-id>
 Profile 中每个 `routing.rule_sets[].url` 的主机都必须在其中，否则 `validate-profile` / `apply-profile`
 返回 `RULE_SET_HOST_NOT_ALLOWED`；数组中有无法解析的值返回 `RULE_SET_HOSTS_INVALID`。省略该字段时
 Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NOT_PINNED`；已缓存且 sha256 匹配的副本
-仍会使用）。同 revision 的 `apply-profile` 仍直接返回 `applied=false`，不重新下载。
+仍会使用）。同 revision 且同 `routing_mode` 的 `apply-profile` 仍直接返回 `applied=false`，不重新下载。
+
+`routing_mode`（可选，核心 0.5.6 起）：`"rules"`（缺省）或 `"global"`，其他值返回 `ROUTING_MODE_INVALID`
+（`field` 为 `routing_mode`）。请求体严格拒绝未知字段，所以不要向 0.5.6 之前的核心发送该字段。
+
+- `rules`：应用全部 Profile 规则和 Profile 的 `final`。
+- `global`：只保留 `baseline: true` 的规则（保持原顺序），其余 Profile 规则丢弃，`final` 固定为代理 selected
+  节点；只有被保留规则引用的规则集才会准备、下载和刷新，`get-status` 的 `rule_sets` 也只列这些。核心自身的
+  规则（TUN 的嗅探、DNS 劫持、fake-ip 拒绝、入口直连）不受影响；流分类（`classifyFlow`）与 sing-box 路由使用
+  同一份规则。
+- 去重键是 `(revision, routing_mode)`：只改 `routing_mode` 的 `apply-profile` 会重新应用同一个 Profile，宿主切换
+  模式时直接调用即可，无需重连。运行中的应用会替换引擎：监听端口不变，但已建立的连接会断开。
+- 规则集刷新触发的重建和 `reload` 沿用当前模式；`get-status` 的 `routing_mode` 返回当前生效的模式（尚未应用
+  Profile 时省略）。
 
 `apply-profile` 在构建配置前准备规则集：`<state_dir>/rule-sets/<id>.srs` 已存在且 sha256 匹配时立即使用；
 否则直连下载，总计最多等待 10 秒，超时或失败时按降级规则构建（见 backend-profile.md），不会因规则集而失败。
@@ -110,7 +123,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 ```
 
 ```json
-{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,
+{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,"routing_mode":"rules",
  "selected_ingress":{"endpoint_key":"9002","previous_endpoint_key":"9001","role":"backup","switched_at":"2026-07-23T12:00:00Z"},
  "system_proxy":{"available":true,"enabled":false,"listening":false},
  "rule_sets":[{"id":"cn-ip","state":"ready","updated_at":"2026-07-23T12:00:00Z"},
