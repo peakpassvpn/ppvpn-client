@@ -42,8 +42,8 @@ type Credential struct {
 }
 
 // Every node is served on one shared loopback port. The proxy username
-// "<prefix>-<nodeID>" selects the node; the password is one per-device secret
-// shared by all nodes.
+// "<prefix>-<alias>" (see Aliases) selects the node; the password is one
+// per-device secret shared by all nodes.
 const (
 	Listen = "127.0.0.1"
 	// PreferredPort is tried first on a fresh device and whenever the
@@ -148,12 +148,14 @@ func (m *Manager) WithPreferredPort(port uint16) *Manager {
 	return m
 }
 
-// FormatUsername returns the proxy username that selects nodeID.
+// FormatUsername returns the internal route key "<prefix>-<nodeID>" that the
+// rendered config uses as the proxy user and auth_user of nodeID. Clients
+// never see or type it; they use the login (see Login and Aliases).
 func FormatUsername(prefix, nodeID string) string { return prefix + "-" + nodeID }
 
-// ParseUsername splits a proxy username into the device prefix and node id.
-// The prefix never contains '-', so the node id is everything after the first
-// '-' and may itself contain '-'.
+// ParseUsername splits a route key or a login into the device prefix and the
+// node id or alias. The prefix never contains '-', so the rest is everything
+// after the first '-' and may itself contain '-'.
 func ParseUsername(username string) (prefix, nodeID string, ok bool) {
 	prefix, nodeID, ok = strings.Cut(username, "-")
 	if !ok || !validPrefix(prefix) || nodeID == "" {
@@ -175,8 +177,9 @@ func validPrefix(prefix string) bool {
 }
 
 // Ensure returns the endpoints for nodeIDs, generating the device prefix and
-// password on first use. It keeps the persisted port without probing it, which
-// is what a running core needs: its own listener holds that port.
+// password on first use. Usernames are client logins; RouteEndpoints converts
+// them for the config builder. It keeps the persisted port without probing
+// it, which is what a running core needs: its own listener holds that port.
 func (m *Manager) Ensure(nodeIDs []string) ([]Endpoint, error) {
 	return m.prepare(nodeIDs, false)
 }
@@ -227,9 +230,10 @@ func (m *Manager) prepare(nodeIDs []string, probe bool) ([]Endpoint, error) {
 			return nil, err
 		}
 	}
+	aliases := Aliases(nodeIDs)
 	out := make([]Endpoint, 0, len(nodeIDs))
 	for _, id := range nodeIDs {
-		out = append(out, Endpoint{NodeID: id, Listen: Listen, Port: state.Port, Username: FormatUsername(state.Prefix, id), Password: state.Password})
+		out = append(out, Endpoint{NodeID: id, Listen: Listen, Port: state.Port, Username: Login(state.Prefix, aliases[id]), Password: state.Password})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
 	return out, nil

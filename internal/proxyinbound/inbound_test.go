@@ -12,35 +12,54 @@ import (
 	"testing"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 )
 
-func TestVerifierRequiresKnownUserAndExactSecret(t *testing.T) {
+func TestVerifierRequiresKnownLoginAndExactSecret(t *testing.T) {
 	v, err := newVerifier([]User{{Username: "u8f2k-a", Password: "secret"}, {Username: "u8f2k-b-c", Password: "secret"}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	aliases := localproxy.Aliases([]string{"a", "b-c"})
+	loginA, loginBC := localproxy.Login("u8f2k", aliases["a"]), localproxy.Login("u8f2k", aliases["b-c"])
 	for _, tc := range []struct {
 		username, password string
 		ok                 bool
 	}{
-		{"u8f2k-a", "secret", true},
-		{"u8f2k-b-c", "secret", true},
-		{"u8f2k-a", "secreT", false},
-		{"u8f2k-a", "secret ", false},
-		{"u8f2k-a", "", false},
+		{loginA, "secret", true},
+		{loginBC, "secret", true},
+		{strings.ToUpper(loginA), "secret", true},
+		{loginA, "secreT", false},
+		{loginA, "secret ", false},
+		{loginA, "", false},
+		// The route key is internal and is not a login.
+		{"u8f2k-a", "secret", false},
+		{"u8f2k-b-c", "secret", false},
 		{"u8f2k-missing", "secret", false},
+		{localproxy.Login("zzzzz", aliases["a"]), "secret", false},
 		{"", "secret", false},
 	} {
 		if got := v.verify(tc.username, tc.password); got != tc.ok {
 			t.Errorf("verify(%q, %q) = %v", tc.username, tc.password, got)
 		}
 	}
+	for login, key := range map[string]string{loginA: "u8f2k-a", strings.ToUpper(loginBC): "u8f2k-b-c", "u8f2k-a": ""} {
+		if got := v.routeKey(login); got != key {
+			t.Errorf("routeKey(%q) = %q, want %q", login, got, key)
+		}
+	}
+	// The HTTP re-check accepts the letter case the client sent.
+	upper := strings.ToUpper(loginA)
+	if !v.authenticator(upper).Verify(upper, "secret") || !v.authenticator(upper).Verify(loginBC, "secret") || v.authenticator("").Verify(upper, "secret") {
+		t.Error("authenticator")
+	}
 	for name, users := range map[string][]User{
 		"empty":     nil,
-		"no secret": {{Username: "a"}},
-		"duplicate": {{Username: "a", Password: "x"}, {Username: "a", Password: "y"}},
+		"no secret": {{Username: "u8f2k-a"}},
+		"duplicate": {{Username: "u8f2k-a", Password: "x"}, {Username: "u8f2k-a", Password: "y"}},
+		"malformed": {{Username: "a", Password: "x"}},
 	} {
 		if _, err := newVerifier(users); err == nil {
 			t.Errorf("%s accepted", name)

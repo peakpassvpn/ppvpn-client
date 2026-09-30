@@ -1,9 +1,11 @@
 // Package proxyinbound is the shared authenticated local proxy listener: one
 // loopback port serving HTTP and SOCKS5, where the proxy username selects the
-// node. It is a thin sing-box inbound whose only job beyond the stock mixed
-// inbound is to verify the shared secret in constant time. Node selection is
-// left to the router: the authenticated username is recorded as the
-// connection's auth user and matched by `auth_user` route rules.
+// node. It is a thin sing-box inbound whose job beyond the stock mixed inbound
+// is to verify the shared secret in constant time and to resolve the short,
+// case-insensitive login ("<prefix>-<alias>", see localproxy.Logins) to the
+// configured route key ("<prefix>-<nodeID>"). Node selection is left to the
+// router: the route key is recorded as the connection's auth user and matched
+// by `auth_user` route rules.
 package proxyinbound
 
 import (
@@ -20,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/common/listener"
@@ -48,7 +51,9 @@ const Type = "ppvpn-local-proxy"
 // the connection is handed to the HTTP proxy implementation.
 const maxHeaderBytes = 16 << 10
 
-// User is one accepted username/password pair.
+// User is one node's route key ("<prefix>-<nodeID>", the auth user that
+// route rules match) and password. Clients log in with the derived short
+// login, not with the route key.
 type User struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -91,33 +96,55 @@ const (
 )
 
 // verifier checks credentials. The password comparison is constant time and
-// runs even for unknown usernames, so a response does not reveal which part
-// was wrong or how much of the secret matched.
+// runs even for unknown logins, so a response does not reveal which part was
+// wrong or how much of the secret matched.
 type verifier struct {
-	users map[string][]byte
-	dummy []byte
+	// logins maps a canonical (lowercase) login to its account.
+	logins map[string]account
+	dummy  []byte
+}
+
+type account struct {
+	routeKey string
+	password []byte
 }
 
 func newVerifier(users []User) (*verifier, error) {
 	if len(users) == 0 {
 		return nil, E.New("local proxy requires at least one user")
 	}
-	v := &verifier{users: make(map[string][]byte, len(users))}
+	keys := make([]string, 0, len(users))
+	seen := make(map[string]bool, len(users))
 	for _, user := range users {
 		if user.Username == "" || user.Password == "" {
 			return nil, E.New("local proxy user must have a username and password")
 		}
-		if _, dup := v.users[user.Username]; dup {
+		if seen[user.Username] {
 			return nil, E.New("duplicate local proxy user")
 		}
-		v.users[user.Username] = []byte(user.Password)
+		seen[user.Username] = true
+		keys = append(keys, user.Username)
+	}
+	logins, ok := localproxy.Logins(keys)
+	if !ok {
+		return nil, E.New("local proxy user must be <prefix>-<node_id>")
+	}
+	v := &verifier{logins: make(map[string]account, len(users))}
+	for _, user := range users {
+		login := logins[user.Username]
+		if _, dup := v.logins[login]; dup {
+			return nil, E.New("duplicate local proxy login")
+		}
+		v.logins[login] = account{routeKey: user.Username, password: []byte(user.Password)}
 		v.dummy = []byte(user.Password)
 	}
 	return v, nil
 }
 
+// verify checks a presented login (any letter case) and password.
 func (v *verifier) verify(username, password string) bool {
-	expected, known := v.users[username]
+	account, known := v.logins[localproxy.CanonicalLogin(username)]
+	expected := account.password
 	if !known {
 		expected = v.dummy
 	}
@@ -125,13 +152,23 @@ func (v *verifier) verify(username, password string) bool {
 	return known && match
 }
 
-// authenticator mirrors the accepted users for the HTTP implementation, which
-// re-checks every later request on a keep-alive connection. It is only
-// reachable after this inbound verified the first request in constant time.
-func (v *verifier) authenticator() *auth.Authenticator {
-	users := make([]auth.User, 0, len(v.users))
-	for name, password := range v.users {
-		users = append(users, auth.User{Username: name, Password: string(password)})
+// routeKey returns the route key of an already verified login.
+func (v *verifier) routeKey(login string) string {
+	return v.logins[localproxy.CanonicalLogin(login)].routeKey
+}
+
+// authenticator mirrors the accepted logins for the HTTP implementation,
+// which re-checks every later request on a keep-alive connection with an
+// exact username match. It is only reachable after this inbound verified the
+// first request in constant time. extra, when not canonical, is the letter
+// case the client actually sent, so its later requests keep matching.
+func (v *verifier) authenticator(extra string) *auth.Authenticator {
+	users := make([]auth.User, 0, len(v.logins)+1)
+	for login, account := range v.logins {
+		users = append(users, auth.User{Username: login, Password: string(account.password)})
+	}
+	if canonical := localproxy.CanonicalLogin(extra); extra != canonical {
+		users = append(users, auth.User{Username: extra, Password: string(v.logins[canonical].password)})
 	}
 	return auth.NewAuthenticator(users)
 }
@@ -155,7 +192,7 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 		router:        uot.NewRouter(router, logger),
 		logger:        logger,
 		verifier:      v,
-		authenticator: v.authenticator(),
+		authenticator: v.authenticator(""),
 	}
 	in.listener = listener.New(listener.Options{
 		Context:           ctx,
@@ -234,7 +271,11 @@ func (h *Inbound) handleHTTP(ctx context.Context, conn net.Conn, reader *std_buf
 		}
 		return errHTTPAuthChallenged
 	}
-	return singhttp.HandleConnectionEx(ctx, conn, reader, h.authenticator, handler, source, onClose)
+	authenticator := h.authenticator
+	if username != localproxy.CanonicalLogin(username) {
+		authenticator = h.verifier.authenticator(username)
+	}
+	return singhttp.HandleConnectionEx(ctx, conn, reader, authenticator, handler, source, onClose)
 }
 
 // closeAfterChallenge ends a connection whose authentication failure reply
@@ -394,13 +435,20 @@ func cachedConn(conn net.Conn, reader *std_bufio.Reader) net.Conn {
 func (h *Inbound) newUserConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	metadata.Inbound = h.Tag()
 	metadata.InboundType = h.Type()
-	metadata.User, _ = auth.UserFromContext[string](ctx)
+	metadata.User = h.routeKeyFromContext(ctx)
 	h.router.RouteConnectionEx(ctx, conn, metadata, onClose)
 }
 
 func (h *Inbound) newUserPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	metadata.Inbound = h.Tag()
 	metadata.InboundType = h.Type()
-	metadata.User, _ = auth.UserFromContext[string](ctx)
+	metadata.User = h.routeKeyFromContext(ctx)
 	h.router.RoutePacketConnectionEx(ctx, conn, metadata, onClose)
+}
+
+// routeKeyFromContext maps the verified login recorded by the SOCKS5 or HTTP
+// handshake to the route key that `auth_user` route rules match.
+func (h *Inbound) routeKeyFromContext(ctx context.Context) string {
+	login, _ := auth.UserFromContext[string](ctx)
+	return h.verifier.routeKey(login)
 }

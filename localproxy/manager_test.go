@@ -48,15 +48,15 @@ func TestSharedEndpointsAreStableAndPrivate(t *testing.T) {
 	if len(first) != 2 || first[0].NodeID != "a" || first[1].NodeID != "b" {
 		t.Fatalf("endpoints: %#v", first)
 	}
-	prefix, nodeID, ok := ParseUsername(first[0].Username)
-	if !ok || nodeID != "a" || len(prefix) != 5 {
+	prefix, alias, ok := ParseUsername(first[0].Username)
+	if !ok || alias != aliasDigest("a")[:AliasLength] || len(prefix) != 5 || len(first[0].Username) != 12 {
 		t.Fatalf("username %q", first[0].Username)
 	}
 	for _, e := range first {
 		if e.Listen != "127.0.0.1" || e.Port == 0 || e.Port != first[0].Port || e.Password != first[0].Password || len(e.Password) < 40 {
 			t.Fatalf("endpoint not shared: %#v", e)
 		}
-		if e.Username != FormatUsername(prefix, e.NodeID) {
+		if e.Username != Login(prefix, aliasDigest(e.NodeID)[:AliasLength]) {
 			t.Fatalf("username %q", e.Username)
 		}
 	}
@@ -65,7 +65,7 @@ func TestSharedEndpointsAreStableAndPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again[0] != first[0] || again[1] != first[1] || again[2].Username != FormatUsername(prefix, "c") || again[2].Port != first[0].Port {
+	if again[0] != first[0] || again[1] != first[1] || again[2].Username != Login(prefix, aliasDigest("c")[:AliasLength]) || again[2].Port != first[0].Port {
 		t.Fatalf("endpoints not stable: %#v -> %#v", first, again)
 	}
 	state := readState(t, path)

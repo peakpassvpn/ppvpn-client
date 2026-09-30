@@ -163,7 +163,8 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time) (bool, erro
 			return false, stageError("apply/local-proxy-state", fmt.Errorf("prepare local proxies: %w", err))
 		}
 	}
-	candidate, err := config.BuildWithLocalProxies(candidateProfile, c.platform, proxyEndpoints, now)
+	// The builder renders internal route keys; clients keep the short logins.
+	candidate, err := config.BuildWithLocalProxies(candidateProfile, c.platform, localproxy.RouteEndpoints(proxyEndpoints), now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)

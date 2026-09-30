@@ -114,6 +114,35 @@ func tunnelGet(conn net.Conn, host string) (int, error) {
 	return response.StatusCode, nil
 }
 
+// plainProxyGets sends count absolute-form GETs over one keep-alive proxy
+// connection, each with Proxy-Authorization, and expects 204 for each.
+func plainProxyGets(endpoint localproxy.Endpoint, username, password, url string, count int) error {
+	conn, err := net.DialTimeout("tcp", proxyAddress(endpoint), time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	authorization := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+	reader := bufio.NewReader(conn)
+	host := strings.TrimPrefix(url, "http://")
+	for i := 0; i < count; i++ {
+		request := "GET " + url + "/ HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + authorization + "\r\nProxy-Connection: keep-alive\r\n\r\n"
+		if _, err = io.WriteString(conn, request); err != nil {
+			return err
+		}
+		response, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			return fmt.Errorf("request %d: %w", i, err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			return fmt.Errorf("request %d: %s", i, response.Status)
+		}
+	}
+	return nil
+}
+
 func waitForConnectionNode(t *testing.T, core *Core, nodeID string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -166,8 +195,17 @@ func TestSharedLocalProxyRoutesByUsername(t *testing.T) {
 		t.Fatalf("endpoints not shared: %#v", endpoints)
 	}
 	alpha, beta := endpoints[0], endpoints[1]
-	if !strings.HasSuffix(alpha.Username, "-alpha-1") || !strings.HasSuffix(beta.Username, "-beta-2") {
+	// Usernames are the short "<prefix>-<alias>" logins, not "<prefix>-<nodeID>".
+	prefix, _, _ := localproxy.ParseUsername(alpha.Username)
+	aliases := localproxy.Aliases([]string{"alpha-1", "beta-2"})
+	if alpha.Username != localproxy.Login(prefix, aliases["alpha-1"]) || beta.Username != localproxy.Login(prefix, aliases["beta-2"]) ||
+		len(alpha.Username) != 12 || len(beta.Username) != 12 {
 		t.Fatalf("usernames: %q %q", alpha.Username, beta.Username)
+	}
+	for _, id := range []string{"alpha-1", "beta-2"} {
+		if credential, err := core.LocalProxyCredential(id); err != nil || credential.Username != localproxy.Login(prefix, aliases[id]) {
+			t.Fatalf("credential %s: %#v %v", id, credential, err)
+		}
 	}
 	for _, metadata := range core.LocalProxyMetadata() {
 		if metadata.Port != alpha.Port || metadata.Listen != "127.0.0.1" {
@@ -176,7 +214,8 @@ func TestSharedLocalProxyRoutesByUsername(t *testing.T) {
 	}
 
 	// HTTP CONNECT as alpha, SOCKS5 CONNECT as beta (via its backup ingress).
-	alphaConn, status, err := httpConnect(alpha, alpha.Username, alpha.Password, targetAddress)
+	// Logins are case-insensitive: alpha is sent in upper case, beta mixed.
+	alphaConn, status, err := httpConnect(alpha, strings.ToUpper(alpha.Username), alpha.Password, targetAddress)
 	if err != nil || !strings.HasPrefix(status, "200") {
 		t.Fatalf("alpha CONNECT: %q %v", status, err)
 	}
@@ -185,7 +224,7 @@ func TestSharedLocalProxyRoutesByUsername(t *testing.T) {
 		t.Fatalf("alpha request: %d %v", code, err)
 	}
 	waitForConnectionNode(t, core, "alpha-1")
-	betaConn, socksStatus, err := socks5Connect(beta, beta.Username, beta.Password, targetAddress)
+	betaConn, socksStatus, err := socks5Connect(beta, strings.ToUpper(beta.Username[:3])+beta.Username[3:], beta.Password, targetAddress)
 	if err != nil || socksStatus != 0 {
 		t.Fatalf("beta SOCKS5: %d %v", socksStatus, err)
 	}
@@ -203,13 +242,20 @@ func TestSharedLocalProxyRoutesByUsername(t *testing.T) {
 		}
 	}
 
-	// Rejections: wrong password, unknown node, foreign prefix, no auth.
-	prefix, _, _ := localproxy.ParseUsername(alpha.Username)
+	// Plain (non-CONNECT) HTTP proxying re-checks every keep-alive request;
+	// a mixed-case login keeps working for the whole connection.
+	if err := plainProxyGets(alpha, strings.ToUpper(alpha.Username), alpha.Password, target.URL, 2); err != nil {
+		t.Fatalf("plain HTTP keep-alive: %v", err)
+	}
+
+	// Rejections: wrong password, unknown alias, foreign prefix, the full
+	// node ID (internal route key, not a login), no auth.
 	rejected := map[string][2]string{
 		"wrong password": {alpha.Username, alpha.Password + "x"},
 		"empty password": {alpha.Username, ""},
-		"unknown node":   {localproxy.FormatUsername(prefix, "missing"), alpha.Password},
-		"other prefix":   {localproxy.FormatUsername("zzzzz", "alpha-1"), alpha.Password},
+		"unknown alias":  {localproxy.Login(prefix, "zzzzzz"), alpha.Password},
+		"other prefix":   {localproxy.Login("zzzzz", aliases["alpha-1"]), alpha.Password},
+		"full node id":   {localproxy.FormatUsername(prefix, "alpha-1"), alpha.Password},
 	}
 	for name, credentials := range rejected {
 		if conn, status, err := httpConnect(alpha, credentials[0], credentials[1], targetAddress); err != nil || !strings.HasPrefix(status, "407") {
@@ -298,7 +344,8 @@ func TestSharedLocalProxyConnectAuthFailureChallenges(t *testing.T) {
 	for name, request := range map[string]string{
 		"no auth":        head + "\r\n",
 		"wrong password": head + authorization(alpha.Username, alpha.Password+"x") + "\r\n",
-		"unknown user":   head + authorization(localproxy.FormatUsername(prefix, "missing"), alpha.Password) + "\r\n",
+		"unknown user":   head + authorization(localproxy.Login(prefix, "zzzzzz"), alpha.Password) + "\r\n",
+		"full node id":   head + authorization(localproxy.FormatUsername(prefix, "alpha-1"), alpha.Password) + "\r\n",
 	} {
 		conn, err := net.DialTimeout("tcp", proxyAddress(alpha), time.Second)
 		if err != nil {
