@@ -164,8 +164,8 @@ Node 表示一个出口身份。选择节点、`routing` 中的 `node_id`、每�
 ## Routing
 
 `match` 支持 `domains`、`domain_suffixes`、`ip_cidrs`、`ip_is_private`、
-`protocols`（仅 `tcp`/`udp`）、`ports` 和包含首尾的 `port_ranges`
-（`start-end`）。域名、suffix、CIDR 和 private 构成一个“目标地址”类别并互为 OR；
+`rule_set_ids`（见下文 [规则集](#规则集rule_sets)）、`protocols`（仅 `tcp`/`udp`）、`ports` 和包含首尾的 `port_ranges`
+（`start-end`）。域名、suffix、CIDR、private 和规则集构成一个“目标地址”类别并互为 OR；
 单端口与端口范围互为 OR；目标地址、协议、端口三个非空类别之间为 AND。空 matcher、
 空 suffix、通配符、非法 CIDR/端口范围和重复 rule ID 都会被拒绝（未知字段按上文忽略）。
 
@@ -185,6 +185,54 @@ RFC 4193 IPv6 ULA（`fc00::/7`），不把 loopback、link-local 或文档网段
 
 固定优先级为平台安全/防递归、每节点本地入口绑定、Profile 显式规则、`routing.final`。
 切换 selected 只影响之后创建的 flow，已建立连接不迁移也不中断。
+
+### 规则集（rule_sets）
+
+`routing.rule_sets` 声明 sing-box 二进制规则集（`.srs`），规则通过 `match.rule_set_ids` 引用。
+该字段是 schema_version 1 内的增量字段。注意兼容性：旧核心（0.5.0 之前）忽略 `rule_sets` 与
+`rule_set_ids`，于是只含 `rule_set_ids` 的规则在旧核心上是空 match，整份 Profile 会以 `RULE_MATCH_EMPTY`
+被拒绝。后端只应向核心版本 ≥ 0.5.0 的客户端下发引用规则集的规则。
+
+```json
+"routing": {
+  "rule_sets": [
+    {"id": "cn-ip", "url": "https://<api host>/api/v1/proxy-profile/rule-sets/cn-ip.srs",
+     "sha256": "<64 位 hex>", "update_interval_seconds": 86400}
+  ],
+  "rules": [
+    {"id": "official-api", "match": {"domains": ["<api host>"]}, "action": {"type": "direct"}},
+    {"id": "bypass-private", "match": {"ip_is_private": true}, "action": {"type": "direct"}},
+    {"id": "<policy>", "match": {"rule_set_ids": ["<id>"]}, "action": {"type": "direct|proxy|reject", "target": "selected"}},
+    {"id": "geoip-cn", "match": {"rule_set_ids": ["cn-ip"]}, "action": {"type": "direct"}}
+  ],
+  "final": {"type": "proxy", "target": "selected"}
+}
+```
+
+| 字段 | 约束 |
+| --- | --- |
+| `id` | 必填，`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`，在 `rule_sets` 内唯一（`RULE_SET_ID_INVALID` / `RULE_SET_ID_DUPLICATE`） |
+| `url` | 必填，绝对 `https` URL，不含 userinfo/fragment（`RULE_SET_URL_INVALID`）；主机必须等于宿主下发 Profile 所用的 API 主机（`RULE_SET_HOST_NOT_ALLOWED`，见 core-api.md 的 `allowed_rule_set_hosts`） |
+| `sha256` | 必填，文件内容的 SHA-256，64 位 hex（大小写均可；`RULE_SET_SHA256_INVALID`） |
+| `update_interval_seconds` | 可选；缺省或 0 为 24 小时；负数拒绝（`RULE_SET_INTERVAL_INVALID`）；其余钳制到 [1 小时, 7 天] |
+
+- 最多 32 个规则集（`RULE_SET_COUNT_INVALID`）。`rule_set_ids` 中的 id 必须存在（`RULE_SET_NOT_FOUND`）且
+  在同一规则内不重复（`RULE_SET_REF_DUPLICATE`）。只含 `rule_set_ids` 的 match 是合法的。
+- 文件格式：sing-box 二进制规则集，version ≤ 3（核心能读 sing-box 1.13 支持的全部版本，后端按 ≤ 3 生成）。
+  单个文件不超过 32 MiB。
+- 下载端点：`GET`，无需认证，返回 `application/octet-stream`；响应 `ETag` 为带引号的 sha256 hex
+  （`"<hex>"`）。核心有旧副本时发送 `If-None-Match: "<旧副本 sha256>"`，内容相同时应返回 304。
+  端点不得重定向（核心不跟随重定向）。
+- 内容不可变：同一 `sha256` 对应的内容永远不变。更新规则集 = 在新 revision 中下发新的 `sha256`；
+  核心只接受 SHA-256 等于 Profile 中 `sha256` 的内容。
+- 语义：`rule_set_ids` 与 `domains`/`domain_suffixes`/`ip_cidrs`/`ip_is_private` 互为 OR，与
+  `protocols`/端口为 AND（与既有语义一致）。
+- 降级：规则集从未下载成功时（下载失败、主机未固定、无状态目录），核心照常启动，但该规则集被视为不可用：
+  只依赖它的规则整条跳过；同时有其他地址 matcher 的规则保留其余 matcher。已有旧副本时继续使用旧副本。
+  状态通过 `get-status` 的 `rule_sets` 上报。
+- TUN 模式的 DNS：只含域名（不含 IP CIDR）的规则集按所在规则的动作镜像到 DNS 规则（direct → 系统解析器，
+  proxy → 经节点的远程解析，reject → 拒绝）；含 IP CIDR 的规则集（如 cn-ip）不影响 DNS。
+- 移动端 flow 分类器（`ClassifyFlow`）不解析规则集，始终按“不可用”处理。
 
 ## 协议约束
 
