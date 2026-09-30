@@ -3,6 +3,7 @@ package failover
 import (
 	"context"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/dnslog"
 	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
 	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	box "github.com/sagernet/sing-box"
@@ -10,8 +11,8 @@ import (
 )
 
 // Context returns a sing-box context whose registries contain every upstream
-// protocol plus the ppvpn failover group, the TUN domain-destination wrapper and the
-// shared local proxy inbound.
+// protocol plus the ppvpn failover group, the TUN domain-destination wrapper, the
+// shared local proxy inbound and debug logging around the DNS transports.
 // Every place that builds, decodes or encodes sing-box options for this core
 // must use it instead of include.Context.
 func Context(ctx context.Context) context.Context {
@@ -20,5 +21,7 @@ func Context(ctx context.Context) context.Context {
 	domaindest.Register(outbounds)
 	inbounds := include.InboundRegistry()
 	proxyinbound.Register(inbounds)
-	return box.Context(ctx, inbounds, outbounds, include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry())
+	transports := include.DNSTransportRegistry()
+	dnslog.Register(transports)
+	return box.Context(ctx, inbounds, outbounds, include.EndpointRegistry(), transports, include.ServiceRegistry())
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
+	"github.com/peakpassvpn/ppvpn-core/internal/dnslog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	box "github.com/sagernet/sing-box"
@@ -179,12 +180,6 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	if !replaced {
 		t.Fatal("remote DNS server is not dialed through the selected node")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
-	if err != nil {
-		t.Fatal(err)
-	}
 	var debugLog strings.Builder
 	var debugMu sync.Mutex
 	connectionLog := corelog.New(writerFunc(func(p []byte) (int, error) {
@@ -193,6 +188,12 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		return debugLog.Write(p)
 	}))
 	_ = connectionLog.SetLevel(corelog.LevelDebug)
+	ctx, cancel := context.WithCancel(dnslog.WithLogger(context.Background(), connectionLog))
+	defer cancel()
+	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
 	tracker := newTelemetry()
 	tracker.log.Store(connectionLog)
 	instance.Router().AppendTracker(tracker)
@@ -224,6 +225,13 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		t.Fatalf("answer: %v %v", err, answer.Answer)
 	}
 	recorder.wait(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(dnsPort))))
+	// At debug level the upstream exchange is logged with its server and rcode.
+	debugMu.Lock()
+	dnsLogged := debugLog.String()
+	debugMu.Unlock()
+	if !strings.Contains(dnsLogged, "msg=dns name=proxied.test. type=A server=dns-remote rcode=NOERROR answers=1 ms=") {
+		t.Fatalf("debug dns line:\n%s", dnsLogged)
+	}
 
 	// 2. A connection to the address DNS answered carries the domain to the
 	// node, even though the sniffed HTTP Host is only the address.
