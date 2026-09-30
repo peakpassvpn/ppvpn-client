@@ -12,7 +12,9 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
 
@@ -45,12 +47,14 @@ type telemetry struct {
 
 func newTelemetry() *telemetry { return &telemetry{connections: map[string]*tracked{}} }
 func (t *telemetry) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
+	conn = takeCachedConn(conn)
 	item := t.add(metadata, outbound)
 	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	counted := bufio.NewCounterConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
 	return &trackedConn{ExtendedConn: counted, onClose: func() { t.remove(item.connection.ID) }}
 }
 func (t *telemetry) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
+	conn = takeCachedPacketConn(conn)
 	item := t.add(metadata, outbound)
 	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	counted := bufio.NewCounterPacketConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
@@ -136,3 +140,98 @@ type trackedPacketConn struct {
 }
 
 func (c *trackedPacketConn) Close() error { c.once.Do(c.onClose); return c.PacketConn.Close() }
+
+// A sniffed connection arrives as bufio.CachedConn / CachedPacketConn holding
+// the sniffed bytes. Once wrapped by the counters, sing-box's copy loop can no
+// longer take that cache atomically (ReadCached) and reads it through
+// Read/ReadPacket, which clear the buffer unsynchronized while Close from the
+// other copy direction reads it: a data race that can release the pooled
+// buffer twice. So the tracker takes the cache itself (atomically, marking it
+// taken so Close leaves it alone), copies the bytes into a prefix only the
+// reader touches, and releases the buffer at once.
+
+func takeCachedConn(conn net.Conn) net.Conn {
+	var prefix []byte
+	for {
+		cached, ok := conn.(*bufio.CachedConn)
+		if !ok {
+			break
+		}
+		// The outermost cache is read first.
+		if buffer := cached.ReadCached(); buffer != nil {
+			prefix = append(prefix, buffer.Bytes()...)
+			buffer.Release()
+		}
+		conn = cached.Conn
+	}
+	if len(prefix) == 0 {
+		return conn
+	}
+	return &prefixConn{Conn: conn, prefix: prefix}
+}
+
+// prefixConn serves prefix before reading conn. Only the reading goroutine
+// touches prefix.
+type prefixConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	if len(c.prefix) > 0 {
+		n := copy(p, c.prefix)
+		c.prefix = c.prefix[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *prefixConn) Upstream() any { return c.Conn }
+
+func takeCachedPacketConn(conn N.PacketConn) N.PacketConn {
+	var packets []cachedPacket
+	for {
+		cached, ok := conn.(*bufio.CachedPacketConn)
+		if !ok {
+			break
+		}
+		if packet := cached.ReadCachedPacket(); packet != nil {
+			if packet.Buffer != nil {
+				packets = append(packets, cachedPacket{data: append([]byte(nil), packet.Buffer.Bytes()...), destination: packet.Destination})
+				packet.Buffer.Release()
+			}
+			N.PutPacketBuffer(packet)
+		}
+		conn = cached.PacketConn
+	}
+	if len(packets) == 0 {
+		return conn
+	}
+	return &prefixPacketConn{PacketConn: conn, packets: packets}
+}
+
+type cachedPacket struct {
+	data        []byte
+	destination M.Socksaddr
+}
+
+// prefixPacketConn returns the cached packets before reading conn. Only the
+// reading goroutine touches packets.
+type prefixPacketConn struct {
+	N.PacketConn
+	packets []cachedPacket
+}
+
+func (c *prefixPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
+	if len(c.packets) > 0 {
+		packet := c.packets[0]
+		c.packets = c.packets[1:]
+		if _, err := buffer.Write(packet.data); err != nil {
+			return M.Socksaddr{}, err
+		}
+		return packet.destination, nil
+	}
+	return c.PacketConn.ReadPacket(buffer)
+}
+
+func (c *prefixPacketConn) Upstream() any { return c.PacketConn }
