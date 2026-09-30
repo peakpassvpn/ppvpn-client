@@ -64,8 +64,9 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 - **嗅探**：`tun` 入站的每个连接先执行 sing-box `sniff` 动作（全部嗅探器：TLS SNI、HTTP Host、
   QUIC、DNS 等），域名规则因此能在 TUN 下命中。
 - **DNS 劫持**：`tun` 入站中协议为 `dns`、或目标端口为 53 的流量执行 `hijack-dns`，交给核心的 DNS
-  模块。TUN 把自身对端地址（`172.19.0.2`）通告为接口 DNS，Linux systemd-resolved、Windows 和
-  macOS 发往它的查询都由核心应答；发往其他地址 53 端口的明文查询只要进了隧道也同样被劫持。
+  模块。规则不区分地址族，IPv4 与 IPv6 解析器一样被劫持。TUN 把自身对端地址（`172.19.0.2`，桌面端
+  另有 `fdfe:dcba:9876::2`）通告为接口 DNS（Windows 与 Linux systemd-resolved 由 sing-tun 设置），
+  发往它的查询都由核心应答；发往其他地址 53 端口的明文查询只要进了隧道也同样被劫持。
 - **按路由选择解析器**：
   - `dns-local`：sing-box `local` 服务器，即系统解析器，直连。它会跳过 TUN 本身（Linux 通过
     systemd-resolved 取默认物理网卡的链路 DNS，Windows 跳过隧道网卡，Darwin 在有 TUN 时走
@@ -83,11 +84,43 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 - **fake-ip 快速失败**：`tun` 入站目标位于 `198.18.0.0/15` 且没有已知域名的连接立即拒绝（等待嗅探
   最多约 300ms），不会发给节点空等。已知域名时照常按域名代理。核心自己不使用 fake-ip。
 
-移动端的 TUN 配置（不启用 `auto_route`）生成同样的嗅探、DNS 与拒绝规则；宿主应把隧道 DNS 设为
-隧道内地址（如 `172.19.0.2`），让查询进入 TUN 被劫持。
+### IPv6
 
-已知边界：IPv6 目前不进入 TUN（TUN 只有 IPv4 地址），核心也不过滤 AAAA；应用自带 DoH/DoT
-的查询不会被劫持，但其连接仍会被嗅探并按域名路由。
+桌面 TUN（`auto_route` + `strict_route`）同时持有 `172.19.0.1/30` 与 ULA `fdfe:dcba:9876::1/126`。
+只有 IPv4 地址时 sing-tun 只装 IPv4 路由：macOS 上 IPv6 流量（包括发往运营商 IPv6 DNS 的查询）
+直接绕过隧道，泄露真实 IPv6 地址；Linux/Windows 的 `strict_route` 则把 IPv6 整个封掉。带上 IPv6
+地址后：
+
+- **路由**：sing-tun 按同一套 `auto_route` 捕获 IPv6。macOS 装 `100::/8`、`200::/7` … `8000::/1`
+  这组拆分路由（覆盖 `::/0` 中除 `::/8` 外的全部，含 `2000::/3` 全球单播）；Linux 在同一张
+  `2091` 表、同一段 `9091`–`9101` 优先级下加 IPv6 规则；Windows 给 Wintun 网卡配 IPv6 地址与
+  IPv6 DNS，WFP 不再加 "block ipv6"，而是与 IPv4 一样放行隧道网卡、拦截其他网卡的 53 端口。
+- **分流**：IPv6 连接与 IPv4 走同一套嗅探、DNS 劫持和 Profile 路由。代理目标由节点拨出
+  （SS/VLESS/AnyTLS 都能承载 IPv6 目标），已知域名时交给节点的是域名，由节点自行选择地址族；
+  只有 IPv6 字面地址且没有已知域名时，节点需要自身有 IPv6 出口，否则连接失败而不是泄露。直连规则
+  仍然直连（经物理网卡）。
+- **入口排除**：`route_exclude_address` 包含所有入口 IP，IPv4 为 `/32`，IPv6 为 `/128`。
+- **主机关闭 IPv6**：sing-tun 加不上 IPv6 地址时会让整个 TUN 启动失败（Linux netlink `EACCES`、
+  Windows 设置 IPv6 地址失败），所以核心每次 apply 前探测主机：Linux 读
+  `/proc/sys/net/ipv6/conf/{all,default}/disable_ipv6`（`/proc/sys/net/ipv6` 不存在即内核
+  `ipv6.disable=1`），Windows 看 `Tcpip6\Parameters\DisabledComponents` 的 `0x10` 位以及是否有
+  AF_INET6 网卡，macOS 视为可用。IPv6 不可用时 TUN 只保留 IPv4 地址，`route_exclude_address`
+  也只留 IPv4 前缀；这样不会泄漏，因为主机本身没有绕开隧道的 IPv6 通路。探测读不到时按可用处理，
+  不做“失败后回退 IPv4”，真实错误照常暴露。
+- **不设置 `prefer_ipv4`**：sing-box 的 `strategy` 只影响核心自身的域名查找（`Lookup`），对被劫持
+  的原始查询（`Exchange`）只有 `ipv4_only` 会过滤 AAAA，`prefer_ipv4` 不起作用。代理流量已经按域名
+  交给节点，AAAA 应答不会因为节点缺 IPv6 而失败；过滤 AAAA 反而会让仅 IPv6 的站点不可达，因此核心
+  原样返回 AAAA。代价：物理网络无 IPv6 时，直连域名的 AAAA 连接会立即失败，由应用的 Happy
+  Eyeballs 回落到 IPv4。
+- **macOS 边界**：Darwin 上 `strict_route` 不起作用，sing-tun 也不改系统 DNS。发往全球单播 IPv6
+  解析器（如运营商 `240e:…`）的查询会进入 TUN 被劫持；但在链路上的解析器（`fe80::…%en0`、路由器
+  通告的本地 ULA、局域网 IPv4 网关）命中更具体的直连路由，不进入 TUN。macOS 宿主应把系统 DNS
+  指向 `172.19.0.2`（可再加 `fdfe:dcba:9876::2`），用 `scutil --dns` 确认首个解析器。
+
+移动端的 TUN 配置（不启用 `auto_route`，由宿主建隧道）保持仅 IPv4 地址，生成同样的嗅探、DNS 与
+拒绝规则；宿主应把隧道 DNS 设为隧道内地址（如 `172.19.0.2`），让查询进入 TUN 被劫持。
+
+已知边界：应用自带 DoH/DoT 的查询不会被劫持，但其连接仍会被嗅探并按域名路由。
 
 ## 与其他 sing-tun 应用共存（mihomo/Clash、sing-box 等）
 

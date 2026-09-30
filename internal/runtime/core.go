@@ -12,6 +12,7 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
+	"github.com/peakpassvpn/ppvpn-core/internal/hostipv6"
 	"github.com/peakpassvpn/ppvpn-core/internal/rulesets"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
@@ -106,6 +107,9 @@ type Core struct {
 	// the hosts the applied profile's rule set URLs were pinned to.
 	ruleSets            *rulesets.Manager
 	allowedRuleSetHosts []string
+	// hostIPv6 probes whether the desktop TUN can carry IPv6 on this host;
+	// tests replace it.
+	hostIPv6 func() bool
 }
 
 // ApplyOptions are the host-supplied inputs of apply-profile besides the
@@ -139,6 +143,7 @@ func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core
 		factory:              factory,
 		flowAuthorizationKey: key,
 		flowAuthorizationOK:  keyOK,
+		hostIPv6:             hostipv6.Available,
 	}
 	core.ruleSets = rulesets.New(core.ruleSetOptions(""))
 	return core
@@ -266,7 +271,7 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 			return false, stageError("apply/local-proxy-state", fmt.Errorf("prepare local proxies: %w", err))
 		}
 	}
-	candidate, err := config.BuildWithOptions(candidateProfile, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files()}, now)
+	candidate, err := config.BuildWithOptions(candidateProfile, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files(), DisableTUNIPv6: c.platform.TUN.Enabled && !c.hostIPv6()}, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)

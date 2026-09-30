@@ -51,6 +51,10 @@ type BuildOptions struct {
 	// RuleSets maps a profile rule set id to its verified local copy. A rule
 	// set without an entry is unavailable: see addProfileRouting.
 	RuleSets map[string]RuleSetFile
+	// DisableTUNIPv6 leaves the IPv6 address (and IPv6 ingress exclusions)
+	// out of a desktop TUN, for hosts with IPv6 disabled: sing-tun cannot add
+	// the address there and would fail the whole start. See hostipv6.
+	DisableTUNIPv6 bool
 }
 
 // RuleSetFile is a verified local copy of a profile rule set.
@@ -101,7 +105,7 @@ func BuildWithOptions(p *profile.Profile, platform profile.PlatformCapabilities,
 		}
 	}
 	if platform.TUN.Enabled {
-		if err := addTUN(result, platform, ingressPrefixes(p)); err != nil {
+		if err := addTUN(result, platform, ingressPrefixes(p), !opts.DisableTUNIPv6); err != nil {
 			return nil, err
 		}
 	}
@@ -223,7 +227,15 @@ const (
 	tunIPRoute2RuleIndex  = 9091
 )
 
-func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded []netip.Prefix) error {
+// Tunnel addresses. The peer address (.2 / ::2) is what sing-tun announces
+// as the tunnel DNS server where it configures one.
+var (
+	tunInet4Address = netip.MustParsePrefix("172.19.0.1/30")
+	// tunInet6Address is a ULA (RFC 4193) /126, desktop only.
+	tunInet6Address = netip.MustParsePrefix("fdfe:dcba:9876::1/126")
+)
+
+func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded []netip.Prefix, ipv6 bool) error {
 	stack := platform.TUN.Stack
 	if stack == "" {
 		stack = "mixed"
@@ -240,8 +252,20 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 		// interface so they cannot loop back into the tunnel.
 		result.Options.Route.AutoDetectInterface = true
 	}
-	options := &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{netip.MustParsePrefix("172.19.0.1/30")}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}
+	options := &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{tunInet4Address}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}
 	if autoRoute {
+		// An IPv6 address makes sing-tun route IPv6 into the tunnel as well
+		// (::/0; on Darwin 100::/8..8000::/1), set the tunnel's IPv6 DNS
+		// (Windows, systemd-resolved) and stop strict_route from merely
+		// blocking IPv6 (Linux unreachable rule, Windows WFP). Without it,
+		// IPv6 bypassed the tunnel on macOS, including DNS to IPv6 resolvers.
+		// Mobile hosts build the tunnel themselves and stay IPv4-only, as do
+		// hosts with IPv6 disabled (nothing can leak around the tunnel there).
+		if ipv6 {
+			options.Address = append(options.Address, tunInet6Address)
+		} else {
+			excluded = inet4Only(excluded)
+		}
 		// Keep every ingress IP (primary and backups) out of the tunnel at the
 		// OS routing level too, so handshakes and ICMP/TCP probes from any
 		// process (including an unprivileged sibling core) never loop.
@@ -251,6 +275,18 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 	}
 	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: C.TypeTun, Tag: TUNInboundTag, Options: options})
 	return nil
+}
+
+// inet4Only drops IPv6 prefixes: without an IPv6 address sing-tun installs no
+// IPv6 routes, so there is nothing to exclude them from.
+func inet4Only(prefixes []netip.Prefix) []netip.Prefix {
+	var out []netip.Prefix
+	for _, prefix := range prefixes {
+		if prefix.Addr().Is4() {
+			out = append(out, prefix)
+		}
+	}
+	return out
 }
 
 // RuleSetTag is the sing-box tag of a profile rule set.
