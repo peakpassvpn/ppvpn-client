@@ -85,8 +85,8 @@ func TestTUNDNSServersAndMirroredRules(t *testing.T) {
 	if local.Type != C.DNSTypeLocal || local.Tag != DNSLocalTag || local.Options.(*option.LocalDNSServerOptions).Detour != "" {
 		t.Fatalf("local server: %#v", local)
 	}
-	remoteOptions, ok := remote.Options.(*option.RemoteHTTPSDNSServerOptions)
-	if remote.Type != C.DNSTypeHTTPS || remote.Tag != DNSRemoteTag || !ok || remoteOptions.Server != "1.1.1.1" || remoteOptions.Detour != selectedOutboundTag {
+	remoteOptions, ok := remote.Options.(*option.RemoteTLSDNSServerOptions)
+	if remote.Type != C.DNSTypeTLS || remote.Tag != DNSRemoteTag || !ok || remoteOptions.Server != "1.1.1.1" || remoteOptions.Detour != selectedOutboundTag {
 		t.Fatalf("remote server: %#v", remote)
 	}
 	if resolver := got.Options.Route.DefaultDomainResolver; resolver == nil || resolver.Server != DNSLocalTag {
