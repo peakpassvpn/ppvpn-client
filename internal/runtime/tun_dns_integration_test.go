@@ -302,6 +302,31 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 		t.Fatal("fake-ip address with an IP-literal Host was sent to the node")
 	}
 
+	// 5c. Non-DNS traffic to the tunnel's own peer address exists nowhere:
+	// it is rejected at once (#17), and never reaches the node.
+	started = time.Now()
+	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("10.60.159.90:8080"))
+	_, err = io.Copy(io.Discard, conn)
+	elapsed = time.Since(started)
+	conn.Close()
+	if errors.As(err, &netErr) && netErr.Timeout() || elapsed > 2*time.Second {
+		t.Fatalf("tunnel peer connection lingered %s: %v", elapsed, err)
+	}
+
+	// 5d. The client baseline keeps LAN and multicast destinations off the
+	// node whatever the profile says (this profile has no private rule).
+	for _, destination := range []string{"239.255.255.250:1900", "192.168.1.10:8080", "100.100.100.100:443"} {
+		conn = socksConnect(t, socksPort, netip.MustParseAddrPort(destination))
+		_, _ = conn.Write([]byte{0})
+		conn.Close()
+	}
+	time.Sleep(300 * time.Millisecond)
+	for _, destination := range []string{"10.60.159.90:8080", "239.255.255.250:1900", "192.168.1.10:8080", "100.100.100.100:443"} {
+		if recorder.has(destination) {
+			t.Fatalf("%s was sent to the node", destination)
+		}
+	}
+
 	// 6. DNS to an IPv6 resolver is hijacked the same way (desktop TUN routes
 	// IPv6 into the tunnel, so an ISP's IPv6 DNS must not escape).
 	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("[2001:db8::53]:53"))

@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -126,7 +127,7 @@ func TestDesktopTUNRoutesIPv6AndExcludesIPv6Ingress(t *testing.T) {
 	n.Ingresses = append(n.Ingresses, ingress(profile.ProtocolShadowsocks, profile.IngressRoleBackup, "v6.example.com", "2606:4700:4700::1111"))
 	n.Ingresses[1].EndpointKey = "v6-backup"
 	n.Ingresses[1].ReplicaOrdinal = n.Ingresses[0].ReplicaOrdinal + 1
-	inet4, inet6 := netip.MustParsePrefix("172.19.0.1/30"), netip.MustParsePrefix("fdfe:dcba:9876::1/126")
+	inet4, inet6 := netip.MustParsePrefix("10.60.159.89/30"), netip.MustParsePrefix("fde2:ec40:9312:c7fd::1/126")
 	for _, platform := range []string{"linux", "macos", "windows"} {
 		got, err := Build(base(n), profile.PlatformCapabilities{Platform: platform, TUN: profile.TUNCapabilities{Enabled: true}}, time.Now())
 		if err != nil {
@@ -139,8 +140,8 @@ func TestDesktopTUNRoutesIPv6AndExcludesIPv6Ingress(t *testing.T) {
 		if !tun.AutoRoute || !tun.StrictRoute {
 			t.Fatalf("%s: auto_route=%v strict_route=%v", platform, tun.AutoRoute, tun.StrictRoute)
 		}
-		want := []netip.Prefix{netip.MustParsePrefix("8.8.8.8/32"), netip.MustParsePrefix("2606:4700:4700::1111/128")}
-		if len(tun.RouteExcludeAddress) != len(want) || tun.RouteExcludeAddress[0] != want[0] || tun.RouteExcludeAddress[1] != want[1] {
+		want := mustPrefixes("8.8.8.8/32", "2606:4700:4700::1111/128", "224.0.0.0/4", "255.255.255.255/32", "169.254.0.0/16", "fe80::/10", "ff00::/8")
+		if !slices.Equal(tun.RouteExcludeAddress, want) {
 			t.Fatalf("%s: route_exclude_address %v", platform, tun.RouteExcludeAddress)
 		}
 	}
@@ -170,13 +171,13 @@ func TestDesktopTUNWithoutHostIPv6IsIPv4Only(t *testing.T) {
 			t.Fatal(err)
 		}
 		tun := got.Options.Inbounds[len(got.Options.Inbounds)-1].Options.(*option.TunInboundOptions)
-		if len(tun.Address) != 1 || tun.Address[0] != netip.MustParsePrefix("172.19.0.1/30") {
+		if len(tun.Address) != 1 || tun.Address[0] != netip.MustParsePrefix("10.60.159.89/30") {
 			t.Fatalf("%s: address %v", platform, tun.Address)
 		}
 		if !tun.AutoRoute || !tun.StrictRoute {
 			t.Fatalf("%s: auto_route=%v strict_route=%v", platform, tun.AutoRoute, tun.StrictRoute)
 		}
-		if len(tun.RouteExcludeAddress) != 1 || tun.RouteExcludeAddress[0] != netip.MustParsePrefix("8.8.8.8/32") {
+		if want := mustPrefixes("8.8.8.8/32", "224.0.0.0/4", "255.255.255.255/32", "169.254.0.0/16"); !slices.Equal(tun.RouteExcludeAddress, want) {
 			t.Fatalf("%s: route_exclude_address %v", platform, tun.RouteExcludeAddress)
 		}
 	}
@@ -201,7 +202,7 @@ func TestPrivateBypassRuleFollowsPerNodeRules(t *testing.T) {
 	}
 	privateRule := got.Options.Route.Rules[2].DefaultOptions
 	if got.Options.Route.Rules[0].DefaultOptions.Inbound == nil ||
-		len(privateRule.IPCIDR) != 4 ||
+		len(privateRule.IPCIDR) != len(profile.PrivatePrefixes) ||
 		privateRule.RouteOptions.Outbound != "direct" {
 		t.Fatalf("rules: %#v", got.Options.Route.Rules)
 	}
@@ -244,4 +245,12 @@ func TestRuleMappingAndFixedPriority(t *testing.T) {
 		rule.Action != "reject" {
 		t.Fatalf("mapped rule: %#v", rule)
 	}
+}
+
+func mustPrefixes(values ...string) []netip.Prefix {
+	out := make([]netip.Prefix, len(values))
+	for i, v := range values {
+		out[i] = netip.MustParsePrefix(v)
+	}
+	return out
 }

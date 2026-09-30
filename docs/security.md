@@ -64,13 +64,15 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 - **嗅探**：`tun` 入站的每个连接先执行 sing-box `sniff` 动作（全部嗅探器：TLS SNI、HTTP Host、
   QUIC、DNS 等），域名规则因此能在 TUN 下命中。
 - **DNS 劫持**：`tun` 入站中协议为 `dns`、或目标端口为 53 的流量执行 `hijack-dns`，交给核心的 DNS
-  模块。规则不区分地址族，IPv4 与 IPv6 解析器一样被劫持。TUN 把自身对端地址（`172.19.0.2`，桌面端
-  另有 `fdfe:dcba:9876::2`）通告为接口 DNS（Windows 与 Linux systemd-resolved 由 sing-tun 设置），
+  模块。规则不区分地址族，IPv4 与 IPv6 解析器一样被劫持。TUN 把自身对端地址（`10.60.159.90`，桌面端
+  另有 `fde2:ec40:9312:c7fd::2`）通告为接口 DNS（Windows 与 Linux systemd-resolved 由 sing-tun 设置），
   发往它的查询都由核心应答；发往其他地址 53 端口的明文查询只要进了隧道也同样被劫持。
 - **按路由选择解析器**：
-  - `dns-local`：sing-box `local` 服务器，即系统解析器，直连。它会跳过 TUN 本身（Linux 通过
-    systemd-resolved 取默认物理网卡的链路 DNS，Windows 跳过隧道网卡，Darwin 在有 TUN 时走
-    DHCP），并借 `auto_detect_interface` 绑定物理网卡，不会绕回隧道。
+  - `dns-local`：宿主用 `serve --local-dns-servers` 传入物理网络解析器时，是发往其中第一个（隧道
+    地址段之外）的 UDP 服务器；否则是 sing-box `local` 服务器。`local` 会跳过 TUN 本身（Linux 通过
+    systemd-resolved 取默认物理网卡的链路 DNS，Windows 读非隧道网卡的 DNS，Darwin 在有 TUN 时查询
+    DHCP 下发的服务器，拿不到时退回系统解析器，而桌面端已把它指向隧道，所以 macOS 宿主应当传入
+    解析器）。两种情况都借 `auto_detect_interface` 绑定物理网卡。
   - `dns-remote`：DoT 到 `1.1.1.1:853`，经所选节点（`selected`）拨出，查询不出现在本地网络上。
   - DNS 规则镜像路由规则中的域名部分，顺序不变：路由为直连的域名（包括所有入口节点域名）走
     `dns-local`，路由为代理的走 `dns-remote`，路由为拒绝的直接拒绝；未命中规则时跟随
@@ -81,12 +83,29 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   不会改写目标地址。核心在每个代理出站（selected 及固定节点）前加一层 `ppvpn-domain-destination`：
   对来自 `tun` 的连接，只要已知域名（嗅探结果优先，其次是核心 DNS 的 `reverse_mapping`），就把目标
   改写为域名再交给节点，由节点远端解析；直连路径保持 IP 不变。
+- **隧道自身地址**：发往隧道自身网段（`10.60.159.88/30`、`fde2:ec40:9312:c7fd::/126`）的流量，除上面
+  被劫持的 DNS 外一律立即拒绝：这些地址只存在于隧道里，否则会被下面的底线规则直连发出并挂到超时。
 - **fake-ip 快速失败**：`tun` 入站目标位于 `198.18.0.0/15` 且没有已知域名的连接立即拒绝（等待嗅探
   最多约 300ms），不会发给节点空等。已知域名时照常按域名代理。核心自己不使用 fake-ip。
+- **客户端底线**：`tun` 入站目标位于私网、CGNAT、回环、链路本地、组播、保留和受限广播网段
+  （与 Profile `ip_is_private` 相同的一组，见 backend-profile.md）时直连，排在所有 Profile 规则之前，
+  不受路由模式（`routing_mode`）影响，也不由 Profile 控制，保证局域网设备与发现协议（mDNS、SSDP、
+  HomeKit/Thread、米家广播）在任何配置下都可用。
+- **路由层排除**：桌面 TUN 的 `route_exclude_address` 除入口 IP 外还包含 `224.0.0.0/4`、
+  `255.255.255.255/32`、`169.254.0.0/16`、`fe80::/10`、`ff00::/8`，这些流量在系统路由层就不进入隧道。
+  sing-tun 在三个平台上都以“从隧道路由范围中减去”实现排除，排除的地址回落到系统主路由表：macOS、
+  Linux 上结果确定。Windows 的 WFP（`strict_route`）只放行核心进程与隧道网卡、拦截其他网卡的 53
+  端口，不拦截组播；但 Windows 会给每块网卡（含 Wintun）自动加 `224.0.0.0/4` 与
+  `255.255.255.255/32` 链路路由，而 sing-tun 把 Wintun 的 metric 设为 0，未指定出口网卡的组播/广播
+  仍可能选中 Wintun。这一点需要真机验证（米家、SSDP、mDNS）。
 
 ### IPv6
 
-桌面 TUN（`auto_route` + `strict_route`）同时持有 `172.19.0.1/30` 与 ULA `fdfe:dcba:9876::1/126`。
+桌面 TUN（`auto_route` + `strict_route`）同时持有 `10.60.159.89/30` 与 ULA `fde2:ec40:9312:c7fd::1/126`
+（取自自有随机 ULA `fde2:ec40:9312::/48`）。0.5.7 起不再使用 sing-tun 的默认地址 `172.19.0.1/30`、
+`fdfe:dcba:9876::1/126`：其他基于 sing-box 的客户端（mihomo/Clash Verge 等）也用这组默认值，两个 TUN
+地址相同时后启动的一方会因 “object already exists” 启动失败。宿主（service）写死同一组地址，二者必须
+同一版本一起更换。
 只有 IPv4 地址时 sing-tun 只装 IPv4 路由：macOS 上 IPv6 流量（包括发往运营商 IPv6 DNS 的查询）
 直接绕过隧道，泄露真实 IPv6 地址；Linux/Windows 的 `strict_route` 则把 IPv6 整个封掉。带上 IPv6
 地址后：
@@ -115,10 +134,10 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 - **macOS 边界**：Darwin 上 `strict_route` 不起作用，sing-tun 也不改系统 DNS。发往全球单播 IPv6
   解析器（如运营商 `240e:…`）的查询会进入 TUN 被劫持；但在链路上的解析器（`fe80::…%en0`、路由器
   通告的本地 ULA、局域网 IPv4 网关）命中更具体的直连路由，不进入 TUN。macOS 宿主应把系统 DNS
-  指向 `172.19.0.2`（可再加 `fdfe:dcba:9876::2`），用 `scutil --dns` 确认首个解析器。
+  指向 `10.60.159.90`（可再加 `fde2:ec40:9312:c7fd::2`），用 `scutil --dns` 确认首个解析器。
 
 移动端的 TUN 配置（不启用 `auto_route`，由宿主建隧道）保持仅 IPv4 地址，生成同样的嗅探、DNS 与
-拒绝规则；宿主应把隧道 DNS 设为隧道内地址（如 `172.19.0.2`），让查询进入 TUN 被劫持。
+拒绝规则；宿主应把隧道 DNS 设为隧道内地址（如 `10.60.159.90`），让查询进入 TUN 被劫持。
 
 已知边界：应用自带 DoH/DoT 的查询不会被劫持，但其连接仍会被嗅探并按域名路由。
 

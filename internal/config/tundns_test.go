@@ -41,11 +41,11 @@ func buildTUN(t *testing.T, platform string, final string) *BuildResult {
 
 // Desktop (auto_route) and mobile (platform-owned tunnel) TUN render the same
 // sniff, DNS hijack and fake-ip rules ahead of everything else.
-func TestTUNSniffHijackAndFakeIPRejectComeFirst(t *testing.T) {
+func TestTUNCoreRulesComeFirst(t *testing.T) {
 	for _, platform := range []string{"windows", "linux", "macos", "ios", "android"} {
 		t.Run(platform, func(t *testing.T) {
 			rules := buildTUN(t, platform, "proxy").Options.Route.Rules
-			if len(rules) < 4 {
+			if len(rules) < 6 {
 				t.Fatalf("rules: %d", len(rules))
 			}
 			sniff := rules[0].DefaultOptions
@@ -60,10 +60,22 @@ func TestTUNSniffHijackAndFakeIPRejectComeFirst(t *testing.T) {
 			if byPort.Action != C.RuleActionTypeHijackDNS || !slices.Equal(byPort.Port, []uint16{53}) || !slices.Equal(byPort.Inbound, []string{TUNInboundTag}) {
 				t.Fatalf("hijack-dns by port: %#v", rules[2])
 			}
-			reject := rules[3].LogicalOptions
-			if rules[3].Type != C.RuleTypeLogical || reject.Mode != C.LogicalTypeAnd || reject.Action != C.RuleActionTypeReject ||
+			// Non-DNS traffic to the tunnel's own networks is rejected (#17).
+			self := rules[3].DefaultOptions
+			if rules[3].Type != C.RuleTypeDefault || self.Action != C.RuleActionTypeReject || !slices.Equal(self.Inbound, []string{TUNInboundTag}) ||
+				!slices.Equal(self.IPCIDR, []string{"10.60.159.88/30", "fde2:ec40:9312:c7fd::/126"}) {
+				t.Fatalf("tunnel self reject: %#v", rules[3])
+			}
+			reject := rules[4].LogicalOptions
+			if rules[4].Type != C.RuleTypeLogical || reject.Mode != C.LogicalTypeAnd || reject.Action != C.RuleActionTypeReject ||
 				reject.RejectOptions.Method != C.RuleActionRejectMethodDefault || len(reject.Rules) != 2 {
-				t.Fatalf("fake-ip reject: %#v", rules[3])
+				t.Fatalf("fake-ip reject: %#v", rules[4])
+			}
+			// The client baseline sends private and LAN destinations direct.
+			baseline := rules[5].DefaultOptions
+			if baseline.RouteOptions.Outbound != "direct" || !slices.Equal(baseline.Inbound, []string{TUNInboundTag}) || len(baseline.IPCIDR) != len(profile.PrivatePrefixes) ||
+				!slices.Contains(baseline.IPCIDR, "224.0.0.0/4") || !slices.Contains(baseline.IPCIDR, "fe80::/10") {
+				t.Fatalf("baseline: %#v", rules[5])
 			}
 			inRange, noDomain := reject.Rules[0].DefaultOptions, reject.Rules[1].DefaultOptions
 			if !slices.Equal(inRange.IPCIDR, []string{"198.18.0.0/15"}) || !slices.Equal(inRange.Inbound, []string{TUNInboundTag}) || inRange.Invert {
@@ -207,7 +219,7 @@ func TestLocalDNSServers(t *testing.T) {
 		wantPort   uint16
 	}{
 		{[]string{"10.10.0.3"}, "10.10.0.3", 53},
-		{[]string{"172.19.0.2", "fdfe:dcba:9876::2", "192.168.1.1:5353"}, "192.168.1.1", 5353},
+		{[]string{"10.60.159.90", "fde2:ec40:9312:c7fd::2", "172.19.0.2", "fdfe:dcba:9876::2", "192.168.1.1:5353"}, "192.168.1.1", 5353},
 		{[]string{"[fe80::1%en0]:53"}, "fe80::1%en0", 53},
 		{[]string{"::ffff:10.0.0.1"}, "10.0.0.1", 53},
 	}
@@ -222,7 +234,7 @@ func TestLocalDNSServers(t *testing.T) {
 			t.Fatalf("%v: %#v", tc.servers, local)
 		}
 	}
-	for _, servers := range [][]string{nil, {"172.19.0.2", "fdfe:dcba:9876::2"}} {
+	for _, servers := range [][]string{nil, {"10.60.159.90", "fde2:ec40:9312:c7fd::2", "172.19.0.2", "fdfe:dcba:9876::2"}} {
 		got, err := build(servers...)
 		if err != nil {
 			t.Fatal(err)

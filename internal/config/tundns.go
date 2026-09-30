@@ -21,13 +21,18 @@ import (
 //   - route rule 0 sniffs every TUN connection (all sniffers: TLS SNI, HTTP
 //     Host, QUIC, DNS, ...), so profile domain rules match.
 //   - route rules 1-2 hijack DNS (sniffed protocol dns, or port 53) into the
-//     DNS module. The TUN announces its peer addresses (172.19.0.2 and, on
-//     desktop, fdfe:dcba:9876::2) as the interface DNS servers where sing-tun
+//     DNS module. The TUN announces its peer addresses (10.60.159.90 and, on
+//     desktop, fde2:ec40:9312:c7fd::2) as the interface DNS servers where sing-tun
 //     configures DNS, and desktop routes both IPv4 and IPv6 into the TUN, so
 //     OS queries to any routed resolver are answered by the core.
-//   - route rule 3 rejects a TUN connection to 198.18.0.0/15 whose domain is
+//   - route rule 3 rejects anything else sent to the tunnel's own networks
+//     (it exists nowhere, and would otherwise go direct and hang).
+//   - route rule 4 rejects a TUN connection to 198.18.0.0/15 whose domain is
 //     unknown: that is a LAN fake-ip answer no node can reach, and proxying it
 //     would hang for the node's whole connect timeout.
+//   - route rule 5 is the client baseline: private, loopback, link-local,
+//     multicast and broadcast destinations go direct, before profile rules
+//     and in every routing mode.
 //   - DNS rules mirror the route rules: a domain routed direct resolves
 //     through the system resolver dialed direct ("dns-local"); a domain routed
 //     to a proxy resolves through DoT to 1.1.1.1 dialed through the selected
@@ -77,6 +82,13 @@ func addTUNTrafficRules(result *BuildResult) {
 			RawDefaultRule: option.RawDefaultRule{Inbound: tun, Port: badoption.Listable[uint16]{53}},
 			RuleAction:     option.RuleAction{Action: C.RuleActionTypeHijackDNS},
 		}},
+		// Anything else to the tunnel's own networks exists nowhere: reject
+		// it at once instead of sending it out the physical interface, where
+		// the private baseline below would put it, to hang until timeout.
+		option.Rule{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{
+			RawDefaultRule: option.RawDefaultRule{Inbound: tun, IPCIDR: prefixStrings(tunPrefixes)},
+			RuleAction:     rejectAction(),
+		}},
 		// Domain and ip_cidr items of one default rule are OR-ed, so "in the
 		// fake-ip range AND no domain" needs a logical rule. knownDomainRegex
 		// matches a known domain name (sniffed, reverse-mapped or requested);
@@ -93,6 +105,24 @@ func addTUNTrafficRules(result *BuildResult) {
 			RuleAction: rejectAction(),
 		}},
 	)
+	// Client baseline: private, loopback, link-local, multicast and broadcast
+	// destinations (profile.PrivatePrefixes) always go direct from the
+	// tunnel, before any profile rule and whatever the routing mode, so LAN
+	// devices and discovery keep working even without a profile
+	// bypass-private rule.
+	ensureDirectOutbound(result)
+	result.Options.Route.Rules = append(result.Options.Route.Rules, routeRule(
+		option.RawDefaultRule{Inbound: tun, IPCIDR: prefixStrings(profile.PrivatePrefixes)},
+		"direct",
+	))
+}
+
+func prefixStrings(prefixes []netip.Prefix) badoption.Listable[string] {
+	out := make(badoption.Listable[string], len(prefixes))
+	for i, prefix := range prefixes {
+		out[i] = prefix.String()
+	}
+	return out
 }
 
 // ensureDomainDestination returns the wrapper tag for a proxy route target,
@@ -137,9 +167,10 @@ func addTUNDNS(result *BuildResult, platform profile.PlatformCapabilities, final
 	return nil
 }
 
-// Tunnel prefixes: a resolver inside them is the core's own tunnel DNS (a
-// stale system DNS entry left by the host), and querying it would loop.
-var tunnelPrefixes = []netip.Prefix{netip.MustParsePrefix("172.19.0.0/30"), netip.MustParsePrefix("fdfe:dcba:9876::/126")}
+// tunnelPrefixes: a resolver inside them is the core's own tunnel DNS (a
+// stale system DNS entry left by the host, including one from before 0.5.7),
+// and querying it would loop.
+var tunnelPrefixes = append(append([]netip.Prefix(nil), tunPrefixes...), tunLegacyPrefixes...)
 
 // LocalDNSServer validates the host-supplied physical resolvers and returns
 // the first one outside the tunnel. ok is false when none is left. Every
