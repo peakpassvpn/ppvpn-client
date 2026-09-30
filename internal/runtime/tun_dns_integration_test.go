@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/peakpassvpn/ppvpn-core/internal/config"
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	box "github.com/sagernet/sing-box"
@@ -67,6 +69,10 @@ func (r *destinationRecorder) wait(t *testing.T, destination string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // startFakeDNS answers A queries over TCP from a fixed table.
 func startFakeDNS(t *testing.T, answers map[string]string) uint16 {
@@ -180,6 +186,17 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var debugLog strings.Builder
+	var debugMu sync.Mutex
+	connectionLog := corelog.New(writerFunc(func(p []byte) (int, error) {
+		debugMu.Lock()
+		defer debugMu.Unlock()
+		return debugLog.Write(p)
+	}))
+	_ = connectionLog.SetLevel(corelog.LevelDebug)
+	tracker := newTelemetry()
+	tracker.log.Store(connectionLog)
+	instance.Router().AppendTracker(tracker)
 	if err = instance.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +236,15 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("203.0.113.7:80"))
 	_, _ = conn.Write([]byte("GET / HTTP/1.1\r\nHost: 203.0.113.7\r\n\r\n"))
 	recorder.wait(t, "proxied.test:80")
+	// At debug level the connection line says the node got the domain, even
+	// though the HTTP sniffer saw only the address as Host (route_domain):
+	// domaindest fell back to the DNS reverse mapping.
+	debugMu.Lock()
+	logged := debugLog.String()
+	debugMu.Unlock()
+	if !strings.Contains(logged, "destination=203.0.113.7:80 route_domain=203.0.113.7 protocol=http") || !strings.Contains(logged, "target=proxied.test:80 target_kind=domain") {
+		t.Fatalf("debug connection line:\n%s", logged)
+	}
 	conn.Close()
 
 	// 3. A sniffed TLS server name reaches the node instead of the address.

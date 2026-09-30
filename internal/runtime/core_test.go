@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"net"
 	"slices"
+	"strings"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
@@ -147,6 +149,31 @@ func TestStartWarmsRemoteDNSThroughSelectedNode(t *testing.T) {
 			t.Fatalf("tun=%v: warmed through %v, want %v", tun, engine.warmedThrough, want)
 		}
 		_ = core.Stop()
+	}
+}
+
+// Apply and start each write one info line with per-phase durations, so a
+// slow /v1/start shows where the time went.
+func TestLifecycleLogsPhaseTimings(t *testing.T) {
+	var b strings.Builder
+	core := newCore(profile.PlatformCapabilities{Platform: "linux", TUN: profile.TUNCapabilities{Enabled: true}}, (&fakeFactory{}).create)
+	core.hostIPv6 = func() bool { return true }
+	core.SetLogger(corelog.New(&b))
+	if _, err := core.ApplyProfile(testProfile("timing", "a.example", "8.8.8.8"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	lines := b.String()
+	for _, want := range []string{
+		"msg=\"apply timing\" outcome=ok tun=true validate_ms=", "rule_sets_ms=", "host_ipv6_ms=", "build_ms=", "routing_ms=",
+		"msg=\"start timing\" outcome=ok tun=true engine_create_ms=", "engine_start_ms=", "total_ms=",
+	} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("missing %q in:\n%s", want, lines)
+		}
 	}
 }
 

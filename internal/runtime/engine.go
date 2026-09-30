@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/option"
@@ -46,6 +47,11 @@ type dnsWarmEngine interface {
 	warmUpDNS()
 }
 
+// connectionLogEngine writes a debug line per routed connection.
+type connectionLogEngine interface {
+	setConnectionLog(log *corelog.Logger)
+}
+
 type singEngine struct {
 	*box.Box
 	ctx     context.Context
@@ -74,6 +80,8 @@ func (e *singEngine) removeInbound(tag string) error {
 }
 
 func (e *singEngine) warmUpDNS() { go warmUpRemoteDNS(e.ctx) }
+
+func (e *singEngine) setConnectionLog(log *corelog.Logger) { e.tracker.log.Store(log) }
 
 func (e *singEngine) telemetrySnapshot() (Traffic, []Connection) { return e.tracker.snapshot() }
 func (e *singEngine) dialFlow(ctx context.Context, network, outboundTag, host string, port uint16) (net.Conn, error) {

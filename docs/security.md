@@ -179,7 +179,8 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 
 ## 日志、错误与诊断
 
-sing-box 上游日志被关闭，因为其文本没有第一方脱敏保证。公开事件只含稳定节点 ID、revision 和安全摘要。未知运行时错误统一折叠为 `CORE_OPERATION_FAILED` / `core operation failed`，不回传上游错误文本；原因只写入本机核心日志（stderr 或 `--log-file`，文件 0600），并经过代理 URL 凭据脱敏。日志不含 Profile 凭据、会话密钥或本地代理密码。
+sing-box 上游日志被关闭，因为其文本没有第一方脱敏保证。公开事件只含稳定节点 ID、revision 和安全摘要。未知运行时错误统一折叠为 `CORE_OPERATION_FAILED` / `core operation failed`，不回传上游错误文本；原因只写入本机核心日志（stderr 或 `--log-file`，文件 0600），并经过代理 URL 凭据脱敏。日志不含 Profile 凭据、会话密钥或本地代理密码。`--log-level debug` 另外逐连接记录目标地址与域名（即浏览记录），
+只供排查时临时开启；默认 `info` 不含任何连接目标。
 
 CLI `render` 会对已知敏感 JSON 键和代理 URL 认证信息脱敏，但脱敏输出仍可能暴露拓扑、域名、IP 和节点数量。仅在受控开发环境使用，不要自动上传。
 

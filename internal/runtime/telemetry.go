@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
+	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
@@ -37,16 +39,20 @@ type telemetry struct {
 	upload, download atomic.Uint64
 	mu               sync.RWMutex
 	connections      map[string]*tracked
+	// log receives one debug line per routed connection; nil logs nothing.
+	log atomic.Pointer[corelog.Logger]
 }
 
 func newTelemetry() *telemetry { return &telemetry{connections: map[string]*tracked{}} }
-func (t *telemetry) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, _ adapter.Rule, outbound adapter.Outbound) net.Conn {
+func (t *telemetry) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
 	item := t.add(metadata, outbound)
+	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	counted := bufio.NewCounterConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
 	return &trackedConn{ExtendedConn: counted, onClose: func() { t.remove(item.connection.ID) }}
 }
-func (t *telemetry) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, outbound adapter.Outbound) N.PacketConn {
+func (t *telemetry) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
 	item := t.add(metadata, outbound)
+	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	counted := bufio.NewCounterPacketConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
 	return &trackedPacketConn{PacketConn: counted, onClose: func() { t.remove(item.connection.ID) }}
 }
@@ -61,6 +67,38 @@ func (t *telemetry) add(metadata adapter.InboundContext, outbound adapter.Outbou
 	t.mu.Unlock()
 	return item
 }
+
+// logRouted writes the debug line of a routed connection: where it came from,
+// the domain route rules matched against (route_domain: sniffed, or from the
+// DNS reverse mapping; the HTTP sniffer may leave an address there), the
+// rule, the outbound, and what the node is asked to connect to (target_kind
+// "domain" when domaindest hands over a name).
+func (t *telemetry) logRouted(id string, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) {
+	log := t.log.Load()
+	if !log.DebugEnabled() {
+		return
+	}
+	tag, target := "", metadata
+	if outbound != nil {
+		tag = adapter.OutboundTag(outbound)
+		if wrapper, ok := outbound.(*domaindest.Outbound); ok {
+			wrapper.Restore(&target)
+			tag = wrapper.Now()
+		}
+	}
+	kind := "ip"
+	if target.Destination.IsFqdn() {
+		kind = "domain"
+	}
+	ruleName := "final"
+	if rule != nil {
+		ruleName = rule.String()
+	}
+	log.Debug("connection", "id", id, "inbound", metadata.Inbound, "network", metadata.Network,
+		"destination", metadata.Destination.String(), "route_domain", metadata.Domain, "protocol", metadata.Protocol,
+		"rule", ruleName, "outbound", tag, "target", target.Destination.String(), "target_kind", kind)
+}
+
 func (t *telemetry) remove(id string) { t.mu.Lock(); delete(t.connections, id); t.mu.Unlock() }
 func (t *telemetry) snapshot() (Traffic, []Connection) {
 	traffic := Traffic{UploadBytes: t.upload.Load(), DownloadBytes: t.download.Load(), MeasuredAt: time.Now()}
