@@ -15,6 +15,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/dnstransport"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/hostipv6"
+	"github.com/peakpassvpn/ppvpn-core/internal/outboundlog"
 	"github.com/peakpassvpn/ppvpn-core/internal/rulesets"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
@@ -683,6 +684,19 @@ func (c *Core) reload() error {
 	return err
 }
 
+// outboundIngresses names the node and ingress of every node outbound tag
+// (for the outbound failure log). A single-ingress node's outbound is the
+// node tag itself.
+func outboundIngresses(built *config.BuildResult) map[string]outboundlog.Ingress {
+	out := make(map[string]outboundlog.Ingress, len(built.OutboundNodes))
+	for tag, node := range built.OutboundNodes {
+		if key, ok := built.IngressKeys[tag]; ok {
+			out[tag] = outboundlog.Ingress{NodeID: node, EndpointKey: key}
+		}
+	}
+	return out
+}
+
 // startCandidate creates and starts an engine; timer (optional) records
 // engine_create (sing-box option parsing and object setup) and engine_start
 // (sing-box start: outbounds, DNS, router and rule sets, inbounds including
@@ -691,6 +705,7 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = failover.WithSwitchObserver(ctx, c.ingressObserver(candidate))
 	ctx = dnstransport.WithLogger(ctx, c.log)
+	ctx = outboundlog.WithLogger(ctx, c.log, outboundIngresses(candidate))
 	instance, err := c.factory(ctx, candidate.Options)
 	if err != nil {
 		cancel()

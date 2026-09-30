@@ -90,6 +90,11 @@ mkdir -m 700 "$APP_STATE"
   `dns-remote` 的 `attempt`（第几次尝试）、`rcode` 与 `answers`，或 `error`，以及 `ms`。命中 DNS 缓存的查询
   不会发往上游，因此不记录。
 
+另外（0.5.9 起）每次连接节点失败记一行 `msg="outbound failed"`：`stage`（`dial`：TCP 连接失败，VLESS/REALITY
+与 AnyTLS 的 TLS 握手也在这一步；`closed before any response`：连上后节点没回任何数据就关闭，例如 Shadowsocks
+密钥被拒）、`node_id`、`endpoint_key`、`outbound`、`protocol`、`network`、`destination`、`error` 与 `ms`。不记录
+任何凭据；只在 debug 级别记录。
+
 `dns-remote`（经所选节点的 DoT）带有防半开连接的保护：每次尝试最多 3 秒，失败（超时、EOF、连接重置等）
 即换连接重试，最多 3 次、总计不超过 10 秒；DNS 应答（包括 NXDOMAIN、SERVFAIL）不重试。距上次成功超过
 30 秒且没有进行中的查询时，先清空连接池再查询，避免复用已被中间设备静默丢弃的空闲连接。**debug 日志包含用户访问的域名，只能在排查时临时开启，
