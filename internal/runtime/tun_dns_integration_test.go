@@ -91,9 +91,9 @@ func startFakeDNS(t *testing.T, answers map[string]string) uint16 {
 	return uint16(listener.Addr().(*net.TCPAddr).Port)
 }
 
-// socksConnect sends a SOCKS5 CONNECT for an IPv4 destination, the way a TUN
-// connection reaches the router: an address and no domain. sing-box answers
-// the CONNECT lazily, once routing reads from the connection.
+// socksConnect sends a SOCKS5 CONNECT for an IPv4 or IPv6 destination, the
+// way a TUN connection reaches the router: an address and no domain. sing-box
+// answers the CONNECT lazily, once routing reads from the connection.
 func socksConnect(t *testing.T, port uint16, destination netip.AddrPort) net.Conn {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))), time.Second)
@@ -101,9 +101,14 @@ func socksConnect(t *testing.T, port uint16, destination netip.AddrPort) net.Con
 		t.Fatal(err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	request := []byte{5, 1, 0, 5, 1, 0, 1}
-	ip := destination.Addr().As4()
-	request = append(request, ip[:]...)
+	request := []byte{5, 1, 0, 5, 1, 0}
+	if destination.Addr().Is4() {
+		ip := destination.Addr().As4()
+		request = append(append(request, 1), ip[:]...)
+	} else {
+		ip := destination.Addr().As16()
+		request = append(append(request, 4), ip[:]...)
+	}
 	request = binary.BigEndian.AppendUint16(request, destination.Port())
 	if _, err = conn.Write(request); err != nil {
 		t.Fatal(err)
@@ -112,9 +117,16 @@ func socksConnect(t *testing.T, port uint16, destination netip.AddrPort) net.Con
 	if _, err = io.ReadFull(conn, method); err != nil || method[1] != 0 {
 		t.Fatalf("socks method: %v %v", method, err)
 	}
-	reply := make([]byte, 10)
+	reply := make([]byte, 4)
 	if _, err = io.ReadFull(conn, reply); err != nil || reply[1] != 0 {
 		t.Fatalf("socks connect: %v %v", reply, err)
+	}
+	bound := 4 + 2
+	if reply[3] == 4 {
+		bound = 16 + 2
+	}
+	if _, err = io.ReadFull(conn, make([]byte, bound)); err != nil {
+		t.Fatalf("socks bound address: %v", err)
 	}
 	return conn
 }
@@ -236,6 +248,35 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	if recorder.has("198.18.1.29:443") {
 		t.Fatal("fake-ip address without a domain was sent to the node")
 	}
+
+	// 6. DNS to an IPv6 resolver is hijacked the same way (desktop TUN routes
+	// IPv6 into the tunnel, so an ISP's IPv6 DNS must not escape).
+	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("[2001:db8::53]:53"))
+	if _, err = conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(packed))), packed...)); err != nil {
+		t.Fatal(err)
+	}
+	if err = binary.Read(conn, binary.BigEndian, &length); err != nil {
+		t.Fatalf("hijacked IPv6 DNS: %v", err)
+	}
+	raw = make([]byte, length)
+	if _, err = io.ReadFull(conn, raw); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	answer = dns.Msg{}
+	if err = answer.Unpack(raw); err != nil || len(answer.Answer) != 1 || answer.Answer[0].(*dns.A).A.String() != "203.0.113.7" {
+		t.Fatalf("IPv6 resolver answer: %v %v", err, answer.Answer)
+	}
+	if recorder.has("[2001:db8::53]:53") {
+		t.Fatal("DNS to an IPv6 resolver reached the node instead of being hijacked")
+	}
+
+	// 7. An IPv6 literal destination without a known domain is proxied to
+	// the node as the address.
+	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("[2001:db8::7]:8443"))
+	_, _ = conn.Write([]byte{0x00, 0x01, 0x02, 0x03})
+	recorder.wait(t, "[2001:db8::7]:8443")
+	conn.Close()
 }
 
 // TestTUNRuleSetDomainGoesDirect runs a local binary rule set on a real

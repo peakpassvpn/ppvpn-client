@@ -223,6 +223,14 @@ const (
 	tunIPRoute2RuleIndex  = 9091
 )
 
+// Tunnel addresses. The peer address (.2 / ::2) is what sing-tun announces
+// as the tunnel DNS server where it configures one.
+var (
+	tunInet4Address = netip.MustParsePrefix("172.19.0.1/30")
+	// tunInet6Address is a ULA (RFC 4193) /126, desktop only.
+	tunInet6Address = netip.MustParsePrefix("fdfe:dcba:9876::1/126")
+)
+
 func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded []netip.Prefix) error {
 	stack := platform.TUN.Stack
 	if stack == "" {
@@ -240,8 +248,15 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 		// interface so they cannot loop back into the tunnel.
 		result.Options.Route.AutoDetectInterface = true
 	}
-	options := &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{netip.MustParsePrefix("172.19.0.1/30")}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}
+	options := &option.TunInboundOptions{Address: badoption.Listable[netip.Prefix]{tunInet4Address}, Stack: stack, AutoRoute: autoRoute, StrictRoute: autoRoute}
 	if autoRoute {
+		// An IPv6 address makes sing-tun route IPv6 into the tunnel as well
+		// (::/0; on Darwin 100::/8..8000::/1), set the tunnel's IPv6 DNS
+		// (Windows, systemd-resolved) and stop strict_route from merely
+		// blocking IPv6 (Linux unreachable rule, Windows WFP). Without it,
+		// IPv6 bypassed the tunnel on macOS, including DNS to IPv6 resolvers.
+		// Mobile hosts build the tunnel themselves and stay IPv4-only.
+		options.Address = append(options.Address, tunInet6Address)
 		// Keep every ingress IP (primary and backups) out of the tunnel at the
 		// OS routing level too, so handshakes and ICMP/TCP probes from any
 		// process (including an unprivileged sibling core) never loop.
