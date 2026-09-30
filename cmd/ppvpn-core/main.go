@@ -193,6 +193,7 @@ func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformNam
 		LogLevel:   "info",
 	}
 	core := coreruntime.NewWithLocalProxyState(capabilities, filepath.Join(stateDir, "local-proxies.json"))
+	core.EnableRuleSets(filepath.Join(stateDir, "rule-sets"))
 	server, err := api.NewServer(core, secret)
 	if err != nil {
 		return err

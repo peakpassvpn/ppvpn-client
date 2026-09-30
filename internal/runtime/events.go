@@ -18,6 +18,10 @@ const (
 	EventNodeIngressSwitched EventType = "NodeIngressSwitched"
 	// EventSystemProxyChanged carries "enabled" or "disabled" in Message.
 	EventSystemProxyChanged EventType = "SystemProxyChanged"
+	// EventRuleSetChanged: a rule set changed state. RuleSetID names it,
+	// Message carries the new state (ready, stale or unavailable) and Code
+	// the error code while it is not ready.
+	EventRuleSetChanged EventType = "RuleSetChanged"
 )
 
 type Event struct {
@@ -29,6 +33,8 @@ type Event struct {
 	// EndpointKey and PreviousEndpointKey are set on NodeIngressSwitched.
 	EndpointKey         string `json:"endpoint_key,omitempty"`
 	PreviousEndpointKey string `json:"previous_endpoint_key,omitempty"`
+	RuleSetID           string `json:"rule_set_id,omitempty"`
+	Code                string `json:"code,omitempty"`
 }
 
 type eventBus struct {

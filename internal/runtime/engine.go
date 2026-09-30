@@ -34,6 +34,12 @@ type inboundEngine interface {
 	addInbound(inbound option.Inbound) error
 	removeInbound(tag string) error
 }
+
+// directEngine dials through the instance's "direct" outbound.
+type directEngine interface {
+	dialDirect(ctx context.Context, network, address string) (net.Conn, error)
+}
+
 type singEngine struct {
 	*box.Box
 	ctx     context.Context
@@ -68,6 +74,13 @@ func (e *singEngine) dialFlow(ctx context.Context, network, outboundTag, host st
 		return nil, fmt.Errorf("outbound not found")
 	}
 	return outbound.DialContext(ctx, network, M.ParseSocksaddrHostPort(host, port))
+}
+func (e *singEngine) dialDirect(ctx context.Context, network, address string) (net.Conn, error) {
+	outbound, ok := e.Outbound().Outbound("direct")
+	if !ok {
+		return nil, fmt.Errorf("direct outbound not found")
+	}
+	return outbound.DialContext(ctx, network, M.ParseSocksaddr(address))
 }
 func (e *singEngine) selectOutbound(outboundTag string) bool {
 	outbound, ok := e.Outbound().Outbound("selected")
