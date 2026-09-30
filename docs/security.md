@@ -100,6 +100,13 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   只有 IPv6 字面地址且没有已知域名时，节点需要自身有 IPv6 出口，否则连接失败而不是泄露。直连规则
   仍然直连（经物理网卡）。
 - **入口排除**：`route_exclude_address` 包含所有入口 IP，IPv4 为 `/32`，IPv6 为 `/128`。
+- **主机关闭 IPv6**：sing-tun 加不上 IPv6 地址时会让整个 TUN 启动失败（Linux netlink `EACCES`、
+  Windows 设置 IPv6 地址失败），所以核心每次 apply 前探测主机：Linux 读
+  `/proc/sys/net/ipv6/conf/{all,default}/disable_ipv6`（`/proc/sys/net/ipv6` 不存在即内核
+  `ipv6.disable=1`），Windows 看 `Tcpip6\Parameters\DisabledComponents` 的 `0x10` 位以及是否有
+  AF_INET6 网卡，macOS 视为可用。IPv6 不可用时 TUN 只保留 IPv4 地址，`route_exclude_address`
+  也只留 IPv4 前缀；这样不会泄漏，因为主机本身没有绕开隧道的 IPv6 通路。探测读不到时按可用处理，
+  不做“失败后回退 IPv4”，真实错误照常暴露。
 - **不设置 `prefer_ipv4`**：sing-box 的 `strategy` 只影响核心自身的域名查找（`Lookup`），对被劫持
   的原始查询（`Exchange`）只有 `ipv4_only` 会过滤 AAAA，`prefer_ipv4` 不起作用。代理流量已经按域名
   交给节点，AAAA 应答不会因为节点缺 IPv6 而失败；过滤 AAAA 反而会让仅 IPv6 的站点不可达，因此核心

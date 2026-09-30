@@ -93,6 +93,25 @@ func (f *fakeFactory) create(_ context.Context, _ option.Options) (engine, error
 	return e, nil
 }
 
+// The desktop TUN carries IPv6 only when the host probe allows it; the probe
+// runs on every apply because IPv6 can be toggled between starts.
+func TestApplyProfileProbesHostIPv6ForTUN(t *testing.T) {
+	core := newCore(profile.PlatformCapabilities{Platform: "linux", TUN: profile.TUNCapabilities{Enabled: true}}, (&fakeFactory{}).create)
+	for _, ipv6 := range []bool{false, true} {
+		core.hostIPv6 = func() bool { return ipv6 }
+		if _, err := core.ApplyProfile(testProfile(fmt.Sprintf("ipv6-%v", ipv6), "a.example", "8.8.8.8"), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		core.mu.RLock()
+		inbounds := core.built.Options.Inbounds
+		core.mu.RUnlock()
+		tun := inbounds[len(inbounds)-1].Options.(*option.TunInboundOptions)
+		if want := map[bool]int{false: 1, true: 2}[ipv6]; len(tun.Address) != want {
+			t.Fatalf("host ipv6=%v: address %v", ipv6, tun.Address)
+		}
+	}
+}
+
 func testProfile(rev, domain, ip string) *profile.Profile {
 	n := profile.Node{ID: "node", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{{Role: profile.IngressRolePrimary, EndpointKey: "9001", Protocol: profile.ProtocolShadowsocks, Endpoint: profile.Endpoint{Domain: domain, IP: ip, Port: 443}, Credentials: profile.Credentials{Shadowsocks: &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA=="}}, Capabilities: profile.Capabilities{TCP: true}}}}
 	return &profile.Profile{SchemaVersion: profile.CurrentSchemaVersion, Revision: rev, ExpiresAt: time.Now().Add(time.Hour), Nodes: []profile.Node{n}, Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"}, Routing: profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}}}

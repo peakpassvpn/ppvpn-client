@@ -156,6 +156,32 @@ func TestDesktopTUNRoutesIPv6AndExcludesIPv6Ingress(t *testing.T) {
 	}
 }
 
+// A host with IPv6 disabled cannot give the TUN an IPv6 address (sing-tun
+// fails the whole start), so the desktop TUN stays IPv4-only there and no
+// IPv6 ingress prefix is excluded from routes that are never installed.
+func TestDesktopTUNWithoutHostIPv6IsIPv4Only(t *testing.T) {
+	n := node(profile.ProtocolShadowsocks)
+	n.Ingresses = append(n.Ingresses, ingress(profile.ProtocolShadowsocks, profile.IngressRoleBackup, "v6.example.com", "2606:4700:4700::1111"))
+	n.Ingresses[1].EndpointKey = "v6-backup"
+	n.Ingresses[1].ReplicaOrdinal = n.Ingresses[0].ReplicaOrdinal + 1
+	for _, platform := range []string{"linux", "macos", "windows"} {
+		got, err := BuildWithOptions(base(n), profile.PlatformCapabilities{Platform: platform, TUN: profile.TUNCapabilities{Enabled: true}}, BuildOptions{DisableTUNIPv6: true}, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		tun := got.Options.Inbounds[len(got.Options.Inbounds)-1].Options.(*option.TunInboundOptions)
+		if len(tun.Address) != 1 || tun.Address[0] != netip.MustParsePrefix("172.19.0.1/30") {
+			t.Fatalf("%s: address %v", platform, tun.Address)
+		}
+		if !tun.AutoRoute || !tun.StrictRoute {
+			t.Fatalf("%s: auto_route=%v strict_route=%v", platform, tun.AutoRoute, tun.StrictRoute)
+		}
+		if len(tun.RouteExcludeAddress) != 1 || tun.RouteExcludeAddress[0] != netip.MustParsePrefix("8.8.8.8/32") {
+			t.Fatalf("%s: route_exclude_address %v", platform, tun.RouteExcludeAddress)
+		}
+	}
+}
+
 func TestPrivateBypassRuleFollowsPerNodeRules(t *testing.T) {
 	n := node(profile.ProtocolShadowsocks)
 	n.Ingresses[0].Credentials.Shadowsocks = &profile.ShadowsocksCredentials{Method: "2022-blake3-aes-128-gcm", UserKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
