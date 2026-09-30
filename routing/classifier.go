@@ -75,6 +75,12 @@ func Compile(p *profile.Profile, now time.Time) (*Classifier, error) {
 		c.nodes[node.ID] = struct{}{}
 	}
 	for _, rule := range p.Routing.Rules {
+		// The flow classifier cannot evaluate binary rule sets, so it treats
+		// every rule set as unavailable: a rule whose only address matchers
+		// are rule sets is skipped, and other rules ignore their rule sets.
+		if len(rule.Match.RuleSetIDs) > 0 && !rule.Match.HasAddressMatch() {
+			continue
+		}
 		compiled, err := compileRule(rule)
 		if err != nil {
 			return nil, fmt.Errorf("compile rule %q: %w", rule.ID, err)

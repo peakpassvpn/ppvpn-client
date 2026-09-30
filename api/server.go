@@ -132,6 +132,9 @@ func (s *Server) validateProfile(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = profile.Validate(p, time.Now())
 	}
+	if err == nil && len(request.AllowedRuleSetHosts) > 0 {
+		err = profile.ValidateRuleSetHosts(p, request.AllowedRuleSetHosts)
+	}
 	s.respond(w, r, map[string]bool{"valid": err == nil}, err)
 }
 func (s *Server) applyProfile(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +148,7 @@ func (s *Server) applyProfile(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, r, nil, err)
 		return
 	}
-	applied, err := s.core.ApplyProfile(p, time.Now())
+	applied, err := s.core.ApplyProfileWithOptions(p, time.Now(), coreruntime.ApplyOptions{AllowedRuleSetHosts: request.AllowedRuleSetHosts})
 	s.respond(w, r, map[string]bool{"applied": applied}, err)
 }
 func (s *Server) selectNode(w http.ResponseWriter, r *http.Request) {

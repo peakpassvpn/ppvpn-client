@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -233,5 +235,92 @@ func TestTUNRouteResolvesAndHandsDomainsToNode(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if recorder.has("198.18.1.29:443") {
 		t.Fatal("fake-ip address without a domain was sent to the node")
+	}
+}
+
+// TestTUNRuleSetDomainGoesDirect runs a local binary rule set on a real
+// sing-box with the TUN route (fed by a SOCKS inbound carrying the TUN tag):
+// a sniffed domain in a direct rule set connects straight to its address,
+// every other domain goes to the node.
+func TestTUNRuleSetDomainGoesDirect(t *testing.T) {
+	recorder := &destinationRecorder{}
+	serverPort := startShadowsocksServerWithTracker(t, recorder)
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	accepted := make(chan struct{}, 4)
+	go func() {
+		for {
+			conn, err := target.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- struct{}{}
+			conn.Close()
+		}
+	}()
+
+	body := domainRuleSet(t, "direct.test")
+	path := filepath.Join(t.TempDir(), "direct-sites.srs")
+	if err = os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &profile.Profile{
+		SchemaVersion: profile.CurrentSchemaVersion, Revision: "tun-rule-set", ExpiresAt: time.Now().Add(time.Hour),
+		Nodes: []profile.Node{{ID: "node", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
+			localSSIngress(profile.IngressRolePrimary, "n0", 0, serverPort),
+		}}},
+		Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"},
+		Routing: profile.Routing{
+			RuleSets: []profile.RuleSet{{ID: "direct-sites", URL: "https://api.example.com/direct-sites.srs", SHA256: sha256Hex(body)}},
+			Rules:    []profile.RoutingRule{{ID: "direct-sites", Match: profile.RoutingMatch{RuleSetIDs: []string{"direct-sites"}}, Action: profile.RoutingAction{Type: "direct"}}},
+			Final:    profile.RoutingAction{Type: "proxy", Target: "selected"},
+		},
+	}
+	built, err := config.BuildWithOptions(p, profile.PlatformCapabilities{Platform: "linux", TUN: profile.TUNCapabilities{Enabled: true}, LogLevel: "error"},
+		config.BuildOptions{RuleSets: map[string]config.RuleSetFile{"direct-sites": {Path: path, MirrorDNS: true}}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := built.Options
+	socksPort := freePort(t)
+	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	options.Inbounds = []option.Inbound{{Type: C.TypeSOCKS, Tag: config.TUNInboundTag, Options: &option.SocksInboundOptions{ListenOptions: option.ListenOptions{Listen: &listen, ListenPort: socksPort}}}}
+	options.Route.AutoDetectInterface = false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = instance.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close()
+
+	// A domain the rule set matches is dialed directly at its address.
+	targetAddress := netip.MustParseAddrPort(target.Addr().String())
+	conn := socksConnect(t, socksPort, targetAddress)
+	go func() {
+		_ = tls.Client(conn, &tls.Config{ServerName: "www.direct.test", InsecureSkipVerify: true}).Handshake()
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rule set domain was not dialed directly")
+	}
+	conn.Close()
+
+	// Any other domain goes to the node.
+	conn = socksConnect(t, socksPort, netip.MustParseAddrPort("203.0.113.8:443"))
+	go func() {
+		_ = tls.Client(conn, &tls.Config{ServerName: "elsewhere.test", InsecureSkipVerify: true}).Handshake()
+	}()
+	recorder.wait(t, "elsewhere.test:443")
+	conn.Close()
+	if recorder.has("www.direct.test:443") {
+		t.Fatal("rule set domain was sent to the node")
 	}
 }
