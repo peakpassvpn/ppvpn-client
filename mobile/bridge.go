@@ -130,6 +130,16 @@ func (b *Bridge) LocalProxyEndpoints() (string, error) { return encode(b.core.Lo
 func (b *Bridge) LocalProxyMetadata() (string, error) {
 	return encode(b.core.LocalProxyMetadata())
 }
+// LocalProxyRoutedCredential returns the routed user's credential (0.5.12):
+// traffic is routed by the profile rules, then the selected node.
+func (b *Bridge) LocalProxyRoutedCredential() (string, error) {
+	credential, err := b.core.LocalProxyRoutedCredential()
+	if err != nil {
+		return "", safeError(err)
+	}
+	return encode(credential)
+}
+
 func (b *Bridge) LocalProxyCredential(nodeID string) (string, error) {
 	credential, err := b.core.LocalProxyCredential(nodeID)
 	if err != nil {

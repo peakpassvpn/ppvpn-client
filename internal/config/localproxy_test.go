@@ -1,6 +1,7 @@
 package config
 
 import (
+	C "github.com/sagernet/sing-box/constant"
 	"net/netip"
 	"slices"
 	"testing"
@@ -36,7 +37,7 @@ func TestEachLocalProxyUserRoutesToItsNode(t *testing.T) {
 	}
 	in := got.Options.Inbounds[0]
 	options := in.Options.(*proxyinbound.Options)
-	if in.Type != proxyinbound.Type || in.Tag != LocalProxyInboundTag || options.ListenPort != 7890 || options.Listen.Build(netip.Addr{}).String() != "127.0.0.1" || len(options.Users) != 2 {
+	if in.Type != proxyinbound.Type || in.Tag != LocalProxyInboundTag || options.ListenPort != 7890 || options.Listen.Build(netip.Addr{}).String() != "127.0.0.1" || len(options.Users) != 3 {
 		t.Fatalf("inbound: %#v", in)
 	}
 	if len(got.Options.Route.Rules) != 3 {
@@ -52,9 +53,27 @@ func TestEachLocalProxyUserRoutesToItsNode(t *testing.T) {
 			t.Fatalf("route %d: %#v", i, rule)
 		}
 	}
-	catchAll := got.Options.Route.Rules[2].DefaultOptions
-	if len(catchAll.Inbound) != 1 || len(catchAll.AuthUser) != 0 || catchAll.Action != "reject" {
-		t.Fatalf("catch-all: %#v", catchAll)
+	// The routed user (bare prefix) has no rule of its own; the catch-all
+	// rejects every other local proxy user, so it alone falls through to the
+	// profile rules.
+	if routed := options.Users[2]; routed.Username != "u8f2k" || routed.Password != "shared-secret" {
+		t.Fatalf("routed user: %#v", routed)
+	}
+	assertLocalProxyCatchAll(t, got.Options.Route.Rules[2], "u8f2k")
+}
+
+// assertLocalProxyCatchAll checks the rule rejecting local proxy traffic
+// except the routed user's.
+func assertLocalProxyCatchAll(t *testing.T, rule option.Rule, routed string) {
+	t.Helper()
+	logical := rule.LogicalOptions
+	if rule.Type != C.RuleTypeLogical || logical.Mode != C.LogicalTypeAnd || logical.Action != C.RuleActionTypeReject || len(logical.Rules) != 2 {
+		t.Fatalf("catch-all: %#v", rule)
+	}
+	inbound, notRouted := logical.Rules[0].DefaultOptions, logical.Rules[1].DefaultOptions
+	if len(inbound.Inbound) != 1 || inbound.Inbound[0] != LocalProxyInboundTag || inbound.Invert ||
+		len(notRouted.AuthUser) != 1 || notRouted.AuthUser[0] != routed || !notRouted.Invert {
+		t.Fatalf("catch-all conditions: %#v", logical.Rules)
 	}
 }
 
@@ -95,7 +114,7 @@ func TestPlatformCapabilitiesStayOutsideProfile(t *testing.T) {
 	}
 	shared := got.Options.Inbounds[0].Options.(*proxyinbound.Options)
 	tun := got.Options.Inbounds[1].Options.(*option.TunInboundOptions)
-	if len(shared.Users) != 1 || !tun.AutoRoute || tun.Stack != "mixed" {
+	if len(shared.Users) != 2 || !tun.AutoRoute || tun.Stack != "mixed" {
 		t.Fatalf("shared=%#v tun=%#v", shared, tun)
 	}
 }
@@ -232,9 +251,10 @@ func TestRuleMappingAndFixedPriority(t *testing.T) {
 	if len(got.Options.Route.Rules) != 3 {
 		t.Fatalf("rules: %#v", got.Options.Route.Rules)
 	}
-	if got.Options.Route.Rules[0].DefaultOptions.Inbound == nil || got.Options.Route.Rules[1].DefaultOptions.Inbound == nil {
+	if got.Options.Route.Rules[0].DefaultOptions.Inbound == nil {
 		t.Fatal("local proxy routes must precede profile rules")
 	}
+	assertLocalProxyCatchAll(t, got.Options.Route.Rules[1], "u8f2k")
 	rule := got.Options.Route.Rules[2].DefaultOptions
 	if len(rule.Domain) != 2 || rule.Domain[0] != "xn--fsqu00a.xn--0zwm56d" ||
 		len(rule.DomainSuffix) != 1 || rule.DomainSuffix[0] != ".example.com" ||

@@ -108,7 +108,9 @@ func TestParseUsername(t *testing.T) {
 		{"u8f2k--leading", "u8f2k", "-leading", true},
 		{"u8f2k-a.b_c", "u8f2k", "a.b_c", true},
 		{"u8f2k-", "", "", false},
-		{"u8f2k", "", "", false},
+		{"u8f2k", "u8f2k", "", true}, // the routed user
+		{"U8F2K", "", "", false},
+		{"u8f2", "", "", false},
 		{"U8F2K-node", "", "", false},
 		{"u8f2-node", "", "", false},
 		{"u8f2kk-node", "", "", false},
@@ -314,5 +316,19 @@ func TestSystemProxyPortUsesPreferredWhenFree(t *testing.T) {
 	port, err := NewManager(filepath.Join(t.TempDir(), "state.json")).WithSystemProxyPreferredPort(preferred).SystemProxyPort(true, 0)
 	if err != nil || port != preferred {
 		t.Fatalf("port %d, want %d: %v", port, preferred, err)
+	}
+}
+
+func TestRoutedEndpoint(t *testing.T) {
+	if _, ok := RoutedEndpoint(nil); ok {
+		t.Fatal("routed endpoint without node endpoints")
+	}
+	nodes := []Endpoint{
+		{NodeID: "a", Listen: Listen, Port: 7890, Username: "u8f2k-a", Password: "secret"},
+		{NodeID: "b", Listen: Listen, Port: 7890, Username: "u8f2k-b", Password: "secret"},
+	}
+	got, ok := RoutedEndpoint(nodes)
+	if !ok || got != (Endpoint{Listen: Listen, Port: 7890, Username: "u8f2k", Password: "secret"}) {
+		t.Fatalf("routed endpoint %+v, %v", got, ok)
 	}
 }

@@ -439,18 +439,28 @@ func (c *Core) LocalProxyEndpoints() []localproxy.Endpoint {
 	return append([]localproxy.Endpoint(nil), c.proxyEndpoints...)
 }
 
+// LocalProxyMetadata lists one entry per node (kind "node", by node id) and,
+// last, the routed user (kind "routed", empty node id); last so hosts that
+// read the first entry keep getting a node.
 func (c *Core) LocalProxyMetadata() []localproxy.Metadata {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	result := make([]localproxy.Metadata, len(c.proxyEndpoints))
-	for i, endpoint := range c.proxyEndpoints {
-		result[i] = localproxy.Metadata{
+	result := make([]localproxy.Metadata, 0, len(c.proxyEndpoints)+1)
+	entry := func(kind string, endpoint localproxy.Endpoint) localproxy.Metadata {
+		return localproxy.Metadata{
+			Kind:         kind,
 			NodeID:       endpoint.NodeID,
 			Listen:       endpoint.Listen,
 			Port:         endpoint.Port,
 			Protocols:    []string{"http", "socks5"},
 			AuthRequired: true,
 		}
+	}
+	for _, endpoint := range c.proxyEndpoints {
+		result = append(result, entry(localproxy.KindNode, endpoint))
+	}
+	if routed, ok := localproxy.RoutedEndpoint(c.proxyEndpoints); ok {
+		result = append(result, entry(localproxy.KindRouted, routed))
 	}
 	return result
 }
@@ -464,6 +474,7 @@ func (c *Core) LocalProxyCredential(nodeID string) (localproxy.Credential, error
 	for _, endpoint := range c.proxyEndpoints {
 		if endpoint.NodeID == nodeID {
 			return localproxy.Credential{
+				Kind:     localproxy.KindNode,
 				NodeID:   endpoint.NodeID,
 				Listen:   endpoint.Listen,
 				Port:     endpoint.Port,
@@ -473,6 +484,22 @@ func (c *Core) LocalProxyCredential(nodeID string) (localproxy.Credential, error
 		}
 	}
 	return localproxy.Credential{}, ErrNodeNotFound
+}
+
+// LocalProxyRoutedCredential returns the routed user's credential: traffic
+// sent with it is routed like the system proxy's, by the profile rules and
+// then the selected node.
+func (c *Core) LocalProxyRoutedCredential() (localproxy.Credential, error) {
+	if !c.platform.LocalProxy.Enabled {
+		return localproxy.Credential{}, ErrLocalProxyDisabled
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	routed, ok := localproxy.RoutedEndpoint(c.proxyEndpoints)
+	if !ok {
+		return localproxy.Credential{}, ErrProfileNotApplied
+	}
+	return localproxy.Credential{Kind: localproxy.KindRouted, Listen: routed.Listen, Port: routed.Port, Username: routed.Username, Password: routed.Password}, nil
 }
 
 func (c *Core) Traffic() Traffic {

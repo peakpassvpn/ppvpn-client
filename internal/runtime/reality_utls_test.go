@@ -31,7 +31,8 @@ func TestFixtureWithRealityStartsInLocalProxyMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer core.Stop()
-	if len(core.LocalProxyMetadata()) != len(p.Nodes) {
-		t.Fatal("expected one local proxy per logical node")
+	// One local proxy per logical node, plus the routed user (0.5.12).
+	if len(core.LocalProxyEndpoints()) != len(p.Nodes) || len(core.LocalProxyMetadata()) != len(p.Nodes)+1 {
+		t.Fatal("expected one local proxy per logical node, plus the routed user")
 	}
 }

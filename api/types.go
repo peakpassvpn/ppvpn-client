@@ -53,4 +53,7 @@ type rawRequest struct {
 	RoutingMode string `json:"routing_mode"`
 	// EndpointKey (pin-ingress): the ingress to pin, or null for automatic.
 	EndpointKey *string `json:"endpoint_key"`
+	// Kind (get-local-proxy-credential, 0.5.12): "node" (default, by
+	// node_id) or "routed" (the user routed by the profile rules).
+	Kind string `json:"kind"`
 }

@@ -180,6 +180,34 @@ func TestLocalProxyMetadataAndCredentialAreSeparated(t *testing.T) {
 		!strings.Contains(missing.Body.String(), `"code":"NODE_NOT_FOUND"`) {
 		t.Fatal(missing.Body.String())
 	}
+	// 0.5.12: every metadata entry has a kind; the routed user is last.
+	body := metadata.Body.String()
+	if !strings.Contains(body, `{"kind":"node","node_id":"node",`) || !strings.HasSuffix(strings.TrimSpace(body[:strings.LastIndex(body, "]")]), `"auth_required":true}`) ||
+		strings.Index(body, `"kind":"routed","node_id":""`) < strings.Index(body, `"kind":"node"`) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(credential.Body.String(), `"kind":"node"`) {
+		t.Fatal(credential.Body.String())
+	}
+	routed := request(t, server, "/v1/get-local-proxy-credential", map[string]any{"kind": "routed"}, true)
+	if routed.Code != http.StatusOK || !strings.Contains(routed.Body.String(), `"kind":"routed","node_id":""`) ||
+		!strings.Contains(routed.Body.String(), `"password"`) || strings.Contains(routed.Body.String(), `-node"`) {
+		t.Fatal(routed.Body.String())
+	}
+	for name, c := range map[string]struct {
+		body  map[string]any
+		code  string
+		field string
+	}{
+		"routed with node_id": {map[string]any{"kind": "routed", "node_id": "node"}, "REQUEST_INVALID", "node_id"},
+		"unknown kind":        {map[string]any{"kind": "system"}, "REQUEST_INVALID", "kind"},
+		"empty node_id":       {map[string]any{"node_id": ""}, "NODE_NOT_FOUND", "node_id"}, // not an implicit routed
+	} {
+		rec := request(t, server, "/v1/get-local-proxy-credential", c.body, true)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"`+c.code+`"`) || !strings.Contains(rec.Body.String(), `"field":"`+c.field+`"`) {
+			t.Fatalf("%s: %s", name, rec.Body.String())
+		}
+	}
 }
 
 func TestProbeEntrancesMethodAndShape(t *testing.T) {
