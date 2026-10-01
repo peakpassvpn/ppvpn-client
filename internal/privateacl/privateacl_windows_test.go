@@ -174,7 +174,7 @@ func TestRepairsLegacyACLAsOwner(t *testing.T) {
 		if !strings.Contains(line, "path="+p+" ") && !strings.Contains(line, "path="+strconv.Quote(p)+" ") {
 			t.Errorf("line %d missing path %s: %s", i, p, line)
 		}
-		for _, want := range []string{"level=info", "repaired ppvpn-core 0.4.0 private ACL", "old_acl=", "(A;;FA;;;BA)", "new_acl=", user.String()} {
+		for _, want := range []string{"level=info", "repaired ppvpn-core 0.4.0 private ACL", "old_acl=", "(A;;FA;;;BA)", "new_acl=", ";;;" + sddlTrustee(t, user) + ")"} {
 			if !strings.Contains(line, want) {
 				t.Errorf("line %d missing %q: %s", i, want, line)
 			}
@@ -216,3 +216,21 @@ func TestAccessErrorNamesPathAndRemedy(t *testing.T) {
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+// sddlTrustee returns user as SDDL writes it: an alias for well-known
+// accounts (the built-in Administrator, RID 500, is "LA", as on the GitHub
+// Windows runner), otherwise the SID string.
+func sddlTrustee(t *testing.T, user *windows.SID) string {
+	t.Helper()
+	descriptor, err := windows.SecurityDescriptorFromString("D:(A;;FA;;;" + user.String() + ")")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sddl := descriptor.String()
+	start := strings.LastIndex(sddl, ";")
+	end := strings.LastIndex(sddl, ")")
+	if start < 0 || end < start {
+		t.Fatalf("unexpected SDDL %q", sddl)
+	}
+	return sddl[start+1 : end]
+}
