@@ -547,6 +547,10 @@ func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
 
 	resolve("proxied.test.")
 	first := logged()
+	// Every fallback server exists in a real sing-box built from the config.
+	if strings.Contains(first, "fallback missing") {
+		t.Fatalf("fallback missing:\n%s", first)
+	}
 	if !strings.Contains(first, "msg=dns name=proxied.test. type=A server=dns-remote attempt=1 error=") ||
 		!strings.Contains(first, "msg=dns name=proxied.test. type=A server=dns-remote-8.8.8.8 attempt=2 rcode=NOERROR answers=1") {
 		t.Fatalf("fallback lines:\n%s", first)

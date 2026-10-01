@@ -339,3 +339,34 @@ func TestGuardPrefersTheLastAnsweringUpstream(t *testing.T) {
 		t.Fatalf("after preferFor dns-remote is first again: %v", calls())
 	}
 }
+
+// A fallback missing from the manager is warned about once, and looked up
+// again on later queries instead of being lost for good.
+func TestGuardWarnsAboutAMissingFallbackOnce(t *testing.T) {
+	shortGuard(t)
+	var b strings.Builder
+	l := corelog.New(&b)
+	ok := answer(mDNS.RcodeSuccess)
+	primary := &fakeTransport{tag: GuardedTag, steps: []func(*mDNS.Msg) (*mDNS.Msg, error){ok, ok, ok}}
+	google := &fakeTransport{tag: FallbackTags[0]}
+	guard := guardWithFallbacks(t, l, primary, google) // no 9.9.9.9
+	for range 2 {
+		if _, err := guard.Exchange(context.Background(), query()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(b.String(), `level=warn msg="dns-remote fallback missing" servers=dns-remote-9.9.9.9`); n != 1 {
+		t.Fatalf("%d warnings:\n%s", n, b.String())
+	}
+	if n := len(guard.upstreams); n != 2 {
+		t.Fatalf("%d upstreams", n)
+	}
+	quad9 := &fakeTransport{tag: FallbackTags[1]}
+	guard.manager.(*fakeManager).transports[quad9.tag] = quad9
+	if _, err := guard.Exchange(context.Background(), query()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(guard.upstreams); n != 3 {
+		t.Fatalf("not resolved again: %d upstreams", n)
+	}
+}

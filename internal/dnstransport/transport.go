@@ -14,6 +14,7 @@ package dnstransport
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,10 +101,12 @@ type wrapped struct {
 	inflight    atomic.Int32
 	lastSuccess atomic.Int64
 	// manager resolves FallbackTags on first use (they are created after
-	// this transport).
-	manager      adapter.DNSTransportManager
-	upstreamOnce sync.Once
-	upstreams    []adapter.DNSTransport
+	// this transport); an incomplete list is resolved again on the next
+	// query, and warned about once.
+	manager       adapter.DNSTransportManager
+	upstreamMu    sync.Mutex
+	upstreams     []adapter.DNSTransport
+	warnedMissing bool
 	// preferred indexes upstreams: where the next query starts, set when an
 	// upstream other than the preferred one answers, at preferredSince.
 	mu             sync.Mutex
@@ -112,23 +115,38 @@ type wrapped struct {
 }
 
 // upstreamList returns the guarded transport followed by the fallbacks that
-// exist, unwrapped so an attempt is logged once.
+// exist, unwrapped so an attempt is logged once. Missing fallbacks (none in
+// the manager, or no manager) leave the guard with fewer upstreams: logged as
+// a warning once, and looked up again on the next query.
 func (w *wrapped) upstreamList() []adapter.DNSTransport {
-	w.upstreamOnce.Do(func() {
-		w.upstreams = []adapter.DNSTransport{w.DNSTransport}
-		if w.manager == nil {
-			return
+	w.upstreamMu.Lock()
+	defer w.upstreamMu.Unlock()
+	if len(w.upstreams) == 1+len(FallbackTags) {
+		return w.upstreams
+	}
+	upstreams := []adapter.DNSTransport{w.DNSTransport}
+	var missing []string
+	for _, tag := range FallbackTags {
+		var upstream adapter.DNSTransport
+		ok := false
+		if w.manager != nil {
+			upstream, ok = w.manager.Transport(tag)
 		}
-		for _, tag := range FallbackTags {
-			if upstream, ok := w.manager.Transport(tag); ok {
-				if inner, ok := upstream.(*wrapped); ok {
-					upstream = inner.DNSTransport
-				}
-				w.upstreams = append(w.upstreams, upstream)
-			}
+		if !ok {
+			missing = append(missing, tag)
+			continue
 		}
-	})
-	return w.upstreams
+		if inner, isWrapped := upstream.(*wrapped); isWrapped {
+			upstream = inner.DNSTransport
+		}
+		upstreams = append(upstreams, upstream)
+	}
+	if len(missing) > 0 && !w.warnedMissing {
+		w.warnedMissing = true
+		w.log.Warn("dns-remote fallback missing", "servers", strings.Join(missing, ","))
+	}
+	w.upstreams = upstreams
+	return upstreams
 }
 
 // start returns the index of the upstream to try first.
