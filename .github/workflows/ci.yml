@@ -1,0 +1,30 @@
+name: CI
+
+# Tier 1: every pull request and push to main. Fast checks only: vet and the
+# unit/integration tests under the tag sets the products build with. The
+# race detector, govulncheck, Windows-native tests and all artifact builds run
+# in release.yml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: GOOS=windows go vet -tags with_utls,with_gvisor,with_dhcp ./...
+      - run: go test ./...
+      - run: go test -tags with_utls ./internal/... ./probe/...
+      # Desktop cores are built with gVisor for the TUN "mixed" stack.
+      - run: go test -tags with_utls,with_gvisor,with_dhcp ./cmd/... ./internal/... ./localproxy/...
