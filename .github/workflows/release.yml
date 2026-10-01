@@ -145,6 +145,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir release
+          # Two artifacts carrying the same file name would overwrite each other.
+          duplicates=$(find artifacts -type f ! -name '*SHA256SUMS' -exec basename {} \; | sort | uniq -d)
+          if [ -n "$duplicates" ]; then
+            echo "duplicate file names across artifacts: $duplicates" >&2
+            exit 1
+          fi
           find artifacts -type f ! -name '*SHA256SUMS' -exec mv {} release/ \;
           chmod +x release/ppvpn-core-linux-amd64
           core_version=$(release/ppvpn-core-linux-amd64 version | jq -er .core_version)
@@ -156,6 +162,9 @@ jobs:
           go_version=$(go version release/ppvpn-core-linux-amd64 | awk '{print $NF}')
           desktop_tags=$(go version -m release/ppvpn-core-linux-amd64 | sed -n 's/.*-tags=//p')
           mobile_tags=$(sed -n 's/^GO_TAGS ?= //p' Makefile)
+          for value in "$go_version" "$desktop_tags" "$mobile_tags"; do
+            [ -n "$value" ] || { echo "build-info.json would have an empty field" >&2; exit 1; }
+          done
           jq -n --arg tag "$GITHUB_REF_NAME" --arg ref_type "$GITHUB_REF_TYPE" --arg commit "$GITHUB_SHA" \
             --arg core_version "$core_version" --arg go_version "$go_version" \
             --arg desktop_tags "$desktop_tags" --arg mobile_tags "$mobile_tags" \
