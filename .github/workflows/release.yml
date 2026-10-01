@@ -3,7 +3,8 @@ name: Release
 # Tier 2: the full gate. Runs on a vX.Y.Z tag (the release itself), on a
 # pull request that bumps version/version.go (the release PR, so a tag never
 # meets this gate for the first time) or changes this workflow, and by hand.
-# Full tests on Linux and Windows, then every platform's artifacts.
+# Full tests on Linux and Windows, then every platform's artifacts, assembled
+# into one set of release files. Only a tag publishes them as a GitHub Release.
 
 on:
   push:
@@ -89,13 +90,16 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: make bootstrap-mobile
-      - run: make build-macos-artifact build-ios-artifact
+      # The desktop app ships the universal CLI binary, not the xcframework.
+      - run: make build-macos-cli-artifact build-macos-artifact build-ios-artifact
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ppvpn-core-apple-${{ github.sha }}
           path: |
+            build/ppvpn-core-darwin-universal
             build/PPVPNCore-macos.xcframework.zip
             build/PPVPNCore-ios.xcframework.zip
+            build/macos-cli-SHA256SUMS
             build/macos-SHA256SUMS
             build/ios-SHA256SUMS
 
@@ -119,3 +123,83 @@ jobs:
           path: |
             build/ppvpn-core.aar
             build/android-SHA256SUMS
+
+  release-files:
+    # Collects every platform's files into the flat set a release carries:
+    # the binaries, SHA256SUMS (sha256sum format, bare file names) and
+    # build-info.json. Runs on pull requests too, so the assembly is tested
+    # before a tag depends on it.
+    needs: [test, test-windows, windows-artifact, linux-artifact, apple-artifacts, android-artifact]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ppvpn-core-*-${{ github.sha }}
+          path: artifacts
+      - name: Assemble
+        run: |
+          set -euo pipefail
+          mkdir release
+          # Two artifacts carrying the same file name would overwrite each other.
+          duplicates=$(find artifacts -type f ! -name '*SHA256SUMS' -exec basename {} \; | sort | uniq -d)
+          if [ -n "$duplicates" ]; then
+            echo "duplicate file names across artifacts: $duplicates" >&2
+            exit 1
+          fi
+          find artifacts -type f ! -name '*SHA256SUMS' -exec mv {} release/ \;
+          chmod +x release/ppvpn-core-linux-amd64
+          core_version=$(release/ppvpn-core-linux-amd64 version | jq -er .core_version)
+          # A tag must name the version the binaries report.
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$core_version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match core_version $core_version" >&2
+            exit 1
+          fi
+          go_version=$(go version release/ppvpn-core-linux-amd64 | awk '{print $NF}')
+          desktop_tags=$(go version -m release/ppvpn-core-linux-amd64 | sed -n 's/.*-tags=//p')
+          mobile_tags=$(sed -n 's/^GO_TAGS ?= //p' Makefile)
+          for value in "$go_version" "$desktop_tags" "$mobile_tags"; do
+            [ -n "$value" ] || { echo "build-info.json would have an empty field" >&2; exit 1; }
+          done
+          jq -n --arg tag "$GITHUB_REF_NAME" --arg ref_type "$GITHUB_REF_TYPE" --arg commit "$GITHUB_SHA" \
+            --arg core_version "$core_version" --arg go_version "$go_version" \
+            --arg desktop_tags "$desktop_tags" --arg mobile_tags "$mobile_tags" \
+            '{tag: (if $ref_type == "tag" then $tag else null end), commit: $commit, core_version: $core_version, go_version: $go_version, desktop_tags: $desktop_tags, mobile_tags: $mobile_tags}' \
+            > release/build-info.json
+          (cd release && sha256sum -- * > ../SHA256SUMS && mv ../SHA256SUMS . && sha256sum -c SHA256SUMS)
+          cat release/build-info.json release/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+
+  publish:
+    # Tags only: attest that this workflow built the files, then publish them.
+    # A file uploaded to the release by hand fails `gh attestation verify`.
+    if: github.ref_type == 'tag'
+    needs: release-files
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files-${{ github.sha }}
+          path: release
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
+            --notes "Commit \`$GITHUB_SHA\`. Desktop binaries are built with the tags in \`build-info.json\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`."
