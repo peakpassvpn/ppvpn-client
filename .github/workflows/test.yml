@@ -62,9 +62,8 @@ jobs:
             build/linux-SHA256SUMS
 
   apple-artifacts:
-    # macOS runner minutes are expensive: build the Apple frameworks only when
-    # dispatched by hand (e.g. for a mobile release).
-    if: github.event_name == 'workflow_dispatch'
+    # The repository is public, so GitHub-hosted macOS runners are free: build
+    # the Apple frameworks on every run like the other platforms.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
