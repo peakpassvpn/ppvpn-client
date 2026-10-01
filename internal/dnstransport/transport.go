@@ -272,20 +272,22 @@ func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, e
 // A failed dial is excluded: that connection was new, so a new one will not
 // help (behind a proxy a refused upstream shows up as a reset or EOF while
 // dialing). sing-box marks it only in the message ("dial TLS connection: …"
-// from E.Cause); the integration tests pin that wording. On Windows a reset
-// is WSAECONNRESET, which syscall.ECONNRESET does not match; the common case,
-// EOF, is the same everywhere.
+// from E.Cause); the integration tests pin that wording. Platform errnos
+// that syscall.ECONNRESET and friends do not match (Windows: WSAECONNRESET,
+// WSAECONNABORTED) are in platformStaleErrors.
 func staleConnection(err error) bool {
 	if strings.HasPrefix(err.Error(), "dial ") {
 		return false
 	}
-	for _, target := range []error{io.EOF, io.ErrUnexpectedEOF, io.ErrClosedPipe, net.ErrClosed, syscall.ECONNRESET, syscall.ECONNABORTED, syscall.EPIPE} {
+	for _, target := range staleErrors {
 		if errors.Is(err, target) {
 			return true
 		}
 	}
 	return false
 }
+
+var staleErrors = append([]error{io.EOF, io.ErrUnexpectedEOF, io.ErrClosedPipe, net.ErrClosed, syscall.ECONNRESET, syscall.ECONNABORTED, syscall.EPIPE}, platformStaleErrors...)
 
 // Start, Close and Reset reach the guarded transport only: sing-box manages
 // the fallbacks as servers of their own.
