@@ -721,6 +721,11 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 	timer.mark("engine_create")
 	err = instance.Start()
 	timer.mark("engine_start")
+	if err == nil {
+		if watcher, ok := instance.(interfaceWatchEngine); ok {
+			watcher.watchDefaultInterface(c.log)
+		}
+	}
 	if err != nil {
 		cancel()
 		_ = instance.Close()

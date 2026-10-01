@@ -67,6 +67,7 @@ X-Request-ID: <optional-client-id>
 | GetStatus | `/v1/get-status` | `{}` | Status |
 | ListNodes | `/v1/list-nodes` | `{}` | NodeSummary[] |
 | SelectNode | `/v1/select-node` | `{"node_id":"stable-id"}` | `{"node_id":"stable-id"}` |
+| DebugGoroutines（`GET`，0.5.10 起） | `/v1/debug/goroutines` | 无 | 纯文本 goroutine 栈（pprof `debug=2`）；只在 `serve --log-level debug` 时存在，否则返回 `API_NOT_FOUND`。用于 Windows 等无法发 SIGQUIT 的平台定位卡住的位置；同样需要鉴权，宿主默认不应放行 |
 | PinIngress | `/v1/pin-ingress` | `{"node_id":"stable-id","endpoint_key":"9002"}`（`null` 为自动） | `{"node_id":"stable-id","endpoint_key":"9002"}` |
 | GetSelectedNode | `/v1/get-selected-node` | `{}` | NodeSummary |
 | ProbeEntrances | `/v1/probe-entrances` | `{"method":"tcp","timeout_ms":5000,"concurrency":4,"node_ids":["stable-id"]}` | EntranceResult[] |

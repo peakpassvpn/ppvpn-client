@@ -75,6 +75,10 @@ mkdir -m 700 "$APP_STATE"
 
 `--log-level info|debug`（默认 `info`，由宿主 service 传入）：
 
+- 任何级别（0.5.10 起）：桌面 TUN（`auto_detect_interface`）启动时和默认网卡每次变化时各记一行
+  `msg="default interface"`：`event`（`start`/`changed`）、`name`、`index`、`mtu`、`addresses`；`name=none`
+  表示没有可用网卡。核心自己的出站连接（拨节点、直连、DNS）都绑定在这块网卡上。
+
 - `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：
   - `msg="apply timing"`：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`local_proxy_ms`、
     `host_ipv6_ms`（主机 IPv6 探测）、`build_ms`、`routing_ms`，运行中 apply 还有

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sagernet/sing/common/control"
 	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
@@ -399,6 +401,22 @@ func TestApplyLogsRealityFingerprintsAtDebug(t *testing.T) {
 	for value, want := range map[string]string{"ab+c=": "padded std", "a+b": "unpadded std", "a-b": "unpadded url", "abc": "unpadded url-or-std"} {
 		if got := base64Flavor(value); got != want {
 			t.Errorf("%q: %q", value, got)
+		}
+	}
+}
+
+func TestDefaultInterfaceLogLine(t *testing.T) {
+	var b strings.Builder
+	log := corelog.New(&b)
+	logDefaultInterface(log, "start", &control.Interface{Name: "en0", Index: 6, MTU: 1500, Addresses: []netip.Prefix{netip.MustParsePrefix("10.10.0.22/16"), netip.MustParsePrefix("fe80::1/64")}})
+	logDefaultInterface(log, "changed", nil)
+	logged := b.String()
+	for _, want := range []string{
+		`msg="default interface" event=start name=en0 index=6 mtu=1500 addresses=10.10.0.22/16,fe80::1/64`,
+		`msg="default interface" event=changed name=none`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("missing %q in:\n%s", want, logged)
 		}
 	}
 }

@@ -3,7 +3,11 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/service"
 	"net"
+	"strings"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
@@ -39,6 +43,12 @@ type inboundEngine interface {
 // directEngine dials through the instance's "direct" outbound.
 type directEngine interface {
 	dialDirect(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// interfaceWatchEngine logs the default interface sing-box binds outbound
+// sockets to (auto_detect_interface), at start and on every change.
+type interfaceWatchEngine interface {
+	watchDefaultInterface(log *corelog.Logger)
 }
 
 // connectionLogEngine writes a debug line per routed connection.
@@ -83,6 +93,37 @@ func (e *singEngine) removeInbound(tag string) error {
 }
 
 func (e *singEngine) setConnectionLog(log *corelog.Logger) { e.tracker.log.Store(log) }
+
+func (e *singEngine) watchDefaultInterface(log *corelog.Logger) {
+	manager := service.FromContext[adapter.NetworkManager](e.ctx)
+	if manager == nil {
+		return
+	}
+	monitor := manager.InterfaceMonitor()
+	if monitor == nil {
+		// No auto_detect_interface: outbound sockets are not bound.
+		return
+	}
+	logDefaultInterface(log, "start", monitor.DefaultInterface())
+	monitor.RegisterCallback(func(defaultInterface *control.Interface, _ int) {
+		logDefaultInterface(log, "changed", defaultInterface)
+	})
+}
+
+// logDefaultInterface writes one info line naming the interface outbound
+// sockets are bound to; a nil interface means none was found (no network).
+func logDefaultInterface(log *corelog.Logger, event string, defaultInterface *control.Interface) {
+	if defaultInterface == nil {
+		log.Info("default interface", "event", event, "name", "none")
+		return
+	}
+	addresses := make([]string, len(defaultInterface.Addresses))
+	for i, prefix := range defaultInterface.Addresses {
+		addresses[i] = prefix.String()
+	}
+	log.Info("default interface", "event", event, "name", defaultInterface.Name, "index", defaultInterface.Index,
+		"mtu", defaultInterface.MTU, "addresses", strings.Join(addresses, ","))
+}
 
 func (e *singEngine) telemetrySnapshot() (Traffic, []Connection) { return e.tracker.snapshot() }
 func (e *singEngine) dialFlow(ctx context.Context, network, outboundTag, host string, port uint16) (net.Conn, error) {

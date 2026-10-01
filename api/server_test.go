@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -351,5 +352,33 @@ func TestPinIngressEndpoint(t *testing.T) {
 	}
 	if status := core.Status(); len(status.Nodes) != 1 || status.Nodes[0].PinnedEndpointKey != nil {
 		t.Fatalf("status after unpin: %+v", status.Nodes)
+	}
+}
+
+// GET /v1/debug/goroutines answers only at debug level and only to an
+// authenticated caller.
+func TestDebugGoroutinesOnlyAtDebugLevel(t *testing.T) {
+	server, _ := testServer(t)
+	get := func(authenticated bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/v1/debug/goroutines", nil)
+		if authenticated {
+			req.Header.Set("Authorization", "Bearer "+testSecret)
+		}
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := get(true); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "API_NOT_FOUND") {
+		t.Fatalf("info level: %d %s", rec.Code, rec.Body.String())
+	}
+	log := corelog.New(io.Discard)
+	_ = log.SetLevel(corelog.LevelDebug)
+	server.SetLogger(log)
+	if rec := get(false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated: %d", rec.Code)
+	}
+	rec := get(true)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), "goroutine ") || !strings.Contains(rec.Body.String(), "debugGoroutines") {
+		t.Fatalf("debug level: %d %.200s", rec.Code, rec.Body.String())
 	}
 }
