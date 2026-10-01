@@ -25,7 +25,17 @@ type Endpoint struct {
 	Password string `json:"password"`
 }
 
+// Kinds of local proxy users: a node user pins its traffic to one node; the
+// routed user (0.5.12) routes like the system proxy, by the profile's rules
+// and then the selected node.
+const (
+	KindNode   = "node"
+	KindRouted = "routed"
+)
+
 type Metadata struct {
+	// Kind is KindNode or KindRouted; NodeID is empty for KindRouted.
+	Kind         string   `json:"kind"`
 	NodeID       string   `json:"node_id"`
 	Listen       string   `json:"listen"`
 	Port         uint16   `json:"port"`
@@ -34,6 +44,7 @@ type Metadata struct {
 }
 
 type Credential struct {
+	Kind     string `json:"kind"`
 	NodeID   string `json:"node_id"`
 	Listen   string `json:"listen"`
 	Port     uint16 `json:"port"`
@@ -42,8 +53,8 @@ type Credential struct {
 }
 
 // Every node is served on one shared loopback port. The proxy username
-// "<prefix>-<nodeID>" selects the node; the password is one per-device secret
-// shared by all nodes.
+// "<prefix>-<nodeID>" selects the node, and the bare "<prefix>" is the routed
+// user; the password is one per-device secret shared by all users.
 const (
 	Listen = "127.0.0.1"
 	// PreferredPort is tried first on a fresh device and whenever the
@@ -148,18 +159,40 @@ func (m *Manager) WithPreferredPort(port uint16) *Manager {
 	return m
 }
 
-// FormatUsername returns the proxy username that selects nodeID.
-func FormatUsername(prefix, nodeID string) string { return prefix + "-" + nodeID }
+// FormatUsername returns the proxy username that selects nodeID, or the
+// routed user's (the bare prefix) for an empty nodeID.
+func FormatUsername(prefix, nodeID string) string {
+	if nodeID == "" {
+		return prefix
+	}
+	return prefix + "-" + nodeID
+}
 
 // ParseUsername splits a proxy username into the device prefix and node id.
 // The prefix never contains '-', so the node id is everything after the first
-// '-' and may itself contain '-'.
+// '-' and may itself contain '-'. A bare prefix is the routed user: nodeID is
+// empty and ok is true. Node ids are never empty, so the two cannot collide.
 func ParseUsername(username string) (prefix, nodeID string, ok bool) {
-	prefix, nodeID, ok = strings.Cut(username, "-")
-	if !ok || !validPrefix(prefix) || nodeID == "" {
+	prefix, nodeID, hasNode := strings.Cut(username, "-")
+	if !validPrefix(prefix) || (hasNode && nodeID == "") {
 		return "", "", false
 	}
 	return prefix, nodeID, true
+}
+
+// RoutedEndpoint returns the routed user's endpoint, derived from the node
+// endpoints Ensure returned (same listener and password, the bare prefix as
+// username). ok is false when there are no node endpoints.
+func RoutedEndpoint(nodes []Endpoint) (Endpoint, bool) {
+	if len(nodes) == 0 {
+		return Endpoint{}, false
+	}
+	prefix, _, ok := ParseUsername(nodes[0].Username)
+	if !ok {
+		return Endpoint{}, false
+	}
+	first := nodes[0]
+	return Endpoint{Listen: first.Listen, Port: first.Port, Username: FormatUsername(prefix, ""), Password: first.Password}, true
 }
 
 func validPrefix(prefix string) bool {

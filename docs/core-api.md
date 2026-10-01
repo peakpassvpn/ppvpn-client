@@ -73,7 +73,7 @@ X-Request-ID: <optional-client-id>
 | ProbeEntrances | `/v1/probe-entrances` | `{"method":"tcp","timeout_ms":5000,"concurrency":4,"node_ids":["stable-id"]}` | EntranceResult[] |
 | ProbeAvailability | `/v1/probe-availability` | `{"node_id":"stable-id","target":"https://example.com/generate_204","timeout_ms":10000}` | AvailabilityResult |
 | GetLocalProxyMetadata | `/v1/get-local-proxy-metadata` | `{}` | LocalProxyMetadata[] |
-| GetLocalProxyCredential | `/v1/get-local-proxy-credential` | `{"node_id":"stable-id"}` | LocalProxyCredential |
+| GetLocalProxyCredential | `/v1/get-local-proxy-credential` | `{"node_id":"stable-id"}`，或 `{"kind":"routed"}`（0.5.12 起） | LocalProxyCredential |
 | GetLocalProxyEndpoints | `/v1/get-local-proxy-endpoints` | `{}` | LocalProxyEndpoint[]（兼容接口） |
 | SetSystemProxy | `/v1/set-system-proxy` | `{"enabled":true}` | SystemProxyStatus |
 | GetSystemProxyEndpoints | `/v1/get-system-proxy-endpoints` | `{}` | SystemProxyStatus |
@@ -116,7 +116,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 
 ```json
 {
-  "core_version": "0.5.11",
+  "core_version": "0.5.12",
   "core_api_version": 1,
   "profile_schema_version": 1,
   "flow_adapter_version": 1,
@@ -235,10 +235,11 @@ sing-box 就地重新加载，不重启实例，也不断开连接。状态每�
 ### LocalProxyMetadata 与 LocalProxyCredential
 
 所有节点共用**一个** loopback 端口（`127.0.0.1`，同一端口同时提供认证 HTTP 代理/CONNECT
-与 SOCKS5），由代理用户名选择节点：
+与 SOCKS5），由代理用户名决定路由。用户名有两类：
 
-- 用户名 `<prefix>-<node_id>`：`prefix` 是每台设备随机生成的 5 位小写字母数字（如
+- 按节点（`kind: "node"`）：用户名 `<prefix>-<node_id>`。`prefix` 是每台设备随机生成的 5 位小写字母数字（如
   `u8f2k`），不含 `-`，因此 `node_id` 本身可以含 `-`（按第一个 `-` 切分）。
+- 按规则（`kind: "routed"`，0.5.12 起）：用户名就是裸 `<prefix>`（不含 `-`），不占用任何 node_id。
 - 密码是每台设备一个随机 secret，所有节点共用。桌面端以设备码登录、没有账户密码，
   设计稿中“密码同账户”即指这个设备 secret。
 - prefix、密码和最终端口在首次使用时生成并写入私有状态文件（0600），重启和 Profile
@@ -249,23 +250,43 @@ sing-box 就地重新加载，不重启实例，也不断开连接。状态每�
   `CONNECT`）返回 `407 Proxy Authentication Required`、`Proxy-Authenticate: Basic realm="ppvpn"`、
   `Content-Length: 0` 与 `Connection: close`，随后正常关闭连接（FIN，不发 RST），浏览器据此弹出
   认证；SOCKS5 返回 RFC 1929 认证失败（同样随后正常关闭，不发 RST）；不支持无认证方法和 SOCKS4。secret 使用常量时间比较。
-- 每个用户名的流量固定走该节点（多入口节点走其故障转移组），不受 selected 节点或 Profile
+- 按节点的用户名，流量固定走该节点（多入口节点走其故障转移组），不受 selected 节点或 Profile
   规则影响；流量统计、连接归属和 `probe-availability` 与之前一致。
+- 裸 `<prefix>` 的流量与系统代理（7891）走同一条路：先匹配 Profile 规则（含 DIRECT 分流），其余走
+  selected 节点；遵循当前 `routing_mode`（`global` 时只保留 baseline 规则）；`select-node`、`apply-profile`
+  对新连接立即生效；流量计入 `get-traffic` 与 `get-connections`。与系统代理一样，非 TUN 模式下核心不嗅探，
+  SOCKS5 以 IP 为目标的连接没有域名，**不会命中域名规则**；要让域名规则生效，客户端应把域名交给代理：
+  用 HTTP 代理/CONNECT，或 SOCKS5 远端解析（如 curl `--socks5-hostname`、`ALL_PROXY=socks5h://…`）。
 
-一般 UI 状态只能读取不含 secret 的 metadata。每个节点一项，`listen`/`port` 对所有节点相同：
+一般 UI 状态只能读取不含 secret 的 metadata。每个节点一项（按 `node_id` 排序），0.5.12 起在**最后**追加一项
+`kind: "routed"`（`node_id` 为空）；`listen`/`port` 对所有项相同：
 
 ```json
 [
-  {"node_id":"hk-001","listen":"127.0.0.1","port":7890,"protocols":["http","socks5"],"auth_required":true},
-  {"node_id":"jp-002","listen":"127.0.0.1","port":7890,"protocols":["http","socks5"],"auth_required":true}
+  {"kind":"node","node_id":"hk-001","listen":"127.0.0.1","port":7890,"protocols":["http","socks5"],"auth_required":true},
+  {"kind":"node","node_id":"jp-002","listen":"127.0.0.1","port":7890,"protocols":["http","socks5"],"auth_required":true},
+  {"kind":"routed","node_id":"","listen":"127.0.0.1","port":7890,"protocols":["http","socks5"],"auth_required":true}
 ]
 ```
 
-只有用户明确打开原生凭据面板时，宿主才能按 node ID 获取该项 credential：
+`kind` 从 0.5.12 起出现；宿主遇到不认识的 `kind` 必须跳过该项，不要假设每一项都是节点。
+
+只有用户明确打开原生凭据面板时，宿主才能获取 credential。按节点用 `{"node_id":"hk-001"}`：
 
 ```json
-{"node_id":"hk-001","listen":"127.0.0.1","port":7890,"username":"u8f2k-hk-001","password":"..."}
+{"kind":"node","node_id":"hk-001","listen":"127.0.0.1","port":7890,"username":"u8f2k-hk-001","password":"..."}
 ```
+
+按规则用 `{"kind":"routed"}`（0.5.12 起），同一端口、同一密码：
+
+```json
+{"kind":"routed","node_id":"","listen":"127.0.0.1","port":7890,"username":"u8f2k","password":"..."}
+```
+
+`kind` 可选，取值 `"node"`（缺省）或 `"routed"`，其他值返回 `REQUEST_INVALID`（`field` 为 `kind`）；
+`kind` 为 `"routed"` 时不得带 `node_id`（否则 `REQUEST_INVALID`）；尚未应用 Profile 时返回 `PROFILE_NOT_APPLIED`。
+空 `node_id` 不是 routed 的隐式写法，仍返回 `NODE_NOT_FOUND`。请求体严格拒绝未知字段，所以不要向 0.5.12
+之前的核心发送 `kind`（会得到 `REQUEST_INVALID`）。移动端对应 `LocalProxyRoutedCredential()`。
 
 字段与之前相同，宿主可以继续把每个节点当作独立的 `{host, port, username, password}` 使用。
 端口只可能在核心未运行时应用 Profile（即启动前的端口协调）时改变；宿主应在 `start`
@@ -273,7 +294,7 @@ sing-box 就地重新加载，不重启实例，也不断开连接。状态每�
 
 凭据是高敏感设备本地秘密；credential 方法和旧兼容接口返回密码，宿主不得把响应传给
 WebView、渲染进程、崩溃报告或日志。旧的 `GetLocalProxyEndpoints` 为 Core API v1 兼容保留，
-会一次返回所有 credential（同一形状）；新宿主不得调用。
+会一次返回所有按节点的 credential（不含 `kind`，也不含 routed 项）；新宿主不得调用。
 
 ### SystemProxyStatus（可选的系统代理监听器）
 

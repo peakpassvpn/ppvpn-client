@@ -15,6 +15,7 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
+	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/version"
@@ -245,7 +246,20 @@ func (s *Server) localProxyCredential(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, r, nil, err)
 		return
 	}
-	credential, err := s.core.LocalProxyCredential(request.NodeID)
+	var credential localproxy.Credential
+	switch request.Kind {
+	case "", localproxy.KindNode:
+		credential, err = s.core.LocalProxyCredential(request.NodeID)
+	case localproxy.KindRouted:
+		if request.NodeID != "" {
+			s.respond(w, r, nil, apiError("REQUEST_INVALID", "node_id must be empty for kind routed", "node_id", false))
+			return
+		}
+		credential, err = s.core.LocalProxyRoutedCredential()
+	default:
+		s.respond(w, r, nil, apiError("REQUEST_INVALID", "kind must be node or routed", "kind", false))
+		return
+	}
 	if err != nil {
 		s.respond(w, r, nil, coreError(err))
 		return
