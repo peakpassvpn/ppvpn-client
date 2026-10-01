@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"io"
 	"net/http"
 	"runtime/pprof"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	coreruntime "github.com/peakpassvpn/ppvpn-core/internal/runtime"
+	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/version"
