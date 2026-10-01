@@ -1,9 +1,17 @@
-name: Test
+name: Release
+
+# Tier 2: the full gate. Runs on a vX.Y.Z tag (the release itself), on a
+# pull request that bumps version/version.go (the release PR, so a tag never
+# meets this gate for the first time) or changes this workflow, and by hand.
+# Full tests on Linux and Windows, then every platform's artifacts.
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - version/version.go
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -18,14 +26,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - run: go vet ./...
+      - run: GOOS=windows go vet -tags with_utls,with_gvisor,with_dhcp ./...
       - run: go test ./...
       - run: go test -tags with_utls ./internal/... ./probe/...
-      # Desktop cores are built with gVisor for the TUN "mixed" stack.
       - run: go test -tags with_utls,with_gvisor,with_dhcp ./cmd/... ./internal/... ./localproxy/...
-      - run: GOOS=windows go vet -tags with_utls,with_gvisor,with_dhcp ./...
       - run: go test -race ./...
-      - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+  test-windows:
+    # Windows-only code (e.g. *_windows.go) is compiled but never executed on
+    # Linux; run its tests natively. internal/privateacl, probe and localproxy
+    # are not listed yet: their tests still assume Unix permissions, timer
+    # resolution or a non-admin account and fail on windows-latest. Add them
+    # back once those tests are fixed.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -tags with_utls,with_gvisor,with_dhcp ./internal/dnstransport/ ./internal/hostipv6/ ./profile/...
 
   windows-artifact:
     runs-on: ubuntu-latest
@@ -62,8 +84,6 @@ jobs:
             build/linux-SHA256SUMS
 
   apple-artifacts:
-    # The repository is public, so GitHub-hosted macOS runners are free: build
-    # the Apple frameworks on every run like the other platforms.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
