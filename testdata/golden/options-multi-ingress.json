@@ -15,6 +15,18 @@
         "tag": "dns-remote",
         "detour": "selected",
         "server": "1.1.1.1"
+      },
+      {
+        "type": "tls",
+        "tag": "dns-remote-8.8.8.8",
+        "detour": "selected",
+        "server": "8.8.8.8"
+      },
+      {
+        "type": "tls",
+        "tag": "dns-remote-9.9.9.9",
+        "detour": "selected",
+        "server": "9.9.9.9"
       }
     ],
     "rules": [

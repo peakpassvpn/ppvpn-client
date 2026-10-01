@@ -72,6 +72,7 @@ func OpenFile(path string) (*Logger, *os.File, error) {
 }
 
 func (l *Logger) Info(msg string, fields ...any)  { l.write("info", msg, fields, true) }
+func (l *Logger) Warn(msg string, fields ...any)  { l.write("warn", msg, fields, true) }
 func (l *Logger) Error(msg string, fields ...any) { l.write("error", msg, fields, true) }
 
 // Debug writes only at debug level, and without the per-line flush: it runs

@@ -13,7 +13,7 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 预期版本响应：
 
 ```json
-{"core_version":"0.5.10","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"0.5.11","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
@@ -90,8 +90,8 @@ mkdir -m 700 "$APP_STATE"
   `route_domain`（路由规则匹配用的域名：嗅探所得或 DNS 反查；HTTP 嗅探可能留下地址本身）、`protocol`、
   `rule`、`outbound`（实际节点）、`target`（交给节点的目标）与 `target_kind`（`domain`/`ip`）。
   被 reject 或 hijack-dns 的连接不经过此处。
-  另外每次发往上游 DNS 服务器的尝试记一行 `msg=dns`：`name`、`type`、`server`（`dns-local`/`dns-remote`）、
-  `dns-remote` 的 `attempt`（第几次尝试）、`rcode` 与 `answers`，或 `error`，以及 `ms`。命中 DNS 缓存的查询
+  另外每次发往上游 DNS 服务器的尝试记一行 `msg=dns`：`name`、`type`、`server`（`dns-local`、`dns-remote`，
+  或回退上游 `dns-remote-8.8.8.8`/`dns-remote-9.9.9.9`）、远端查询的 `attempt`（第几次尝试）、`rcode` 与 `answers`，或 `error`，以及 `ms`。命中 DNS 缓存的查询
   不会发往上游，因此不记录。
 
 另外（0.5.9 起）每次连接节点失败记一行 `msg="outbound failed"`：`stage`（`dial`：TCP 连接失败，VLESS/REALITY
@@ -103,8 +103,12 @@ mkdir -m 700 "$APP_STATE"
 `public_key_encoding`（`padded`/`unpadded` 与 `url`/`std`/`url-or-std` 字母表）和 uTLS `fingerprint`。
 
 `dns-remote`（经所选节点的 DoT）带有防半开连接的保护：每次尝试最多 3 秒，失败（超时、EOF、连接重置等）
-即换连接重试，最多 3 次、总计不超过 10 秒；DNS 应答（包括 NXDOMAIN、SERVFAIL）不重试。距上次成功超过
-30 秒且没有进行中的查询时，先清空连接池再查询，避免复用已被中间设备静默丢弃的空闲连接。**debug 日志包含用户访问的域名，只能在排查时临时开启，
+即重试，最多 3 次、总计不超过 8 秒（0.5.11 前为 10 秒）；DNS 应答（包括 NXDOMAIN、SERVFAIL）不重试。0.5.11 起每次重试换下一个上游：
+`1.1.1.1` → `8.8.8.8` → `9.9.9.9`（都是经所选节点的 DoT，三次尝试各一个）。例外：若失败发生在已建立的连接上
+（EOF、连接重置/已关闭，典型是连接池里空闲时被对端关掉的连接），每个查询有一次机会先清空该上游的连接池、在同一上游
+用新连接重试，再进入回退；这次重试是额外的一次尝试，仍在总预算内。超时和拨号失败直接回退；某个回退上游应答后，之后 10 分钟内的
+查询从它开始，避免每次先撞已被拦截的上游，10 分钟后重新从 `1.1.1.1` 开始；三个都失败时立即回 SERVFAIL（不缓存，下次查询重新尝试），客户端不必等到自己超时。总预算短于 sing-box 自身的 10 秒 DNS 超时，以保证 SERVFAIL 能在被取消前发出。距上次成功超过
+30 秒且没有进行中的查询时，先清空各上游的连接池再查询，避免复用已被中间设备静默丢弃的空闲连接。**debug 日志包含用户访问的域名，只能在排查时临时开启，
   不得常开或默认开启。**
 `serve` 每次启动覆盖生成新的会话密钥，正常退出时删除密钥文件。产品桌面端还应启用 `--exit-on-stdin-close`，并保持传入核心的 stdin 写端存活，使父 App 崩溃后核心自动退出。
 

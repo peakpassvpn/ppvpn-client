@@ -73,7 +73,9 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
     systemd-resolved 取默认物理网卡的链路 DNS，Windows 读非隧道网卡的 DNS，Darwin 在有 TUN 时查询
     DHCP 下发的服务器，拿不到时退回系统解析器，而桌面端已把它指向隧道，所以 macOS 宿主应当传入
     解析器）。两种情况都借 `auto_detect_interface` 绑定物理网卡。
-  - `dns-remote`：DoT 到 `1.1.1.1:853`，经所选节点（`selected`）拨出，查询不出现在本地网络上。
+  - `dns-remote`：DoT 到 `1.1.1.1:853`，经所选节点（`selected`）拨出，查询不出现在本地网络上。失败时（0.5.11 起）
+    依次回退到 `dns-remote-8.8.8.8`、`dns-remote-9.9.9.9`（同样是经所选节点的 DoT）。只用境外公共解析器：
+    这里解析的是走代理的域名，境内解析器会记录它们，也可能返回污染结果；全部失败时回 SERVFAIL，不降级到其他解析器。
   - DNS 规则镜像路由规则中的域名部分，顺序不变：路由为直连的域名（包括所有入口节点域名）走
     `dns-local`，路由为代理的走 `dns-remote`，路由为拒绝的直接拒绝；未命中规则时跟随
     `routing.final`：final 为 direct 时走 `dns-local`，否则走 `dns-remote`。端口、协议、CIDR 条件
