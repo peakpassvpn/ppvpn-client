@@ -36,13 +36,30 @@ import (
 //   - DNS rules mirror the route rules: a domain routed direct resolves
 //     through the system resolver dialed direct ("dns-local"); a domain routed
 //     to a proxy resolves through DoT to 1.1.1.1 dialed through the selected
-//     node ("dns-remote"); a rejected domain is refused. dns.final follows
+//     node ("dns-remote", falling back to 8.8.8.8 and 9.9.9.9 the same way,
+//     see dnstransport); a rejected domain is refused. dns.final follows
 //     route.final. Domain rule sets referenced by a route rule are mirrored
 //     the same way; rule sets carrying IP CIDRs never affect DNS.
 //     reverse_mapping remembers which domain each answered address belongs
 //     to.
 //   - every proxy route target is wrapped by domaindest, which hands the known
 //     domain (sniffed, or from DNS) to the node instead of the address.
+
+// remoteDNSFallbacks are the DoT servers dns-remote falls back to, in order,
+// each dialed through the selected node like dns-remote. Only public
+// resolvers outside mainland China: these resolve the domains routed to a
+// proxy, and a domestic resolver would log them and may answer them
+// poisoned. When all fail the query fails.
+var remoteDNSFallbacks = []string{"8.8.8.8", "9.9.9.9"}
+
+// DNSRemoteFallbackTags are the tags of the remoteDNSFallbacks servers.
+var DNSRemoteFallbackTags = func() []string {
+	tags := make([]string, len(remoteDNSFallbacks))
+	for i, server := range remoteDNSFallbacks {
+		tags[i] = DNSRemoteTag + "-" + server
+	}
+	return tags
+}()
 
 // TUNInboundTag is the tag of the TUN inbound.
 const TUNInboundTag = "tun"
@@ -148,14 +165,12 @@ func addTUNDNS(result *BuildResult, platform profile.PlatformCapabilities, final
 	if err != nil {
 		return err
 	}
+	servers := []option.DNSServerOptions{local, remoteDNSServer(DNSRemoteTag, RemoteDNSServer)}
+	for i, server := range remoteDNSFallbacks {
+		servers = append(servers, remoteDNSServer(DNSRemoteFallbackTags[i], server))
+	}
 	result.Options.DNS = &option.DNSOptions{RawDNSOptions: option.RawDNSOptions{
-		Servers: []option.DNSServerOptions{
-			local,
-			{Type: C.DNSTypeTLS, Tag: DNSRemoteTag, Options: &option.RemoteTLSDNSServerOptions{RemoteDNSServerOptions: option.RemoteDNSServerOptions{
-				RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: selectedOutboundTag}},
-				DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: RemoteDNSServer},
-			}}},
-		},
+		Servers:        servers,
 		Rules:          mirrorDNSRules(result.Options.Route.Rules, dnsRuleSets),
 		Final:          DNSRemoteTag,
 		ReverseMapping: true,
@@ -165,6 +180,14 @@ func addTUNDNS(result *BuildResult, platform profile.PlatformCapabilities, final
 	}
 	result.Options.Route.DefaultDomainResolver = &option.DomainResolveOptions{Server: DNSLocalTag}
 	return nil
+}
+
+// remoteDNSServer is DoT to server, dialed through the selected node.
+func remoteDNSServer(tag, server string) option.DNSServerOptions {
+	return option.DNSServerOptions{Type: C.DNSTypeTLS, Tag: tag, Options: &option.RemoteTLSDNSServerOptions{RemoteDNSServerOptions: option.RemoteDNSServerOptions{
+		RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: selectedOutboundTag}},
+		DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: server},
+	}}}
 }
 
 // tunnelPrefixes: a resolver inside them is the core's own tunnel DNS (a

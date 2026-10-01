@@ -91,16 +91,23 @@ func TestTUNCoreRulesComeFirst(t *testing.T) {
 func TestTUNDNSServersAndMirroredRules(t *testing.T) {
 	got := buildTUN(t, "windows", "proxy")
 	dns := got.Options.DNS
-	if dns == nil || !dns.ReverseMapping || dns.Final != DNSRemoteTag || len(dns.Servers) != 2 {
+	if dns == nil || !dns.ReverseMapping || dns.Final != DNSRemoteTag || len(dns.Servers) != 4 {
 		t.Fatalf("dns: %#v", dns)
 	}
-	local, remote := dns.Servers[0], dns.Servers[1]
+	local := dns.Servers[0]
 	if local.Type != C.DNSTypeLocal || local.Tag != DNSLocalTag || local.Options.(*option.LocalDNSServerOptions).Detour != "" {
 		t.Fatalf("local server: %#v", local)
 	}
-	remoteOptions, ok := remote.Options.(*option.RemoteTLSDNSServerOptions)
-	if remote.Type != C.DNSTypeTLS || remote.Tag != DNSRemoteTag || !ok || remoteOptions.Server != "1.1.1.1" || remoteOptions.Detour != selectedOutboundTag {
-		t.Fatalf("remote server: %#v", remote)
+	// dns-remote, then its fallbacks: DoT to resolvers outside mainland
+	// China, each through the selected node.
+	for i, want := range []struct{ tag, server string }{
+		{DNSRemoteTag, "1.1.1.1"}, {"dns-remote-8.8.8.8", "8.8.8.8"}, {"dns-remote-9.9.9.9", "9.9.9.9"},
+	} {
+		remote := dns.Servers[1+i]
+		remoteOptions, ok := remote.Options.(*option.RemoteTLSDNSServerOptions)
+		if remote.Type != C.DNSTypeTLS || remote.Tag != want.tag || !ok || remoteOptions.Server != want.server || remoteOptions.ServerPort != 0 || remoteOptions.Detour != selectedOutboundTag {
+			t.Fatalf("remote server %d: %#v", i, remote)
+		}
 	}
 	if resolver := got.Options.Route.DefaultDomainResolver; resolver == nil || resolver.Server != DNSLocalTag {
 		t.Fatalf("default domain resolver: %#v", resolver)
@@ -254,5 +261,8 @@ func TestLocalDNSServers(t *testing.T) {
 func TestGuardedDNSTagIsTheRemoteServer(t *testing.T) {
 	if dnstransport.GuardedTag != DNSRemoteTag {
 		t.Fatalf("guarded %q, remote %q", dnstransport.GuardedTag, DNSRemoteTag)
+	}
+	if !slices.Equal(dnstransport.FallbackTags, DNSRemoteFallbackTags) {
+		t.Fatalf("fallbacks %q, config %q", dnstransport.FallbackTags, DNSRemoteFallbackTags)
 	}
 }

@@ -449,3 +449,113 @@ func TestTUNRuleSetDomainGoesDirect(t *testing.T) {
 		t.Fatal("rule set domain was sent to the node")
 	}
 }
+
+// When dns-remote fails through the node, the guard falls back to the next
+// remote server in a real sing-box, and later queries start there. The remote
+// servers are swapped for plain TCP: dns-remote to a closed port, the first
+// fallback to a local fake, both still dialed through the selected node.
+func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
+	serverPort := startShadowsocksServerWithTracker(t, &destinationRecorder{})
+	dnsPort := startFakeDNS(t, map[string]string{"proxied.test.": "203.0.113.7", "again.proxied.test.": "203.0.113.7"})
+	closedPort := freePort(t)
+
+	p := &profile.Profile{
+		SchemaVersion: profile.CurrentSchemaVersion, Revision: "tun-dns-fallback", ExpiresAt: time.Now().Add(time.Hour),
+		Nodes: []profile.Node{{ID: "node", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
+			localSSIngress(profile.IngressRolePrimary, "n0", 0, serverPort),
+		}}},
+		Selection: profile.Selection{Mode: "manual", DefaultNodeID: "node"},
+		Routing:   profile.Routing{Final: profile.RoutingAction{Type: "proxy", Target: "selected"}},
+	}
+	built, err := config.Build(p, profile.PlatformCapabilities{Platform: "linux", TUN: profile.TUNCapabilities{Enabled: true}, LogLevel: "error"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := built.Options
+	socksPort := freePort(t)
+	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	options.Inbounds = []option.Inbound{{Type: C.TypeSOCKS, Tag: config.TUNInboundTag, Options: &option.SocksInboundOptions{ListenOptions: option.ListenOptions{Listen: &listen, ListenPort: socksPort}}}}
+	options.Route.AutoDetectInterface = false
+	ports := map[string]uint16{config.DNSRemoteTag: closedPort, config.DNSRemoteFallbackTags[0]: dnsPort}
+	for i, server := range options.DNS.Servers {
+		port, ok := ports[server.Tag]
+		if !ok {
+			continue
+		}
+		detour := server.Options.(*option.RemoteTLSDNSServerOptions).Detour
+		if detour != "selected" {
+			t.Fatalf("%s not dialed through the selected node", server.Tag)
+		}
+		options.DNS.Servers[i] = option.DNSServerOptions{Type: C.DNSTypeTCP, Tag: server.Tag, Options: &option.RemoteDNSServerOptions{
+			RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: detour}},
+			DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: "127.0.0.1", ServerPort: port},
+		}}
+		delete(ports, server.Tag)
+	}
+	if len(ports) != 0 {
+		t.Fatalf("servers not found: %v", ports)
+	}
+	var debugLog strings.Builder
+	var debugMu sync.Mutex
+	logger := corelog.New(writerFunc(func(p []byte) (int, error) {
+		debugMu.Lock()
+		defer debugMu.Unlock()
+		return debugLog.Write(p)
+	}))
+	_ = logger.SetLevel(corelog.LevelDebug)
+	ctx, cancel := context.WithCancel(dnstransport.WithLogger(context.Background(), logger))
+	defer cancel()
+	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = instance.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close()
+
+	resolve := func(name string) {
+		t.Helper()
+		conn := socksConnect(t, socksPort, netip.MustParseAddrPort("10.255.0.1:53"))
+		defer conn.Close()
+		query := new(dns.Msg)
+		query.SetQuestion(name, dns.TypeA)
+		query.RecursionDesired = true
+		packed, _ := query.Pack()
+		if _, err := conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(packed))), packed...)); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		var length uint16
+		if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
+			t.Fatalf("hijacked DNS: %v", err)
+		}
+		raw := make([]byte, length)
+		if _, err := io.ReadFull(conn, raw); err != nil {
+			t.Fatal(err)
+		}
+		var answer dns.Msg
+		if err := answer.Unpack(raw); err != nil || len(answer.Answer) != 1 || answer.Answer[0].(*dns.A).A.String() != "203.0.113.7" {
+			t.Fatalf("answer: %v %v", err, answer.Answer)
+		}
+	}
+	logged := func() string {
+		debugMu.Lock()
+		defer debugMu.Unlock()
+		return debugLog.String()
+	}
+
+	resolve("proxied.test.")
+	first := logged()
+	if !strings.Contains(first, "msg=dns name=proxied.test. type=A server=dns-remote attempt=1 error=") ||
+		!strings.Contains(first, "msg=dns name=proxied.test. type=A server=dns-remote-8.8.8.8 attempt=2 rcode=NOERROR answers=1") {
+		t.Fatalf("fallback lines:\n%s", first)
+	}
+	// The next uncached query starts at the upstream that answered.
+	resolve("again.proxied.test.")
+	second := strings.TrimPrefix(logged(), first)
+	if !strings.Contains(second, "msg=dns name=again.proxied.test. type=A server=dns-remote-8.8.8.8 attempt=1 rcode=NOERROR answers=1") ||
+		strings.Contains(second, "server=dns-remote attempt") {
+		t.Fatalf("preferred upstream lines:\n%s", second)
+	}
+}

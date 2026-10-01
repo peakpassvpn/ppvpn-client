@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing/service"
 )
 
 // fakeTransport answers each exchange with the next scripted step; a nil step
@@ -226,5 +227,115 @@ func TestGuardResetsThePoolAfterIdle(t *testing.T) {
 	exchange()
 	if inner.resets.Load() != 1 {
 		t.Fatalf("resets after idle: %d", inner.resets.Load())
+	}
+}
+
+// fakeManager resolves the fallback servers by tag.
+type fakeManager struct {
+	adapter.DNSTransportManager
+	transports map[string]adapter.DNSTransport
+}
+
+func (m *fakeManager) Transport(tag string) (adapter.DNSTransport, bool) {
+	transport, ok := m.transports[tag]
+	return transport, ok
+}
+
+// guardWithFallbacks builds dns-remote and its FallbackTags servers the way
+// sing-box does: every server through wrap, the manager in the context.
+func guardWithFallbacks(t *testing.T, l *corelog.Logger, primary *fakeTransport, fallbacks ...*fakeTransport) *wrapped {
+	t.Helper()
+	manager := &fakeManager{transports: map[string]adapter.DNSTransport{}}
+	ctx := service.ContextWith[adapter.DNSTransportManager](WithLogger(context.Background(), l), manager)
+	guarded := construct(t, ctx, primary).(*wrapped)
+	for _, fallback := range fallbacks {
+		manager.transports[fallback.tag] = construct(t, ctx, fallback)
+	}
+	return guarded
+}
+
+func countLines(lines, substring string) int { return strings.Count(lines, substring) }
+
+// Each attempt goes to the next upstream in order: dns-remote, then the
+// fallbacks. Every attempt is logged once, under the upstream's tag.
+func TestGuardFallsBackInOrder(t *testing.T) {
+	shortGuard(t)
+	l, b := debugLogger()
+	primary := &fakeTransport{tag: GuardedTag}                                                                           // hangs
+	google := &fakeTransport{tag: FallbackTags[0], steps: []func(*mDNS.Msg) (*mDNS.Msg, error){fail(errors.New("EOF"))}} // fails
+	quad9 := &fakeTransport{tag: FallbackTags[1], steps: []func(*mDNS.Msg) (*mDNS.Msg, error){answer(mDNS.RcodeSuccess)}}
+	response, err := guardWithFallbacks(t, l, primary, google, quad9).Exchange(context.Background(), query())
+	if err != nil || response == nil || primary.calls != 1 || google.calls != 1 || quad9.calls != 1 {
+		t.Fatalf("response %v, err %v, calls %d/%d/%d", response, err, primary.calls, google.calls, quad9.calls)
+	}
+	lines := b.String()
+	for _, want := range []string{
+		"server=dns-remote attempt=1 error=",
+		"server=dns-remote-8.8.8.8 attempt=2 error=EOF",
+		"server=dns-remote-9.9.9.9 attempt=3 rcode=NOERROR",
+	} {
+		if countLines(lines, want) != 1 {
+			t.Fatalf("want %q once in:\n%s", want, lines)
+		}
+	}
+	if n := countLines(lines, "msg=dns"); n != 3 {
+		t.Fatalf("%d lines, want 3:\n%s", n, lines)
+	}
+}
+
+// When every upstream fails the query fails: no other resolver is tried.
+func TestGuardFailsWhenAllUpstreamsFail(t *testing.T) {
+	shortGuard(t)
+	primary, google, quad9 := &fakeTransport{tag: GuardedTag}, &fakeTransport{tag: FallbackTags[0]}, &fakeTransport{tag: FallbackTags[1]}
+	if _, err := guardWithFallbacks(t, nil, primary, google, quad9).Exchange(context.Background(), query()); err == nil {
+		t.Fatal("no error")
+	}
+	if primary.calls != 1 || google.calls != 1 || quad9.calls != 1 {
+		t.Fatalf("calls %d/%d/%d", primary.calls, google.calls, quad9.calls)
+	}
+}
+
+// After a fallback answers, queries start from it for preferFor, so a blocked
+// dns-remote is not hit first every time; then dns-remote is tried first
+// again. A failing preferred upstream falls through to the next and wraps
+// around to dns-remote.
+func TestGuardPrefersTheLastAnsweringUpstream(t *testing.T) {
+	shortGuard(t)
+	ok, eof := answer(mDNS.RcodeSuccess), fail(errors.New("EOF"))
+	primary := &fakeTransport{tag: GuardedTag, steps: []func(*mDNS.Msg) (*mDNS.Msg, error){eof, ok, ok}}
+	google := &fakeTransport{tag: FallbackTags[0], steps: []func(*mDNS.Msg) (*mDNS.Msg, error){ok, ok, eof}}
+	quad9 := &fakeTransport{tag: FallbackTags[1], steps: []func(*mDNS.Msg) (*mDNS.Msg, error){eof}}
+	guard := guardWithFallbacks(t, nil, primary, google, quad9)
+	exchange := func() {
+		t.Helper()
+		if _, err := guard.Exchange(context.Background(), query()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := func() [3]int { return [3]int{primary.calls, google.calls, quad9.calls} }
+
+	exchange() // dns-remote fails, 8.8.8.8 answers and becomes preferred
+	if calls() != [3]int{1, 1, 0} {
+		t.Fatalf("first query: %v", calls())
+	}
+	exchange() // starts at 8.8.8.8
+	if calls() != [3]int{1, 2, 0} {
+		t.Fatalf("preferred: %v", calls())
+	}
+	guard.preferredSince = guard.preferredSince.Add(-preferFor + time.Minute)
+	exchange() // still within preferFor (fails, 9.9.9.9 fails, wraps to dns-remote)
+	if calls() != [3]int{2, 3, 1} {
+		t.Fatalf("wrap around: %v", calls())
+	}
+	if guard.preferred != 0 {
+		t.Fatalf("preferred after dns-remote answered: %d", guard.preferred)
+	}
+
+	// Expiry: prefer 8.8.8.8, then let preferFor pass.
+	guard.answered(1, time.Now().Add(-preferFor))
+	primary.steps = append(primary.steps, ok)
+	exchange()
+	if calls() != [3]int{3, 3, 1} {
+		t.Fatalf("after preferFor dns-remote is first again: %v", calls())
 	}
 }
