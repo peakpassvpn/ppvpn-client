@@ -424,6 +424,9 @@ func TestTUNRuleSetDomainGoesDirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Like newSingBox: without the tracker a sniffed connection keeps its
+	// bufio.CachedConn, whose cache races with Close (SagerNet/sing#112).
+	instance.Router().AppendTracker(newTelemetry())
 	if err = instance.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -541,6 +544,8 @@ func startRemoteDNSBox(t *testing.T, ports map[string]uint16) (uint16, func() st
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Like newSingBox; see TestTUNRuleSetDomainGoesDirect.
+	instance.Router().AppendTracker(newTelemetry())
 	if err = instance.Start(); err != nil {
 		t.Fatal(err)
 	}
