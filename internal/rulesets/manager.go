@@ -548,7 +548,10 @@ func (m *Manager) install(e *entry, body []byte, want string) string {
 	if err != nil {
 		return ErrInvalid
 	}
-	path := m.path(e.set.ID)
+	path, ok := m.path(e.set.ID)
+	if !ok {
+		return ErrStorage
+	}
 	if err = writeAtomic(path, body); err != nil {
 		return ErrStorage
 	}
@@ -556,11 +559,24 @@ func (m *Manager) install(e *entry, body []byte, want string) string {
 	return ""
 }
 
-func (m *Manager) path(id string) string { return filepath.Join(m.opts.Dir, id+".srs") }
+// path returns the file of rule set id inside Dir. The profile already
+// restricts ids to a safe alphabet; this keeps the file inside Dir even if a
+// caller skipped validation.
+func (m *Manager) path(id string) (string, bool) {
+	dir := filepath.Clean(m.opts.Dir)
+	path := filepath.Clean(filepath.Join(dir, id+".srs"))
+	if !strings.HasPrefix(path, dir+string(filepath.Separator)) || filepath.Dir(path) != dir {
+		return "", false
+	}
+	return path, true
+}
 
 // readLocal loads and verifies the cached copy of id, or returns nil.
 func (m *Manager) readLocal(id string) *localCopy {
-	path := m.path(id)
+	path, ok := m.path(id)
+	if !ok {
+		return nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil || len(data) > MaxSize {
 		return nil

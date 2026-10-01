@@ -378,3 +378,21 @@ func statusesOf(m *Manager, snapshot *Snapshot) []Status {
 	}
 	return out
 }
+
+func TestPathStaysInsideDir(t *testing.T) {
+	dir := t.TempDir()
+	m := New(Options{Dir: dir})
+	if got, ok := m.path("geosite-cn"); !ok || got != filepath.Join(dir, "geosite-cn.srs") {
+		t.Fatalf("path(geosite-cn) = %q, %v", got, ok)
+	}
+	for _, id := range []string{"../escape", "a/b", "..", "/abs", `a\b`} {
+		if got, ok := m.path(id); ok && filepath.Dir(got) != filepath.Clean(dir) {
+			t.Fatalf("path(%q) = %q escapes %q", id, got, dir)
+		}
+	}
+	for _, id := range []string{"../escape", "a/b"} {
+		if _, ok := m.path(id); ok {
+			t.Fatalf("path(%q) accepted", id)
+		}
+	}
+}
