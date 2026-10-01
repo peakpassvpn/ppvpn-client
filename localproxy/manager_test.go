@@ -236,8 +236,8 @@ func TestMigratesVersion1StateInPlace(t *testing.T) {
 	if !validPrefix(state.Prefix) || state.Password != got[0].Password || state.Port != got[0].Port {
 		t.Fatalf("upgraded state: %#v", state)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("permissions after upgrade: %v", err)
+	if exists, err := privateacl.CheckFile(path); err != nil || !exists {
+		t.Fatalf("state not private after upgrade: %v %v", exists, err)
 	}
 	// The upgrade happens once: the next load keeps the generated values.
 	again, err := NewManager(path).Ensure([]string{"hk-001"})
