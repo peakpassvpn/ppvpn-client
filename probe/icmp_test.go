@@ -25,7 +25,9 @@ func TestPingLoopback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if rtt <= 0 || rtt > 2*time.Second {
+			// Windows reports whole milliseconds (IcmpSendEcho), so a
+			// loopback echo can take 0.
+			if rtt < 0 || rtt > 2*time.Second {
 				t.Fatalf("rtt %v", rtt)
 			}
 		})

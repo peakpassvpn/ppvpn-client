@@ -5,9 +5,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/peakpassvpn/ppvpn-core/internal/privateacl"
 )
 
 // holdPort binds 127.0.0.1:port for the test. A concurrent test package may
@@ -72,12 +75,15 @@ func TestSharedEndpointsAreStableAndPrivate(t *testing.T) {
 	if state.Version != StateVersion || state.Prefix != prefix || state.Password != first[0].Password || state.Port != first[0].Port {
 		t.Fatalf("persisted state: %#v", state)
 	}
-	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("permissions: %v %v", info.Mode().Perm(), err)
+	// Private means a 0600 file on Unix and a protected owner/SYSTEM DACL on
+	// Windows, where mode bits say nothing; privateacl checks either.
+	if exists, err := privateacl.CheckFile(path); err != nil || !exists {
+		t.Fatalf("state file not private: %v %v", exists, err)
 	}
-	if dirInfo, err := os.Stat(filepath.Dir(path)); err != nil || dirInfo.Mode().Perm() != 0o700 {
-		t.Fatalf("directory permissions: %v %v", dirInfo.Mode().Perm(), err)
+	if runtime.GOOS != "windows" {
+		if dirInfo, err := os.Stat(filepath.Dir(path)); err != nil || dirInfo.Mode().Perm() != 0o700 {
+			t.Fatalf("directory permissions: %v %v", dirInfo.Mode().Perm(), err)
+		}
 	}
 }
 
@@ -202,6 +208,12 @@ func TestMigratesVersion1StateInPlace(t *testing.T) {
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Every core that wrote version 1 made the file private (on Windows a
+	// protected DACL; os.WriteFile alone leaves an inherited one, which is
+	// rightly refused).
+	if err := privateacl.SecureFile(path); err != nil {
+		t.Fatal(err)
+	}
 	got, err := NewManager(path).Ensure([]string{"hk-001"})
 	if err != nil {
 		t.Fatal(err)
@@ -224,8 +236,8 @@ func TestMigratesVersion1StateInPlace(t *testing.T) {
 	if !validPrefix(state.Prefix) || state.Password != got[0].Password || state.Port != got[0].Port {
 		t.Fatalf("upgraded state: %#v", state)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("permissions after upgrade: %v", err)
+	if exists, err := privateacl.CheckFile(path); err != nil || !exists {
+		t.Fatalf("state not private after upgrade: %v %v", exists, err)
 	}
 	// The upgrade happens once: the next load keeps the generated values.
 	again, err := NewManager(path).Ensure([]string{"hk-001"})
