@@ -8,6 +8,40 @@
 - Desktop 的 `vendor/ppvpn-core/<ver>/manifest.json` 以 `source.commit` 固定完整 SHA，
   该 SHA 必须就是 `vX.Y.Z` 指向的提交。
 
+## CI 分层与 GitHub Release
+
+- `ci.yml`（每个 PR、每次推送 `main`）：`go vet`（本机与 `GOOS=windows`）和三组构建标签下的 `go test`。
+- `release.yml`（`v*` tag；改动 `version/version.go` 或该工作流的 PR；手动触发）：上面全部，加
+  `-race`、`govulncheck`、Windows 原生测试，以及全部平台产物。发版 PR 改了版本号，所以完整门禁在合并前
+  就已跑过，tag 不会是第一次遇到它。
+- `release-files` job 把各平台文件汇总成一组发布文件：二进制、`SHA256SUMS`（`sha256sum` 格式，不带目录）
+  和 `build-info.json`（`tag`、`commit`、`core_version`、`go_version`、`desktop_tags`、`mobile_tags`）。
+  PR 上也会运行并作为 artifact 上传。
+- 在 tag 上，`release-files` 还要求 tag 等于 `v<core_version>`，否则失败，后面不会发布。
+- `publish` job 只在 tag 上运行：对文件做 GitHub artifact attestation 并创建同名 GitHub Release
+  （0.5.14 起）。桌面端使用其中的
+  `ppvpn-core-darwin-universal`、`ppvpn-core-windows-amd64.exe` 和 `ppvpn-core-linux-amd64`，
+  均以 `DESKTOP_TAGS` 构建。
+
+下载后校验：
+
+```sh
+sha256sum -c SHA256SUMS   # macOS: shasum -a 256 -c SHA256SUMS
+gh attestation verify ppvpn-core-linux-amd64 \
+  --repo peakpassvpn/ppvpn-core \
+  --signer-workflow peakpassvpn/ppvpn-core/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z
+```
+
+Windows 没有 `sha256sum`，用 `Get-FileHash -Algorithm SHA256 <文件>` 与 `SHA256SUMS` 中的值比对。
+
+只带 `--repo` 时，attestation 只证明文件由本仓库的某个工作流构建；加上 `--signer-workflow` 和
+`--source-ref` 才把它限定为 `release.yml` 在该 tag 上的构建。手动上传到 Release 的文件无法通过校验。
+
+`-race` 偶尔会报上游依赖内部的竞态，发生在测试里充当节点的 Shadowsocks 服务端
+（`sing-shadowsocks` 的 `serverConn.writeResponse` 对 `serverConn.Close`）。只有两侧堆栈都是这两个
+函数时才重跑，其他竞态一律当作真实问题处理。
+
 ## 固定工具链
 
 - Go：以 `go.mod` 的 `go` 指令为准（当前 1.26.8）。

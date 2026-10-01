@@ -202,4 +202,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" release/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
-            --notes "Commit \`$GITHUB_SHA\`. Desktop binaries are built with the tags in \`build-info.json\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`."
+            --notes "Commit \`$GITHUB_SHA\`. Desktop binaries are built with the tags in \`build-info.json\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref $GITHUB_REF\`."
