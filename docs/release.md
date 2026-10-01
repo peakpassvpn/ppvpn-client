@@ -27,14 +27,14 @@
 下载后校验：
 
 ```sh
-sha256sum -c SHA256SUMS   # macOS: shasum -a 256 -c SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS   # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
 gh attestation verify ppvpn-core-linux-amd64 \
   --repo peakpassvpn/ppvpn-core \
   --signer-workflow peakpassvpn/ppvpn-core/.github/workflows/release.yml \
   --source-ref refs/tags/vX.Y.Z
 ```
 
-Windows 没有 `sha256sum`，用 `Get-FileHash -Algorithm SHA256 <文件>` 与 `SHA256SUMS` 中的值比对。
+`--ignore-missing` 允许只下载部分文件。Windows 没有 `sha256sum`，用 `Get-FileHash -Algorithm SHA256 <文件>` 与 `SHA256SUMS` 中的值比对。
 
 只带 `--repo` 时，attestation 只证明文件由本仓库的某个工作流构建；加上 `--signer-workflow` 和
 `--source-ref` 才把它限定为 `release.yml` 在该 tag 上的构建。手动上传到 Release 的文件无法通过校验。
