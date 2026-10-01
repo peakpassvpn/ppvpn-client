@@ -154,10 +154,12 @@ func addPlatformSafetyRules(result *BuildResult, p *profile.Profile) {
 const LocalProxyInboundTag = "local-proxy"
 
 // addLocalProxies renders one shared loopback inbound for every node. The
-// inbound accepts exactly the per-node usernames, and one auth_user rule per
-// node pins that user's traffic to the node outbound (the failover group for
-// multi-ingress nodes). A final inbound rule rejects anything else, so local
-// proxy traffic can never fall through to profile rules or the selected node.
+// inbound accepts exactly the per-node usernames and the routed user (the
+// bare prefix). One auth_user rule per node pins that user's traffic to the
+// node outbound (the failover group for multi-ingress nodes). The routed user
+// gets no rule of its own: like the system proxy it falls through to the
+// profile rules and the selected node. A final rule rejects any other local
+// proxy traffic, so a node user can never fall through.
 func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 	first := proxies[0]
 	prefix, _, ok := localproxy.ParseUsername(first.Username)
@@ -180,13 +182,19 @@ func addLocalProxies(result *BuildResult, proxies []localproxy.Endpoint) error {
 			nodeOutbound,
 		))
 	}
-	result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: option.DefaultRule{
-			RawDefaultRule: option.RawDefaultRule{Inbound: badoption.Listable[string]{LocalProxyInboundTag}},
-			RuleAction:     rejectAction(),
-		},
-	})
+	routed := localproxy.FormatUsername(prefix, "")
+	users = append(users, proxyinbound.User{Username: routed, Password: first.Password})
+	result.Options.Route.Rules = append(result.Options.Route.Rules, option.Rule{Type: C.RuleTypeLogical, LogicalOptions: option.LogicalRule{
+		RawLogicalRule: option.RawLogicalRule{Mode: C.LogicalTypeAnd, Rules: []option.Rule{
+			{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{
+				Inbound: badoption.Listable[string]{LocalProxyInboundTag},
+			}}},
+			{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{
+				AuthUser: badoption.Listable[string]{routed}, Invert: true,
+			}}},
+		}},
+		RuleAction: rejectAction(),
+	}})
 	loopback := badoption.Addr(netip.MustParseAddr(localproxy.Listen))
 	result.Options.Inbounds = append(result.Options.Inbounds, option.Inbound{Type: proxyinbound.Type, Tag: LocalProxyInboundTag, Options: &proxyinbound.Options{
 		ListenOptions: option.ListenOptions{Listen: &loopback, ListenPort: first.Port},

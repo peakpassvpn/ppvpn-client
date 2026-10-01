@@ -65,6 +65,10 @@
         {
           "username": "u8f2k-3f2c9a1e-0000-4000-8000-000000000002-129",
           "password": "shared"
+        },
+        {
+          "username": "u8f2k",
+          "password": "shared"
         }
       ]
     },
@@ -260,7 +264,17 @@
         "outbound": "node-55b02d505a37e662"
       },
       {
-        "inbound": "local-proxy",
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "inbound": "local-proxy"
+          },
+          {
+            "auth_user": "u8f2k",
+            "invert": true
+          }
+        ],
         "action": "reject"
       },
       {

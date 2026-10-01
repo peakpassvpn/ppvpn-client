@@ -37,7 +37,8 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 		t.Fatalf("got %d endpoints", len(endpoints))
 	}
 	metadata := core.LocalProxyMetadata()
-	if len(metadata) != len(endpoints) {
+	// One record per node, then the routed user last.
+	if len(metadata) != len(endpoints)+1 {
 		t.Fatalf("got %d metadata records", len(metadata))
 	}
 	metadataJSON, err := json.Marshal(metadata)
@@ -47,8 +48,16 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 	if strings.Contains(string(metadataJSON), "username") || strings.Contains(string(metadataJSON), "password") {
 		t.Fatalf("metadata leaked credentials: %s", metadataJSON)
 	}
-	for i := range metadata {
-		if metadata[i].NodeID != endpoints[i].NodeID ||
+	routed := metadata[len(endpoints)]
+	if routed.Kind != localproxy.KindRouted || routed.NodeID != "" || routed.Listen != endpoints[0].Listen || routed.Port != endpoints[0].Port || !routed.AuthRequired {
+		t.Fatalf("routed metadata: %#v", routed)
+	}
+	if credential, err := core.LocalProxyRoutedCredential(); err != nil || credential.Kind != localproxy.KindRouted || credential.NodeID != "" ||
+		credential.Username+"-"+endpoints[0].NodeID != endpoints[0].Username || credential.Password != endpoints[0].Password || credential.Port != endpoints[0].Port {
+		t.Fatalf("routed credential: %#v, %v", credential, err)
+	}
+	for i := range endpoints {
+		if metadata[i].Kind != localproxy.KindNode || metadata[i].NodeID != endpoints[i].NodeID ||
 			metadata[i].Listen != endpoints[i].Listen ||
 			metadata[i].Port != endpoints[i].Port ||
 			len(metadata[i].Protocols) != 2 ||
@@ -61,7 +70,7 @@ func TestRealSingBoxRunsMultipleLocalProxies(t *testing.T) {
 		if credentialErr != nil {
 			t.Fatal(credentialErr)
 		}
-		if credential.NodeID != endpoints[i].NodeID ||
+		if credential.Kind != localproxy.KindNode || credential.NodeID != endpoints[i].NodeID ||
 			credential.Listen != endpoints[i].Listen ||
 			credential.Port != endpoints[i].Port ||
 			credential.Username != endpoints[i].Username ||
