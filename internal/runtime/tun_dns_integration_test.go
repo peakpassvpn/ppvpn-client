@@ -25,10 +25,13 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	singtls "github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
+	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
 )
 
 // destinationRecorder is a tracker on the stand-in Shadowsocks server: it
@@ -450,17 +453,44 @@ func TestTUNRuleSetDomainGoesDirect(t *testing.T) {
 	}
 }
 
-// When dns-remote fails through the node, the guard falls back to the next
-// remote server in a real sing-box, and later queries start there. The remote
-// servers are swapped for plain TCP: dns-remote to a closed port, the first
-// fallback to a local fake, both still dialed through the selected node.
-func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
-	serverPort := startShadowsocksServerWithTracker(t, &destinationRecorder{})
-	dnsPort := startFakeDNS(t, map[string]string{"proxied.test.": "203.0.113.7", "again.proxied.test.": "203.0.113.7"})
-	closedPort := freePort(t)
+// startFakeDoT is startFakeDNS over TLS (a fresh self-signed certificate;
+// clients skip verification).
+func startFakeDoT(t *testing.T, answers map[string]string) uint16 {
+	t.Helper()
+	certificate, err := singtls.GenerateKeyPair(nil, nil, time.Now, "dns.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{*certificate}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &dns.Server{Listener: listener, Net: "tcp-tls", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
+		response := new(dns.Msg)
+		response.SetReply(request)
+		question := request.Question[0]
+		if address, ok := answers[question.Name]; !ok {
+			response.Rcode = dns.RcodeNameError
+		} else if question.Qtype == dns.TypeA {
+			response.Answer = append(response.Answer, &dns.A{Hdr: dns.RR_Header{Name: question.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP(address)})
+		}
+		_ = w.WriteMsg(response)
+	})}
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+	return uint16(listener.Addr().(*net.TCPAddr).Port)
+}
 
+// startRemoteDNSBox runs the TUN config behind a SOCKS stand-in for the TUN
+// inbound, through a Shadowsocks node, with the remote DoT servers
+// (dns-remote and its fallbacks) pointed at 127.0.0.1:ports[tag] and
+// certificate verification off. Every remote server must be given. It returns
+// the SOCKS port and a reader of the debug log.
+func startRemoteDNSBox(t *testing.T, ports map[string]uint16) (uint16, func() string) {
+	t.Helper()
+	serverPort := startShadowsocksServerWithTracker(t, &destinationRecorder{})
 	p := &profile.Profile{
-		SchemaVersion: profile.CurrentSchemaVersion, Revision: "tun-dns-fallback", ExpiresAt: time.Now().Add(time.Hour),
+		SchemaVersion: profile.CurrentSchemaVersion, Revision: "tun-dns-remote", ExpiresAt: time.Now().Add(time.Hour),
 		Nodes: []profile.Node{{ID: "node", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
 			localSSIngress(profile.IngressRolePrimary, "n0", 0, serverPort),
 		}}},
@@ -476,24 +506,25 @@ func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	options.Inbounds = []option.Inbound{{Type: C.TypeSOCKS, Tag: config.TUNInboundTag, Options: &option.SocksInboundOptions{ListenOptions: option.ListenOptions{Listen: &listen, ListenPort: socksPort}}}}
 	options.Route.AutoDetectInterface = false
-	ports := map[string]uint16{config.DNSRemoteTag: closedPort, config.DNSRemoteFallbackTags[0]: dnsPort}
-	for i, server := range options.DNS.Servers {
-		port, ok := ports[server.Tag]
+	remaining := len(ports)
+	for _, server := range options.DNS.Servers {
+		tlsOptions, ok := server.Options.(*option.RemoteTLSDNSServerOptions)
 		if !ok {
 			continue
 		}
-		detour := server.Options.(*option.RemoteTLSDNSServerOptions).Detour
-		if detour != "selected" {
-			t.Fatalf("%s not dialed through the selected node", server.Tag)
+		port, ok := ports[server.Tag]
+		if !ok {
+			t.Fatalf("no port for %s", server.Tag)
 		}
-		options.DNS.Servers[i] = option.DNSServerOptions{Type: C.DNSTypeTCP, Tag: server.Tag, Options: &option.RemoteDNSServerOptions{
-			RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{Detour: detour}},
-			DNSServerAddressOptions:  option.DNSServerAddressOptions{Server: "127.0.0.1", ServerPort: port},
-		}}
-		delete(ports, server.Tag)
+		if server.Type != C.DNSTypeTLS || tlsOptions.Detour != "selected" {
+			t.Fatalf("%s is not DoT through the selected node", server.Tag)
+		}
+		tlsOptions.Server, tlsOptions.ServerPort = "127.0.0.1", port
+		tlsOptions.TLS = &option.OutboundTLSOptions{Enabled: true, ServerName: "dns.test", Insecure: true}
+		remaining--
 	}
-	if len(ports) != 0 {
-		t.Fatalf("servers not found: %v", ports)
+	if remaining != 0 {
+		t.Fatalf("remote servers %v, config has %d fewer", ports, remaining)
 	}
 	var debugLog strings.Builder
 	var debugMu sync.Mutex
@@ -504,7 +535,7 @@ func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
 	}))
 	_ = logger.SetLevel(corelog.LevelDebug)
 	ctx, cancel := context.WithCancel(dnstransport.WithLogger(context.Background(), logger))
-	defer cancel()
+	t.Cleanup(cancel)
 	instance, err := box.New(box.Options{Context: failover.Context(ctx), Options: options})
 	if err != nil {
 		t.Fatal(err)
@@ -512,54 +543,190 @@ func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
 	if err = instance.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer instance.Close()
-
-	resolve := func(name string) {
-		t.Helper()
-		conn := socksConnect(t, socksPort, netip.MustParseAddrPort("10.255.0.1:53"))
-		defer conn.Close()
-		query := new(dns.Msg)
-		query.SetQuestion(name, dns.TypeA)
-		query.RecursionDesired = true
-		packed, _ := query.Pack()
-		if _, err := conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(packed))), packed...)); err != nil {
-			t.Fatal(err)
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-		var length uint16
-		if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
-			t.Fatalf("hijacked DNS: %v", err)
-		}
-		raw := make([]byte, length)
-		if _, err := io.ReadFull(conn, raw); err != nil {
-			t.Fatal(err)
-		}
-		var answer dns.Msg
-		if err := answer.Unpack(raw); err != nil || len(answer.Answer) != 1 || answer.Answer[0].(*dns.A).A.String() != "203.0.113.7" {
-			t.Fatalf("answer: %v %v", err, answer.Answer)
-		}
-	}
-	logged := func() string {
+	t.Cleanup(func() { _ = instance.Close() })
+	return socksPort, func() string {
 		debugMu.Lock()
 		defer debugMu.Unlock()
 		return debugLog.String()
 	}
+}
 
-	resolve("proxied.test.")
-	first := logged()
-	// Every fallback server exists in a real sing-box built from the config.
-	if strings.Contains(first, "fallback missing") {
-		t.Fatalf("fallback missing:\n%s", first)
+// resolveTCP sends a hijacked DNS query over TCP (as a TUN client would to
+// port 53) and returns the response and how long it took.
+func resolveTCP(t *testing.T, socksPort uint16, name string) (*dns.Msg, time.Duration) {
+	t.Helper()
+	started := time.Now()
+	conn := socksConnect(t, socksPort, netip.MustParseAddrPort("10.255.0.1:53"))
+	defer conn.Close()
+	query := new(dns.Msg)
+	query.SetQuestion(name, dns.TypeA)
+	packed, _ := query.Pack()
+	if _, err := conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(packed))), packed...)); err != nil {
+		t.Fatal(err)
 	}
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	var length uint16
+	if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
+		t.Fatalf("hijacked DNS over TCP after %s: %v", time.Since(started), err)
+	}
+	raw := make([]byte, length)
+	if _, err := io.ReadFull(conn, raw); err != nil {
+		t.Fatal(err)
+	}
+	response := new(dns.Msg)
+	if err := response.Unpack(raw); err != nil {
+		t.Fatal(err)
+	}
+	return response, time.Since(started)
+}
+
+// resolveUDP is resolveTCP over UDP, through a SOCKS5 UDP association.
+func resolveUDP(t *testing.T, socksPort uint16, name string) (*dns.Msg, time.Duration) {
+	t.Helper()
+	started := time.Now()
+	client := socks.NewClient(N.SystemDialer, M.ParseSocksaddrHostPort("127.0.0.1", socksPort), socks.Version5, "", "")
+	destination := M.ParseSocksaddr("10.255.0.1:53")
+	conn, err := client.ListenPacket(context.Background(), destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	query := new(dns.Msg)
+	query.SetQuestion(name, dns.TypeA)
+	packed, _ := query.Pack()
+	if _, err = conn.WriteTo(packed, destination.UDPAddr()); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	raw := make([]byte, 4096)
+	n, _, err := conn.ReadFrom(raw)
+	if err != nil {
+		t.Fatalf("hijacked DNS over UDP after %s: %v", time.Since(started), err)
+	}
+	response := new(dns.Msg)
+	if err = response.Unpack(raw[:n]); err != nil {
+		t.Fatal(err)
+	}
+	return response, time.Since(started)
+}
+
+// When dns-remote fails through the node, the guard falls back to the next
+// DoT server in a real sing-box and gets the answer on attempt 2; the next
+// uncached query starts at that server.
+func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
+	dotPort := startFakeDoT(t, map[string]string{"proxied.test.": "203.0.113.7", "again.proxied.test.": "203.0.113.7"})
+	socksPort, logged := startRemoteDNSBox(t, map[string]uint16{
+		config.DNSRemoteTag:             freePort(t), // closed
+		config.DNSRemoteFallbackTags[0]: dotPort,
+		config.DNSRemoteFallbackTags[1]: freePort(t), // closed, never reached
+	})
+	answered := func(name string) {
+		t.Helper()
+		response, _ := resolveTCP(t, socksPort, name)
+		if response.Rcode != dns.RcodeSuccess || len(response.Answer) != 1 || response.Answer[0].(*dns.A).A.String() != "203.0.113.7" {
+			t.Fatalf("%s: %v", name, response)
+		}
+	}
+
+	answered("proxied.test.")
+	first := logged()
 	if !strings.Contains(first, "msg=dns name=proxied.test. type=A server=dns-remote attempt=1 error=") ||
 		!strings.Contains(first, "msg=dns name=proxied.test. type=A server=dns-remote-8.8.8.8 attempt=2 rcode=NOERROR answers=1") {
 		t.Fatalf("fallback lines:\n%s", first)
 	}
+	// Every fallback server exists in a real sing-box built from the config.
+	if strings.Contains(first, "fallback missing") {
+		t.Fatalf("fallback missing:\n%s", first)
+	}
 	// The next uncached query starts at the upstream that answered.
-	resolve("again.proxied.test.")
+	answered("again.proxied.test.")
 	second := strings.TrimPrefix(logged(), first)
 	if !strings.Contains(second, "msg=dns name=again.proxied.test. type=A server=dns-remote-8.8.8.8 attempt=1 rcode=NOERROR answers=1") ||
 		strings.Contains(second, "server=dns-remote attempt") {
 		t.Fatalf("preferred upstream lines:\n%s", second)
+	}
+}
+
+// When every remote server fails, a hijacked query is answered SERVFAIL over
+// TCP and UDP, instead of no answer (sing-box drops a query whose exchange
+// errors and the client waits out its own timeout). SERVFAIL is not cached:
+// the next query tries the upstreams again.
+func TestTUNRemoteDNSAllFailAnswersServfail(t *testing.T) {
+	socksPort, logged := startRemoteDNSBox(t, map[string]uint16{
+		config.DNSRemoteTag:             freePort(t),
+		config.DNSRemoteFallbackTags[0]: freePort(t),
+		config.DNSRemoteFallbackTags[1]: freePort(t),
+	})
+	for _, c := range []struct {
+		network string
+		resolve func(*testing.T, uint16, string) (*dns.Msg, time.Duration)
+	}{{"tcp", resolveTCP}, {"udp", resolveUDP}, {"udp again", resolveUDP}} {
+		response, took := c.resolve(t, socksPort, "proxied.test.")
+		if response.Rcode != dns.RcodeServerFailure || took > 11*time.Second {
+			t.Fatalf("%s: rcode %s after %s", c.network, dns.RcodeToString[response.Rcode], took)
+		}
+	}
+	lines := logged()
+	if n := strings.Count(lines, "msg=dns name=proxied.test. type=A server=dns-remote-9.9.9.9 attempt=3 error="); n != 3 {
+		t.Fatalf("%d complete fallbacks, want one per query (not cached):\n%s", n, lines)
+	}
+}
+
+// startBlackhole accepts TCP connections and never answers, like a DoT
+// server whose traffic is silently dropped.
+func startBlackhole(t *testing.T) uint16 {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		listener.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range conns {
+			conn.Close()
+		}
+	})
+	return uint16(listener.Addr().(*net.TCPAddr).Port)
+}
+
+// When every remote server times out (silently dropped), SERVFAIL still
+// arrives within the guard budget: the budget ends before sing-box's own DNS
+// timeout cancels the query.
+func TestTUNRemoteDNSAllTimeOutAnswersServfail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out the guard budget")
+	}
+	if raceEnabled {
+		// A DoT handshake that times out closes the Shadowsocks 2022 conn
+		// while its first Write is sending the request header: an upstream
+		// race (SagerNet/sing-shadowsocks2#9), not one in this code.
+		t.Skip("upstream race in sing-shadowsocks2 (SagerNet/sing-shadowsocks2#9)")
+	}
+	socksPort, logged := startRemoteDNSBox(t, map[string]uint16{
+		config.DNSRemoteTag:             startBlackhole(t),
+		config.DNSRemoteFallbackTags[0]: startBlackhole(t),
+		config.DNSRemoteFallbackTags[1]: startBlackhole(t),
+	})
+	response, took := resolveUDP(t, socksPort, "proxied.test.")
+	if response.Rcode != dns.RcodeServerFailure || took < 7*time.Second || took > 9500*time.Millisecond {
+		t.Fatalf("rcode %s after %s:\n%s", dns.RcodeToString[response.Rcode], took, logged())
+	}
+	if !strings.Contains(logged(), "server=dns-remote-9.9.9.9 attempt=3 error=") {
+		t.Fatalf("not every upstream tried:\n%s", logged())
 	}
 }

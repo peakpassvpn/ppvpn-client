@@ -165,15 +165,15 @@ func TestGuardRetriesEOF(t *testing.T) {
 }
 
 // When every attempt fails the guard gives up after maxAttempts within the
-// overall budget and returns the last error.
+// overall budget and answers SERVFAIL; a caller that gave up gets the error.
 func TestGuardGivesUpWithinBudget(t *testing.T) {
 	shortGuard(t)
 	inner := &fakeTransport{tag: GuardedTag}
 	started := time.Now()
-	_, err := construct(t, context.Background(), inner).Exchange(context.Background(), query())
+	response, err := construct(t, context.Background(), inner).Exchange(context.Background(), query())
 	elapsed := time.Since(started)
-	if err == nil || inner.calls != maxAttempts {
-		t.Fatalf("err %v, calls %d", err, inner.calls)
+	if err != nil || response.Rcode != mDNS.RcodeServerFailure || inner.calls != maxAttempts {
+		t.Fatalf("response %v, err %v, calls %d", response, err, inner.calls)
 	}
 	if elapsed > overallBudget+100*time.Millisecond {
 		t.Fatalf("took %s, budget %s", elapsed, overallBudget)
@@ -283,12 +283,14 @@ func TestGuardFallsBackInOrder(t *testing.T) {
 	}
 }
 
-// When every upstream fails the query fails: no other resolver is tried.
+// When every upstream fails the query fails with SERVFAIL, so the client is
+// answered instead of waiting out its timeout; no other resolver is tried.
 func TestGuardFailsWhenAllUpstreamsFail(t *testing.T) {
 	shortGuard(t)
 	primary, google, quad9 := &fakeTransport{tag: GuardedTag}, &fakeTransport{tag: FallbackTags[0]}, &fakeTransport{tag: FallbackTags[1]}
-	if _, err := guardWithFallbacks(t, nil, primary, google, quad9).Exchange(context.Background(), query()); err == nil {
-		t.Fatal("no error")
+	response, err := guardWithFallbacks(t, nil, primary, google, quad9).Exchange(context.Background(), query())
+	if err != nil || response == nil || response.Rcode != mDNS.RcodeServerFailure || response.Question[0].Name != "example.com." {
+		t.Fatalf("want SERVFAIL for the query: %v %v", response, err)
 	}
 	if primary.calls != 1 || google.calls != 1 || quad9.calls != 1 {
 		t.Fatalf("calls %d/%d/%d", primary.calls, google.calls, quad9.calls)
@@ -368,5 +370,13 @@ func TestGuardWarnsAboutAMissingFallbackOnce(t *testing.T) {
 	}
 	if n := len(guard.upstreams); n != 3 {
 		t.Fatalf("not resolved again: %d upstreams", n)
+	}
+}
+
+// The overall budget must end before sing-box's own DNS timeout, or SERVFAIL
+// can never be sent.
+func TestGuardBudgetEndsBeforeSingBoxTimeout(t *testing.T) {
+	if overallBudget > C.DNSTimeout-time.Second {
+		t.Fatalf("budget %s, sing-box DNS timeout %s", overallBudget, C.DNSTimeout)
 	}
 }

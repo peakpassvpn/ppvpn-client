@@ -40,10 +40,13 @@ const GuardedTag = "dns-remote"
 // are ordinary servers to sing-box, referenced by no DNS rule.
 var FallbackTags = []string{"dns-remote-8.8.8.8", "dns-remote-9.9.9.9"}
 
-// Guard limits. The overall budget matches sing-box's DNS timeout.
+// Guard limits. The overall budget stays under sing-box's DNS timeout
+// (C.DNSTimeout, 10s, which the DNS client puts around every exchange): the
+// guard must still be running when its budget ends, to answer SERVFAIL
+// before sing-box cancels the query and the client gets nothing.
 var (
 	attemptTimeout = 3 * time.Second
-	overallBudget  = 10 * time.Second
+	overallBudget  = 8 * time.Second
 	maxAttempts    = 3
 	idleReset      = 30 * time.Second
 	// preferFor is how long the guard keeps starting from the upstream that
@@ -186,7 +189,8 @@ func (w *wrapped) answered(index int, now time.Time) {
 // order, wrapping around, so with three upstreams and three attempts each is
 // tried once. An upstream that answers after a fallback is where queries
 // start for preferFor, so a blocked upstream is not hit first on every query;
-// then GuardedTag is tried first again. All upstreams failing fails the query.
+// then GuardedTag is tried first again. All upstreams failing fails the query
+// with SERVFAIL, unless the caller gave up first.
 func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
 	if !w.guarded {
 		return w.attempt(ctx, w.DNSTransport, message, 0)
@@ -200,6 +204,7 @@ func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, e
 	first := w.start(time.Now())
 	w.inflight.Add(1)
 	defer w.inflight.Add(-1)
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, overallBudget)
 	defer cancel()
 	var err error
@@ -223,7 +228,16 @@ func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, e
 			break
 		}
 	}
-	return nil, err
+	if caller.Err() != nil {
+		return nil, err
+	}
+	// Every upstream failed. sing-box answers a hijacked query whose exchange
+	// errors with nothing (UDP) or a closed connection (TCP), so the client
+	// waits out its own timeout; SERVFAIL fails it now. sing-box never caches
+	// SERVFAIL, so the next query tries the upstreams again.
+	response := new(mDNS.Msg)
+	response.SetRcode(message, mDNS.RcodeServerFailure)
+	return response, nil
 }
 
 // Start, Close and Reset reach the guarded transport only: sing-box manages
