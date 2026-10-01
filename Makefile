@@ -43,9 +43,9 @@ build-macos-cli-artifact:
 	mkdir -p build
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-darwin-arm64 ./cmd/ppvpn-core
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core-darwin-amd64 ./cmd/ppvpn-core
-	lipo -create -output build/ppvpn-core-darwin-universal build/ppvpn-core-darwin-arm64 build/ppvpn-core-darwin-amd64
-	lipo build/ppvpn-core-darwin-universal -verify_arch arm64 x86_64
-	shasum -a 256 build/ppvpn-core-darwin-universal > build/macos-cli-SHA256SUMS
+	lipo build/ppvpn-core-darwin-arm64 -verify_arch arm64
+	lipo build/ppvpn-core-darwin-amd64 -verify_arch x86_64
+	shasum -a 256 build/ppvpn-core-darwin-arm64 build/ppvpn-core-darwin-amd64 > build/macos-cli-SHA256SUMS
 
 build-windows-artifact:
 	mkdir -p build
