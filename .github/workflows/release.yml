@@ -90,13 +90,16 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: make bootstrap-mobile
-      # The desktop app ships the universal CLI binary, not the xcframework.
+      # The desktop app ships the CLI binary for its Mac's architecture, not the
+      # xcframework. Separate files, not a universal one, so Intel can be
+      # dropped on its own once Apple ends Intel support.
       - run: make build-macos-cli-artifact build-macos-artifact build-ios-artifact
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ppvpn-core-apple-${{ github.sha }}
           path: |
-            build/ppvpn-core-darwin-universal
+            build/ppvpn-core-darwin-arm64
+            build/ppvpn-core-darwin-amd64
             build/PPVPNCore-macos.xcframework.zip
             build/PPVPNCore-ios.xcframework.zip
             build/macos-cli-SHA256SUMS

@@ -20,7 +20,8 @@
 - 在 tag 上，`release-files` 还要求 tag 等于 `v<core_version>`，否则失败，后面不会发布。
 - `publish` job 只在 tag 上运行：对文件做 GitHub artifact attestation 并创建同名 GitHub Release
   （0.5.14 起）。桌面端使用其中的
-  `ppvpn-core-darwin-universal`、`ppvpn-core-windows-amd64.exe` 和 `ppvpn-core-linux-amd64`，
+  `ppvpn-core-darwin-arm64`（Apple Silicon）、`ppvpn-core-darwin-amd64`（Intel）、`ppvpn-core-windows-amd64.exe`
+  和 `ppvpn-core-linux-amd64`（0.5.15 起 macOS 按架构分两个文件，不再提供 `ppvpn-core-darwin-universal`），
   均以 `DESKTOP_TAGS` 构建。
 
 下载后校验：
@@ -86,8 +87,9 @@ GitHub Actions 按平台拆分桌面产物：
   `linux-SHA256SUMS`。
 
 本地可分别运行 `make build-macos-artifact`、`make build-macos-cli-artifact`
-（`CGO_ENABLED=0` 的 arm64/x86_64 `ppvpn-core serve` CLI，经 `lipo` 合并为
-`build/ppvpn-core-darwin-universal`，并写入 `macos-cli-SHA256SUMS`）和
+（`CGO_ENABLED=0` 的 `ppvpn-core serve` CLI，按架构分别输出
+`build/ppvpn-core-darwin-arm64` 和 `build/ppvpn-core-darwin-amd64`，用 `lipo -verify_arch` 确认架构，
+并写入 `macos-cli-SHA256SUMS`）和
 `make build-windows-artifact`、`make build-linux-artifact`；`make build-desktop-artifact` 同时构建四者。
 
 这些是未签名核心二进制。最终产品仍需在桌面 App 的发布流水线中完成平台代码签名、安装包封装、公证/信誉链和更新签名。
