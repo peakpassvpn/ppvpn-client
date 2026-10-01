@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -101,9 +102,23 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/get-traffic", s.simple(func(_ *http.Request) (any, error) { return s.core.Traffic(), nil }))
 	s.mux.HandleFunc("POST /v1/get-connections", s.simple(func(_ *http.Request) (any, error) { return s.core.Connections(), nil }))
 	s.mux.HandleFunc("GET /v1/watch-events", s.watchEvents)
+	s.mux.HandleFunc("GET /v1/debug/goroutines", s.debugGoroutines)
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, http.StatusNotFound, Envelope{RequestID: requestID(r), OK: false, Error: &Error{Code: "API_NOT_FOUND", Message: "Core API method was not found"}})
 	})
+}
+
+// debugGoroutines returns every goroutine's stack (pprof goroutine, debug=2)
+// as text, to see where a core is stuck on platforms without SIGQUIT. It
+// exists only while the core logs at debug level; otherwise it answers like
+// an unknown method. Authentication applies as for every method.
+func (s *Server) debugGoroutines(w http.ResponseWriter, r *http.Request) {
+	if !s.log.DebugEnabled() {
+		write(w, http.StatusNotFound, Envelope{RequestID: requestID(r), OK: false, Error: &Error{Code: "API_NOT_FOUND", Message: "Core API method was not found"}})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_ = pprof.Lookup("goroutine").WriteTo(w, 2)
 }
 
 func (s *Server) authenticate(next http.Handler) http.Handler {

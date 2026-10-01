@@ -13,7 +13,7 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 预期版本响应：
 
 ```json
-{"core_version":"0.5.9","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"0.5.10","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
@@ -74,6 +74,10 @@ mkdir -m 700 "$APP_STATE"
 因此 macOS 宿主应当传入。列表在启动时固定，运行中切换网络需要重连。
 
 `--log-level info|debug`（默认 `info`，由宿主 service 传入）：
+
+- 任何级别（0.5.10 起）：桌面 TUN（`auto_detect_interface`）启动时和默认网卡每次变化时各记一行
+  `msg="default interface"`：`event`（`start`/`changed`）、`name`、`index`、`mtu`、`addresses`；`name=none`
+  表示没有可用网卡。核心自己的出站连接（拨节点、直连、DNS）都绑定在这块网卡上。
 
 - `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：
   - `msg="apply timing"`：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`local_proxy_ms`、
