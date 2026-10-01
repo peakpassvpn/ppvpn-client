@@ -14,9 +14,13 @@ package dnstransport
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	mDNS "github.com/miekg/dns"
@@ -187,8 +191,11 @@ func (w *wrapped) answered(index int, now time.Time) {
 //
 // Each attempt goes to the next upstream: GuardedTag, then FallbackTags in
 // order, wrapping around, so with three upstreams and three attempts each is
-// tried once. An upstream that answers after a fallback is where queries
-// start for preferFor, so a blocked upstream is not hit first on every query;
+// tried once. Once per query, an attempt that failed on a closed connection
+// (staleConnection) is retried on the same upstream with its pool reset
+// first, before falling back; the retry is an extra attempt within the same
+// budget. An upstream that answers after a fallback is where queries start
+// for preferFor, so a blocked upstream is not hit first on every query;
 // then GuardedTag is tried first again. All upstreams failing fails the query
 // with SERVFAIL, unless the caller gave up first.
 func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
@@ -202,19 +209,22 @@ func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, e
 		}
 	}
 	first := w.start(time.Now())
+	retried := false
 	w.inflight.Add(1)
 	defer w.inflight.Add(-1)
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, overallBudget)
 	defer cancel()
 	var err error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	// slot counts the upstreams tried: maxAttempts of them, the last with
+	// the rest of the budget.
+	for attempt, slot := 1, 0; slot < maxAttempts; attempt++ {
 		timeout := attemptTimeout
-		if attempt == maxAttempts {
+		if slot == maxAttempts-1 {
 			timeout = overallBudget
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, timeout)
-		index := (first + attempt - 1) % len(upstreams)
+		index := (first + slot) % len(upstreams)
 		var response *mDNS.Msg
 		response, err = w.attempt(attemptCtx, upstreams[index], message, attempt)
 		attemptCancel()
@@ -227,6 +237,17 @@ func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, e
 		if ctx.Err() != nil {
 			break
 		}
+		if !retried && staleConnection(err) {
+			// The pooled connections are probably all as old as the one
+			// that failed: sing-box's transport already retried once on
+			// another pooled connection before returning this error. Reset
+			// so the retry dials. In-flight exchanges on the pool may fail
+			// and take this path themselves.
+			retried = true
+			upstreams[index].Reset()
+			continue
+		}
+		slot++
 	}
 	if caller.Err() != nil {
 		return nil, err
@@ -238,6 +259,32 @@ func (w *wrapped) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, e
 	response := new(mDNS.Msg)
 	response.SetRcode(message, mDNS.RcodeServerFailure)
 	return response, nil
+}
+
+// staleConnection reports an exchange that failed on a connection the peer
+// or a middlebox already closed: a pooled DoT connection (or the node session
+// carrying it) that died while idle fails like this at once, and a new
+// connection to the same upstream usually works. It is told apart by error
+// type, not by how fast it failed: a dead pooled connection fails on its
+// first read or write whenever that happens, and a timeout (an upstream that
+// is blocked or down) never matches and still falls back at once.
+//
+// A failed dial is excluded: that connection was new, so a new one will not
+// help (behind a proxy a refused upstream shows up as a reset or EOF while
+// dialing). sing-box marks it only in the message ("dial TLS connection: …"
+// from E.Cause); the integration tests pin that wording. On Windows a reset
+// is WSAECONNRESET, which syscall.ECONNRESET does not match; the common case,
+// EOF, is the same everywhere.
+func staleConnection(err error) bool {
+	if strings.HasPrefix(err.Error(), "dial ") {
+		return false
+	}
+	for _, target := range []error{io.EOF, io.ErrUnexpectedEOF, io.ErrClosedPipe, net.ErrClosed, syscall.ECONNRESET, syscall.ECONNABORTED, syscall.EPIPE} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // Start, Close and Reset reach the guarded transport only: sing-box manages

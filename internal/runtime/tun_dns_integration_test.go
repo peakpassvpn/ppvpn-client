@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -728,5 +729,99 @@ func TestTUNRemoteDNSAllTimeOutAnswersServfail(t *testing.T) {
 	}
 	if !strings.Contains(logged(), "server=dns-remote-9.9.9.9 attempt=3 error=") {
 		t.Fatalf("not every upstream tried:\n%s", logged())
+	}
+}
+
+// trackingListener records accepted connections so a test can close them
+// from the server side.
+type trackingListener struct {
+	net.Listener
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (l *trackingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err == nil {
+		l.mu.Lock()
+		l.conns = append(l.conns, conn)
+		l.mu.Unlock()
+	}
+	return conn, err
+}
+
+// closeAll closes every accepted connection and returns how many there were.
+func (l *trackingListener) closeAll() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, conn := range l.conns {
+		conn.Close()
+	}
+	n := len(l.conns)
+	l.conns = nil
+	return n
+}
+
+// A DoT server that closed its idle connections leaves them in sing-box's
+// pool. With more than one there, the transport's own retry takes a second
+// dead one and the exchange fails with EOF at once. The guard then resets
+// that upstream and retries it on a new connection before falling back: the
+// same server answers on attempt 2 and stays the preferred upstream.
+func TestTUNRemoteDNSRetriesStalePooledConnections(t *testing.T) {
+	certificate, err := singtls.GenerateKeyPair(nil, nil, time.Now, "dns.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracked := &trackingListener{Listener: inner}
+	server := &dns.Server{Listener: tls.NewListener(tracked, &tls.Config{Certificates: []tls.Certificate{*certificate}}), Net: "tcp-tls", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
+		time.Sleep(200 * time.Millisecond) // keep connections busy so the pool opens several
+		response := new(dns.Msg)
+		response.SetReply(request)
+		response.Answer = append(response.Answer, &dns.A{Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("203.0.113.7")})
+		_ = w.WriteMsg(response)
+	})}
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+	socksPort, logged := startRemoteDNSBox(t, map[string]uint16{
+		config.DNSRemoteTag:             uint16(inner.Addr().(*net.TCPAddr).Port),
+		config.DNSRemoteFallbackTags[0]: freePort(t), // closed: a fallback would fail
+		config.DNSRemoteFallbackTags[1]: freePort(t),
+	})
+
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if response, _ := resolveTCP(t, socksPort, fmt.Sprintf("warm%d.proxied.test.", i)); response.Rcode != dns.RcodeSuccess {
+				t.Errorf("warm-up %d: %v", i, response)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := tracked.closeAll(); n < 2 {
+		t.Fatalf("pool opened %d connections, need at least 2 to defeat the transport's own retry", n)
+	}
+	time.Sleep(100 * time.Millisecond) // let the FINs reach the pooled connections
+
+	before := logged()
+	if response, _ := resolveTCP(t, socksPort, "after.proxied.test."); response.Rcode != dns.RcodeSuccess {
+		t.Fatalf("after the server closed its connections: %v\n%s", response, strings.TrimPrefix(logged(), before))
+	}
+	lines := strings.TrimPrefix(logged(), before)
+	if !strings.Contains(lines, "name=after.proxied.test. type=A server=dns-remote attempt=1 error=") ||
+		!strings.Contains(lines, "name=after.proxied.test. type=A server=dns-remote attempt=2 rcode=NOERROR") ||
+		strings.Contains(lines, "dns-remote-8.8.8.8") {
+		t.Fatalf("stale connection lines:\n%s", lines)
+	}
+	// Still preferred: the next query starts at dns-remote.
+	before = logged()
+	resolveTCP(t, socksPort, "next.proxied.test.")
+	if lines := strings.TrimPrefix(logged(), before); !strings.Contains(lines, "name=next.proxied.test. type=A server=dns-remote attempt=1 rcode=NOERROR") {
+		t.Fatalf("preference changed:\n%s", lines)
 	}
 }

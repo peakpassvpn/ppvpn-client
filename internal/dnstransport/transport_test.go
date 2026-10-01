@@ -3,9 +3,14 @@ package dnstransport
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -378,5 +383,63 @@ func TestGuardWarnsAboutAMissingFallbackOnce(t *testing.T) {
 func TestGuardBudgetEndsBeforeSingBoxTimeout(t *testing.T) {
 	if overallBudget > C.DNSTimeout-time.Second {
 		t.Fatalf("budget %s, sing-box DNS timeout %s", overallBudget, C.DNSTimeout)
+	}
+}
+
+// A pooled connection the peer already closed fails with EOF at once: the
+// guard resets that upstream's pool and retries it once before falling back,
+// and the answer does not change the preferred upstream.
+func TestGuardRetriesAStaleConnectionOnTheSameUpstream(t *testing.T) {
+	shortGuard(t)
+	l, b := debugLogger()
+	stale := fail(fmt.Errorf("read response: %w", io.EOF))
+	primary := &fakeTransport{tag: GuardedTag, steps: []func(*mDNS.Msg) (*mDNS.Msg, error){stale, answer(mDNS.RcodeSuccess)}}
+	google, quad9 := &fakeTransport{tag: FallbackTags[0]}, &fakeTransport{tag: FallbackTags[1]}
+	guard := guardWithFallbacks(t, l, primary, google, quad9)
+	if _, err := guard.Exchange(context.Background(), query()); err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 2 || google.calls != 0 || primary.resets.Load() != 1 || guard.preferred != 0 {
+		t.Fatalf("calls %d/%d, resets %d, preferred %d", primary.calls, google.calls, primary.resets.Load(), guard.preferred)
+	}
+	lines := b.String()
+	if !strings.Contains(lines, "server=dns-remote attempt=1 error=\"read response: EOF\"") || !strings.Contains(lines, "server=dns-remote attempt=2 rcode=NOERROR") {
+		t.Fatalf("lines:\n%s", lines)
+	}
+}
+
+// Only one same-upstream retry per query: a second stale failure falls back,
+// and every upstream is still tried (four attempts).
+func TestGuardRetriesAStaleConnectionOnlyOnce(t *testing.T) {
+	shortGuard(t)
+	stale := fail(fmt.Errorf("write request: %w", syscall.EPIPE))
+	refused := fail(errors.New("dial TLS connection: connection refused"))
+	primary := &fakeTransport{tag: GuardedTag, steps: []func(*mDNS.Msg) (*mDNS.Msg, error){stale, stale}}
+	google := &fakeTransport{tag: FallbackTags[0], steps: []func(*mDNS.Msg) (*mDNS.Msg, error){refused}}
+	quad9 := &fakeTransport{tag: FallbackTags[1], steps: []func(*mDNS.Msg) (*mDNS.Msg, error){answer(mDNS.RcodeSuccess)}}
+	if _, err := guardWithFallbacks(t, nil, primary, google, quad9).Exchange(context.Background(), query()); err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 2 || google.calls != 1 || quad9.calls != 1 {
+		t.Fatalf("calls %d/%d/%d", primary.calls, google.calls, quad9.calls)
+	}
+}
+
+func TestStaleConnectionErrors(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("read response: %w", io.EOF), io.ErrUnexpectedEOF, fmt.Errorf("x: %w", net.ErrClosed),
+		&net.OpError{Op: "read", Err: os.NewSyscallError("read", syscall.ECONNRESET)}, fmt.Errorf("write: %w", syscall.EPIPE),
+	} {
+		if !staleConnection(err) {
+			t.Errorf("%v not stale", err)
+		}
+	}
+	for _, err := range []error{
+		context.DeadlineExceeded, os.ErrDeadlineExceeded, errors.New("EOF"), errors.New("connection refused"),
+		fmt.Errorf("dial TLS connection: %w", io.EOF), // a new connection failed: retrying it is pointless
+	} {
+		if staleConnection(err) {
+			t.Errorf("%v stale", err)
+		}
 	}
 }
