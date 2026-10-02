@@ -27,19 +27,23 @@ J
 # The runtime API (for the reload in E5) is Sail's; sing-box has none and is
 # restarted instead.
 API=''; [ "$ENGINE" = sail ] && API=",\"api\":$(api_json 7912)"
-tunif() { ip -o -4 addr show | awk '/ 172\.19\.0\.1\// {print $2}'; }
+# The TUN: the interface holding 172.19.0.1, plain (/30) or point-to-point
+# ("172.19.0.1 peer ..."), as Sail configures its utun.
+tunif() { ip -o -4 addr show | awk '/inet 172\.19\.0\.1[ \/]/ {print $2; exit}'; }
 q() { dig +nocookie +tries=1 +time=6 -p 5355 @127.0.0.1 split.lab.test A +short 2>&1 | head -1; }
 # One capture per interface (the TUN and every ethN), so a count says where
 # a packet went: tcpdump -i any does not name the interface on every build.
 cap_start() { rm -f /tmp/b7cap-*.txt; for i in $(tunif) $(ls /sys/class/net | grep '^eth'); do
   tcpdump -n -l -i $i "port 53 or port 853" > /tmp/b7cap-$i.txt 2>/dev/null & done; sleep 1; }
 cap_stop() { sleep 1; pkill -x tcpdump 2>/dev/null; sleep 0.3; }
-count() { # interface, address.port: packets sent to it there
-  [ -n "$1" ] && [ -f /tmp/b7cap-$1.txt ] && grep -c "> $2:" /tmp/b7cap-$1.txt || echo 0; }
+count() { # interface, address.port: packets sent to it there; "none" when
+  # the interface was not captured (an assertion on it would prove nothing).
+  [ -n "$1" ] && [ -f /tmp/b7cap-$1.txt ] || { echo none; return; }
+  n=$(grep -c "> $2:" /tmp/b7cap-$1.txt 2>/dev/null); echo "${n:-0}"; }
 case_d() { # name, server JSON, server address
   conf "$2"; run_engine /tmp/b7.json $OUT/b7-$TAG-$1.log.full; T=$(tunif)
   cap_start; r=$(q); cap_stop
-  echo "D $1: answer=${r:-FAILED} on-tun=$(count "$T" "$3") on-eth0=$(count eth0 "$3")   (want an answer, on-tun 0, on-eth0 > 0)"
+  echo "D $1: answer=${r:-FAILED} tun=${T:-none} on-tun=$(count "$T" "$3") on-eth0=$(count eth0 "$3")   (want an answer, on-tun 0, on-eth0 > 0)"
   stop_engine
 }
 {
