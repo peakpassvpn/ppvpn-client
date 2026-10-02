@@ -78,6 +78,11 @@ mkdir -m 700 "$APP_STATE"
 - 任何级别（0.5.10 起）：桌面 TUN（`auto_detect_interface`）启动时和默认网卡每次变化时各记一行
   `msg="default interface"`：`event`（`start`/`changed`）、`name`、`index`、`mtu`、`addresses`；`name=none`
   表示没有可用网卡。核心自己的出站连接（拨节点、直连、DNS）都绑定在这块网卡上。
+- 任何级别（TUN）：每次 apply 与 start 探测主机 IPv6，记一行 `msg="host ipv6"`：`host_ipv6_enabled`、
+  `host_ipv6_route`（是否有全局单播 IPv6 地址 + IPv6 默认路由）、`policy`（`tun_ipv6`；
+  `tun_ipv6_direct_ipv4` 表示无 IPv6 出口，直连的 IPv6 目标改按域名走 IPv4；`tun_ipv4_only` 表示主机
+  关闭了 IPv6）。路由探测失败时另记一行 warn `msg="host ipv6 route probe failed"`，按有出口处理。
+  详见 [security.md](security.md#ipv6)。
 
 - `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：
   - `msg="apply timing"`：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`local_proxy_ms`、

@@ -43,6 +43,8 @@ const Type = "ppvpn-domain-destination"
 type Options struct {
 	Outbound string   `json:"outbound"`
 	Inbounds []string `json:"inbounds"`
+	// IPv6Only rewrites only connections to a global unicast IPv6 address.
+	IPv6Only bool `json:"ipv6_only,omitempty"`
 }
 
 // Register adds the outbound type to a sing-box outbound registry.
@@ -57,6 +59,7 @@ type Outbound struct {
 	dns        adapter.DNSRouter
 	targetTag  string
 	inbounds   []string
+	ipv6Only   bool
 	target     adapter.Outbound
 }
 
@@ -81,6 +84,7 @@ func New(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string,
 		dns:        service.FromContext[adapter.DNSRouter](ctx),
 		targetTag:  options.Outbound,
 		inbounds:   slices.Clone(options.Inbounds),
+		ipv6Only:   options.IPv6Only,
 	}, nil
 }
 
@@ -158,6 +162,9 @@ func (o *Outbound) Restore(metadata *adapter.InboundContext) bool {
 	if !metadata.Destination.IsIP() || !slices.Contains(o.inbounds, metadata.Inbound) {
 		return false
 	}
+	if o.ipv6Only && !globalIPv6(metadata.Destination.Addr) {
+		return false
+	}
 	domain := metadata.Domain
 	if !isDomain(domain) {
 		domain = ""
@@ -174,6 +181,12 @@ func (o *Outbound) Restore(metadata *adapter.InboundContext) bool {
 	metadata.Destination = M.Socksaddr{Fqdn: domain, Port: metadata.Destination.Port}
 	metadata.DestinationAddresses = nil
 	return true
+}
+
+// globalIPv6 reports whether a is a global unicast IPv6 address
+// (2000::/3): not IPv4, ULA, link-local or any other local scope.
+func globalIPv6(a netip.Addr) bool {
+	return a.Is6() && !a.Is4In6() && a.As16()[0]&0xe0 == 0x20
 }
 
 func isDomain(value string) bool {

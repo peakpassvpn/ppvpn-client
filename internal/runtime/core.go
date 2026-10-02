@@ -118,6 +118,9 @@ type Core struct {
 	// hostIPv6 probes whether the desktop TUN can carry IPv6 on this host;
 	// tests replace it.
 	hostIPv6 func() bool
+	// hostIPv6Route probes whether the host has an IPv6 path of its own
+	// (hostipv6.Route); tests replace it.
+	hostIPv6Route func() (bool, error)
 	// routingMode is the mode the active profile was applied in.
 	routingMode RoutingMode
 	// pins maps a node ID to the endpoint_key it is pinned to (PinIngress).
@@ -162,6 +165,10 @@ func NewWithLocalProxyState(platform profile.PlatformCapabilities, statePath str
 	return core
 }
 
+// hostIPv6Route is the host IPv6 path probe new cores use (the runtime
+// tests pin it, so they do not depend on the machine's network).
+var hostIPv6Route = hostipv6.Route
+
 func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core {
 	key, keyOK := newFlowAuthorizationKey()
 	core := &Core{
@@ -171,6 +178,7 @@ func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core
 		flowAuthorizationKey: key,
 		flowAuthorizationOK:  keyOK,
 		hostIPv6:             hostipv6.Available,
+		hostIPv6Route:        hostIPv6Route,
 		log:                  corelog.Discard(),
 	}
 	core.ruleSets = rulesets.New(core.ruleSetOptions(""))
@@ -337,9 +345,9 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 		}
 	}
 	timer.mark("local_proxy")
-	disableIPv6 := c.platform.TUN.Enabled && !c.hostIPv6()
+	disableIPv6, noIPv6Route := c.hostIPv6State()
 	timer.mark("host_ipv6")
-	candidate, err := config.BuildWithOptions(effective, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files(), DisableTUNIPv6: disableIPv6}, now)
+	candidate, err := config.BuildWithOptions(effective, c.platform, config.BuildOptions{LocalProxies: proxyEndpoints, RuleSets: ruleSets.Files(), DisableTUNIPv6: disableIPv6, NoHostIPv6Route: noIPv6Route}, now)
 	if err != nil {
 		c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate validation or build failed"})
 		return false, stageError("apply/build", err)
@@ -641,6 +649,21 @@ func (c *Core) Start() (err error) {
 	if built == nil {
 		return fmt.Errorf("no profile applied")
 	}
+	if c.platform.TUN.Enabled {
+		// The host may have joined or left an IPv6 network since the last
+		// apply: rebuild when its IPv6 path changed.
+		if _, noIPv6Route := c.hostIPv6State(); noIPv6Route != built.DirectIPv6HandOff {
+			c.mu.RLock()
+			active, hosts, mode := c.active, c.allowedRuleSetHosts, c.routingMode
+			c.mu.RUnlock()
+			if _, err := c.applyProfileLocked(active, time.Now(), hosts, mode, true); err != nil {
+				return stageError("start/host-ipv6", err)
+			}
+			c.mu.RLock()
+			built = c.built
+			c.mu.RUnlock()
+		}
+	}
 	if c.systemProxyEnabled {
 		// The port may have been taken while the core was stopped.
 		port, err := c.proxyManager.SystemProxyPort(true, localPort)
@@ -763,6 +786,35 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 		return nil, nil, stageError(stage, err)
 	}
 	return instance, cancel, nil
+}
+
+// hostIPv6State probes the host's IPv6 for a TUN build: disable leaves IPv6
+// out of the TUN (stack disabled, see hostipv6.Available); noRoute hands
+// direct IPv6 destinations their domain (stack enabled but no IPv6 path, see
+// config.BuildOptions.NoHostIPv6Route). Without a TUN both are false. The
+// result is logged on every probe; a failed route probe keeps IPv6 as before
+// and logs why.
+func (c *Core) hostIPv6State() (disable, noRoute bool) {
+	if !c.platform.TUN.Enabled {
+		return false, false
+	}
+	enabled := c.hostIPv6()
+	route := false
+	if enabled {
+		var err error
+		if route, err = c.hostIPv6Route(); err != nil {
+			c.log.Warn("host ipv6 route probe failed", "error", err, "assumed_route", route)
+		}
+	}
+	policy := "tun_ipv6"
+	switch {
+	case !enabled:
+		policy = "tun_ipv4_only"
+	case !route:
+		policy = "tun_ipv6_direct_ipv4"
+	}
+	c.log.Info("host ipv6", "host_ipv6_enabled", enabled, "host_ipv6_route", route, "policy", policy)
+	return !enabled, enabled && !route
 }
 
 func (c *Core) SelectNode(id string) error {
