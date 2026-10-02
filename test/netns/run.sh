@@ -4,6 +4,13 @@
 #
 #   go test -c -o runtime.test ./internal/runtime        # as a normal user
 #   sudo test/netns/run.sh ./runtime.test -test.run 'TestTUNRules' [more test flags]
+#   sudo test/netns/run.sh --host <script> [args]        # a script that builds
+#                                                        # namespaces of its own
+#
+# With --host the command runs as it is in the host's namespace (it must keep
+# its changes inside namespaces it creates and removes, as the test/lab/localdns
+# scripts do); the timeout and the host check are the same, and its exit
+# status is the result.
 #
 # Namespaces (removed again on exit):
 #   ppvpn-t: the test's; veth pt0 10.243.0.1/24, default route via 10.243.0.2
@@ -19,7 +26,8 @@
 #   NETNS_ENV       extra VAR=value pairs for the test (space separated)
 set -euo pipefail
 
-BIN=$(realpath "${1:?usage: run.sh <test binary> [test flags]}"); shift
+HOST_MODE=0; [ "${1:-}" = --host ] && { HOST_MODE=1; shift; }
+BIN=$(realpath "${1:?usage: run.sh [--host] <test binary or script> [args]}"); shift
 T=ppvpn-t; W=ppvpn-w
 OUT=${NETNS_OUT:-$(mktemp -d)}
 
@@ -53,20 +61,26 @@ cleanup
 
 snapshot "$OUT/host-before.txt"
 
-for ns in "$T" "$W"; do ip netns add "$ns"; ip -n "$ns" link set lo up; done
-ip link add pt0 netns "$T" type veth peer name pw0 netns "$W"
-ip -n "$T" addr add 10.243.0.1/24 dev pt0; ip -n "$T" link set pt0 up
-ip -n "$W" addr add 10.243.0.2/24 dev pw0; ip -n "$W" link set pw0 up
-ip -n "$T" route add default via 10.243.0.2
-
 status=0
-# shellcheck disable=SC2086
-ip netns exec "$T" env PPVPN_TEST_REAL_TUN=1 ${NETNS_ENV:-} \
-	timeout --kill-after=10 "${NETNS_TIMEOUT:-300}" "$BIN" -test.v -test.count=1 "$@" > "$OUT/test.txt" 2>&1 || status=$?
-cat "$OUT/test.txt"
-[ "$status" = 124 ] && echo "run.sh: the test binary timed out after ${NETNS_TIMEOUT:-300} s" >&2
-grep -qE '^--- (PASS|FAIL)' "$OUT/test.txt" || { echo "run.sh: no test ran (all skipped?)" >&2; status=1; }
-grep -q '^--- SKIP' "$OUT/test.txt" && grep '^--- SKIP' "$OUT/test.txt" >&2 || true
+if [ "$HOST_MODE" = 1 ]; then
+	# shellcheck disable=SC2086
+	env ${NETNS_ENV:-} timeout --kill-after=10 "${NETNS_TIMEOUT:-300}" "$BIN" "$@" > "$OUT/test.txt" 2>&1 || status=$?
+	cat "$OUT/test.txt"
+	[ "$status" = 124 ] && echo "run.sh: $BIN timed out after ${NETNS_TIMEOUT:-300} s" >&2
+else
+	for ns in "$T" "$W"; do ip netns add "$ns"; ip -n "$ns" link set lo up; done
+	ip link add pt0 netns "$T" type veth peer name pw0 netns "$W"
+	ip -n "$T" addr add 10.243.0.1/24 dev pt0; ip -n "$T" link set pt0 up
+	ip -n "$W" addr add 10.243.0.2/24 dev pw0; ip -n "$W" link set pw0 up
+	ip -n "$T" route add default via 10.243.0.2
+	# shellcheck disable=SC2086
+	ip netns exec "$T" env PPVPN_TEST_REAL_TUN=1 ${NETNS_ENV:-} \
+		timeout --kill-after=10 "${NETNS_TIMEOUT:-300}" "$BIN" -test.v -test.count=1 "$@" > "$OUT/test.txt" 2>&1 || status=$?
+	cat "$OUT/test.txt"
+	[ "$status" = 124 ] && echo "run.sh: the test binary timed out after ${NETNS_TIMEOUT:-300} s" >&2
+	grep -qE '^--- (PASS|FAIL)' "$OUT/test.txt" || { echo "run.sh: no test ran (all skipped?)" >&2; status=1; }
+	grep -q '^--- SKIP' "$OUT/test.txt" && grep '^--- SKIP' "$OUT/test.txt" >&2 || true
+fi
 
 cleanup
 trap - EXIT
