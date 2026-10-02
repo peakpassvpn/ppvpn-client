@@ -68,7 +68,7 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   另有 `fde2:ec40:9312:c7fd::2`）通告为接口 DNS（Windows 与 Linux systemd-resolved 由 sing-tun 设置），
   发往它的查询都由核心应答；发往其他地址 53 端口的明文查询只要进了隧道也同样被劫持。
 - **按路由选择解析器**：
-  - `dns-local`（0.5.21 起）：Windows 与 macOS 上是核心自己的 `ppvpn-local` 传输，向**物理默认网卡**
+  - `dns-local`（0.5.20 起）：Windows 与 macOS 上是核心自己的 `ppvpn-local` 传输，向**物理默认网卡**
     （即 `auto_detect_interface` 绑定直连 socket 的那块网卡）的 DNS 服务器发 UDP（截断时改用 TCP），
     每个服务器 2 秒，按顺序尝试。服务器列表在默认网卡每次变化时立即作废、下次查询时重读（同一网卡上
     最多每秒一次）；Windows 读该网卡的 `GetAdaptersAddresses`，macOS 读 `scutil` 的

@@ -72,7 +72,7 @@ mkdir -m 700 "$APP_STATE"
 `[IPv6%zone]:port`，默认端口 53），作为 `dns-local` 的**静态覆盖**：核心按顺序使用其中所有不在隧道地址段
 （`10.60.159.88/30`、`fde2:ec40:9312:c7fd::/126`，以及 0.5.7 之前的 `172.19.0.0/30`、
 `fdfe:dcba:9876::/126`）内的地址（绑定物理网卡），用来解析路由为直连的域名；它们不跟随网络变化，启动时记一行
-warn。非法项会让 `serve` 启动失败。0.5.21 起不需要再传：不传（或全部被过滤）时，Windows 与 macOS 上的
+warn。非法项会让 `serve` 启动失败。0.5.20 起不需要再传：不传（或全部被过滤）时，Windows 与 macOS 上的
 `dns-local` 自己读取物理默认网卡的 DNS，并在网卡变化（换 Wi‑Fi、插拔网线）时立即重读；Linux 上是
 sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun的-dns-与防泄漏) 与
 [设计](design-local-dns.md)。
@@ -107,7 +107,7 @@ sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun
   `rule`、`outbound`（实际节点）、`target`（交给节点的目标）与 `target_kind`（`domain`/`ip`）。
   被 reject 或 hijack-dns 的连接不经过此处。
   另外每次发往上游 DNS 服务器的尝试记一行 `msg=dns`：`name`、`type`、`server`（`dns-local`、`dns-remote`，
-  或回退上游 `dns-remote-8.8.8.8`/`dns-remote-9.9.9.9`）、`dns-local` 实际应答的服务器 `upstream`（0.5.21 起，
+  或回退上游 `dns-remote-8.8.8.8`/`dns-remote-9.9.9.9`）、`dns-local` 实际应答的服务器 `upstream`（0.5.20 起，
   Windows/macOS 或传了 `--local-dns-servers` 时）、远端查询的 `attempt`（第几次尝试）、`rcode` 与 `answers`，或 `error`，以及 `ms`。命中 DNS 缓存的查询
   不会发往上游，因此不记录。
 
