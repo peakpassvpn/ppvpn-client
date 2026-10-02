@@ -52,9 +52,10 @@ pub struct EngineConfig {
 
 impl Engine {
     pub async fn new(config: EngineConfig) -> Result<Engine, Error>;
-    pub async fn shutdown(self) -> Result<(), Error>;
+    pub async fn shutdown(&self) -> Result<(), Error>; // 对整个实例生效，幂等
 }
-impl Drop for Engine { /* 尽力清理，见下文 */ }
+impl Clone for Engine { /* 引用计数句柄 */ }
+impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */ }
 ```
 
 - **创建**：`new` 创建实例，但不应用 Profile，也不监听任何端口，状态为 `Stopped`。
@@ -63,10 +64,19 @@ impl Drop for Engine { /* 尽力清理，见下文 */ }
     - Windows：我们自己命名的 Wintun 适配器；
     - macOS：我们创建的 utun 上的路由。
   - 清扫的结果记一行 info 日志。
-- **运行时**：本库在宿主当前的 tokio 运行时里运行，也就是 `new` 必须在 tokio 运行时上下文里调用。
-  - 实例有自己的任务范围，不使用全局单例、静态运行时或全局注册表。同一个进程里可以先后创建多个实例（G7 要求反复启停 100 次不留残留），但同一时刻每种 `Role` 最多一个，因为两个 TUN 实例会争用同一套规则命名空间。
-- **正常退出**：用 `shutdown(self).await`。它先停止接受新连接，再关闭监听和 TUN，最后撤销规则和路由并清理 TUN 内的 DNS。返回时这些都已完成。
-- **`drop`**：直接 drop 实例时，会在有限时间内同步做同样的清理，作为兜底，保证宿主 panic 后依然干净。进程被强杀时没有机会清理，这种情况由下一次 `new` 的清扫兜底。
+- **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
+  - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
+  - 实例不使用全局单例、静态运行时或全局注册表。同一个进程里可以先后创建多个实例（G7 要求反复启停 100 次不留残留）。
+- **实例数量**：
+  - **Tun**：同一时刻只能有一个，因为它们会争用同一套规则命名空间。重复创建时返回 `TUN_INSTANCE_EXISTS`（retryable=false）。
+  - **Standard**：不限制数量，只要 `state_dir` 和本地代理端口不冲突即可（`cargo test` 和 CLI 的测试会并行创建多个）。
+- **句柄**：`Engine` 实现 `Clone`，是同一个实例的引用计数句柄（FFI 包装时句柄同样是引用计数）。
+- **正常退出**：用 `shutdown(&self).await`，任何一个句柄都可以调用，对整个实例生效，并且幂等。它先停止接受新连接，再关闭监听和 TUN，最后撤销规则和路由并清理 TUN 内的 DNS。返回时这些都已完成。
+  - 之后，所有句柄上的生命周期调用都返回 `ENGINE_SHUT_DOWN`（retryable=false）；查询返回最后的快照，状态为 `Stopped`；订阅收到通道关闭。
+- **`drop`**：最后一个句柄被 drop、而之前没有调用过 `shutdown` 时，清理作为兜底仍会进行，保证宿主 panic 后依然干净：
+  - `Drop` **不会在调用方的线程上 `block_on`**，在 tokio 运行时线程上那样做会 panic 或卡住线程。它把清理交给实例自己的清理线程，在有限时间内（目前定为 5 秒）同步完成：撤销规则和路由、关闭 TUN 的 fd 和监听 socket；这些都不需要异步。
+  - 在异步任务里 drop 是安全的（G7 覆盖"在异步任务里 drop"这个用例）。
+  - 进程被强杀时没有机会清理，这种情况由下一次 `new` 的清扫兜底。
 - **两项进程内保证**（desktop 要求，G7 验收）：
   1. panic 之后可以丢弃并重建实例：重建时不受任何全局状态影响。
   2. 实例被丢弃后，TUN、ip rule/route、TUN 内的 DNS 和监听端口都已清理干净。
@@ -85,12 +95,15 @@ impl Drop for Engine { /* 尽力清理，见下文 */ }
 pub struct ApplyRequest {
     pub profile: Vec<u8>,                 // 原始 JSON；未知字段忽略；schema 由引擎判定
     pub routing_mode: RoutingMode,        // Rules | Global
+    pub selected_node_id: Option<String>, // 宿主持久化的选中节点；None = 用 default_node_id
     pub pins: Vec<Pin>,                   // 宿主持久化的 ingress pin：{ node_id, endpoint_key }
     pub allowed_rule_set_hosts: Vec<String>,
 }
 pub struct ApplyResult {
-    pub applied: bool,                    // false：(revision, routing_mode, pins) 与当前完全相同，什么也没做
+    pub applied: bool,                    // false：(revision, routing_mode, selected_node_id, pins) 与当前完全相同，什么也没做
     pub revision: String,
+    pub selected_node_id: String,         // 生效的选中节点
+    pub selection_reset: bool,            // true：传入的 selected_node_id 不在新 Profile 里，已改用 default_node_id
     pub cleared_pins: Vec<ClearedPin>,    // { node_id, endpoint_key, reason: NodeRemoved | IngressRemoved }
     pub switch: Option<SwitchKind>,       // 运行中：KernelSwitch（不断连）| FullRestart { reasons }
 }
@@ -98,13 +111,14 @@ pub async fn apply(&self, request: ApplyRequest) -> Result<ApplyResult, Error>;
 pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例，不联网
 ```
 
-- **原子生效**：Profile、`routing_mode` 和 `pins` 三者一起生效，或者都不生效。任何一步失败，当前生效的配置都不变，并发出 `ReloadFailed` 事件。
-- **去重**：去重的键是 `(revision, routing_mode, pins)`，在引擎里判断。宿主不再需要做重发和补发。
-- **pin 的处理**：`pins` 是宿主持久化的完整集合。新 Profile 里已经不存在的节点或入口，它的 pin 会被清除，并在 `cleared_pins` 里返回，同时发出 `NodeIngressPinCleared` 事件。
+- **原子生效**：Profile、`routing_mode`、`selected_node_id` 和 `pins` 一起生效，或者都不生效。任何一步失败，当前生效的配置都不变，并发出 `ReloadFailed` 事件。
+- **宿主持久化的状态**：选中节点、pins 和 `routing_mode` 都由宿主持久化（按设备），每次 apply 一起传入。实例重建后用户的选择不会丢，宿主也不必在 apply 之后补发 `select_node` 或 `pin_ingress`。
+- **去重**：去重的键是 `(revision, routing_mode, selected_node_id, pins)`，在引擎里判断。
+- **pin 的处理**：`pins` 是宿主持久化的完整集合。新 Profile 里已经不存在的节点或入口，它的 pin 会被清除，并在 `cleared_pins` 里返回，同时发出 `NodeIngressPinCleared` 事件。返回值和事件内容相同：返回值给发起 apply 的调用方，事件给其他订阅者。宿主对两者的处理应当是幂等的。
 - **校验顺序**（D3，#45 已决定）：先校验**原始** Profile，再沿用当前选中的节点。
   - `default_node_id` 不存在时，报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate` 一致。Go 0.5.21 在这种情况下会接受，见 `docs/rust-parity.md`。
-  - 校验通过后，如果新 Profile 里仍有当前选中的节点，就沿用它；否则用新的 `default_node_id`。
-- **规则集**：apply 前会准备规则集，总共最多等 10 秒。下载失败的规则集按降级规则处理，不会让 apply 失败。
+  - 校验通过后选节点：传入的 `selected_node_id` 仍在新 Profile 里就用它；不在（或没有传）就用 `default_node_id`，传了却不在时 `selection_reset=true`。不再看实例内部"当前选中的节点"，所以重建实例和不重建的结果一样。
+- **规则集**：apply 前会准备规则集，总共最多等 10 秒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
 - **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
 ### 4.2 start / stop
@@ -125,7 +139,7 @@ pub async fn select_node(&self, node_id: &str) -> Result<(), Error>;
 pub async fn pin_ingress(&self, node_id: &str, endpoint_key: Option<&str>) -> Result<(), Error>; // None = 恢复自动
 ```
 
-- **`select_node`**：只影响新连接。
+- **`select_node`**：只影响新连接。返回成功后由宿主持久化，下次 apply 时作为 `selected_node_id` 传入。
   - 节点不存在时返回 `NODE_NOT_FOUND`（field=`node_id`）；还没有 Profile 时返回 `PROFILE_NOT_APPLIED`（D2）。
 - **`pin_ingress`**：立即生效。宿主负责持久化，下次 apply 时放进 `pins` 传入。
   - 入口不存在时返回 `INGRESS_NOT_FOUND`（field=`endpoint_key`）；节点不存在时返回 `NODE_NOT_FOUND`。
@@ -220,6 +234,7 @@ Stopped ──apply──▶ Configured ──start──▶ Running ⇄ Degrade
   | `TunRoutingRestoring` | Linux：TUN 的路由规则被删，正在补回 |
   | `TunRoutingUnguarded` | Linux：规则守护没能启动，规则保持安装时的样子，相当于 Go 的 `unguarded` |
   | `RuleSetUnavailable { rule_set_id }` | 规则集不可用，相关规则按降级处理 |
+| `LocalDnsUnavailable` | 默认网卡上读不到 DNS 服务器，直连域名只能得到 SERVFAIL；网卡或 DNS 变化后自动重试（Go 版只有日志） |
 
 - **`Fatal`**：引擎无法自愈。宿主**丢弃并重建**实例；这是宿主重建实例的唯一理由，另外两个是 panic 和会话丢失。
 
@@ -271,9 +286,11 @@ pub struct Error {
 ```
 
 - **错误码沿用 Core API v1**：Profile 校验类（`PROFILE_*`、`SCHEMA_UNSUPPORTED`、`RULE_SET_*`、`ROUTING_*` 等，完整列表和每个码对应的 field 见 `testdata/golden/contract/validation.json`）、`ROUTING_MODE_INVALID`（field=`routing_mode`）、`NODE_NOT_FOUND`、`INGRESS_NOT_FOUND`、`PROFILE_NOT_APPLIED`、`CORE_NOT_RUNNING`、`LOCAL_PROXY_DISABLED`、`SYSTEM_PROXY_UNAVAILABLE`、`SYSTEM_PROXY_START_FAILED`、`NO_DEFAULT_INTERFACE`、`PROBE_METHOD_UNSUPPORTED`。
-- **新增两个码**：
+- **新增的码**：
   - `CORE_PANICKED`：retryable=false，实例已进入 `Fatal`；
-  - `ENGINE_FATAL`：retryable=false，实例已处于 `Fatal` 时，任何生命周期调用都返回它。
+  - `ENGINE_FATAL`：retryable=false，实例已处于 `Fatal` 时，任何生命周期调用都返回它；
+  - `ENGINE_SHUT_DOWN`：retryable=false，实例已经 `shutdown` 之后的生命周期调用；
+  - `TUN_INSTANCE_EXISTS`：retryable=false，同一进程里已有一个 Tun 实例。
 - **`CORE_OPERATION_FAILED`**：只用于真正的内部错误，原因写进日志。Go 版有几种本该是结构化错误的情况会折叠成这个码，Rust 版改成具体的码（D1、D2）。
 - **IPC 专用的码不再出现**：`UNAUTHENTICATED`、`CORE_API_UNSUPPORTED`、`REQUEST_INVALID`、`API_NOT_FOUND`、`STREAM_UNSUPPORTED`，库里没有对应的情形。
 - **CLI 依赖**：CLI 的退出码和 `--json` 输出依赖 `code`、`field`、`retryable` 这三个字段。
@@ -291,14 +308,14 @@ pub struct Error {
 以下这些归引擎，宿主不再介入：
 
 - 入口故障转移和 pin 的生效；
-- 网卡变化后：重新选默认网卡、重新探测 IPv6 出口、重新读本地 DNS，以及离线期间的处理（原来 desktop 的"30 秒稳定期，每 2 秒重查"移到这里实现）；
+- 网卡变化后：重新选默认网卡、重新探测 IPv6 出口、重新读本地 DNS，以及离线期间的处理。原来 desktop 的"30 秒稳定期，每 2 秒重查"移到这里实现；**请 Desktop 评审时确认这正是现在的逻辑**；
 - 路由规则守护，以及 Wintun、utun 的自愈；
 - 热切换和排空；
-- 检查流量是否真的进了 TUN：引擎做得到就由引擎做，做不到就留给宿主，评审时确认。
+- 路由和规则层面的完整性：规则在，流量没有绕过 TUN。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。
 
 留在宿主的：
 
-- 端到端可用性的提示；
+- 端到端可用性的提示：例如经 TUN 能不能访问后端，只用于提示用户；
 - 竞品检测；
 - 会话和租约；
 - 多用户和接管；
@@ -309,6 +326,7 @@ pub struct Error {
 ## 10. 日志
 
 - **输出方式**：日志行通过 `LogConfig` 交给宿主，可以是写入宿主提供的文件，也可以是一个按行接收的通道。格式与 Go 版一致（logfmt：`level=… msg=… key=value`），lab 和性能检查会解析这些行。
+- **轮转**：由宿主负责，引擎只按行输出，不管文件大小。
 - **级别**：默认 info；debug 级别会记录每个连接和每次 DNS 查询（含域名），只在排障时开启。
 - **脱敏**：任何级别都不记录凭据。
 
@@ -324,8 +342,8 @@ pub struct Error {
 | --- | --- |
 | `get-version` | `Engine::version()` |
 | `validate-profile` | `Engine::validate(&ApplyRequest)` |
-| `apply-profile`（`profile`、`routing_mode`、`allowed_rule_set_hosts`） | `apply(ApplyRequest)`，另外带 `pins`，返回 `cleared_pins` |
-| `start` / `stop` / `reload` | `start()` / `stop()`；`reload` 用重新 apply 代替 |
+| `apply-profile`（`profile`、`routing_mode`、`allowed_rule_set_hosts`） | `apply(ApplyRequest)`，另外带 `selected_node_id` 和 `pins`，返回 `cleared_pins` 和 `selection_reset` |
+| `start` / `stop` / `reload` | `start()` / `stop()`；`reload` 去掉（规则集刷新在引擎内部完成） |
 | `get-status` | `status()` |
 | `list-nodes` / `get-selected-node` | `nodes()` / `selected_node()` |
 | `select-node` / `pin-ingress` | `select_node()` / `pin_ingress()` |
@@ -338,9 +356,15 @@ pub struct Error {
 | `watch-events` | `subscribe(kinds)` |
 | 会话密钥、`X-Core-API-Version` | 不需要（进程内调用） |
 
-## 13. 待评审的问题
+## 13. 已定的问题（Core 第一轮审阅）
 
-1. **apply 返回 `cleared_pins` 的同时，还发 `NodeIngressPinCleared` 事件**：会不会让宿主重复处理？倾向两者都保留：返回值给发起 apply 的调用方用，事件给其他订阅者用。
-2. **`reload` 是否需要保留**：Go 版用它来重建当前 Profile，比如在规则集刷新之后。Rust 版的规则集刷新由引擎内部处理，宿主看起来不再需要它。
-3. **"流量是否真的进了 TUN"的自检**由引擎做，还是留在宿主？
-4. **每种 `Role` 同时只能有一个实例**：这个限制对 CLI 的测试和多用户场景够不够用？
+1. **cleared_pins 和 `NodeIngressPinCleared` 事件都保留**：内容相同，宿主幂等处理（第 4.1 节）。
+2. **去掉 `reload`**：规则集的刷新和恢复由引擎内部完成，并发出 `RuleSetChanged`（第 4.1 节）。
+3. **"流量是否进了 TUN"**：路由和规则层面的完整性归引擎，端到端的可达性归宿主，只用于提示用户（第 9 节）。
+4. **实例数量**：只限制 Tun 实例（`TUN_INSTANCE_EXISTS`），Standard 实例不限（第 3 节）。
+
+## 14. 请 Desktop、CLI 评审时确认
+
+1. 选中节点、pins 和 routing_mode 由宿主持久化，每次 apply 一起传入（第 4.1 节）。
+2. 第 9 节"30 秒稳定期，每 2 秒重查"移进引擎，这是否正是 desktop 现在的逻辑。
+3. `Degraded`、`Fatal` 原因的枚举是否足够宿主做提示和决定是否重建（第 5 节）。
