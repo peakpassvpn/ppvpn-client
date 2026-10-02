@@ -43,6 +43,12 @@ const (
 	// HasDefaultInterface is false when none is left (offline); otherwise
 	// InterfaceName and InterfaceIndex name the new one.
 	EventNetworkChanged EventType = "NetworkChanged"
+	// EventTunRoutingBroken (0.5.20, Linux): the TUN's policy routing rules
+	// or routes are missing and could not be put back, so traffic bypasses
+	// the TUN; the host should restart the core. EventTunRoutingRestored:
+	// they are back.
+	EventTunRoutingBroken   EventType = "TunRoutingBroken"
+	EventTunRoutingRestored EventType = "TunRoutingRestored"
 )
 
 type Event struct {
@@ -67,6 +73,11 @@ type Event struct {
 	InterfaceName       string `json:"interface_name,omitempty"`
 	InterfaceIndex      int    `json:"interface_index,omitempty"`
 	HasDefaultInterface *bool  `json:"has_default_interface,omitempty"`
+	// Missing (TunRoutingBroken, TunRoutingRestored) lists the TUN policy
+	// routing rules and routes missing, or that were; Error is why they
+	// could not be put back (TunRoutingBroken).
+	Missing []string `json:"missing,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 type eventBus struct {

@@ -162,6 +162,10 @@ TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「�
 
 `state` 可为 `stopped`、`configured`、`running`。尚未应用 Profile 时返回 `stopped` 且 `node_count=0`。
 
+`tun_routing`（0.5.20 起，只在 Linux 上、TUN 运行时出现）：`ok` 表示 TUN 的策略路由规则完整，必要时
+核心已自动补回；`broken` 表示规则缺失且补不回来，流量正在绕过 TUN，宿主应重启核心。其他平台、非 TUN
+模式下省略。行为说明见 security.md「Linux TUN 策略路由的守护」。
+
 `selected_ingress` 是 selected 节点实际使用的入口副本，标准核心与 TUN 核心都会返回；核心未运行或无法
 确定时省略该字段：
 
@@ -384,7 +388,7 @@ Traffic 是当前运行实例的累计计数，`stop`/`start` 或走「停止再
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`NodeIngressPinned`（附 `endpoint_key`，恢复自动时为空）、`NodeIngressPinCleared`（附 `endpoint_key` 与新 `revision`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）、`KernelSwitched`（附 `revision`、`closed_connections`、`kept_connections`）、`KernelDrained`（`code` 为 `idle`/`deadline`，附 `closed_connections`）、`NetworkChanged`（0.5.20 起，核心绑定出站的默认网卡变化时发出：`has_default_interface`，有网卡时附 `interface_name`、`interface_index`；只在核心监视网卡时出现，即桌面 TUN）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`NodeIngressPinned`（附 `endpoint_key`，恢复自动时为空）、`NodeIngressPinCleared`（附 `endpoint_key` 与新 `revision`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）、`KernelSwitched`（附 `revision`、`closed_connections`、`kept_connections`）、`KernelDrained`（`code` 为 `idle`/`deadline`，附 `closed_connections`）、`NetworkChanged`（0.5.20 起，核心绑定出站的默认网卡变化时发出：`has_default_interface`，有网卡时附 `interface_name`、`interface_index`；只在核心监视网卡时出现，即桌面 TUN）、`TunRoutingBroken`（0.5.20 起，仅 Linux：TUN 策略路由规则缺失且补不回来，附 `missing` 缺失列表与 `error`；宿主应重启核心）、`TunRoutingRestored`（0.5.20 起，仅 Linux：补回后恢复，附 `missing` 当时缺失的列表）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 

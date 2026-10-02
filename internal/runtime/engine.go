@@ -11,6 +11,7 @@ import (
 
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
+	"github.com/peakpassvpn/ppvpn-core/internal/tunrules"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
@@ -58,6 +59,13 @@ type interfaceWatchEngine interface {
 // engine cannot tell.
 type networkStateEngine interface {
 	defaultInterfaceState() (known, present bool)
+}
+
+// tunRoutingEngine keeps the TUN's policy routing rules in place (Linux;
+// see tunrules). setTUNRouting is called before Start.
+type tunRoutingEngine interface {
+	setTUNRouting(log *corelog.Logger, changed func(tunrules.State))
+	tunRouting() string
 }
 
 // connectionLogEngine writes a debug line per routed connection.
