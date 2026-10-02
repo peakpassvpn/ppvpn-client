@@ -3,8 +3,8 @@
 A Docker lab in which the same scripts drive core's behaviour on two engines:
 the Go core with sing-box (`ppvpn-core serve`) and, for Sail, the standalone
 `sail` binary (repros) or an engine with a Sail kernel behind the same
-control surface (core-level tests; for ppvpn-engine, see ppvpn-core#45:
-`ppvpn-engine-lab`). It is gate G2 of #45 and the place where Sail gaps are
+control surface (core-level tests; for the Rust ppvpn-core, see #45:
+`ppvpn-core-lab`). It is gate G2 of #45 and the place where Sail gaps are
 reproduced and regressed. Moved here from the prototype branch
 `proto/sail-engine` (archived; its Go engine code is not part of main).
 
@@ -60,7 +60,7 @@ written.
 and DNS, `t56` local proxy, `t9`): `CORE_ENGINES` (default `sing`, the Go
 core). A Sail engine (`sail`) needs a core that runs one behind the same
 control endpoints (`core.sh` passes `PPVPN_ENGINE`/`PPVPN_SAIL_*` through):
-the prototype did; ppvpn-engine will through `ppvpn-engine-lab`.
+the prototype did; the Rust ppvpn-core will through `ppvpn-core-lab`.
 
 ## Files
 
