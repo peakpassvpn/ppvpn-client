@@ -134,6 +134,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
 - **过期**（`expires_at`，与 Go 0.5.21 相同）：
   - 只在校验时检查：已过期的 Profile 在 apply 和 `validate` 时报 `PROFILE_EXPIRED`（field=`expires_at`，retryable=false；golden 见 `validation.json` 的 `profile_expired`）。
   - 运行中越过 `expires_at` 时，引擎**不会**主动停止，也不会拒绝转发，已生效的配置继续工作。
+  - 同时，引擎在越过 `expires_at` 的那一刻进入 `Degraded{ProfileExpired}`。这由定时器触发，不必等到下一次重建才发现。这个原因只用于上报，不触发 `Fatal`，也不影响转发。apply 一份未过期的新 Profile 后清除。这是 Rust 版新增的行为，Go 0.5.21 只有日志。
   - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
   - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
 - **规则集**：apply 前会准备规则集，总共最多等 10 秒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
@@ -274,6 +275,7 @@ Stopped ──apply──▶ Configured ──start──▶ Running ⇄ Degrade
   | `RuleSetUnavailable { rule_set_id }` | 规则集不可用，相关规则按降级处理 |
   | `LocalDnsUnavailable` | 默认网卡上读不到 DNS 服务器，直连域名只能得到 SERVFAIL；网卡或 DNS 变化后自动重试（Go 版只有日志） |
   | `LocalProxyUnavailable` | 本地代理端口监听失败，正在按退避重试 |
+  | `ProfileExpired { expires_at }` | 已生效的 Profile 越过了 `expires_at`。转发照常；之后的重建都会因 `PROFILE_EXPIRED` 失败；apply 一份未过期的 Profile 后清除。宿主据此提示用户，或者去刷新 Profile（第 9 节） |
   | `DefaultRouteOverridden` | 其他 VPN 抢走了默认路由，流量不再进入本 TUN；对方撤走后自动恢复 |
 
 - **`Fatal`**：引擎无法自愈。宿主**丢弃并重建**实例；这是宿主重建实例的唯一理由，另外两个是 panic 和会话丢失。
@@ -372,7 +374,7 @@ pub struct Error {
 - 拉取 Profile 失败时，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。后端的口径见 proxy-profile 格式文档（ingress-endpoints.md）：
   - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）；
   - **500**：违反客户端契约，或者规则集读不出来。
-- **续用的硬上限**：保留上一份 Profile 最多到它自己的 `expires_at`。过期后不能再用：宿主停止续用并提示用户，因为引擎在运行中不会自己因为过期而停止（第 4.1 节）。
+- **续用的硬上限**：保留上一份 Profile 最多到它自己的 `expires_at`。过期后不能再用：引擎进入 `Degraded{ProfileExpired}`（第 4.1 节、第 5 节）。宿主收到后去刷新 Profile 并提示用户；拿不到新 Profile 时，是否停止由宿主决定，因为引擎自己不会因为过期而停止转发。
 - **对 `ppvpn-account` 的要求**：拉取错误分成三类，宿主按类别处理：
   - **暂时性错误**（网络错误、5xx、超时）：保留上一份 Profile（以 `expires_at` 为限），退避重试；
   - **无可用服务**（404）：保留上一份 Profile（以 `expires_at` 为限），提示用户；
@@ -438,6 +440,7 @@ pub struct Error {
 - **Desktop G**：new 阶段能确定的失败直接返回错误，不进入 `Fatal`。
 - **Desktop 第 14 节第 2 项**：不照搬"稳定期"，改为第 9 节的两条保证。
 
+- **过期**（Core 定）：转发与 Go 一致；新增只用于上报的 `Degraded{ProfileExpired}`，由定时器触发（第 4.1 节、第 5 节、第 9 节）。
 - **CLI 补充**（不阻塞合并）：
   - Profile 续用以它自己的 `expires_at` 为硬上限，并写清了 Go 版在运行中越过 `expires_at` 时的行为（第 4.1 节）；
   - `ppvpn-account` 的错误分三类：暂时性错误、无可用服务、需要重新登录；
