@@ -1,0 +1,14 @@
+<dictionary> {
+  PrimaryInterface : utun4
+  Router : 10.8.0.1
+}
+  No such key
+<dictionary> {
+  ServerAddresses : <array> {
+    0 : 10.8.0.53
+  }
+  __CONFIGURATION_ID__ : Default: 0
+  __FLAGS__ : 2
+  __IF_INDEX__ : 29
+  __ORDER__ : 0
+}

@@ -1951,7 +1951,11 @@ dependencies = [
 name = "ppvpn-core"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
+ "hickory-proto",
  "sail",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

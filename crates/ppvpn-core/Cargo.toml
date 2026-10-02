@@ -13,3 +13,11 @@ name = "ppvpn_core"
 
 [dependencies]
 sail.workspace = true
+# The versions sail resolves (Cargo.lock), so nothing is built twice.
+async-trait = "0.1"
+hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
