@@ -10,7 +10,7 @@ mod engine;
 pub mod error;
 pub mod event;
 // dns-local is wired up by the runtime; until then only its tests use it.
-#[allow(dead_code)]
+#[allow(dead_code, unused_imports)]
 pub(crate) mod localdns;
 pub(crate) mod profile;
 pub mod request;
