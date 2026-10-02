@@ -9,12 +9,13 @@ baseline cannot drift.
 | --- | --- | --- |
 | `options.json`, `options-multi-ingress.json` | sing-box options built from `testdata/profiles/*` | `internal/config/golden_test.go` (sing-box specific; not a Rust baseline) |
 | `contract/` | Core API v1 contract: request sequences and the responses and events they produce | `api/golden_contract_test.go` |
-| `routing/` | routing decisions | (later PR) |
+| `routing/` | routing decisions of the real engine for a profile and a set of connections | `internal/runtime/golden_routing_test.go` |
 
 Regenerate after an intended behaviour change, then review the diff:
 
 ```sh
 go test ./api -run TestGoldenContract -update
+go test ./internal/runtime -run TestGoldenRouting -update
 ```
 
 Running `-update` twice gives byte-identical files; anything random (ports,
@@ -60,3 +61,51 @@ One file per scenario:
   - an apply whose `default_node_id` no longer exists is accepted, and the current selection is kept.
 
   Changing any of them in Rust is a decision to record in `docs/rust-parity.md`, not an accident.
+
+## routing/
+
+One file per profile (`profile_ref` as in `contract/`). Each case is one TCP connection:
+
+```json
+{ "name": "tun_private_with_sni_stays_direct_ip",
+  "inbound": "tun",
+  "routing_mode": "rules",
+  "host_ipv6_route": true,
+  "destination": "192.168.1.10:20009",
+  "sniff": { "tls_server_name": "intranet.video.example" },
+  "reject_reason": "…" }
+```
+
+- **`inbound`** says how the connection reaches the core. Each desktop instance is built the way the product builds it:
+
+  | `inbound` | Desktop instance | How the connection arrives |
+  | --- | --- | --- |
+  | `tun` | TUN-only instance | `destination` is an IP; `sniff` sends a TLS ClientHello or an HTTP request after the connection opens. |
+  | `proxy-routed` | standard instance (local proxy, no TUN) | the local proxy's routed user |
+  | `proxy-node:<id>` | standard instance | that node's user |
+  | `system-proxy` | standard instance | the unauthenticated system proxy listener |
+
+- **`routing_mode`** is `rules` (the default) or `global`.
+- **`host_ipv6_route`** applies to the TUN only. `false` is a host whose IPv6 stack has no IPv6 path; there, direct traffic to a global IPv6 address is handed its sniffed domain over IPv4.
+- **`reject_reason`** is a reader's annotation. The engine does not report which rule rejected a connection, so the expectation is only `REJECT`. The reasons used are:
+  - the TUN's own subnet;
+  - the fake-ip range without a known domain;
+  - a profile rule.
+
+  The Rust engine should reject for the same reason.
+
+`expect[i]` is the decision for `cases[i]`:
+
+| Field | Meaning |
+| --- | --- |
+| `action` | `DIRECT`, `PROXY` or `REJECT` |
+| `node_id` | the node for `PROXY`: the selected node, a node named by a rule, or the user's node |
+| `target`, `target_kind` | what the chosen outbound is asked to reach: a sniffed domain handed to a node, or the IP; `ip` or `domain` |
+| `ipv6_hand_off` | the IPv6 hand-off happened (no IPv6 path, global IPv6 destination, known domain) |
+| `classifier` | the flow-adapter classifier's decision for the same flow (`routing.Compile`), for comparison only |
+
+The classifier has no client floor, no fake-ip or TUN-subnet rejection and no rule sets, so it disagrees with the engine on purpose in those cases. The engine's decision is the baseline.
+
+How Go runs it: every outbound is bound to the loopback interface, so dials fail at once after routing has decided, and nothing leaves the host. The decision is read from the connection log line, written when routing picked an outbound; a connection closed without one was rejected. Internal outbound tags (sing-box names) are mapped to the fields above and never appear in the file.
+
+UDP, DNS hijacking and the reverse mapping (domains learned from the core's own DNS answers) are not in these files.
