@@ -5,7 +5,7 @@
 #
 # The core must be a lab build (make build-lab-linux: localdns_testsource),
 # which reads the default interface's resolvers from $PPVPN_LOCALDNS_TEST_FILE
-# instead of the system. Needs root, iproute2 (with netns) and curl on Linux; no jq or GNU date. Everything runs
+# instead of the system. Needs root, iproute2 (with netns), tcpdump and curl on Linux; no jq or GNU date. Everything runs
 # in three network namespaces of its own (ldns-c client, ldns-a and ldns-b
 # networks); the host's network is not touched. Set CPUS (e.g. 12-15) to pin
 # the processes with taskset.
@@ -14,7 +14,8 @@
 # network B (veth cb, 10.202.0.0/24) has one at .1 answering 192.0.2.2 and,
 # for the "new network on the same interface" step, one at .53 answering
 # 192.0.2.3. A trap resolver on 127.0.0.1:53 in the client answers 192.0.2.99:
-# it must never be asked. Every query uses a new name (no cache hits).
+# it must never be asked. Every query uses a new name (no cache hits). DNS on
+# the TUN is captured: no query to a physical resolver may enter it.
 set -eu
 mkdir -p "$4"
 CORE=$(realpath "$1"); LAB=$(realpath "$2"); PROFILE=$(realpath "$3"); OUT=$(realpath "$4")
@@ -32,13 +33,14 @@ check() { # description, condition
 
 cleanup() {
   [ -f $R/pid ] && kill $(cat $R/pid) 2>/dev/null || true
+  [ -f $R/tcpdump.pid ] && kill $(cat $R/tcpdump.pid) 2>/dev/null || true
   for pid in $(cat $R/servers.pid 2>/dev/null); do kill $pid 2>/dev/null || true; done
   sleep 0.5
   for ns in ldns-c ldns-a ldns-b; do ip netns del $ns 2>/dev/null || true; done
 }
 trap cleanup EXIT
 cleanup
-rm -f $R/pid $R/servers.pid
+rm -f $R/pid $R/servers.pid $R/tcpdump.pid
 
 # Namespaces and links.
 for ns in ldns-c ldns-a ldns-b; do ip netns add $ns; ip -n $ns link set lo up; done
@@ -73,6 +75,17 @@ c curl -s --unix-socket $R/core.sock -H "Authorization: Bearer $(cat $R/secret)"
 log "apply: $(cat $R/apply.out) start: $(cat $R/start.out)"
 check "profile applied and started" 'grep -q "\"ok\":true" $R/apply.out && grep -q "\"ok\":true" $R/start.out'
 sleep 2
+
+# dns-local's socket must be bound to the physical interface
+# (auto_detect_interface): auto_route sends everything else into the TUN, and
+# a query to a physical resolver entering the TUN would loop. Capture DNS on
+# the TUN for the whole run; queries to the TUN's own resolver 10.60.159.90
+# are the positive control that the capture works.
+TUN=$(ip -n ldns-c -o -4 addr show | awk '/ 10\.60\.159\.89\// {print $2}')
+log "tun interface: ${TUN:-none}"
+c tcpdump -l -n -i "$TUN" 'port 53' > "$OUT/tun-dns.txt" 2>"$OUT/tcpdump.err" &
+echo $! > $R/tcpdump.pid
+sleep 0.5
 
 echo 0 > $R/n
 q() { # -> "ok <ip> <ms>" | "fail <why> <ms>"; a new name every time (no cache hits)
@@ -143,6 +156,10 @@ log "recovered after ${recovered:-never} ms"
 check "servers that appear are used within 1.5 s" '[ -n "$recovered" ] && [ "$recovered" -lt 1500 ]'
 
 check "the 127.0.0.1 trap was never asked" '[ "$(count dns-trap)" = 0 ]'
+sleep 0.5; kill $(cat $R/tcpdump.pid) 2>/dev/null || true; sleep 0.3
+check "capture on the TUN saw the queries to its own resolver" '[ "$(grep -c "> 10\.60\.159\.90\.53:" "$OUT/tun-dns.txt")" -gt 0 ]'
+check "no query to a physical resolver entered the TUN" '! grep -Eq "> 10\.20[12]\.0\.(1|53)\.53:" "$OUT/tun-dns.txt"'
+check "every resolver saw only physical source addresses" '! cat "$OUT/dns-a.log" "$OUT/dns-b.log" "$OUT/dns-b2.log" | grep -v " from 10\.20[12]\.0\.[0-9]*:" | grep -q .'
 grep 'msg="local dns servers"' "$OUT/core.log" | tee -a "$OUT/steps.log" || true
 check "a local dns servers line per change" '[ "$(grep -c "msg=\"local dns servers\"" "$OUT/core.log")" -ge 4 ]'
 log "result: $([ $FAILED = 0 ] && echo PASS || echo FAIL)"

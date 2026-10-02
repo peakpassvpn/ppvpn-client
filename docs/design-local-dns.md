@@ -149,3 +149,9 @@ macOS 的具体做法：
   - 服务器出现但网卡没有变化时，约 1.04 秒恢复（符合每秒最多读一次的限制）；
   - 127.0.0.1 陷阱始终未被查询。
   - 变异检查：把作废改成空操作后，"同一网卡换网络"和"没有服务器"两组断言失败。
+- **依赖：socket 必须绑在物理网卡上。** 传输用 `dns.NewLocalDialer` 加空的 `DialerOptions` 拨号，也就是 sing-box 的默认 dialer。它在 `route.auto_detect_interface` 打开时把 socket 绑到默认网卡（Linux、macOS、Windows 都由 sing-box 的 interface finder 和 bind 实现）。core 的 TUN 构建总是打开 `auto_detect_interface`。`auto_route` 会把其余所有流量引进 TUN，所以一旦没绑上，发往物理网卡 DNS 的查询就会进隧道、被劫持回 core，形成回环。这个依赖由端到端测试守住：
+  - 整个测试过程都在 TUN（`tun0`）上抓 53 端口；
+  - 断言：发往物理 DNS 的包一个都不出现在 TUN 上；各个 DNS 服务器看到的源地址全部是物理网卡的地址；
+  - 发往 TUN 自身 DNS（10.60.159.90）的查询作为正对照，证明抓包确实生效。
+  - 变异检查：把 dialer 换成不绑网卡的 `N.SystemDialer` 后，565 个发往物理 DNS 的包进了 `tun0`，每次查询都在 2 秒后变成 SERVFAIL，这条断言失败。也就是说，这个回环真实存在，而测试能发现它。
+  - 未来如果改动这个 dialer（例如加 `bind_interface` 或 detour），这条测试必须继续通过。

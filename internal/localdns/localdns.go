@@ -90,6 +90,12 @@ type Transport struct {
 // NewTransport creates the transport; l receives the "local dns servers"
 // lines (nil discards them).
 func NewTransport(ctx context.Context, l *corelog.Logger, tag string, options Options) (*Transport, error) {
+	// sing-box's default dialer: with route.auto_detect_interface (always on
+	// in TUN builds) it binds every socket to the default interface. That
+	// binding is what keeps queries to the physical resolvers out of the
+	// TUN; without it auto_route sends them into the tunnel, they are
+	// hijacked back to the core and loop (test/lab/localdns/run.sh asserts
+	// no such packet appears on the TUN).
 	transportDialer, err := dns.NewLocalDialer(ctx, option.LocalDNSServerOptions{})
 	if err != nil {
 		return nil, err
