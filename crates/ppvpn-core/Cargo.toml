@@ -1,0 +1,15 @@
+[package]
+name = "ppvpn-core"
+version = "0.0.0"
+description = "PeakPass VPN core: profile, routing, DNS policy, failover and local proxy on sail"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "ppvpn_core"
+
+[dependencies]
+sail.workspace = true
