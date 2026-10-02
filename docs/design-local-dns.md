@@ -1,6 +1,6 @@
 # 设计：core 自己维护的本地 DNS（dns-local）
 
-状态：PPVPN Core 工作小组已确认（2026-10-02），已实现，目标 0.5.20。作者 ppvpn-core-4b。实现与本稿的差异和补充见第 7 节。
+状态：已确认（2026-10-02），已实现，目标 0.5.20。实现与本稿的差异和补充见第 7 节。
 
 ## 1. 问题
 
@@ -97,7 +97,7 @@ macOS 的具体做法：
 - 解析器：用 `scutil` 输出的样本（DHCP、手动静态 DNS、带 zone 的 IPv6、Desktop 那个 tun 服务同时存在、PrimaryInterface 不一致需要走 scoped）；Windows 的假适配器表（fec0::、隧道地址、多块网卡只取默认网卡那块）。
 - 缓存逻辑：假的 `Discover` 加手动触发的网卡变化事件，覆盖：作废后立即重读；空列表时 1 秒内不重复读，并返回 `ErrNoLocalDNS`；绝不出现 127.0.0.1:53；60 秒软刷新；并发查询只读一次（singleflight）。
 
-### 4.2 Linux 端到端（sail-load 的特权容器，12–15 号核）
+### 4.2 Linux 端到端（Linux 测试机上的特权容器）
 
 缓存和作废是共通逻辑，要在 Linux 上验证，测试构建需要一个可替换的 `Discover`：在 `internal/localdns` 里加一个只用于测试的"文件来源"，由环境变量 `PPVPN_LOCALDNS_TEST_FILE` 打开，按网卡名读一个 JSON。生产构建里这个变量不起作用，或者用 build tag 隔离。场景：
 
@@ -132,7 +132,7 @@ macOS 的具体做法：
 - **`--local-dns-servers`：** 在所有平台上都渲染为 `ppvpn-local` 的静态列表，按顺序使用全部隧道网段外的地址。启动时记 warn：`msg="static local dns servers; they do not follow network changes"`。如果全部在隧道网段内，记 warn，并改为动态读取（Windows/macOS），或 sing-box `local`（Linux）。
 - **日志：** 服务器列表每次变化时记 `msg="local dns servers" source=… interface=… servers=…`（info）。读不到时为 warn，`servers=none`，并附 `error`。`source` 的取值：`adapter`（Windows）、`scutil-global`、`scutil-scoped`（macOS）、`override`。`msg=dns` 的 debug 行新增 `upstream`，记录实际应答的服务器。
 - **没有网卡监视器时：** `auto_detect_interface` 关闭时（TUN 构建里不会出现），`Start` 只记 warn，不让内核启动失败；查询会立即返回 `ErrNoInterface`。
-- **测试来源（按工作小组的要求改用 build tag）：** 只有带 `localdns_testsource` tag 的构建才含这个来源（`internal/localdns/testsource.go`）。它从 `$PPVPN_LOCALDNS_TEST_FILE` 读取 `{"<网卡名>": ["<服务器>", …]}`，并在 Linux 上也让 config 渲染 `ppvpn-local`。正式构建不编译这个文件，环境变量也就不起作用。实验构建用 `make build-lab-linux`。来源里有标记字符串 `ppvpn-localdns-testsource-enabled`（也作为日志里的 `source`）。检查分两处：
+- **测试来源（按评审要求改用 build tag）：** 只有带 `localdns_testsource` tag 的构建才含这个来源（`internal/localdns/testsource.go`）。它从 `$PPVPN_LOCALDNS_TEST_FILE` 读取 `{"<网卡名>": ["<服务器>", …]}`，并在 Linux 上也让 config 渲染 `ppvpn-local`。正式构建不编译这个文件，环境变量也就不起作用。实验构建用 `make build-lab-linux`。来源里有标记字符串 `ppvpn-localdns-testsource-enabled`（也作为日志里的 `source`）。检查分两处：
   - CI：用正式 tag 和实验 tag 各构建一次。实验构建必须含这个标记，否则检查本身失效；正式构建必须不含。
   - release.yml：在 Assemble 步骤里检查每个发行文件，既不能含这个标记，`go version -m` 里也不能有这个 tag。
 - **4.2 的实现：** 用的是 `test/lab/localdns/run.sh`，加上辅助程序 `test/lab/localdns/ldnslab`。它不用容器，而是建三个独立的网络命名空间（客户端、网 A、网 B），既不依赖镜像，也不碰宿主网络；`CPUS=12-15` 时用 taskset 固定到这几个核上。覆盖的情况：
@@ -143,7 +143,7 @@ macOS 的具体做法：
   - 每次列表变化都有一行 `local dns servers`。
 - **失败即 SERVFAIL：** 读不到服务器，或所有服务器都失败时，传输返回 SERVFAIL 应答，而不是返回错误。sing-box 对出错的被劫持查询不回任何应答（UDP）或直接关闭连接（TCP），客户端只能等到自己超时。这和 dnstransport 守卫在 0.5.11 的做法相同。原因记在 debug 日志 `msg="local dns failed"` 里；SERVFAIL 不会被缓存。实验中第一版返回的是错误，客户端因此等满了 3 秒超时，是端到端测试发现的。
 - **网卡变化的 1 秒防抖：** sing-tun 在所有平台上都把默认网卡检查推迟 1 秒（`monitor_shared.go` 的 `delayCheckUpdate`）。所以 `event=changed` 比路由实际变化晚约 1 秒，Windows VM 102 上的 +1.2 秒就是这个原因。直连 socket 的网卡绑定受同一个延迟影响，dns-local 跟随同一个事件。
-- **端到端结果（sail-load，2026-10-02，netshoot 特权容器，12–13 号核，连跑 3 次都通过）：**
+- **端到端结果（Linux 测试机，2026-10-02，netshoot 特权容器，连跑 3 次都通过）：**
   - 三种网络变化在 `changed` 之后的第一次查询就由新 DNS 应答（1–2 ms），旧 DNS 不再收到查询；
   - 没有服务器时 SERVFAIL 在 0–1 ms 内返回；
   - 服务器出现但网卡没有变化时，约 1.04 秒恢复（符合每秒最多读一次的限制）；

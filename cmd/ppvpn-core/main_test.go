@@ -65,17 +65,17 @@ func TestServeRejectsTUNStackMissingFromBuild(t *testing.T) {
 func TestServeValidatesLocalDNSServers(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "ppvpn-core.log")
-	if err := run([]string{"serve", "--tun", "--local-dns-servers", "10.10.0.3,not-an-ip", "--log-file", logPath}); err == nil || !strings.Contains(err.Error(), `invalid local DNS server "not-an-ip"`) {
+	if err := run([]string{"serve", "--tun", "--local-dns-servers", "192.168.50.3,not-an-ip", "--log-file", logPath}); err == nil || !strings.Contains(err.Error(), `invalid local DNS server "not-an-ip"`) {
 		t.Fatalf("invalid entry: %v", err)
 	}
-	if err := run([]string{"serve", "--local-dns-servers", "10.10.0.3", "--log-file", logPath}); err == nil || !strings.Contains(err.Error(), "requires --tun") {
+	if err := run([]string{"serve", "--local-dns-servers", "192.168.50.3", "--log-file", logPath}); err == nil || !strings.Contains(err.Error(), "requires --tun") {
 		t.Fatalf("without --tun: %v", err)
 	}
 	// Valid entries are logged with those dns-local will use, as a static
 	// override; startup then fails later for the missing socket.
-	_ = run([]string{"serve", "--tun", "--local-proxy=false", "--local-dns-servers", " 172.19.0.2 , 10.10.0.3,[fe80::1%en0]:5353", "--log-file", logPath})
+	_ = run([]string{"serve", "--tun", "--local-proxy=false", "--local-dns-servers", " 172.19.0.2 , 192.168.50.3,[fe80::1%en0]:5353", "--log-file", logPath})
 	data, _ := os.ReadFile(logPath)
-	if !strings.Contains(string(data), `msg="static local dns servers; they do not follow network changes" given=172.19.0.2,10.10.0.3,[fe80::1%en0]:5353 servers=10.10.0.3:53,[fe80::1%en0]:5353`) {
+	if !strings.Contains(string(data), `msg="static local dns servers; they do not follow network changes" given=172.19.0.2,192.168.50.3,[fe80::1%en0]:5353 servers=192.168.50.3:53,[fe80::1%en0]:5353`) {
 		t.Fatalf("log:\n%s", data)
 	}
 }

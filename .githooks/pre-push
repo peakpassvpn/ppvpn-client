@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refuses a push whose new commits carry content that must not reach the
+# public repository (tools/sensitive-check.sh range origin/main..HEAD).
+# Enable once per clone: git config core.hooksPath .githooks
+set -eu
+root=$(git rev-parse --show-toplevel)
+git fetch -q origin main 2>/dev/null || true
+base=$(git merge-base origin/main HEAD 2>/dev/null) || base=origin/main
+[ "$(git rev-parse "$base")" = "$(git rev-parse HEAD)" ] && exit 0
+exec "$root/tools/sensitive-check.sh" range "$base" HEAD
