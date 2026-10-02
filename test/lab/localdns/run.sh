@@ -96,16 +96,18 @@ q() { # -> "ok <ip> <ms>" | "fail <why> <ms>"; a new name every time (no cache h
   c $PIN "$LAB" query -server 10.60.159.90:53 -name "q$n.lab.test" -timeout ${QTIMEOUT:-3s}
 }
 count() { grep -c . "$OUT/$1.log" 2>/dev/null || true; }
-changes() { grep -c 'msg="default interface" event=changed' "$OUT/core.log" || true; }
+changes() { grep -c "msg=\"default interface\" event=changed name=$1 " "$OUT/core.log" || true; } # changes to interface $1
 # sing-tun reports a default interface change after a 1 s debounce
 # (monitor_shared.go delayCheckUpdate); dns-local follows from that event,
 # as direct sockets' binding does. Waits for the next one, logs its delay.
-await_change() { # previous count, what changed
+await_change() { # interface, previous count of its changes, what changed
+  # Waits for a change reported for that interface: a change of another one
+  # (ca's link-local address settling, seen on CI runners) does not count.
   started=$(now)
-  for i in $(seq 50); do [ "$(changes)" -gt "$1" ] && break; sleep 0.1; done
-  log "default interface changed $(( $(now) - started )) ms after: $2"
-  previous=$1
-  check "default interface change reported ($2)" '[ "$(changes)" -gt "$previous" ]'
+  for i in $(seq 50); do [ "$(changes "$1")" -gt "$2" ] && break; sleep 0.1; done
+  log "default interface changed to $1 $(( $(now) - started )) ms after: $3"
+  previous=$2; iface=$1
+  check "default interface change reported ($3)" '[ "$(changes "$iface")" -gt "$previous" ]'
 }
 
 # 1. Network A.
@@ -114,9 +116,9 @@ check "network A answered by A" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.
 
 # 2. Switch the default route to network B (another interface): the first
 # query after the switch must already be answered by B.
-k=$(changes)
+k=$(changes cb)
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
-await_change $k "default route to cb"
+await_change cb $k "default route to cb"
 a_before=$(count dns-a)
 r=$(q); log "network B: $r"
 check "first query after the change answered by B" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.2" ]'
@@ -125,10 +127,10 @@ check "no query reached A after the change" '[ "$(count dns-a)" = "$a_before" ]'
 # 3. Another network on the same interface (a Wi-Fi switch on en0): new
 # address on cb, new resolver in the file.
 echo '{"ca":["10.201.0.1"],"cb":["10.202.0.53"]}' > $TESTFILE
-k=$(changes)
+k=$(changes cb)
 ip -n ldns-c addr add 10.202.0.3/24 dev cb; ip -n ldns-c addr del 10.202.0.2/24 dev cb
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
-await_change $k "new address and resolver on cb"
+await_change cb $k "new address and resolver on cb"
 b_before=$(count dns-b)
 r=$(q); log "same interface, new network: $r"
 check "same interface, new network answered by the new resolver" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.3" ]'
@@ -138,10 +140,10 @@ check "no query reached the old resolver after the change" '[ "$(count dns-b)" =
 # then the servers appear without another interface change and are used
 # within RetryInterval.
 echo '{"ca":["10.201.0.1"],"cb":[]}' > $TESTFILE
-k=$(changes)
+k=$(changes cb)
 ip -n ldns-c addr add 10.202.0.4/24 dev cb; ip -n ldns-c addr del 10.202.0.3/24 dev cb
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
-await_change $k "cb without resolvers"
+await_change cb $k "cb without resolvers"
 for i in 1 2 3; do
   r=$(q); log "no resolvers: $r"
   check "no resolvers: query $i gets SERVFAIL" '[ "$(echo $r | cut -d" " -f1,2)" = "fail SERVFAIL" ]'
