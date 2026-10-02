@@ -1,0 +1,6 @@
+# The same Rust as sail's CI and releases (sail's rust-toolchain.toml).
+# Moving it is a commit: bump this and rust.yml together, fix what clippy finds.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

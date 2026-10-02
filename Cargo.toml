@@ -1,0 +1,28 @@
+# The Rust ppvpn-core (#45): a library linking sail directly, hosted in
+# process by Desktop and the CLI. The Go core (cmd/, internal/, ...) stays
+# frozen at v0.5.21 beside it until the hosts switch over.
+[workspace]
+members = ["crates/ppvpn-core"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.98.1"
+license = "GPL-3.0-only"
+repository = "https://github.com/peakpassvpn/ppvpn-core"
+
+[workspace.dependencies]
+# sail by commit (#45: regressions run on named commits, no release needed).
+# Moving it is a commit of its own that also takes sail's [patch.crates-io]
+# below as of that commit (tools/sail-patch-check.sh).
+sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "bccd765637ee1b7419a4490eb661938ba4d2dea6" }
+
+# Copied from sail's Cargo.toml at the commit above: sail builds against its
+# forks, so a crate that links sail must patch the same. Keep in step with
+# the sail rev (CI compares them).
+[patch.crates-io]
+btls = { git = "https://github.com/peakpassvpn/btls.git", rev = "3eb203a7ed44fd93d31056156a1ddfab5a6b9338" }
+btls-sys = { git = "https://github.com/peakpassvpn/btls.git", rev = "3eb203a7ed44fd93d31056156a1ddfab5a6b9338" }
+quinn-proto = { git = "https://github.com/peakpassvpn/quinn.git", rev = "ac0737da7704788407daab3c5e6abd3dca7ae55e" }
+netconfig-rs = { git = "https://github.com/peakpassvpn/netconfig-rs.git", rev = "a5caf848a0e0f18bc9810c1fa854f3ac6a903443" }
+route_manager = { git = "https://github.com/peakpassvpn/route_manager.git", rev = "5703367f56a7b4fed9fd02e216f2f110b4186eda" }
