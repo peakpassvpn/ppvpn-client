@@ -38,6 +38,11 @@ const (
 	// EventKernelDrained: a replaced kernel was closed; Code is "idle" (no
 	// connections left) or "deadline" (ClosedConnections were still open).
 	EventKernelDrained EventType = "KernelDrained"
+	// EventNetworkChanged: the default interface the core binds outbound
+	// sockets to changed (only where the core watches it: the desktop TUN).
+	// HasDefaultInterface is false when none is left (offline); otherwise
+	// InterfaceName and InterfaceIndex name the new one.
+	EventNetworkChanged EventType = "NetworkChanged"
 )
 
 type Event struct {
@@ -58,6 +63,10 @@ type Event struct {
 	KeptConnections   int `json:"kept_connections,omitempty"`
 	// DrainingKernels is set on KernelSwitched.
 	DrainingKernels int `json:"draining_kernels,omitempty"`
+	// Set on NetworkChanged.
+	InterfaceName       string `json:"interface_name,omitempty"`
+	InterfaceIndex      int    `json:"interface_index,omitempty"`
+	HasDefaultInterface *bool  `json:"has_default_interface,omitempty"`
 }
 
 type eventBus struct {

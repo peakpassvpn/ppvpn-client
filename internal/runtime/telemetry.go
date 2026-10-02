@@ -214,6 +214,7 @@ type trackedView struct {
 	route       []string
 	nodeID      string
 	lastActive  time.Time
+	bytes       uint64 // both directions so far
 }
 
 // generation lists the open connections of kernel gen.
@@ -229,7 +230,7 @@ func (t *telemetry) generations(gens map[uint64]bool) []trackedView {
 	var items []trackedView
 	for _, item := range t.connections {
 		if gens[item.gen] {
-			items = append(items, trackedView{item: item, outboundTag: item.connection.OutboundTag, metadata: item.metadata, route: append([]string(nil), item.route...), nodeID: item.nodeID, lastActive: time.Unix(0, item.lastActive.Load())})
+			items = append(items, trackedView{item: item, outboundTag: item.connection.OutboundTag, metadata: item.metadata, route: append([]string(nil), item.route...), nodeID: item.nodeID, lastActive: time.Unix(0, item.lastActive.Load()), bytes: item.upload.Load() + item.download.Load()})
 		}
 	}
 	return items

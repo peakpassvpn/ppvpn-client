@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -408,5 +409,13 @@ func TestDebugGoroutinesOnlyAtDebugLevel(t *testing.T) {
 	rec := get(true)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), "goroutine ") || !strings.Contains(rec.Body.String(), "debugGoroutines") {
 		t.Fatalf("debug level: %d %.200s", rec.Code, rec.Body.String())
+	}
+}
+
+// Offline probes fail fast as NO_DEFAULT_INTERFACE, retryable.
+func TestNoDefaultInterfaceIsRetryable(t *testing.T) {
+	var structured *apiErr
+	if !errors.As(coreError(coreruntime.ErrNoDefaultInterface), &structured) || structured.Detail.Code != "NO_DEFAULT_INTERFACE" || !structured.Detail.Retryable {
+		t.Fatalf("mapped to %#v", structured)
 	}
 }

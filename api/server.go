@@ -398,6 +398,8 @@ func coreError(err error) error {
 		return apiError("SYSTEM_PROXY_START_FAILED", "the system proxy listener could not be opened", "", true)
 	case errors.Is(err, coreruntime.ErrNodeNotFound):
 		return apiError("NODE_NOT_FOUND", "node not found", "node_id", false)
+	case errors.Is(err, coreruntime.ErrNoDefaultInterface):
+		return apiError("NO_DEFAULT_INTERFACE", "the host has no default network interface; probe again once the network is back", "", true)
 	case errors.Is(err, coreruntime.ErrIngressNotFound):
 		return apiError("INGRESS_NOT_FOUND", "the node has no ingress with this endpoint_key", "endpoint_key", false)
 	default:

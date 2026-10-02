@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sagernet/sing/common/control"
 	"net"
 	"strings"
 	"sync"
@@ -92,6 +93,10 @@ var (
 	ErrSystemProxyUnavailable = errors.New("system proxy is unavailable in this core")
 	// ErrSystemProxyStartFailed: the listener could not be opened.
 	ErrSystemProxyStartFailed = errors.New("system proxy listener could not be started")
+	// ErrNoDefaultInterface: the running engine's interface monitor has no
+	// default interface (offline), so a probe would only wait out its
+	// timeout.
+	ErrNoDefaultInterface = errors.New("no default network interface")
 )
 
 // Core serializes lifecycle mutations and owns all sing-box values. Reads and
@@ -614,6 +619,9 @@ func (c *Core) probeEntrances(
 	if p == nil {
 		return nil, ErrProfileNotApplied
 	}
+	if c.offline() {
+		return nil, ErrNoDefaultInterface
+	}
 	clone, err := cloneProfile(p)
 	if err != nil {
 		return nil, err
@@ -664,6 +672,9 @@ func (c *Core) ProbeAvailability(ctx context.Context, nodeID, target string, tim
 	}
 	if !running {
 		return probe.AvailabilityResult{}, ErrCoreNotRunning
+	}
+	if c.offline() {
+		return probe.AvailabilityResult{}, ErrNoDefaultInterface
 	}
 	for _, endpoint := range c.LocalProxyEndpoints() {
 		if endpoint.NodeID == nodeID {
@@ -844,10 +855,34 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 // new interface in quick succession.
 const ReprobeDelay = 2 * time.Second
 
+// offline reports that the running engine knows there is no default
+// interface. Without a running engine or an interface monitor it cannot
+// tell, and probes run as usual. A default interface that just came back is
+// not offline: the network may already work, so probes are not failed early
+// on a change alone.
+func (c *Core) offline() bool {
+	c.mu.RLock()
+	instance := c.engine
+	c.mu.RUnlock()
+	state, ok := instance.(networkStateEngine)
+	if !ok {
+		return false
+	}
+	known, present := state.defaultInterfaceState()
+	return known && !present
+}
+
 // defaultInterfaceChanged is called on every default interface change of a
-// running TUN engine. It (re)arms one timer, so a burst of changes leads to
-// one probe ReprobeDelay after the last of them.
-func (c *Core) defaultInterfaceChanged() {
+// running engine with an interface monitor. It reports NetworkChanged, and on
+// a TUN core (re)arms one timer, so a burst of changes leads to one host IPv6
+// probe ReprobeDelay after the last of them.
+func (c *Core) defaultInterfaceChanged(defaultInterface *control.Interface) {
+	event := Event{Type: EventNetworkChanged, At: time.Now(), HasDefaultInterface: new(bool)}
+	if defaultInterface != nil {
+		*event.HasDefaultInterface = true
+		event.InterfaceName, event.InterfaceIndex = defaultInterface.Name, defaultInterface.Index
+	}
+	c.emit(event)
 	if !c.platform.TUN.Enabled {
 		return
 	}
