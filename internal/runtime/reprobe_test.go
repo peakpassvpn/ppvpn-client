@@ -14,10 +14,26 @@ import (
 )
 
 // watchSwap is a kernel-swapping engine whose default interface changes the
-// test fires by hand.
+// test fires by hand. Its interface monitor state is unknown until the test
+// sets it.
 type watchSwap struct {
 	*fakeSwap
 	changed func(*control.Interface)
+
+	stateMu        sync.Mutex
+	known, present bool
+}
+
+func (w *watchSwap) setDefaultInterface(known, present bool) {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	w.known, w.present = known, present
+}
+
+func (w *watchSwap) defaultInterfaceState() (bool, bool) {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	return w.known, w.present
 }
 
 func (w *watchSwap) watchDefaultInterface(_ *corelog.Logger, changed func(*control.Interface)) {
@@ -162,6 +178,57 @@ func TestReprobeSwitchesWhenIPv6PathAppears(t *testing.T) {
 	}
 	if !strings.Contains(r.log.String(), `policy=tun_ipv6_direct_ipv4 policy=tun_ipv6 rebuilt=true switch=kernel`) {
 		t.Fatalf("log:\n%s", r.log.String())
+	}
+}
+
+// A link goes down: the path looks lost only because there is no network.
+// The probe that fires while the engine knows there is no default interface
+// switches nothing and keeps the policy. When the network is back with the
+// same IPv6 path nothing switches either; when it is back without one, the
+// next probe switches once, online.
+func TestReprobeSkipsWhileOffline(t *testing.T) {
+	r := newReprobeRig(t, true)
+	if err := r.core.log.SetLevel("debug"); err != nil {
+		t.Fatal(err)
+	}
+	r.engine.setDefaultInterface(true, false)
+	r.setRoute(false)
+	r.engine.changed(nil)
+	r.timer.fire()
+	if got, restarts, handOff := r.swaps(); got != 0 || restarts != "" || handOff {
+		t.Fatalf("offline: swaps %d, restart reasons %q, hand-off %v", got, restarts, handOff)
+	}
+	if !strings.Contains(r.log.String(), `msg="host ipv6 re-probe skipped" reason="no default interface"`) {
+		t.Fatalf("log:\n%s", r.log.String())
+	}
+	if strings.Contains(r.log.String(), "host ipv6 changed") {
+		t.Fatalf("offline probe logged a change:\n%s", r.log.String())
+	}
+
+	// Back with the same path: the change arms a probe, nothing switches.
+	eth := &control.Interface{Index: 2, Name: "eth0"}
+	r.engine.setDefaultInterface(true, true)
+	r.setRoute(true)
+	r.engine.changed(eth)
+	r.timer.fire()
+	if got, _, handOff := r.swaps(); got != 0 || handOff {
+		t.Fatalf("back, same path: swaps %d, hand-off %v", got, handOff)
+	}
+
+	// Down again, back without an IPv6 path: one switch, after the network
+	// is back.
+	r.engine.setDefaultInterface(true, false)
+	r.setRoute(false)
+	r.engine.changed(nil)
+	r.timer.fire()
+	if got, _, _ := r.swaps(); got != 0 {
+		t.Fatalf("offline again: swaps %d", got)
+	}
+	r.engine.setDefaultInterface(true, true)
+	r.engine.changed(eth)
+	r.timer.fire()
+	if got, restarts, handOff := r.swaps(); got != 1 || restarts != "" || !handOff {
+		t.Fatalf("back, path lost: swaps %d, restart reasons %q, hand-off %v", got, restarts, handOff)
 	}
 }
 
