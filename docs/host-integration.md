@@ -172,6 +172,7 @@ pub fn selected_node(&self) -> Option<NodeInfo>;
 pub fn traffic(&self) -> Traffic;                 // 累计上传/下载，方向以客户端为准
 pub fn connections(&self) -> Vec<Connection>;
 pub fn version() -> VersionInfo;                  // 关联函数，不需要实例
+pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行
 ```
 
 `VersionInfo` 包含以下字段：
@@ -223,8 +224,10 @@ pub struct Status {
     pub routing_mode: Option<RoutingMode>,
     pub selected_node_id: Option<String>,
     pub selected_ingress: Option<IngressStatus>, // endpoint_key、label、role、previous_endpoint_key、switched_at
-    pub nodes: Vec<NodeStatus>,             // 每个节点：name、entry_key、entry_label、exit、capabilities、
-                                            // 各入口（endpoint_key、label、role、healthy、active、consecutive_failures）、pin
+    pub node_count: u32,
+    pub nodes: Vec<NodeStatus>,             // 每个节点：node_id、pinned_endpoint_key、各入口（endpoint_key、role、label、
+                                            // healthy、last_check_at、consecutive_failures、active），同 get-status
+                                            // 名称、entry_label、region 等节点资料见 nodes() / selected_node()（同 list-nodes）
     pub local_proxy: Option<LocalProxyStatus>, // listen、port、listening（不含凭据）
     pub rule_sets: Vec<RuleSetStatus>,
     pub system_proxy: SystemProxyStatus,
@@ -292,12 +295,12 @@ Stopped ──apply──▶ Configured ──start──▶ Running ⇄ Degrade
 ## 6. 事件
 
 ```rust
-pub fn subscribe(&self, kinds: &[EventKind]) -> EventReceiver;
+pub fn subscribe(&self, kinds: &[EventKind]) -> EventReceiver;   // EventKind::ALL：全部
 impl EventReceiver { pub async fn recv(&mut self) -> Option<EventItem>; }
-pub enum EventItem { Event(Event), Lagged(u64) }
+pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: u64 } }
 ```
 
-- **按种类订阅**：每种事件一个有界缓冲，宿主处理慢时收到 `Lagged(n)`，表示这种事件丢了 n 个。高频事件不会挤掉状态变化，例如连接事件不会挤掉 `StateChanged`。`EventReceiver` 被 drop 就是取消订阅。
+- **按种类订阅**：每种事件一个有界缓冲，宿主处理慢时收到 `Lagged { kind, dropped }`，表示这种事件丢了 `dropped` 个。高频事件不会挤掉状态变化，例如连接事件不会挤掉 `StateChanged`。`EventReceiver` 被 drop 就是取消订阅。
 - **格式**：`Event` 是带 `type` 标签的枚举，序列化成 JSON 后和 Core API v1 的 `watch-events` 一致：类型名保持 CamelCase，字段沿用现有名字，`at` 是 RFC 3339 格式的时间。
 - **只增加**：新版本只会增加事件种类和字段。
 
