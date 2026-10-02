@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && !android
 
 package tunrules
 
@@ -438,7 +438,7 @@ func parseRule(b []byte) (Rule, error) {
 		case nl.FRA_FWMARK:
 			r.Mark, r.MarkSet = native.Uint32(v), true
 		case nl.FRA_FWMASK:
-			r.Mask = int(native.Uint32(v))
+			r.Mask = int64(native.Uint32(v))
 		case nl.FRA_SUPPRESS_PREFIXLEN:
 			if n := native.Uint32(v); n != 0xffffffff {
 				r.SuppressPrefixlen = int(n)
@@ -479,7 +479,9 @@ func toNetlinkRule(r Rule) *netlink.Rule {
 	out.IifName, out.OifName = r.IifName, r.OifName
 	out.Mark, out.MarkSet = r.Mark, r.MarkSet
 	if r.MarkSet || r.Mask >= 0 {
-		out.Mask = r.Mask
+		// netlink.Rule.Mask is an int: on 32-bit a mask above 1<<31 wraps,
+		// and netlink writes it back as the same 32 bits.
+		out.Mask = int(uint32(r.Mask))
 	}
 	out.Invert = r.Invert
 	out.SuppressPrefixlen = r.SuppressPrefixlen
