@@ -954,12 +954,14 @@ func (c *Core) kernelContext(candidate *config.BuildResult) context.Context {
 		// Only the TUN configuration turns dns.reverse_mapping on.
 		ctx = reversemap.WithStore(ctx, c.reverse)
 	}
+	ctx = withOutboundNodes(ctx, candidate.OutboundNodes)
 	return outboundlog.WithLogger(ctx, c.log, outboundIngresses(candidate))
 }
 
-// closeOnSwitch decides which connections of the replaced kernel to close
+// closeOnSwitch decides which connections of the replaced kernels to close
 // when next takes over: only those the new profile takes away. A connection
-// is closed when the node it uses is gone, when it came in as a local proxy
+// is closed when the node it uses is gone (the node its routing kernel
+// recorded, by that kernel's own build), when it came in as a local proxy
 // user the new list no longer has, or when the new kernel's route rules
 // would now reject it. Everything else (another node or outbound, direct
 // instead of proxy, a global/rules switch) keeps running until it ends.
@@ -977,7 +979,14 @@ func closeOnSwitch(old *config.BuildResult, next *profile.Profile, candidate *co
 		}
 	}
 	return func(nextEngine engine, item trackedView) bool {
-		if old != nil {
+		// The node the routing kernel attributed the connection to, by its
+		// own build; without one (an engine without per-kernel attribution)
+		// the previous build's tags stand in.
+		if item.nodeID != "" {
+			if !nodes[item.nodeID] {
+				return true
+			}
+		} else if old != nil {
 			for _, tag := range append([]string{item.outboundTag}, item.route...) {
 				if node, ok := old.OutboundNodes[tag]; ok && !nodes[node] {
 					return true

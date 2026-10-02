@@ -742,6 +742,16 @@ func TestApplyReachesConnectionsOfOlderKernels(t *testing.T) {
 	if _, err := f.core.ApplyProfile(f.profile("r2", []string{"a", "b"}, nil), time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// Each connection carries the node its kernel routed it to.
+	layered := f.core.engine.(*layeredEngine)
+	recorded := map[string]bool{}
+	for _, item := range layered.tracker.generation(1) {
+		recorded[item.nodeID] = true
+	}
+	if !recorded["a"] || !recorded["b"] {
+		t.Fatalf("node IDs recorded by kernel 1: %v", recorded)
+	}
+
 	if switched := f.next(t, EventKernelSwitched, 5*time.Second); switched.KeptConnections != 2 || switched.ClosedConnections != 0 || switched.DrainingKernels != 1 {
 		t.Fatalf("first switch: %#v", switched)
 	}
