@@ -1,0 +1,31 @@
+[package]
+name = "ppvpn-cli"
+version = "0.0.0"
+description = "PeakPass VPN command-line client: a local HTTP/SOCKS5 proxy driven by ppvpn-core"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "ppvpn_cli"
+
+[[bin]]
+name = "ppvpn"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
+clap_complete = "4"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# musl's allocator costs about 2.5x the CPU of glibc's under high throughput
+# (sail's measurement), so static Linux builds use mimalloc.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"

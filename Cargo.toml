@@ -2,7 +2,7 @@
 # process by Desktop and the CLI. The Go core (cmd/, internal/, ...) stays
 # frozen at v0.5.21 beside it until the hosts switch over.
 [workspace]
-members = ["crates/ppvpn-core"]
+members = ["crates/ppvpn-core", "crates/ppvpn-cli"]
 resolver = "2"
 
 [workspace.package]
