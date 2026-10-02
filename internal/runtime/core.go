@@ -131,8 +131,11 @@ type Core struct {
 	// reprobe debounces host IPv6 re-probes after default interface changes
 	// (see defaultInterfaceChanged).
 	reprobeMu    sync.Mutex
-	reprobeTimer *time.Timer
+	reprobeStop  func() bool
 	reprobeDelay time.Duration
+	// reprobeAfter schedules f after d and returns its stop function
+	// (time.AfterFunc); tests replace it to fire the probe by hand.
+	reprobeAfter func(d time.Duration, f func()) (stop func() bool)
 	// routingMode is the mode the active profile was applied in.
 	routingMode RoutingMode
 	// pins maps a node ID to the endpoint_key it is pinned to (PinIngress).
@@ -195,6 +198,7 @@ func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core
 		hostIPv6:             hostipv6.Available,
 		hostIPv6Route:        hostIPv6Route,
 		reprobeDelay:         ReprobeDelay,
+		reprobeAfter:         func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop },
 		log:                  corelog.Discard(),
 		reverse:              reversemap.New(),
 	}
@@ -742,8 +746,8 @@ func (c *Core) Stop() error {
 	c.engine, c.cancel = nil, nil
 	c.mu.Unlock()
 	c.reprobeMu.Lock()
-	if c.reprobeTimer != nil {
-		c.reprobeTimer.Stop()
+	if c.reprobeStop != nil {
+		c.reprobeStop()
 	}
 	c.reprobeMu.Unlock()
 	if instance == nil {
@@ -849,10 +853,10 @@ func (c *Core) defaultInterfaceChanged() {
 	}
 	c.reprobeMu.Lock()
 	defer c.reprobeMu.Unlock()
-	if c.reprobeTimer != nil {
-		c.reprobeTimer.Stop()
+	if c.reprobeStop != nil {
+		c.reprobeStop()
 	}
-	c.reprobeTimer = time.AfterFunc(c.reprobeDelay, c.reprobeHostIPv6)
+	c.reprobeStop = c.reprobeAfter(c.reprobeDelay, c.reprobeHostIPv6)
 }
 
 // reprobeHostIPv6 probes the host's IPv6 path again and, when it differs from
