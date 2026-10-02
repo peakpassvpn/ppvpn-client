@@ -479,3 +479,75 @@ func TestFullRestartReasons(t *testing.T) {
 		}
 	}
 }
+
+// fakeSwap is an engine that can swap kernels; its full-restart decision is
+// the layered engine's real whitelist over the options it runs.
+type fakeSwap struct {
+	options  option.Options
+	swaps    int
+	restarts []string
+}
+
+func (f *fakeSwap) Start() error { return nil }
+func (f *fakeSwap) Close() error { return nil }
+func (f *fakeSwap) fullRestartReasons(options option.Options) []string {
+	reasons := (&layeredEngine{inbounds: f.options.Inbounds, route: f.options.Route}).fullRestartReasons(options)
+	f.restarts = append(f.restarts, strings.Join(reasons, "; "))
+	return reasons
+}
+func (f *fakeSwap) swap(_ context.Context, options option.Options, prepare func(engine), _ func(engine, trackedView) bool) (kernelEvent, error) {
+	f.options = options
+	f.swaps++
+	return kernelEvent{Switched: true}, nil
+}
+func (f *fakeSwap) drainingKernels() int             { return 0 }
+func (f *fakeSwap) setKernelEvents(func(kernelEvent)) {}
+
+// With the host's IPv6 state unchanged, a TUN apply is a kernel switch: the
+// no-IPv6-path build (direct wrapped, direct-host resolving IPv4 only, see
+// #48) changes outbounds, never the listeners. A change of the IPv6 path
+// alone is still a switch; disabling IPv6 changes the TUN and restarts.
+func TestTUNApplyWithoutIPv6PathSwitchesKernels(t *testing.T) {
+	var engines []*fakeSwap
+	core := newCore(profile.PlatformCapabilities{Platform: "windows", TUN: profile.TUNCapabilities{Enabled: true}}, func(_ context.Context, options option.Options) (engine, error) {
+		e := &fakeSwap{options: options}
+		engines = append(engines, e)
+		return e, nil
+	})
+	core.hostIPv6 = func() bool { return true }
+	route := false
+	core.hostIPv6Route = func() (bool, error) { return route, nil }
+	if _, err := core.ApplyProfile(testProfile("r1", "edge.example.com", "8.8.8.8"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for _, revision := range []string{"r2", "r3"} {
+		if _, err := core.ApplyProfile(testProfile(revision, "edge.example.com", "8.8.8.8"), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(engines) != 1 || engines[0].swaps != 2 || strings.Join(engines[0].restarts, "") != "" {
+		t.Fatalf("engines %d, swaps %d, restart reasons %q", len(engines), engines[0].swaps, engines[0].restarts)
+	}
+	if !core.built.DirectIPv6HandOff {
+		t.Fatal("build is not the no-IPv6-path one: the test does not cover direct-host")
+	}
+	// The host gains an IPv6 path: outbounds only, still a switch.
+	route = true
+	if _, err := core.ApplyProfile(testProfile("r4", "edge.example.com", "8.8.8.8"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(engines) != 1 || engines[0].swaps != 3 || core.built.DirectIPv6HandOff {
+		t.Fatalf("after the IPv6 path appeared: engines %d swaps %d handoff %v", len(engines), engines[0].swaps, core.built.DirectIPv6HandOff)
+	}
+	// IPv6 disabled on the host: the TUN loses its IPv6 address, restart.
+	core.hostIPv6 = func() bool { return false }
+	if _, err := core.ApplyProfile(testProfile("r5", "edge.example.com", "8.8.8.8"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(engines) != 2 || engines[0].restarts[len(engines[0].restarts)-1] != "tun options changed" {
+		t.Fatalf("after IPv6 was disabled: engines %d, last reasons %q", len(engines), engines[0].restarts)
+	}
+}
