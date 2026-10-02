@@ -342,4 +342,72 @@ mod tests {
         let status = serde_json::to_value(Status::default()).unwrap();
         assert_eq!(status["state"], "stopped");
     }
+
+    /// The whole `Status` JSON is a contract: the CLI's `--json` passes it
+    /// through. The state's tag and its fields sit at the top level, beside
+    /// the other fields (flatten); empty optional fields are left out.
+    #[test]
+    fn status_json_shape_is_fixed() {
+        use crate::request::RoutingMode;
+        use crate::status::{DegradedReason, FatalReason, IngressHealth, NodeStatus, TunRouting};
+        let status = Status {
+            state: EngineState::Degraded {
+                reasons: vec![
+                    DegradedReason::PinnedLineDown {
+                        node_id: "jp".into(),
+                        endpoint_key: "jp-2".into(),
+                    },
+                    DegradedReason::NoDefaultInterface,
+                ],
+            },
+            revision: Some("r7".into()),
+            routing_mode: Some(RoutingMode::Global),
+            selected_node_id: Some("jp".into()),
+            node_count: 1,
+            nodes: vec![NodeStatus {
+                node_id: "jp".into(),
+                pinned_endpoint_key: Some("jp-2".into()),
+                ingresses: vec![IngressHealth {
+                    endpoint_key: "jp-2".into(),
+                    role: "backup".into(),
+                    label: String::new(),
+                    healthy: Some(false),
+                    last_check_at: None,
+                    consecutive_failures: 3,
+                    active: true,
+                }],
+            }],
+            draining_kernels: 1,
+            tun_routing: Some(TunRouting::Ok),
+            ..Status::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&status).unwrap(),
+            concat!(
+                r#"{"state":"degraded","reasons":[{"kind":"pinned_line_down","node_id":"jp","endpoint_key":"jp-2"},{"kind":"no_default_interface"}],"#,
+                r#""revision":"r7","routing_mode":"global","selected_node_id":"jp","node_count":1,"#,
+                r#""nodes":[{"node_id":"jp","pinned_endpoint_key":"jp-2","ingresses":[{"endpoint_key":"jp-2","role":"backup","healthy":false,"consecutive_failures":3,"active":true}]}],"#,
+                r#""system_proxy":{"available":false,"enabled":false,"listening":false},"#,
+                r#""draining_kernels":1,"tun_routing":"ok","dropped_log_lines":0}"#
+            )
+        );
+        let fatal = Status {
+            state: EngineState::Fatal {
+                reason: FatalReason::TunRoutingBroken {
+                    missing: vec!["9101/v4 nop".into()],
+                },
+            },
+            ..Status::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&fatal).unwrap(),
+            concat!(
+                r#"{"state":"fatal","reason":{"kind":"tun_routing_broken","missing":["9101/v4 nop"]},"node_count":0,"#,
+                r#""system_proxy":{"available":false,"enabled":false,"listening":false},"draining_kernels":0,"dropped_log_lines":0}"#
+            )
+        );
+        // And it reads back.
+        let back: Status = serde_json::from_str(&serde_json::to_string(&status).unwrap()).unwrap();
+        assert_eq!(back, status);
+    }
 }
