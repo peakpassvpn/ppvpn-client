@@ -21,19 +21,25 @@ conf() { # server JSON
    {"type":"direct","tag":"dns-in","listen":"127.0.0.1","listen_port":5355,"network":"udp"}],
  "outbounds":[{"type":"direct","tag":"direct"}],
  "route":{"rules":[{"inbound":"dns-in","action":"hijack-dns"},{"inbound":"tun","action":"sniff"},{"protocol":"dns","action":"hijack-dns"}],
-  "final":"direct","auto_detect_interface":true},
- "api":$(api_json 7912)}
+  "final":"direct","auto_detect_interface":true}$API}
 J
 }
+# The runtime API (for the reload in E5) is Sail's; sing-box has none and is
+# restarted instead.
+API=''; [ "$ENGINE" = sail ] && API=",\"api\":$(api_json 7912)"
 tunif() { ip -o -4 addr show | awk '/ 172\.19\.0\.1\// {print $2}'; }
 q() { dig +nocookie +tries=1 +time=6 -p 5355 @127.0.0.1 split.lab.test A +short 2>&1 | head -1; }
-cap_start() { tcpdump -n -l -i any "port 53 or port 853" > /tmp/b7cap.txt 2>/dev/null & CP=$!; sleep 1; }
-cap_stop() { sleep 1; kill $CP 2>/dev/null; sleep 0.3; }
-count() { grep -cE "$1" /tmp/b7cap.txt || true; }  # tcpdump -i any prints the interface first
+# One capture per interface (the TUN and every ethN), so a count says where
+# a packet went: tcpdump -i any does not name the interface on every build.
+cap_start() { rm -f /tmp/b7cap-*.txt; for i in $(tunif) $(ls /sys/class/net | grep '^eth'); do
+  tcpdump -n -l -i $i "port 53 or port 853" > /tmp/b7cap-$i.txt 2>/dev/null & done; sleep 1; }
+cap_stop() { sleep 1; pkill -x tcpdump 2>/dev/null; sleep 0.3; }
+count() { # interface, address.port: packets sent to it there
+  [ -n "$1" ] && [ -f /tmp/b7cap-$1.txt ] && grep -c "> $2:" /tmp/b7cap-$1.txt || echo 0; }
 case_d() { # name, server JSON, server address
   conf "$2"; run_engine /tmp/b7.json $OUT/b7-$TAG-$1.log.full; T=$(tunif)
   cap_start; r=$(q); cap_stop
-  echo "D $1: answer=${r:-FAILED} on-tun=$(count "^$T .*> $3") on-eth0=$(count "^eth0 .*> $3")   (want an answer, on-tun 0)"
+  echo "D $1: answer=${r:-FAILED} on-tun=$(count "$T" "$3") on-eth0=$(count eth0 "$3")   (want an answer, on-tun 0, on-eth0 > 0)"
   stop_engine
 }
 {
@@ -42,6 +48,10 @@ ip route replace default dev eth0
 case_d udp '{"type":"udp","tag":"d","server":"198.51.100.54"}' '198.51.100.54.53'
 case_d tcp '{"type":"tcp","tag":"d","server":"198.51.100.54"}' '198.51.100.54.53'
 case_d tls '{"type":"tls","tag":"d","server":"198.51.100.53","tls":{"enabled":true,"server_name":"one.one.one.one"}}' '198.51.100.53.853'
+# `local` (the system's servers, resolv.conf -> .54): the original B7 case,
+# and the capture's positive control while it still loops (Sail 0.16.0:
+# on-tun > 0).
+case_d local '{"type":"local","tag":"d"}' '198.51.100.54.53'
 # E5: switch the default interface while the TUN runs, then swap the server
 # (the engine would re-read the new network's resolver).
 conf '{"type":"udp","tag":"d","server":"198.51.100.54"}'; run_engine /tmp/b7.json $OUT/b7-$TAG-e5.log.full; T=$(tunif)
@@ -56,7 +66,7 @@ conf '{"type":"udp","tag":"d","server":"203.0.113.54"}'
 code=$(api_curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:7912/api/v1/runtime/reload 2>/dev/null)
 [ "$ENGINE" = sing-box ] && { stop_engine; run_engine /tmp/b7.json $OUT/b7-$TAG-e5b.log.full; T=$(tunif); code=restart; }
 sleep 2; cap_start; r=$(q); cap_stop
-echo "E5 after switch to eth1 + server 203.0.113.54 (reload $code): answer=${r:-FAILED} on-tun=$(count "^$T .*> 203.0.113.54.53") on-eth1=$(count "^eth1 .*> 203.0.113.54.53") on-eth0=$(count "^eth0 .*> 203.0.113.54.53")   (want 203.0.113.60, on-tun 0, via eth1)"
+echo "E5 after switch to eth1 + server 203.0.113.54 (reload $code): answer=${r:-FAILED} on-tun=$(count "$T" 203.0.113.54.53) on-eth1=$(count eth1 203.0.113.54.53) on-eth0=$(count eth0 203.0.113.54.53)   (want 203.0.113.60, on-tun 0, on-eth1 > 0)"
 for i in $(seq 20); do [ -s /tmp/b7-held.txt ] && break; sleep 0.5; done
 held=$(cat /tmp/b7-held.txt 2>/dev/null); [ "$ENGINE" = sing-box ] && held="n/a (sing-box restarted: $held)"
 echo "E5 held connection across the reload: ${held:-none}   (want http=200, bytes >= 55000, no error)"
