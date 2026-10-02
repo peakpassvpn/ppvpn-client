@@ -128,6 +128,11 @@ type Core struct {
 	// hostIPv6Route probes whether the host has an IPv6 path of its own
 	// (hostipv6.Route); tests replace it.
 	hostIPv6Route func() (bool, error)
+	// reprobe debounces host IPv6 re-probes after default interface changes
+	// (see defaultInterfaceChanged).
+	reprobeMu    sync.Mutex
+	reprobeTimer *time.Timer
+	reprobeDelay time.Duration
 	// routingMode is the mode the active profile was applied in.
 	routingMode RoutingMode
 	// pins maps a node ID to the endpoint_key it is pinned to (PinIngress).
@@ -189,6 +194,7 @@ func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core
 		flowAuthorizationOK:  keyOK,
 		hostIPv6:             hostipv6.Available,
 		hostIPv6Route:        hostIPv6Route,
+		reprobeDelay:         ReprobeDelay,
 		log:                  corelog.Discard(),
 		reverse:              reversemap.New(),
 	}
@@ -735,6 +741,11 @@ func (c *Core) Stop() error {
 	instance, cancel := c.engine, c.cancel
 	c.engine, c.cancel = nil, nil
 	c.mu.Unlock()
+	c.reprobeMu.Lock()
+	if c.reprobeTimer != nil {
+		c.reprobeTimer.Stop()
+	}
+	c.reprobeMu.Unlock()
 	if instance == nil {
 		return nil
 	}
@@ -809,7 +820,7 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 	timer.mark("engine_start")
 	if err == nil {
 		if watcher, ok := instance.(interfaceWatchEngine); ok {
-			watcher.watchDefaultInterface(c.log)
+			watcher.watchDefaultInterface(c.log, c.defaultInterfaceChanged)
 		}
 	}
 	if err != nil {
@@ -822,6 +833,81 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 		return nil, nil, stageError(stage, err)
 	}
 	return instance, cancel, nil
+}
+
+// ReprobeDelay is how long the default interface must stay unchanged before
+// the host's IPv6 path is probed again: a Wi-Fi switch reports a loss and a
+// new interface in quick succession.
+const ReprobeDelay = 2 * time.Second
+
+// defaultInterfaceChanged is called on every default interface change of a
+// running TUN engine. It (re)arms one timer, so a burst of changes leads to
+// one probe ReprobeDelay after the last of them.
+func (c *Core) defaultInterfaceChanged() {
+	if !c.platform.TUN.Enabled {
+		return
+	}
+	c.reprobeMu.Lock()
+	defer c.reprobeMu.Unlock()
+	if c.reprobeTimer != nil {
+		c.reprobeTimer.Stop()
+	}
+	c.reprobeTimer = time.AfterFunc(c.reprobeDelay, c.reprobeHostIPv6)
+}
+
+// reprobeHostIPv6 probes the host's IPv6 path again and, when it differs from
+// the running build's, rebuilds the active profile as a reload would. The
+// path only changes outbounds (see config.BuildOptions.NoHostIPv6Route), so
+// the rebuild is a kernel switch and keeps connections. It holds the
+// operation lock like apply: an apply that ran in between built for the
+// current state already, and then nothing changes here.
+func (c *Core) reprobeHostIPv6() {
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	c.mu.RLock()
+	instance, built, active := c.engine, c.built, c.active
+	allowedHosts, mode := c.allowedRuleSetHosts, c.routingMode
+	c.mu.RUnlock()
+	if instance == nil || built == nil || active == nil {
+		return
+	}
+	disable, noRoute := c.hostIPv6State()
+	if disable || noRoute == built.DirectIPv6HandOff {
+		// Unchanged; a host that disabled IPv6 changes the TUN itself and is
+		// left to the next apply or start.
+		return
+	}
+	clone, err := cloneProfile(active)
+	if err != nil {
+		c.log.Error("host ipv6 changed", "error", err)
+		return
+	}
+	_, err = c.applyProfileLocked(clone, time.Now(), allowedHosts, mode, true)
+	c.mu.RLock()
+	after := c.engine
+	c.mu.RUnlock()
+	switchKind := "kernel"
+	if after != instance {
+		switchKind = "full_restart"
+	}
+	fields := []any{"previous_host_ipv6_route", !built.DirectIPv6HandOff, "host_ipv6_route", !noRoute,
+		"previous_policy", hostIPv6Policy(true, !built.DirectIPv6HandOff), "policy", hostIPv6Policy(true, !noRoute)}
+	if err != nil {
+		c.log.Error("host ipv6 changed", append(fields, "rebuilt", false, "error", err)...)
+		return
+	}
+	c.log.Info("host ipv6 changed", append(fields, "rebuilt", true, "switch", switchKind)...)
+}
+
+// hostIPv6Policy names what a build does with IPv6 (see hostIPv6State).
+func hostIPv6Policy(enabled, route bool) string {
+	switch {
+	case !enabled:
+		return "tun_ipv4_only"
+	case !route:
+		return "tun_ipv6_direct_ipv4"
+	}
+	return "tun_ipv6"
 }
 
 // hostIPv6State probes the host's IPv6 for a TUN build: disable leaves IPv6
@@ -842,14 +928,7 @@ func (c *Core) hostIPv6State() (disable, noRoute bool) {
 			c.log.Warn("host ipv6 route probe failed", "error", err, "assumed_route", route)
 		}
 	}
-	policy := "tun_ipv6"
-	switch {
-	case !enabled:
-		policy = "tun_ipv4_only"
-	case !route:
-		policy = "tun_ipv6_direct_ipv4"
-	}
-	c.log.Info("host ipv6", "host_ipv6_enabled", enabled, "host_ipv6_route", route, "policy", policy)
+	c.log.Info("host ipv6", "host_ipv6_enabled", enabled, "host_ipv6_route", route, "policy", hostIPv6Policy(enabled, route))
 	return !enabled, enabled && !route
 }
 

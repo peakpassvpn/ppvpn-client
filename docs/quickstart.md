@@ -82,6 +82,9 @@ mkdir -m 700 "$APP_STATE"
   `host_ipv6_route`（是否有全局单播 IPv6 地址 + IPv6 默认路由）、`policy`（`tun_ipv6`；
   `tun_ipv6_direct_ipv4` 表示无 IPv6 出口，直连的 IPv6 目标改按域名走 IPv4；`tun_ipv4_only` 表示主机
   关闭了 IPv6）。路由探测失败时另记一行 warn `msg="host ipv6 route probe failed"`，按有出口处理。
+  默认网卡变化后（防抖 2 秒）也会重新探测；结果变了就热切换内核，记一行
+  `msg="host ipv6 changed"`：`previous_host_ipv6_route`、`host_ipv6_route`、`previous_policy`、
+  `policy`、`rebuilt`、`switch`（应为 `kernel`；如果出现 `full_restart`，说明有 bug）。
   详见 [security.md](security.md#ipv6)。
 
 - `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：

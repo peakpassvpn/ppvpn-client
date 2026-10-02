@@ -46,9 +46,10 @@ type directEngine interface {
 }
 
 // interfaceWatchEngine logs the default interface sing-box binds outbound
-// sockets to (auto_detect_interface), at start and on every change.
+// sockets to (auto_detect_interface), at start and on every change, and calls
+// changed (when not nil) after each change.
 type interfaceWatchEngine interface {
-	watchDefaultInterface(log *corelog.Logger)
+	watchDefaultInterface(log *corelog.Logger, changed func())
 }
 
 // connectionLogEngine writes a debug line per routed connection.
@@ -94,7 +95,7 @@ func (e *singEngine) removeInbound(tag string) error {
 
 func (e *singEngine) setConnectionLog(log *corelog.Logger) { e.tracker.log.Store(log) }
 
-func (e *singEngine) watchDefaultInterface(log *corelog.Logger) {
+func (e *singEngine) watchDefaultInterface(log *corelog.Logger, changed func()) {
 	manager := service.FromContext[adapter.NetworkManager](e.ctx)
 	if manager == nil {
 		return
@@ -107,6 +108,9 @@ func (e *singEngine) watchDefaultInterface(log *corelog.Logger) {
 	logDefaultInterface(log, "start", monitor.DefaultInterface())
 	monitor.RegisterCallback(func(defaultInterface *control.Interface, _ int) {
 		logDefaultInterface(log, "changed", defaultInterface)
+		if changed != nil {
+			changed()
+		}
 	})
 }
 
