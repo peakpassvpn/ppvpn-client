@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"net"
 	"strings"
 	"sync"
@@ -134,6 +135,9 @@ type Core struct {
 	// log is the first-party diagnostic log (phase timings; per-connection
 	// lines at debug level).
 	log *corelog.Logger
+	// reverse is the address → domain mapping of DNS answers, shared by every
+	// kernel so a kernel switch keeps it.
+	reverse *reversemap.Store
 }
 
 // SetLogger sets the diagnostic log. It must be called before the first
@@ -186,6 +190,7 @@ func newCore(platform profile.PlatformCapabilities, factory engineFactory) *Core
 		hostIPv6:             hostipv6.Available,
 		hostIPv6Route:        hostIPv6Route,
 		log:                  corelog.Discard(),
+		reverse:              reversemap.New(),
 	}
 	core.ruleSets = rulesets.New(core.ruleSetOptions(""))
 	return core
@@ -862,6 +867,10 @@ func (c *Core) kernelContext(candidate *config.BuildResult) context.Context {
 	ctx := context.Background()
 	ctx = failover.WithSwitchObserver(ctx, c.ingressObserver(candidate))
 	ctx = dnstransport.WithLogger(ctx, c.log)
+	if c.platform.TUN.Enabled {
+		// Only the TUN configuration turns dns.reverse_mapping on.
+		ctx = reversemap.WithStore(ctx, c.reverse)
+	}
 	return outboundlog.WithLogger(ctx, c.log, outboundIngresses(candidate))
 }
 

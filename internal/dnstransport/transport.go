@@ -15,6 +15,7 @@ package dnstransport
 import (
 	"context"
 	"errors"
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"io"
 	"net"
 	"strings"
@@ -86,11 +87,11 @@ func wrap[T any](constructor dns.TransportConstructorFunc[T]) dns.TransportConst
 		if err != nil {
 			return nil, err
 		}
-		l, guarded := loggerFrom(ctx), tag == GuardedTag
-		if l == nil && !guarded {
+		l, guarded, store := loggerFrom(ctx), tag == GuardedTag, reversemap.FromContext(ctx)
+		if l == nil && !guarded && store == nil {
 			return inner, nil
 		}
-		w := &wrapped{DNSTransport: inner, log: l, guarded: guarded}
+		w := &wrapped{DNSTransport: inner, log: l, guarded: guarded, store: store}
 		if guarded {
 			w.manager = service.FromContext[adapter.DNSTransportManager](ctx)
 		}
@@ -104,6 +105,9 @@ type wrapped struct {
 	adapter.DNSTransport
 	log     *corelog.Logger
 	guarded bool
+	// store is the core's reverse mapping, shared by every kernel (nil
+	// records nothing).
+	store *reversemap.Store
 	// inflight and lastSuccess (unix nanoseconds) drive the idle reset.
 	inflight    atomic.Int32
 	lastSuccess atomic.Int64
@@ -292,14 +296,18 @@ var staleErrors = append([]error{io.EOF, io.ErrUnexpectedEOF, io.ErrClosedPipe, 
 // Start, Close and Reset reach the guarded transport only: sing-box manages
 // the fallbacks as servers of their own.
 
-// attempt runs one exchange on upstream and logs it at debug level, with the
-// upstream's tag as server. attempt is 0 for an unguarded transport.
+// attempt runs one exchange on upstream, records its answers in the shared
+// reverse mapping, and logs it at debug level, with the upstream's tag as
+// server. attempt is 0 for an unguarded transport.
 func (w *wrapped) attempt(ctx context.Context, upstream adapter.DNSTransport, message *mDNS.Msg, attempt int) (*mDNS.Msg, error) {
-	if !w.log.DebugEnabled() {
-		return upstream.Exchange(ctx, message)
-	}
 	started := time.Now()
 	response, err := upstream.Exchange(ctx, message)
+	if err == nil {
+		w.store.Record(response)
+	}
+	if !w.log.DebugEnabled() {
+		return response, err
+	}
 	name, qtype := "", ""
 	if len(message.Question) > 0 {
 		name, qtype = message.Question[0].Name, mDNS.TypeToString[message.Question[0].Qtype]
