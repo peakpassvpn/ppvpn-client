@@ -31,17 +31,33 @@ type testServer struct {
 	tcp      chan struct{}
 }
 
+// listenUDPAndTCP opens a UDP and a TCP listener on the same loopback port
+// (a truncated answer is asked again over TCP at the same address). The
+// port the UDP bind got may be taken for TCP by another socket: then both
+// are dropped and another port tried.
+func listenUDPAndTCP(t *testing.T) (net.PacketConn, net.Listener, int) {
+	t.Helper()
+	var lastErr error
+	for range 20 {
+		packet, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := packet.LocalAddr().(*net.UDPAddr).Port
+		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err == nil {
+			return packet, listener, port
+		}
+		packet.Close()
+		lastErr = err
+	}
+	t.Fatalf("no loopback port free for both UDP and TCP: %v", lastErr)
+	return nil, nil, 0
+}
+
 func startServer(t *testing.T, answer string, truncate, stray bool) *testServer {
 	t.Helper()
-	packet, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := packet.LocalAddr().(*net.UDPAddr).Port
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	packet, listener, port := listenUDPAndTCP(t)
 	t.Cleanup(func() { packet.Close(); listener.Close() })
 	s := &testServer{addr: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)), answer: netip.MustParseAddr(answer), truncate: truncate, stray: stray, tcp: make(chan struct{}, 4)}
 	go func() {
