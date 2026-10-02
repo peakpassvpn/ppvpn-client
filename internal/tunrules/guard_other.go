@@ -1,9 +1,9 @@
-//go:build !linux
+//go:build !linux || android
 
 package tunrules
 
-// Only Linux routes the TUN by policy rules; elsewhere there is nothing to
-// guard.
+// Only desktop Linux routes the TUN by policy rules sing-tun installs;
+// elsewhere (Android's TUN is the VpnService's) there is nothing to guard.
 
 type Logger interface {
 	Info(msg string, fields ...any)
