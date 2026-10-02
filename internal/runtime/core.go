@@ -908,9 +908,20 @@ func (c *Core) defaultInterfaceChanged(defaultInterface *control.Interface) {
 // the rebuild is a kernel switch and keeps connections. It holds the
 // operation lock like apply: an apply that ran in between built for the
 // current state already, and then nothing changes here.
+//
+// While the engine knows there is no default interface it does nothing: the
+// IPv6 path is "lost" only because every path is, and a kernel built then
+// starts without a default interface of its own (on Linux it was seen to
+// keep failing dials for seconds after the link came back, until the next
+// switch replaced it). The build keeps its policy through the outage; the
+// change that brings the network back arms the next probe.
 func (c *Core) reprobeHostIPv6() {
 	c.operation.Lock()
 	defer c.operation.Unlock()
+	if c.offline() {
+		c.log.Debug("host ipv6 re-probe skipped", "reason", "no default interface")
+		return
+	}
 	c.mu.RLock()
 	instance, built, active := c.engine, c.built, c.active
 	allowedHosts, mode := c.allowedRuleSetHosts, c.routingMode
