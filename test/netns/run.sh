@@ -23,14 +23,19 @@ BIN=$(realpath "${1:?usage: run.sh <test binary> [test flags]}"); shift
 T=ppvpn-t; W=ppvpn-w
 OUT=${NETNS_OUT:-$(mktemp -d)}
 
+# Only what a test could leave behind is compared; values the host changes by
+# itself are left out: nftables counters and quotas (the runner's own rules
+# count its traffic), routes' remaining lifetimes (RA routes count down),
+# link statistics (only link names are listed).
+volatile() { sed -E 's/ expires [0-9]+sec//g; s/counter packets [0-9]+ bytes [0-9]+/counter/g; s/quota (over )?[0-9]+ [a-z]+( used [0-9]+ [a-z]+)?/quota/g'; }
 snapshot() { # file
 	{
 		echo "## ip -4 rule"; ip -4 rule show
 		echo "## ip -6 rule"; ip -6 rule show
-		echo "## ip -4 route (all tables)"; ip -4 route show table all | grep -vE '^(local|broadcast) ' || true
-		echo "## ip -6 route (all tables)"; ip -6 route show table all | grep -vE '^(local|multicast|anycast) |expires' || true
+		echo "## ip -4 route (all tables)"; ip -4 route show table all | grep -vE '^(local|broadcast) ' | volatile || true
+		echo "## ip -6 route (all tables)"; ip -6 route show table all | grep -vE '^(local|multicast|anycast) ' | volatile || true
 		echo "## links"; ip -o link show | awk -F': ' '{print $2}' | sed 's/@.*//' | sort
-		echo "## nft"; nft list ruleset 2>/dev/null || echo "(nft unavailable)"
+		echo "## nft"; { nft -s list ruleset 2>/dev/null || echo "(nft unavailable)"; } | volatile
 		echo "## resolv.conf"; sha256sum /etc/resolv.conf 2>/dev/null || echo "(none)"
 		echo "## resolvectl dns"; resolvectl dns 2>/dev/null || echo "(no systemd-resolved)"
 		echo "## resolvectl domain"; resolvectl domain 2>/dev/null || true
