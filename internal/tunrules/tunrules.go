@@ -41,7 +41,7 @@ type Rule struct {
 	IifName, OifName  string
 	Mark              uint32
 	MarkSet           bool
-	Mask              int
+	Mask              int64 // a uint32, or -1; int64 so 0xffffffff fits on 32-bit
 	Invert            bool
 	Dport, Sport      *PortRange
 	UIDRange          *UIDRange
