@@ -131,6 +131,11 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
   - `default_node_id` 不存在时，报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate` 一致。Go 0.5.21 在这种情况下会接受，见 `docs/rust-parity.md`。
   - 后端保证 `default_node_id` 指向下发的节点之一（`nodes[0]`），所以被拒只会发生在异常的 Profile 上。
   - 校验通过后选节点：传入的 `selected_node_id` 仍在新 Profile 里就用它；不在（或没有传）就用 `default_node_id`，传了却不在时 `selection_reset=true`。不再看实例内部"当前选中的节点"，所以重建实例和不重建的结果一样。
+- **过期**（`expires_at`，与 Go 0.5.21 相同）：
+  - 只在校验时检查：已过期的 Profile 在 apply 和 `validate` 时报 `PROFILE_EXPIRED`（field=`expires_at`，retryable=false；golden 见 `validation.json` 的 `profile_expired`）。
+  - 运行中越过 `expires_at` 时，引擎**不会**主动停止，也不会拒绝转发，已生效的配置继续工作。
+  - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
+  - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
 - **规则集**：apply 前会准备规则集，总共最多等 10 秒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
 - **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
@@ -199,6 +204,7 @@ pub async fn set_system_proxy_listener(&self, enabled: bool) -> Result<SystemPro
 ```
 
 - **凭据接口分开**：按节点的凭据和 routed 凭据分别读取。metadata 不含密码，只有原生凭据面板才读凭据。
+- **`state_dir` 里有什么**：只有规则集缓存和本地代理状态（prefix、密码、端口）。**不保存 Profile 原文**，Profile 只在内存里。宿主同样可以只把 Profile 放在内存里，不落盘，因为里面有节点凭据。
 - **持久化**：prefix、密码和端口在 `new` 时生成或读取，存在 `state_dir` 里，重启和升级后保持不变，不在每次启动时重新生成。
 - **端口**：
   - 优先级依次为：持久化的端口、`EngineConfig` 里的首选端口、7890、任意空闲端口。`preferred_port=0` 表示直接用任意空闲端口，供测试用。
@@ -366,6 +372,12 @@ pub struct Error {
 - 拉取 Profile 失败时，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。后端的口径见 proxy-profile 格式文档（ingress-endpoints.md）：
   - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）；
   - **500**：违反客户端契约，或者规则集读不出来。
+- **续用的硬上限**：保留上一份 Profile 最多到它自己的 `expires_at`。过期后不能再用：宿主停止续用并提示用户，因为引擎在运行中不会自己因为过期而停止（第 4.1 节）。
+- **对 `ppvpn-account` 的要求**：拉取错误分成三类，宿主按类别处理：
+  - **暂时性错误**（网络错误、5xx、超时）：保留上一份 Profile（以 `expires_at` 为限），退避重试；
+  - **无可用服务**（404）：保留上一份 Profile（以 `expires_at` 为限），提示用户；
+  - **需要重新登录**（刷新令牌后仍然 401，或者 403）：不再续用旧 Profile，要求用户重新登录。
+- **Profile 只放内存**：宿主可以不把 Profile 写到磁盘，因为里面有节点凭据；引擎的 `state_dir` 里也不保存 Profile 原文（第 4.6 节）。
 
 ## 10. 日志
 
@@ -426,4 +438,8 @@ pub struct Error {
 - **Desktop G**：new 阶段能确定的失败直接返回错误，不进入 `Fatal`。
 - **Desktop 第 14 节第 2 项**：不照搬"稳定期"，改为第 9 节的两条保证。
 
+- **CLI 补充**（不阻塞合并）：
+  - Profile 续用以它自己的 `expires_at` 为硬上限，并写清了 Go 版在运行中越过 `expires_at` 时的行为（第 4.1 节）；
+  - `ppvpn-account` 的错误分三类：暂时性错误、无可用服务、需要重新登录；
+  - Profile 只放内存，`state_dir` 不保存 Profile 原文（第 4.6 节、第 9 节）。
 - **Desktop H**：Backend 确认 `default_node_id` 一定存在，并且固定为 `nodes[0]`；有实例的入口一个都渲染不出来时返回错误，`nodes` 为空时返回 404，不会下发残缺或空的 Profile。已写进第 4.1 节和第 9 节（第 9 节附了后端 404 和 500 的口径）。
