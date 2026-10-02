@@ -100,9 +100,25 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
   规则（TUN 的嗅探、DNS 劫持、fake-ip 拒绝、入口直连）不受影响；流分类（`classifyFlow`）与 sing-box 路由使用
   同一份规则。
 - 去重键是 `(revision, routing_mode)`：只改 `routing_mode` 的 `apply-profile` 会重新应用同一个 Profile，宿主切换
-  模式时直接调用即可，无需重连。运行中的应用会替换引擎：监听端口不变，但已建立的连接会断开。
+  模式时直接调用即可，无需重连。运行中的应用不断开已建立的连接，见下文「运行中 apply 不断连」。
 - 规则集刷新触发的重建和 `reload` 沿用当前模式；`get-status` 的 `routing_mode` 返回当前生效的模式（尚未应用
   Profile 时省略）。
+
+**运行中 apply 不断连（0.5.17 起）。** 核心运行时，`apply-profile`、`reload` 与规则集重建都不再重启引擎：监听端口与
+TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「内核」里。新 Profile 先启动一个新内核，成功后新连接立即
+走新内核；已建立的连接留在旧内核里直到自然结束，最长 10 分钟后旧内核关闭（仍未结束的连接此时断开）。
+
+- 只断开新 Profile 不再允许的连接：所走节点已被删除、以本地代理中已被删除的节点用户名进来的、或新规则判为
+  `reject` 的（按新内核的 sing-box 规则匹配，含规则集）。改走其他节点、由代理改为直连、`rules` 与 `global`
+  互切等「放宽」的变化不影响已有连接。
+- 新内核启动失败时 `apply-profile` 返回错误，旧内核与连接完全不受影响，Profile 不变（与之前的回滚语义一致）。
+  新内核启动成功后的问题（例如新节点不可达）不会自动回滚，宿主重新 apply 上一个 Profile 即可，这同样不断连。
+- 只有监听本身变化时才走旧的「停止再启动」路径（会断开连接），白名单：TUN 选项（地址、IPv6、MTU、stack 等）、
+  本地代理的监听地址或端口、其他入站的增删或变化、出站网卡选项。本地代理的用户列表（随节点增删、共享密码）就地
+  替换；系统代理监听就地增删。每次走旧路径核心日志记一行 `msg="apply full restart" reasons=…`。
+- 每次切换发出 `KernelSwitched`（`closed_connections`、`kept_connections`），旧内核关闭时发出 `KernelDrained`
+  （`code` 为 `idle` 或 `deadline`，后者附 `closed_connections`）；`get-status` 的 `draining_kernels` 是仍在排空的
+  旧内核数量。
 
 `apply-profile` 在构建配置前准备规则集：`<state_dir>/rule-sets/<id>.srs` 已存在且 sha256 匹配时立即使用；
 否则直连下载，总计最多等待 10 秒，超时或失败时按降级规则构建（见 backend-profile.md），不会因规则集而失败。
@@ -125,7 +141,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 ```
 
 ```json
-{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,"routing_mode":"rules",
+{"state":"running","revision":"cfg-42","selected_node_id":"hk-001","node_count":3,"routing_mode":"rules","draining_kernels":0,
  "selected_ingress":{"endpoint_key":"9002","previous_endpoint_key":"9001","role":"backup","switched_at":"2026-07-23T12:00:00Z"},
  "system_proxy":{"available":true,"enabled":false,"listening":false},
  "rule_sets":[{"id":"cn-ip","state":"ready","updated_at":"2026-07-23T12:00:00Z"},
@@ -191,7 +207,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 5 秒起指数退避重试（5、10、20 秒……最长 15 分钟，且不超过更新间隔）。同时到期的规则集并发下载（最多 4 个）。
 某个非 `ready` 的规则集恢复时，核心认为网络已经恢复，立即重试其余所有非 `ready` 的规则集，而不是各自等待退避。
 有规则集从 `unavailable` 变为可用（或反之）时，核心在这一轮到期的下载全部结束后只重建一次配置（等同
-`reload`，运行中的实例会被替换，**已建立的连接会断开**，监听端口不变）；已在使用的规则集文件内容更新时由
+`reload`；0.5.17 起不断开已建立的连接，见「运行中 apply 不断连」）；已在使用的规则集文件内容更新时由
 sing-box 就地重新加载，不重启实例，也不断开连接。状态每次变化都会发出 `RuleSetChanged` 事件，并在核心日志记一行
 `msg="rule set"`（`id`、`state`、`error`、`failures`、`next_retry_at`）；`apply timing` 一行附带
 `rule_sets_ready`/`rule_sets_stale`/`rule_sets_unavailable` 与 `rebuild`（规则集或 `reload` 触发的重建为 `true`）：
@@ -340,7 +356,8 @@ HTTP/SOCKS5 监听器（同一端口）。它默认关闭，由宿主在运行�
 ]
 ```
 
-Traffic 是当前运行实例的累计计数；重启或替换实例后归零。Connections 只包含仍活动的连接，关闭后移除。
+Traffic 是当前运行实例的累计计数，`stop`/`start` 或走「停止再启动」路径的 apply 后归零；0.5.17 起运行中 apply
+切换内核不归零，`get-connections` 也包含旧内核中仍在排空的连接。Connections 只包含仍活动的连接，关闭后移除。
 
 方向以客户端为准：`upload_bytes` 是客户端（应用、浏览器、TUN 内的流量）发往远端的字节，`download_bytes`
 是远端返回给客户端的字节；TCP 与 UDP、`get-traffic` 与 `get-connections`、移动端 `Traffic()` /
@@ -355,7 +372,7 @@ Traffic 是当前运行实例的累计计数；重启或替换实例后归零。
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`NodeIngressPinned`（附 `endpoint_key`，恢复自动时为空）、`NodeIngressPinCleared`（附 `endpoint_key` 与新 `revision`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`NodeIngressPinned`（附 `endpoint_key`，恢复自动时为空）、`NodeIngressPinCleared`（附 `endpoint_key` 与新 `revision`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）、`KernelSwitched`（附 `revision`、`closed_connections`、`kept_connections`）、`KernelDrained`（`code` 为 `idle`/`deadline`，附 `closed_connections`）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 

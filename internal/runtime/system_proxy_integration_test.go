@@ -129,9 +129,7 @@ func TestSystemProxyFollowsSelectedNodeAndRules(t *testing.T) {
 	if code, err := systemProxyGet(t, status, proxiedTarget.URL); err != nil || code != http.StatusNoContent {
 		t.Fatalf("proxied via selected node: %d %v", code, err)
 	}
-	if after := core.Traffic(); after.UploadBytes <= before.UploadBytes || after.DownloadBytes <= before.DownloadBytes {
-		t.Fatalf("system proxy traffic not counted: %#v -> %#v", before, after)
-	}
+	waitTrafficCounted(t, core, before)
 	if code, err := tunnelGet(tunnel, proxiedTarget.Listener.Addr().String()); err != nil || code != http.StatusNoContent {
 		t.Fatalf("local proxy tunnel interrupted by toggle: %d %v", code, err)
 	}

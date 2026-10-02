@@ -201,3 +201,27 @@ func TestSOCKS5AuthFailureRepliesThenClosesGracefully(t *testing.T) {
 		})
 	}
 }
+
+// SetUsers swaps the accepted users atomically: a removed user is refused,
+// an added one accepted, and an empty list is rejected without changing
+// anything.
+func TestSetUsersReplacesTheUserList(t *testing.T) {
+	created, err := New(context.Background(), nil, log.NewNOPFactory().Logger(), "test", Options{Users: []User{{Username: "u8f2k-a", Password: "s"}, {Username: "u8f2k", Password: "s"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := created.(*Inbound)
+	if err = in.SetUsers([]User{{Username: "u8f2k-b", Password: "s"}, {Username: "u8f2k", Password: "s"}}); err != nil {
+		t.Fatal(err)
+	}
+	verifier := in.credentials.Load().verifier
+	if verifier.verify("u8f2k-a", "s") || !verifier.verify("u8f2k-b", "s") || !verifier.verify("u8f2k", "s") {
+		t.Fatal("user list not replaced")
+	}
+	if !in.credentials.Load().authenticator.Verify("u8f2k-b", "s") || in.credentials.Load().authenticator.Verify("u8f2k-a", "s") {
+		t.Fatal("HTTP keep-alive authenticator not replaced")
+	}
+	if err = in.SetUsers(nil); err == nil || !in.credentials.Load().verifier.verify("u8f2k-b", "s") {
+		t.Fatalf("empty list: %v", err)
+	}
+}

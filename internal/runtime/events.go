@@ -28,6 +28,13 @@ const (
 	// Message carries the new state (ready, stale or unavailable) and Code
 	// the error code while it is not ready.
 	EventRuleSetChanged EventType = "RuleSetChanged"
+	// EventKernelSwitched: an apply took effect without closing listeners;
+	// ClosedConnections were closed because the new profile no longer allows
+	// them, KeptConnections keep draining in the replaced kernel.
+	EventKernelSwitched EventType = "KernelSwitched"
+	// EventKernelDrained: a replaced kernel was closed; Code is "idle" (no
+	// connections left) or "deadline" (ClosedConnections were still open).
+	EventKernelDrained EventType = "KernelDrained"
 )
 
 type Event struct {
@@ -42,6 +49,10 @@ type Event struct {
 	PreviousEndpointKey string `json:"previous_endpoint_key,omitempty"`
 	RuleSetID           string `json:"rule_set_id,omitempty"`
 	Code                string `json:"code,omitempty"`
+	// ClosedConnections and KeptConnections are set on KernelSwitched and
+	// KernelDrained.
+	ClosedConnections int `json:"closed_connections,omitempty"`
+	KeptConnections   int `json:"kept_connections,omitempty"`
 }
 
 type eventBus struct {

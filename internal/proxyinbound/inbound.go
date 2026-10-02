@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -138,9 +139,15 @@ func (v *verifier) authenticator() *auth.Authenticator {
 
 type Inbound struct {
 	inbound.Adapter
-	router        adapter.ConnectionRouterEx
-	logger        log.ContextLogger
-	listener      *listener.Listener
+	router   adapter.ConnectionRouterEx
+	logger   log.ContextLogger
+	listener *listener.Listener
+	// credentials is replaced as a whole by SetUsers, so a connection sees
+	// one consistent user list.
+	credentials atomic.Pointer[credentials]
+}
+
+type credentials struct {
 	verifier      *verifier
 	authenticator *auth.Authenticator
 }
@@ -151,12 +158,11 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 		return nil, err
 	}
 	in := &Inbound{
-		Adapter:       inbound.NewAdapter(Type, tag),
-		router:        uot.NewRouter(router, logger),
-		logger:        logger,
-		verifier:      v,
-		authenticator: v.authenticator(),
+		Adapter: inbound.NewAdapter(Type, tag),
+		router:  uot.NewRouter(router, logger),
+		logger:  logger,
 	}
+	in.credentials.Store(&credentials{verifier: v, authenticator: v.authenticator()})
 	in.listener = listener.New(listener.Options{
 		Context:           ctx,
 		Logger:            logger,
@@ -175,6 +181,18 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 }
 
 func (h *Inbound) Close() error { return common.Close(h.listener) }
+
+// SetUsers replaces the accepted users without closing the listener. New
+// connections, and later requests on a keep-alive HTTP connection, use the
+// new list; connections already accepted keep running.
+func (h *Inbound) SetUsers(users []User) error {
+	v, err := newVerifier(users)
+	if err != nil {
+		return err
+	}
+	h.credentials.Store(&credentials{verifier: v, authenticator: v.authenticator()})
+	return nil
+}
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	err := h.newConnection(ctx, conn, metadata, onClose)
@@ -228,13 +246,14 @@ func (h *Inbound) handleHTTP(ctx context.Context, conn net.Conn, reader *std_buf
 		return E.Cause(err, "read http request")
 	}
 	username, password, ok := basicProxyAuth(request.Header.Get("Proxy-Authorization"))
-	if !ok || !h.verifier.verify(username, password) {
+	current := h.credentials.Load()
+	if !ok || !current.verifier.verify(username, password) {
 		if _, writeErr := io.WriteString(conn, authChallenge); writeErr != nil {
 			return writeErr
 		}
 		return errHTTPAuthChallenged
 	}
-	return singhttp.HandleConnectionEx(ctx, conn, reader, h.authenticator, handler, source, onClose)
+	return singhttp.HandleConnectionEx(ctx, conn, reader, current.authenticator, handler, source, onClose)
 }
 
 // closeAfterChallenge ends a connection whose authentication failure reply
@@ -321,7 +340,7 @@ func (h *Inbound) handleSOCKS5(ctx context.Context, conn net.Conn, reader *std_b
 		return err
 	}
 	response := socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusFailure}
-	accepted := h.verifier.verify(credentials.Username, credentials.Password)
+	accepted := h.credentials.Load().verifier.verify(credentials.Username, credentials.Password)
 	if accepted {
 		response.Status = socks5.UsernamePasswordStatusSuccess
 	}

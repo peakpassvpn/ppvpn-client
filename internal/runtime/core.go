@@ -16,11 +16,14 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/hostipv6"
 	"github.com/peakpassvpn/ppvpn-core/internal/outboundlog"
+	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	"github.com/peakpassvpn/ppvpn-core/internal/rulesets"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	"github.com/peakpassvpn/ppvpn-core/routing"
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
 )
 
 type State string
@@ -48,6 +51,9 @@ type Status struct {
 	RoutingMode RoutingMode `json:"routing_mode,omitempty"`
 	// Nodes reports each node's ingress pin and health, in profile order.
 	Nodes []NodeStatus `json:"nodes,omitempty"`
+	// DrainingKernels counts kernels replaced by an apply that still serve
+	// their connections (0.5.17).
+	DrainingKernels int `json:"draining_kernels"`
 }
 
 // IngressStatus is the ingress (replica) a node is actually using. For a
@@ -370,8 +376,30 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 
 	var replacement engine
 	var replacementCancel context.CancelFunc
-	reusePorts := running && len(candidate.Options.Inbounds) > 0
+	// A running layered engine takes the candidate as a new kernel without
+	// closing listeners or connections; only a listener change (the
+	// fullRestartReasons whitelist) needs the stop-and-start path below.
+	var switched *kernelEvent
 	if running {
+		if swapper, ok := oldInstance.(swapEngine); ok {
+			if reasons := swapper.fullRestartReasons(candidate.Options); len(reasons) == 0 {
+				event, err := swapper.swap(c.kernelContext(candidate), candidate.Options,
+					func(next engine) { c.applyPins(next, candidate) },
+					closeOnSwitch(oldBuilt, candidateProfile, candidate))
+				timer.mark("kernel_switch")
+				if err != nil {
+					c.emit(Event{Type: EventReloadFailed, At: now, Message: "candidate kernel start failed"})
+					return false, stageError("apply", fmt.Errorf("start candidate kernel: %w", err))
+				}
+				switched = &event
+				replacement, replacementCancel = oldInstance, oldInstanceCancel
+			} else {
+				c.log.Info("apply full restart", "reasons", strings.Join(reasons, "; "))
+			}
+		}
+	}
+	reusePorts := running && switched == nil && len(candidate.Options.Inbounds) > 0
+	if running && switched == nil {
 		if reusePorts {
 			if oldInstanceCancel != nil {
 				oldInstanceCancel()
@@ -418,10 +446,13 @@ func (c *Core) applyProfileLocked(p *profile.Profile, now time.Time, allowedHost
 	c.mu.Unlock()
 
 	c.ruleSets.Activate(ruleSets)
-	if oldCancel != nil && running && !reusePorts {
+	if switched != nil {
+		c.kernelSwitched(*switched, candidateProfile.Revision, now)
+	}
+	if oldCancel != nil && running && !reusePorts && switched == nil {
 		oldCancel()
 	}
-	if oldEngine != nil && running && !reusePorts {
+	if oldEngine != nil && running && !reusePorts && switched == nil {
 		_ = oldEngine.Close()
 	}
 	if oldProfile != nil {
@@ -755,10 +786,7 @@ func outboundIngresses(built *config.BuildResult) map[string]outboundlog.Ingress
 // (sing-box start: outbounds, DNS, router and rule sets, inbounds including
 // opening the TUN and installing its routes).
 func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) (engine, context.CancelFunc, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = failover.WithSwitchObserver(ctx, c.ingressObserver(candidate))
-	ctx = dnstransport.WithLogger(ctx, c.log)
-	ctx = outboundlog.WithLogger(ctx, c.log, outboundIngresses(candidate))
+	ctx, cancel := context.WithCancel(c.kernelContext(candidate))
 	instance, err := c.factory(ctx, candidate.Options)
 	if err != nil {
 		cancel()
@@ -766,6 +794,9 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 	}
 	if logged, ok := instance.(connectionLogEngine); ok {
 		logged.setConnectionLog(c.log)
+	}
+	if swapper, ok := instance.(swapEngine); ok {
+		swapper.setKernelEvents(c.kernelDrained)
 	}
 	c.applyPins(instance, candidate)
 	timer.mark("engine_create")
@@ -817,6 +848,93 @@ func (c *Core) hostIPv6State() (disable, noRoute bool) {
 	return !enabled, enabled && !route
 }
 
+func drainingKernels(instance engine) int {
+	if swapper, ok := instance.(swapEngine); ok {
+		return swapper.drainingKernels()
+	}
+	return 0
+}
+
+// kernelContext carries what the engine built from candidate needs: the
+// ingress switch observer and the diagnostic loggers. It carries no service
+// registry, so every box made from it gets its own.
+func (c *Core) kernelContext(candidate *config.BuildResult) context.Context {
+	ctx := context.Background()
+	ctx = failover.WithSwitchObserver(ctx, c.ingressObserver(candidate))
+	ctx = dnstransport.WithLogger(ctx, c.log)
+	return outboundlog.WithLogger(ctx, c.log, outboundIngresses(candidate))
+}
+
+// closeOnSwitch decides which connections of the replaced kernel to close
+// when next takes over: only those the new profile takes away. A connection
+// is closed when the node it uses is gone, when it came in as a local proxy
+// user the new list no longer has, or when the new kernel's route rules
+// would now reject it. Everything else (another node or outbound, direct
+// instead of proxy, a global/rules switch) keeps running until it ends.
+func closeOnSwitch(old *config.BuildResult, next *profile.Profile, candidate *config.BuildResult) func(engine, trackedView) bool {
+	nodes := make(map[string]bool, len(next.Nodes))
+	for _, node := range next.Nodes {
+		nodes[node.ID] = true
+	}
+	users := map[string]bool{}
+	for _, inbound := range candidate.Options.Inbounds {
+		if options, ok := inbound.Options.(*proxyinbound.Options); ok {
+			for _, user := range options.Users {
+				users[user.Username] = true
+			}
+		}
+	}
+	return func(nextEngine engine, item trackedView) bool {
+		if old != nil {
+			for _, tag := range append([]string{item.outboundTag}, item.route...) {
+				if node, ok := old.OutboundNodes[tag]; ok && !nodes[node] {
+					return true
+				}
+			}
+		}
+		if item.metadata.Inbound == config.LocalProxyInboundTag && item.metadata.User != "" && !users[item.metadata.User] {
+			return true
+		}
+		if kernel, ok := nextEngine.(*singEngine); ok {
+			return rejectedBy(kernel.Router().Rules(), item.metadata)
+		}
+		return false
+	}
+}
+
+// rejectedBy reports whether the first final route rule matching metadata
+// rejects it. Rules that only set options (sniff, resolve, route-options)
+// are passed over, as the router does.
+func rejectedBy(rules []adapter.Rule, metadata adapter.InboundContext) bool {
+	for _, rule := range rules {
+		probe := metadata
+		if !rule.Match(&probe) {
+			continue
+		}
+		switch rule.Action().Type() {
+		case C.RuleActionTypeReject:
+			return true
+		case C.RuleActionTypeSniff, C.RuleActionTypeResolve, C.RuleActionTypeRouteOptions:
+			continue
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// kernelSwitched logs and reports a kernel switch made by an apply.
+func (c *Core) kernelSwitched(event kernelEvent, revision string, now time.Time) {
+	c.log.Info("kernel switched", "gen", event.Gen, "previous", event.Previous, "closed_connections", event.Closed, "kept_connections", event.Kept)
+	c.emit(Event{Type: EventKernelSwitched, At: now, Revision: revision, ClosedConnections: event.Closed, KeptConnections: event.Kept})
+}
+
+// kernelDrained logs and reports a replaced kernel that was closed.
+func (c *Core) kernelDrained(event kernelEvent) {
+	c.log.Info("kernel drained", "gen", event.Gen, "reason", event.Reason, "closed_connections", event.Closed)
+	c.emit(Event{Type: EventKernelDrained, At: time.Now(), Code: event.Reason, ClosedConnections: event.Closed})
+}
+
 func (c *Core) SelectNode(id string) error {
 	c.operation.Lock()
 	defer c.operation.Unlock()
@@ -851,7 +969,7 @@ func (c *Core) Status() Status {
 	if c.engine != nil {
 		state = StateRunning
 	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses(), RoutingMode: c.routingMode, Nodes: c.nodeStatusesLocked()}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses(), RoutingMode: c.routingMode, Nodes: c.nodeStatusesLocked(), DrainingKernels: drainingKernels(c.engine)}
 }
 
 func (c *Core) selectedIngressLocked() *IngressStatus {

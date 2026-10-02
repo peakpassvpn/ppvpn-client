@@ -151,15 +151,8 @@ func (e *singEngine) selectOutbound(outboundTag string) bool {
 
 type engineFactory func(context.Context, option.Options) (engine, error)
 
+// newSingBox is the production engine: a layered engine (layered.go), whose
+// kernel can be replaced without closing listeners.
 func newSingBox(ctx context.Context, options option.Options) (engine, error) {
-	// box.New registers its services in the registry carried by this
-	// context, so the same context can create inbounds later.
-	ctx = failover.Context(ctx)
-	instance, err := box.New(box.Options{Context: ctx, Options: options})
-	if err != nil {
-		return nil, err
-	}
-	tracker := newTelemetry()
-	instance.Router().AppendTracker(tracker)
-	return &singEngine{Box: instance, ctx: ctx, tracker: tracker}, nil
+	return newLayeredEngine(ctx, options)
 }
