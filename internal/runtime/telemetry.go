@@ -36,6 +36,15 @@ type Connection struct {
 type tracked struct {
 	connection       Connection
 	upload, download atomic.Uint64
+	// gen is the kernel generation that routed the connection; metadata is
+	// what its router matched; closeConn closes it (set once wrapped).
+	gen       uint64
+	metadata  adapter.InboundContext
+	closeConn func() error
+	// route is the outbound chain the connection took, outermost first
+	// (e.g. domaindest wrapper, selector, node group, ingress), resolved
+	// when it was routed.
+	route []string
 }
 type telemetry struct {
 	upload, download atomic.Uint64
@@ -56,32 +65,132 @@ func (item *tracked) counters(t *telemetry) (upload, download []N.CountFunc) {
 	return []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }},
 		[]N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}
 }
-func (t *telemetry) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
+func (t *telemetry) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
+	return t.routedConnection(0, conn, metadata, rule, outbound)
+}
+func (t *telemetry) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
+	return t.routedPacketConnection(0, conn, metadata, rule, outbound)
+}
+func (t *telemetry) routedConnection(gen uint64, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
 	conn = takeCachedConn(conn)
-	item := t.add(metadata, outbound)
+	item := t.add(gen, metadata, outbound)
 	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	upload, download := item.counters(t)
 	counted := bufio.NewCounterConn(conn, upload, download)
-	return &trackedConn{ExtendedConn: counted, onClose: func() { t.remove(item.connection.ID) }}
+	wrapped := &trackedConn{ExtendedConn: counted, id: item.connection.ID, onClose: func() { t.remove(item.connection.ID) }}
+	t.setCloser(item, wrapped.Close)
+	return wrapped
 }
-func (t *telemetry) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
+func (t *telemetry) routedPacketConnection(gen uint64, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
 	conn = takeCachedPacketConn(conn)
-	item := t.add(metadata, outbound)
+	item := t.add(gen, metadata, outbound)
 	t.logRouted(item.connection.ID, metadata, rule, outbound)
 	upload, download := item.counters(t)
 	counted := bufio.NewCounterPacketConn(conn, upload, download)
-	return &trackedPacketConn{PacketConn: counted, onClose: func() { t.remove(item.connection.ID) }}
+	wrapped := &trackedPacketConn{PacketConn: counted, id: item.connection.ID, onClose: func() { t.remove(item.connection.ID) }}
+	t.setCloser(item, wrapped.Close)
+	return wrapped
 }
-func (t *telemetry) add(metadata adapter.InboundContext, outbound adapter.Outbound) *tracked {
+func (t *telemetry) add(gen uint64, metadata adapter.InboundContext, outbound adapter.Outbound) *tracked {
 	tag := ""
 	if outbound != nil {
 		tag = adapter.OutboundTag(outbound)
 	}
-	item := &tracked{connection: Connection{ID: randomConnectionID(), OutboundTag: tag, Network: metadata.Network, Destination: metadata.Destination.String(), StartedAt: time.Now()}}
+	item := &tracked{gen: gen, metadata: metadata, connection: Connection{ID: randomConnectionID(), OutboundTag: tag, Network: metadata.Network, Destination: metadata.Destination.String(), StartedAt: time.Now()}}
 	t.mu.Lock()
 	t.connections[item.connection.ID] = item
 	t.mu.Unlock()
 	return item
+}
+
+func (t *telemetry) setCloser(item *tracked, closeConn func() error) {
+	t.mu.Lock()
+	item.closeConn = closeConn
+	t.mu.Unlock()
+}
+
+// kernelTracker attributes the connections one kernel routes to its
+// generation, so all kernels can share one telemetry, and records the
+// outbound chain each one took.
+type kernelTracker struct {
+	t         *telemetry
+	gen       uint64
+	outbounds adapter.OutboundManager
+}
+
+func (k kernelTracker) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
+	wrapped := k.t.routedConnection(k.gen, conn, metadata, rule, outbound)
+	k.t.setRoute(wrapped, k.route(outbound))
+	return wrapped
+}
+func (k kernelTracker) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
+	wrapped := k.t.routedPacketConnection(k.gen, conn, metadata, rule, outbound)
+	k.t.setRoute(wrapped, k.route(outbound))
+	return wrapped
+}
+
+// route follows groups (anything with Now(): selector, domaindest, a node's
+// failover group) to the outbound that carries the connection.
+func (k kernelTracker) route(outbound adapter.Outbound) []string {
+	var chain []string
+	for depth := 0; outbound != nil && depth < 8; depth++ {
+		chain = append(chain, adapter.OutboundTag(outbound))
+		group, ok := outbound.(interface{ Now() string })
+		if !ok || k.outbounds == nil {
+			break
+		}
+		outbound, _ = k.outbounds.Outbound(group.Now())
+	}
+	return chain
+}
+
+// setRoute stores the chain on the item behind a wrapped connection.
+func (t *telemetry) setRoute(wrapped any, chain []string) {
+	var id string
+	switch conn := wrapped.(type) {
+	case *trackedConn:
+		id = conn.id
+	case *trackedPacketConn:
+		id = conn.id
+	}
+	t.mu.Lock()
+	if item, ok := t.connections[id]; ok {
+		item.route = chain
+	}
+	t.mu.Unlock()
+}
+
+// trackedView is a consistent copy of what a switch needs to judge one
+// tracked connection (route is written after the item is added).
+type trackedView struct {
+	item        *tracked
+	outboundTag string
+	metadata    adapter.InboundContext
+	route       []string
+}
+
+// generation lists the open connections of kernel gen.
+func (t *telemetry) generation(gen uint64) []trackedView {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	var items []trackedView
+	for _, item := range t.connections {
+		if item.gen == gen {
+			items = append(items, trackedView{item: item, outboundTag: item.connection.OutboundTag, metadata: item.metadata, route: append([]string(nil), item.route...)})
+		}
+	}
+	return items
+}
+
+// closeConnection closes one tracked connection (from another goroutine than
+// its copy loop: the copy ends with an error and sing-box closes both sides).
+func (t *telemetry) closeConnection(item *tracked) {
+	t.mu.RLock()
+	closeConn := item.closeConn
+	t.mu.RUnlock()
+	if closeConn != nil {
+		_ = closeConn()
+	}
 }
 
 // logRouted writes the debug line of a routed connection: where it came from,
@@ -139,6 +248,7 @@ func randomConnectionID() string {
 
 type trackedConn struct {
 	N.ExtendedConn
+	id      string
 	once    sync.Once
 	onClose func()
 }
@@ -147,6 +257,7 @@ func (c *trackedConn) Close() error { c.once.Do(c.onClose); return c.ExtendedCon
 
 type trackedPacketConn struct {
 	N.PacketConn
+	id      string
 	once    sync.Once
 	onClose func()
 }

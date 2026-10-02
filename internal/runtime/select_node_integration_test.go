@@ -11,7 +11,7 @@ import (
 func selectorNow(t *testing.T, core *Core) string {
 	t.Helper()
 	core.mu.RLock()
-	instance := core.engine.(*singEngine)
+	instance := core.engine.(*layeredEngine).kernel()
 	core.mu.RUnlock()
 	outbound, ok := instance.Outbound().Outbound("selected")
 	if !ok {
