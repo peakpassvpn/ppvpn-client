@@ -1,0 +1,190 @@
+//! The status snapshot and the state machine (docs/host-integration.md,
+//! section 5). Field names are Core API v1's `get-status`.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::request::RoutingMode;
+
+/// The authoritative snapshot ([`crate::Engine::status`]); never blocked by
+/// lifecycle calls. Read it, then follow events.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Status {
+    #[serde(flatten)]
+    pub state: EngineState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_mode: Option<RoutingMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_node_id: Option<String>,
+    pub node_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_ingress: Option<IngressStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<NodeStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_sets: Vec<RuleSetStatus>,
+    pub system_proxy: SystemProxyStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_proxy: Option<LocalProxyStatus>,
+    pub draining_kernels: u32,
+    /// TUN instances (Linux, macOS, Windows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tun_routing: Option<TunRouting>,
+    /// Log lines dropped because the sink blocked (section 10).
+    pub dropped_log_lines: u64,
+}
+
+/// The state machine (section 5). Serialised tagged, snake_case:
+/// `{"state":"degraded","reasons":[{"kind":"ingress_unavailable","node_id":"jp"}]}`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum EngineState {
+    /// No profile applied (or shut down).
+    #[default]
+    Stopped,
+    /// Applied, not started.
+    Configured,
+    Running,
+    /// Healing on its own: show the reasons; do not recreate the instance.
+    Degraded {
+        reasons: Vec<DegradedReason>,
+    },
+    /// Cannot heal: drop and recreate the instance.
+    Fatal {
+        reason: FatalReason,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DegradedReason {
+    /// Offline; probes fail at once; back to running when the network is.
+    NoDefaultInterface,
+    /// Every ingress of the node is down; failover keeps trying.
+    IngressUnavailable { node_id: String },
+    /// The pinned ingress is down; a pin does not fail over.
+    PinnedLineDown {
+        node_id: String,
+        endpoint_key: String,
+    },
+    /// The TUN's routing was deleted and is being put back.
+    TunRoutingRestoring,
+    /// The routing guard did not start; routing is as installed.
+    TunRoutingUnguarded,
+    /// The rule set is unavailable; its rules are degraded.
+    RuleSetUnavailable { rule_set_id: String },
+    /// No DNS servers on the default interface: direct names get SERVFAIL.
+    LocalDnsUnavailable,
+    /// The local proxy port cannot be listened on; retried with backoff.
+    LocalProxyUnavailable,
+    /// Another VPN took the default route.
+    DefaultRouteOverridden,
+    /// The applied profile is past its `expires_at`; forwarding goes on.
+    ProfileExpired { expires_at: DateTime<Utc> },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum FatalReason {
+    /// The TUN's routing was deleted and could not be put back.
+    TunRoutingBroken { missing: Vec<String> },
+    /// The TUN device is gone and could not be recreated.
+    TunDeviceLost,
+    /// A panic was caught at the API boundary.
+    Panic,
+    /// A kernel failed to start and the previous one could not be restored.
+    KernelUnrecoverable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TunRouting {
+    Ok,
+    Restoring,
+    Unguarded,
+}
+
+/// The ingress a node is actually using (`get-status.selected_ingress`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct IngressStatus {
+    pub endpoint_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub previous_endpoint_key: String,
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switched_at: Option<DateTime<Utc>>,
+}
+
+/// A node's pin and ingress health (`get-status.nodes`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NodeStatus {
+    pub node_id: String,
+    pub pinned_endpoint_key: Option<String>,
+    pub ingresses: Vec<IngressHealth>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct IngressHealth {
+    pub endpoint_key: String,
+    pub role: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healthy: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_check_at: Option<DateTime<Utc>>,
+    pub consecutive_failures: u32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RuleSetStatus {
+    pub id: String,
+    /// `ready`, `stale` or `unavailable`.
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+}
+
+/// The unauthenticated loopback listener for OS proxy settings (7891).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SystemProxyStatus {
+    pub available: bool,
+    pub enabled: bool,
+    pub listening: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub listen: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<String>,
+}
+
+/// The shared local proxy (no credentials).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct LocalProxyStatus {
+    pub listen: String,
+    pub port: u16,
+    pub listening: bool,
+}
+
+fn is_zero(port: &u16) -> bool {
+    *port == 0
+}

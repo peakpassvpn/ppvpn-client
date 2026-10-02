@@ -69,6 +69,29 @@ pub mod codes {
     pub const RULE_SET_HOST_NOT_ALLOWED: &str = "RULE_SET_HOST_NOT_ALLOWED";
     pub const ROUTING_MODE_INVALID: &str = "ROUTING_MODE_INVALID";
     pub const PINS_INVALID: &str = "PINS_INVALID";
+
+    // Lifecycle, queries and probes (Core API v1's).
+    pub const PROFILE_NOT_APPLIED: &str = "PROFILE_NOT_APPLIED";
+    pub const CORE_NOT_RUNNING: &str = "CORE_NOT_RUNNING";
+    pub const NODE_NOT_FOUND: &str = "NODE_NOT_FOUND";
+    pub const INGRESS_NOT_FOUND: &str = "INGRESS_NOT_FOUND";
+    pub const LOCAL_PROXY_DISABLED: &str = "LOCAL_PROXY_DISABLED";
+    pub const SYSTEM_PROXY_UNAVAILABLE: &str = "SYSTEM_PROXY_UNAVAILABLE";
+    pub const SYSTEM_PROXY_START_FAILED: &str = "SYSTEM_PROXY_START_FAILED";
+    pub const NO_DEFAULT_INTERFACE: &str = "NO_DEFAULT_INTERFACE";
+    pub const PROBE_METHOD_UNSUPPORTED: &str = "PROBE_METHOD_UNSUPPORTED";
+    pub const RULE_SET_STORAGE_UNAVAILABLE: &str = "RULE_SET_STORAGE_UNAVAILABLE";
+    /// An internal error; the log says why.
+    pub const CORE_OPERATION_FAILED: &str = "CORE_OPERATION_FAILED";
+
+    // New with the library (docs/host-integration.md, section 7).
+    pub const CORE_PANICKED: &str = "CORE_PANICKED";
+    pub const ENGINE_FATAL: &str = "ENGINE_FATAL";
+    pub const ENGINE_SHUT_DOWN: &str = "ENGINE_SHUT_DOWN";
+    pub const TUN_INSTANCE_EXISTS: &str = "TUN_INSTANCE_EXISTS";
+    pub const STATE_DIR_IN_USE: &str = "STATE_DIR_IN_USE";
+    pub const PERMISSION_DENIED: &str = "PERMISSION_DENIED";
+    pub const WINTUN_UNAVAILABLE: &str = "WINTUN_UNAVAILABLE";
 }
 
 /// The error of a public call.
@@ -83,6 +106,25 @@ pub struct Error {
 }
 
 impl Error {
+    /// An error with a code that is not about one field.
+    pub(crate) fn new(code: &'static str, retryable: bool, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            field: None,
+            retryable,
+            message: message.into(),
+        }
+    }
+
+    /// What the skeleton's unimplemented calls return.
+    pub(crate) fn not_implemented(call: &str) -> Self {
+        Self::new(
+            codes::CORE_OPERATION_FAILED,
+            false,
+            format!("{call}: not implemented"),
+        )
+    }
+
     /// A validation error: never retryable (the same input fails again).
     pub(crate) fn invalid(
         code: &'static str,

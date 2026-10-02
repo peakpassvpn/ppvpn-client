@@ -75,6 +75,68 @@ impl ApplyRequest {
             ..Self::default()
         }
     }
+    pub fn with_routing_mode(mut self, routing_mode: RoutingMode) -> Self {
+        self.routing_mode = routing_mode;
+        self
+    }
+    pub fn with_selected_node_id(mut self, node_id: impl Into<String>) -> Self {
+        self.selected_node_id = Some(node_id.into());
+        self
+    }
+    pub fn with_pins(mut self, pins: Vec<Pin>) -> Self {
+        self.pins = pins;
+        self
+    }
+    pub fn with_allowed_rule_set_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.allowed_rule_set_hosts = hosts;
+        self
+    }
+}
+
+/// What `apply` did (section 4.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ApplyResult {
+    /// false: (revision, routing_mode, selected_node_id, pins) equal the live
+    /// values, nothing was done.
+    pub applied: bool,
+    pub revision: String,
+    /// The node now selected.
+    pub selected_node_id: String,
+    /// The requested `selected_node_id` is not in the new profile; the
+    /// profile's `default_node_id` is selected instead.
+    pub selection_reset: bool,
+    /// Pins whose node or ingress the new profile no longer has (also sent
+    /// as `NodeIngressPinCleared`).
+    pub cleared_pins: Vec<ClearedPin>,
+    /// How a running instance took it; `None` when not running.
+    pub switch: Option<SwitchKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ClearedPin {
+    pub node_id: String,
+    pub endpoint_key: String,
+    pub reason: PinClearReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PinClearReason {
+    NodeRemoved,
+    IngressRemoved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SwitchKind {
+    /// A new kernel took over; listeners and open connections were kept.
+    KernelSwitch,
+    /// A listener itself changed: stop and start (connections closed).
+    FullRestart { reasons: Vec<String> },
 }
 
 /// Decodes and validates `request` at `now`, as `apply` does before it
