@@ -14,6 +14,7 @@ pub mod event;
 pub(crate) mod localdns;
 pub(crate) mod profile;
 pub mod request;
+mod runtime;
 pub mod status;
 pub mod types;
 

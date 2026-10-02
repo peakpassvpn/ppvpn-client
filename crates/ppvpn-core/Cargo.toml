@@ -21,7 +21,7 @@ serde_json.workspace = true
 # The versions sail resolves (Cargo.lock), so nothing is built twice.
 async-trait = "0.1"
 hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
