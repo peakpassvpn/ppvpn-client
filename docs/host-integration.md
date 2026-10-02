@@ -44,21 +44,31 @@ pub struct EngineConfig {
     pub role: Role,                         // Standard | Tun
     pub platform: Platform,                 // Linux | Macos | Windows（今后加 Ios | Android）
     pub state_dir: PathBuf,                 // 私有目录：规则集缓存、本地代理状态
-    pub local_proxy: Option<LocalProxyConfig>, // 仅 Standard：listen（默认 127.0.0.1）、首选端口（默认 7890）
-    pub system_proxy: bool,                 // 仅 Standard：是否允许 set_system_proxy（CLI 设为 false）
-    pub tun: Option<TunConfig>,             // 仅 Tun：local_dns_servers 覆盖（等同 --local-dns-servers）
+    pub local_proxy: Option<LocalProxyConfig>, // 仅 Standard：listen（默认 127.0.0.1）、preferred_port（默认 7890；0 = 任意空闲端口，供测试）
+    pub system_proxy: bool,                 // 仅 Standard：是否允许 set_system_proxy_listener（CLI 设为 false）
+    pub tun: Option<TunConfig>,             // 仅 Tun：local_dns_servers 覆盖（等同 --local-dns-servers）；Windows 上 wintun_dll 路径
     pub log: LogConfig,                     // 级别（info/debug）和日志行的接收端，见第 10 节
 }
 
 impl Engine {
     pub async fn new(config: EngineConfig) -> Result<Engine, Error>;
-    pub async fn shutdown(&self) -> Result<(), Error>; // 对整个实例生效，幂等
+    pub async fn shutdown(&self) -> Result<ShutdownReport, Error>; // 对整个实例生效，幂等；最多 10 秒
 }
 impl Clone for Engine { /* 引用计数句柄 */ }
 impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */ }
 ```
 
-- **创建**：`new` 创建实例，但不应用 Profile，也不监听任何端口，状态为 `Stopped`。
+- **创建**：`new` 创建实例，但不应用 Profile，状态为 `Stopped`。
+  - **new 阶段就能确定的失败直接返回 `Err`**，不进入 `Fatal`：
+    - 权限不足：`PERMISSION_DENIED`；
+    - Windows 上找不到 wintun.dll：`WINTUN_UNAVAILABLE`；
+    - `state_dir` 已被另一个实例使用：`STATE_DIR_IN_USE`；
+    - 已有 Tun 实例：`TUN_INSTANCE_EXISTS`。
+
+    `Fatal` 只用于运行中发生的、无法恢复的问题。
+  - **`state_dir` 独占加锁**：实例打开它时加独占锁，直到 `shutdown` 或最后一个句柄 drop 后才释放。第二个实例打开同一个目录时返回 `STATE_DIR_IN_USE`（retryable=false）。
+  - **本地代理状态在 `new` 时就生成或读取**：Standard 实例的 prefix、密码和端口，不依赖 apply，所以 `new` 之后就能读凭据和 metadata（第 4.6 节）。监听要到 `start` 才开。
+  - **wintun.dll 由宿主随安装包分发**：签名版本和 Sail 使用的 `WINTUN_VERSION` 一致，路径通过 `TunConfig` 传入。引擎不下载它，也不内嵌。
   - 创建时会先**幂等地清扫上次的残留**，只限本库创建、并且能可靠识别的东西：
     - Linux：优先级 9091–9101 的 ip rule 和表 2091（`tunrules` 的命名空间）；
     - Windows：我们自己命名的 Wintun 适配器；
@@ -71,7 +81,8 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
   - **Tun**：同一时刻只能有一个，因为它们会争用同一套规则命名空间。重复创建时返回 `TUN_INSTANCE_EXISTS`（retryable=false）。
   - **Standard**：不限制数量，只要 `state_dir` 和本地代理端口不冲突即可（`cargo test` 和 CLI 的测试会并行创建多个）。
 - **句柄**：`Engine` 实现 `Clone`，是同一个实例的引用计数句柄（FFI 包装时句柄同样是引用计数）。
-- **正常退出**：用 `shutdown(&self).await`，任何一个句柄都可以调用，对整个实例生效，并且幂等。它先停止接受新连接，再关闭监听和 TUN，最后撤销规则和路由并清理 TUN 内的 DNS。返回时这些都已完成。
+- **正常退出**：用 `shutdown(&self).await`，任何一个句柄都可以调用，对整个实例生效，并且幂等。它先停止接受新连接，再关闭监听和 TUN，最后撤销规则和路由并清理 TUN 内的 DNS。
+  - 总耗时上限 **10 秒**（服务管理器的停止流程比这长得多）。正常情况下返回时都已完成；超时就返回，结果 `ShutdownReport { leftovers: Vec<String> }` 里列出没清理完的项，同时记一行 warn，剩下的由下一次 `new` 的清扫兜底。
   - 之后，所有句柄上的生命周期调用都返回 `ENGINE_SHUT_DOWN`（retryable=false）；查询返回最后的快照，状态为 `Stopped`；订阅收到通道关闭。
 - **`drop`**：最后一个句柄被 drop、而之前没有调用过 `shutdown` 时，清理作为兜底仍会进行，保证宿主 panic 后依然干净：
   - `Drop` **不会在调用方的线程上 `block_on`**，在 tokio 运行时线程上那样做会 panic 或卡住线程。它把清理交给实例自己的清理线程，在有限时间内（目前定为 5 秒）同步完成：撤销规则和路由、关闭 TUN 的 fd 和监听 socket；这些都不需要异步。
@@ -113,7 +124,8 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
 
 - **原子生效**：Profile、`routing_mode`、`selected_node_id` 和 `pins` 一起生效，或者都不生效。任何一步失败，当前生效的配置都不变，并发出 `ReloadFailed` 事件。
 - **宿主持久化的状态**：选中节点、pins 和 `routing_mode` 都由宿主持久化（按设备），每次 apply 一起传入。实例重建后用户的选择不会丢，宿主也不必在 apply 之后补发 `select_node` 或 `pin_ingress`。
-- **去重**：去重的键是 `(revision, routing_mode, selected_node_id, pins)`，在引擎里判断。
+- **去重**：去重的键是 `(revision, routing_mode, selected_node_id, pins)`，在引擎里判断。比较的对象是实例**当前生效**的值，包括 apply 之后 `select_node`、`pin_ingress` 做的改动。所以宿主把持久化的最新状态原样传回来时，不会触发重新 apply。
+- **`pins` 的校验**：`pins` 里同一个节点出现多次时，按校验错误拒绝：`PINS_INVALID`（field=`pins[i].node_id`，retryable=false）。
 - **pin 的处理**：`pins` 是宿主持久化的完整集合。新 Profile 里已经不存在的节点或入口，它的 pin 会被清除，并在 `cleared_pins` 里返回，同时发出 `NodeIngressPinCleared` 事件。返回值和事件内容相同：返回值给发起 apply 的调用方，事件给其他订阅者。宿主对两者的处理应当是幂等的。
 - **校验顺序**（D3，#45 已决定）：先校验**原始** Profile，再沿用当前选中的节点。
   - `default_node_id` 不存在时，报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate` 一致。Go 0.5.21 在这种情况下会接受，见 `docs/rust-parity.md`。
@@ -182,12 +194,17 @@ pub async fn probe_availability(&self, request: ProbeAvailabilityRequest) -> Res
 pub fn local_proxy_metadata(&self) -> Result<Vec<LocalProxyMetadata>, Error>;        // 不含密码
 pub fn local_proxy_credential(&self, node_id: &str) -> Result<LocalProxyCredential, Error>;
 pub fn local_proxy_routed_credential(&self) -> Result<LocalProxyCredential, Error>;  // 用户名是裸 prefix
-pub async fn set_system_proxy(&self, enabled: bool) -> Result<SystemProxyStatus, Error>;
+pub async fn set_system_proxy_listener(&self, enabled: bool) -> Result<SystemProxyStatus, Error>;
 ```
 
 - **凭据接口分开**：按节点的凭据和 routed 凭据分别读取。metadata 不含密码，只有原生凭据面板才读凭据。
-- **持久化**：prefix、密码和端口存在 `state_dir` 里，重启和升级后保持不变，不在每次启动时重新生成。端口优先 7890；被占用时改用空闲端口并持久化。
-- **TUN 实例**：本组方法返回 `LOCAL_PROXY_DISABLED`；`set_system_proxy` 返回 `SYSTEM_PROXY_UNAVAILABLE`。
+- **持久化**：prefix、密码和端口在 `new` 时生成或读取，存在 `state_dir` 里，重启和升级后保持不变，不在每次启动时重新生成。
+- **端口**：
+  - 优先级依次为：持久化的端口、`EngineConfig` 里的首选端口、7890、任意空闲端口。`preferred_port=0` 表示直接用任意空闲端口，供测试用。
+  - 实际端口有变化时，持久化新端口，发出 `LocalProxyEndpointChanged` 事件，`status` 里也能看到。
+  - 监听失败时，例如端口被占用而且换不了，进入 `Degraded{LocalProxyUnavailable}`，并按退避重试。
+- **系统代理监听**：`set_system_proxy_listener` 只开关 7891 的无认证监听。操作系统的代理设置（指向这个端口）由宿主负责。
+- **TUN 实例**：本组方法返回 `LOCAL_PROXY_DISABLED`；`set_system_proxy_listener` 返回 `SYSTEM_PROXY_UNAVAILABLE`。
 
 ## 5. 状态
 
@@ -197,11 +214,15 @@ pub struct Status {
     pub revision: Option<String>,
     pub routing_mode: Option<RoutingMode>,
     pub selected_node_id: Option<String>,
-    pub nodes: Vec<NodeStatus>,             // 每个节点：入口健康、active、pin
+    pub selected_ingress: Option<IngressStatus>, // endpoint_key、label、role、previous_endpoint_key、switched_at
+    pub nodes: Vec<NodeStatus>,             // 每个节点：name、entry_key、entry_label、exit、capabilities、
+                                            // 各入口（endpoint_key、label、role、healthy、active、consecutive_failures）、pin
+    pub local_proxy: Option<LocalProxyStatus>, // listen、port、listening（不含凭据）
     pub rule_sets: Vec<RuleSetStatus>,
     pub system_proxy: SystemProxyStatus,
     pub draining_kernels: u32,
-    pub tun_routing: Option<TunRouting>,    // 仅 Linux 的 TUN 实例：Ok | Restoring | Unguarded
+    pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded（Linux、macOS、Windows）
+    pub dropped_log_lines: u64,             // 日志接收端阻塞而丢弃的行数，见第 10 节
 }
 #[non_exhaustive]
 pub enum EngineState {
@@ -214,6 +235,16 @@ pub enum EngineState {
 ```
 
 `status()` 任何时候都能取到，开销很小，不受生命周期操作阻塞。宿主重连（或者重新订阅）时，先读快照，再接收事件。
+
+Core API v1 的 `get-status`、`list-nodes`、`get-selected-node` 里 CLI 直接展示的字段，这里全部保留，名字也不变。
+
+`EngineState` 序列化成带标签的 JSON，取值用 snake_case：
+
+```json
+{"state":"running"}
+{"state":"degraded","reasons":[{"kind":"ingress_unavailable","node_id":"jp"},{"kind":"no_default_interface"}]}
+{"state":"fatal","reason":{"kind":"tun_routing_broken","missing":["9093/v4 iif tun0 goto 9101"]}}
+```
 
 ### 状态机
 
@@ -231,16 +262,18 @@ Stopped ──apply──▶ Configured ──start──▶ Running ⇄ Degrade
   | `NoDefaultInterface` | 离线；探测立即失败；网络恢复后自动回到 `Running` |
   | `IngressUnavailable { node_id }` | 节点的所有入口都不可用；故障转移会继续重试 |
   | `PinnedLineDown { node_id, endpoint_key }` | 被 pin 的入口不可用；pin 时不会转移到别的入口 |
-  | `TunRoutingRestoring` | Linux：TUN 的路由规则被删，正在补回 |
-  | `TunRoutingUnguarded` | Linux：规则守护没能启动，规则保持安装时的样子，相当于 Go 的 `unguarded` |
+  | `TunRoutingRestoring` | TUN 的路由（Linux 的规则，macOS/Windows 的路由）被删，正在补回 |
+  | `TunRoutingUnguarded` | 路由守护没能启动，路由保持安装时的样子（相当于 Go 的 `unguarded`） |
   | `RuleSetUnavailable { rule_set_id }` | 规则集不可用，相关规则按降级处理 |
-| `LocalDnsUnavailable` | 默认网卡上读不到 DNS 服务器，直连域名只能得到 SERVFAIL；网卡或 DNS 变化后自动重试（Go 版只有日志） |
+  | `LocalDnsUnavailable` | 默认网卡上读不到 DNS 服务器，直连域名只能得到 SERVFAIL；网卡或 DNS 变化后自动重试（Go 版只有日志） |
+  | `LocalProxyUnavailable` | 本地代理端口监听失败，正在按退避重试 |
+  | `DefaultRouteOverridden` | 其他 VPN 抢走了默认路由，流量不再进入本 TUN；对方撤走后自动恢复 |
 
 - **`Fatal`**：引擎无法自愈。宿主**丢弃并重建**实例；这是宿主重建实例的唯一理由，另外两个是 panic 和会话丢失。
 
   | `FatalReason` | 含义 |
   | --- | --- |
-  | `TunRoutingBroken { missing }` | Linux：规则被删后补不回来，流量可能绕过 TUN（对应 Go 的 `TunRoutingBroken`） |
+  | `TunRoutingBroken { missing }` | 路由被删后补不回来，流量可能绕过 TUN（对应 Go 的 `TunRoutingBroken`；Rust 扩展到 macOS 和 Windows） |
   | `TunDeviceLost` | TUN 设备消失，例如适配器被外部删除，并且重建失败 |
   | `Panic` | 公开方法里兜住了一次 panic |
   | `KernelUnrecoverable` | 内核启动失败，也恢复不到上一个内核 |
@@ -269,9 +302,10 @@ pub enum EventItem { Event(Event), Lagged(u64) }
 | `EntranceProbed`、`AvailabilityProbed` | 是 | |
 | `RuleSetChanged` | 是 | |
 | `SystemProxyChanged` | 是 | |
+| `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
 | `KernelSwitched`、`KernelDrained` | 是 | 热切换和排空 |
 | `NetworkChanged` | 是 | 默认网卡变化 |
-| `TunRoutingBroken`、`TunRoutingRestored` | 是 | Linux；同时会反映在 `StateChanged` 里 |
+| `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有；Rust 版三个平台都有。同时会反映在 `StateChanged` 里 |
 
 ## 7. 错误
 
@@ -290,7 +324,11 @@ pub struct Error {
   - `CORE_PANICKED`：retryable=false，实例已进入 `Fatal`；
   - `ENGINE_FATAL`：retryable=false，实例已处于 `Fatal` 时，任何生命周期调用都返回它；
   - `ENGINE_SHUT_DOWN`：retryable=false，实例已经 `shutdown` 之后的生命周期调用；
-  - `TUN_INSTANCE_EXISTS`：retryable=false，同一进程里已有一个 Tun 实例。
+  - `TUN_INSTANCE_EXISTS`：retryable=false，同一进程里已有一个 Tun 实例；
+  - `STATE_DIR_IN_USE`：retryable=false，`state_dir` 已被另一个实例使用；
+  - `PERMISSION_DENIED`：retryable=false，Tun 实例的权限不足（见第 2 节）；
+  - `WINTUN_UNAVAILABLE`：retryable=false，找不到或加载不了宿主传入的 wintun.dll；
+  - `PINS_INVALID`：retryable=false，`pins` 里同一个节点出现多次，field=`pins[i].node_id`。
 - **`CORE_OPERATION_FAILED`**：只用于真正的内部错误，原因写进日志。Go 版有几种本该是结构化错误的情况会折叠成这个码，Rust 版改成具体的码（D1、D2）。
 - **IPC 专用的码不再出现**：`UNAUTHENTICATED`、`CORE_API_UNSUPPORTED`、`REQUEST_INVALID`、`API_NOT_FOUND`、`STREAM_UNSUPPORTED`，库里没有对应的情形。
 - **CLI 依赖**：CLI 的退出码和 `--json` 输出依赖 `code`、`field`、`retryable` 这三个字段。
@@ -308,10 +346,12 @@ pub struct Error {
 以下这些归引擎，宿主不再介入：
 
 - 入口故障转移和 pin 的生效；
-- 网卡变化后：重新选默认网卡、重新探测 IPv6 出口、重新读本地 DNS，以及离线期间的处理。原来 desktop 的"30 秒稳定期，每 2 秒重查"移到这里实现；**请 Desktop 评审时确认这正是现在的逻辑**；
+- 网卡变化后：重新选默认网卡、重新探测 IPv6 出口、重新读本地 DNS，以及离线期间的处理。对此引擎保证两点：
+  - 网络变化期间（包括断网、切换网卡）**不会进入 `Fatal`**，只会出现 `Degraded`，网络稳定后自动回到 `Running`；
+  - 流量一旦绕过 TUN，**立即处理**：先尝试补回路由，补不回来就进入 `Fatal{TunRoutingBroken}`。
 - 路由规则守护，以及 Wintun、utun 的自愈；
 - 热切换和排空；
-- 路由和规则层面的完整性：规则在，流量没有绕过 TUN。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。
+- 路由和规则层面的完整性：规则或路由都在，流量没有绕过 TUN。Linux 沿用 Go 0.5.20 的规则守护；**macOS 和 Windows 是 Rust 版新增的能力**，至少要能检测到并上报，能自愈的就自愈，由 G5 实机验收。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。
 
 留在宿主的：
 
@@ -327,6 +367,7 @@ pub struct Error {
 
 - **输出方式**：日志行通过 `LogConfig` 交给宿主，可以是写入宿主提供的文件，也可以是一个按行接收的通道。格式与 Go 版一致（logfmt：`level=… msg=… key=value`），lab 和性能检查会解析这些行。
 - **轮转**：由宿主负责，引擎只按行输出，不管文件大小。
+- **不阻塞数据面**：日志接收端阻塞时，引擎丢弃日志行，不让数据面等待。丢弃的行数计入 `status().dropped_log_lines`，恢复后再补一行 warn 汇总这段时间丢了多少。
 - **级别**：默认 info；debug 级别会记录每个连接和每次 DNS 查询（含域名），只在排障时开启。
 - **脱敏**：任何级别都不记录凭据。
 
@@ -351,7 +392,7 @@ pub struct Error {
 | `get-local-proxy-metadata` | `local_proxy_metadata()` |
 | `get-local-proxy-credential`（`node_id` / `kind=routed`） | `local_proxy_credential(node_id)` / `local_proxy_routed_credential()` |
 | `get-local-proxy-endpoints`（兼容接口） | 不提供（用前两项代替） |
-| `set-system-proxy` / `get-system-proxy-endpoints` | `set_system_proxy()` / `status().system_proxy` |
+| `set-system-proxy` / `get-system-proxy-endpoints` | `set_system_proxy_listener()` / `status().system_proxy` |
 | `get-traffic` / `get-connections` | `traffic()` / `connections()` |
 | `watch-events` | `subscribe(kinds)` |
 | 会话密钥、`X-Core-API-Version` | 不需要（进程内调用） |
@@ -363,8 +404,24 @@ pub struct Error {
 3. **"流量是否进了 TUN"**：路由和规则层面的完整性归引擎，端到端的可达性归宿主，只用于提示用户（第 9 节）。
 4. **实例数量**：只限制 Tun 实例（`TUN_INSTANCE_EXISTS`），Standard 实例不限（第 3 节）。
 
-## 14. 请 Desktop、CLI 评审时确认
+## 14. 评审结论（Desktop、CLI 第一轮）
 
-1. 选中节点、pins 和 routing_mode 由宿主持久化，每次 apply 一起传入（第 4.1 节）。
-2. 第 9 节"30 秒稳定期，每 2 秒重查"移进引擎，这是否正是 desktop 现在的逻辑。
-3. `Degraded`、`Fatal` 原因的枚举是否足够宿主做提示和决定是否重建（第 5 节）。
+已写进正文的：
+
+- **CLI A1**：去重比较的是当前生效的值；pins 重复节点报 `PINS_INVALID`。
+- **CLI A2**：`state_dir` 独占锁，冲突时报 `STATE_DIR_IN_USE`。
+- **CLI A3**：本地代理端口的优先级、`LocalProxyEndpointChanged` 事件、`LocalProxyUnavailable` 状态，以及 `preferred_port=0`。
+- **CLI A4**：凭据在 `new` 时就生成或读取。
+- **CLI A5、Desktop E**：`shutdown` 上限 10 秒，超时返回遗留项；Drop 上限 5 秒。
+- **CLI**：状态字段全部保留，`EngineState` 的 JSON 示例见第 5 节。
+- **Desktop A**：`set_system_proxy_listener` 只管 7891 的监听。
+- **Desktop B**：TUN 路由完整性扩展到 macOS 和 Windows（新增能力，G5 实机验收）。
+- **Desktop C**：新增 `DefaultRouteOverridden`、`LocalProxyUnavailable` 两个降级原因。
+- **Desktop D**：wintun.dll 由宿主分发，通过 `TunConfig` 传入。
+- **Desktop F**：日志接收端阻塞时丢弃日志，不阻塞数据面。
+- **Desktop G**：new 阶段能确定的失败直接返回错误，不进入 `Fatal`。
+- **Desktop 第 14 节第 2 项**：不照搬"稳定期"，改为第 9 节的两条保证。
+
+待确认：
+
+- **Desktop H**：Backend 确认 Profile 一定带 `default_node_id`，并且它指向的节点一定存在。确认后写进第 4.1 节。
