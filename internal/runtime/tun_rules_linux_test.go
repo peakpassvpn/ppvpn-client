@@ -24,7 +24,8 @@ import (
 
 // realTUN runs a core with a real TUN in this network namespace. It changes
 // the namespace's routing, so it runs only where that is disposable: as root
-// with PPVPN_TEST_REAL_TUN=1, in a container (/.dockerenv), never on a host.
+// with PPVPN_TEST_REAL_TUN=1, in a network namespace of its own (a container,
+// or `ip netns exec` as test/netns/run.sh does in CI), never in the host's.
 type realTUN struct {
 	core   *Core
 	events <-chan Event
@@ -44,8 +45,8 @@ func newRealTUN(t *testing.T) *realTUN {
 	if os.Getenv("PPVPN_TEST_REAL_TUN") != "1" || os.Geteuid() != 0 {
 		t.Skip("needs root and PPVPN_TEST_REAL_TUN=1 (privileged container)")
 	}
-	if _, err := os.Stat("/.dockerenv"); err != nil {
-		t.Skip("changes the network namespace's rules: runs only in a container")
+	if !ownNetNamespace() {
+		t.Skip("changes the network namespace's rules: runs only in a namespace of its own (container or ip netns)")
 	}
 	ip(t, "route", "replace", "blackhole", probeNet)
 	t.Cleanup(func() { _, _ = exec.Command("ip", "route", "del", "blackhole", probeNet).CombinedOutput() })
@@ -90,6 +91,22 @@ func newRealTUN(t *testing.T) *realTUN {
 		t.Fatalf("tun_routing %q after start, want ok", got)
 	}
 	return f
+}
+
+// ownNetNamespace reports whether this process runs in a network namespace
+// that is not the host's: inside a container (/.dockerenv; its PID 1 shares
+// the container's namespace), or in a namespace other than PID 1's, as with
+// `ip netns exec` on a host. Unknown counts as not.
+func ownNetNamespace() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	self, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		return false
+	}
+	init, err := os.Readlink("/proc/1/ns/net")
+	return err == nil && self != init
 }
 
 func (f *realTUN) logged() string {
