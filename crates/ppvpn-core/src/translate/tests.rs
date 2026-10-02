@@ -138,7 +138,7 @@ fn tags_are_gos() {
     // Go: "node-" + hex(sha256(id)[:8]); member: + "-" + hex(sha256(key)[:4]).
     assert_eq!(
         node_tag("node-a"),
-        format!("node-{}", &hex_prefix("node-a", 8))
+        format!("node-{}", hex_prefix("node-a", 8))
     );
     assert_eq!(node_tag("node-a").len(), "node-".len() + 16);
     assert_eq!(

@@ -11,4 +11,4 @@ mod validate;
 pub use model::*;
 pub use parse::parse;
 pub use ruleset::validate_rule_set_hosts;
-pub use validate::validate;
+pub use validate::{normalize_domain, parse_port_range, validate};
