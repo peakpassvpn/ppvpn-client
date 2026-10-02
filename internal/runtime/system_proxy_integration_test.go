@@ -57,7 +57,7 @@ func TestSystemProxyFollowsSelectedNodeAndRules(t *testing.T) {
 	proxiedTarget := httptest.NewServer(handler)
 	defer proxiedTarget.Close()
 	serverPort := startShadowsocksServer(t)
-	deadPort := freePort(t)
+	deadPort := deadPort(t)
 	p := &profile.Profile{
 		SchemaVersion: profile.CurrentSchemaVersion, Revision: "system-1", ExpiresAt: time.Now().Add(time.Hour),
 		Nodes: []profile.Node{

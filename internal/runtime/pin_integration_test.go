@@ -21,7 +21,7 @@ func TestPinIngressOnARunningCore(t *testing.T) {
 	primaryHits, backupHits := &destinationRecorder{}, &destinationRecorder{}
 	primaryPort := startShadowsocksServerWithTracker(t, primaryHits)
 	backupPort := startShadowsocksServerWithTracker(t, backupHits)
-	deadPort := freePort(t)
+	deadPort := deadPort(t)
 	targetAddress := target.Listener.Addr().String()
 
 	build := func(revision string, ingresses ...profile.Ingress) *profile.Profile {

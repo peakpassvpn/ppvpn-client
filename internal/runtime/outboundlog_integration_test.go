@@ -28,7 +28,7 @@ func TestOutboundFailuresAreLoggedAtDebug(t *testing.T) {
 		SchemaVersion: profile.CurrentSchemaVersion, Revision: "outbound-log", ExpiresAt: time.Now().Add(time.Hour),
 		Nodes: []profile.Node{
 			{ID: "dead", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{
-				localSSIngress(profile.IngressRolePrimary, "dead-port", 0, freePort(t)),
+				localSSIngress(profile.IngressRolePrimary, "dead-port", 0, deadPort(t)),
 			}},
 			{ID: "rejected", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{rejected}},
 		},

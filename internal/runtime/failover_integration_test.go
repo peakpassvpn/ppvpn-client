@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -110,7 +112,7 @@ func TestLocalProxyOnlyCoreFailsOverToBackupIngress(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	defer target.Close()
 	serverPort := startShadowsocksServer(t)
-	deadPort := freePort(t)
+	deadPort := deadPort(t)
 
 	p := &profile.Profile{
 		SchemaVersion: profile.CurrentSchemaVersion, Revision: "failover", ExpiresAt: time.Now().Add(time.Hour),
@@ -238,5 +240,28 @@ func TestFreePortIsFreeForTCPAndUDP(t *testing.T) {
 			t.Fatal(err)
 		}
 		udp.Close()
+	}
+}
+
+// A dead port refuses connections at once (a dial that hangs instead would
+// make a dead ingress look like a slow one), and on Linux, where released
+// ports get reused, no later listener can take it.
+func TestDeadPortRefusesAndStaysReserved(t *testing.T) {
+	port := deadPort(t)
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
+	started := time.Now()
+	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+	if err == nil {
+		conn.Close()
+		t.Fatal("dead port accepted a connection")
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) || time.Since(started) > 500*time.Millisecond {
+		t.Fatalf("dial %s: %v after %s, want connection refused at once", address, err, time.Since(started))
+	}
+	if runtime.GOOS == "linux" {
+		if l, err := net.Listen("tcp", address); err == nil {
+			l.Close()
+			t.Fatal("dead port could be listened on")
+		}
 	}
 }
