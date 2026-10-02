@@ -363,7 +363,9 @@ pub struct Error {
 - service 的安装；
 - UI 状态的映射；
 - 系统层面的 DNS 设置；
-- 拉取 Profile 时遇到 404 或 5xx，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。
+- 拉取 Profile 失败时，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。后端的口径见 proxy-profile 格式文档（ingress-endpoints.md）：
+  - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）；
+  - **500**：违反客户端契约，或者规则集读不出来。
 
 ## 10. 日志
 
@@ -424,4 +426,4 @@ pub struct Error {
 - **Desktop G**：new 阶段能确定的失败直接返回错误，不进入 `Fatal`。
 - **Desktop 第 14 节第 2 项**：不照搬"稳定期"，改为第 9 节的两条保证。
 
-- **Desktop H**：Backend 确认 `default_node_id` 一定存在，并且固定为 `nodes[0]`；有实例的入口一个都渲染不出来时返回错误，`nodes` 为空时返回 404，不会下发残缺或空的 Profile。已写进第 4.1 节和第 9 节。
+- **Desktop H**：Backend 确认 `default_node_id` 一定存在，并且固定为 `nodes[0]`；有实例的入口一个都渲染不出来时返回错误，`nodes` 为空时返回 404，不会下发残缺或空的 Profile。已写进第 4.1 节和第 9 节（第 9 节附了后端 404 和 500 的口径）。
