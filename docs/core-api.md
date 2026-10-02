@@ -125,7 +125,8 @@ TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「�
   （节点被删、用户被删、命中新的 reject 规则）会被关闭，不管它们建立于几次 apply 之前。每次切换发出
   `KernelSwitched`：`closed_connections` 和 `kept_connections` 统计的是所有旧内核上被关闭、留下继续排空的连接；
   `draining_kernels`（0.5.19 起）是切换后正在排空的旧内核数，包含刚被替换的这个。旧内核关闭时发出
-  `KernelDrained`（`code` 为 `idle` 或 `deadline`，后者附 `closed_connections`）。`get-status` 的
+  `KernelDrained`（`code` 为 `idle` 或 `deadline`；`deadline` 时 `closed_connections` 是到 10 分钟上限仍未结束、
+  也一直不空闲的连接数，即仍在传输或有心跳的连接，此时被一并关闭）。`get-status` 的
   `draining_kernels` 是此刻仍在排空的旧内核数量。
 
 `apply-profile` 在构建配置前准备规则集：`<state_dir>/rule-sets/<id>.srs` 已存在且 sha256 匹配时立即使用；
@@ -133,6 +134,9 @@ TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「�
 宿主的 `apply-profile` 调用超时应大于 10 秒。
 
 需要本地代理的方法（`get-local-proxy-metadata`、`get-local-proxy-credential`、`get-local-proxy-endpoints`、`probe-availability`）在 `serve --local-proxy=false` 启动的核心上返回 `LOCAL_PROXY_DISABLED`；`probe-availability` 在核心未 `start` 时返回 `CORE_NOT_RUNNING`（可重试）。
+0.5.20 起，核心运行且其网卡监视器（桌面 TUN）报告当前没有默认网卡（断网）时，`probe-entrances` 与
+`probe-availability` 立即返回 `NO_DEFAULT_INTERFACE`（可重试），不再等满超时；网卡刚恢复时照常探测（网络可能
+已经可用，不提前判失败）。宿主可以用 `NetworkChanged` 事件决定何时重新探测。
 
 ## DTO
 
@@ -380,7 +384,7 @@ Traffic 是当前运行实例的累计计数，`stop`/`start` 或走「停止再
 {"request_id":"events-1","ok":true,"data":{"type":"NodeSelected","at":"2026-07-23T12:00:00Z","revision":"cfg-42","node_id":"hk-001"}}
 ```
 
-事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`NodeIngressPinned`（附 `endpoint_key`，恢复自动时为空）、`NodeIngressPinCleared`（附 `endpoint_key` 与新 `revision`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）、`KernelSwitched`（附 `revision`、`closed_connections`、`kept_connections`）、`KernelDrained`（`code` 为 `idle`/`deadline`，附 `closed_connections`）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
+事件类型：`CoreStarted`、`CoreStopped`、`ProfileApplied`、`NodeEndpointChanged`、`NodeSelected`、`ReloadFailed`、`EntranceProbed`、`AvailabilityProbed`、`NodeIngressSwitched`（附 `endpoint_key`、`previous_endpoint_key`）、`NodeIngressPinned`（附 `endpoint_key`，恢复自动时为空）、`NodeIngressPinCleared`（附 `endpoint_key` 与新 `revision`）、`SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）、`RuleSetChanged`（附 `rule_set_id`；`message` 为新状态，`code` 为非 ready 时的错误码）、`KernelSwitched`（附 `revision`、`closed_connections`、`kept_connections`）、`KernelDrained`（`code` 为 `idle`/`deadline`，附 `closed_connections`）、`NetworkChanged`（0.5.20 起，核心绑定出站的默认网卡变化时发出：`has_default_interface`，有网卡时附 `interface_name`、`interface_index`；只在核心监视网卡时出现，即桌面 TUN）。`message` 只包含第一方安全摘要，如 `success` 或探测错误码，不含上游错误原文。
 
 事件不持久化且缓冲区满时可丢弃。因此它适合触发 UI 刷新，不适合作为唯一事实来源或审计日志。
 
@@ -423,6 +427,7 @@ Traffic 是当前运行实例的累计计数，`stop`/`start` 或走「停止再
 | `PROBE_METHOD_UNSUPPORTED` | 入口探测 `method` 只能是 `tcp` 或 `icmp` |
 | `LOCAL_PROXY_DISABLED` | 该核心以 `--local-proxy=false` 启动；改用本地代理核心 |
 | `CORE_NOT_RUNNING` | 先调用 `/v1/start` |
+| `NO_DEFAULT_INTERFACE` | 0.5.20 起：核心监视到当前没有默认网卡（断网），探测未发出；可重试，网络恢复后（`NetworkChanged` 且 `has_default_interface` 为 true）再探测 |
 | `STREAM_UNSUPPORTED` | 当前 HTTP writer 无法刷新事件流 |
 | `CORE_OPERATION_FAILED` | 安全折叠后的内部失败；读取状态并按产品策略重试/上报。响应不含原因；原因、阶段（如 `apply/local-proxy-state`、`start > engine-start/tun-open`）和错误链以同一 `request_id` 写入核心日志 |
 

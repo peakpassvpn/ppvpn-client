@@ -49,7 +49,15 @@ type directEngine interface {
 // sockets to (auto_detect_interface), at start and on every change, and calls
 // changed (when not nil) after each change.
 type interfaceWatchEngine interface {
-	watchDefaultInterface(log *corelog.Logger, changed func())
+	// changed gets the new default interface (nil: none).
+	watchDefaultInterface(log *corelog.Logger, changed func(*control.Interface))
+}
+
+// networkStateEngine reports whether a default interface exists. known is
+// false without an interface monitor (no auto_detect_interface), when the
+// engine cannot tell.
+type networkStateEngine interface {
+	defaultInterfaceState() (known, present bool)
 }
 
 // connectionLogEngine writes a debug line per routed connection.
@@ -95,7 +103,15 @@ func (e *singEngine) removeInbound(tag string) error {
 
 func (e *singEngine) setConnectionLog(log *corelog.Logger) { e.tracker.log.Store(log) }
 
-func (e *singEngine) watchDefaultInterface(log *corelog.Logger, changed func()) {
+func (e *singEngine) defaultInterfaceState() (known, present bool) {
+	manager := service.FromContext[adapter.NetworkManager](e.ctx)
+	if manager == nil || manager.InterfaceMonitor() == nil {
+		return false, false
+	}
+	return true, manager.InterfaceMonitor().DefaultInterface() != nil
+}
+
+func (e *singEngine) watchDefaultInterface(log *corelog.Logger, changed func(*control.Interface)) {
 	manager := service.FromContext[adapter.NetworkManager](e.ctx)
 	if manager == nil {
 		return
@@ -109,7 +125,7 @@ func (e *singEngine) watchDefaultInterface(log *corelog.Logger, changed func()) 
 	monitor.RegisterCallback(func(defaultInterface *control.Interface, _ int) {
 		logDefaultInterface(log, "changed", defaultInterface)
 		if changed != nil {
-			changed()
+			changed(defaultInterface)
 		}
 	})
 }

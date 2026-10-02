@@ -20,6 +20,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 )
@@ -40,6 +41,14 @@ var drainLimit = 10 * time.Minute
 
 // drainCheckInterval is how often draining kernels are checked.
 var drainCheckInterval = time.Second
+
+// drainReportInterval is how often a draining kernel writes its debug line
+// (msg="kernel draining"); lowTrafficBytes is the per-interval traffic below
+// which a connection counts as low_traffic (a heartbeat, typically).
+var (
+	drainReportInterval        = time.Minute
+	lowTrafficBytes     uint64 = 4096
+)
 
 // beforeKernelStart lets tests fail a kernel's start.
 var beforeKernelStart func() error
@@ -97,6 +106,10 @@ type kernel struct {
 	deadline       time.Time
 	// idleClosed counts connections closed while draining for idleness.
 	idleClosed int
+	// lastReport and reportBytes (connection ID -> bytes both ways) are the
+	// previous "kernel draining" report, for its per-interval figures.
+	lastReport  time.Time
+	reportBytes map[*tracked]uint64
 }
 
 type layeredEngine struct {
@@ -110,7 +123,7 @@ type layeredEngine struct {
 	route    *option.RouteOptions
 	// Drain timing, copied from the package variables when built (tests
 	// change those; the drain loop must not read them concurrently).
-	drainLimit, drainGrace, drainCheck, drainIdle time.Duration
+	drainLimit, drainGrace, drainCheck, drainIdle, drainReport time.Duration
 
 	// active is the current kernel. It is read without mu: the core reads it
 	// while holding its own lock (Status, probes, pins), and swap's prepare
@@ -141,7 +154,7 @@ func newLayeredEngine(ctx context.Context, options option.Options) (*layeredEngi
 	}
 	engine := &layeredEngine{ctx: frontCtx, front: front, switcher: &switchRouter{reverse: reversemap.FromContext(ctx)}, tracker: tracker,
 		inbounds: options.Inbounds, route: options.Route, stop: make(chan struct{}),
-		drainLimit: drainLimit, drainGrace: drainGrace, drainCheck: drainCheckInterval, drainIdle: drainIdleClose}
+		drainLimit: drainLimit, drainGrace: drainGrace, drainCheck: drainCheckInterval, drainIdle: drainIdleClose, drainReport: drainReportInterval}
 	first, err := engine.newKernel(ctx, options)
 	if err != nil {
 		_ = front.Close()
@@ -401,6 +414,11 @@ func (e *layeredEngine) switchTo(next *kernel, options option.Options, closeOld 
 	event := kernelEvent{Switched: true, Gen: next.gen, Previous: previous.gen}
 	previous.retired = time.Now()
 	previous.deadline = previous.retired.Add(e.drainLimit)
+	previous.lastReport = previous.retired
+	previous.reportBytes = map[*tracked]uint64{}
+	for _, item := range e.tracker.generation(previous.gen) {
+		previous.reportBytes[item.item] = item.bytes
+	}
 	e.draining = append(e.draining, previous)
 	e.drainingCount.Store(int32(len(e.draining)))
 	gens := make(map[uint64]bool, len(e.draining))
@@ -495,8 +513,11 @@ func (e *layeredEngine) drainOnce(now time.Time) {
 	var closing []*kernel
 	var idle []*tracked
 	kept := make([]*kernel, 0, len(e.draining))
+	log := e.tracker.log.Load()
+	var reports [][]any
 	for _, k := range e.draining {
 		open := 0
+		var openItems []trackedView
 		for _, item := range e.tracker.generation(k.gen) {
 			if e.drainIdle > 0 && now.Sub(item.lastActive) >= e.drainIdle {
 				idle = append(idle, item.item)
@@ -504,6 +525,10 @@ func (e *layeredEngine) drainOnce(now time.Time) {
 				continue
 			}
 			open++
+			openItems = append(openItems, item)
+		}
+		if log.DebugEnabled() && e.drainReport > 0 && now.Sub(k.lastReport) >= e.drainReport {
+			reports = append(reports, e.drainReportFields(k, openItems, now))
 		}
 		switch {
 		case open == 0 && now.Sub(k.retired) >= e.drainGrace:
@@ -519,6 +544,9 @@ func (e *layeredEngine) drainOnce(now time.Time) {
 	e.draining = kept
 	e.drainingCount.Store(int32(len(kept)))
 	e.mu.Unlock()
+	for _, fields := range reports {
+		log.Debug("kernel draining", fields...)
+	}
 	// Outside the lock: closing a connection or a box can take a while.
 	for _, item := range idle {
 		e.tracker.closeConnection(item)
@@ -529,6 +557,34 @@ func (e *layeredEngine) drainOnce(now time.Time) {
 	for _, event := range done {
 		e.emit(event)
 	}
+}
+
+// drainReportFields describes a draining kernel's open connections for the
+// periodic debug line, and starts the next interval: idle_candidates have
+// been idle for half the idle window or more, oldest_idle is the longest
+// idle time, low_traffic moved fewer than lowTrafficBytes both ways since
+// the previous report (or the switch). A kernel held by connections that are
+// all low_traffic but never idle carries heartbeats. Called under e.mu.
+func (e *layeredEngine) drainReportFields(k *kernel, open []trackedView, now time.Time) []any {
+	idleCandidates, lowTraffic := 0, 0
+	var oldestIdle time.Duration
+	next := make(map[*tracked]uint64, len(open))
+	for _, item := range open {
+		idleFor := now.Sub(item.lastActive)
+		if e.drainIdle > 0 && idleFor >= e.drainIdle/2 {
+			idleCandidates++
+		}
+		if idleFor > oldestIdle {
+			oldestIdle = idleFor
+		}
+		if item.bytes-k.reportBytes[item.item] < lowTrafficBytes {
+			lowTraffic++
+		}
+		next[item.item] = item.bytes
+	}
+	k.lastReport, k.reportBytes = now, next
+	return []any{"gen", k.gen, "age_s", int(now.Sub(k.retired).Seconds()), "open", len(open),
+		"idle_candidates", idleCandidates, "oldest_idle_s", int(oldestIdle.Seconds()), "low_traffic", lowTraffic}
 }
 
 // The engine capabilities go to the current kernel; listeners to the front.
@@ -572,8 +628,13 @@ func (e *layeredEngine) setConnectionLog(log *corelog.Logger) { e.tracker.log.St
 
 // watchDefaultInterface watches the front's monitor: it lives as long as the
 // engine, while kernels are replaced.
-func (e *layeredEngine) watchDefaultInterface(log *corelog.Logger, changed func()) {
+func (e *layeredEngine) watchDefaultInterface(log *corelog.Logger, changed func(*control.Interface)) {
 	(&singEngine{Box: e.front, ctx: e.ctx}).watchDefaultInterface(log, changed)
+}
+
+// defaultInterfaceState reads the front's monitor, like watchDefaultInterface.
+func (e *layeredEngine) defaultInterfaceState() (known, present bool) {
+	return (&singEngine{Box: e.front, ctx: e.ctx}).defaultInterfaceState()
 }
 func (e *layeredEngine) telemetrySnapshot() (Traffic, []Connection) { return e.tracker.snapshot() }
 func (e *layeredEngine) dialFlow(ctx context.Context, network, outboundTag, host string, port uint16) (net.Conn, error) {

@@ -99,6 +99,10 @@ sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun
     `kept_connections`，0.5.19 起统计所有仍在排空的旧内核；`draining_kernels`，切换后正在排空的旧内核数）；旧内核关闭时 `msg="kernel drained"`（`gen`、`reason`=`idle`/`deadline`、
     `closed_connections`、`idle_closed`（0.5.19 起：排空期间因空闲 60 秒被关闭的连接数））；
     监听变化需要重启时 `msg="apply full restart" reasons=…`；
+  - 排空中的旧内核（0.5.20 起，`debug` 级别）每分钟一行 `msg="kernel draining"`：`gen`、`age_s`（已排空多久）、
+    `open`（仍在的连接）、`idle_candidates`（空闲已超过阈值一半）、`oldest_idle_s`、`low_traffic`（这一分钟双向合计
+    不足 4 KB 的连接）。`open` 一直不降、`idle_candidates` 为 0 而 `low_traffic` 等于 `open`，说明旧内核被只有
+    心跳的长连接拖住，会等到 10 分钟上限；
   - `msg="start timing"`：`system_proxy_ms`（启用时）、`engine_create_ms`（sing-box 解析与构造）、
     `engine_start_ms`（sing-box 启动：出站、DNS、路由与规则集、入站，含打开 TUN 与安装 `auto_route`
     路由）、`total_ms`。sing-box 内部各组件不再细分：其计时只在上游日志里，而上游日志保持关闭。

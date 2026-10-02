@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"github.com/sagernet/sing/common/control"
 	"strings"
 	"sync"
 	"testing"
@@ -16,10 +17,12 @@ import (
 // test fires by hand.
 type watchSwap struct {
 	*fakeSwap
-	changed func()
+	changed func(*control.Interface)
 }
 
-func (w *watchSwap) watchDefaultInterface(_ *corelog.Logger, changed func()) { w.changed = changed }
+func (w *watchSwap) watchDefaultInterface(_ *corelog.Logger, changed func(*control.Interface)) {
+	w.changed = changed
+}
 
 // lockedLog is a log sink safe to read while the core writes from a timer.
 type lockedLog struct {
@@ -131,7 +134,7 @@ func newReprobeRig(t *testing.T, route bool) *reprobeRig {
 func TestReprobeSwitchesWhenIPv6PathIsLost(t *testing.T) {
 	r := newReprobeRig(t, true)
 	r.setRoute(false)
-	r.engine.changed()
+	r.engine.changed(nil)
 	if r.timer.delay != ReprobeDelay {
 		t.Fatalf("probe armed %v out, want %v", r.timer.delay, ReprobeDelay)
 	}
@@ -152,7 +155,7 @@ func TestReprobeSwitchesWhenIPv6PathIsLost(t *testing.T) {
 func TestReprobeSwitchesWhenIPv6PathAppears(t *testing.T) {
 	r := newReprobeRig(t, false)
 	r.setRoute(true)
-	r.engine.changed()
+	r.engine.changed(nil)
 	r.timer.fire()
 	if got, restarts, handOff := r.swaps(); got != 1 || restarts != "" || handOff {
 		t.Fatalf("swaps %d, restart reasons %q, hand-off %v", got, restarts, handOff)
@@ -165,7 +168,7 @@ func TestReprobeSwitchesWhenIPv6PathAppears(t *testing.T) {
 // Same result: nothing rebuilt, no change logged.
 func TestReprobeKeepsKernelWhenUnchanged(t *testing.T) {
 	r := newReprobeRig(t, false)
-	r.engine.changed()
+	r.engine.changed(nil)
 	r.timer.fire()
 	if got, _, _ := r.swaps(); got != 0 {
 		t.Fatalf("swaps %d", got)
@@ -181,7 +184,7 @@ func TestReprobeDebouncesBursts(t *testing.T) {
 	r := newReprobeRig(t, true)
 	r.setRoute(false)
 	for range 5 {
-		r.engine.changed()
+		r.engine.changed(nil)
 	}
 	if r.timer.scheduled != 5 || r.timer.stopped != 4 {
 		t.Fatalf("scheduled %d, stopped %d; want 5 and 4", r.timer.scheduled, r.timer.stopped)
@@ -202,7 +205,7 @@ func TestReprobeDebouncesBursts(t *testing.T) {
 func TestStopCancelsPendingReprobe(t *testing.T) {
 	r := newReprobeRig(t, true)
 	r.setRoute(false)
-	r.engine.changed()
+	r.engine.changed(nil)
 	if err := r.core.Stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +223,7 @@ func TestStopCancelsPendingReprobe(t *testing.T) {
 func TestReprobeDefersToApply(t *testing.T) {
 	r := newReprobeRig(t, true)
 	r.setRoute(false)
-	r.engine.changed()
+	r.engine.changed(nil)
 	if _, err := r.core.ApplyProfile(testProfile("user-apply", "edge.example.com", "8.8.8.8"), time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +243,7 @@ func TestReprobeRealTimerFires(t *testing.T) {
 	r.core.reprobeAfter = newCore(profile.PlatformCapabilities{}, nil).reprobeAfter
 	r.core.reprobeDelay = 10 * time.Millisecond
 	r.setRoute(false)
-	r.engine.changed()
+	r.engine.changed(nil)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if got, _, _ := r.swaps(); got == 1 {

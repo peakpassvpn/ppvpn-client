@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,13 @@ type hotSwap struct {
 const chunk = 64 << 10
 
 func newHotSwap(t *testing.T) *hotSwap {
+	t.Helper()
+	return newHotSwapWith(t, nil)
+}
+
+// newHotSwapWith applies rules(f) with the first profile (r1), for tests
+// that need routing tied to the fixture's targets.
+func newHotSwapWith(t *testing.T, rules func(*hotSwap) []profile.RoutingRule) *hotSwap {
 	t.Helper()
 	f := &hotSwap{release: make(chan struct{}), downloadChunks: 64, logMu: &sync.Mutex{}, log: &strings.Builder{}}
 	// The slow target streams 64 chunks of 64 KiB, the second half only once
@@ -92,7 +100,11 @@ func newHotSwap(t *testing.T) *hotSwap {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	f.events = f.core.Subscribe(ctx, 64)
-	if _, err := f.core.ApplyProfile(f.profile("r1", []string{"a", "b"}, nil), time.Now()); err != nil {
+	var initial []profile.RoutingRule
+	if rules != nil {
+		initial = rules(f)
+	}
+	if _, err := f.core.ApplyProfile(f.profile("r1", []string{"a", "b"}, initial), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.core.Start(); err != nil {
@@ -784,5 +796,87 @@ func TestApplyReachesConnectionsOfOlderKernels(t *testing.T) {
 	}
 	if logged := f.logged(); !strings.Contains(logged, `msg="kernel switched" gen=3 previous=2 closed_connections=1 kept_connections=1 draining_kernels=2`) {
 		t.Fatalf("log:\n%s", logged)
+	}
+}
+
+// The first kernel drains like any other across several switches: its idle
+// keep-alive connection is closed after drainIdleClose, a connection with a
+// heartbeat stays (its last-activity time keeps moving), the periodic debug
+// line shows why, and once the heartbeat stops the kernel drains.
+func TestFirstKernelDrainsAcrossSwitches(t *testing.T) {
+	shortDrainIdle(t, time.Second)
+	previousReport := drainReportInterval
+	drainReportInterval = 400 * time.Millisecond
+	t.Cleanup(func() { drainReportInterval = previousReport })
+	stop := make(chan struct{})
+	heartbeat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for {
+			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			select {
+			case <-stop:
+				return
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+	}))
+	defer heartbeat.Close()
+	// Both targets go direct: what is tested is the drain bookkeeping, and a
+	// Shadowsocks 2022 client has an upstream race between its first Write
+	// and Read (sing-shadowsocks2 clientConn) that -race reports now and then.
+	direct := func(f *hotSwap) []profile.RoutingRule {
+		return []profile.RoutingRule{{ID: "direct-targets", Match: profile.RoutingMatch{Ports: []uint16{targetPort(t, f.quick), targetPort(t, heartbeat)}}, Action: profile.RoutingAction{Type: "direct"}}}
+	}
+	f := newHotSwapWith(t, direct)
+	_ = f.core.log.SetLevel(corelog.LevelDebug)
+	idleTunnel, _ := f.keepAlive(t) // kernel 1, goes quiet
+	defer idleTunnel.Close()
+	username, password := f.user(t, "")
+	endpoint := f.core.LocalProxyEndpoints()[0]
+	sse, status, err := httpConnect(endpoint, username, password, heartbeat.Listener.Addr().String())
+	if err != nil || status[:3] != "200" {
+		t.Fatalf("CONNECT: %q %v", status, err)
+	}
+	defer sse.Close()
+	_, _ = io.WriteString(sse, "GET / HTTP/1.1\r\nHost: sse\r\n\r\n")
+	go func() { _, _ = io.Copy(io.Discard, sse) }()
+
+	for _, revision := range []string{"r2", "r3"} {
+		if _, err := f.core.ApplyProfile(f.profile(revision, []string{"a", "b"}, direct(f)), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		f.next(t, EventKernelSwitched, 5*time.Second)
+	}
+	layered := f.core.engine.(*layeredEngine)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(layered.tracker.generation(1)) != 1 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	items := layered.tracker.generation(1)
+	if len(items) != 1 {
+		t.Fatalf("kernel 1 connections after the idle window: %d, want only the heartbeat one", len(items))
+	}
+	if age := time.Since(items[0].lastActive); age > 800*time.Millisecond {
+		t.Fatalf("heartbeat connection's last activity %s ago: not refreshed", age)
+	}
+	if got := f.core.Status().DrainingKernels; got < 1 {
+		t.Fatal("kernel 1 drained while its heartbeat connection was alive")
+	}
+	// The periodic debug line shows why: one open connection, never idle,
+	// moving only a few bytes (low_traffic). Reports before the idle
+	// connection was closed show it as an idle candidate.
+	heartbeatOnly := regexp.MustCompile(`msg="kernel draining" gen=1 age_s=\d+ open=1 idle_candidates=0 oldest_idle_s=0 low_traffic=1`)
+	for deadline := time.Now().Add(3 * time.Second); !heartbeatOnly.MatchString(f.logged()) && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !heartbeatOnly.MatchString(f.logged()) {
+		t.Fatalf("draining report:\n%s", f.logged())
+	}
+	close(stop)
+	for !strings.Contains(f.logged(), `msg="kernel drained" gen=1 reason=idle`) {
+		f.next(t, EventKernelDrained, 5*time.Second)
 	}
 }
