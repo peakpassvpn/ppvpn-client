@@ -44,6 +44,9 @@ rm -f $R/pid $R/servers.pid $R/tcpdump.pid
 
 # Namespaces and links.
 for ns in ldns-c ldns-a ldns-b; do ip netns add $ns; ip -n $ns link set lo up; done
+# Deleting an interface's first address must keep the others (step 3 swaps
+# cb's address): promote_secondaries is off on some kernels' defaults.
+ip netns exec ldns-c sysctl -qw net.ipv4.conf.all.promote_secondaries=1 net.ipv4.conf.default.promote_secondaries=1
 ip link add ca netns ldns-c type veth peer name ac netns ldns-a
 ip link add cb netns ldns-c type veth peer name bc netns ldns-b
 ip -n ldns-a addr add 10.201.0.1/24 dev ac; ip -n ldns-a link set ac up
