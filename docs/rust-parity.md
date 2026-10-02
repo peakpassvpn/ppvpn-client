@@ -6,13 +6,28 @@ Go core 冻结在 v0.5.21（#45）。Rust 的 `ppvpn-engine` 硬切换前，下�
 - **done**：`Rust 用例` 一列写明对应的测试（crate 路径和名称），行为与 Go 一致；
 - **n-a**：不适用，`备注` 写明原因（例如只属于 sing-box 配置、或者没有宿主使用的接口）。
 
-行为不一致、但决定就这样改的，也算 done，必须在 `备注` 里写明差异和决定出处。没有结论的行不能硬切换。
+行为不一致、但决定就这样改的，也算 done，必须在 `备注` 里写明差异和决定出处；涉及 golden 的偏离统一列在下面"Rust 有意偏离 Go golden 的行为"一节。没有结论的行不能硬切换。
 
 配套的语言无关基准在 [`testdata/golden/`](../testdata/golden/README.md)：Core API 契约（`contract/`）和路由判定（`routing/`）。Rust 跑同一组文件，即可覆盖其中的行为；对应的 Go 运行器（`TestGoldenContract`、`TestGoldenRouting`）在下表标为 n-a。
 
 分组沿用 #45 评审意见里的八组。"行为摘要"取自 Go 测试的注释，没有注释的取测试名；细节以 Go 测试为准。
 
 新增 Go 测试（只允许测试和文档）时，在对应分组里加一行。
+
+## Rust 有意偏离 Go golden 的行为
+
+以下几项 Go 0.5.21 的行为已按现状记录在 `testdata/golden/contract`。#45 的待定项 D1–D3 已经决定（2026-10-03）：Rust 版修正这些行为，Go 的 golden 不改。Rust 跑这几个步骤时，按下表的"Rust 预期"判定，不按 golden。其余步骤仍按 golden 判定。
+
+| # | golden 步骤 | Go 0.5.21（golden） | Rust 预期 |
+| --- | --- | --- | --- |
+| D1 | `lifecycle.json` `start_without_profile` | `CORE_OPERATION_FAILED`（retryable=false） | `PROFILE_NOT_APPLIED`（retryable=false），不发事件 |
+| D2 | `selection.json` `select_unknown` | `CORE_OPERATION_FAILED` | `NODE_NOT_FOUND`（field=`node_id`，retryable=false），与 `pin-ingress` 一致；选中的节点不变 |
+| D2 | `selection.json` `select_before_profile` | `CORE_OPERATION_FAILED` | `PROFILE_NOT_APPLIED`（retryable=false） |
+| D3 | `apply_dedupe.json` `apply_unknown_default_node_keeps_selection` | 接受（`applied=true`，`ProfileApplied`）：Go 在校验前先用当前选中的节点覆盖了 `default_node_id` | apply 先校验原始 Profile：`default_node_id` 不存在就报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate-profile` 一致，已应用的 Profile 不变，发 `ReloadFailed`。校验通过后，若新 Profile 仍含当前选中的节点，就沿用它 |
+
+D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`，在 Rust 下 `revision` 仍是 `2026-09-29T00:00:00Z#2`，因为 r3 被拒绝了；这两步也按此判定。
+
+D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
 
 ## 1. 热切换和排空
 
