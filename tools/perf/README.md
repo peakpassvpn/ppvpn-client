@@ -35,6 +35,7 @@ All metrics use the same profile: one Shadowsocks 2022 node and one AnyTLS node,
 ## Caveats
 
 - **RSS and size are the engine's alone.** The Rust engine runs inside the hosts' processes, so the hosts' total RSS and installer size are Desktop's measurements (#45). Against Go, sizes are a trend only.
+- **The fake node's certificate is trusted only on Linux.** AnyTLS trusts it through `SSL_CERT_FILE`, which Go honours on Linux but not on macOS, so the measurement runs on Linux. The Rust engine's lab binary must accept a CA file the same way, for example a flag or `SSL_CERT_FILE` with rustls-native-certs, for this script to measure it.
 - **Allocations do not compare across engines.** Go's runtime and a Rust allocator count differently.
 - **Out of scope for tier A:** CPU, throughput and latency depend on the runner. They are measured before the switch, on the lab hosts and real machines.
 
