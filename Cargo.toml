@@ -14,10 +14,10 @@ repository = "https://github.com/peakpassvpn/ppvpn-core"
 [workspace.dependencies]
 # sail by commit (#45: regressions run on named commits, no release needed).
 # Moving it is a commit of its own that also takes sail's [patch.crates-io]
-# below as of that commit (tools/sail-patch-check.sh).
+# below as of that commit (CI runs sail's tools/embed-patch-check.py).
 # auto-reload is not among sail's defaults and must stay on: without it the
 # runtime does not follow certificate files that change on disk.
-sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "bccd765637ee1b7419a4490eb661938ba4d2dea6", features = ["auto-reload"] }
+sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "68b647616148f6ceef6b9b3cd697334ade3b20c4", features = ["auto-reload"] }
 
 # Copied from sail's Cargo.toml at the commit above: sail builds against its
 # forks, so a crate that links sail must patch the same. Keep in step with
@@ -26,5 +26,7 @@ sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "bccd765637ee1b7
 btls = { git = "https://github.com/peakpassvpn/btls.git", rev = "3eb203a7ed44fd93d31056156a1ddfab5a6b9338" }
 btls-sys = { git = "https://github.com/peakpassvpn/btls.git", rev = "3eb203a7ed44fd93d31056156a1ddfab5a6b9338" }
 quinn-proto = { git = "https://github.com/peakpassvpn/quinn.git", rev = "ac0737da7704788407daab3c5e6abd3dca7ae55e" }
+# tun-rs's netlink graph without paste (RUSTSEC-2024-0436); see
+# sail's tools/security/policy.toml for when these go.
 netconfig-rs = { git = "https://github.com/peakpassvpn/netconfig-rs.git", rev = "a5caf848a0e0f18bc9810c1fa854f3ac6a903443" }
 route_manager = { git = "https://github.com/peakpassvpn/route_manager.git", rev = "5703367f56a7b4fed9fd02e216f2f110b4186eda" }

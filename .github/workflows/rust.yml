@@ -32,8 +32,14 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: fetch
+        run: cargo fetch --locked
+      # sail's own check, from the checkout of the sail commit Cargo.lock pins.
       - name: sail's [patch.crates-io], as of the pinned sail commit
-        run: tools/sail-patch-check.sh
+        run: |
+          manifest=$(cargo metadata --format-version 1 --locked --offline |
+            python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "sail"))')
+          python3 "$(dirname "$(dirname "$manifest")")/tools/embed-patch-check.py"
       - name: format
         run: cargo fmt --all --check
       - name: clippy
