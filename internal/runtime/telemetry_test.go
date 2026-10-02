@@ -14,30 +14,34 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
+// The routed conn is the inbound (client) side, as sing-box hands it to the
+// tracker: what the router reads from it is the client's upload, what it
+// writes to it is the download back to the client.
 func TestTelemetryCountsAndRemovesConnections(t *testing.T) {
 	tracker := newTelemetry()
-	left, right := net.Pipe()
-	wrapped := tracker.RoutedConnection(context.Background(), left, adapter.InboundContext{Network: "tcp"}, nil, nil)
-	writeDone := make(chan error, 1)
-	go func() { _, err := wrapped.Write([]byte("up")); writeDone <- err }()
+	inbound, client := net.Pipe()
+	wrapped := tracker.RoutedConnection(context.Background(), inbound, adapter.InboundContext{Network: "tcp"}, nil, nil)
+	go func() { _, _ = client.Write([]byte("up")) }() // client -> remote
 	buffer := make([]byte, 2)
-	if _, err := io.ReadFull(right, buffer); err != nil {
+	if _, err := io.ReadFull(wrapped, buffer); err != nil {
+		t.Fatal(err)
+	}
+	writeDone := make(chan error, 1)
+	go func() { _, err := wrapped.Write([]byte("down")); writeDone <- err }() // remote -> client
+	buffer = make([]byte, 4)
+	if _, err := io.ReadFull(client, buffer); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-writeDone; err != nil {
 		t.Fatal(err)
 	}
-	go func() { _, _ = right.Write([]byte("down")) }()
-	buffer = make([]byte, 4)
-	if _, err := io.ReadFull(wrapped, buffer); err != nil {
-		t.Fatal(err)
-	}
 	traffic, connections := tracker.snapshot()
-	if traffic.UploadBytes != 2 || traffic.DownloadBytes != 4 || len(connections) != 1 {
+	if traffic.UploadBytes != 2 || traffic.DownloadBytes != 4 || len(connections) != 1 ||
+		connections[0].UploadBytes != 2 || connections[0].DownloadBytes != 4 {
 		t.Fatalf("traffic=%#v connections=%#v", traffic, connections)
 	}
 	wrapped.Close()
-	right.Close()
+	client.Close()
 	_, connections = tracker.snapshot()
 	if len(connections) != 0 {
 		t.Fatal("closed connection retained")

@@ -46,18 +46,30 @@ type telemetry struct {
 }
 
 func newTelemetry() *telemetry { return &telemetry{connections: map[string]*tracked{}} }
+
+// counters returns the read and write counters for the routed conn, which is
+// the inbound (client) side: what is read from it is the client's upload
+// toward the remote, what is written to it is the remote's download back to
+// the client. (bufio.NewCounterConn takes read counters first, as sing-box's
+// clash API does with upload; before 0.5.16 the two were swapped.)
+func (item *tracked) counters(t *telemetry) (upload, download []N.CountFunc) {
+	return []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }},
+		[]N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}
+}
 func (t *telemetry) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
 	conn = takeCachedConn(conn)
 	item := t.add(metadata, outbound)
 	t.logRouted(item.connection.ID, metadata, rule, outbound)
-	counted := bufio.NewCounterConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
+	upload, download := item.counters(t)
+	counted := bufio.NewCounterConn(conn, upload, download)
 	return &trackedConn{ExtendedConn: counted, onClose: func() { t.remove(item.connection.ID) }}
 }
 func (t *telemetry) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
 	conn = takeCachedPacketConn(conn)
 	item := t.add(metadata, outbound)
 	t.logRouted(item.connection.ID, metadata, rule, outbound)
-	counted := bufio.NewCounterPacketConn(conn, []N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}, []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }})
+	upload, download := item.counters(t)
+	counted := bufio.NewCounterPacketConn(conn, upload, download)
 	return &trackedPacketConn{PacketConn: counted, onClose: func() { t.remove(item.connection.ID) }}
 }
 func (t *telemetry) add(metadata adapter.InboundContext, outbound adapter.Outbound) *tracked {
