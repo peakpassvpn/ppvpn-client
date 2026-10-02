@@ -3,8 +3,8 @@
 ## 分支与版本
 
 - 只有 `main` 一个长期分支，与 PPVPN Desktop 一致；功能与修复分支都向 `main` 提 PR。
-- 发版：在 PR 中更新 `version/version.go` 的 `CoreVersion`（以及 README、`docs/core-api.md`、
-  `docs/quickstart.md` 中的示例版本），合入后在该合并提交上打注解 tag `vX.Y.Z`。
+- 发版：在 PR 中只更新 `version/version.go` 的 `CoreVersion`（版本号的唯一来源；文档示例写 `X.Y.Z`，
+  不随发版修改），合入后在该合并提交上打注解 tag `vX.Y.Z`。
 - Desktop 的 `vendor/ppvpn-core/<ver>/manifest.json` 以 `source.commit` 固定完整 SHA，
   该 SHA 必须就是 `vX.Y.Z` 指向的提交。
 
@@ -152,7 +152,7 @@ shasum -a 256 \
 - 所有测试门禁通过，真实 sing-box 集成测试未被跳过。
 - `govulncheck` 没有报告可达漏洞。
 - 源码归档包含 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和对应版本的依赖清单。
-- `version` 输出与 `version/version.go`、README 和发布元数据一致。
+- `version` 输出与 `version/version.go`、tag 和发布元数据（`build-info.json`）一致。
 - `go.mod` 与 Makefile 中固定依赖版本没有漂移。
 - Profile golden 变化已人工审阅，未新增 Clash API 或公开内部 tag。
 - 文档示例与公开 DTO 同步。
