@@ -100,15 +100,21 @@ changes() { grep -c "msg=\"default interface\" event=changed name=$1 " "$OUT/cor
 # sing-tun reports a default interface change after a 1 s debounce
 # (monitor_shared.go delayCheckUpdate); dns-local follows from that event,
 # as direct sockets' binding does. Waits for the next one, logs its delay.
+# The Rust core must report within 2 s (the default). On the Go baseline
+# (SWITCH_GRACE_MS > 0) the front's own monitor can be held back for
+# seconds too, as each netlink event restarts the debounce (5146 ms seen on
+# a CI runner): it gets 10 s, and the log keeps the time it took.
+GRACE=${SWITCH_GRACE_MS:-0}
+if [ "$GRACE" -gt 0 ]; then REPORT_MS=${CHANGE_REPORT_MS:-10000}; else REPORT_MS=${CHANGE_REPORT_MS:-2000}; fi
 await_change() { # interface, previous count of its changes, what changed
   # Waits for a change reported for that interface: a change of another one
   # (ca's link-local address settling, seen on CI runners) does not count.
   started=$(now)
-  for i in $(seq 50); do [ "$(changes "$1")" -gt "$2" ] && break; sleep 0.1; done
+  while [ "$(changes "$1")" -le "$2" ] && [ $(( $(now) - started )) -lt "$REPORT_MS" ]; do sleep 0.1; done
   CHANGED_AT=$(now)
-  log "default interface changed to $1 $(( CHANGED_AT - started )) ms after: $3"
-  previous=$2; iface=$1
-  check "default interface change reported ($3)" '[ "$(changes "$iface")" -gt "$previous" ]'
+  took=$(( CHANGED_AT - started )); previous=$2; iface=$1
+  log "default interface changed to $1 $took ms after: $3 (limit $REPORT_MS ms)"
+  check "default interface change reported within $REPORT_MS ms ($3)" '[ "$(changes "$iface")" -gt "$previous" ]'
 }
 
 # The change is logged from the front's interface monitor; dns-local (and
@@ -118,7 +124,6 @@ await_change() { # interface, previous count of its changes, what changed
 # baseline in CI) waits up to that long after the reported change for
 # dns-local to follow, and logs how long it took; 0 (the default, and the
 # requirement for the Rust core) asks the first query after the change.
-GRACE=${SWITCH_GRACE_MS:-0}
 settle() { # answer regex, what
   [ "$GRACE" -gt 0 ] || return 0
   first=""
