@@ -1,6 +1,6 @@
 # 设计：core 自己维护的本地 DNS（dns-local）
 
-状态：PPVPN Core 工作小组已确认（2026-10-02），已实现，目标 0.5.21。作者 ppvpn-core-4b。实现与本稿的差异和补充见第 7 节。
+状态：PPVPN Core 工作小组已确认（2026-10-02），已实现，目标 0.5.20。作者 ppvpn-core-4b。实现与本稿的差异和补充见第 7 节。
 
 ## 1. 问题
 
@@ -77,8 +77,8 @@ macOS 的具体做法：
 
 建议：
 
-1. **0.5.21 保留，语义改为显式覆盖：** 给了就只用它，不再动态读，并在启动时记一条 warn："static local DNS servers; they will not follow network changes"。同时把"只取第一个"改成全部取用（过滤掉隧道网段），按顺序尝试。
-2. **Desktop 在 core ≥ 0.5.21 时不再传它**（macOS service 删掉 `physical_dns_servers` 那段）。Desktop 可以从 `get-version` 得到 core 版本，旧 core 继续传，新 core 不传。
+1. **0.5.20 保留，语义改为显式覆盖：** 给了就只用它，不再动态读，并在启动时记一条 warn：`msg="static local dns servers; they do not follow network changes"`。同时把"只取第一个"改成全部取用（过滤掉隧道网段），按顺序尝试。
+2. **Desktop 在 core ≥ 0.5.20 时不再传它**（macOS service 删掉 `physical_dns_servers` 那段）。Desktop 可以从 `get-version` 得到 core 版本，旧 core 继续传，新 core 不传。
 3. 参数本身保留，用于测试和特殊主机，不再是推荐用法。
 
 ### 3.6 与 0.5.4/0.5.5 回环修复的关系
@@ -119,7 +119,7 @@ macOS 的具体做法：
 - `internal/runtime`：在 `defaultInterfaceChanged` 里调用 `localdns.Invalidate()`；
 - `internal/dnstransport`：debug 日志加 `upstream`；
 - 文档：security.md 的 DNS 一节，以及 quickstart 的日志说明；
-- Desktop（另行安排）：core ≥ 0.5.21 时不再传 `--local-dns-servers`。
+- Desktop（另行安排）：core ≥ 0.5.20 时不再传 `--local-dns-servers`。
 
 ## 7. 实现说明（与设计稿的差异和补充）
 
