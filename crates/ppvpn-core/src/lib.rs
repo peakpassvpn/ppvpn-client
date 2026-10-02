@@ -16,6 +16,7 @@ pub(crate) mod profile;
 pub mod request;
 mod runtime;
 pub mod status;
+mod translate;
 pub mod types;
 
 pub use config::{
