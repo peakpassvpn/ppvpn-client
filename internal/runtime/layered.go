@@ -15,6 +15,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
@@ -75,10 +76,13 @@ type swapEngine interface {
 
 type kernel struct {
 	*singEngine
-	gen      uint64
-	cancel   context.CancelFunc
-	retired  time.Time
-	deadline time.Time
+	// reverseMapping: this kernel's DNS has dns.reverse_mapping on (the TUN
+	// configuration), so its router fills domains of address destinations.
+	reverseMapping bool
+	gen            uint64
+	cancel         context.CancelFunc
+	retired        time.Time
+	deadline       time.Time
 }
 
 type layeredEngine struct {
@@ -121,7 +125,7 @@ func newLayeredEngine(ctx context.Context, options option.Options) (*layeredEngi
 	if err != nil {
 		return nil, err
 	}
-	engine := &layeredEngine{ctx: frontCtx, front: front, switcher: &switchRouter{}, tracker: tracker,
+	engine := &layeredEngine{ctx: frontCtx, front: front, switcher: &switchRouter{reverse: reversemap.FromContext(ctx)}, tracker: tracker,
 		inbounds: options.Inbounds, route: options.Route, stop: make(chan struct{}),
 		drainLimit: drainLimit, drainGrace: drainGrace, drainCheck: drainCheckInterval}
 	first, err := engine.newKernel(ctx, options)
@@ -163,7 +167,8 @@ func (e *layeredEngine) newKernel(ctx context.Context, options option.Options) (
 		return nil, err
 	}
 	instance.Router().AppendTracker(kernelTracker{t: e.tracker, gen: gen, outbounds: instance.Outbound()})
-	return &kernel{singEngine: &singEngine{Box: instance, ctx: kernelCtx, tracker: e.tracker}, gen: gen, cancel: cancel}, nil
+	reverseMapping := options.DNS != nil && options.DNS.ReverseMapping
+	return &kernel{singEngine: &singEngine{Box: instance, ctx: kernelCtx, tracker: e.tracker}, reverseMapping: reverseMapping, gen: gen, cancel: cancel}, nil
 }
 
 func (k *kernel) close() {
@@ -535,8 +540,34 @@ func (e *layeredEngine) selectOutbound(outboundTag string) bool {
 // switchRouter is the router the front's inbounds were created with. It
 // forwards to the current kernel's router; a connection is routed once, by
 // the kernel current when it arrives.
+//
+// For a connection to an address it first fills the domain the way the
+// kernel's router would from dns.reverse_mapping, falling back to the
+// core's shared reverse mapping: a kernel's own mapping starts empty, while
+// clients keep addresses the previous kernel answered. The router then skips
+// its own lookup (it only looks up an empty Domain); a sniffed name still
+// replaces it.
 type switchRouter struct {
 	current atomic.Pointer[kernel]
+	reverse *reversemap.Store
+}
+
+func (r *switchRouter) fillDomain(k *kernel, metadata *adapter.InboundContext) {
+	// Only where the kernel's router would fill it itself: without
+	// reverse_mapping (outside TUN) an address destination has no domain.
+	if !k.reverseMapping || metadata.Domain != "" || !metadata.Destination.IsIP() {
+		return
+	}
+	addr := metadata.Destination.Addr
+	if dns := service.FromContext[adapter.DNSRouter](k.ctx); dns != nil {
+		if domain, ok := dns.LookupReverseMapping(addr); ok {
+			metadata.Domain = domain
+			return
+		}
+	}
+	if domain, ok := r.reverse.Lookup(addr); ok {
+		metadata.Domain = domain
+	}
 }
 
 var _ adapter.Router = (*switchRouter)(nil)
@@ -562,8 +593,12 @@ func (r *switchRouter) RoutePacketConnection(ctx context.Context, conn N.PacketC
 	return r.router().RoutePacketConnection(ctx, conn, metadata)
 }
 func (r *switchRouter) RouteConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
-	r.router().RouteConnectionEx(ctx, conn, metadata, onClose)
+	k := r.current.Load()
+	r.fillDomain(k, &metadata)
+	k.Router().RouteConnectionEx(ctx, conn, metadata, onClose)
 }
 func (r *switchRouter) RoutePacketConnectionEx(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
-	r.router().RoutePacketConnectionEx(ctx, conn, metadata, onClose)
+	k := r.current.Load()
+	r.fillDomain(k, &metadata)
+	k.Router().RoutePacketConnectionEx(ctx, conn, metadata, onClose)
 }

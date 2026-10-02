@@ -26,6 +26,7 @@ import (
 	"net/netip"
 	"slices"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/log"
@@ -57,10 +58,13 @@ type Outbound struct {
 	manager    adapter.OutboundManager
 	connection adapter.ConnectionManager
 	dns        adapter.DNSRouter
-	targetTag  string
-	inbounds   []string
-	ipv6Only   bool
-	target     adapter.Outbound
+	// reverse is the core's reverse mapping shared across kernels, read
+	// after dns (whose own mapping starts empty in every new kernel).
+	reverse   *reversemap.Store
+	targetTag string
+	inbounds  []string
+	ipv6Only  bool
+	target    adapter.Outbound
 }
 
 var (
@@ -82,6 +86,7 @@ func New(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string,
 		manager:    service.FromContext[adapter.OutboundManager](ctx),
 		connection: service.FromContext[adapter.ConnectionManager](ctx),
 		dns:        service.FromContext[adapter.DNSRouter](ctx),
+		reverse:    reversemap.FromContext(ctx),
 		targetTag:  options.Outbound,
 		inbounds:   slices.Clone(options.Inbounds),
 		ipv6Only:   options.IPv6Only,
@@ -170,6 +175,9 @@ func (o *Outbound) Restore(metadata *adapter.InboundContext) bool {
 		domain = ""
 		if o.dns != nil {
 			domain, _ = o.dns.LookupReverseMapping(metadata.Destination.Addr)
+		}
+		if !isDomain(domain) {
+			domain, _ = o.reverse.Lookup(metadata.Destination.Addr)
 		}
 		if !isDomain(domain) {
 			return false

@@ -1,9 +1,12 @@
 package domaindest
 
 import (
+	"net"
 	"net/netip"
 	"testing"
 
+	mDNS "github.com/miekg/dns"
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -78,5 +81,29 @@ func TestRestoreIPv6Only(t *testing.T) {
 				t.Fatalf("destination %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// After a kernel switch the new kernel's own reverse mapping is empty; the
+// shared store still gives direct's ipv6_only wrapper (no host IPv6 path)
+// the domain of a global IPv6 address, so it goes out by IPv4. Other
+// destinations stay untouched.
+func TestRestoreFallsBackToTheSharedReverseMapping(t *testing.T) {
+	store := reversemap.New()
+	answer := new(mDNS.Msg)
+	answer.Answer = append(answer.Answer, &mDNS.AAAA{Hdr: mDNS.RR_Header{Name: "dual.example.", Rrtype: mDNS.TypeAAAA, Class: mDNS.ClassINET, Ttl: 60}, AAAA: net.ParseIP("2001:db8::50")})
+	answer.Answer = append(answer.Answer, &mDNS.A{Hdr: mDNS.RR_Header{Name: "dual.example.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("203.0.113.50")})
+	store.Record(answer)
+	o := &Outbound{inbounds: []string{"tun"}, ipv6Only: true, dns: reverseMapping{table: map[netip.Addr]string{}}, reverse: store}
+	for destination, want := range map[string]string{
+		"[2001:db8::50]:443": "dual.example:443",
+		"203.0.113.50:443":   "203.0.113.50:443", // ipv6_only: IPv4 untouched
+		"[2001:db8::51]:443": "[2001:db8::51]:443",
+	} {
+		metadata := adapter.InboundContext{Inbound: "tun", Destination: M.ParseSocksaddr(destination)}
+		o.Restore(&metadata)
+		if got := metadata.Destination.String(); got != want {
+			t.Errorf("%s: %s, want %s", destination, got, want)
+		}
 	}
 }
