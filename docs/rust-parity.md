@@ -35,6 +35,15 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | --- | --- | --- | --- |
 | D4 | `test/lab/engine/cases/udp.sh` `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（lab 的 `us`，AnyTLS），仍经该节点发出（出口 `.13`）：Go 在路由时不检查这个字段 | 立即拒绝：不经该节点，也不改走别的节点或直连；记一行 debug 日志说明原因（节点或入口 `udp=false`）。多入口节点做故障转移时，`udp=false` 的入口不承接 UDP。`udp.3` 在 Rust 下应判为没有应答 |
 
+## Rust 新增的行为
+
+下面这些是 Go 0.5.21 没有的新能力。它们不改变 Go 已有的行为，所以不算偏离；Rust 版要另写用例覆盖，并在这里登记结论。
+
+| # | 行为 | 来源 | Rust 用例 | 状态 |
+| --- | --- | --- | --- | --- |
+| N1 | 越过 `expires_at` 时进入 `Degraded{ProfileExpired}`，由定时器触发；转发照常，apply 一份未过期的 Profile 后清除 | #86（Core 定） | | todo |
+| N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护 | #86（Desktop B） | | todo（G5 实机验收） |
+
 ## 测试宿主的约定
 
 - 所有 lab 和性能检查都通过 `ppvpn-core-lab`（Rust 的测试宿主）驱动 Rust 版。它要提供和 `ppvpn-core serve` 相同的命令行、日志格式，以及 lab 实际用到的那部分 Core API v1（#45）。
