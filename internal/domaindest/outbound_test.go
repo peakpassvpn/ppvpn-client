@@ -1,12 +1,12 @@
 package domaindest
 
 import (
-	mDNS "github.com/miekg/dns"
-	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"net"
 	"net/netip"
 	"testing"
 
+	mDNS "github.com/miekg/dns"
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 )

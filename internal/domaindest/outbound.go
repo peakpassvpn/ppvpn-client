@@ -22,11 +22,11 @@ package domaindest
 
 import (
 	"context"
-	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"net"
 	"net/netip"
 	"slices"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/log"

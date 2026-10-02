@@ -15,7 +15,6 @@ package dnstransport
 import (
 	"context"
 	"errors"
-	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"io"
 	"net"
 	"strings"
@@ -26,6 +25,7 @@ import (
 
 	mDNS "github.com/miekg/dns"
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
+	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
