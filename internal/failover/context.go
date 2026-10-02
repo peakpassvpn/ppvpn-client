@@ -13,7 +13,7 @@ import (
 
 // Context returns a sing-box context whose registries contain every upstream
 // protocol plus the ppvpn failover group, the TUN domain-destination wrapper, the
-// shared local proxy inbound, debug logging of failed node connections and debug logging and the remote-server guard around the DNS transports.
+// shared local proxy inbound, debug logging of failed node and direct connections and debug logging and the remote-server guard around the DNS transports.
 // Every place that builds, decodes or encodes sing-box options for this core
 // must use it instead of include.Context.
 func Context(ctx context.Context) context.Context {
