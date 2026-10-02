@@ -2,6 +2,7 @@ package hostipv6
 
 import (
 	"errors"
+	"net/netip"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -58,4 +59,67 @@ func hasIPv6Adapter() bool {
 		}
 	}
 	return true
+}
+
+// adapterIPv6 is what route needs of one adapter.
+type adapterIPv6 struct {
+	up      bool
+	gateway bool
+	addrs   []netip.Addr
+}
+
+func route() (bool, error) {
+	adapters, err := ipv6Adapters()
+	if err != nil {
+		return true, err
+	}
+	return routeFrom(adapters), nil
+}
+
+// routeFrom reports whether one adapter is up with a global unicast IPv6
+// address and an IPv6 default gateway. Wintun with our ULA never qualifies.
+func routeFrom(adapters []adapterIPv6) bool {
+	for _, adapter := range adapters {
+		if !adapter.up || !adapter.gateway {
+			continue
+		}
+		for _, addr := range adapter.addrs {
+			if globalUnicast(addr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ipv6Adapters lists the IPv6 adapters with their unicast addresses and
+// whether they have a default gateway (GAA_FLAG_INCLUDE_GATEWAYS).
+func ipv6Adapters() ([]adapterIPv6, error) {
+	const flags = windows.GAA_FLAG_INCLUDE_GATEWAYS | windows.GAA_FLAG_SKIP_ANYCAST | windows.GAA_FLAG_SKIP_MULTICAST | windows.GAA_FLAG_SKIP_DNS_SERVER
+	size := uint32(16 * 1024)
+	for range 3 {
+		buffer := make([]byte, size)
+		first := (*windows.IpAdapterAddresses)(unsafe.Pointer(&buffer[0]))
+		err := windows.GetAdaptersAddresses(windows.AF_INET6, flags, 0, first, &size)
+		switch {
+		case errors.Is(err, windows.ERROR_NO_DATA):
+			return nil, nil
+		case errors.Is(err, windows.ERROR_BUFFER_OVERFLOW):
+			continue
+		case err != nil:
+			return nil, err
+		}
+		var out []adapterIPv6
+		for a := first; a != nil; a = a.Next {
+			adapter := adapterIPv6{up: a.OperStatus == windows.IfOperStatusUp, gateway: a.FirstGatewayAddress != nil}
+			for u := a.FirstUnicastAddress; u != nil; u = u.Next {
+				if addr, ok := netip.AddrFromSlice(u.Address.IP()); ok {
+					adapter.addrs = append(adapter.addrs, addr)
+				}
+			}
+			out = append(out, adapter)
+		}
+		return out, nil
+	}
+	return nil, windows.ERROR_BUFFER_OVERFLOW
 }

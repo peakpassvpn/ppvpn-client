@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/config"
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/profile"
@@ -113,6 +114,61 @@ func TestApplyProfileProbesHostIPv6ForTUN(t *testing.T) {
 		if want := map[bool]int{false: 1, true: 2}[ipv6]; len(tun.Address) != want {
 			t.Fatalf("host ipv6=%v: address %v", ipv6, tun.Address)
 		}
+	}
+}
+
+// A host with IPv6 enabled but no IPv6 path keeps the IPv6 TUN and wraps
+// direct; the probe runs on every apply and again at start, and its result
+// is logged. A failed probe keeps IPv6 as before and says why.
+func TestHostIPv6RouteDecidesDirectHandOff(t *testing.T) {
+	var b strings.Builder
+	core := newCore(profile.PlatformCapabilities{Platform: "windows", TUN: profile.TUNCapabilities{Enabled: true}}, (&fakeFactory{}).create)
+	core.SetLogger(corelog.New(&b))
+	core.hostIPv6 = func() bool { return true }
+	route, routeErr := false, error(nil)
+	core.hostIPv6Route = func() (bool, error) { return route, routeErr }
+	built := func() *config.BuildResult {
+		core.mu.RLock()
+		defer core.mu.RUnlock()
+		return core.built
+	}
+
+	if _, err := core.ApplyProfile(testProfile("no-route", "a.example", "8.8.8.8"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !built().DirectIPv6HandOff {
+		t.Fatal("no IPv6 route: direct not wrapped")
+	}
+	tun := built().Options.Inbounds[len(built().Options.Inbounds)-1].Options.(*option.TunInboundOptions)
+	if len(tun.Address) != 2 {
+		t.Fatalf("no IPv6 route: TUN lost its IPv6 address: %v", tun.Address)
+	}
+	if !strings.Contains(b.String(), `msg="host ipv6" host_ipv6_enabled=true host_ipv6_route=false policy=tun_ipv6_direct_ipv4`) {
+		t.Fatalf("log:\n%s", b.String())
+	}
+
+	// The host joins an IPv6 network while stopped: start rebuilds.
+	route = true
+	if err := core.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if built().DirectIPv6HandOff {
+		t.Fatal("start kept the hand-off after the host gained an IPv6 route")
+	}
+	if err := core.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A failed probe: IPv6 as before, with a warning.
+	route, routeErr = true, errors.New("route table unreadable")
+	if _, err := core.ApplyProfile(testProfile("probe-failed", "a.example", "8.8.8.8"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if built().DirectIPv6HandOff {
+		t.Fatal("failed probe: direct wrapped")
+	}
+	if !strings.Contains(b.String(), `msg="host ipv6 route probe failed" error="route table unreadable" assumed_route=true`) {
+		t.Fatalf("log:\n%s", b.String())
 	}
 }
 

@@ -131,8 +131,22 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 - **不设置 `prefer_ipv4`**：sing-box 的 `strategy` 只影响核心自身的域名查找（`Lookup`），对被劫持
   的原始查询（`Exchange`）只有 `ipv4_only` 会过滤 AAAA，`prefer_ipv4` 不起作用。代理流量已经按域名
   交给节点，AAAA 应答不会因为节点缺 IPv6 而失败；过滤 AAAA 反而会让仅 IPv6 的站点不可达，因此核心
-  原样返回 AAAA。代价：物理网络无 IPv6 时，直连域名的 AAAA 连接会立即失败，由应用的 Happy
-  Eyeballs 回落到 IPv4。
+  原样返回 AAAA。物理网络无 IPv6 时直连怎么办见下一条。
+- **主机启用 IPv6 但没有 IPv6 出口**（物理网卡上没有“全局单播地址 + IPv6 默认路由”）：TUN 不变，
+  仍持有 IPv6 地址和路由，防止绕过隧道的泄漏；但应用会优先用 AAAA，连到 TUN 后命中直连规则，
+  直连出站按 IPv6 拨号立即失败。TUN 栈已在本地完成握手，应用看到的是“连上又断”，不会回落到
+  IPv4（Windows VM 102，0.5.16）。所以此时核心把 `direct` 换成一层包装：发往全局单播 IPv6
+  地址（`2000::/3`）、且域名已知（嗅探或 DNS 反查）的连接，TCP 和 UDP 都改成按域名，由物理直连
+  出站 `direct-host` 经 `dns-local` 只解析 IPv4 后拨出。IPv4、私有、ULA、链路本地目标，以及不知道
+  域名的 IPv6 字面地址照旧（后者和不开 VPN 时一样失败）。按 IP 规则直连的目标（比如含 IPv6 段的
+  规则集）同样覆盖，浏览器 DoH 或应用缓存的 AAAA 也不例外，因为改写发生在出站而不是 DNS。只改
+  出站，TUN inbound 和有 IPv6 出口的主机完全相同，所以主机 IPv6 状态变化不会重启 TUN。
+  探测：Linux 读 `/proc/net/if_inet6` 与 `/proc/net/ipv6_route`（排除 reject 路由），Windows 用
+  `GetAdaptersAddresses`（适配器 Up、有全局地址、有 IPv6 网关），macOS 读路由表中的 `::/0` 及其
+  网卡地址；TUN 自己只有 ULA，不会被算作出口。每次 apply 时探测，start 时结果变化就先重建；
+  info 日志写 `msg="host ipv6" host_ipv6_enabled=… host_ipv6_route=… policy=tun_ipv6|tun_ipv6_direct_ipv4|tun_ipv4_only`。
+  探测失败按有出口处理（即旧行为），并记一条 warn 写明原因。网络切换（换 Wi‑Fi）后要到下一次
+  apply 或 start 才重新探测。
 - **macOS 边界**：Darwin 上 `strict_route` 不起作用，sing-tun 也不改系统 DNS。发往全球单播 IPv6
   解析器（如运营商 `240e:…`）的查询会进入 TUN 被劫持；但在链路上的解析器（`fe80::…%en0`、路由器
   通告的本地 ULA、局域网 IPv4 网关）命中更具体的直连路由，不进入 TUN。macOS 宿主应把系统 DNS

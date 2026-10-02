@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
@@ -29,6 +30,10 @@ type BuildResult struct {
 	// IngressKeys maps every outbound that is one ingress (a single-ingress
 	// node tag, or a failover member tag) to the ingress endpoint_key.
 	IngressKeys map[string]string
+
+	// DirectIPv6HandOff is set when the build was made for a host without
+	// an IPv6 path (BuildOptions.NoHostIPv6Route) and wraps direct for it.
+	DirectIPv6HandOff bool
 
 	// tun is set while building a TUN configuration: proxy route targets
 	// then go through a domain-destination wrapper (see tundns.go).
@@ -55,6 +60,12 @@ type BuildOptions struct {
 	// out of a desktop TUN, for hosts with IPv6 disabled: sing-tun cannot add
 	// the address there and would fail the whole start. See hostipv6.
 	DisableTUNIPv6 bool
+	// NoHostIPv6Route marks a host whose IPv6 stack is enabled but that has
+	// no IPv6 path of its own (no global IPv6 address with a default route,
+	// see hostipv6.Route). The desktop TUN still routes IPv6, so nothing
+	// leaks around it; direct traffic hands a global IPv6 destination its
+	// domain, resolved to IPv4 (see handOffDirectIPv6).
+	NoHostIPv6Route bool
 }
 
 // RuleSetFile is a verified local copy of a profile rule set.
@@ -116,8 +127,55 @@ func BuildWithOptions(p *profile.Profile, platform profile.PlatformCapabilities,
 		if err := addTUNDNS(result, platform, p.Routing.Final, dnsRuleSetTags(opts.RuleSets)); err != nil {
 			return nil, err
 		}
+		if opts.NoHostIPv6Route && !opts.DisableTUNIPv6 && desktopTUN(platform) {
+			handOffDirectIPv6(result)
+		}
 	}
 	return result, nil
+}
+
+// DirectHostTag is the physical direct outbound behind the "direct" wrapper
+// on a host without an IPv6 path.
+const DirectHostTag = "direct-host"
+
+// handOffDirectIPv6 keeps direct traffic working on a host whose IPv6 stack
+// is enabled but has no IPv6 path of its own. The desktop TUN routes IPv6
+// (an address of its own and ::/0, so nothing bypasses it), applications
+// then prefer the AAAA answers of dual-stack names, and a direct connection
+// to such an address would fail at once: the TUN stack accepts it, the
+// physical interface cannot reach it. So "direct" becomes a wrapper that
+// hands a connection to a global unicast IPv6 address its domain (sniffed,
+// or from the DNS reverse mapping) and the physical outbound, now
+// DirectHostTag, resolves domains to IPv4 only. IPv4, private, ULA and
+// link-local destinations, and IPv6 addresses whose name is unknown, go out
+// unchanged. Only outbounds change: the TUN inbound is the same as on a host
+// with IPv6, so a change of the host's IPv6 state never restarts the TUN.
+func handOffDirectIPv6(result *BuildResult) {
+	for i, outbound := range result.Options.Outbounds {
+		if outbound.Tag != "direct" || outbound.Type != C.TypeDirect {
+			continue
+		}
+		direct, _ := outbound.Options.(*option.DirectOutboundOptions)
+		if direct == nil {
+			direct = &option.DirectOutboundOptions{}
+		}
+		physical := *direct
+		physical.DomainResolver = &option.DomainResolveOptions{Server: DNSLocalTag, Strategy: option.DomainStrategy(C.DomainStrategyIPv4Only)}
+		result.Options.Outbounds[i] = option.Outbound{Type: C.TypeDirect, Tag: DirectHostTag, Options: &physical}
+		result.Options.Outbounds = append(result.Options.Outbounds, option.Outbound{Type: domaindest.Type, Tag: "direct", Options: &domaindest.Options{
+			Outbound: DirectHostTag,
+			Inbounds: []string{TUNInboundTag},
+			IPv6Only: true,
+		}})
+		result.DirectIPv6HandOff = true
+		return
+	}
+}
+
+// desktopTUN reports whether the TUN is the desktop's own (auto_route, IPv6
+// routed); mobile hosts build the tunnel themselves and stay IPv4-only.
+func desktopTUN(platform profile.PlatformCapabilities) bool {
+	return platform.Platform != "ios" && platform.Platform != "android"
 }
 
 func addPlatformSafetyRules(result *BuildResult, p *profile.Profile) {
@@ -278,7 +336,7 @@ func addTUN(result *BuildResult, platform profile.PlatformCapabilities, excluded
 	default:
 		return fmt.Errorf("unsupported TUN stack %q", stack)
 	}
-	autoRoute := platform.Platform != "ios" && platform.Platform != "android"
+	autoRoute := desktopTUN(platform)
 	if autoRoute {
 		// Desktop TUN owns the default route; bind the core's own outbound
 		// sockets (ingress handshakes, direct traffic) to the physical
