@@ -129,6 +129,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
 - **pin 的处理**：`pins` 是宿主持久化的完整集合。新 Profile 里已经不存在的节点或入口，它的 pin 会被清除，并在 `cleared_pins` 里返回，同时发出 `NodeIngressPinCleared` 事件。返回值和事件内容相同：返回值给发起 apply 的调用方，事件给其他订阅者。宿主对两者的处理应当是幂等的。
 - **校验顺序**（D3，#45 已决定）：先校验**原始** Profile，再沿用当前选中的节点。
   - `default_node_id` 不存在时，报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate` 一致。Go 0.5.21 在这种情况下会接受，见 `docs/rust-parity.md`。
+  - 后端保证 `default_node_id` 指向下发的节点之一（`nodes[0]`），所以被拒只会发生在异常的 Profile 上。
   - 校验通过后选节点：传入的 `selected_node_id` 仍在新 Profile 里就用它；不在（或没有传）就用 `default_node_id`，传了却不在时 `selection_reset=true`。不再看实例内部"当前选中的节点"，所以重建实例和不重建的结果一样。
 - **规则集**：apply 前会准备规则集，总共最多等 10 秒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
 - **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
@@ -361,7 +362,8 @@ pub struct Error {
 - 多用户和接管；
 - service 的安装；
 - UI 状态的映射；
-- 系统层面的 DNS 设置。
+- 系统层面的 DNS 设置；
+- 拉取 Profile 时遇到 404 或 5xx，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。
 
 ## 10. 日志
 
@@ -422,6 +424,4 @@ pub struct Error {
 - **Desktop G**：new 阶段能确定的失败直接返回错误，不进入 `Fatal`。
 - **Desktop 第 14 节第 2 项**：不照搬"稳定期"，改为第 9 节的两条保证。
 
-待确认：
-
-- **Desktop H**：Backend 确认 Profile 一定带 `default_node_id`，并且它指向的节点一定存在。确认后写进第 4.1 节。
+- **Desktop H**：Backend 确认 `default_node_id` 一定存在，并且固定为 `nodes[0]`；有实例的入口一个都渲染不出来时返回错误，`nodes` 为空时返回 404，不会下发残缺或空的 Profile。已写进第 4.1 节和第 9 节。
