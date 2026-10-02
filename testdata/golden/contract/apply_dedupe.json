@@ -1,0 +1,452 @@
+{
+  "name": "apply_dedupe",
+  "description": "apply-profile: the same revision and routing mode is a no-op (applied=false, no event); a new revision applies; switching routing_mode without a new revision applies; an invalid profile leaves the applied one in place. A default_node_id that no longer exists is accepted on apply (the current selection is kept).",
+  "steps": [
+    {
+      "name": "apply_r1",
+      "method": "apply-profile",
+      "body": {},
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "apply_r1_again",
+      "method": "apply-profile",
+      "body": {},
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "apply_r1_global",
+      "method": "apply-profile",
+      "body": {
+        "routing_mode": "global"
+      },
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "status_global",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "apply_r1_global_again",
+      "method": "apply-profile",
+      "body": {
+        "routing_mode": "global"
+      },
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "apply_routing_mode_invalid",
+      "method": "apply-profile",
+      "body": {
+        "routing_mode": "direct"
+      },
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "apply_r2_rules",
+      "method": "apply-profile",
+      "body": {
+        "routing_mode": "rules"
+      },
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/revision",
+            "value": "2026-09-29T00:00:00Z#2"
+          }
+        ]
+      }
+    },
+    {
+      "name": "status_r2",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "apply_unknown_default_node_keeps_selection",
+      "method": "apply-profile",
+      "body": {},
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/revision",
+            "value": "2026-09-29T00:00:00Z#3"
+          },
+          {
+            "op": "replace",
+            "path": "/selection/default_node_id",
+            "value": "missing"
+          }
+        ]
+      }
+    },
+    {
+      "name": "status_r3",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "apply_invalid_keeps_r3",
+      "method": "apply-profile",
+      "body": {},
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/revision",
+            "value": "2026-09-29T00:00:00Z#4"
+          },
+          {
+            "op": "replace",
+            "path": "/schema_version",
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "status_still_r3",
+      "method": "get-status",
+      "body": {}
+    }
+  ],
+  "expect": [
+    {
+      "events": [
+        {
+          "revision": "2026-09-29T00:00:00Z#1",
+          "type": "ProfileApplied"
+        }
+      ],
+      "response": {
+        "data": {
+          "applied": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "applied": false
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "revision": "2026-09-29T00:00:00Z#1",
+          "type": "ProfileApplied"
+        }
+      ],
+      "response": {
+        "data": {
+          "applied": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#1",
+          "routing_mode": "global",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "applied": false
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ROUTING_MODE_INVALID",
+          "field": "routing_mode",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [
+        {
+          "revision": "2026-09-29T00:00:00Z#2",
+          "type": "ProfileApplied"
+        }
+      ],
+      "response": {
+        "data": {
+          "applied": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#2",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "revision": "2026-09-29T00:00:00Z#3",
+          "type": "ProfileApplied"
+        }
+      ],
+      "response": {
+        "data": {
+          "applied": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#3",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "message": "candidate validation or build failed",
+          "type": "ReloadFailed"
+        }
+      ],
+      "response": {
+        "error": {
+          "code": "SCHEMA_UNSUPPORTED",
+          "field": "schema_version",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#3",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    }
+  ]
+}

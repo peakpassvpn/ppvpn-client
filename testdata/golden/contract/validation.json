@@ -1,0 +1,3325 @@
+{
+  "name": "validation",
+  "description": "validate-profile: one step per validation outcome. The base profile is valid; each step's patch breaks one thing. Expectations hold the error code, field and retryable (message is free text and left out).",
+  "steps": [
+    {
+      "name": "valid_base",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "schema_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/schema_version",
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "field_required_revision",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/revision",
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "time_range_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/expires_at",
+            "value": "2026-09-28T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "profile_expired",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/generated_at",
+            "value": "2000-01-01T00:00:00Z"
+          },
+          {
+            "op": "replace",
+            "path": "/expires_at",
+            "value": "2000-01-02T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "field_required_nodes",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes",
+            "value": []
+          },
+          {
+            "op": "remove",
+            "path": "/selection/default_node_id"
+          }
+        ]
+      }
+    },
+    {
+      "name": "node_id_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/id",
+            "value": "bad id with spaces"
+          }
+        ]
+      }
+    },
+    {
+      "name": "node_id_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/1/id",
+            "value": "3f2c9a1e-0000-4000-8000-000000000001-128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "entry_key_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/entry_key",
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "exit_ip_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/exit/ip",
+            "value": "not-an-ip"
+          }
+        ]
+      }
+    },
+    {
+      "name": "capabilities_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/capabilities",
+            "value": {
+              "tcp": false,
+              "udp": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "default_node_not_found",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/selection/default_node_id",
+            "value": "missing"
+          }
+        ]
+      }
+    },
+    {
+      "name": "selection_mode_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/selection/mode",
+            "value": "auto"
+          }
+        ]
+      }
+    },
+    {
+      "name": "field_required_ingresses",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses",
+            "value": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "ingress_role_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/role",
+            "value": "backup"
+          }
+        ]
+      }
+    },
+    {
+      "name": "endpoint_key_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/endpoint_key",
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "endpoint_key_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/1/endpoint_key",
+            "value": "9001"
+          }
+        ]
+      }
+    },
+    {
+      "name": "replica_ordinal_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/1/replica_ordinal",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "ingress_label_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/1/label",
+            "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "name": "protocol_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/1/protocol",
+            "value": "trojan"
+          }
+        ]
+      }
+    },
+    {
+      "name": "entry_ip_not_public",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/endpoint/ip",
+            "value": "192.168.1.10"
+          }
+        ]
+      }
+    },
+    {
+      "name": "entry_ip_not_public_documentation_range",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/endpoint/ip",
+            "value": "203.0.113.5"
+          }
+        ]
+      }
+    },
+    {
+      "name": "port_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/endpoint/port",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "field_required_domain_without_ip",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/1/endpoint/domain",
+            "value": "bad_domain!"
+          }
+        ]
+      }
+    },
+    {
+      "name": "credentials_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/credentials",
+            "value": {
+              "shadowsocks": {
+                "method": "2022-blake3-aes-128-gcm",
+                "user_key": "AAAAAAAAAAAAAAAAAAAAAA=="
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "reality_required",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "remove",
+            "path": "/nodes/0/ingresses/0/tls/reality"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reality_public_key_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/tls/reality/public_key",
+            "value": "short"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reality_short_id_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/tls/reality/short_id",
+            "value": "zz"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tls_required",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "remove",
+            "path": "/nodes/1/ingresses/0/tls"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tls_server_name_mismatch",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/1/ingresses/0/tls/server_name",
+            "value": "other.example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tls_server_name_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/tls/server_name",
+            "value": "bad name"
+          }
+        ]
+      }
+    },
+    {
+      "name": "shadowsocks_method_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/1/credentials/shadowsocks/method",
+            "value": "aes-256-gcm"
+          }
+        ]
+      }
+    },
+    {
+      "name": "shadowsocks_key_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/1/credentials/shadowsocks/user_key",
+            "value": "short"
+          }
+        ]
+      }
+    },
+    {
+      "name": "shadowsocks_server_key_removed",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/nodes/0/ingresses/1/credentials/shadowsocks/server_key",
+            "value": "AAAAAAAAAAAAAAAAAAAAAA=="
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_id_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/0/id",
+            "value": "bad id"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_id_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/id",
+            "value": "bypass-private"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_match_empty",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/0/match",
+            "value": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "cidr_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/0/match",
+            "value": {
+              "ip_cidrs": [
+                "10.0.0.0/33"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "cidr_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/0/match",
+            "value": {
+              "ip_cidrs": [
+                "10.0.0.0/8",
+                "10.0.0.0/8"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "domain_wildcard_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "domains": [
+                "*.video.example"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "domain_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "domain_suffixes": [
+                "video.example",
+                "video.example"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "port_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "ports": [
+                443,
+                443
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "port_range_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "port_ranges": [
+                "90-80"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "network_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "protocols": [
+                "icmp"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "routing_node_not_found",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/action",
+            "value": {
+              "type": "proxy",
+              "target": "node",
+              "node_id": "missing"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "routing_target_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/action",
+            "value": {
+              "type": "proxy",
+              "target": "elsewhere"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "routing_action_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/action",
+            "value": {
+              "type": "bounce"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "routing_action_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/final",
+            "value": {
+              "type": "direct",
+              "target": "selected"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_not_found",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "rule_set_ids": [
+                "missing"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_url_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/routing/rule_sets",
+            "value": [
+              {
+                "id": "cn",
+                "format": "binary",
+                "url": "http://rules.example.com/cn.srs",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "ingress_count_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses",
+            "value": [
+              {
+                "role": "primary",
+                "endpoint_key": "9100",
+                "replica_ordinal": 0,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9101",
+                "replica_ordinal": 1,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9102",
+                "replica_ordinal": 2,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9103",
+                "replica_ordinal": 3,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9104",
+                "replica_ordinal": 4,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9105",
+                "replica_ordinal": 5,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9106",
+                "replica_ordinal": 6,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9107",
+                "replica_ordinal": 7,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9108",
+                "replica_ordinal": 8,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9109",
+                "replica_ordinal": 9,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9110",
+                "replica_ordinal": 10,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9111",
+                "replica_ordinal": 11,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9112",
+                "replica_ordinal": 12,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9113",
+                "replica_ordinal": 13,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9114",
+                "replica_ordinal": 14,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9115",
+                "replica_ordinal": 15,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9116",
+                "replica_ordinal": 16,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9117",
+                "replica_ordinal": 17,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9118",
+                "replica_ordinal": 18,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9119",
+                "replica_ordinal": 19,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9120",
+                "replica_ordinal": 20,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9121",
+                "replica_ordinal": 21,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9122",
+                "replica_ordinal": 22,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9123",
+                "replica_ordinal": 23,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9124",
+                "replica_ordinal": 24,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9125",
+                "replica_ordinal": 25,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9126",
+                "replica_ordinal": 26,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9127",
+                "replica_ordinal": 27,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9128",
+                "replica_ordinal": 28,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9129",
+                "replica_ordinal": 29,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9130",
+                "replica_ordinal": 30,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9131",
+                "replica_ordinal": 31,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9132",
+                "replica_ordinal": 32,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9133",
+                "replica_ordinal": 33,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9134",
+                "replica_ordinal": 34,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9135",
+                "replica_ordinal": 35,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9136",
+                "replica_ordinal": 36,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9137",
+                "replica_ordinal": 37,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9138",
+                "replica_ordinal": 38,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9139",
+                "replica_ordinal": 39,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9140",
+                "replica_ordinal": 40,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9141",
+                "replica_ordinal": 41,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9142",
+                "replica_ordinal": 42,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9143",
+                "replica_ordinal": 43,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9144",
+                "replica_ordinal": 44,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9145",
+                "replica_ordinal": 45,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9146",
+                "replica_ordinal": 46,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9147",
+                "replica_ordinal": 47,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9148",
+                "replica_ordinal": 48,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9149",
+                "replica_ordinal": 49,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9150",
+                "replica_ordinal": 50,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9151",
+                "replica_ordinal": 51,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9152",
+                "replica_ordinal": 52,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9153",
+                "replica_ordinal": 53,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9154",
+                "replica_ordinal": 54,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9155",
+                "replica_ordinal": 55,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9156",
+                "replica_ordinal": 56,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9157",
+                "replica_ordinal": 57,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9158",
+                "replica_ordinal": 58,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9159",
+                "replica_ordinal": 59,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9160",
+                "replica_ordinal": 60,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9161",
+                "replica_ordinal": 61,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9162",
+                "replica_ordinal": 62,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9163",
+                "replica_ordinal": 63,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              },
+              {
+                "role": "backup",
+                "endpoint_key": "9164",
+                "replica_ordinal": 64,
+                "protocol": "shadowsocks",
+                "endpoint": {
+                  "domain": "tyo-01-relay.edge.example.com",
+                  "port": 8443
+                },
+                "credentials": {
+                  "shadowsocks": {
+                    "method": "2022-blake3-aes-128-gcm",
+                    "user_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+                    "identity_keys": [
+                      "AQEBAQEBAQEBAQEBAQEBAQ=="
+                    ]
+                  }
+                },
+                "capabilities": {
+                  "tcp": true,
+                  "udp": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "domain_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "domains": [
+                "bad_domain!"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "network_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "protocols": [
+                "tcp",
+                "tcp"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "port_range_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "port_ranges": [
+                "80-90",
+                "80-90"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "transport_unsupported",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/nodes/0/ingresses/1/transport",
+            "value": {
+              "type": "ws"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_id_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/routing/rule_sets",
+            "value": [
+              {
+                "id": "bad id",
+                "format": "binary",
+                "url": "https://rules.example.com/cn.srs",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_sha256_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/routing/rule_sets",
+            "value": [
+              {
+                "id": "cn",
+                "format": "binary",
+                "url": "https://rules.example.com/cn.srs",
+                "sha256": "xyz"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_id_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/routing/rule_sets",
+            "value": [
+              {
+                "id": "cn",
+                "format": "binary",
+                "url": "https://rules.example.com/a.srs",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              },
+              {
+                "id": "cn",
+                "format": "binary",
+                "url": "https://rules.example.com/b.srs",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_interval_invalid",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/routing/rule_sets",
+            "value": [
+              {
+                "id": "cn",
+                "format": "binary",
+                "url": "https://rules.example.com/cn.srs",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "update_interval_seconds": -1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_ref_duplicate",
+      "method": "validate-profile",
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/routing/rule_sets",
+            "value": [
+              {
+                "id": "cn",
+                "format": "binary",
+                "url": "https://rules.example.com/cn.srs",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          },
+          {
+            "op": "replace",
+            "path": "/routing/rules/1/match",
+            "value": {
+              "rule_set_ids": [
+                "cn",
+                "cn"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule_set_hosts_invalid",
+      "method": "validate-profile",
+      "body": {
+        "allowed_rule_set_hosts": [
+          "https://bad/"
+        ]
+      },
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "profile_missing",
+      "method": "validate-profile",
+      "body": {}
+    },
+    {
+      "name": "rule_set_host_not_allowed",
+      "method": "validate-profile",
+      "body": {
+        "allowed_rule_set_hosts": [
+          "other.example.com"
+        ]
+      },
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "add",
+            "path": "/routing/rule_sets",
+            "value": [
+              {
+                "id": "cn",
+                "format": "binary",
+                "url": "https://rules.example.com/cn.srs",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          },
+          {
+            "op": "add",
+            "path": "/routing/rules/-",
+            "value": {
+              "id": "cn-direct",
+              "match": {
+                "rule_set_ids": [
+                  "cn"
+                ]
+              },
+              "action": {
+                "type": "direct"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "routing_mode_invalid",
+      "method": "validate-profile",
+      "body": {
+        "routing_mode": "fastest"
+      },
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "request_invalid_unknown_field",
+      "method": "validate-profile",
+      "body": {
+        "profil": {}
+      }
+    }
+  ],
+  "expect": [
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "valid": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "SCHEMA_UNSUPPORTED",
+          "field": "schema_version",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "FIELD_REQUIRED",
+          "field": "revision",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "TIME_RANGE_INVALID",
+          "field": "expires_at",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "PROFILE_EXPIRED",
+          "field": "expires_at",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "FIELD_REQUIRED",
+          "field": "nodes",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "NODE_ID_INVALID",
+          "field": "nodes[0].id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "NODE_ID_DUPLICATE",
+          "field": "nodes[1].id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ENTRY_KEY_INVALID",
+          "field": "nodes[0].entry_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "EXIT_IP_INVALID",
+          "field": "nodes[0].exit.ip",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CAPABILITIES_INVALID",
+          "field": "nodes[0].capabilities",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "DEFAULT_NODE_NOT_FOUND",
+          "field": "selection.default_node_id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "SELECTION_MODE_UNSUPPORTED",
+          "field": "selection.mode",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "FIELD_REQUIRED",
+          "field": "nodes[0].ingresses",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "INGRESS_ROLE_INVALID",
+          "field": "nodes[0].ingresses[0].role",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ENDPOINT_KEY_INVALID",
+          "field": "nodes[0].ingresses[0].endpoint_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ENDPOINT_KEY_DUPLICATE",
+          "field": "nodes[0].ingresses[1].endpoint_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "REPLICA_ORDINAL_INVALID",
+          "field": "nodes[0].ingresses[1].replica_ordinal",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "INGRESS_LABEL_INVALID",
+          "field": "nodes[0].ingresses[1].label",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "PROTOCOL_UNSUPPORTED",
+          "field": "nodes[0].ingresses[1].protocol",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ENTRY_IP_NOT_PUBLIC",
+          "field": "nodes[0].ingresses[0].endpoint.ip",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ENTRY_IP_NOT_PUBLIC",
+          "field": "nodes[0].ingresses[0].endpoint.ip",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "PORT_INVALID",
+          "field": "nodes[0].ingresses[0].endpoint.port",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "FIELD_REQUIRED",
+          "field": "nodes[0].ingresses[1].endpoint.domain",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CREDENTIALS_INVALID",
+          "field": "nodes[0].ingresses[0].credentials.vless",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "REALITY_REQUIRED",
+          "field": "nodes[0].ingresses[0].tls.reality",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "REALITY_PUBLIC_KEY_INVALID",
+          "field": "nodes[0].ingresses[0].tls.reality.public_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "REALITY_SHORT_ID_INVALID",
+          "field": "nodes[0].ingresses[0].tls.reality.short_id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "TLS_REQUIRED",
+          "field": "nodes[1].ingresses[0].tls",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "TLS_SERVER_NAME_MISMATCH",
+          "field": "nodes[1].ingresses[0].tls.server_name",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "TLS_SERVER_NAME_INVALID",
+          "field": "nodes[0].ingresses[0].tls.server_name",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "SHADOWSOCKS_METHOD_UNSUPPORTED",
+          "field": "nodes[0].ingresses[1].credentials.shadowsocks.method",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "SHADOWSOCKS_KEY_INVALID",
+          "field": "nodes[0].ingresses[1].credentials.shadowsocks.user_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "SHADOWSOCKS_SERVER_KEY_REMOVED",
+          "field": "nodes[0].ingresses[1].credentials.shadowsocks.server_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_ID_INVALID",
+          "field": "routing.rules[0].id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_ID_DUPLICATE",
+          "field": "routing.rules[1].id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_MATCH_EMPTY",
+          "field": "routing.rules[0].match",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CIDR_INVALID",
+          "field": "routing.rules[0].match.ip_cidrs[0]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CIDR_DUPLICATE",
+          "field": "routing.rules[0].match.ip_cidrs[1]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "DOMAIN_WILDCARD_UNSUPPORTED",
+          "field": "routing.rules[1].match.domains[0]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "DOMAIN_DUPLICATE",
+          "field": "routing.rules[1].match.domain_suffixes[1]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "PORT_DUPLICATE",
+          "field": "routing.rules[1].match.ports[1]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "PORT_RANGE_INVALID",
+          "field": "routing.rules[1].match.port_ranges[0]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "NETWORK_UNSUPPORTED",
+          "field": "routing.rules[1].match.protocols[0]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ROUTING_NODE_NOT_FOUND",
+          "field": "routing.rules[1].action.node_id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ROUTING_TARGET_UNSUPPORTED",
+          "field": "routing.rules[1].action.target",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ROUTING_ACTION_UNSUPPORTED",
+          "field": "routing.rules[1].action.type",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ROUTING_ACTION_INVALID",
+          "field": "routing.final",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_NOT_FOUND",
+          "field": "routing.rules[1].match.rule_set_ids[0]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_URL_INVALID",
+          "field": "routing.rule_sets[0].url",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "INGRESS_COUNT_INVALID",
+          "field": "nodes[0].ingresses",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "DOMAIN_INVALID",
+          "field": "routing.rules[1].match.domains[0]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "NETWORK_DUPLICATE",
+          "field": "routing.rules[1].match.protocols[1]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "PORT_RANGE_DUPLICATE",
+          "field": "routing.rules[1].match.port_ranges[1]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "TRANSPORT_UNSUPPORTED",
+          "field": "nodes[0].ingresses[1].transport.type",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_ID_INVALID",
+          "field": "routing.rule_sets[0].id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_SHA256_INVALID",
+          "field": "routing.rule_sets[0].sha256",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_ID_DUPLICATE",
+          "field": "routing.rule_sets[1].id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_INTERVAL_INVALID",
+          "field": "routing.rule_sets[0].update_interval_seconds",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_REF_DUPLICATE",
+          "field": "routing.rules[1].match.rule_set_ids[1]",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_HOSTS_INVALID",
+          "field": "allowed_rule_set_hosts",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CORE_OPERATION_FAILED",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "RULE_SET_HOST_NOT_ALLOWED",
+          "field": "routing.rule_sets[0].url",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "ROUTING_MODE_INVALID",
+          "field": "routing_mode",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "REQUEST_INVALID",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    }
+  ]
+}
