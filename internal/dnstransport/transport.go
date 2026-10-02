@@ -25,6 +25,7 @@ import (
 
 	mDNS "github.com/miekg/dns"
 	"github.com/peakpassvpn/ppvpn-core/internal/corelog"
+	"github.com/peakpassvpn/ppvpn-core/internal/localdns"
 	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
@@ -79,6 +80,9 @@ func Register(registry *dns.TransportRegistry) {
 	dns.RegisterTransport[option.RemoteHTTPSDNSServerOptions](registry, C.DNSTypeHTTPS, wrap(transport.NewHTTPS))
 	dns.RegisterTransport[option.RemoteDNSServerOptions](registry, C.DNSTypeTCP, wrap(transport.NewTCP))
 	dns.RegisterTransport[option.RemoteDNSServerOptions](registry, C.DNSTypeUDP, wrap(transport.NewUDP))
+	localdns.Register(registry, wrap(func(ctx context.Context, _ log.ContextLogger, tag string, options localdns.Options) (adapter.DNSTransport, error) {
+		return localdns.NewTransport(ctx, loggerFrom(ctx), tag, options)
+	}))
 }
 
 func wrap[T any](constructor dns.TransportConstructorFunc[T]) dns.TransportConstructorFunc[T] {
@@ -301,6 +305,10 @@ var staleErrors = append([]error{io.EOF, io.ErrUnexpectedEOF, io.ErrClosedPipe, 
 // server. attempt is 0 for an unguarded transport.
 func (w *wrapped) attempt(ctx context.Context, upstream adapter.DNSTransport, message *mDNS.Msg, attempt int) (*mDNS.Msg, error) {
 	started := time.Now()
+	answeredBy := func() string { return "" }
+	if w.log.DebugEnabled() {
+		ctx, answeredBy = localdns.WithUpstream(ctx)
+	}
 	response, err := upstream.Exchange(ctx, message)
 	if err == nil {
 		w.store.Record(response)
@@ -313,6 +321,9 @@ func (w *wrapped) attempt(ctx context.Context, upstream adapter.DNSTransport, me
 		name, qtype = message.Question[0].Name, mDNS.TypeToString[message.Question[0].Qtype]
 	}
 	fields := []any{"name", name, "type", qtype, "server", upstream.Tag()}
+	if answered := answeredBy(); answered != "" {
+		fields = append(fields, "upstream", answered)
+	}
 	if attempt > 0 {
 		fields = append(fields, "attempt", attempt)
 	}

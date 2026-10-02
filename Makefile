@@ -15,13 +15,22 @@ export GO_TAGS
 DESKTOP_TAGS ?= $(GO_TAGS),with_gvisor,with_dhcp
 export PATH := $(GO_BIN):$(PATH)
 
-.PHONY: test test-race build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android
+.PHONY: test test-race print-desktop-tags build-lab-linux build-desktop build-release-desktop build-desktop-artifact build-macos-artifact build-macos-cli-artifact build-windows-artifact build-linux-artifact bootstrap-mobile build-mobile-ios build-mobile-macos build-mobile-android build-ios-artifact build-android-artifact verify-mobile-ios verify-mobile-macos verify-mobile-android
 
 test:
 	go test -tags $(GO_TAGS) ./...
 
 test-race:
 	go test -tags $(GO_TAGS) -race ./...
+
+# CI builds with exactly the release tags.
+print-desktop-tags:
+	@echo $(DESKTOP_TAGS)
+
+# Lab build for proto/sail-lab tests of dns-local (reads its servers from
+# $$PPVPN_LOCALDNS_TEST_FILE); never shipped: release.yml rejects it.
+build-lab-linux:
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(or $(GOARCH),amd64) go build -tags $(DESKTOP_TAGS),localdns_testsource -trimpath -o build/ppvpn-core-lab-linux ./cmd/ppvpn-core
 
 build-desktop:
 	go build -tags $(DESKTOP_TAGS) -trimpath -o build/ppvpn-core ./cmd/ppvpn-core

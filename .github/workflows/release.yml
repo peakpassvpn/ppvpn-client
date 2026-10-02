@@ -156,6 +156,18 @@ jobs:
           fi
           find artifacts -type f ! -name '*SHA256SUMS' -exec mv {} release/ \;
           chmod +x release/ppvpn-core-linux-amd64
+          # Lab builds read dns-local's servers from a file (localdns_testsource);
+          # no released file may contain that source or have been built with the tag.
+          if grep -la ppvpn-localdns-testsource-enabled release/*; then
+            echo "release files above contain the localdns test source" >&2
+            exit 1
+          fi
+          for file in release/*; do
+            if go version -m "$file" 2>/dev/null | grep -Eq 'build[[:space:]]+-tags=(.*,)?localdns_testsource(,|$)'; then
+              echo "$file was built with localdns_testsource" >&2
+              exit 1
+            fi
+          done
           core_version=$(release/ppvpn-core-linux-amd64 version | jq -er .core_version)
           # A tag must name the version the binaries report.
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$core_version" != "$GITHUB_REF_NAME" ]; then

@@ -68,11 +68,18 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   另有 `fde2:ec40:9312:c7fd::2`）通告为接口 DNS（Windows 与 Linux systemd-resolved 由 sing-tun 设置），
   发往它的查询都由核心应答；发往其他地址 53 端口的明文查询只要进了隧道也同样被劫持。
 - **按路由选择解析器**：
-  - `dns-local`：宿主用 `serve --local-dns-servers` 传入物理网络解析器时，是发往其中第一个（隧道
-    地址段之外）的 UDP 服务器；否则是 sing-box `local` 服务器。`local` 会跳过 TUN 本身（Linux 通过
-    systemd-resolved 取默认物理网卡的链路 DNS，Windows 读非隧道网卡的 DNS，Darwin 在有 TUN 时查询
-    DHCP 下发的服务器，拿不到时退回系统解析器，而桌面端已把它指向隧道，所以 macOS 宿主应当传入
-    解析器）。两种情况都借 `auto_detect_interface` 绑定物理网卡。
+  - `dns-local`（0.5.21 起）：Windows 与 macOS 上是核心自己的 `ppvpn-local` 传输，向**物理默认网卡**
+    （即 `auto_detect_interface` 绑定直连 socket 的那块网卡）的 DNS 服务器发 UDP（截断时改用 TCP），
+    每个服务器 2 秒，按顺序尝试。服务器列表在默认网卡每次变化时立即作废、下次查询时重读（同一网卡上
+    最多每秒一次）；Windows 读该网卡的 `GetAdaptersAddresses`，macOS 读 `scutil` 的
+    `State:/Network/Global/DNS`（仅当它属于该网卡），否则取 `scutil --dns` 中该网卡的 scoped 解析器。
+    隧道地址段（含 0.5.7 之前的）、回环、`fec0::/10` 一律排除；链路本地 IPv6 只用该网卡上的（zone
+    指向该网卡，否则丢弃）。读不到服务器时查询立即失败（客户端得到 SERVFAIL），**从不调用系统解析器、
+    从不退回 127.0.0.1**，因此不会经系统 DNS 绕回隧道（0.5.4/0.5.5 的回环）。每次列表变化记一行
+    `msg="local dns servers"`（`source`、`interface`、`servers`）。Linux 上不传服务器时仍是 sing-box `local`
+    （systemd-resolved 的默认网卡链路 DNS，或 `/etc/resolv.conf`）。宿主用 `serve --local-dns-servers` 传入
+    服务器时，它们是静态覆盖：全部（隧道地址段之外的）按顺序使用，不跟随网络变化（启动时记 warn）。
+    各种情况都借 `auto_detect_interface` 绑定物理网卡。
   - `dns-remote`：DoT 到 `1.1.1.1:853`，经所选节点（`selected`）拨出，查询不出现在本地网络上。失败时（0.5.11 起）
     依次回退到 `dns-remote-8.8.8.8`、`dns-remote-9.9.9.9`（同样是经所选节点的 DoT）。只用境外公共解析器：
     这里解析的是走代理的域名，境内解析器会记录它们，也可能返回污染结果；全部失败时回 SERVFAIL，不降级到其他解析器。
@@ -80,7 +87,7 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
     `dns-local`，路由为代理的走 `dns-remote`，路由为拒绝的直接拒绝；未命中规则时跟随
     `routing.final`：final 为 direct 时走 `dns-local`，否则走 `dns-remote`。端口、协议、CIDR 条件
     在解析时未知，不参与镜像。
-  - `route.default_domain_resolver` 为 `dns-local`：节点入口域名和直连目标都用系统解析器解析。
+  - `route.default_domain_resolver` 为 `dns-local`：节点入口域名和直连目标都经 `dns-local` 解析。
 - **把域名交给节点**：sing-box 1.13 已删除 `sniff_override_destination`，嗅探到的域名只用于匹配规则，
   不会改写目标地址。核心在每个代理出站（selected 及固定节点）前加一层 `ppvpn-domain-destination`：
   对来自 `tun` 的连接，只要已知域名（嗅探结果优先，其次是核心 DNS 的 `reverse_mapping`），就把目标

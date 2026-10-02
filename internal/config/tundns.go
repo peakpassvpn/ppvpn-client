@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
+	"github.com/peakpassvpn/ppvpn-core/internal/localdns"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -195,30 +196,30 @@ func remoteDNSServer(tag, server string) option.DNSServerOptions {
 // and querying it would loop.
 var tunnelPrefixes = append(append([]netip.Prefix(nil), tunPrefixes...), tunLegacyPrefixes...)
 
-// LocalDNSServer validates the host-supplied physical resolvers and returns
-// the first one outside the tunnel. ok is false when none is left. Every
-// entry must be an IP, IP:port or [IPv6]:port (zones allowed); the default
-// port is 53.
-func LocalDNSServer(entries []string) (server netip.AddrPort, ok bool, err error) {
+// LocalDNSServers validates the host-supplied physical resolvers and returns
+// those outside the tunnel, in order. Every entry must be an IP, IP:port or
+// [IPv6]:port (zones allowed); the default port is 53.
+func LocalDNSServers(entries []string) ([]netip.AddrPort, error) {
+	var servers []netip.AddrPort
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		address, err := netip.ParseAddrPort(entry)
 		if err != nil {
 			ip, ipErr := netip.ParseAddr(entry)
 			if ipErr != nil {
-				return netip.AddrPort{}, false, fmt.Errorf("invalid local DNS server %q: want an IP, IP:port or [IPv6]:port", entry)
+				return nil, fmt.Errorf("invalid local DNS server %q: want an IP, IP:port or [IPv6]:port", entry)
 			}
 			address = netip.AddrPortFrom(ip, 53)
 		}
 		if address.Port() == 0 || !address.Addr().IsValid() || address.Addr().IsUnspecified() {
-			return netip.AddrPort{}, false, fmt.Errorf("invalid local DNS server %q", entry)
+			return nil, fmt.Errorf("invalid local DNS server %q", entry)
 		}
 		address = netip.AddrPortFrom(address.Addr().Unmap(), address.Port())
-		if !ok && !inTunnel(address.Addr()) {
-			server, ok = address, true
+		if !inTunnel(address.Addr()) {
+			servers = append(servers, address)
 		}
 	}
-	return server, ok, nil
+	return servers, nil
 }
 
 func inTunnel(ip netip.Addr) bool {
@@ -230,25 +231,33 @@ func inTunnel(ip netip.Addr) bool {
 	return false
 }
 
-// localDNSServerOptions renders dns-local. With a host-supplied physical
-// resolver it is a plain UDP server; auto_detect_interface binds its socket
-// to the physical interface, so it never enters the tunnel. Without one it
-// is sing-box's local transport: on Linux it asks systemd-resolved for the
-// default interface's link DNS, on Windows it reads non-tunnel adapters, and
-// on Darwin with a TUN it asks DHCP (desktop builds include with_dhcp) and
-// otherwise falls back to the system resolver, which the desktop points at
-// the tunnel, so Darwin hosts should pass their resolvers.
+// ownLocalDNS reports whether this build reads the default interface's
+// resolvers itself (localdns: Windows, macOS, lab builds); tests replace it.
+var ownLocalDNS = localdns.Supported
+
+// localDNSServerOptions renders dns-local. Host-supplied physical resolvers
+// are used as they are, all of them in order (a static override: they do not
+// follow network changes). Otherwise, on Windows and macOS it is the core's
+// own transport (localdns), which asks the DNS servers of the default
+// interface and reads them again on every interface change; elsewhere it is
+// sing-box's local transport, which on Linux asks systemd-resolved for the
+// default interface's link DNS or reads /etc/resolv.conf. Either way the
+// socket is bound to the physical interface (auto_detect_interface), never
+// the tunnel, and neither asks the system resolver the desktop points at the
+// tunnel.
 func localDNSServerOptions(entries []string) (option.DNSServerOptions, error) {
-	server, ok, err := LocalDNSServer(entries)
+	servers, err := LocalDNSServers(entries)
 	if err != nil {
 		return option.DNSServerOptions{}, err
 	}
-	if !ok {
+	switch {
+	case len(servers) > 0:
+		return option.DNSServerOptions{Type: localdns.Type, Tag: DNSLocalTag, Options: &localdns.Options{Servers: servers}}, nil
+	case ownLocalDNS():
+		return option.DNSServerOptions{Type: localdns.Type, Tag: DNSLocalTag, Options: &localdns.Options{Exclude: tunnelPrefixes}}, nil
+	default:
 		return option.DNSServerOptions{Type: C.DNSTypeLocal, Tag: DNSLocalTag, Options: &option.LocalDNSServerOptions{}}, nil
 	}
-	return option.DNSServerOptions{Type: C.DNSTypeUDP, Tag: DNSLocalTag, Options: &option.RemoteDNSServerOptions{
-		DNSServerAddressOptions: option.DNSServerAddressOptions{Server: server.Addr().String(), ServerPort: server.Port()},
-	}}, nil
 }
 
 // dnsRuleSetTags returns the tags of the rule sets DNS rules may reference

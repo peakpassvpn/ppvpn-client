@@ -194,18 +194,22 @@ func serveWithLog(log *corelog.Logger, socket, secretFile, stateDir, platformNam
 	log.Info("serve starting", "core_version", info.CoreVersion, "os", goruntime.GOOS, "arch", goruntime.GOARCH, "log_level", logLevel,
 		"platform", platformName, "tun", tun, "tun_stack", tunStack, "local_proxy", localProxy, "state_dir", stateDir, "socket", socket)
 	if len(localDNS) > 0 {
-		server, ok, err := config.LocalDNSServer(localDNS)
+		servers, err := config.LocalDNSServers(localDNS)
 		if err != nil {
 			return err
 		}
 		if !tun {
 			return fmt.Errorf("--local-dns-servers requires --tun")
 		}
-		selected := "none (all inside the tunnel)"
-		if ok {
-			selected = server.String()
+		used := make([]string, len(servers))
+		for i, server := range servers {
+			used[i] = server.String()
 		}
-		log.Info("local dns servers", "given", strings.Join(localDNS, ","), "selected", selected)
+		if len(used) == 0 {
+			log.Warn("static local dns servers all inside the tunnel; reading the default interface's instead", "given", strings.Join(localDNS, ","))
+		} else {
+			log.Warn("static local dns servers; they do not follow network changes", "given", strings.Join(localDNS, ","), "servers", strings.Join(used, ","))
+		}
 	}
 	if socket == "" || secretFile == "" || stateDir == "" {
 		return fmt.Errorf("serve requires --socket, --session-secret-file and --state-dir")

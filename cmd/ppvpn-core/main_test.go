@@ -71,11 +71,11 @@ func TestServeValidatesLocalDNSServers(t *testing.T) {
 	if err := run([]string{"serve", "--local-dns-servers", "10.10.0.3", "--log-file", logPath}); err == nil || !strings.Contains(err.Error(), "requires --tun") {
 		t.Fatalf("without --tun: %v", err)
 	}
-	// Valid entries are logged with the one dns-local will use; startup then
-	// fails later for the missing socket.
+	// Valid entries are logged with those dns-local will use, as a static
+	// override; startup then fails later for the missing socket.
 	_ = run([]string{"serve", "--tun", "--local-proxy=false", "--local-dns-servers", " 172.19.0.2 , 10.10.0.3,[fe80::1%en0]:5353", "--log-file", logPath})
 	data, _ := os.ReadFile(logPath)
-	if !strings.Contains(string(data), `msg="local dns servers" given=172.19.0.2,10.10.0.3,[fe80::1%en0]:5353 selected=10.10.0.3:53`) {
+	if !strings.Contains(string(data), `msg="static local dns servers; they do not follow network changes" given=172.19.0.2,10.10.0.3,[fe80::1%en0]:5353 servers=10.10.0.3:53,[fe80::1%en0]:5353`) {
 		t.Fatalf("log:\n%s", data)
 	}
 }
