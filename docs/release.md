@@ -77,6 +77,14 @@ GOOS=linux GOARCH=amd64 go build -trimpath -o build/ppvpn-core-linux-amd64 ./cmd
 GOOS=linux GOARCH=arm64 go build -trimpath -o build/ppvpn-core-linux-arm64 ./cmd/ppvpn-core
 ```
 
+Windows 二进制带版本资源（0.5.21 起，文件属性的“详细信息”页）：`FileVersion`/`ProductVersion` 为
+`<CoreVersion>.0`，`CompanyName` 为 PeakPass VPN LLC，`ProductName`/`FileDescription` 为 PPVPN Core，`LegalCopyright`
+注明 GNU GPL v3。版本号只从 `version/version.go` 的 `CoreVersion` 读取，其余字段在 `winres/winres.json`。
+`make build-windows-artifact` 先执行 `make windows-resources`（`go run github.com/tc-hib/go-winres@v0.3.3`，纯 Go，
+生成 `cmd/ppvpn-core/rsrc_windows_{amd64,arm64}.syso`），构建后删除这些文件，不提交。上面直接 `go build` 的
+Windows 文件没有版本资源。release.yml 在构建后执行 `make verify-windows-version`：从两个 exe 读回资源，任一版本字段
+与 `CoreVersion` 不一致即失败。
+
 GitHub Actions 按平台拆分桌面产物：
 
 - `build:macos-artifact`：macOS arm64/x86_64 XCFramework 与
