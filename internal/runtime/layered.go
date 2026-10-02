@@ -25,6 +25,7 @@ import (
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/control"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/x/list"
 	"github.com/sagernet/sing/service"
 )
 
@@ -145,12 +146,14 @@ type layeredEngine struct {
 	events        atomic.Pointer[func(kernelEvent)]
 
 	// TUN policy routing guard (Linux): tunLog/tunChanged are set before
-	// Start; tunGuard and tunBroken while it runs.
-	tunLog     *corelog.Logger
-	tunChanged func(tunrules.State)
-	tunGuard   *tunrules.Guard
-	tunGuarded atomic.Bool
-	tunBroken  atomic.Bool
+	// Start; tunGuard and tunCallback while it runs (under mu).
+	tunLog       *corelog.Logger
+	tunChanged   func(tunrules.State)
+	tunGuard     *tunrules.Guard
+	tunCallback  *list.Element[tun.DefaultInterfaceUpdateCallback]
+	tunGuarded   atomic.Bool
+	tunUnguarded atomic.Bool
+	tunBroken    atomic.Bool
 }
 
 // newLayeredEngine builds (does not start) the front and the first kernel.
@@ -263,6 +266,12 @@ func (e *layeredEngine) Close() error {
 		e.started = false
 	}
 	// The guard before the TUN: sing-tun's own cleanup must stay undone.
+	if e.tunCallback != nil {
+		if manager := service.FromContext[adapter.NetworkManager](e.ctx); manager != nil && manager.InterfaceMonitor() != nil {
+			manager.InterfaceMonitor().UnregisterCallback(e.tunCallback)
+		}
+		e.tunCallback = nil
+	}
 	e.tunGuard.Close()
 	e.tunGuard = nil
 	// Listeners first, so nothing new reaches a kernel being closed.
@@ -651,10 +660,13 @@ func (e *layeredEngine) setTUNRouting(log *corelog.Logger, changed func(tunrules
 	e.tunLog, e.tunChanged = log, changed
 }
 
-// tunRouting is "" when nothing is guarded (no TUN, not Linux, or sing-tun
-// installed no rules), else "ok" or "broken".
+// tunRouting is "" when there is nothing to guard (no TUN, not Linux, or
+// sing-tun installed no rules), "unguarded" when the guard could not start,
+// else "ok" or "broken".
 func (e *layeredEngine) tunRouting() string {
 	switch {
+	case e.tunUnguarded.Load():
+		return "unguarded"
 	case !e.tunGuarded.Load():
 		return ""
 	case e.tunBroken.Load():
@@ -679,11 +691,11 @@ func (e *layeredEngine) startTUNGuard() {
 	}
 	guard, err := tunrules.Start(scope, e.tunLog, changed)
 	if err != nil {
-		// Unguarded is not known to be broken, but nobody would notice if
-		// it were: report it so the host can restart the core.
-		e.tunLog.Error("tun routing guard", "error", err)
-		e.tunGuarded.Store(true)
-		go changed(tunrules.State{Broken: true, Err: err})
+		// Unguarded, not broken: the rules are as sing-tun installed them
+		// (as in 0.5.19). A restart would likely fail the same way, so no
+		// TunRoutingBroken, which hosts answer with a restart.
+		e.tunLog.Error("tun routing unguarded", "error", err)
+		e.tunUnguarded.Store(true)
 		return
 	}
 	if guard == nil {
@@ -692,7 +704,7 @@ func (e *layeredEngine) startTUNGuard() {
 	e.tunGuard = guard
 	e.tunGuarded.Store(true)
 	if manager := service.FromContext[adapter.NetworkManager](e.ctx); manager != nil && manager.InterfaceMonitor() != nil {
-		manager.InterfaceMonitor().RegisterCallback(func(*control.Interface, int) { guard.Check("default interface changed") })
+		e.tunCallback = manager.InterfaceMonitor().RegisterCallback(func(*control.Interface, int) { guard.Check("default interface changed") })
 	}
 }
 

@@ -193,6 +193,8 @@ systemd-networkd 默认 `ManageForeignRoutingPolicyRules=yes`，网卡 down 时�
 - 补不回来（权限不足、补完复查仍缺）时，`get-status` 的 `tun_routing` 变为 `broken`，并发出
   `TunRoutingBroken`，附缺失列表 `missing` 和原因 `error`。核心不会自行拦截流量，也不会自行停止；宿主
   收到事件后应重启核心。之后核心继续检查，恢复后 `tun_routing` 回到 `ok`，并发出 `TunRoutingRestored`。
+- 守护本身起不来时（例如读不到规则表），`tun_routing` 为 `unguarded`，核心记一条 error 日志说明原因，
+  不发 `TunRoutingBroken`：规则保持 sing-tun 安装时的样子，与 0.5.19 相同，重启核心多半也起不来。
 - 核心停止或整体重启时，先停守护，再关闭 TUN，所以 sing-tun 自己的清理不会被补回。
 - 只在 Linux 上做。Windows 和 macOS 的 TUN 不靠策略规则路由，`tun_routing` 不出现。
 

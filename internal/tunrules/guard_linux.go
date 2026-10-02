@@ -116,6 +116,11 @@ func (g *Guard) Check(reason string) {
 
 func (g *Guard) request(r request) {
 	select {
+	case <-g.done:
+		return // closed: a no-op
+	default:
+	}
+	select {
 	case g.requests <- r:
 	case <-g.done:
 	default:

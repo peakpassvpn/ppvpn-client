@@ -163,8 +163,10 @@ TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「�
 `state` 可为 `stopped`、`configured`、`running`。尚未应用 Profile 时返回 `stopped` 且 `node_count=0`。
 
 `tun_routing`（0.5.20 起，只在 Linux 上、TUN 运行时出现）：`ok` 表示 TUN 的策略路由规则完整，必要时
-核心已自动补回；`broken` 表示规则缺失且补不回来，流量正在绕过 TUN，宿主应重启核心。其他平台、非 TUN
-模式下省略。行为说明见 security.md「Linux TUN 策略路由的守护」。
+核心已自动补回；`broken` 表示规则缺失且补不回来，流量正在绕过 TUN，宿主应重启核心；`unguarded` 表示
+守护没能启动（例如读不到规则表，原因见核心 error 日志 `msg="tun routing unguarded"`）：规则没人守护，行为
+与 0.5.19 相同，规则被删后不会补回。`unguarded` 不发事件，宿主不应因此重启核心（重启后多半同样起不来）。
+其他平台、非 TUN 模式下省略。行为说明见 security.md「Linux TUN 策略路由的守护」。
 
 `selected_ingress` 是 selected 节点实际使用的入口副本，标准核心与 TUN 核心都会返回；核心未运行或无法
 确定时省略该字段：

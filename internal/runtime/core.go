@@ -57,8 +57,9 @@ type Status struct {
 	// DrainingKernels counts kernels replaced by an apply that still serve
 	// their connections (0.5.18).
 	DrainingKernels int `json:"draining_kernels"`
-	// TunRouting (0.5.20, Linux with a TUN): "ok", or "broken" while the
-	// TUN's policy routing rules are missing and cannot be put back.
+	// TunRouting (0.5.20, Linux with a TUN): "ok"; "broken" while the
+	// TUN's policy routing rules are missing and cannot be put back;
+	// "unguarded" when the guard could not start (rules as in 0.5.19).
 	TunRouting string `json:"tun_routing,omitempty"`
 }
 
