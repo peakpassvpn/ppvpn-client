@@ -1,0 +1,147 @@
+name: perf
+
+# The performance checks' tier A (#45): numbers that barely depend on the
+# machine — release binary sizes, the engine process's RSS idle and under a
+# fixed loopback load, allocations, apply and kernel-switch time — measured
+# at each main push and compared with the last main run and with the Go
+# 0.5.21 baseline (testdata/perf). A crossed threshold turns this workflow
+# red; it blocks nothing (not a required check). tools/perf/measure.py
+# drives any engine that serves Core API v1 like `ppvpn-core serve`, so the
+# Rust engine's lab binary is measured by the same script. A ci/perf-*
+# branch runs as main does, to try a change of this workflow; ci/perf-calib
+# measures ten times over, to calibrate the thresholds.
+on:
+  push:
+    branches: [main, "ci/perf-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        run: ${{ fromJSON(github.ref == 'refs/heads/ci/perf-calib' && '[1,2,3,4,5,6,7,8,9,10]' || '[1,2,3]') }}
+    name: measure (${{ matrix.run }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build
+        run: |
+          set -eu
+          tags=$(make -s print-desktop-tags)
+          CGO_ENABLED=0 go build -tags "$tags" -trimpath -o "$RUNNER_TEMP/ppvpn-core" ./cmd/ppvpn-core
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/fakenode" ./test/perf/fakenode
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/loadgen" ./test/perf/loadgen
+      # Root for the TUN instance, which runs in its own network namespace.
+      - name: engine process
+        shell: bash
+        run: |
+          sudo -E python3 tools/perf/measure.py --engine-bin "$RUNNER_TEMP/ppvpn-core" \
+            --fakenode "$RUNNER_TEMP/fakenode" --loadgen "$RUNNER_TEMP/loadgen" --rounds 1 \
+            | tee "$RUNNER_TEMP/measure.log"
+      - name: allocations (Go engine)
+        shell: bash
+        env:
+          PPVPN_PERF_FAKENODE: ${{ runner.temp }}/fakenode
+        run: |
+          go test -tags "$(make -s print-desktop-tags)" ./internal/runtime -run '^TestPerfAllocations$' -count=1 -v \
+            | grep '^PERF ' | tee "$RUNNER_TEMP/alloc.log"
+      - name: collect
+        run: |
+          tools/perf/report.py collect --sha "$GITHUB_SHA" --engine go "$RUNNER_TEMP/measure.log" "$RUNNER_TEMP/alloc.log" \
+            > "perf-measure-${{ matrix.run }}.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-measure-${{ matrix.run }}
+          path: perf-measure-${{ matrix.run }}.json
+
+  # The release binaries, built as release.yml builds them.
+  size:
+    if: github.ref != 'refs/heads/ci/perf-calib'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build
+        run: |
+          set -eu
+          make build-linux-artifact build-windows-artifact
+          tags=$(make -s print-desktop-tags)
+          for arch in arm64 amd64; do
+            CGO_ENABLED=0 GOOS=darwin GOARCH=$arch go build -tags "$tags" -trimpath -o "build/ppvpn-core-darwin-$arch" ./cmd/ppvpn-core
+          done
+      - name: collect
+        run: |
+          args=()
+          for file in build/ppvpn-core-linux-amd64 build/ppvpn-core-linux-arm64 build/ppvpn-core-windows-amd64.exe \
+                      build/ppvpn-core-windows-arm64.exe build/ppvpn-core-darwin-amd64 build/ppvpn-core-darwin-arm64; do
+            name=$(basename "$file" .exe | sed 's/^ppvpn-core-//')
+            args+=(--size "$name=$file")
+          done
+          tools/perf/report.py collect --sha "$GITHUB_SHA" --engine go "${args[@]}" > perf-size.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-size
+          path: perf-size.json
+
+  report:
+    needs: [measure, size]
+    if: always() && needs.measure.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: perf-*
+          path: parts
+          merge-multiple: true
+      - name: merge
+        run: |
+          tools/perf/report.py merge \
+            --env "runner=${ImageOS:-ubuntu} ${ImageVersion:-}" \
+            --env "go=$(go env GOVERSION)" \
+            --env "allocator=go runtime (GOGC and GOMEMLIMIT default)" \
+            --env "tags=$(make -s print-desktop-tags)" \
+            parts/*.json > perf.json
+      # Numbers, metric names, the engine, the commit and the environment only:
+      # it is public.
+      - name: check
+        run: tools/perf/report.py check perf.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf
+          path: perf.json
+          retention-days: 90
+      - name: last main run
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow perf.yml --branch main --status success \
+                 --json databaseId,headSha --jq "[.[] | select(.headSha != \"$GITHUB_SHA\")][0].databaseId")
+          if [ -n "$id" ]; then gh run download "$id" -R "$GITHUB_REPOSITORY" -n perf -D base-main || true; fi
+      - name: compare
+        shell: bash
+        run: |
+          args=()
+          [ -f base-main/perf.json ] && args+=(--main base-main/perf.json)
+          [ -f testdata/perf/baseline-go-0.5.21.json ] && args+=(--baseline testdata/perf/baseline-go-0.5.21.json)
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "Nothing to compare with yet." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          tools/perf/report.py compare perf.json "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
