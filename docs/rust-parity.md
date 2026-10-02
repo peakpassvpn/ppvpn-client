@@ -29,6 +29,25 @@ D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`�
 
 D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
 
+## netns CI（G3、G7）
+
+`.github/workflows/netns.yml` 在每个 PR 和 main 上运行，环境是 GitHub 的 ubuntu-latest runner，测的是冻结的 Go core。每项测试都在 runner 上的独立网络命名空间里运行，经过 `test/netns/run.sh`：它负责超时，并在宿主命名空间里比较测试前后的状态。比较项是 ip rule（v4、v6）、全部路由表（去掉剩余生存期）、网卡名、nftables（不含计数器）、`/etc/resolv.conf`、systemd-resolved 的各网卡 DNS；任何差异都判失败，这一项覆盖 G7 的宿主残留。脚本与引擎无关：Rust engine 接入时，只把被测的二进制换成 `ppvpn-engine-lab`，脚本和断言不变。
+
+| CI 步骤 | 脚本 | 覆盖的行为 | 相关 Go 测试 | Rust 接入 |
+| --- | --- | --- | --- | --- |
+| tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
+| tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 换成 Rust 的同名集成测试 |
+| tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上 |
+| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E6 | 被测二进制换成 `ppvpn-engine-lab` |
+| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | 同上 |
+
+**不在 CI 里的**（继续在共享测试主机上用 hostq 跑，见 `test/lab/engine`）：
+- 真实节点、弱网（netem）、长时间运行和内存（G4、G6）；
+- Docker 多节点 lab 的场景（G2：B1–B7、t3/t4/t56/t9），在移植到 runner 之前都在这里；
+- systemd-networkd 管理的链路抖动（`TestTUNRulesSurviveNetworkdLinkFlap`），runner 上没有 networkd 管理的链路。
+
+计划下一个 PR 接入 dns-local 的 E5（TUN 运行中切换默认网卡）和其余 D 组。
+
 ## 1. 热切换和排空
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
@@ -64,9 +83,9 @@ D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` �
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
 | `internal/config` `TestDesktopTUNUsesOwnIPRoute2Namespace` | Desktop tun uses own ip route2 namespace |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/runtime` `TestTUNRulesBrokenIsReported` | : rules that stay missing set the status to broken and send TunRoutingBroken. |  | todo |  |
-| `internal/runtime` `TestTUNRulesRestoredAfterDeletion` | deletes the TUN's policy routing the ways seen in the field (everything, as networkd does on a link down; just the goto target; the table's routes) and requires each to … |  | todo |  |
-| `internal/runtime` `TestTUNRulesSurviveNetworkdLinkFlap` | reproduces the field report: with systemd-networkd managing a link (ManageForeignRoutingPolicyRules on, its default), taking the link down and up makes networkd drop the … |  | todo |  |
+| `internal/runtime` `TestTUNRulesBrokenIsReported` | : rules that stay missing set the status to broken and send TunRoutingBroken. |  | todo | netns CI：tun 作业（关掉补回） |
+| `internal/runtime` `TestTUNRulesRestoredAfterDeletion` | deletes the TUN's policy routing the ways seen in the field (everything, as networkd does on a link down; just the goto target; the table's routes) and requires each to … |  | todo | netns CI：tun 作业，runner 上的独立 netns 中真实 TUN |
+| `internal/runtime` `TestTUNRulesSurviveNetworkdLinkFlap` | reproduces the field report: with systemd-networkd managing a link (ManageForeignRoutingPolicyRules on, its default), taking the link down and up makes networkd drop the … |  | todo | 不在 CI：runner 没有 systemd-networkd 管理的链路；在容器里跑 |
 | `internal/tunrules` `TestMissingCountsDuplicates` | Missing counts duplicates |  | todo |  |
 | `internal/tunrules` `TestOwnedKeepsEverySingTunRule` | Owned keeps every sing tun rule |  | todo |  |
 | `internal/tunrules` `TestOwnedLeavesOtherProgramsRules` | Owned leaves other programs rules |  | todo |  |
@@ -80,13 +99,13 @@ D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` �
 | --- | --- | --- | --- | --- |
 | `cmd/ppvpn-core` `TestServeValidatesLocalDNSServers` | Serve validates local dns servers |  | todo |  |
 | `internal/config` `TestLocalDNSServers` | Host-supplied physical resolvers become a static ppvpn-local dns-local with every one outside the tunnel, in order; with none left (or none given) dns-local reads the … |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/localdns` `TestCacheFailsFastWithoutServers` | DHCP has not handed out DNS yet: queries fail at once with a clear error (never 127.0.0.1, never a 5 s timeout), and the interface is read again at most once per … |  | todo |  |
-| `internal/localdns` `TestCacheFollowsInterfaceChanges` | Cache follows interface changes |  | todo |  |
+| `internal/localdns` `TestCacheFailsFastWithoutServers` | DHCP has not handed out DNS yet: queries fail at once with a clear error (never 127.0.0.1, never a 5 s timeout), and the interface is read again at most once per … |  | todo | 端到端：netns CI network-change（读不到 DNS 时 500 ms 内回 SERVFAIL） |
+| `internal/localdns` `TestCacheFollowsInterfaceChanges` | Cache follows interface changes |  | todo | 端到端：netns CI network-change（test/lab/localdns/run.sh） |
 | `internal/localdns` `TestCacheReadsOnceForConcurrentQueries` | Concurrent queries after an invalidation share one read. |  | todo |  |
 | `internal/localdns` `TestCacheRefreshes` | Cache refreshes |  | todo |  |
 | `internal/localdns` `TestExchangeAsksServersInOrder` | Exchange asks servers in order |  | todo |  |
 | `internal/localdns` `TestExchangeFailureRereads` | Every server failing marks the read servers suspect, so the next query reads the interface again (after RetryInterval). |  | todo |  |
-| `internal/localdns` `TestExchangeWithoutServersAnswersServfailAtOnce` | Without servers a hijacked query gets SERVFAIL at once (an error would leave the client waiting for its own timeout), with the cause logged. |  | todo |  |
+| `internal/localdns` `TestExchangeWithoutServersAnswersServfailAtOnce` | Without servers a hijacked query gets SERVFAIL at once (an error would leave the client waiting for its own timeout), with the cause logged. |  | todo | 端到端：netns CI network-change |
 | `internal/localdns` `TestGlobalServers` | Global servers |  | todo |  |
 | `internal/localdns` `TestScopedServers` | Scoped servers |  | todo |  |
 | `internal/localdns` `TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal` | Usable leaves out tunnel loopback and foreign link local |  | todo |  |
@@ -148,9 +167,9 @@ D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` �
 | `internal/runtime` `TestReprobeDefersToApply` | An apply between the change and the probe builds for the new state; the probe then finds nothing to do. |  | todo |  |
 | `internal/runtime` `TestReprobeKeepsKernelWhenUnchanged` | Same result: nothing rebuilt, no change logged. |  | todo |  |
 | `internal/runtime` `TestReprobeRealTimerFires` | The default scheduler is time.AfterFunc: a change still leads to a probe on its own (with a short delay and a generous deadline). |  | todo |  |
-| `internal/runtime` `TestReprobeSkipsWhileOffline` | A link goes down: the path looks lost only because there is no network. |  | todo |  |
+| `internal/runtime` `TestReprobeSkipsWhileOffline` | A link goes down: the path looks lost only because there is no network. |  | todo | 端到端：netns CI network-change，updown 模式 0–4 |
 | `internal/runtime` `TestReprobeSwitchesWhenIPv6PathAppears` | The host gains an IPv6 path: switch back to the plain build. |  | todo |  |
-| `internal/runtime` `TestReprobeSwitchesWhenIPv6PathIsLost` | The host loses its IPv6 path (joins an IPv4-only network): one kernel switch to the hand-off build, no restart, armed ReprobeDelay out. |  | todo |  |
+| `internal/runtime` `TestReprobeSwitchesWhenIPv6PathIsLost` | The host loses its IPv6 path (joins an IPv4-only network): one kernel switch to the hand-off build, no restart, armed ReprobeDelay out. |  | todo | 端到端：netns CI updown 模式 2（在线时切换一次） |
 | `internal/runtime` `TestStopCancelsPendingReprobe` | Stop cancels a pending re-probe. |  | todo |  |
 | `internal/runtime` `TestTUNApplyWithoutIPv6PathSwitchesKernels` | With the host's IPv6 state unchanged, a TUN apply is a kernel switch: the no-IPv6-path build (direct wrapped, direct-host resolving IPv4 only, see #48) changes … |  | todo |  |
 | `internal/runtime` `TestTUNRouteResolvesAndHandsDomainsToNode` | runs the TUN route and DNS configuration on a real sing-box. |  | todo |  |
