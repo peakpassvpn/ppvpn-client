@@ -342,6 +342,11 @@ HTTP/SOCKS5 监听器（同一端口）。它默认关闭，由宿主在运行�
 
 Traffic 是当前运行实例的累计计数；重启或替换实例后归零。Connections 只包含仍活动的连接，关闭后移除。
 
+方向以客户端为准：`upload_bytes` 是客户端（应用、浏览器、TUN 内的流量）发往远端的字节，`download_bytes`
+是远端返回给客户端的字节；TCP 与 UDP、`get-traffic` 与 `get-connections`、移动端 `Traffic()` /
+`Connections()` 一致。**0.5.16 之前两者是反的**（下载计入 `upload_bytes`）；按旧方向做了对调的宿主，
+在 0.5.16 起应去掉对调。
+
 ## 事件流
 
 `GET /v1/watch-events` 返回 `Content-Type: application/x-ndjson`，每行一个独立 Envelope：
