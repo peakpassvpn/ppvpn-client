@@ -1017,8 +1017,8 @@ func rejectedBy(rules []adapter.Rule, metadata adapter.InboundContext) bool {
 
 // kernelSwitched logs and reports a kernel switch made by an apply.
 func (c *Core) kernelSwitched(event kernelEvent, revision string, now time.Time) {
-	c.log.Info("kernel switched", "gen", event.Gen, "previous", event.Previous, "closed_connections", event.Closed, "kept_connections", event.Kept)
-	c.emit(Event{Type: EventKernelSwitched, At: now, Revision: revision, ClosedConnections: event.Closed, KeptConnections: event.Kept})
+	c.log.Info("kernel switched", "gen", event.Gen, "previous", event.Previous, "closed_connections", event.Closed, "kept_connections", event.Kept, "draining_kernels", event.Draining)
+	c.emit(Event{Type: EventKernelSwitched, At: now, Revision: revision, ClosedConnections: event.Closed, KeptConnections: event.Kept, DrainingKernels: event.Draining})
 }
 
 // kernelDrained logs and reports a replaced kernel that was closed.

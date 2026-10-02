@@ -60,11 +60,15 @@ type kernelEvent struct {
 	Switched bool // a new kernel took over (Gen); otherwise Gen drained
 	Gen      uint64
 	Previous uint64
-	// Closed: connections closed (on a switch, by the new profile; on a
-	// drain, still open at drainLimit). Kept: left to drain on a switch.
-	// IdleClosed (drain): connections closed while draining for being idle
-	// longer than drainIdleClose.
+	// Closed: connections closed (on a switch, by the new profile, in every
+	// replaced kernel; on a drain, still open at drainLimit). Kept: left to
+	// drain on a switch, in every replaced kernel. IdleClosed (drain):
+	// connections closed while draining for being idle longer than
+	// drainIdleClose.
 	Closed, Kept, IdleClosed int
+	// Draining (switch): kernels draining after the switch, the one just
+	// replaced included.
+	Draining int
 	// Reason of a drain: "idle" (no connections left) or "deadline".
 	Reason string
 }
@@ -378,18 +382,24 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 	e.active.Store(next)
 	e.inbounds = options.Inbounds
 	event := kernelEvent{Switched: true, Gen: next.gen, Previous: previous.gen}
-	for _, item := range e.tracker.generation(previous.gen) {
-		if closeOld != nil && closeOld(next.singEngine, item) {
-			e.tracker.closeConnection(item.item)
-			event.Closed++
-		} else {
-			event.Kept++
-		}
-	}
 	previous.retired = time.Now()
 	previous.deadline = previous.retired.Add(e.drainLimit)
 	e.draining = append(e.draining, previous)
 	e.drainingCount.Store(int32(len(e.draining)))
+	// The new profile applies to every replaced kernel still draining, not
+	// only the one just replaced: a connection two applies old may run
+	// through a node or match a rule the new profile drops.
+	for _, old := range e.draining {
+		for _, item := range e.tracker.generation(old.gen) {
+			if closeOld != nil && closeOld(next.singEngine, item) {
+				e.tracker.closeConnection(item.item)
+				event.Closed++
+			} else {
+				event.Kept++
+			}
+		}
+	}
+	event.Draining = len(e.draining)
 	return event, nil
 }
 

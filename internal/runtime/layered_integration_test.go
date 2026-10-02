@@ -725,3 +725,47 @@ func TestDrainToleratesShortPauses(t *testing.T) {
 		t.Fatalf("draining kernels %d: the connection was closed", got)
 	}
 }
+
+// A switch applies the new profile to every replaced kernel still draining,
+// not only the one it replaces: a download started two applies earlier is
+// counted as kept, and closed once its node is removed.
+func TestApplyReachesConnectionsOfOlderKernels(t *testing.T) {
+	shortDrain(t, time.Minute)
+	f := newHotSwap(t)
+	userA, passwordA := f.user(t, "a")
+	userB, passwordB := f.user(t, "b")
+	keptTunnel, kept := f.startDownload(t, userA, passwordA) // kernel 1
+	defer keptTunnel.Close()
+	closedTunnel, closed := f.startDownload(t, userB, passwordB) // kernel 1
+	defer closedTunnel.Close()
+
+	if _, err := f.core.ApplyProfile(f.profile("r2", []string{"a", "b"}, nil), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if switched := f.next(t, EventKernelSwitched, 5*time.Second); switched.KeptConnections != 2 || switched.ClosedConnections != 0 || switched.DrainingKernels != 1 {
+		t.Fatalf("first switch: %#v", switched)
+	}
+	// Kernel 2 carried nothing; kernel 1 still carries both downloads.
+	if _, err := f.core.ApplyProfile(f.profile("r3", []string{"a"}, nil), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	switched := f.next(t, EventKernelSwitched, 5*time.Second)
+	if switched.KeptConnections != 1 || switched.ClosedConnections != 1 || switched.DrainingKernels != 2 {
+		t.Fatalf("second switch (kernel 1's connections must count): %#v", switched)
+	}
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Fatal("download on the removed node completed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("kernel 1's connection on the removed node still open")
+	}
+	f.releaseAll()
+	if err := <-kept; err != nil {
+		t.Fatalf("download on the remaining node: %v", err)
+	}
+	if logged := f.logged(); !strings.Contains(logged, `msg="kernel switched" gen=3 previous=2 closed_connections=1 kept_connections=1 draining_kernels=2`) {
+		t.Fatalf("log:\n%s", logged)
+	}
+}

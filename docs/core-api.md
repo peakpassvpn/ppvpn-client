@@ -121,9 +121,12 @@ TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「�
 - 只有监听本身变化时才走旧的「停止再启动」路径（会断开连接），白名单：TUN 选项（地址、IPv6、MTU、stack 等）、
   本地代理的监听地址或端口、其他入站的增删或变化、出站网卡选项。本地代理的用户列表（随节点增删、共享密码）就地
   替换；系统代理监听就地增删。每次走旧路径核心日志记一行 `msg="apply full restart" reasons=…`。
-- 每次切换发出 `KernelSwitched`（`closed_connections`、`kept_connections`），旧内核关闭时发出 `KernelDrained`
-  （`code` 为 `idle` 或 `deadline`，后者附 `closed_connections`）；`get-status` 的 `draining_kernels` 是仍在排空的
-  旧内核数量。
+- 每次切换都会把新 Profile 套用到所有仍在排空的旧内核上，不只是刚被替换的那个：新 Profile 不再允许的连接
+  （节点被删、用户被删、命中新的 reject 规则）会被关闭，不管它们建立于几次 apply 之前。每次切换发出
+  `KernelSwitched`：`closed_connections` 和 `kept_connections` 统计的是所有旧内核上被关闭、留下继续排空的连接；
+  `draining_kernels`（0.5.19 起）是切换后正在排空的旧内核数，包含刚被替换的这个。旧内核关闭时发出
+  `KernelDrained`（`code` 为 `idle` 或 `deadline`，后者附 `closed_connections`）。`get-status` 的
+  `draining_kernels` 是此刻仍在排空的旧内核数量。
 
 `apply-profile` 在构建配置前准备规则集：`<state_dir>/rule-sets/<id>.srs` 已存在且 sha256 匹配时立即使用；
 否则直连下载，总计最多等待 10 秒，超时或失败时按降级规则构建（见 backend-profile.md），不会因规则集而失败。
