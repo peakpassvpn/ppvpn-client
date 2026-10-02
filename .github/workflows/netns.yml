@@ -1,0 +1,48 @@
+name: netns
+
+# Tests that need a real TUN, each in a network namespace of its own on the
+# runner (test/netns/run.sh), with a check that the runner's own routes,
+# rules, links, nftables and DNS are as they were afterwards (gates G3 and
+# G7 of #45). Engine-independent by design: the same scripts are to run on
+# the Rust engine later. No internet: documentation addresses and local
+# fake nodes only.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Runner
+        run: |
+          uname -r; ls -l /dev/net/tun
+          ip -V; nft --version || true
+          systemctl is-active systemd-resolved || true
+          sudo -n true && echo "passwordless sudo"
+      - name: Build the test binary (as the runner user)
+        run: go test -c -o "$RUNNER_TEMP/runtime.test" ./internal/runtime
+      - name: Leftover check catches a change to the host
+        run: |
+          # A fake test that adds a rule in the host's namespace: run.sh must fail.
+          printf '#!/bin/sh\nnsenter -t 1 -n ip rule add priority 31999 lookup main\necho "--- PASS: TestLeak"\n' > "$RUNNER_TEMP/leak.test"
+          chmod +x "$RUNNER_TEMP/leak.test"
+          if sudo test/netns/run.sh "$RUNNER_TEMP/leak.test"; then
+            echo "run.sh did not notice the host change" >&2; sudo ip rule del priority 31999 || true; exit 1
+          fi
+          sudo ip rule del priority 31999
+      - name: TUN rules are put back after deletion
+        run: sudo NETNS_TIMEOUT=240 test/netns/run.sh "$RUNNER_TEMP/runtime.test" -test.run 'TestTUNRulesRestoredAfterDeletion' -test.timeout 230s
+      - name: TUN rules broken is reported (restoring off)
+        run: sudo NETNS_TIMEOUT=240 NETNS_ENV=PPVPN_TEST_TUN_RULES_NO_RESTORE=1 test/netns/run.sh "$RUNNER_TEMP/runtime.test" -test.run 'TestTUNRulesBrokenIsReported' -test.timeout 230s
