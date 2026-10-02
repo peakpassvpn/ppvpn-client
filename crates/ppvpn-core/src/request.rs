@@ -143,7 +143,10 @@ pub enum SwitchKind {
 /// changes anything: the profile as given (D3: a stale `default_node_id` is
 /// rejected even when the host's selection would replace it), the allowed
 /// rule set hosts, then the pins.
-pub fn validate_request(request: &ApplyRequest, now: DateTime<Utc>) -> Result<Profile, Error> {
+pub(crate) fn validate_request(
+    request: &ApplyRequest,
+    now: DateTime<Utc>,
+) -> Result<Profile, Error> {
     let profile = profile::parse(&request.profile)?;
     profile::validate(&profile, now)?;
     if !request.allowed_rule_set_hosts.is_empty() {

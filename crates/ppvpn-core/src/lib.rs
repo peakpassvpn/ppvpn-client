@@ -9,8 +9,10 @@ pub mod config;
 mod engine;
 pub mod error;
 pub mod event;
-pub mod localdns;
-pub mod profile;
+// dns-local is wired up by the runtime; until then only its tests use it.
+#[allow(dead_code, unused_imports)]
+pub(crate) mod localdns;
+pub(crate) mod profile;
 pub mod request;
 pub mod status;
 pub mod types;
@@ -22,8 +24,7 @@ pub use engine::{Engine, LOCAL_PROXY_CONTRACT_VERSION};
 pub use error::{codes, Error};
 pub use event::{Event, EventItem, EventKind, EventReceiver, LogReceiver};
 pub use request::{
-    validate_request, ApplyRequest, ApplyResult, ClearedPin, Pin, PinClearReason, RoutingMode,
-    SwitchKind,
+    ApplyRequest, ApplyResult, ClearedPin, Pin, PinClearReason, RoutingMode, SwitchKind,
 };
 pub use status::{
     DegradedReason, EngineState, FatalReason, IngressHealth, IngressStatus, LocalProxyStatus,
@@ -34,6 +35,22 @@ pub use types::{
     LocalProxyCredential, LocalProxyKind, LocalProxyMetadata, NodeInfo, ProbeAvailabilityRequest,
     ProbeEntrancesRequest, ProbeMethod, ShutdownReport, Traffic, VersionInfo,
 };
+
+/// Unstable: for this crate's own tests and `ppvpn-core-lab` only. Hosts
+/// must not use it; it changes in any release without notice. The public
+/// API is [`Engine`] and the value types above (docs/host-integration.md).
+#[doc(hidden)]
+pub mod internal {
+    use chrono::{DateTime, Utc};
+
+    pub use crate::profile::Profile;
+    use crate::{ApplyRequest, Error};
+
+    /// What `apply` checks before it changes anything (the contract golden).
+    pub fn validate_request(request: &ApplyRequest, now: DateTime<Utc>) -> Result<Profile, Error> {
+        crate::request::validate_request(request, now)
+    }
+}
 
 /// Whether a sail runtime with this id runs in this process. Here so that
 /// the shell links sail (and CI builds and caches it, BoringSSL included).

@@ -9,7 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use ppvpn_core::{validate_request, ApplyRequest, RoutingMode};
+use ppvpn_core::internal::validate_request;
+use ppvpn_core::{ApplyRequest, RoutingMode};
 use serde_json::Value;
 
 /// (file, step, expected code and field): D3 — apply validates the profile
