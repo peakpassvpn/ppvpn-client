@@ -12,7 +12,12 @@ publish = false
 name = "ppvpn_core"
 
 [dependencies]
+base64.workspace = true
+chrono.workspace = true
+idna.workspace = true
 sail.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 # The versions sail resolves (Cargo.lock), so nothing is built twice.
 async-trait = "0.1"
 hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }

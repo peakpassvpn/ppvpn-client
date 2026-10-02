@@ -3,7 +3,13 @@
 //! process (#45). An empty shell for now: the workspace, its CI and the sail
 //! dependency come first, the modules follow one PR each.
 
+pub mod error;
 pub mod localdns;
+pub mod profile;
+pub mod request;
+
+pub use error::Error;
+pub use request::{validate_request, ApplyRequest, Pin, RoutingMode};
 
 /// Whether a sail runtime with this id runs in this process. Here so that
 /// the shell links sail (and CI builds and caches it, BoringSSL included).
