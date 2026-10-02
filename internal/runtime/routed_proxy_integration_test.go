@@ -118,9 +118,7 @@ func TestRoutedLocalProxyUserFollowsProfileRules(t *testing.T) {
 	before := core.Traffic()
 	socksGet(routed.Port, routed.Username, routed.Password, proxiedIP)
 	nodeA.wait(t, proxiedIP)
-	if after := core.Traffic(); after.UploadBytes <= before.UploadBytes || after.DownloadBytes <= before.DownloadBytes {
-		t.Fatalf("routed traffic not counted: %#v -> %#v", before, after)
-	}
+	waitTrafficCounted(t, core, before)
 
 	// 4. SOCKS5 to an IP gets no domain (no sniffing outside TUN), so a domain
 	// rule cannot match: same result as the system proxy (selected node).
@@ -170,5 +168,20 @@ func TestRoutedLocalProxyUserFollowsProfileRules(t *testing.T) {
 			conn.Close()
 		}
 		t.Fatalf("SOCKS5 wrong password: status %d %v", status, err)
+	}
+}
+
+// waitTrafficCounted waits until both directions grew past before. The
+// response's bytes are counted once the write to the client returns, which
+// can be just after the client has read them, so a read right after the
+// exchange may still miss them.
+func waitTrafficCounted(t *testing.T, core *Core, before Traffic) {
+	t.Helper()
+	after := core.Traffic()
+	for deadline := time.Now().Add(2 * time.Second); (after.UploadBytes <= before.UploadBytes || after.DownloadBytes <= before.DownloadBytes) && time.Now().Before(deadline); after = core.Traffic() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after.UploadBytes <= before.UploadBytes || after.DownloadBytes <= before.DownloadBytes {
+		t.Fatalf("traffic not counted: %#v -> %#v", before, after)
 	}
 }

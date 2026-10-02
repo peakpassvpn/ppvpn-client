@@ -500,7 +500,7 @@ func (f *fakeSwap) swap(_ context.Context, options option.Options, prepare func(
 	f.swaps++
 	return kernelEvent{Switched: true}, nil
 }
-func (f *fakeSwap) drainingKernels() int             { return 0 }
+func (f *fakeSwap) drainingKernels() int              { return 0 }
 func (f *fakeSwap) setKernelEvents(func(kernelEvent)) {}
 
 // With the host's IPv6 state unchanged, a TUN apply is a kernel switch: the
