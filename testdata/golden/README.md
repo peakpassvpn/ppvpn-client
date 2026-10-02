@@ -1,7 +1,7 @@
 # Golden files
 
 Behaviour baselines exported from the Go core (frozen at v0.5.21), for the
-Rust `ppvpn-engine` to be checked against (#45). Every file is
+Rust `ppvpn-core` (`crates/ppvpn-core`) to be checked against (#45). Every file is
 language-independent JSON; Go checks itself against the same files, so the
 baseline cannot drift.
 

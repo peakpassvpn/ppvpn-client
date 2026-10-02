@@ -3,7 +3,7 @@
 Assertions on core behaviour that need the lab (UDP, DNS hijack, reverse
 mapping, TUN, failover): one file per group, `cases/<group>.sh`, run inside
 the client by `lab.sh case <group> [engine]` (engine `sing` = Go core,
-default; `rust` = ppvpn-engine-lab). Same script, same expectations on every
+default; `rust` = ppvpn-core-lab). Same script, same expectations on every
 engine; that is what makes them parity cases (docs/rust-parity.md).
 
 Write a group as:

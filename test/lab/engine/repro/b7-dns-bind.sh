@@ -1,5 +1,5 @@
 #!/bin/sh
-# B7 as ppvpn-engine will use it: plain DNS servers (udp, tcp, tls) with no
+# B7 as the Rust ppvpn-core will use it: plain DNS servers (udp, tcp, tls) with no
 # detour, under a TUN with auto_route, must leave through the default
 # interface (never into the TUN), and keep doing so after the default
 # interface changes and the engine swaps the server list (a reload, as the

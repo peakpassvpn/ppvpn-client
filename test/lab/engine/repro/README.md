@@ -1,7 +1,7 @@
 # Engine gap repros
 
 One script per gap found while running ppvpn-core's behaviour on Sail
-(first on the prototype, now the reference for ppvpn-engine). Each script
+(first on the prototype, now the reference for the Rust ppvpn-core). Each script
 prints what it saw and writes the engine's debug log next to it. Wherever
 the same JSON is valid for both, it runs on **Sail and on sing-box 1.13.12**
 (the version Go core embeds). Lab keys are generated per lab and redacted

@@ -1,6 +1,6 @@
 # Rust 版与 Go 版的行为对照
 
-Go core 冻结在 v0.5.21（#45）。Rust 的 `ppvpn-engine` 硬切换前，下表每一行都要有结论：
+Go core 冻结在 v0.5.21（#45）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`）硬切换前，下表每一行都要有结论：
 
 - **todo**：还没有对应的 Rust 用例；
 - **done**：`Rust 用例` 一列写明对应的测试（crate 路径和名称），行为与 Go 一致；
@@ -28,6 +28,17 @@ Go core 冻结在 v0.5.21（#45）。Rust 的 `ppvpn-engine` 硬切换前，下�
 D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`，在 Rust 下 `revision` 仍是 `2026-09-29T00:00:00Z#2`，因为 r3 被拒绝了；这两步也按此判定。
 
 D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
+
+lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust 版遵守 `capabilities.udp`；Backend 已确认生产上所有入口下发的都是 `udp=true`，所以不影响现有用户）：
+
+| # | lab 用例 | Go 0.5.21（baseline） | Rust 预期 |
+| --- | --- | --- | --- |
+| D4 | `test/lab/engine/cases/udp.sh` `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（lab 的 `us`，AnyTLS），仍经该节点发出（出口 `.13`）：Go 在路由时不检查这个字段 | 立即拒绝：不经该节点，也不改走别的节点或直连；记一行 debug 日志说明原因（节点或入口 `udp=false`）。多入口节点做故障转移时，`udp=false` 的入口不承接 UDP。`udp.3` 在 Rust 下应判为没有应答 |
+
+## 测试宿主的约定
+
+- 所有 lab 和性能检查都通过 `ppvpn-core-lab`（Rust 的测试宿主）驱动 Rust 版。它要提供和 `ppvpn-core serve` 相同的命令行、日志格式，以及 lab 实际用到的那部分 Core API v1（#45）。
+- `ppvpn-core-lab` 必须能信任测试时现场生成的 CA：性能检查的 AnyTLS 假节点（`tools/perf`）就是这样。Go 版通过 `SSL_CERT_FILE` 实现（只在 Linux 上有效）；Rust 版要支持 `SSL_CERT_FILE`，例如 rustls-native-certs，或者提供等价的命令行参数来注入 CA 文件，否则 `tools/perf/measure.py` 测不了 AnyTLS。
 
 ## netns CI（G3、G7）
 
@@ -58,7 +69,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | `dns-hijack.5`–`.6` | 代理路由的域名由 dns-remote 解析，直连路由的域名由 dns-local 解析 | PASS | todo | |
 | `dns-hijack.7`–`.8` | 发往服务器 853 端口的 DoT 不被劫持，按普通连接路由 | PASS | todo | |
 | `udp.1`–`.2` | UDP 经选中节点；direct 规则下的 UDP 直连 | PASS | todo | |
-| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | todo | Go 不强制 capability；Rust 是否强制待定（#45） |
+| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | todo | Rust 有意偏离（D4）：拒绝，见上文 |
 | `reverse-map.1`–`.4` | 不带 Host 的连接按 DNS 应答的域名交给节点；内核热切换、改选节点后仍然有效 | PASS | todo | 对应 `TestKernelSwitchKeepsReverseMapping` |
 
 未覆盖：QUIC 嗅探（lab 镜像里没有 QUIC 客户端）。
