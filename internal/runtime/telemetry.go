@@ -46,8 +46,10 @@ type tracked struct {
 	closeConn func() error
 	// route is the outbound chain the connection took, outermost first
 	// (e.g. domaindest wrapper, selector, node group, ingress), resolved
-	// when it was routed.
-	route []string
+	// when it was routed; nodeID is the logical node that chain reached,
+	// by the build of the kernel that routed it ("" for none, e.g. direct).
+	route  []string
+	nodeID string
 }
 type telemetry struct {
 	upload, download atomic.Uint64
@@ -128,17 +130,47 @@ type kernelTracker struct {
 	t         *telemetry
 	gen       uint64
 	outbounds adapter.OutboundManager
+	// nodes maps this kernel's node and ingress outbound tags to node IDs
+	// (its build's OutboundNodes; see withOutboundNodes).
+	nodes map[string]string
+}
+
+type outboundNodesKey struct{}
+
+// withOutboundNodes gives the kernel built under ctx its build's map of
+// outbound tags to node IDs, so its connections record their node.
+func withOutboundNodes(ctx context.Context, nodes map[string]string) context.Context {
+	return context.WithValue(ctx, outboundNodesKey{}, nodes)
+}
+
+func outboundNodesFrom(ctx context.Context) map[string]string {
+	nodes, _ := ctx.Value(outboundNodesKey{}).(map[string]string)
+	return nodes
 }
 
 func (k kernelTracker) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
 	wrapped := k.t.routedConnection(k.gen, conn, metadata, rule, outbound)
-	k.t.setRoute(wrapped, k.route(outbound))
+	k.setRoute(wrapped, outbound)
 	return wrapped
 }
 func (k kernelTracker) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) N.PacketConn {
 	wrapped := k.t.routedPacketConnection(k.gen, conn, metadata, rule, outbound)
-	k.t.setRoute(wrapped, k.route(outbound))
+	k.setRoute(wrapped, outbound)
 	return wrapped
+}
+
+// setRoute records the chain outbound resolves to and the node it reaches,
+// the first tag of the chain this kernel's build attributes to a node.
+func (k kernelTracker) setRoute(wrapped any, outbound adapter.Outbound) {
+	chain := k.route(outbound)
+	node := ""
+	for _, tag := range chain {
+		if id, ok := k.nodes[tag]; ok {
+			node = id
+			break
+		}
+	}
+	k.t.setRoute(wrapped, chain, node)
 }
 
 // route follows groups (anything with Now(): selector, domaindest, a node's
@@ -157,7 +189,7 @@ func (k kernelTracker) route(outbound adapter.Outbound) []string {
 }
 
 // setRoute stores the chain on the item behind a wrapped connection.
-func (t *telemetry) setRoute(wrapped any, chain []string) {
+func (t *telemetry) setRoute(wrapped any, chain []string, nodeID string) {
 	var id string
 	switch conn := wrapped.(type) {
 	case *trackedConn:
@@ -168,6 +200,7 @@ func (t *telemetry) setRoute(wrapped any, chain []string) {
 	t.mu.Lock()
 	if item, ok := t.connections[id]; ok {
 		item.route = chain
+		item.nodeID = nodeID
 	}
 	t.mu.Unlock()
 }
@@ -179,17 +212,24 @@ type trackedView struct {
 	outboundTag string
 	metadata    adapter.InboundContext
 	route       []string
+	nodeID      string
 	lastActive  time.Time
 }
 
 // generation lists the open connections of kernel gen.
 func (t *telemetry) generation(gen uint64) []trackedView {
+	return t.generations(map[uint64]bool{gen: true})
+}
+
+// generations lists the open connections of the kernels in gens, in one
+// pass over the table.
+func (t *telemetry) generations(gens map[uint64]bool) []trackedView {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	var items []trackedView
 	for _, item := range t.connections {
-		if item.gen == gen {
-			items = append(items, trackedView{item: item, outboundTag: item.connection.OutboundTag, metadata: item.metadata, route: append([]string(nil), item.route...), lastActive: time.Unix(0, item.lastActive.Load())})
+		if gens[item.gen] {
+			items = append(items, trackedView{item: item, outboundTag: item.connection.OutboundTag, metadata: item.metadata, route: append([]string(nil), item.route...), nodeID: item.nodeID, lastActive: time.Unix(0, item.lastActive.Load())})
 		}
 	}
 	return items

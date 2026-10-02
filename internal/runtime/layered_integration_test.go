@@ -706,8 +706,12 @@ func TestDrainKeepsActiveConnections(t *testing.T) {
 }
 
 // Pauses shorter than the threshold do not close a draining connection.
+// The window counts from the connection's last byte: a request right after
+// the switch takes the apply's own duration out of it, and the pauses add up
+// to more than the window, so a window counted from anything but the last
+// byte would close the connection.
 func TestDrainToleratesShortPauses(t *testing.T) {
-	shortDrainIdle(t, 600*time.Millisecond)
+	shortDrainIdle(t, time.Second)
 	f := newHotSwap(t)
 	tunnel, request := f.keepAlive(t)
 	defer tunnel.Close()
@@ -715,8 +719,11 @@ func TestDrainToleratesShortPauses(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.next(t, EventKernelSwitched, 5*time.Second)
-	for i := range 2 {
-		time.Sleep(300 * time.Millisecond)
+	if err := request(); err != nil { // a fresh byte: the apply is out of the window
+		t.Fatalf("request right after the switch: %v", err)
+	}
+	for i := range 6 { // 6 × 250 ms = 1.5 s > the 1 s window
+		time.Sleep(250 * time.Millisecond)
 		if err := request(); err != nil {
 			t.Fatalf("request %d after a short pause: %v", i, err)
 		}
@@ -742,6 +749,16 @@ func TestApplyReachesConnectionsOfOlderKernels(t *testing.T) {
 	if _, err := f.core.ApplyProfile(f.profile("r2", []string{"a", "b"}, nil), time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// Each connection carries the node its kernel routed it to.
+	layered := f.core.engine.(*layeredEngine)
+	recorded := map[string]bool{}
+	for _, item := range layered.tracker.generation(1) {
+		recorded[item.nodeID] = true
+	}
+	if !recorded["a"] || !recorded["b"] {
+		t.Fatalf("node IDs recorded by kernel 1: %v", recorded)
+	}
+
 	if switched := f.next(t, EventKernelSwitched, 5*time.Second); switched.KeptConnections != 2 || switched.ClosedConnections != 0 || switched.DrainingKernels != 1 {
 		t.Fatalf("first switch: %#v", switched)
 	}

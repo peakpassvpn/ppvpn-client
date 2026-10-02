@@ -31,6 +31,9 @@ type fakeTransport struct {
 	steps  []func(*mDNS.Msg) (*mDNS.Msg, error)
 	calls  int
 	resets atomic.Int32
+	// entered and deadlines record, per call, when it came in and the
+	// deadline of its context (zero without one).
+	entered, deadlines []time.Time
 }
 
 func (f *fakeTransport) Tag() string  { return f.tag }
@@ -43,6 +46,9 @@ func (f *fakeTransport) Exchange(ctx context.Context, query *mDNS.Msg) (*mDNS.Ms
 		step = f.steps[f.calls]
 	}
 	f.calls++
+	deadline, _ := ctx.Deadline()
+	f.entered = append(f.entered, time.Now())
+	f.deadlines = append(f.deadlines, deadline)
 	f.mu.Unlock()
 	if step == nil {
 		<-ctx.Done()
@@ -79,6 +85,11 @@ func query() *mDNS.Msg {
 	q.SetQuestion("example.com.", mDNS.TypeA)
 	return q
 }
+
+// hangLimit bounds a guard test in wall-clock time only to catch a real
+// hang; timing assertions use the deadlines the guard set (fakeTransport),
+// which do not depend on how loaded the machine is.
+const hangLimit = 5 * time.Second
 
 // shortGuard shrinks the guard limits for the test. The budget keeps a wide
 // margin over the attempt timeout: under a loaded -race CI run a goroutine
@@ -154,9 +165,16 @@ func TestGuardRetriesAfterAHungAttempt(t *testing.T) {
 	if err != nil || response == nil || inner.calls != 2 {
 		t.Fatalf("response %v, err %v, calls %d", response, err, inner.calls)
 	}
-	// One attempt timeout, far from the whole budget (the margin absorbs
-	// scheduling delays on a loaded machine).
-	if elapsed < attemptTimeout || elapsed > attemptTimeout+time.Second {
+	// What the guard gave the hung attempt, not how long the machine took:
+	// its deadline is set before the call, attemptTimeout after a moment
+	// after started. The wide bound only catches a real hang.
+	if given := inner.deadlines[0].Sub(inner.entered[0]); inner.deadlines[0].IsZero() || given > attemptTimeout {
+		t.Fatalf("hung attempt given %s (deadline %v), want at most %s", given, inner.deadlines[0], attemptTimeout)
+	}
+	if since := inner.deadlines[0].Sub(started); since < attemptTimeout {
+		t.Fatalf("hung attempt's deadline %s after the start, want at least %s", since, attemptTimeout)
+	}
+	if elapsed < attemptTimeout || elapsed > hangLimit {
 		t.Fatalf("took %s", elapsed)
 	}
 	lines := b.String()
@@ -185,7 +203,15 @@ func TestGuardGivesUpWithinBudget(t *testing.T) {
 	if err != nil || response.Rcode != mDNS.RcodeServerFailure || inner.calls != maxAttempts {
 		t.Fatalf("response %v, err %v, calls %d", response, err, inner.calls)
 	}
-	if elapsed > overallBudget+time.Second {
+	// Every attempt ends within the budget the guard set before the first
+	// one: no deadline is later than the first entry plus overallBudget.
+	// The wide bound only catches a real hang.
+	for i, deadline := range inner.deadlines {
+		if deadline.IsZero() || deadline.After(inner.entered[0].Add(overallBudget)) {
+			t.Fatalf("attempt %d deadline %v, past the budget (%s from %v)", i+1, deadline, overallBudget, inner.entered[0])
+		}
+	}
+	if elapsed > hangLimit {
 		t.Fatalf("took %s, budget %s", elapsed, overallBudget)
 	}
 	// A cancelled caller is not retried.

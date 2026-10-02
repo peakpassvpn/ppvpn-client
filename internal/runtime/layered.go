@@ -180,7 +180,7 @@ func (e *layeredEngine) newKernel(ctx context.Context, options option.Options) (
 		cancel()
 		return nil, err
 	}
-	instance.Router().AppendTracker(kernelTracker{t: e.tracker, gen: gen, outbounds: instance.Outbound()})
+	instance.Router().AppendTracker(kernelTracker{t: e.tracker, gen: gen, outbounds: instance.Outbound(), nodes: outboundNodesFrom(ctx)})
 	reverseMapping := options.DNS != nil && options.DNS.ReverseMapping
 	return &kernel{singEngine: &singEngine{Box: instance, ctx: kernelCtx, tracker: e.tracker}, reverseMapping: reverseMapping, gen: gen, cancel: cancel}, nil
 }
@@ -366,16 +366,33 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 		return kernelEvent{}, err
 	}
 
+	event, closing, err := e.switchTo(next, options, closeOld)
+	if err != nil {
+		next.close()
+		return kernelEvent{}, err
+	}
+	// Outside the lock, as drainOnce does: closing can take a while.
+	for _, item := range closing {
+		e.tracker.closeConnection(item)
+	}
+	return event, nil
+}
+
+// switchTo makes next the current kernel and retires the one it replaces,
+// under the engine lock (released by defer, so a panic in closeOld cannot
+// leave it held). The new profile applies to every replaced kernel still
+// draining, not only the one just replaced: a connection two applies old may
+// run through a node or match a rule the new profile drops. It returns the
+// connections to close; the caller closes them after the lock.
+func (e *layeredEngine) switchTo(next *kernel, options option.Options, closeOld func(next engine, item trackedView) bool) (kernelEvent, []*tracked, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.started {
-		next.close()
-		return kernelEvent{}, errors.New("engine closed during the switch")
+		return kernelEvent{}, nil, errors.New("engine closed during the switch")
 	}
 	e.registerTUNInterface(next)
-	if err = e.reconcileInbounds(options.Inbounds); err != nil {
-		next.close()
-		return kernelEvent{}, fmt.Errorf("update listeners: %w", err)
+	if err := e.reconcileInbounds(options.Inbounds); err != nil {
+		return kernelEvent{}, nil, fmt.Errorf("update listeners: %w", err)
 	}
 	previous := e.active.Load()
 	e.switcher.set(next)
@@ -386,21 +403,21 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 	previous.deadline = previous.retired.Add(e.drainLimit)
 	e.draining = append(e.draining, previous)
 	e.drainingCount.Store(int32(len(e.draining)))
-	// The new profile applies to every replaced kernel still draining, not
-	// only the one just replaced: a connection two applies old may run
-	// through a node or match a rule the new profile drops.
+	gens := make(map[uint64]bool, len(e.draining))
 	for _, old := range e.draining {
-		for _, item := range e.tracker.generation(old.gen) {
-			if closeOld != nil && closeOld(next.singEngine, item) {
-				e.tracker.closeConnection(item.item)
-				event.Closed++
-			} else {
-				event.Kept++
-			}
+		gens[old.gen] = true
+	}
+	var closing []*tracked
+	for _, item := range e.tracker.generations(gens) {
+		if closeOld != nil && closeOld(next.singEngine, item) {
+			closing = append(closing, item.item)
+			event.Closed++
+		} else {
+			event.Kept++
 		}
 	}
 	event.Draining = len(e.draining)
-	return event, nil
+	return event, closing, nil
 }
 
 // reconcileInbounds applies the in-place listener changes: the local proxy's
