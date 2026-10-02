@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,12 +17,15 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
+	"github.com/peakpassvpn/ppvpn-core/internal/tunrules"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/control"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/x/list"
 	"github.com/sagernet/sing/service"
 )
 
@@ -140,6 +144,16 @@ type layeredEngine struct {
 	started       bool
 	stop          chan struct{}
 	events        atomic.Pointer[func(kernelEvent)]
+
+	// TUN policy routing guard (Linux): tunLog/tunChanged are set before
+	// Start; tunGuard and tunCallback while it runs (under mu).
+	tunLog       *corelog.Logger
+	tunChanged   func(tunrules.State)
+	tunGuard     *tunrules.Guard
+	tunCallback  *list.Element[tun.DefaultInterfaceUpdateCallback]
+	tunGuarded   atomic.Bool
+	tunUnguarded atomic.Bool
+	tunBroken    atomic.Bool
 }
 
 // newLayeredEngine builds (does not start) the front and the first kernel.
@@ -220,6 +234,7 @@ func (e *layeredEngine) Start() error {
 		}
 	}
 	e.registerTUNInterface(first)
+	e.startTUNGuard()
 	e.started = true
 	go e.drainLoop()
 	return nil
@@ -250,6 +265,15 @@ func (e *layeredEngine) Close() error {
 		close(e.stop)
 		e.started = false
 	}
+	// The guard before the TUN: sing-tun's own cleanup must stay undone.
+	if e.tunCallback != nil {
+		if manager := service.FromContext[adapter.NetworkManager](e.ctx); manager != nil && manager.InterfaceMonitor() != nil {
+			manager.InterfaceMonitor().UnregisterCallback(e.tunCallback)
+		}
+		e.tunCallback = nil
+	}
+	e.tunGuard.Close()
+	e.tunGuard = nil
 	// Listeners first, so nothing new reaches a kernel being closed.
 	err := e.front.Close()
 	for _, k := range e.draining {
@@ -388,6 +412,12 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 	for _, item := range closing {
 		e.tracker.closeConnection(item)
 	}
+	// A switch follows host network changes (rebuild): the moment the TUN's
+	// rules are most likely gone.
+	e.mu.Lock()
+	guard := e.tunGuard
+	e.mu.Unlock()
+	guard.Check("kernel switch")
 	return event, nil
 }
 
@@ -625,6 +655,94 @@ func withoutTag(inbounds []option.Inbound, tag string) []option.Inbound {
 }
 
 func (e *layeredEngine) setConnectionLog(log *corelog.Logger) { e.tracker.log.Store(log) }
+
+func (e *layeredEngine) setTUNRouting(log *corelog.Logger, changed func(tunrules.State)) {
+	e.tunLog, e.tunChanged = log, changed
+}
+
+// tunRouting is "" when there is nothing to guard (no TUN, not Linux, or
+// sing-tun installed no rules), "unguarded" when the guard could not start,
+// else "ok" or "broken".
+func (e *layeredEngine) tunRouting() string {
+	switch {
+	case e.tunUnguarded.Load():
+		return "unguarded"
+	case !e.tunGuarded.Load():
+		return ""
+	case e.tunBroken.Load():
+		return "broken"
+	}
+	return "ok"
+}
+
+// startTUNGuard snapshots the policy routing the front's TUN just installed
+// and keeps it in place (see tunrules). Called under mu, right after the
+// inbounds were created.
+func (e *layeredEngine) startTUNGuard() {
+	scope, ok := e.tunScope()
+	if !ok || e.tunLog == nil {
+		return
+	}
+	changed := func(state tunrules.State) {
+		e.tunBroken.Store(state.Broken)
+		if e.tunChanged != nil {
+			e.tunChanged(state)
+		}
+	}
+	guard, err := tunrules.Start(scope, e.tunLog, changed)
+	if err != nil {
+		// Unguarded, not broken: the rules are as sing-tun installed them
+		// (as in 0.5.19). A restart would likely fail the same way, so no
+		// TunRoutingBroken, which hosts answer with a restart.
+		e.tunLog.Error("tun routing unguarded", "error", err)
+		e.tunUnguarded.Store(true)
+		return
+	}
+	if guard == nil {
+		return
+	}
+	e.tunGuard = guard
+	e.tunGuarded.Store(true)
+	if manager := service.FromContext[adapter.NetworkManager](e.ctx); manager != nil && manager.InterfaceMonitor() != nil {
+		e.tunCallback = manager.InterfaceMonitor().RegisterCallback(func(*control.Interface, int) { guard.Check("default interface changed") })
+	}
+}
+
+// tunScope is the policy routing namespace of the front's TUN, when it has
+// one sing-tun manages (auto_route on Linux).
+func (e *layeredEngine) tunScope() (tunrules.Scope, bool) {
+	if runtime.GOOS != "linux" {
+		return tunrules.Scope{}, false
+	}
+	for _, inbound := range e.inbounds {
+		if inbound.Type != C.TypeTun {
+			continue
+		}
+		options, ok := inbound.Options.(*option.TunInboundOptions)
+		if !ok || !options.AutoRoute {
+			return tunrules.Scope{}, false
+		}
+		name := options.InterfaceName
+		if manager := service.FromContext[adapter.NetworkManager](e.ctx); manager != nil && manager.InterfaceMonitor() != nil {
+			if mine := manager.InterfaceMonitor().MyInterface(); mine != "" {
+				name = mine
+			}
+		}
+		if name == "" {
+			return tunrules.Scope{}, false
+		}
+		// sing-tun's defaults when unset (tun.DefaultIPRoute2TableIndex/RuleIndex).
+		table, start := options.IPRoute2TableIndex, options.IPRoute2RuleIndex
+		if table == 0 {
+			table = tun.DefaultIPRoute2TableIndex
+		}
+		if start == 0 {
+			start = tun.DefaultIPRoute2RuleIndex
+		}
+		return tunrules.Scope{Interface: name, Table: table, RuleStart: start, RuleEnd: start + 10}, true
+	}
+	return tunrules.Scope{}, false
+}
 
 // watchDefaultInterface watches the front's monitor: it lives as long as the
 // engine, while kernels are replaced.

@@ -169,6 +169,40 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
 
 已知边界：应用自带 DoH/DoT 的查询不会被劫持，但其连接仍会被嗅探并按域名路由。
 
+## Linux TUN 策略路由的守护（0.5.20 起）
+
+Linux 上 TUN 靠策略路由生效：sing-tun 在优先级 `9091`–`9101` 安装规则，指向表 `2091` 里经 TUN 的路由
+（`strict_route` 的 unreachable 规则也在这个区间）。sing-tun 只在 TUN 启动时安装一次，之后不再检查。
+systemd-networkd 默认 `ManageForeignRoutingPolicyRules=yes`，网卡 down 时会删除不是它自己加的规则。
+规则一旦被删，流量就回到主路由表、绕过 TUN，`strict_route` 也随之失效，这是泄漏。热切换不会重装规则。
+
+核心因此自己守护这些规则：
+
+- TUN 启动后，核心立即对该区间内的规则和表 `2091` 里 TUN 网卡的路由拍快照。快照是 sing-tun 实际装上的
+  结果，不是核心按选项拼出来的，所以优先级、表号和匹配条件天然一致。只有能确认属于 sing-tun 的规则才进
+  快照：查表 `2091`、goto 到区间内、带 TUN 网卡的 iif/oif，或者是 sing-tun 特有的几类规则（goto 目标
+  `nop`、严格路由的 `unreachable`、`not dport 53 lookup main suppress_prefixlength 0`）。区间里其他程序加的
+  规则只记一行 info 日志，不纳入快照。
+- 核心常驻监听 netlink 的规则和路由删除通知。区间内的规则或表 `2091` 的路由一被删除，核心就在约 50 ms
+  内检查，并按快照只补回缺的那几条：先补路由，再补规则（goto 目标先补），已有的不动，不会先删后加。
+  补回后记一行 warn：`msg="tun routing rules restored" missing=… by=…`。`by` 是删除方，尽力判断，
+  例如 `systemd-network (port 1234)`；判断不了写 `unknown`。另外三处各做一次兜底检查：默认网卡变化、
+  每次内核切换之后，以及每 30 秒一次（防止通知丢失）。
+- 每次 down 都会被 networkd 删一遍、再被核心补回，这种来回是预期内的。10 秒内补回超过 10 次时
+  记一条 error。
+- 补不回来（权限不足、补完复查仍缺）时，`get-status` 的 `tun_routing` 变为 `broken`，并发出
+  `TunRoutingBroken`，附缺失列表 `missing` 和原因 `error`。核心不会自行拦截流量，也不会自行停止；宿主
+  收到事件后应重启核心。之后核心继续检查，恢复后 `tun_routing` 回到 `ok`，并发出 `TunRoutingRestored`。
+- 守护本身起不来时（例如读不到规则表），`tun_routing` 为 `unguarded`，核心记一条 error 日志说明原因，
+  不发 `TunRoutingBroken`：规则保持 sing-tun 安装时的样子，与 0.5.19 相同，重启核心多半也起不来。
+- 核心停止或整体重启时，先停守护，再关闭 TUN，所以 sing-tun 自己的清理不会被补回。
+- 只在 Linux 上做。Windows 和 macOS 的 TUN 不靠策略规则路由，`tun_routing` 不出现。
+
+额外防护：使用 systemd-networkd 的系统（Ubuntu Server、netplan 等）建议在
+`/etc/systemd/networkd.conf` 的 `[Network]` 段设置 `ManageForeignRoutingPolicyRules=no`，从源头避免规则
+被删。这只是额外防护，不能替代核心的守护：其他程序同样可能删除规则。NetworkManager 推测不会删除，
+但尚未实测。
+
 ## 与其他 sing-tun 应用共存（mihomo/Clash、sing-box 等）
 
 桌面 TUN 与其他基于 sing-tun 的应用（mihomo/Clash Meta、Clash Verge、原版 sing-box 等）同时运行时：

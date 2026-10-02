@@ -20,6 +20,7 @@ import (
 	"github.com/peakpassvpn/ppvpn-core/internal/proxyinbound"
 	"github.com/peakpassvpn/ppvpn-core/internal/reversemap"
 	"github.com/peakpassvpn/ppvpn-core/internal/rulesets"
+	"github.com/peakpassvpn/ppvpn-core/internal/tunrules"
 	"github.com/peakpassvpn/ppvpn-core/localproxy"
 	"github.com/peakpassvpn/ppvpn-core/probe"
 	"github.com/peakpassvpn/ppvpn-core/profile"
@@ -56,6 +57,10 @@ type Status struct {
 	// DrainingKernels counts kernels replaced by an apply that still serve
 	// their connections (0.5.18).
 	DrainingKernels int `json:"draining_kernels"`
+	// TunRouting (0.5.20, Linux with a TUN): "ok"; "broken" while the
+	// TUN's policy routing rules are missing and cannot be put back;
+	// "unguarded" when the guard could not start (rules as in 0.5.19).
+	TunRouting string `json:"tun_routing,omitempty"`
 }
 
 // IngressStatus is the ingress (replica) a node is actually using. For a
@@ -829,6 +834,9 @@ func (c *Core) startCandidate(candidate *config.BuildResult, timer *phaseTimer) 
 	if swapper, ok := instance.(swapEngine); ok {
 		swapper.setKernelEvents(c.kernelDrained)
 	}
+	if guarded, ok := instance.(tunRoutingEngine); ok {
+		guarded.setTUNRouting(c.log, c.tunRoutingChanged)
+	}
 	c.applyPins(instance, candidate)
 	timer.mark("engine_create")
 	err = instance.Start()
@@ -971,6 +979,13 @@ func (c *Core) hostIPv6State() (disable, noRoute bool) {
 	return !enabled, enabled && !route
 }
 
+func tunRouting(instance engine) string {
+	if guarded, ok := instance.(tunRoutingEngine); ok {
+		return guarded.tunRouting()
+	}
+	return ""
+}
+
 func drainingKernels(instance engine) int {
 	if swapper, ok := instance.(swapEngine); ok {
 		return swapper.drainingKernels()
@@ -1066,6 +1081,20 @@ func (c *Core) kernelSwitched(event kernelEvent, revision string, now time.Time)
 }
 
 // kernelDrained logs and reports a replaced kernel that was closed.
+// tunRoutingChanged reports the TUN guard's verdict (its own goroutine).
+func (c *Core) tunRoutingChanged(state tunrules.State) {
+	if !state.Broken {
+		c.log.Info("tun routing ok again")
+		c.emit(Event{Type: EventTunRoutingRestored, At: time.Now(), Missing: state.Missing})
+		return
+	}
+	event := Event{Type: EventTunRoutingBroken, At: time.Now(), Missing: state.Missing}
+	if state.Err != nil {
+		event.Error = state.Err.Error()
+	}
+	c.emit(event)
+}
+
 func (c *Core) kernelDrained(event kernelEvent) {
 	c.log.Info("kernel drained", "gen", event.Gen, "reason", event.Reason, "closed_connections", event.Closed, "idle_closed", event.IdleClosed)
 	c.emit(Event{Type: EventKernelDrained, At: time.Now(), Code: event.Reason, ClosedConnections: event.Closed})
@@ -1105,7 +1134,7 @@ func (c *Core) Status() Status {
 	if c.engine != nil {
 		state = StateRunning
 	}
-	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses(), RoutingMode: c.routingMode, Nodes: c.nodeStatusesLocked(), DrainingKernels: drainingKernels(c.engine)}
+	return Status{State: state, Revision: c.active.Revision, SelectedNodeID: c.selected, NodeCount: len(c.active.Nodes), SelectedIngress: c.selectedIngressLocked(), SystemProxy: c.systemProxyStatusLocked(), RuleSets: c.ruleSets.Statuses(), RoutingMode: c.routingMode, Nodes: c.nodeStatusesLocked(), DrainingKernels: drainingKernels(c.engine), TunRouting: tunRouting(c.engine)}
 }
 
 func (c *Core) selectedIngressLocked() *IngressStatus {
