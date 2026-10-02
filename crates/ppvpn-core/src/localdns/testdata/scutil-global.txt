@@ -1,0 +1,21 @@
+<dictionary> {
+  ARPResolvedHardwareAddress : 0:11:22:33:44:55
+  PrimaryInterface : en0
+  PrimaryService : 4A8B1E2C-0000-0000-0000-000000000000
+  Router : 192.168.50.1
+}
+  No such key
+<dictionary> {
+  ServerAddresses : <array> {
+    0 : 192.168.50.3
+    1 : 172.19.0.2
+    2 : fe80::1%en0
+    3 : fdfe:dcba:9876::2
+    4 : 2001:db8::53
+    5 : 10.60.159.90
+    6 : fde2:ec40:9312:c7fd::2
+  }
+  SearchDomains : <array> {
+    0 : lan
+  }
+}

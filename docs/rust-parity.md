@@ -136,16 +136,16 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | --- | --- | --- | --- | --- |
 | `cmd/ppvpn-core` `TestServeValidatesLocalDNSServers` | Serve validates local dns servers |  | todo |  |
 | `internal/config` `TestLocalDNSServers` | Host-supplied physical resolvers become a static ppvpn-local dns-local with every one outside the tunnel, in order; with none left (or none given) dns-local reads the … |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/localdns` `TestCacheFailsFastWithoutServers` | DHCP has not handed out DNS yet: queries fail at once with a clear error (never 127.0.0.1, never a 5 s timeout), and the interface is read again at most once per … |  | todo | 端到端：netns CI network-change（读不到 DNS 时 500 ms 内回 SERVFAIL） |
-| `internal/localdns` `TestCacheFollowsInterfaceChanges` | Cache follows interface changes |  | todo | 端到端：netns CI network-change（test/lab/localdns/run.sh） |
-| `internal/localdns` `TestCacheReadsOnceForConcurrentQueries` | Concurrent queries after an invalidation share one read. |  | todo |  |
-| `internal/localdns` `TestCacheRefreshes` | Cache refreshes |  | todo |  |
-| `internal/localdns` `TestExchangeAsksServersInOrder` | Exchange asks servers in order |  | todo |  |
-| `internal/localdns` `TestExchangeFailureRereads` | Every server failing marks the read servers suspect, so the next query reads the interface again (after RetryInterval). |  | todo |  |
-| `internal/localdns` `TestExchangeWithoutServersAnswersServfailAtOnce` | Without servers a hijacked query gets SERVFAIL at once (an error would leave the client waiting for its own timeout), with the cause logged. |  | todo | 端到端：netns CI network-change |
-| `internal/localdns` `TestGlobalServers` | Global servers |  | todo |  |
-| `internal/localdns` `TestScopedServers` | Scoped servers |  | todo |  |
-| `internal/localdns` `TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal` | Usable leaves out tunnel loopback and foreign link local |  | todo |  |
+| `internal/localdns` `TestCacheFailsFastWithoutServers` | DHCP has not handed out DNS yet: queries fail at once with a clear error (never 127.0.0.1, never a 5 s timeout), and the interface is read again at most once per … | `ppvpn-core` `localdns::cache::tests::fails_fast_without_servers` | done | #45 B3、B7；端到端仍由 netns CI network-change 覆盖 |
+| `internal/localdns` `TestCacheFollowsInterfaceChanges` | Cache follows interface changes | `ppvpn-core` `localdns::cache::tests::follows_interface_changes` | done | #45 B1、B2、B7；端到端仍由 netns CI network-change 覆盖 |
+| `internal/localdns` `TestCacheReadsOnceForConcurrentQueries` | Concurrent queries after an invalidation share one read. | `ppvpn-core` `localdns::cache::tests::concurrent_queries_share_one_read` | done | #45 B6 |
+| `internal/localdns` `TestCacheRefreshes` | Cache refreshes | `ppvpn-core` `localdns::cache::tests::refreshes` | done | #45 B4、B5 |
+| `internal/localdns` `TestExchangeAsksServersInOrder` | Exchange asks servers in order | `ppvpn-core` `localdns::tests::next_server_after_a_silent_one`、`ppvpn-core` `localdns::tests::answer_names_its_upstream` | done | #45 C2、C5；另有 C3 `truncated_answer_retries_over_tcp`、C4 `reply_with_another_id_is_dropped`、C6 `hosts_file_names_are_answered_locally` |
+| `internal/localdns` `TestExchangeFailureRereads` | Every server failing marks the read servers suspect, so the next query reads the interface again (after RetryInterval). | `ppvpn-core` `localdns::tests::next_server_after_a_silent_one` | done | #45 B4（全部失败后回 SERVFAIL，下次查询重读） |
+| `internal/localdns` `TestExchangeWithoutServersAnswersServfailAtOnce` | Without servers a hijacked query gets SERVFAIL at once (an error would leave the client waiting for its own timeout), with the cause logged. | `ppvpn-core` `localdns::tests::without_servers_servfail_at_once` | done | #45 C1 |
+| `internal/localdns` `TestGlobalServers` | Global servers | `ppvpn-core` `localdns::scutil::tests::global_servers_of_the_default_interface`、`ppvpn-core` `localdns::scutil::tests::another_vpns_dns_is_not_the_default_interfaces` | done | #45 A4–A6；fixture 取自 Go 测试（`src/localdns/testdata`） |
+| `internal/localdns` `TestScopedServers` | Scoped servers | `ppvpn-core` `localdns::scutil::tests::scoped_servers_of_an_interface` | done | #45 A7 |
+| `internal/localdns` `TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal` | Usable leaves out tunnel loopback and foreign link local | `ppvpn-core` `localdns::servers::tests::usable_leaves_out_tunnel_loopback_and_foreign_link_local` | done | #45 A1–A3；A8（Windows 适配器）见 `adapters::tests` |
 
 ## 4. dnstransport guard 与 TUN 远端 DNS
 
