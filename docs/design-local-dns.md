@@ -1,6 +1,6 @@
 # 设计：core 自己维护的本地 DNS（dns-local）
 
-状态：设计稿，待 PPVPN Core 工作小组确认；目标 0.5.21。作者 ppvpn-core-4b，2026-10-02。
+状态：PPVPN Core 工作小组已确认（2026-10-02），已实现，目标 0.5.21。作者 ppvpn-core-4b。实现与本稿的差异和补充见第 7 节。
 
 ## 1. 问题
 
@@ -28,8 +28,9 @@
 
 新包 `internal/localdns`，在 sing-box 的 DNS 传输注册表里注册类型 `ppvpn-local`（和现在的 dnstransport 注册方式一样）。`internal/config` 渲染 `dns-local` 时：
 
-- Windows、macOS：一律渲染为 `ppvpn-local`。给了 `--local-dns-servers` 时，把列表作为显式覆盖传进去（见 3.5）；
-- Linux：保持 sing-box `local` 不变（理由见 3.4）。
+- Windows、macOS：一律渲染为 `ppvpn-local`；
+- 给了 `--local-dns-servers`（任何平台）：渲染为带静态服务器列表的 `ppvpn-local`（见 3.5）；
+- Linux 不给时：保持 sing-box `local` 不变（理由见 3.4）。
 
 ### 3.2 平台读取（`Discover`）
 
@@ -119,3 +120,32 @@ macOS 的具体做法：
 - `internal/dnstransport`：debug 日志加 `upstream`；
 - 文档：security.md 的 DNS 一节，以及 quickstart 的日志说明；
 - Desktop（另行安排）：core ≥ 0.5.21 时不再传 `--local-dns-servers`。
+
+## 7. 实现说明（与设计稿的差异和补充）
+
+- **作废的挂载点：** 传输在 `Start` 时自己向 sing-box 的 `InterfaceMonitor` 注册回调（与 sing-box 的 resolved 传输相同），`Close` 时注销。这和 #54 的 `Core.defaultInterfaceChanged` 是同一个事件源，不需要经过 `Core` 转发，也覆盖热切换出来的每个内核。另外，`Reset()` 也会作废缓存；默认网卡的 index 与上次读取时不同，也会触发重读（不依赖回调）。
+- **作废不加锁：** 回调只给一个原子计数器加一，不等待正在进行的读取，因此不会阻塞网卡监视器。
+- **失败驱动的重读：** 所有服务器都失败时（ctx 被取消不算），把缓存标记为可疑，下一次查询重读（同样每秒最多一次）。这覆盖了"换了网络，但 IP 地址和网卡都没变"的少见情况；另有 60 秒的软刷新兜底。软刷新时如果读取本身出错（例如 scutil 超时），继续使用原来的服务器。
+- **macOS 判定"属于默认网卡"：** 优先用 `State:/Network/Global/DNS` 自带的 `__IF_INDEX__`，与默认网卡的 index 比较；没有这个字段时，才比较 `Global/IPv4`（或 IPv6-only 时 `Global/IPv6`）的 `PrimaryInterface`。不属于默认网卡时，改用 `scutil --dns` 里该网卡的 scoped 解析器（带 `domain` 的项是 split DNS，跳过）。实测：在一台同时运行着另一个 VPN 的 Mac 上，主服务是那个 VPN 的 utun，Global/DNS 是它的 DNS（`__IF_INDEX__ : 29`）。按 Desktop 原来 `physical_dns_servers` 的读法会拿到那个 VPN 的 DNS；新实现拒绝了它，并从 scoped 解析器取到了 en0 的 DNS。
+- **带 zone 的链路本地地址：** 选择**使用**，前提是它属于默认网卡。zone 是默认网卡的名称或 index 时保留；没有 zone 时补上默认网卡的 index；zone 指向其他网卡的一律丢弃（socket 绑在默认网卡上，到不了它）。Windows 读到的链路本地地址用适配器的 `Ipv6IfIndex` 作为 zone。`--local-dns-servers` 给的地址按原样使用，不做这项过滤。
+- **过滤：** 隧道网段（`10.60.159.88/30`、`fde2:ec40:9312:c7fd::/126`，以及旧的 `172.19.0.0/30`、`fdfe:dcba:9876::/126`，由 config 通过 `exclude` 传入）、回环、未指定地址、组播、`fec0::/10`，并去掉重复项；`::ffff:` 映射地址还原成 IPv4。
+- **`--local-dns-servers`：** 在所有平台上都渲染为 `ppvpn-local` 的静态列表，按顺序使用全部隧道网段外的地址。启动时记 warn：`msg="static local dns servers; they do not follow network changes"`。如果全部在隧道网段内，记 warn，并改为动态读取（Windows/macOS），或 sing-box `local`（Linux）。
+- **日志：** 服务器列表每次变化时记 `msg="local dns servers" source=… interface=… servers=…`（info）。读不到时为 warn，`servers=none`，并附 `error`。`source` 的取值：`adapter`（Windows）、`scutil-global`、`scutil-scoped`（macOS）、`override`。`msg=dns` 的 debug 行新增 `upstream`，记录实际应答的服务器。
+- **没有网卡监视器时：** `auto_detect_interface` 关闭时（TUN 构建里不会出现），`Start` 只记 warn，不让内核启动失败；查询会立即返回 `ErrNoInterface`。
+- **测试来源（按工作小组的要求改用 build tag）：** 只有带 `localdns_testsource` tag 的构建才含这个来源（`internal/localdns/testsource.go`）。它从 `$PPVPN_LOCALDNS_TEST_FILE` 读取 `{"<网卡名>": ["<服务器>", …]}`，并在 Linux 上也让 config 渲染 `ppvpn-local`。正式构建不编译这个文件，环境变量也就不起作用。实验构建用 `make build-lab-linux`。来源里有标记字符串 `ppvpn-localdns-testsource-enabled`（也作为日志里的 `source`）。检查分两处：
+  - CI：用正式 tag 和实验 tag 各构建一次。实验构建必须含这个标记，否则检查本身失效；正式构建必须不含。
+  - release.yml：在 Assemble 步骤里检查每个发行文件，既不能含这个标记，`go version -m` 里也不能有这个 tag。
+- **4.2 的实现：** 用的是 `test/lab/localdns/run.sh`，加上辅助程序 `test/lab/localdns/ldnslab`。它不用容器，而是建三个独立的网络命名空间（客户端、网 A、网 B），既不依赖镜像，也不碰宿主网络；`CPUS=12-15` 时用 taskset 固定到这几个核上。覆盖的情况：
+  - 切换到另一块网卡后的第一次查询；
+  - 同一网卡上换网络（换地址、换 DNS）；
+  - 没有 DNS 时快速失败（每次 <500 ms），DNS 出现后 1.5 秒内恢复；
+  - 127.0.0.1:53 上放了一个陷阱解析器，始终不应被查询；
+  - 每次列表变化都有一行 `local dns servers`。
+- **失败即 SERVFAIL：** 读不到服务器，或所有服务器都失败时，传输返回 SERVFAIL 应答，而不是返回错误。sing-box 对出错的被劫持查询不回任何应答（UDP）或直接关闭连接（TCP），客户端只能等到自己超时。这和 dnstransport 守卫在 0.5.11 的做法相同。原因记在 debug 日志 `msg="local dns failed"` 里；SERVFAIL 不会被缓存。实验中第一版返回的是错误，客户端因此等满了 3 秒超时，是端到端测试发现的。
+- **网卡变化的 1 秒防抖：** sing-tun 在所有平台上都把默认网卡检查推迟 1 秒（`monitor_shared.go` 的 `delayCheckUpdate`）。所以 `event=changed` 比路由实际变化晚约 1 秒，Windows VM 102 上的 +1.2 秒就是这个原因。直连 socket 的网卡绑定受同一个延迟影响，dns-local 跟随同一个事件。
+- **端到端结果（sail-load，2026-10-02，netshoot 特权容器，12–13 号核，连跑 3 次都通过）：**
+  - 三种网络变化在 `changed` 之后的第一次查询就由新 DNS 应答（1–2 ms），旧 DNS 不再收到查询；
+  - 没有服务器时 SERVFAIL 在 0–1 ms 内返回；
+  - 服务器出现但网卡没有变化时，约 1.04 秒恢复（符合每秒最多读一次的限制）；
+  - 127.0.0.1 陷阱始终未被查询。
+  - 变异检查：把作废改成空操作后，"同一网卡换网络"和"没有服务器"两组断言失败。

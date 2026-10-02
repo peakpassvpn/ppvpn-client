@@ -28,3 +28,15 @@ jobs:
       - run: go test -tags with_utls ./internal/... ./probe/...
       # Desktop cores are built with gVisor for the TUN "mixed" stack.
       - run: go test -tags with_utls,with_gvisor,with_dhcp ./cmd/... ./internal/... ./localproxy/...
+      # Lab builds (localdns_testsource) read dns-local's servers from a file;
+      # the source must exist only there: tested with the tag, and absent from
+      # a build with the release tags (release.yml also checks every release file).
+      - run: go test -tags localdns_testsource ./internal/localdns/
+      - name: Release builds carry no localdns test source
+        run: |
+          set -euo pipefail
+          marker=ppvpn-localdns-testsource-enabled
+          go build -tags "$(make -s print-desktop-tags)" -trimpath -o "$RUNNER_TEMP/core-release" ./cmd/ppvpn-core
+          go build -tags "$(make -s print-desktop-tags),localdns_testsource" -trimpath -o "$RUNNER_TEMP/core-lab" ./cmd/ppvpn-core
+          grep -qa "$marker" "$RUNNER_TEMP/core-lab" || { echo "lab build lacks the marker: the check below would prove nothing" >&2; exit 1; }
+          if grep -qa "$marker" "$RUNNER_TEMP/core-release"; then echo "release build contains the localdns test source" >&2; exit 1; fi

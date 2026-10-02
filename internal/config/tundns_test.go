@@ -1,13 +1,16 @@
 package config
 
 import (
+	"net/netip"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/peakpassvpn/ppvpn-core/internal/dnstransport"
 	"github.com/peakpassvpn/ppvpn-core/internal/domaindest"
+	"github.com/peakpassvpn/ppvpn-core/internal/localdns"
 	"github.com/peakpassvpn/ppvpn-core/profile"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -94,8 +97,7 @@ func TestTUNDNSServersAndMirroredRules(t *testing.T) {
 	if dns == nil || !dns.ReverseMapping || dns.Final != DNSRemoteTag || len(dns.Servers) != 4 {
 		t.Fatalf("dns: %#v", dns)
 	}
-	local := dns.Servers[0]
-	if local.Type != C.DNSTypeLocal || local.Tag != DNSLocalTag || local.Options.(*option.LocalDNSServerOptions).Detour != "" {
+	if local := dns.Servers[0]; local.Tag != DNSLocalTag || (local.Type != C.DNSTypeLocal && local.Type != localdns.Type) {
 		t.Fatalf("local server: %#v", local)
 	}
 	// dns-remote, then its fallbacks: DoT to resolvers outside mainland
@@ -213,41 +215,67 @@ func TestKnownDomainRegexRejectsIPLiterals(t *testing.T) {
 	}
 }
 
-// A host-supplied physical resolver becomes a UDP dns-local (the first one
-// outside the tunnel); tunnel addresses are skipped; with none left dns-local
-// stays sing-box's local transport; a malformed entry fails the build.
+// Host-supplied physical resolvers become a static ppvpn-local dns-local
+// with every one outside the tunnel, in order; with none left (or none given)
+// dns-local reads the default interface where the build supports it
+// (localdns), and is sing-box's local transport elsewhere; a malformed entry
+// fails the build.
 func TestLocalDNSServers(t *testing.T) {
 	build := func(servers ...string) (*BuildResult, error) {
 		return Build(base(node(profile.ProtocolShadowsocks)), profile.PlatformCapabilities{Platform: "macos", TUN: profile.TUNCapabilities{Enabled: true, LocalDNSServers: servers}}, time.Now())
 	}
 	cases := []struct {
-		servers    []string
-		wantServer string
-		wantPort   uint16
+		servers []string
+		want    string
 	}{
-		{[]string{"10.10.0.3"}, "10.10.0.3", 53},
-		{[]string{"10.60.159.90", "fde2:ec40:9312:c7fd::2", "172.19.0.2", "fdfe:dcba:9876::2", "192.168.1.1:5353"}, "192.168.1.1", 5353},
-		{[]string{"[fe80::1%en0]:53"}, "fe80::1%en0", 53},
-		{[]string{"::ffff:10.0.0.1"}, "10.0.0.1", 53},
+		{[]string{"10.10.0.3"}, "10.10.0.3:53"},
+		{[]string{"10.60.159.90", "fde2:ec40:9312:c7fd::2", "172.19.0.2", "fdfe:dcba:9876::2", "192.168.1.1:5353", "10.10.0.3"}, "192.168.1.1:5353,10.10.0.3:53"},
+		{[]string{"[fe80::1%en0]:53"}, "[fe80::1%en0]:53"},
+		{[]string{"::ffff:10.0.0.1"}, "10.0.0.1:53"},
 	}
-	for _, tc := range cases {
-		got, err := build(tc.servers...)
-		if err != nil {
-			t.Fatalf("%v: %v", tc.servers, err)
+	defer func(saved func() bool) { ownLocalDNS = saved }(ownLocalDNS)
+	for _, own := range []bool{false, true} {
+		ownLocalDNS = func() bool { return own }
+		for _, tc := range cases {
+			got, err := build(tc.servers...)
+			if err != nil {
+				t.Fatalf("%v: %v", tc.servers, err)
+			}
+			local := got.Options.DNS.Servers[0]
+			options, ok := local.Options.(*localdns.Options)
+			if local.Type != localdns.Type || local.Tag != DNSLocalTag || !ok || len(options.Exclude) != 0 {
+				t.Fatalf("%v: %#v", tc.servers, local)
+			}
+			var servers []string
+			for _, server := range options.Servers {
+				servers = append(servers, server.String())
+			}
+			if strings.Join(servers, ",") != tc.want {
+				t.Fatalf("%v: servers %v, want %s", tc.servers, servers, tc.want)
+			}
 		}
-		local := got.Options.DNS.Servers[0]
-		options, ok := local.Options.(*option.RemoteDNSServerOptions)
-		if local.Type != C.DNSTypeUDP || local.Tag != DNSLocalTag || !ok || options.Server != tc.wantServer || options.ServerPort != tc.wantPort || options.Detour != "" {
-			t.Fatalf("%v: %#v", tc.servers, local)
-		}
-	}
-	for _, servers := range [][]string{nil, {"10.60.159.90", "fde2:ec40:9312:c7fd::2", "172.19.0.2", "fdfe:dcba:9876::2"}} {
-		got, err := build(servers...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if local := got.Options.DNS.Servers[0]; local.Type != C.DNSTypeLocal || local.Tag != DNSLocalTag {
-			t.Fatalf("%v: %#v", servers, local)
+		for _, servers := range [][]string{nil, {"10.60.159.90", "fde2:ec40:9312:c7fd::2", "172.19.0.2", "fdfe:dcba:9876::2"}} {
+			got, err := build(servers...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			local := got.Options.DNS.Servers[0]
+			if !own {
+				if local.Type != C.DNSTypeLocal || local.Tag != DNSLocalTag {
+					t.Fatalf("%v: %#v", servers, local)
+				}
+				continue
+			}
+			options, ok := local.Options.(*localdns.Options)
+			if local.Type != localdns.Type || local.Tag != DNSLocalTag || !ok || len(options.Servers) != 0 {
+				t.Fatalf("%v: %#v", servers, local)
+			}
+			// The interface's resolvers exclude both tunnel ranges.
+			for _, addr := range []string{"10.60.159.90", "fde2:ec40:9312:c7fd::2", "172.19.0.2", "fdfe:dcba:9876::2"} {
+				if !slices.ContainsFunc(options.Exclude, func(p netip.Prefix) bool { return p.Contains(netip.MustParseAddr(addr)) }) {
+					t.Fatalf("%s not excluded: %v", addr, options.Exclude)
+				}
+			}
 		}
 	}
 	for _, bad := range []string{"dns.example", "10.0.0.1:0", "0.0.0.0", "[::1]:abc"} {
