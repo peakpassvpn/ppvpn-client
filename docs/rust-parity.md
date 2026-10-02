@@ -31,14 +31,14 @@ D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` �
 
 ## netns CI（G3、G7）
 
-`.github/workflows/netns.yml` 在每个 PR 和 main 上运行，环境是 GitHub 的 ubuntu-latest runner，测的是冻结的 Go core。每项测试都在 runner 上的独立网络命名空间里运行，经过 `test/netns/run.sh`：它负责超时，并在宿主命名空间里比较测试前后的状态。比较项是 ip rule（v4、v6）、全部路由表（去掉剩余生存期）、网卡名、nftables（不含计数器）、`/etc/resolv.conf`、systemd-resolved 的各网卡 DNS；任何差异都判失败，这一项覆盖 G7 的宿主残留。脚本与引擎无关：Rust engine 接入时，只把被测的二进制换成 `ppvpn-engine-lab`，脚本和断言不变。
+`.github/workflows/netns.yml` 在每个 PR 和 main 上运行，环境是 GitHub 的 ubuntu-latest runner，测的是冻结的 Go core。每项测试都在 runner 上的独立网络命名空间里运行，经过 `test/netns/run.sh`：它负责超时，并在宿主命名空间里比较测试前后的状态。比较项是 ip rule（v4、v6）、全部路由表（去掉剩余生存期）、网卡名、nftables（不含计数器）、`/etc/resolv.conf`、systemd-resolved 的各网卡 DNS；任何差异都判失败，这一项覆盖 G7 的宿主残留。脚本与引擎无关：Rust 版 ppvpn-core 接入时，只把被测的二进制换成 `ppvpn-core-lab`，脚本和断言不变。
 
 | CI 步骤 | 脚本 | 覆盖的行为 | 相关 Go 测试 | Rust 接入 |
 | --- | --- | --- | --- | --- |
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
 | tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 换成 Rust 的同名集成测试 |
 | tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上 |
-| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E6 | 被测二进制换成 `ppvpn-engine-lab` |
+| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E6 | 被测二进制换成 `ppvpn-core-lab` |
 | network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | 同上 |
 
 **不在 CI 里的**（继续在共享测试主机上用 hostq 跑，见 `test/lab/engine`）：
