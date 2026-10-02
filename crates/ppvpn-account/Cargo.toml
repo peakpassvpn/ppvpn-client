@@ -1,0 +1,20 @@
+[package]
+name = "ppvpn-account"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "PPVPN backend account client: device-code login, credential rotation and the account API"
+
+[dependencies]
+tokio = { version = "1", features = ["sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing = "0.1"
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
