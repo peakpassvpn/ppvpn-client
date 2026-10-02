@@ -1,0 +1,256 @@
+{
+  "name": "pin_ingress",
+  "description": "pin-ingress: pin a multi-ingress node to its backup, an unknown endpoint_key, an empty endpoint_key, an unknown node, then back to automatic (null).",
+  "steps": [
+    {
+      "name": "apply",
+      "method": "apply-profile",
+      "body": {},
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "pin_backup",
+      "method": "pin-ingress",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+        "endpoint_key": "9002"
+      }
+    },
+    {
+      "name": "status_pinned",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "pin_unknown_key",
+      "method": "pin-ingress",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+        "endpoint_key": "9999"
+      }
+    },
+    {
+      "name": "pin_empty_key",
+      "method": "pin-ingress",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+        "endpoint_key": ""
+      }
+    },
+    {
+      "name": "pin_unknown_node",
+      "method": "pin-ingress",
+      "body": {
+        "node_id": "missing",
+        "endpoint_key": "9001"
+      }
+    },
+    {
+      "name": "unpin",
+      "method": "pin-ingress",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+        "endpoint_key": null
+      }
+    },
+    {
+      "name": "status_unpinned",
+      "method": "get-status",
+      "body": {}
+    }
+  ],
+  "expect": [
+    {
+      "events": [
+        {
+          "revision": "2026-09-29T00:00:00Z#1",
+          "type": "ProfileApplied"
+        }
+      ],
+      "response": {
+        "data": {
+          "applied": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "endpoint_key": "9002",
+          "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "type": "NodeIngressPinned"
+        }
+      ],
+      "response": {
+        "data": {
+          "endpoint_key": "9002",
+          "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128"
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": "9002"
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#1",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "INGRESS_NOT_FOUND",
+          "field": "endpoint_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "INGRESS_NOT_FOUND",
+          "field": "endpoint_key",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "NODE_NOT_FOUND",
+          "field": "node_id",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [
+        {
+          "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "type": "NodeIngressPinned"
+        }
+      ],
+      "response": {
+        "data": {
+          "endpoint_key": null,
+          "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128"
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#1",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    }
+  ]
+}

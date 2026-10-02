@@ -1,0 +1,270 @@
+{
+  "name": "selection",
+  "description": "select-node and get-selected-node, list-nodes; an unknown node; selection before any profile.",
+  "steps": [
+    {
+      "name": "select_before_profile",
+      "method": "select-node",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128"
+      }
+    },
+    {
+      "name": "apply",
+      "method": "apply-profile",
+      "body": {},
+      "profile_ref": {
+        "base": "profiles/base.json"
+      }
+    },
+    {
+      "name": "selected_default",
+      "method": "get-selected-node",
+      "body": {}
+    },
+    {
+      "name": "list_nodes",
+      "method": "list-nodes",
+      "body": {}
+    },
+    {
+      "name": "select_second",
+      "method": "select-node",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129"
+      }
+    },
+    {
+      "name": "selected_second",
+      "method": "get-selected-node",
+      "body": {}
+    },
+    {
+      "name": "select_unknown",
+      "method": "select-node",
+      "body": {
+        "node_id": "missing"
+      }
+    },
+    {
+      "name": "status_after_select",
+      "method": "get-status",
+      "body": {}
+    }
+  ],
+  "expect": [
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CORE_OPERATION_FAILED",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [
+        {
+          "revision": "2026-09-29T00:00:00Z#1",
+          "type": "ProfileApplied"
+        }
+      ],
+      "response": {
+        "data": {
+          "applied": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "entry_key": "cn-optimized",
+          "id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "ingresses": [
+            {
+              "endpoint_key": "9001",
+              "protocol": "vless",
+              "replica_ordinal": 0,
+              "role": "primary"
+            },
+            {
+              "endpoint_key": "9002",
+              "label": "Tokyo relay",
+              "protocol": "shadowsocks",
+              "replica_ordinal": 1,
+              "role": "backup"
+            }
+          ],
+          "name": "日本-203.0.113.10",
+          "protocol": "vless",
+          "region": "日本",
+          "tcp": true,
+          "udp": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": [
+          {
+            "entry_key": "cn-optimized",
+            "id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+            "ingresses": [
+              {
+                "endpoint_key": "9001",
+                "protocol": "vless",
+                "replica_ordinal": 0,
+                "role": "primary"
+              },
+              {
+                "endpoint_key": "9002",
+                "label": "Tokyo relay",
+                "protocol": "shadowsocks",
+                "replica_ordinal": 1,
+                "role": "backup"
+              }
+            ],
+            "name": "日本-203.0.113.10",
+            "protocol": "vless",
+            "region": "日本",
+            "tcp": true,
+            "udp": true
+          },
+          {
+            "entry_key": "cn-optimized",
+            "entry_label": "CN Optimized",
+            "id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+            "ingresses": [
+              {
+                "endpoint_key": "9003",
+                "protocol": "anytls",
+                "replica_ordinal": 0,
+                "role": "primary"
+              }
+            ],
+            "name": "美国-203.0.113.20",
+            "protocol": "anytls",
+            "region": "美国",
+            "tcp": true,
+            "udp": false
+          }
+        ],
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+          "revision": "2026-09-29T00:00:00Z#1",
+          "type": "NodeSelected"
+        }
+      ],
+      "response": {
+        "data": {
+          "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129"
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "entry_key": "cn-optimized",
+          "entry_label": "CN Optimized",
+          "id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+          "ingresses": [
+            {
+              "endpoint_key": "9003",
+              "protocol": "anytls",
+              "replica_ordinal": 0,
+              "role": "primary"
+            }
+          ],
+          "name": "美国-203.0.113.20",
+          "protocol": "anytls",
+          "region": "美国",
+          "tcp": true,
+          "udp": false
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CORE_OPERATION_FAILED",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#1",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    }
+  ]
+}

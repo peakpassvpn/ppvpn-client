@@ -1,0 +1,59 @@
+{
+  "name": "requests",
+  "description": "Request-level errors common to every method.",
+  "steps": [
+    {
+      "name": "unknown_method",
+      "method": "no-such-method",
+      "body": {}
+    },
+    {
+      "name": "unknown_field",
+      "method": "select-node",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+        "extra": 1
+      }
+    },
+    {
+      "name": "local_proxy_metadata_disabled",
+      "method": "get-local-proxy-metadata",
+      "body": {}
+    }
+  ],
+  "expect": [
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "API_NOT_FOUND",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 404
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "REQUEST_INVALID",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "LOCAL_PROXY_DISABLED",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    }
+  ]
+}

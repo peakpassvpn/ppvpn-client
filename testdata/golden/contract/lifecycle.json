@@ -1,0 +1,350 @@
+{
+  "name": "lifecycle",
+  "description": "Lifecycle: start before any profile, apply, start, status, stop twice. Platform with no local proxy and no TUN, so nothing listens. The profile replaces the REALITY ingress (which needs the with_utls build tag) so the outcome is the same under every tag set.",
+  "steps": [
+    {
+      "name": "start_without_profile",
+      "method": "start",
+      "body": {}
+    },
+    {
+      "name": "status_stopped",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "apply",
+      "method": "apply-profile",
+      "body": {},
+      "profile_ref": {
+        "base": "profiles/base.json",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/protocol",
+            "value": "shadowsocks"
+          },
+          {
+            "op": "replace",
+            "path": "/nodes/0/ingresses/0/credentials",
+            "value": {
+              "shadowsocks": {
+                "method": "2022-blake3-aes-128-gcm",
+                "user_key": "AAAAAAAAAAAAAAAAAAAAAA=="
+              }
+            }
+          },
+          {
+            "op": "remove",
+            "path": "/nodes/0/ingresses/0/tls"
+          }
+        ]
+      }
+    },
+    {
+      "name": "status_configured",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "start",
+      "method": "start",
+      "body": {}
+    },
+    {
+      "name": "status_running",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "start_again",
+      "method": "start",
+      "body": {}
+    },
+    {
+      "name": "stop",
+      "method": "stop",
+      "body": {}
+    },
+    {
+      "name": "status_after_stop",
+      "method": "get-status",
+      "body": {}
+    },
+    {
+      "name": "stop_again",
+      "method": "stop",
+      "body": {}
+    },
+    {
+      "name": "probe_availability_local_proxy_disabled",
+      "method": "probe-availability",
+      "body": {
+        "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+        "target": "https://example.com/",
+        "timeout_ms": 1000
+      }
+    }
+  ],
+  "expect": [
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "CORE_OPERATION_FAILED",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 0,
+          "state": "stopped",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "revision": "2026-09-29T00:00:00Z#1",
+          "type": "ProfileApplied"
+        }
+      ],
+      "response": {
+        "data": {
+          "applied": true
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#1",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "type": "CoreStarted"
+        }
+      ],
+      "response": {
+        "data": {},
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": true,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "healthy": true,
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "healthy": true,
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#1",
+          "routing_mode": "rules",
+          "selected_ingress": {
+            "endpoint_key": "9001",
+            "role": "primary"
+          },
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "running",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {},
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [
+        {
+          "type": "CoreStopped"
+        }
+      ],
+      "response": {
+        "data": {},
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {
+          "draining_kernels": 0,
+          "node_count": 2,
+          "nodes": [
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9001",
+                  "role": "primary"
+                },
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9002",
+                  "label": "Tokyo relay",
+                  "role": "backup"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+              "pinned_endpoint_key": null
+            },
+            {
+              "ingresses": [
+                {
+                  "active": false,
+                  "consecutive_failures": 0,
+                  "endpoint_key": "9003",
+                  "role": "primary"
+                }
+              ],
+              "node_id": "3f2c9a1e-0000-4000-8000-000000000002-129",
+              "pinned_endpoint_key": null
+            }
+          ],
+          "revision": "2026-09-29T00:00:00Z#1",
+          "routing_mode": "rules",
+          "selected_node_id": "3f2c9a1e-0000-4000-8000-000000000001-128",
+          "state": "configured",
+          "system_proxy": {
+            "available": false,
+            "enabled": false,
+            "listening": false
+          }
+        },
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "data": {},
+        "ok": true
+      },
+      "status": 200
+    },
+    {
+      "events": [],
+      "response": {
+        "error": {
+          "code": "LOCAL_PROXY_DISABLED",
+          "retryable": false
+        },
+        "ok": false
+      },
+      "status": 400
+    }
+  ]
+}
