@@ -92,7 +92,7 @@ mkdir -m 700 "$APP_STATE"
     `host_ipv6_ms`（主机 IPv6 探测）、`build_ms`、`routing_ms`，运行中 apply 还有 `kernel_switch_ms`
     （0.5.18 起：新内核创建、启动与切换），走「停止再启动」路径时为 `engine_create_ms`/`engine_start_ms`；
   - 运行中 apply（0.5.18 起）：`msg="kernel switched"`（`gen`、`previous`、`closed_connections`、
-    `kept_connections`）；旧内核关闭时 `msg="kernel drained"`（`gen`、`reason`=`idle`/`deadline`、
+    `kept_connections`，0.5.19 起统计所有仍在排空的旧内核；`draining_kernels`，切换后正在排空的旧内核数）；旧内核关闭时 `msg="kernel drained"`（`gen`、`reason`=`idle`/`deadline`、
     `closed_connections`、`idle_closed`（0.5.19 起：排空期间因空闲 60 秒被关闭的连接数））；
     监听变化需要重启时 `msg="apply full restart" reasons=…`；
   - `msg="start timing"`：`system_proxy_ms`（启用时）、`engine_create_ms`（sing-box 解析与构造）、
