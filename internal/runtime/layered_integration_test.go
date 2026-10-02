@@ -706,12 +706,12 @@ func TestDrainKeepsActiveConnections(t *testing.T) {
 }
 
 // Pauses shorter than the threshold do not close a draining connection.
+// The window counts from the connection's last byte: a request right after
+// the switch takes the apply's own duration out of it, and the pauses add up
+// to more than the window, so a window counted from anything but the last
+// byte would close the connection.
 func TestDrainToleratesShortPauses(t *testing.T) {
-	// The idle window counts from the connection's last byte, which went out
-	// before the apply: under a loaded -race run the apply alone can take
-	// hundreds of milliseconds, so the window must leave a wide margin over
-	// apply plus pause, or a correct drain closes the connection as idle.
-	shortDrainIdle(t, 5*time.Second)
+	shortDrainIdle(t, time.Second)
 	f := newHotSwap(t)
 	tunnel, request := f.keepAlive(t)
 	defer tunnel.Close()
@@ -719,8 +719,11 @@ func TestDrainToleratesShortPauses(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.next(t, EventKernelSwitched, 5*time.Second)
-	for i := range 2 {
-		time.Sleep(300 * time.Millisecond)
+	if err := request(); err != nil { // a fresh byte: the apply is out of the window
+		t.Fatalf("request right after the switch: %v", err)
+	}
+	for i := range 6 { // 6 × 250 ms = 1.5 s > the 1 s window
+		time.Sleep(250 * time.Millisecond)
 		if err := request(); err != nil {
 			t.Fatalf("request %d after a short pause: %v", i, err)
 		}

@@ -366,17 +366,33 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 		return kernelEvent{}, err
 	}
 
-	e.mu.Lock()
-	if !e.started {
-		e.mu.Unlock()
+	event, closing, err := e.switchTo(next, options, closeOld)
+	if err != nil {
 		next.close()
-		return kernelEvent{}, errors.New("engine closed during the switch")
+		return kernelEvent{}, err
+	}
+	// Outside the lock, as drainOnce does: closing can take a while.
+	for _, item := range closing {
+		e.tracker.closeConnection(item)
+	}
+	return event, nil
+}
+
+// switchTo makes next the current kernel and retires the one it replaces,
+// under the engine lock (released by defer, so a panic in closeOld cannot
+// leave it held). The new profile applies to every replaced kernel still
+// draining, not only the one just replaced: a connection two applies old may
+// run through a node or match a rule the new profile drops. It returns the
+// connections to close; the caller closes them after the lock.
+func (e *layeredEngine) switchTo(next *kernel, options option.Options, closeOld func(next engine, item trackedView) bool) (kernelEvent, []*tracked, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.started {
+		return kernelEvent{}, nil, errors.New("engine closed during the switch")
 	}
 	e.registerTUNInterface(next)
-	if err = e.reconcileInbounds(options.Inbounds); err != nil {
-		e.mu.Unlock()
-		next.close()
-		return kernelEvent{}, fmt.Errorf("update listeners: %w", err)
+	if err := e.reconcileInbounds(options.Inbounds); err != nil {
+		return kernelEvent{}, nil, fmt.Errorf("update listeners: %w", err)
 	}
 	previous := e.active.Load()
 	e.switcher.set(next)
@@ -387,11 +403,6 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 	previous.deadline = previous.retired.Add(e.drainLimit)
 	e.draining = append(e.draining, previous)
 	e.drainingCount.Store(int32(len(e.draining)))
-	// The new profile applies to every replaced kernel still draining, not
-	// only the one just replaced: a connection two applies old may run
-	// through a node or match a rule the new profile drops. One pass over
-	// the table; the connections are closed outside the lock, as drainOnce
-	// does.
 	gens := make(map[uint64]bool, len(e.draining))
 	for _, old := range e.draining {
 		gens[old.gen] = true
@@ -406,11 +417,7 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 		}
 	}
 	event.Draining = len(e.draining)
-	e.mu.Unlock()
-	for _, item := range closing {
-		e.tracker.closeConnection(item)
-	}
-	return event, nil
+	return event, closing, nil
 }
 
 // reconcileInbounds applies the in-place listener changes: the local proxy's
