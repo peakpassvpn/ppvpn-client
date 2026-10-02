@@ -53,7 +53,7 @@ type Status struct {
 	// Nodes reports each node's ingress pin and health, in profile order.
 	Nodes []NodeStatus `json:"nodes,omitempty"`
 	// DrainingKernels counts kernels replaced by an apply that still serve
-	// their connections (0.5.17).
+	// their connections (0.5.18).
 	DrainingKernels int `json:"draining_kernels"`
 }
 

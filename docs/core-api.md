@@ -104,7 +104,7 @@ Profile 照常应用，但规则集一律不下载（状态为 `RULE_SET_HOST_NO
 - 规则集刷新触发的重建和 `reload` 沿用当前模式；`get-status` 的 `routing_mode` 返回当前生效的模式（尚未应用
   Profile 时省略）。
 
-**运行中 apply 不断连（0.5.17 起）。** 核心运行时，`apply-profile`、`reload` 与规则集重建都不再重启引擎：监听端口与
+**运行中 apply 不断连（0.5.18 起）。** 核心运行时，`apply-profile`、`reload` 与规则集重建都不再重启引擎：监听端口与
 TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「内核」里。新 Profile 先启动一个新内核，成功后新连接立即
 走新内核；已建立的连接留在旧内核里直到自然结束，最长 10 分钟后旧内核关闭（仍未结束的连接此时断开）。
 
@@ -210,7 +210,7 @@ TUN 由一个常驻的前端持有，规则、出站与 DNS 在可替换的「�
 5 秒起指数退避重试（5、10、20 秒……最长 15 分钟，且不超过更新间隔）。同时到期的规则集并发下载（最多 4 个）。
 某个非 `ready` 的规则集恢复时，核心认为网络已经恢复，立即重试其余所有非 `ready` 的规则集，而不是各自等待退避。
 有规则集从 `unavailable` 变为可用（或反之）时，核心在这一轮到期的下载全部结束后只重建一次配置（等同
-`reload`；0.5.17 起不断开已建立的连接，见「运行中 apply 不断连」）；已在使用的规则集文件内容更新时由
+`reload`；0.5.18 起不断开已建立的连接，见「运行中 apply 不断连」）；已在使用的规则集文件内容更新时由
 sing-box 就地重新加载，不重启实例，也不断开连接。状态每次变化都会发出 `RuleSetChanged` 事件，并在核心日志记一行
 `msg="rule set"`（`id`、`state`、`error`、`failures`、`next_retry_at`）；`apply timing` 一行附带
 `rule_sets_ready`/`rule_sets_stale`/`rule_sets_unavailable` 与 `rebuild`（规则集或 `reload` 触发的重建为 `true`）：
@@ -359,7 +359,7 @@ HTTP/SOCKS5 监听器（同一端口）。它默认关闭，由宿主在运行�
 ]
 ```
 
-Traffic 是当前运行实例的累计计数，`stop`/`start` 或走「停止再启动」路径的 apply 后归零；0.5.17 起运行中 apply
+Traffic 是当前运行实例的累计计数，`stop`/`start` 或走「停止再启动」路径的 apply 后归零；0.5.18 起运行中 apply
 切换内核不归零，`get-connections` 也包含旧内核中仍在排空的连接。Connections 只包含仍活动的连接，关闭后移除。
 
 方向以客户端为准：`upload_bytes` 是客户端（应用、浏览器、TUN 内的流量）发往远端的字节，`download_bytes`

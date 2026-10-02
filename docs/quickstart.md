@@ -87,8 +87,8 @@ mkdir -m 700 "$APP_STATE"
 - `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：
   - `msg="apply timing"`：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`local_proxy_ms`、
     `host_ipv6_ms`（主机 IPv6 探测）、`build_ms`、`routing_ms`，运行中 apply 还有 `kernel_switch_ms`
-    （0.5.17 起：新内核创建、启动与切换），走「停止再启动」路径时为 `engine_create_ms`/`engine_start_ms`；
-  - 运行中 apply（0.5.17 起）：`msg="kernel switched"`（`gen`、`previous`、`closed_connections`、
+    （0.5.18 起：新内核创建、启动与切换），走「停止再启动」路径时为 `engine_create_ms`/`engine_start_ms`；
+  - 运行中 apply（0.5.18 起）：`msg="kernel switched"`（`gen`、`previous`、`closed_connections`、
     `kept_connections`）；旧内核关闭时 `msg="kernel drained"`（`gen`、`reason`=`idle`/`deadline`、
     `closed_connections`）；监听变化需要重启时 `msg="apply full restart" reasons=…`；
   - `msg="start timing"`：`system_proxy_ms`（启用时）、`engine_create_ms`（sing-box 解析与构造）、
