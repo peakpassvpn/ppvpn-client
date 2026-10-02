@@ -1,7 +1,9 @@
 // Package outboundlog wraps the node outbounds (Shadowsocks, VLESS, AnyTLS)
 // so that, at debug level, a failed connection to a node writes one line to
 // the first-party diagnostic log: which node and ingress, the protocol, the
-// destination asked for, the underlying error and how long it took.
+// destination asked for, the underlying error and how long it took. Direct
+// outbounds (direct, direct-host) log their dial failures the same way,
+// without node and ingress, at most once per destination per DirectLimit.
 //
 // sing-box's own log stays disabled (its text is not covered by the
 // credential policy), so without this a failed handshake or authentication
@@ -58,11 +60,13 @@ func WithLogger(ctx context.Context, l *corelog.Logger, ingresses map[string]Ing
 	return context.WithValue(ctx, contextKey{}, settings{log: l, ingresses: ingresses})
 }
 
-// Register replaces the node protocol constructors with wrapping ones.
+// Register replaces the node protocol and direct constructors with
+// wrapping ones.
 func Register(registry *outbound.Registry) {
 	outbound.Register[option.ShadowsocksOutboundOptions](registry, C.TypeShadowsocks, wrap(shadowsocks.NewOutbound))
 	outbound.Register[option.VLESSOutboundOptions](registry, C.TypeVLESS, wrap(vless.NewOutbound))
 	outbound.Register[option.AnyTLSOutboundOptions](registry, C.TypeAnyTLS, wrap(anytls.NewOutbound))
+	outbound.Register[option.DirectOutboundOptions](registry, C.TypeDirect, wrapDirect)
 }
 
 func wrap[T any](inner outbound.ConstructorFunc[T]) outbound.ConstructorFunc[T] {

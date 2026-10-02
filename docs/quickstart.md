@@ -118,7 +118,10 @@ sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun
 另外（0.5.9 起）每次连接节点失败记一行 `msg="outbound failed"`：`stage`（`dial`：TCP 连接失败，VLESS/REALITY
 与 AnyTLS 的 TLS 握手也在这一步；`closed before any response`：连上后节点没回任何数据就关闭，例如 Shadowsocks
 密钥被拒）、`node_id`、`endpoint_key`、`outbound`、`protocol`、`network`、`destination`、`error` 与 `ms`。不记录
-任何凭据；只在 debug 级别记录。每次 apply（不含 reload/规则集重建）还为每个带 TLS 的入口记一行
+任何凭据；只在 debug 级别记录。0.5.21 起直连出站（`direct`，以及无主机 IPv6 时的 `direct-host`）拨号失败也记
+同样的一行：`stage=dial`、`outbound`、`protocol=direct`、`network`、`destination`、`error`、`ms`，没有 `node_id` 与
+`endpoint_key`。断网时直连会大量失败，所以同一出站、同一目标 10 秒内只记第一次；窗口过后的下一行附
+`suppressed`，即期间被省略的次数。每次 apply（不含 reload/规则集重建）还为每个带 TLS 的入口记一行
 `msg="ingress tls"`，用于和服务端核对参数而不暴露原文：`server_name`、`flow`，REALITY 入口另有
 `public_key_sha256`/`short_id_sha256`（按收到的字符串原样取 SHA-256 的前 10 个十六进制字符）、两者长度、
 `public_key_encoding`（`padded`/`unpadded` 与 `url`/`std`/`url-or-std` 字母表）和 uTLS `fingerprint`。
