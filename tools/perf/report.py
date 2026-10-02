@@ -36,18 +36,24 @@ import sys
 # metric suffix -> (largest growth against the last main run, against the
 # Go 0.5.21 baseline, only comparable within one engine, source). None: no
 # threshold, the number is recorded only. The most specific suffix first.
+# Calibration (2026-10-03, testdata/perf/baseline-go-0.5.21.json): ten
+# single-round runners plus three; "spread" is (max - min) / median of the
+# rounds. A compared number is a median of three, so it varies less.
 THRESHOLDS = [
-    # Sizes are reproducible; against Go they are a trend only: Rust links
-    # the engine into the host, whose installer Desktop measures (#45).
-    ("size_bytes", 0.02, None, False, "2%: Sail's; Go vs Rust: trend only"),
-    # Same engine only: Go's GC and Rust's allocator count differently.
-    ("allocations_per_mib", 0.03, 0.03, True, "Sail's calibration; same engine only"),
-    ("allocations_per_connection", 0.03, 0.03, True, "Sail's calibration; same engine only"),
-    ("allocated_bytes_per_mib", 0.25, 0.25, True, "Sail's calibration (a coarse alarm); same engine only"),
+    # Reproducible (spread 0). Against Go a trend only: Rust links the
+    # engine into the host, whose installer Desktop measures (#45).
+    ("size_bytes", 0.02, None, False, "spread 0; Go vs Rust: trend only"),
+    # Same engine only: Go's GC and a Rust allocator count differently.
+    ("allocations_per_mib", 0.03, 0.03, True, "spread <=1.6%"),
+    ("allocations_per_connection", 0.05, 0.05, True, "spread <=3.6%"),
+    ("allocated_bytes_per_mib", 0.10, 0.10, True, "spread <=5.3%"),
     # After a load the Go runtime returns memory on its own schedule.
     ("after_rss_kb", None, None, False, "record only: depends on the GC's scavenger timing"),
-    ("rss_kb", 0.05, 0.20, False, "Desktop's threshold against Go (120%); 5% against main: Sail's"),
-    ("_ms", 1.00, 0.10, False, "only a doubling against main; Desktop: not worse than Go (10% margin, to calibrate)"),
+    ("rss_kb", 0.10, 0.20, False, "spread <=8.5%; against Go: Desktop's 120%"),
+    # A few milliseconds at a resolution of one: spread 75-100%. Desktop's
+    # "not worse than Go" for apply and kernel_switch_ms is judged on the
+    # lab hosts and real machines instead (#45).
+    ("_ms", None, None, False, "record only: spread 75-100% at 1 ms resolution"),
 ]
 
 NAME = re.compile(r"^[a-z0-9_.-]+$")
