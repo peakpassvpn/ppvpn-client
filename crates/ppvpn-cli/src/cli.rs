@@ -103,6 +103,9 @@ pub enum Command {
     Doctor,
     /// Generate a shell completion script (bash, zsh or fish).
     Completion { shell: String },
+    /// Run the background daemon (started by `ppvpn start`).
+    #[command(hide = true)]
+    Daemon,
 }
 
 #[derive(Debug, Subcommand)]

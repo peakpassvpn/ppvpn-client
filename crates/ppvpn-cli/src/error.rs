@@ -37,6 +37,8 @@ pub struct CliError {
     /// One line for people; never contains credentials.
     pub message: String,
     pub retryable: bool,
+    /// The input field at fault, when core names one (`--json` only).
+    pub field: Option<String>,
 }
 
 impl CliError {
@@ -46,6 +48,7 @@ impl CliError {
             code: code.to_string(),
             message: message.into(),
             retryable: false,
+            field: None,
         }
     }
 
@@ -76,3 +79,59 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {}
 
 pub type Result<T> = std::result::Result<T, CliError>;
+
+/// Maps an error from ppvpn-core to the CLI's exit categories. Core's
+/// runtime codes are listed; every other code is a profile or request
+/// validation failure (exit 7).
+pub fn from_core(code: &str, field: Option<String>, retryable: bool, message: &str) -> CliError {
+    let exit = match code {
+        "NODE_NOT_FOUND" | "INGRESS_NOT_FOUND" | "PINS_INVALID" | "ROUTING_MODE_INVALID" => {
+            Exit::Argument
+        }
+        "PROFILE_NOT_APPLIED"
+        | "CORE_NOT_RUNNING"
+        | "CORE_OPERATION_FAILED"
+        | "CORE_PANICKED"
+        | "ENGINE_FATAL"
+        | "ENGINE_SHUT_DOWN"
+        | "NO_DEFAULT_INTERFACE" => Exit::Core,
+        "LOCAL_PROXY_DISABLED"
+        | "SYSTEM_PROXY_UNAVAILABLE"
+        | "SYSTEM_PROXY_START_FAILED"
+        | "TUN_INSTANCE_EXISTS"
+        | "WINTUN_UNAVAILABLE" => Exit::Incompatible,
+        "STATE_DIR_IN_USE" | "PERMISSION_DENIED" => Exit::Environment,
+        _ => Exit::Profile,
+    };
+    CliError {
+        exit,
+        code: code.to_string(),
+        message: message.to_string(),
+        retryable,
+        field,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_codes_map_to_exit_categories() {
+        let exit = |code: &str| from_core(code, None, false, "m").exit_code();
+        assert_eq!(exit("NODE_NOT_FOUND"), 2);
+        assert_eq!(exit("PROFILE_NOT_APPLIED"), 5);
+        assert_eq!(exit("ENGINE_SHUT_DOWN"), 5);
+        assert_eq!(exit("LOCAL_PROXY_DISABLED"), 6);
+        assert_eq!(exit("STATE_DIR_IN_USE"), 8);
+        assert_eq!(exit("PROFILE_EXPIRED"), 7);
+        assert_eq!(exit("RULE_SET_HOST_NOT_ALLOWED"), 7);
+        let err = from_core(
+            "DEFAULT_NODE_NOT_FOUND",
+            Some("selection.default_node_id".into()),
+            false,
+            "m",
+        );
+        assert_eq!(err.field.as_deref(), Some("selection.default_node_id"));
+    }
+}
