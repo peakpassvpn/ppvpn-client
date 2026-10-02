@@ -168,8 +168,8 @@ curl --unix-socket "$APP_STATE/core.sock" \
 
 随后调用 `/v1/start`，并用 `/v1/get-local-proxy-metadata` 读取不含 secret 的每节点
 HTTP/SOCKS5 端点（所有节点同一端口）；只有原生凭据面板按需调用 `/v1/get-local-proxy-credential`。Windows
-产品由特权 service 以 TUN 模式运行 core，macOS 产品使用 XCFramework 和原生 Network
-Extension；两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1/select-node`，退出时
+和 macOS 产品都由特权 service 以 TUN 模式（`--tun`）运行 core，macOS 不使用 Network Extension；
+两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1/select-node`，退出时
 调用 `/v1/stop`。完整顺序和 DTO 见 [Core API v1](core-api.md)。
 
 ## 5. 常见问题
@@ -180,4 +180,4 @@ Extension；两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1
 - `CORE_OPERATION_FAILED`：上游错误已安全折叠。核心日志（默认 stderr，或 `--log-file`）中有一行 `level=error msg=CORE_OPERATION_FAILED`，包含 `path`、`request_id`、`stage`、`error` 和 `chain`（错误链类型，OS 错误附带数值，如 `syscall.Errno(5)`）。
 - TUN 启动失败并提示 `gVisor is not included`：核心未带 `with_gvisor` 构建，而 `mixed`/`gvisor` 栈需要它；使用 Makefile 的桌面目标构建（`serve` 会在启动时直接拒绝这种组合）。
 - 本地代理端口变更：核心启动前发现持久端口（或 7890）已占用时改用空闲端口并持久化；`start` 后调用 `GetLocalProxyMetadata` 刷新。
-- TUN/Network Extension 启动失败：保持未连接并由原生宿主通知用户；不要静默回退到系统代理。
+- TUN 启动失败：保持未连接并由原生宿主通知用户；不要静默回退到系统代理。

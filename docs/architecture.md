@@ -7,8 +7,8 @@
 ```mermaid
 flowchart LR
   Backend["ppvpn-backend"] -->|"Profile (schema 1)"| Profile["profile: 解析、校验"]
-  Desktop["桌面 App"] -->|"Core API v1 + 会话密钥"| API["api / ipc"]
-  Mobile["Network Extension / VpnService"] -->|"mobile.Bridge JSON DTO"| Runtime["internal/runtime"]
+  Desktop["桌面特权 service（Windows / macOS，--tun）"] -->|"Core API v1 + 会话密钥"| API["api / ipc"]
+  Mobile["iOS Network Extension / Android VpnService"] -->|"mobile.Bridge JSON DTO"| Runtime["internal/runtime"]
   API --> Runtime
   Profile --> Builder["internal/config"]
   Runtime --> Builder
@@ -57,17 +57,19 @@ stateDiagram-v2
 Profile 描述“连接到哪些服务以及使用什么协议”；`PlatformCapabilities` 描述“本设备允许核心做什么”。TUN、本地监听地址、日志级别和平台名称只能由宿主提供，后端不得下发。
 
 桌面 `serve` 默认启用每节点认证代理。每节点代理为每个稳定
-node ID 提供一个同时支持 HTTP/SOCKS5 的认证端点。Windows 宿主以特权 TUN 接管流量，
-macOS 宿主使用原生 Network Extension；Profile 不包含系统级隧道配置。
+node ID 提供一个同时支持 HTTP/SOCKS5 的认证端点。Windows 与 macOS 宿主都由特权 service 以
+`--tun` 拉起 core、以 TUN 接管流量（macOS 不使用 Network Extension）；Profile 不包含系统级隧道配置。
 
 ## TUN 实际边界
 
 `PlatformCapabilities.tun.enabled=true` 确实进入配置构建：macOS/Windows 会生成带 `auto_route`、`strict_route` 的 sing-box TUN inbound。桌面 CLI 提供 `--tun` 与 `--tun-stack`，但 core 不获取管理员/root 权限，不安装或打开平台驱动，不设置系统代理，也不承载平台 UI。因此普通权限 sidecar 不能被视为已经具备可交付 TUN。
 
-Windows Desktop 必须由已签名 privileged service 提供权限和平台资源，再以 `--tun`
-启动 core；失败时保持未连接并通知用户，不静默回退到系统代理。macOS Desktop 使用
-`NETransparentProxyProvider` 内的 XCFramework flow adapter。iOS `NEPacketTunnelProvider`
-与 Android `VpnService` 仍由宿主创建系统 VPN/TUN；移动 TUN 文件描述符桥接是后续接入点。
+Windows 与 macOS Desktop 都由特权 service 提供权限和平台资源，再以 `--tun` 启动 core
+（Windows 为已签名 service；macOS 为 LaunchDaemon，core 打开 utun）；失败时保持未连接并通知用户，
+不静默回退到系统代理。系统层面的 DNS 设置（macOS 用 `scutil` 覆盖，退出和异常后清理）归 service，
+TUN 内部的 DNS 归 core。core 的 `PPVPNCore.xcframework` flow adapter（为 `NETransparentProxyProvider`
+设计）目前没有宿主使用。iOS `NEPacketTunnelProvider` 与 Android `VpnService` 仍由宿主创建系统
+VPN/TUN；移动 TUN 文件描述符桥接是后续接入点。
 
 ## 探测语义
 

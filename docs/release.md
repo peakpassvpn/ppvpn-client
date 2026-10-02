@@ -88,7 +88,8 @@ Windows 文件没有版本资源。release.yml 在构建后执行 `make verify-w
 GitHub Actions 按平台拆分桌面产物：
 
 - `build:macos-artifact`：macOS arm64/x86_64 XCFramework 与
-  `macos-SHA256SUMS`。
+  `macos-SHA256SUMS`（flow adapter，目前没有宿主使用；macOS Desktop 用的是 `ppvpn-core-darwin-*`
+  可执行文件，见 [桌面平台接入](desktop.md#macos)）。
 - `build:windows-artifact`：Windows amd64/arm64 可执行文件与
   `windows-SHA256SUMS`。
 - `build:linux-artifact`：Linux amd64/arm64 静态可执行文件与

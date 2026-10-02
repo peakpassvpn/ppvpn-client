@@ -2,12 +2,24 @@
 
 桌面产品只依赖版本化的 ppvpn-core 公共契约，不感知或选择 core 的内部实现。
 
+Windows 与 macOS 的做法相同：特权 service 以 `--tun` 拉起 core，由 core 打开 TUN。两个平台都
+不使用 Network Extension 或 System Extension。
+
+DNS 分两层，归属不同：
+
+- **系统层面的 DNS 设置归 service**：让系统 DNS 指向 TUN 通告的地址，并在退出和异常后清理残留
+  设置。macOS 上 service 用 `scutil` 覆盖；Windows 上 TUN 网卡的 DNS 由 core（sing-tun）设置，
+  service 不另行改写（见下）。
+- **TUN 内部的 DNS 归 core**：劫持隧道内的 DNS 查询、按 Profile 解析，以及本地 DNS（`dns-local`）
+  读取物理网卡的解析器。
+
 ## Windows
 
 特权 `ppvpn-service` 作为唯一 runtime owner 启动 Windows x64 core 制品，先读取
-`version` 并要求 Core API v1、Profile Schema 1。service 负责权限、TUN、路由、DNS、
-进程校验和控制通道；Profile 的 `DIRECT`、`REJECT`、selected/fixed-node `PROXY`
-语义只由 core 判定。
+`version` 并要求 Core API v1、Profile Schema 1。service 负责权限、以 `--tun` 拉起 core、
+进程校验和控制通道。系统层面的 DNS 在 Windows 上由 TUN 网卡的 DNS 设置完成（sing-tun 设置），
+service 不另行改写；TUN 内部的 DNS 由 core 负责（见上）。Profile 的
+`DIRECT`、`REJECT`、selected/fixed-node `PROXY` 语义只由 core 判定。
 
 增强模式（TUN）下 DNS 由 core 接管：TUN 同时持有 IPv4 与 IPv6 地址，IPv6 也进入隧道；TUN 通告的 DNS
 （`10.60.159.90`、`fde2:ec40:9312:c7fd::2`，0.5.7 之前为 `172.19.0.2`、`fdfe:dcba:9876::2`）以及隧道内任何 53 端口查询（不分 IPv4/IPv6）都被
@@ -21,7 +33,20 @@
 
 ## macOS
 
-`build/PPVPNCore.xcframework` 提供 macOS 13+ universal slice，运行在
+macOS 与 Windows 相同，由特权 service 以 `--tun` 拉起 core。service 以 LaunchDaemon 形式运行，
+启动用两个 release 文件 `ppvpn-core-darwin-arm64` 与 `ppvpn-core-darwin-amd64` 经 `lipo` 合成的
+universal 可执行文件；core 打开 utun 设备作为 TUN。系统 DNS 由 service 用 `scutil` 覆盖为 TUN 通告的
+DNS 地址，service 在退出和异常后负责清理残留设置；隧道内的 DNS 劫持与解析由 core 负责。
+Desktop 不使用 Network Extension 或 System Extension（没有 Developer ID 与 NE entitlement）。
+
+Desktop 仓库里的 XCFramework 是 `PPVPNClientFFI`（Desktop 自己 crate 的 UniFFI 绑定），不是
+core 的产物。
+
+### Flow adapter（`PPVPNCore.xcframework`，目前没有宿主使用）
+
+下面的 flow adapter 目前没有任何宿主使用，构建和 release 产物照常保留，是否下线另行决定。
+
+`build/PPVPNCore.xcframework` 提供 macOS 13+ universal slice，设计为运行在
 `NETransparentProxyProvider` System Extension 进程内。公开 Objective-C API 包括：
 
 - `MobileBridge.start/applyProfile/stop/status`
