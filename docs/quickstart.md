@@ -10,10 +10,10 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 ./build/ppvpn-core version
 ```
 
-预期版本响应：
+预期版本响应（`core_version` 是当前版本，即 `version/version.go` 的 `CoreVersion`）：
 
 ```json
-{"core_version":"0.5.16","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"X.Y.Z","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
 ```
 
 ## 2. 准备 Profile
