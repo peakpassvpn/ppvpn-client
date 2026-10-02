@@ -48,6 +48,21 @@ D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` �
 
 计划下一个 PR 接入 dns-local 的 E5（TUN 运行中切换默认网卡）和其余 D 组。
 
+## Lab 用例（`test/lab/engine/cases`）
+
+UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golden/routing`）里没有覆盖。它们写成 lab 的用例，在有特权容器的 Linux 主机上跑：`lab.sh case <组> sing|rust`。Go 0.5.21 的输出存为 `cases/<组>.baseline.txt`。Rust 版跑同一个脚本，结论按 id 记在这里。
+
+| id | 行为 | Go 0.5.21 | Rust | 备注 |
+| --- | --- | --- | --- | --- |
+| `dns-hijack.1`–`.4` | 发往任意 IPv4、IPv6 地址，以及隧道自身 DNS 地址（`10.60.159.90`、`fde2:…::2`）的 53 端口查询都被劫持 | PASS | todo | |
+| `dns-hijack.5`–`.6` | 代理路由的域名由 dns-remote 解析，直连路由的域名由 dns-local 解析 | PASS | todo | |
+| `dns-hijack.7`–`.8` | 发往服务器 853 端口的 DoT 不被劫持，按普通连接路由 | PASS | todo | |
+| `udp.1`–`.2` | UDP 经选中节点；direct 规则下的 UDP 直连 | PASS | todo | |
+| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | todo | Go 不强制 capability；Rust 是否强制待定（#45） |
+| `reverse-map.1`–`.4` | 不带 Host 的连接按 DNS 应答的域名交给节点；内核热切换、改选节点后仍然有效 | PASS | todo | 对应 `TestKernelSwitchKeepsReverseMapping` |
+
+未覆盖：QUIC 嗅探（lab 镜像里没有 QUIC 客户端）。
+
 ## 1. 热切换和排空
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |

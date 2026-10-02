@@ -1,0 +1,9 @@
+PASS dns-hijack.1 IPv4 query to an arbitrary address is answered over DoT: got=198.51.100.60
+PASS dns-hijack.2 IPv6 query to an arbitrary address is hijacked too: got=198.51.100.60
+PASS dns-hijack.3 query to the tunnel's own IPv4 DNS address: got=198.51.100.60
+PASS dns-hijack.4 query to the tunnel's own IPv6 DNS address: got=198.51.100.60
+PASS dns-hijack.5 a proxied name is resolved by dns-remote: got=dns-remote
+PASS dns-hijack.6 a direct-routed name is resolved by dns-local: got=dns-local
+PASS dns-hijack.7 DoT to a server (port 853) is not hijacked: no dns log line: got=none
+PASS dns-hijack.8 DoT to a server is routed as a connection (a connection log line): got=node-9732c83e3e03fffd
+== 8 passed, 0 failed (engine=sing)

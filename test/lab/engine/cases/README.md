@@ -23,3 +23,13 @@ stop_core; summary
 - Exit addresses: .11/.12/.13 through a node, .100 direct (see ../README.md).
 - `cases/<group>.baseline.txt`: the output on Go core 0.5.21 (refresh it
   only on purpose, and say why in the commit).
+
+Groups:
+
+| Group | Covers (beyond t4) |
+|---|---|
+| `dns-hijack` | IPv6 and tunnel-address DNS hijack; dns-local vs dns-remote by rule; DoT to a server not hijacked |
+| `udp` | direct-rule UDP; UDP routed to a `udp=false` node |
+| `reverse-map` | the reverse mapping across a kernel switch and a node change |
+
+Not covered: QUIC sniffing (no QUIC client in the image).

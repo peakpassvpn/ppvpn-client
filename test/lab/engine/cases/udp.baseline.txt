@@ -1,0 +1,4 @@
+PASS udp.1 UDP through the selected node: got=198.51.100.11
+PASS udp.2 UDP under a direct rule leaves directly: got=198.51.100.100
+PASS udp.3 UDP routed to a node with udp=false still goes through it: got=198.51.100.13
+== 3 passed, 0 failed (engine=sing)

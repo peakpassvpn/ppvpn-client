@@ -1,0 +1,5 @@
+PASS reverse-map.1 Host-less connection to an answered address goes to the node by name: got=198.51.100.11
+PASS reverse-map.2 the apply switched kernels: got=1
+PASS reverse-map.3 after the kernel switch the name is still known: got=198.51.100.11
+PASS reverse-map.4 after selecting another node it goes there, by name: got=198.51.100.13
+== 4 passed, 0 failed (engine=sing)
