@@ -47,3 +47,32 @@ jobs:
         run: sudo NETNS_TIMEOUT=240 test/netns/run.sh "$RUNNER_TEMP/runtime.test" -test.run 'TestTUNRulesRestoredAfterDeletion' -test.timeout 230s
       - name: TUN rules broken is reported (restoring off)
         run: sudo NETNS_TIMEOUT=240 NETNS_ENV=PPVPN_TEST_TUN_RULES_NO_RESTORE=1 test/netns/run.sh "$RUNNER_TEMP/runtime.test" -test.run 'TestTUNRulesBrokenIsReported' -test.timeout 230s
+
+  network-change:
+    # dns-local and the host-IPv6 re-probe across network changes (#61, #69):
+    # scripts that build namespaces of their own, run through run.sh --host
+    # for the timeout and the host check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the lab core and helper (as the runner user)
+        run: |
+          GOARCH=amd64 make build-lab-linux
+          go build -o "$RUNNER_TEMP/ldnslab" ./test/lab/localdns/ldnslab
+          command -v tcpdump || { sudo apt-get update -qq && sudo apt-get install -y -qq tcpdump; }
+      - name: dns-local follows network changes (#61)
+        run: sudo NETNS_TIMEOUT=180 test/netns/run.sh --host test/lab/localdns/run.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json "$RUNNER_TEMP/localdns"
+      - name: link down/up, no kernel switch while offline (#69), modes 0-4
+        run: |
+          status=0
+          for mode in 0 1 2 3 4; do
+            echo "::group::mode $mode"
+            sudo NETNS_TIMEOUT=90 test/netns/run.sh --host test/lab/localdns/updown.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json $mode "$RUNNER_TEMP/updown-$mode" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
