@@ -15,7 +15,9 @@ repository = "https://github.com/peakpassvpn/ppvpn-core"
 # sail by commit (#45: regressions run on named commits, no release needed).
 # Moving it is a commit of its own that also takes sail's [patch.crates-io]
 # below as of that commit (tools/sail-patch-check.sh).
-sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "bccd765637ee1b7419a4490eb661938ba4d2dea6" }
+# auto-reload is not among sail's defaults and must stay on: without it the
+# runtime does not follow certificate files that change on disk.
+sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "bccd765637ee1b7419a4490eb661938ba4d2dea6", features = ["auto-reload"] }
 
 # Copied from sail's Cargo.toml at the commit above: sail builds against its
 # forks, so a crate that links sail must patch the same. Keep in step with
