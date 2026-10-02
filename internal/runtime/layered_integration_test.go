@@ -707,7 +707,11 @@ func TestDrainKeepsActiveConnections(t *testing.T) {
 
 // Pauses shorter than the threshold do not close a draining connection.
 func TestDrainToleratesShortPauses(t *testing.T) {
-	shortDrainIdle(t, 600*time.Millisecond)
+	// The idle window counts from the connection's last byte, which went out
+	// before the apply: under a loaded -race run the apply alone can take
+	// hundreds of milliseconds, so the window must leave a wide margin over
+	// apply plus pause, or a correct drain closes the connection as idle.
+	shortDrainIdle(t, 5*time.Second)
 	f := newHotSwap(t)
 	tunnel, request := f.keepAlive(t)
 	defer tunnel.Close()
