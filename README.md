@@ -10,7 +10,7 @@ Core 版本以 `version/version.go` 的 `CoreVersion` 为准（`ppvpn-core versi
 - [架构与生命周期](docs/architecture.md)：模块边界、状态机、热更新和失败回滚
 - [Backend Profile](docs/backend-profile.md)：逻辑节点/多入口故障转移、完整字段、路由语义、协议示例和后端生成规则
 - [Core API v1](docs/core-api.md)：认证、请求/响应、所有方法、DTO、事件及错误码
-- [桌面平台接入](docs/desktop.md)：Windows 特权 TUN 与 macOS 原生 Network Extension
+- [桌面平台接入](docs/desktop.md)：Windows 与 macOS 都由特权 service 以 TUN 模式运行 core
 - [移动端接入](docs/mobile.md)：iOS Network Extension 与 Android `VpnService`
 - [安全模型](docs/security.md)：密钥边界、IPC、日志、持久化和威胁假设
 - [构建与发布](docs/release.md)：测试门禁、跨平台构建、校验和与发布检查表
