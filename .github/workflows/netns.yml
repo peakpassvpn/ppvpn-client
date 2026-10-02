@@ -68,8 +68,11 @@ jobs:
       - name: dns-local follows network changes (#61)
         # SWITCH_GRACE_MS: Go 0.5.21's dns-local follows the kernel's own
         # interface monitor, which lags the logged change by seconds while
-        # network events keep coming (#45, docs/rust-parity.md); the Rust core
-        # must pass with 0.
+        # network events keep coming (#45, docs/rust-parity.md). With a grace
+        # the reported change itself may take up to 10 s too (the front's
+        # monitor is held back the same way); the Rust core must pass with 0:
+        # the change reported within 2 s, the first query after it on the new
+        # network.
         run: sudo NETNS_TIMEOUT=180 NETNS_ENV=SWITCH_GRACE_MS=6000 test/netns/run.sh --host test/lab/localdns/run.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json "$RUNNER_TEMP/localdns"
       - name: link down/up, no kernel switch while offline (#69), modes 0-4
         run: |
