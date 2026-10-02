@@ -105,9 +105,30 @@ await_change() { # interface, previous count of its changes, what changed
   # (ca's link-local address settling, seen on CI runners) does not count.
   started=$(now)
   for i in $(seq 50); do [ "$(changes "$1")" -gt "$2" ] && break; sleep 0.1; done
-  log "default interface changed to $1 $(( $(now) - started )) ms after: $3"
+  CHANGED_AT=$(now)
+  log "default interface changed to $1 $(( CHANGED_AT - started )) ms after: $3"
   previous=$2; iface=$1
   check "default interface change reported ($3)" '[ "$(changes "$iface")" -gt "$previous" ]'
+}
+
+# The change is logged from the front's interface monitor; dns-local (and
+# direct dials) follow the kernel's own monitor, which on Go core 0.5.21 can
+# lag by seconds while network events keep coming (each restarts sing-tun's
+# 1 s debounce; #45, docs/rust-parity.md). SWITCH_GRACE_MS > 0 (the Go
+# baseline in CI) waits up to that long after the reported change for
+# dns-local to follow, and logs how long it took; 0 (the default, and the
+# requirement for the Rust core) asks the first query after the change.
+GRACE=${SWITCH_GRACE_MS:-0}
+settle() { # answer regex, what
+  [ "$GRACE" -gt 0 ] || return 0
+  first=""
+  while :; do
+    r=$(q); [ -n "$first" ] || first=$r
+    echo "$r" | grep -qE "$1" && break
+    [ $(( $(now) - CHANGED_AT )) -ge "$GRACE" ] && break
+    sleep 0.2
+  done
+  log "dns-local followed $(( $(now) - CHANGED_AT )) ms after the reported change ($2): $r; the first query got: $first"
 }
 
 # 1. Network A.
@@ -119,6 +140,7 @@ check "network A answered by A" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.
 k=$(changes cb)
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
 await_change cb $k "default route to cb"
+settle '^ok 192\.0\.2\.2 ' "default route to cb"
 a_before=$(count dns-a)
 r=$(q); log "network B: $r"
 check "first query after the change answered by B" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.2" ]'
@@ -131,6 +153,7 @@ k=$(changes cb)
 ip -n ldns-c addr add 10.202.0.3/24 dev cb; ip -n ldns-c addr del 10.202.0.2/24 dev cb
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
 await_change cb $k "new address and resolver on cb"
+settle '^ok 192\.0\.2\.3 ' "new address and resolver on cb"
 b_before=$(count dns-b)
 r=$(q); log "same interface, new network: $r"
 check "same interface, new network answered by the new resolver" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.3" ]'
@@ -144,6 +167,7 @@ k=$(changes cb)
 ip -n ldns-c addr add 10.202.0.4/24 dev cb; ip -n ldns-c addr del 10.202.0.3/24 dev cb
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
 await_change cb $k "cb without resolvers"
+settle '^fail SERVFAIL ' "cb without resolvers"
 for i in 1 2 3; do
   r=$(q); log "no resolvers: $r"
   check "no resolvers: query $i gets SERVFAIL" '[ "$(echo $r | cut -d" " -f1,2)" = "fail SERVFAIL" ]'
