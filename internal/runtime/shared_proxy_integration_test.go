@@ -136,7 +136,7 @@ func TestSharedLocalProxyRoutesByUsername(t *testing.T) {
 	defer target.Close()
 	targetAddress := strings.TrimPrefix(target.URL, "http://")
 	serverPort := startShadowsocksServer(t)
-	deadPort := freePort(t)
+	deadPort := deadPort(t)
 	nodes := []profile.Node{
 		{ID: "alpha-1", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{localSSIngress(profile.IngressRolePrimary, "a0", 0, serverPort)}},
 		{ID: "beta-2", EntryKey: "cn-optimized", Capabilities: profile.Capabilities{TCP: true}, Ingresses: []profile.Ingress{

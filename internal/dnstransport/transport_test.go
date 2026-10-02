@@ -80,11 +80,14 @@ func query() *mDNS.Msg {
 	return q
 }
 
-// shortGuard shrinks the guard limits for the test.
+// shortGuard shrinks the guard limits for the test. The budget keeps a wide
+// margin over the attempt timeout: under a loaded -race CI run a goroutine
+// can be scheduled hundreds of milliseconds late, and a 400 ms budget ran out
+// before the answering second attempt.
 func shortGuard(t *testing.T) {
 	t.Helper()
 	a, b, n, i := attemptTimeout, overallBudget, maxAttempts, idleReset
-	attemptTimeout, overallBudget, maxAttempts, idleReset = 50*time.Millisecond, 400*time.Millisecond, 3, time.Hour
+	attemptTimeout, overallBudget, maxAttempts, idleReset = 100*time.Millisecond, 2*time.Second, 3, time.Hour
 	t.Cleanup(func() { attemptTimeout, overallBudget, maxAttempts, idleReset = a, b, n, i })
 }
 
@@ -151,7 +154,9 @@ func TestGuardRetriesAfterAHungAttempt(t *testing.T) {
 	if err != nil || response == nil || inner.calls != 2 {
 		t.Fatalf("response %v, err %v, calls %d", response, err, inner.calls)
 	}
-	if elapsed < attemptTimeout || elapsed > attemptTimeout+200*time.Millisecond {
+	// One attempt timeout, far from the whole budget (the margin absorbs
+	// scheduling delays on a loaded machine).
+	if elapsed < attemptTimeout || elapsed > attemptTimeout+time.Second {
 		t.Fatalf("took %s", elapsed)
 	}
 	lines := b.String()
@@ -180,7 +185,7 @@ func TestGuardGivesUpWithinBudget(t *testing.T) {
 	if err != nil || response.Rcode != mDNS.RcodeServerFailure || inner.calls != maxAttempts {
 		t.Fatalf("response %v, err %v, calls %d", response, err, inner.calls)
 	}
-	if elapsed > overallBudget+100*time.Millisecond {
+	if elapsed > overallBudget+time.Second {
 		t.Fatalf("took %s, budget %s", elapsed, overallBudget)
 	}
 	// A cancelled caller is not retried.

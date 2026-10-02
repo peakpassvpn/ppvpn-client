@@ -622,9 +622,9 @@ func resolveUDP(t *testing.T, socksPort uint16, name string) (*dns.Msg, time.Dur
 func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
 	dotPort := startFakeDoT(t, map[string]string{"proxied.test.": "203.0.113.7", "again.proxied.test.": "203.0.113.7"})
 	socksPort, logged := startRemoteDNSBox(t, map[string]uint16{
-		config.DNSRemoteTag:             freePort(t), // closed
+		config.DNSRemoteTag:             deadPort(t), // closed
 		config.DNSRemoteFallbackTags[0]: dotPort,
-		config.DNSRemoteFallbackTags[1]: freePort(t), // closed, never reached
+		config.DNSRemoteFallbackTags[1]: deadPort(t), // closed, never reached
 	})
 	answered := func(name string) {
 		t.Helper()
@@ -659,9 +659,9 @@ func TestTUNRemoteDNSFallsBackThroughTheNode(t *testing.T) {
 // the next query tries the upstreams again.
 func TestTUNRemoteDNSAllFailAnswersServfail(t *testing.T) {
 	socksPort, logged := startRemoteDNSBox(t, map[string]uint16{
-		config.DNSRemoteTag:             freePort(t),
-		config.DNSRemoteFallbackTags[0]: freePort(t),
-		config.DNSRemoteFallbackTags[1]: freePort(t),
+		config.DNSRemoteTag:             deadPort(t),
+		config.DNSRemoteFallbackTags[0]: deadPort(t),
+		config.DNSRemoteFallbackTags[1]: deadPort(t),
 	})
 	for _, c := range []struct {
 		network string
@@ -793,8 +793,8 @@ func TestTUNRemoteDNSRetriesStalePooledConnections(t *testing.T) {
 	t.Cleanup(func() { _ = server.Shutdown() })
 	socksPort, logged := startRemoteDNSBox(t, map[string]uint16{
 		config.DNSRemoteTag:             uint16(inner.Addr().(*net.TCPAddr).Port),
-		config.DNSRemoteFallbackTags[0]: freePort(t), // closed: a fallback would fail
-		config.DNSRemoteFallbackTags[1]: freePort(t),
+		config.DNSRemoteFallbackTags[0]: deadPort(t), // closed: a fallback would fail
+		config.DNSRemoteFallbackTags[1]: deadPort(t),
 	})
 
 	var wg sync.WaitGroup
