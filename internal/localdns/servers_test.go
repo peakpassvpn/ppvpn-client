@@ -34,12 +34,12 @@ func ports(values ...string) []netip.AddrPort {
 
 func TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal(t *testing.T) {
 	got := usable(ports(
-		"10.10.0.3", "172.19.0.2", "10.60.159.90", "fde2:ec40:9312:c7fd::2", "fdfe:dcba:9876::2",
+		"192.168.50.3", "172.19.0.2", "10.60.159.90", "fde2:ec40:9312:c7fd::2", "fdfe:dcba:9876::2",
 		"127.0.0.1", "::1", "0.0.0.0", "fec0:0:0:ffff::1", "224.0.0.251",
 		"fe80::1%en0", "fe80::2%en1", "fe80::3", "fe80::4%6",
-		"::ffff:192.168.1.1", "10.10.0.3", "[2001:db8::53]:5353",
+		"::ffff:192.168.1.1", "192.168.50.3", "[2001:db8::53]:5353",
 	), en0, tunnel)
-	want := "10.10.0.3:53,[fe80::1%en0]:53,[fe80::3%6]:53,[fe80::4%6]:53,192.168.1.1:53,[2001:db8::53]:5353"
+	want := "192.168.50.3:53,[fe80::1%en0]:53,[fe80::3%6]:53,[fe80::4%6]:53,192.168.1.1:53,[2001:db8::53]:5353"
 	if joinServers(got) != want {
 		t.Fatalf("got  %s\nwant %s", joinServers(got), want)
 	}
@@ -47,16 +47,16 @@ func TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal(t *testing.T) {
 
 // The sample of the desktop's macdns.rs test: tunnel addresses old and new
 // mixed into the primary service's DNS, and a link-local one with a zone.
-const scutilGlobal = "<dictionary> {\n  ARPResolvedHardwareAddress : 0:11:22:33:44:55\n  PrimaryInterface : en0\n  PrimaryService : 4A8B1E2C-0000-0000-0000-000000000000\n  Router : 10.10.0.1\n}\n" +
+const scutilGlobal = "<dictionary> {\n  ARPResolvedHardwareAddress : 0:11:22:33:44:55\n  PrimaryInterface : en0\n  PrimaryService : 4A8B1E2C-0000-0000-0000-000000000000\n  Router : 192.168.50.1\n}\n" +
 	"  No such key\n" +
-	"<dictionary> {\n  ServerAddresses : <array> {\n    0 : 10.10.0.3\n    1 : 172.19.0.2\n    2 : fe80::1%en0\n    3 : fdfe:dcba:9876::2\n    4 : 2001:db8::53\n    5 : 10.60.159.90\n    6 : fde2:ec40:9312:c7fd::2\n  }\n  SearchDomains : <array> {\n    0 : lan\n  }\n}\n"
+	"<dictionary> {\n  ServerAddresses : <array> {\n    0 : 192.168.50.3\n    1 : 172.19.0.2\n    2 : fe80::1%en0\n    3 : fdfe:dcba:9876::2\n    4 : 2001:db8::53\n    5 : 10.60.159.90\n    6 : fde2:ec40:9312:c7fd::2\n  }\n  SearchDomains : <array> {\n    0 : lan\n  }\n}\n"
 
 func TestGlobalServers(t *testing.T) {
 	servers, ok := globalServers(scutilGlobal, "en0", 6)
 	if !ok {
 		t.Fatal("en0 is primary")
 	}
-	if got := joinServers(usable(servers, en0, tunnel)); got != "10.10.0.3:53,[fe80::1%en0]:53,[2001:db8::53]:53" {
+	if got := joinServers(usable(servers, en0, tunnel)); got != "192.168.50.3:53,[fe80::1%en0]:53,[2001:db8::53]:53" {
 		t.Fatalf("servers %s", got)
 	}
 	// Another primary interface (configd behind a switch): not ours.
@@ -102,7 +102,7 @@ resolver #1
 
 resolver #2
   search domain[0] : lan
-  nameserver[0] : 10.10.0.3
+  nameserver[0] : 192.168.50.3
   if_index : 6 (en0)
   flags    : Request A records
   reach    : 0x00020002 (Reachable,Directly Reachable Address)
@@ -119,7 +119,7 @@ resolver #1
 
 resolver #2
   search domain[0] : lan
-  nameserver[0] : 10.10.0.3
+  nameserver[0] : 192.168.50.3
   nameserver[1] : fe80::1%en0
   if_index : 6 (en0)
   flags    : Scoped, Request A records
@@ -134,7 +134,7 @@ resolver #3
 
 func TestScopedServers(t *testing.T) {
 	// The domain-specific (split DNS) resolver on en0 is skipped.
-	if got := joinServers(scopedServers(scutilDNS, 6)); got != "10.10.0.3:53,[fe80::1%en0]:53" {
+	if got := joinServers(scopedServers(scutilDNS, 6)); got != "192.168.50.3:53,[fe80::1%en0]:53" {
 		t.Fatalf("en0: %s", got)
 	}
 	if got := joinServers(scopedServers(scutilDNS, 16)); got != "192.168.8.1:53" {

@@ -464,11 +464,11 @@ func TestApplyLogsRealityFingerprintsAtDebug(t *testing.T) {
 func TestDefaultInterfaceLogLine(t *testing.T) {
 	var b strings.Builder
 	log := corelog.New(&b)
-	logDefaultInterface(log, "start", &control.Interface{Name: "en0", Index: 6, MTU: 1500, Addresses: []netip.Prefix{netip.MustParsePrefix("10.10.0.22/16"), netip.MustParsePrefix("fe80::1/64")}})
+	logDefaultInterface(log, "start", &control.Interface{Name: "en0", Index: 6, MTU: 1500, Addresses: []netip.Prefix{netip.MustParsePrefix("192.168.50.22/24"), netip.MustParsePrefix("fe80::1/64")}})
 	logDefaultInterface(log, "changed", nil)
 	logged := b.String()
 	for _, want := range []string{
-		`msg="default interface" event=start name=en0 index=6 mtu=1500 addresses=10.10.0.22/16,fe80::1/64`,
+		`msg="default interface" event=start name=en0 index=6 mtu=1500 addresses=192.168.50.22/24,fe80::1/64`,
 		`msg="default interface" event=changed name=none`,
 	} {
 		if !strings.Contains(logged, want) {

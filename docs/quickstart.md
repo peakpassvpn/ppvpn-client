@@ -41,7 +41,7 @@ go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
 创建一个仅当前用户可访问的应用状态目录。以下路径仅为 macOS/Linux 开发示例：
 
 ```sh
-APP_STATE=/private/tmp/ppvpn-core-demo
+APP_STATE="${TMPDIR:-/tmp}/ppvpn-core-demo"
 mkdir -m 700 "$APP_STATE"
 
 ./build/ppvpn-core serve \
@@ -141,7 +141,7 @@ sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun
 在另一个终端：
 
 ```sh
-APP_STATE=/private/tmp/ppvpn-core-demo
+APP_STATE="${TMPDIR:-/tmp}/ppvpn-core-demo"
 SECRET=$(cat "$APP_STATE/session.secret")
 
 curl --unix-socket "$APP_STATE/core.sock" \
@@ -156,13 +156,13 @@ curl --unix-socket "$APP_STATE/core.sock" \
 应用 Profile 时，不要用 shell 拼接含密钥的命令。产品代码应直接在内存中编码请求并写入 IPC。仅本机开发可用下列 `jq` 示例：
 
 ```sh
-jq -n --slurpfile profile profile.json '{profile:$profile[0]}' > /private/tmp/apply-request.json
+jq -n --slurpfile profile profile.json '{profile:$profile[0]}' > "$APP_STATE/apply-request.json"
 
 curl --unix-socket "$APP_STATE/core.sock" \
   -H "Authorization: Bearer $SECRET" \
   -H 'X-Core-API-Version: 1' \
   -H 'Content-Type: application/json' \
-  --data-binary @/private/tmp/apply-request.json \
+  --data-binary @"$APP_STATE/apply-request.json" \
   http://localhost/v1/apply-profile
 ```
 
