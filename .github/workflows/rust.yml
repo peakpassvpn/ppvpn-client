@@ -41,6 +41,10 @@ jobs:
           manifest=$(cargo metadata --format-version 1 --locked --offline |
             python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "sail"))')
           python3 "$(dirname "$(dirname "$manifest")")/tools/embed-patch-check.py"
+      # Reports (never fails) shared packages our lock resolves otherwise
+      # than sail's: a lock regenerated for a new crate can drift.
+      - name: Cargo.lock against sail's
+        run: tools/sail-lock-compare.py
       - name: format
         run: cargo fmt --all --check
       - name: clippy
