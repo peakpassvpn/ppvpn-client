@@ -32,7 +32,8 @@ jobs:
           systemctl is-active systemd-resolved || true
           sudo -n true && echo "passwordless sudo"
       - name: Build the test binary (as the runner user)
-        run: go test -c -o "$RUNNER_TEMP/runtime.test" ./internal/runtime
+        # With the desktop tags: the TUN's default stack (mixed) needs gVisor.
+        run: go test -c -tags "$(make -s print-desktop-tags)" -o "$RUNNER_TEMP/runtime.test" ./internal/runtime
       - name: Leftover check catches a change to the host
         run: |
           # A fake test that adds a rule in the host's namespace: run.sh must fail.
