@@ -29,6 +29,15 @@ D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`�
 
 D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
 
+Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
+
+| # | golden 步骤 | Go 0.5.21（golden） | Rust 预期 |
+| --- | --- | --- | --- |
+| D5 | `validation.json` `profile_missing`（空 Profile） | `CORE_OPERATION_FAILED` | `PROFILE_REQUIRED`（retryable=false） |
+| D5 | （golden 没有对应步骤）Profile 不是合法 JSON，或者字段类型不对（例如 `port` 大于 65535） | `CORE_OPERATION_FAILED` | `PROFILE_MALFORMED`（retryable=false） |
+
+`validation.json` 的 `request_invalid_unknown_field`（请求体里有未知字段）只在 IPC 下存在，库里没有对应的情形，标为 n-a。
+
 lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust 版遵守 `capabilities.udp`；Backend 已确认生产上所有入口下发的都是 `udp=true`，所以不影响现有用户）：
 
 | # | lab 用例 | Go 0.5.21（baseline） | Rust 预期 |
