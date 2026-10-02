@@ -1,0 +1,99 @@
+# `ppvpn` command-line client
+
+`crates/ppvpn-cli` builds the `ppvpn` binary: a terminal client that logs in through the browser and runs
+ppvpn-core's standard instance in its own process, exposing the authenticated local HTTP/SOCKS5 proxy. It
+does not create a TUN device or change system network settings.
+
+Status: the command-line contract, settings and directory layout are in place. Commands that need the core
+library (see [host integration](host-integration.md)) or the account crate report `NOT_IMPLEMENTED` until
+those are wired in; their arguments are already parsed and checked.
+
+## Commands
+
+```text
+ppvpn [--json] [--no-color] <command>
+```
+
+| Command | Purpose |
+| --- | --- |
+| `login [--no-browser]` | authorize this device in a browser |
+| `logout` | revoke and remove this device's credential |
+| `account` | show the authorized account |
+| `start [--foreground]` / `restart [--foreground]` / `stop` | run or stop the local proxy |
+| `status` | state, routing mode, selected ingress, rule sets |
+| `nodes` / `use <node-id>` | list nodes; select the node for new connections |
+| `probe [node-id] [--all] [--type entrance\|availability] [--timeout 5s] [--concurrency 4] [--target URL]` | entrance or end-to-end probes |
+| `traffic` / `connections` | cumulative traffic; active connections |
+| `proxy` / `proxy credential [node-id]` | local proxy endpoints; the routed credential, or a node's |
+| `mode [rules\|global]` | show or set the routing mode |
+| `ingress [node-id]` / `ingress pin <node-id> <endpoint-key>` / `ingress auto <node-id>` | ingress health; pin or unpin |
+| `doctor` | privacy-safe diagnostics |
+| `version` / `completion <bash\|zsh\|fish>` | version; shell completion script |
+
+Argument values are checked before any file, keychain, network or core access. For example, `probe` needs
+either one node ID or `--all` for entrance probes and exactly one node ID for availability probes, a timeout
+between 1 ms and 2 minutes, and a concurrency between 1 and 32.
+
+## Output
+
+- Without `--json`, results go to stdout and errors to stderr as `Error: <message>`.
+- With `--json`, stdout carries exactly one JSON value per invocation, for errors too:
+  `{"ok": false, "code": "<CODE>", "message": "<text>", "retryable": <bool>}`. Progress and warnings go to
+  stderr.
+- `code` is stable and upper-case; `message` is for people and may change.
+
+## Exit codes
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | success |
+| 1 | other or internal error (including `NOT_IMPLEMENTED`) |
+| 2 | invalid argument or build configuration |
+| 3 | login missing, expired or not permitted |
+| 4 | backend unavailable |
+| 5 | core not running or a core operation failed |
+| 6 | incompatible core or feature unavailable |
+| 7 | the backend's profile could not be applied |
+| 8 | local environment: files, directories, keychain |
+
+## Files
+
+| | macOS | Linux |
+| --- | --- | --- |
+| settings | `~/Library/Application Support/ppvpn-cli/settings.json` | `$XDG_CONFIG_HOME/ppvpn-cli/settings.json` |
+| runtime: control socket, process record, logs | `~/Library/Application Support/ppvpn-cli/runtime/` | `$XDG_STATE_HOME/ppvpn-cli/runtime/` |
+| core `state_dir` | `~/Library/Application Support/ppvpn-cli/state/` | `$XDG_STATE_HOME/ppvpn-cli/state/` |
+
+Unset or relative XDG variables fall back to `~/.config` and `~/.local/state`. Directories are `0700` and
+files `0600`. Linux deliberately avoids `XDG_RUNTIME_DIR`: it is cleared on reboot and may be removed at
+logout, and core's state directory holds the local proxy username prefix, password and port that users copy
+into other applications, so they must not change.
+
+When the runtime directory is too long for a Unix socket address (`sun_path`: 104 bytes on macOS, 108 on
+Linux), the control socket moves to a private, owner-checked `0700` directory `ppvpn-cli-<uid>/` under the
+system temporary directory, named after a hash of the runtime directory.
+
+The process record survives reboots, so a recorded process counts as the CLI's daemon only when its PID is
+alive, runs the recorded executable, and started within 10 seconds of the recorded time.
+
+## Settings
+
+`settings.json` holds the per-device choices that core does not persist and that the CLI passes with every
+apply ([host integration](host-integration.md), section 4.1):
+
+```json
+{
+  "routing_mode": "rules",
+  "selected_node_id": "hk-001",
+  "ingress_pins": { "hk-001": "9002" }
+}
+```
+
+Unknown fields are ignored and an unknown `routing_mode` falls back to `rules`.
+
+## Build
+
+Release builds connect to the production API and ignore overrides. A build made with
+`PPVPN_BUILD_PROFILE=dev` reads `PPVPN_API_BASE` at run time (HTTPS only; plain HTTP only for loopback) and
+may set a compile-time default with `PPVPN_DEFAULT_API_BASE`. `PPVPN_VERSION` sets the reported version.
+Static Linux (musl) builds use mimalloc as the global allocator.
