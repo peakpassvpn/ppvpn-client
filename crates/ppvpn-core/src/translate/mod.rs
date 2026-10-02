@@ -9,9 +9,13 @@
 //!   a `fallback` group over the ingresses (tag + [`AUTO_SUFFIX`]) and whose
 //!   other members are the ingresses themselves: selecting an ingress pins
 //!   it, selecting the fallback group returns to automatic failover.
-//! - The domain-destination wrapper (TUN) comes with TUN.
+//! - The domain-destination wrapper (TUN) is sail's `override_destination`
+//!   (see [`tun`]).
 //!
-//! DNS and TUN are not translated yet.
+//! D4: a node whose capabilities say no UDP gets its UDP rejected, never
+//! re-routed: before every rule routing to it, the same match on UDP is
+//! rejected. What a rule cannot know (the selected node, an ingress of a
+//! failover group) is the Engine's.
 
 #![allow(dead_code)] // the Engine is wired to it with the runtime
 
@@ -27,6 +31,9 @@ use crate::profile::{
     normalize_domain, parse_port_range, Ingress, Node, Profile, RoutingAction, RoutingMatch, Tls,
 };
 use crate::request::RoutingMode;
+
+mod tun;
+pub(crate) use tun::{local_dns_servers, LocalDns, Tun};
 
 /// The selector over every node, in profile order.
 pub(crate) const SELECTED_TAG: &str = "selected";
@@ -99,6 +106,10 @@ impl LocalProxy {
 pub(crate) struct RuleSetFile {
     /// Absolute path of the binary (`.srs`) file.
     pub path: String,
+    /// The set matches domains and no destination CIDRs: only such sets are
+    /// mirrored into DNS rules (a DNS rule whose set carries CIDRs would
+    /// resolve every name through its server to test the answer).
+    pub mirror_dns: bool,
 }
 
 /// The device-local inputs of a translation.
@@ -114,6 +125,8 @@ pub(crate) struct Options {
     /// Rule set id → its local copy; a rule set without one is unavailable.
     pub rule_sets: HashMap<String, RuleSetFile>,
     pub health_check: HealthCheck,
+    /// Enhanced mode.
+    pub tun: Option<Tun>,
     /// sail's log level (`info`, `debug`); no log section when empty.
     pub log_level: String,
 }
@@ -152,6 +165,14 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         rules: Vec::new(),
         rule_sets: Vec::new(),
         has_direct: false,
+        auto_detect_interface: false,
+        no_dns_mirror: HashSet::new(),
+        udp_off: profile
+            .nodes
+            .iter()
+            .filter(|n| !n.capabilities.udp)
+            .map(|n| node_tag(&n.id))
+            .collect(),
     };
     let mut node_outbounds = Vec::new();
     for node in &profile.nodes {
@@ -185,6 +206,9 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }));
     b.outbounds.extend(node_outbounds);
 
+    if options.tun.is_some() {
+        b.tun_rules(profile);
+    }
     if let Some(local_proxy) = &options.local_proxy {
         b.local_proxy(profile, local_proxy)?;
     }
@@ -196,8 +220,24 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
             "listen_port": port,
         }));
     }
+    if let Some(tun) = &options.tun {
+        b.tun_inbound(profile, tun);
+    }
     let routing = effective_routing(profile, options.mode);
     let final_tag = b.routing(&routing, &options.rule_sets)?;
+    let dns = match &options.tun {
+        Some(tun) => {
+            let dns_rule_sets: HashSet<String> = options
+                .rule_sets
+                .iter()
+                .filter(|(_, file)| file.mirror_dns)
+                .map(|(id, _)| rule_set_tag(id))
+                .collect();
+            let final_direct = final_tag.as_deref() == Some(DIRECT_TAG);
+            Some(b.tun_dns(tun, final_direct, &dns_rule_sets)?)
+        }
+        None => None,
+    };
 
     let mut root = Map::new();
     if !options.log_level.is_empty() {
@@ -205,6 +245,9 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
             "log".into(),
             json!({ "level": options.log_level, "timestamp": true }),
         );
+    }
+    if let Some(dns) = dns {
+        root.insert("dns".into(), dns);
     }
     if !b.inbounds.is_empty() {
         root.insert(
@@ -228,6 +271,17 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }
     if let Some(final_tag) = final_tag {
         route.insert("final".into(), Value::String(final_tag));
+    }
+    if b.auto_detect_interface {
+        // The core's own sockets (handshakes, direct traffic) bind to the
+        // physical interface so they cannot loop into the tunnel.
+        route.insert("auto_detect_interface".into(), true.into());
+    }
+    if options.tun.is_some() {
+        route.insert(
+            "default_domain_resolver".into(),
+            json!({ "server": tun::DNS_LOCAL_TAG }),
+        );
     }
     root.insert("route".into(), Value::Object(route));
     let mut translation = b.translation;
@@ -294,6 +348,11 @@ struct Builder {
     rules: Vec<Value>,
     rule_sets: Vec<Value>,
     has_direct: bool,
+    auto_detect_interface: bool,
+    /// Rules made for D4: never mirrored into DNS.
+    no_dns_mirror: HashSet<usize>,
+    /// Node tags whose node carries no UDP.
+    udp_off: HashSet<String>,
 }
 
 impl Builder {
@@ -363,12 +422,14 @@ impl Builder {
         let mut users = Vec::with_capacity(profile.nodes.len() + 1);
         for node in &profile.nodes {
             let username = proxy.username(&node.id);
-            self.rules.push(json!({
-                "inbound": [LOCAL_PROXY_INBOUND_TAG],
-                "auth_user": [username],
-                "action": "route",
-                "outbound": self.translation.node_tags[&node.id],
-            }));
+            let mut rule = Map::new();
+            rule.insert("inbound".into(), json!([LOCAL_PROXY_INBOUND_TAG]));
+            rule.insert("auth_user".into(), json!([username]));
+            let target = self.translation.node_tags[&node.id].clone();
+            self.reject_udp_before(&rule, &target);
+            rule.insert("action".into(), "route".into());
+            rule.insert("outbound".into(), target.into());
+            self.rules.push(Value::Object(rule));
             users.push(json!({ "username": username, "password": proxy.password }));
         }
         let routed = proxy.username("");
@@ -427,8 +488,13 @@ impl Builder {
             if !tags.is_empty() {
                 out.insert("rule_set".into(), json!(tags));
             }
+            let matcher = out.clone();
             self.action(&mut out, &rule.action)
                 .map_err(|e| failed(format!("rule {:?}: {e}", rule.id)))?;
+            if let Some(target) = out.get("outbound").and_then(Value::as_str) {
+                let target = target.to_owned();
+                self.reject_udp_before(&matcher, &target);
+            }
             self.rules.push(Value::Object(out));
         }
         for set in &routing.rule_sets {
@@ -446,10 +512,13 @@ impl Builder {
                 self.ensure_direct();
                 Ok(Some(DIRECT_TAG.into()))
             }
-            "proxy" => Ok(Some(
-                self.proxy_target(&routing.final_action)
-                    .map_err(|e| failed(format!("final: {e}")))?,
-            )),
+            "proxy" => {
+                let target = self
+                    .proxy_target(&routing.final_action)
+                    .map_err(|e| failed(format!("final: {e}")))?;
+                self.reject_udp_before(&Map::new(), &target);
+                Ok(Some(target))
+            }
             "reject" => {
                 // sail refuses a rule without conditions; both networks is
                 // the same catch-all.
@@ -500,6 +569,24 @@ impl Builder {
                 .ok_or_else(|| "fixed proxy node does not exist".into()),
             other => Err(format!("unsupported proxy target {other:?}")),
         }
+    }
+
+    /// D4: before a rule with `matcher` routing to `target`, the same match
+    /// on UDP is rejected when the target node carries no UDP.
+    fn reject_udp_before(&mut self, matcher: &Map<String, Value>, target: &str) {
+        if !self.udp_off.contains(target) {
+            return;
+        }
+        let mut rule = matcher.clone();
+        match rule.get("network").and_then(Value::as_array) {
+            Some(networks) if !networks.iter().any(|n| n == "udp") => return,
+            _ => {}
+        }
+        rule.insert("network".into(), json!(["udp"]));
+        rule.insert("action".into(), "reject".into());
+        rule.insert("method".into(), "default".into());
+        self.no_dns_mirror.insert(self.rules.len());
+        self.rules.push(Value::Object(rule));
     }
 
     fn ensure_direct(&mut self) {

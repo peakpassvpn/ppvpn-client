@@ -56,6 +56,7 @@ fn every_fixture_passes_sail_check() {
         "cn-site".to_owned(),
         RuleSetFile {
             path: "/nonexistent/cn-site.srs".into(),
+            mirror_dns: true,
         },
     );
     let fixtures: Vec<(&str, Profile, Options)> = vec![
@@ -101,6 +102,37 @@ fn every_fixture_passes_sail_check() {
             "routing, final direct",
             with_final(routing(), "direct"),
             Options::default(),
+        ),
+        (
+            "contract, TUN desktop",
+            contract(),
+            Options {
+                tun: Some(desktop_tun(LocalDns::System)),
+                local_proxy: Some(local_proxy()),
+                ..Options::default()
+            },
+        ),
+        (
+            "contract, TUN desktop without IPv6, host DNS servers",
+            contract(),
+            Options {
+                tun: Some(Tun {
+                    ipv6: false,
+                    ..desktop_tun(LocalDns::Servers(vec![
+                        "192.168.50.1:53".parse().unwrap(),
+                        "[2001:db8::53]:5353".parse().unwrap(),
+                    ]))
+                }),
+                ..Options::default()
+            },
+        ),
+        (
+            "routing, TUN desktop, final direct",
+            with_final(routing(), "direct"),
+            Options {
+                tun: Some(desktop_tun(LocalDns::System)),
+                ..Options::default()
+            },
         ),
     ];
     for (name, profile, options) in fixtures {
@@ -243,6 +275,8 @@ fn profile_rules_in_order_then_final() {
             json!({"ip_cidr": ["172.16.0.0/12"], "action": "route", "outbound": "direct"}),
             json!({"domain": ["blocked.example"], "domain_suffix": [".blocked.example"], "action": "reject", "method": "default"}),
             json!({"port": [25], "action": "reject", "method": "default"}),
+            // D4: node-b carries no UDP.
+            json!({"domain": ["video.example"], "domain_suffix": [".video.example"], "network": ["udp"], "action": "reject", "method": "default"}),
             json!({"domain": ["video.example"], "domain_suffix": [".video.example"], "action": "route", "outbound": node_tag("node-b")}),
             json!({"domain": ["direct.test"], "domain_suffix": [".direct.test"], "action": "route", "outbound": "direct"}),
             json!({"ip_cidr": ["203.0.113.0/24", "2001:db8:1::/48"], "action": "route", "outbound": "direct"}),
@@ -318,13 +352,274 @@ fn local_proxy_users_go_to_their_node_and_strangers_are_rejected() {
         rules[0],
         json!({"inbound": ["local-proxy"], "auth_user": [format!("abcd1234-{NODE_1}")], "action": "route", "outbound": node_tag(NODE_1)})
     );
-    assert_eq!(rules[2]["type"], "logical");
+    // D4: NODE_2's user carries no UDP.
     assert_eq!(
-        rules[2]["rules"][1],
+        rules[1],
+        json!({"inbound": ["local-proxy"], "auth_user": [format!("abcd1234-{NODE_2}")], "network": ["udp"], "action": "reject", "method": "default"})
+    );
+    assert_eq!(rules[3]["type"], "logical");
+    assert_eq!(
+        rules[3]["rules"][1],
         json!({"auth_user": ["abcd1234"], "invert": true})
     );
     // Then the profile's own rules.
-    assert_eq!(rules[3]["ip_cidr"], json!(PRIVATE_PREFIXES));
+    assert_eq!(rules[4]["ip_cidr"], json!(PRIVATE_PREFIXES));
+}
+
+fn desktop_tun(local_dns: LocalDns) -> Tun {
+    Tun {
+        desktop: true,
+        ipv6: true,
+        local_dns,
+    }
+}
+
+fn tun_options() -> Options {
+    Options {
+        tun: Some(desktop_tun(LocalDns::System)),
+        ..Options::default()
+    }
+}
+
+#[test]
+fn tun_rules_lead_then_ingress_bypass_then_profile() {
+    let config = value(&translate(&contract(), &tun_options()).unwrap());
+    let rules = config["route"]["rules"].as_array().unwrap();
+    assert_eq!(rules[0], json!({"inbound": ["tun"], "action": "sniff"}));
+    assert_eq!(
+        rules[1],
+        json!({"inbound": ["tun"], "action": "route-options", "override_destination": true})
+    );
+    assert_eq!(rules[2]["action"], "hijack-dns");
+    assert_eq!(
+        rules[3],
+        json!({"inbound": ["tun"], "port": [53], "action": "hijack-dns"})
+    );
+    assert_eq!(
+        rules[4]["ip_cidr"],
+        json!(["10.60.159.88/30", "fde2:ec40:9312:c7fd::/126"])
+    );
+    assert_eq!(rules[5]["type"], "logical");
+    assert_eq!(rules[6]["ip_cidr"], json!(PRIVATE_PREFIXES));
+    assert_eq!(rules[6]["outbound"], "direct");
+    // Every ingress, primary and backup, by domain and by IP.
+    assert_eq!(
+        rules[7..12].to_vec(),
+        vec![
+            json!({"domain": ["tyo-01.edge.example.com"], "action": "route", "outbound": "direct"}),
+            json!({"ip_cidr": ["8.8.8.8"], "action": "route", "outbound": "direct"}),
+            json!({"domain": ["tyo-01-relay.edge.example.com"], "action": "route", "outbound": "direct"}),
+            json!({"domain": ["sjc-01.edge.example.com"], "action": "route", "outbound": "direct"}),
+            json!({"ip_cidr": ["1.1.1.1"], "action": "route", "outbound": "direct"}),
+        ]
+    );
+    // The profile's bypass-private rule follows.
+    assert_eq!(rules[12]["ip_cidr"], json!(PRIVATE_PREFIXES));
+    assert_eq!(config["route"]["auto_detect_interface"], true);
+    assert_eq!(
+        config["route"]["default_domain_resolver"],
+        json!({"server": "dns-local"})
+    );
+}
+
+#[test]
+fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
+    let config = value(&translate(&contract(), &tun_options()).unwrap());
+    let tun = &config["inbounds"][0];
+    assert_eq!(tun["type"], "tun");
+    assert_eq!(
+        tun["address"],
+        json!(["10.60.159.89/30", "fde2:ec40:9312:c7fd::1/126"])
+    );
+    assert_eq!(tun["auto_route"], true);
+    assert_eq!(tun["strict_route"], true);
+    assert_eq!(tun["iproute2_table_index"], 2091);
+    assert_eq!(tun["iproute2_rule_index"], 9091);
+    assert_eq!(
+        tun["route_exclude_address"],
+        json!([
+            "8.8.8.8/32",
+            "1.1.1.1/32",
+            "224.0.0.0/4",
+            "255.255.255.255/32",
+            "169.254.0.0/16",
+            "fe80::/10",
+            "ff00::/8"
+        ])
+    );
+    assert!(tun.get("stack").is_none(), "sail warns on stack");
+
+    let no_ipv6 = Options {
+        tun: Some(Tun {
+            ipv6: false,
+            ..desktop_tun(LocalDns::System)
+        }),
+        ..Options::default()
+    };
+    let config = value(&translate(&contract(), &no_ipv6).unwrap());
+    let tun = &config["inbounds"][0];
+    assert_eq!(tun["address"], json!(["10.60.159.89/30"]));
+    assert_eq!(
+        tun["route_exclude_address"],
+        json!([
+            "8.8.8.8/32",
+            "1.1.1.1/32",
+            "224.0.0.0/4",
+            "255.255.255.255/32",
+            "169.254.0.0/16"
+        ])
+    );
+
+    let mobile = Options {
+        tun: Some(Tun {
+            desktop: false,
+            ipv6: false,
+            local_dns: LocalDns::System,
+        }),
+        ..Options::default()
+    };
+    let config = value(&translate(&contract(), &mobile).unwrap());
+    assert_eq!(
+        config["inbounds"][0],
+        json!({"type": "tun", "tag": "tun", "address": ["10.60.159.89/30"]})
+    );
+    assert!(config["route"].get("auto_detect_interface").is_none());
+}
+
+#[test]
+fn dns_mirrors_domain_rules_in_order() {
+    let mut options = tun_options();
+    options.rule_sets.insert(
+        "cn-site".into(),
+        RuleSetFile {
+            path: "/x/cn-site.srs".into(),
+            mirror_dns: true,
+        },
+    );
+    let config = value(&translate(&routing(), &options).unwrap());
+    let dns = &config["dns"];
+    assert_eq!(dns["final"], "dns-remote");
+    assert_eq!(dns["reverse_mapping"], true);
+    assert_eq!(dns["timeout"], "8s");
+    let local = |d: &str| json!({"domain": [d], "action": "route", "server": "dns-local"});
+    assert_eq!(
+        dns["rules"].as_array().unwrap().clone(),
+        vec![
+            // The ingress bypass.
+            local("a1.edge.example.com"),
+            local("a2.edge.example.com"),
+            local("b1.edge.example.com"),
+            json!({"domain": ["blocked.example"], "domain_suffix": [".blocked.example"], "action": "reject", "method": "default"}),
+            // The D4 reject before it is not mirrored: the name resolves.
+            json!({"domain": ["video.example"], "domain_suffix": [".video.example"], "action": "route", "server": "dns-remote"}),
+            json!({"domain": ["direct.test"], "domain_suffix": [".direct.test"], "action": "route", "server": "dns-local"}),
+            json!({"rule_set": ["rule-set-cn-site"], "action": "route", "server": "dns-local"}),
+        ]
+    );
+
+    options.rule_sets.get_mut("cn-site").unwrap().mirror_dns = false;
+    let config = value(&translate(&routing(), &options).unwrap());
+    let rules = config["dns"]["rules"].as_array().unwrap();
+    assert!(
+        rules.iter().all(|r| r.get("rule_set").is_none()),
+        "a set with CIDRs never affects DNS"
+    );
+}
+
+#[test]
+fn dns_servers_local_then_remote_in_order() {
+    let options = Options {
+        tun: Some(desktop_tun(LocalDns::Servers(vec!["192.168.50.1:53"
+            .parse()
+            .unwrap()]))),
+        ..Options::default()
+    };
+    let config = value(&translate(&with_final(contract(), "direct"), &options).unwrap());
+    let dns = &config["dns"];
+    assert_eq!(dns["final"], "dns-local");
+    assert_eq!(
+        dns["servers"],
+        json!([
+            {"type": "udp", "tag": "dns-local-0", "server": "192.168.50.1", "server_port": 53},
+            {"type": "sequential", "tag": "dns-local", "servers": ["dns-local-0"]},
+            {"type": "tls", "tag": "dns-remote-1.1.1.1", "server": "1.1.1.1", "detour": "selected"},
+            {"type": "tls", "tag": "dns-remote-8.8.8.8", "server": "8.8.8.8", "detour": "selected"},
+            {"type": "tls", "tag": "dns-remote-9.9.9.9", "server": "9.9.9.9", "detour": "selected"},
+            {"type": "sequential", "tag": "dns-remote", "servers": ["dns-remote-1.1.1.1", "dns-remote-8.8.8.8", "dns-remote-9.9.9.9"]},
+        ])
+    );
+    let empty = Options {
+        tun: Some(desktop_tun(LocalDns::Servers(vec![]))),
+        ..Options::default()
+    };
+    assert!(translate(&contract(), &empty).is_err());
+}
+
+#[test]
+fn no_tun_no_dns() {
+    let config = value(&translate(&contract(), &Options::default()).unwrap());
+    assert!(config.get("dns").is_none());
+    assert!(config["route"].get("default_domain_resolver").is_none());
+}
+
+#[test]
+fn d4_rejects_udp_to_a_fixed_udp_less_node() {
+    // A final to a fixed node without UDP: UDP is rejected before it.
+    let mut profile = routing();
+    profile.routing.final_action = RoutingAction {
+        kind: "proxy".into(),
+        target: "node".into(),
+        node_id: "node-b".into(),
+    };
+    let config = value(&translate(&profile, &Options::default()).unwrap());
+    let rules = config["route"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules.last().unwrap(),
+        &json!({"network": ["udp"], "action": "reject", "method": "default"})
+    );
+    assert_eq!(config["route"]["final"], node_tag("node-b").as_str());
+
+    // A TCP-only rule to it needs none.
+    let mut profile = routing();
+    profile.routing.rules[3].matcher.protocols = vec!["tcp".into()];
+    let config = value(&translate(&profile, &Options::default()).unwrap());
+    let rules = config["route"]["rules"].as_array().unwrap();
+    assert!(rules.iter().all(|r| r["network"] != json!(["udp"])));
+
+    // The selected node is the Engine's: nothing here.
+    let mut profile = routing();
+    profile.selection.default_node_id = "node-b".into();
+    profile.routing.rules.clear();
+    let config = value(&translate(&profile, &Options::default()).unwrap());
+    assert!(config["route"].get("rules").is_none());
+}
+
+#[test]
+fn local_dns_servers_as_go_reads_them() {
+    let read = |v: &[&str]| local_dns_servers(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    assert_eq!(
+        read(&[
+            " 192.168.50.1 ",
+            "192.168.50.2:5353",
+            "[2001:db8::1]:53",
+            "::ffff:192.168.50.3"
+        ])
+        .unwrap(),
+        vec![
+            "192.168.50.1:53".parse().unwrap(),
+            "192.168.50.2:5353".parse().unwrap(),
+            "[2001:db8::1]:53".parse().unwrap(),
+            "192.168.50.3:53".parse().unwrap(),
+        ]
+    );
+    // Inside the tunnel, now or before 0.5.7: left out.
+    assert_eq!(
+        read(&["10.60.159.90", "172.19.0.2", "fde2:ec40:9312:c7fd::2"]).unwrap(),
+        Vec::<std::net::SocketAddr>::new()
+    );
+    for bad in ["dns.example", "0.0.0.0", "192.168.50.1:0", "[::]:53", ""] {
+        assert!(read(&[bad]).is_err(), "{bad}");
+    }
 }
 
 #[test]
