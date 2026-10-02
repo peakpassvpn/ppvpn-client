@@ -145,8 +145,13 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   `GetAdaptersAddresses`（适配器 Up、有全局地址、有 IPv6 网关），macOS 读路由表中的 `::/0` 及其
   网卡地址；TUN 自己只有 ULA，不会被算作出口。每次 apply 时探测，start 时结果变化就先重建；
   info 日志写 `msg="host ipv6" host_ipv6_enabled=… host_ipv6_route=… policy=tun_ipv6|tun_ipv6_direct_ipv4|tun_ipv4_only`。
-  探测失败按有出口处理（即旧行为），并记一条 warn 写明原因。网络切换（换 Wi‑Fi）后要到下一次
-  apply 或 start 才重新探测。
+  探测失败按有出口处理（即旧行为），并记一条 warn 写明原因。运行中也会重新探测：
+  默认网卡变化（`msg="default interface" event=changed`）后，等最后一次变化过去 2 秒再探测，
+  连续多次变化（比如 Wi‑Fi 先断后连）只探测一次；结果和当前构建不同，就用当前 Profile 重建，
+  走一次内核热切换，不断开已有连接，并记 info `msg="host ipv6 changed"`（前后两次的
+  `host_ipv6_route`、`policy`，以及 `switch=kernel`）。重建和 apply 共用同一把锁，期间如果有
+  apply，以 apply 的探测结果为准。主机运行中把 IPv6 整个关掉会改变 TUN，这种情况留到下一次 apply
+  或 start 处理。
 - **macOS 边界**：Darwin 上 `strict_route` 不起作用，sing-tun 也不改系统 DNS。发往全球单播 IPv6
   解析器（如运营商 `240e:…`）的查询会进入 TUN 被劫持；但在链路上的解析器（`fe80::…%en0`、路由器
   通告的本地 ULA、局域网 IPv4 网关）命中更具体的直连路由，不进入 TUN。macOS 宿主应把系统 DNS

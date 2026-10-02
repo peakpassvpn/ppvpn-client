@@ -523,8 +523,8 @@ func (e *layeredEngine) setConnectionLog(log *corelog.Logger) { e.tracker.log.St
 
 // watchDefaultInterface watches the front's monitor: it lives as long as the
 // engine, while kernels are replaced.
-func (e *layeredEngine) watchDefaultInterface(log *corelog.Logger) {
-	(&singEngine{Box: e.front, ctx: e.ctx}).watchDefaultInterface(log)
+func (e *layeredEngine) watchDefaultInterface(log *corelog.Logger, changed func()) {
+	(&singEngine{Box: e.front, ctx: e.ctx}).watchDefaultInterface(log, changed)
 }
 func (e *layeredEngine) telemetrySnapshot() (Traffic, []Connection) { return e.tracker.snapshot() }
 func (e *layeredEngine) dialFlow(ctx context.Context, network, outboundTag, host string, port uint16) (net.Conn, error) {
