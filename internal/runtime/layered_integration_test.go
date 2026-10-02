@@ -551,3 +551,49 @@ func TestTUNApplyWithoutIPv6PathSwitchesKernels(t *testing.T) {
 		t.Fatalf("after IPv6 was disabled: engines %d, last reasons %q", len(engines), engines[0].restarts)
 	}
 }
+
+// An apply in progress must not wedge the core's lock: Status reads the
+// kernel while holding it (activeIngress), and the apply's prepare (pins)
+// takes it. With a writer queued on the core's lock in between (Subscribe
+// here; a failover switch event or SetSystemProxy in practice), reading the
+// kernel under the engine's own lock made a cycle: apply waits for the
+// writer, the writer for Status, Status for the engine lock apply holds.
+func TestApplyDoesNotDeadlockWithStatusAndAWriter(t *testing.T) {
+	shortDrain(t, time.Minute)
+	f := newHotSwap(t)
+	paused, release := make(chan struct{}), make(chan struct{})
+	beforeKernelStart = func() error { close(paused); <-release; return nil }
+	t.Cleanup(func() { beforeKernelStart = nil })
+	applied := make(chan error, 1)
+	go func() {
+		_, err := f.core.ApplyProfile(f.profile("r2", []string{"a", "b"}, nil), time.Now())
+		applied <- err
+	}()
+	<-paused
+	status := make(chan Status, 1)
+	go func() { status <- f.core.Status() }()
+	time.Sleep(100 * time.Millisecond) // Status holds the core's read lock
+	subscribed := make(chan struct{})
+	go func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		f.core.Subscribe(ctx, 1) // queues for the core's write lock
+		close(subscribed)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	close(release) // the apply goes on to prepare, which takes the read lock
+	timeout := time.After(5 * time.Second)
+	for name, done := range map[string]<-chan struct{}{"status": waitFor(status), "subscribe": subscribed, "apply": waitFor(applied)} {
+		select {
+		case <-done:
+		case <-timeout:
+			t.Fatalf("%s did not return: lock cycle", name)
+		}
+	}
+}
+
+func waitFor[T any](ch <-chan T) <-chan struct{} {
+	done := make(chan struct{})
+	go func() { <-ch; close(done) }()
+	return done
+}

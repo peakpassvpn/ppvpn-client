@@ -94,9 +94,14 @@ type layeredEngine struct {
 	// change those; the drain loop must not read them concurrently).
 	drainLimit, drainGrace, drainCheck time.Duration
 
+	// active is the current kernel. It is read without mu: the core reads it
+	// while holding its own lock (Status, probes, pins), and swap's prepare
+	// takes that lock, so mu must never be needed to reach the kernel.
+	active atomic.Pointer[kernel]
+	gen    atomic.Uint64
+
+	// mu guards the switch itself, draining, inbounds and started.
 	mu       sync.Mutex
-	gen      uint64
-	current  *kernel
 	draining []*kernel
 	// drainingCount mirrors len(draining) for readers that must not take mu
 	// (Status holds the core's lock, which swap's prepare takes under mu).
@@ -124,7 +129,7 @@ func newLayeredEngine(ctx context.Context, options option.Options) (*layeredEngi
 		_ = front.Close()
 		return nil, err
 	}
-	engine.current = first
+	engine.active.Store(first)
 	return engine, nil
 }
 
@@ -150,8 +155,7 @@ func kernelOptions(options option.Options) option.Options {
 }
 
 func (e *layeredEngine) newKernel(ctx context.Context, options option.Options) (*kernel, error) {
-	e.gen++
-	gen := e.gen
+	gen := e.gen.Add(1)
 	kernelCtx, cancel := context.WithCancel(failover.Context(ctx))
 	instance, err := box.New(box.Options{Context: kernelCtx, Options: kernelOptions(options)})
 	if err != nil {
@@ -170,10 +174,11 @@ func (k *kernel) close() {
 func (e *layeredEngine) Start() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if err := e.current.Start(); err != nil {
+	first := e.active.Load()
+	if err := first.Start(); err != nil {
 		return err
 	}
-	e.switcher.set(e.current)
+	e.switcher.set(first)
 	if err := e.front.Start(); err != nil {
 		return err
 	}
@@ -182,7 +187,7 @@ func (e *layeredEngine) Start() error {
 			return err
 		}
 	}
-	e.registerTUNInterface(e.current)
+	e.registerTUNInterface(first)
 	e.started = true
 	go e.drainLoop()
 	return nil
@@ -220,17 +225,15 @@ func (e *layeredEngine) Close() error {
 	}
 	e.draining = nil
 	e.drainingCount.Store(0)
-	if e.current != nil {
-		e.current.close()
+	if current := e.active.Load(); current != nil {
+		current.close()
 	}
 	return err
 }
 
-func (e *layeredEngine) kernel() *kernel {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.current
-}
+// kernel is the current kernel; during a swap that is still the old one
+// until the switch.
+func (e *layeredEngine) kernel() *kernel { return e.active.Load() }
 
 func (e *layeredEngine) setKernelEvents(handler func(kernelEvent)) { e.events.Store(&handler) }
 
@@ -314,37 +317,50 @@ func sameJSON(a, b any) bool {
 
 // swap starts a kernel for options and switches to it. If the kernel fails
 // to start, it is discarded and nothing else changes.
+//
+// The new kernel is built, prepared (pins: the core's lock) and started
+// without mu: nobody else can see it yet, and mu must not be held while the
+// core's lock is taken (Status reads the kernel under that lock). mu covers
+// only the switch.
 func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepare func(engine), closeOld func(next engine, item trackedView) bool) (kernelEvent, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.started {
+	started := e.started
+	e.mu.Unlock()
+	if !started {
 		return kernelEvent{}, errors.New("engine is not running")
 	}
 	next, err := e.newKernel(ctx, options)
 	if err != nil {
 		return kernelEvent{}, err
 	}
-	if prepare != nil {
-		prepare(next.singEngine)
-	}
 	if beforeKernelStart != nil {
 		err = beforeKernelStart()
 	}
 	if err == nil {
+		if prepare != nil {
+			prepare(next.singEngine)
+		}
 		err = next.Start()
 	}
 	if err != nil {
 		next.close()
 		return kernelEvent{}, err
 	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.started {
+		next.close()
+		return kernelEvent{}, errors.New("engine closed during the switch")
+	}
 	e.registerTUNInterface(next)
 	if err = e.reconcileInbounds(options.Inbounds); err != nil {
 		next.close()
 		return kernelEvent{}, fmt.Errorf("update listeners: %w", err)
 	}
-	previous := e.current
+	previous := e.active.Load()
 	e.switcher.set(next)
-	e.current = next
+	e.active.Store(next)
 	e.inbounds = options.Inbounds
 	event := kernelEvent{Switched: true, Gen: next.gen, Previous: previous.gen}
 	for _, item := range e.tracker.generation(previous.gen) {
@@ -363,9 +379,20 @@ func (e *layeredEngine) swap(ctx context.Context, options option.Options, prepar
 }
 
 // reconcileInbounds applies the in-place listener changes: the local proxy's
-// user list, and the system proxy listener (added, moved or removed).
-func (e *layeredEngine) reconcileInbounds(inbounds []option.Inbound) error {
+// user list, and the system proxy listener (added, moved or removed). If the
+// system proxy change fails, the user lists are put back, so the listeners
+// still match the kernel that stays (whose rules pin the old users).
+func (e *layeredEngine) reconcileInbounds(inbounds []option.Inbound) (err error) {
 	next := inboundsByTag(inbounds)
+	current := inboundsByTag(e.inbounds)
+	var restore []func()
+	defer func() {
+		if err != nil {
+			for _, undo := range restore {
+				undo()
+			}
+		}
+	}()
 	for _, inbound := range inbounds {
 		options, ok := inbound.Options.(*proxyinbound.Options)
 		if !ok {
@@ -381,9 +408,11 @@ func (e *layeredEngine) reconcileInbounds(inbounds []option.Inbound) error {
 			if err := setter.SetUsers(options.Users); err != nil {
 				return err
 			}
+			if old, ok := current[inbound.Tag].Options.(*proxyinbound.Options); ok {
+				restore = append(restore, func() { _ = setter.SetUsers(old.Users) })
+			}
 		}
 	}
-	current := inboundsByTag(e.inbounds)
 	before, had := current[config.SystemProxyInboundTag]
 	after, has := next[config.SystemProxyInboundTag]
 	switch {
