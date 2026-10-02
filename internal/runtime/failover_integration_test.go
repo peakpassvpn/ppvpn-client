@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,14 +24,29 @@ import (
 
 const testSSKey = "AAAAAAAAAAAAAAAAAAAAAA=="
 
+// freePort returns a loopback port that is free for both TCP and UDP. Some
+// listeners the tests start (the Shadowsocks server, SOCKS inbounds) bind
+// both on the same number, and a port picked by TCP alone was occasionally
+// already taken for UDP ("listen udp …: address already in use"). The port
+// is released before returning, so a listener can still lose a race for it;
+// startShadowsocksServerWithTracker retries for that.
 func freePort(t *testing.T) uint16 {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for range 50 {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		packet, err := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		l.Close()
+		if err == nil {
+			packet.Close()
+			return uint16(port)
+		}
 	}
-	defer l.Close()
-	return uint16(l.Addr().(*net.TCPAddr).Port)
+	t.Fatal("no loopback port free for both TCP and UDP")
+	return 0
 }
 
 // startShadowsocksServer runs an in-process sing-box Shadowsocks 2022 server
@@ -45,6 +61,20 @@ func startShadowsocksServer(t *testing.T) uint16 {
 // the client asked for.
 func startShadowsocksServerWithTracker(t *testing.T, tracker adapter.ConnectionTracker) uint16 {
 	t.Helper()
+	for attempt := 1; ; attempt++ {
+		port, err := tryStartShadowsocksServer(t, tracker)
+		if err == nil {
+			return port
+		}
+		// Another socket took the port between freePort and the bind.
+		if attempt == 3 || !strings.Contains(err.Error(), "address already in use") {
+			t.Fatal(err)
+		}
+	}
+}
+
+func tryStartShadowsocksServer(t *testing.T, tracker adapter.ConnectionTracker) (uint16, error) {
+	t.Helper()
 	port := freePort(t)
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -54,17 +84,18 @@ func startShadowsocksServerWithTracker(t *testing.T, tracker adapter.ConnectionT
 	}})
 	if err != nil {
 		cancel()
-		t.Fatal(err)
+		return 0, err
 	}
 	if tracker != nil {
 		server.Router().AppendTracker(tracker)
 	}
 	if err = server.Start(); err != nil {
+		server.Close()
 		cancel()
-		t.Fatal(err)
+		return 0, err
 	}
 	t.Cleanup(func() { server.Close(); cancel() })
-	return port
+	return port, nil
 }
 
 func localSSIngress(role profile.IngressRole, key string, ordinal int, port uint16) profile.Ingress {
@@ -192,4 +223,20 @@ func TestTUNOnlyCoreRejectsLocalProxyAPIs(t *testing.T) {
 func labeledIngress(ingress profile.Ingress, label string) profile.Ingress {
 	ingress.Label = &label
 	return ingress
+}
+
+func TestFreePortIsFreeForTCPAndUDP(t *testing.T) {
+	for range 20 {
+		address := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(freePort(t))))
+		tcp, err := net.Listen("tcp", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		udp, err := net.ListenPacket("udp", address)
+		tcp.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		udp.Close()
+	}
 }
