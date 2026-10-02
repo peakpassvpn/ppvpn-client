@@ -1019,7 +1019,7 @@ func (c *Core) kernelSwitched(event kernelEvent, revision string, now time.Time)
 
 // kernelDrained logs and reports a replaced kernel that was closed.
 func (c *Core) kernelDrained(event kernelEvent) {
-	c.log.Info("kernel drained", "gen", event.Gen, "reason", event.Reason, "closed_connections", event.Closed)
+	c.log.Info("kernel drained", "gen", event.Gen, "reason", event.Reason, "closed_connections", event.Closed, "idle_closed", event.IdleClosed)
 	c.emit(Event{Type: EventKernelDrained, At: time.Now(), Code: event.Reason, ClosedConnections: event.Closed})
 }
 

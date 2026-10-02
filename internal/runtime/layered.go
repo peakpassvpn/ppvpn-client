@@ -44,6 +44,12 @@ var drainCheckInterval = time.Second
 // beforeKernelStart lets tests fail a kernel's start.
 var beforeKernelStart func() error
 
+// drainIdleClose closes a draining kernel's connection that moved no byte
+// either way for this long: a client's keep-alive or event-stream connection
+// would otherwise hold its old kernel (and old rules) for the whole
+// drainLimit. The client reconnects, through the current kernel.
+var drainIdleClose = time.Minute
+
 // drainGrace keeps a replaced kernel at least this long: a connection it
 // was routing at the switch (still sniffing) registers with the tracker only
 // once routed, so an empty count right after the switch is not final.
@@ -56,7 +62,9 @@ type kernelEvent struct {
 	Previous uint64
 	// Closed: connections closed (on a switch, by the new profile; on a
 	// drain, still open at drainLimit). Kept: left to drain on a switch.
-	Closed, Kept int
+	// IdleClosed (drain): connections closed while draining for being idle
+	// longer than drainIdleClose.
+	Closed, Kept, IdleClosed int
 	// Reason of a drain: "idle" (no connections left) or "deadline".
 	Reason string
 }
@@ -83,6 +91,8 @@ type kernel struct {
 	cancel         context.CancelFunc
 	retired        time.Time
 	deadline       time.Time
+	// idleClosed counts connections closed while draining for idleness.
+	idleClosed int
 }
 
 type layeredEngine struct {
@@ -96,7 +106,7 @@ type layeredEngine struct {
 	route    *option.RouteOptions
 	// Drain timing, copied from the package variables when built (tests
 	// change those; the drain loop must not read them concurrently).
-	drainLimit, drainGrace, drainCheck time.Duration
+	drainLimit, drainGrace, drainCheck, drainIdle time.Duration
 
 	// active is the current kernel. It is read without mu: the core reads it
 	// while holding its own lock (Status, probes, pins), and swap's prepare
@@ -127,7 +137,7 @@ func newLayeredEngine(ctx context.Context, options option.Options) (*layeredEngi
 	}
 	engine := &layeredEngine{ctx: frontCtx, front: front, switcher: &switchRouter{reverse: reversemap.FromContext(ctx)}, tracker: tracker,
 		inbounds: options.Inbounds, route: options.Route, stop: make(chan struct{}),
-		drainLimit: drainLimit, drainGrace: drainGrace, drainCheck: drainCheckInterval}
+		drainLimit: drainLimit, drainGrace: drainGrace, drainCheck: drainCheckInterval, drainIdle: drainIdleClose}
 	first, err := engine.newKernel(ctx, options)
 	if err != nil {
 		_ = front.Close()
@@ -449,20 +459,30 @@ func (e *layeredEngine) drainLoop() {
 	}
 }
 
-// drainOnce closes every draining kernel with no connections left, or past
-// its deadline (closing what is still open).
+// drainOnce closes the idle connections of draining kernels (no byte either
+// way for drainIdle), then every draining kernel with no connections left
+// (after drainGrace), or past its deadline (closing what is still open).
 func (e *layeredEngine) drainOnce(now time.Time) {
 	e.mu.Lock()
 	var done []kernelEvent
 	var closing []*kernel
+	var idle []*tracked
 	kept := make([]*kernel, 0, len(e.draining))
 	for _, k := range e.draining {
-		open := len(e.tracker.generation(k.gen))
+		open := 0
+		for _, item := range e.tracker.generation(k.gen) {
+			if e.drainIdle > 0 && now.Sub(item.lastActive) >= e.drainIdle {
+				idle = append(idle, item.item)
+				k.idleClosed++
+				continue
+			}
+			open++
+		}
 		switch {
 		case open == 0 && now.Sub(k.retired) >= e.drainGrace:
-			done = append(done, kernelEvent{Gen: k.gen, Reason: "idle"})
+			done = append(done, kernelEvent{Gen: k.gen, Reason: "idle", IdleClosed: k.idleClosed})
 		case !now.Before(k.deadline):
-			done = append(done, kernelEvent{Gen: k.gen, Reason: "deadline", Closed: open})
+			done = append(done, kernelEvent{Gen: k.gen, Reason: "deadline", Closed: open, IdleClosed: k.idleClosed})
 		default:
 			kept = append(kept, k)
 			continue
@@ -472,8 +492,10 @@ func (e *layeredEngine) drainOnce(now time.Time) {
 	e.draining = kept
 	e.drainingCount.Store(int32(len(kept)))
 	e.mu.Unlock()
-	// Outside the lock: closing a box can take a while, and closes the
-	// connections still open in it.
+	// Outside the lock: closing a connection or a box can take a while.
+	for _, item := range idle {
+		e.tracker.closeConnection(item)
+	}
 	for _, k := range closing {
 		k.close()
 	}

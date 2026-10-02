@@ -93,7 +93,8 @@ mkdir -m 700 "$APP_STATE"
     （0.5.18 起：新内核创建、启动与切换），走「停止再启动」路径时为 `engine_create_ms`/`engine_start_ms`；
   - 运行中 apply（0.5.18 起）：`msg="kernel switched"`（`gen`、`previous`、`closed_connections`、
     `kept_connections`）；旧内核关闭时 `msg="kernel drained"`（`gen`、`reason`=`idle`/`deadline`、
-    `closed_connections`）；监听变化需要重启时 `msg="apply full restart" reasons=…`；
+    `closed_connections`、`idle_closed`（0.5.19 起：排空期间因空闲 60 秒被关闭的连接数））；
+    监听变化需要重启时 `msg="apply full restart" reasons=…`；
   - `msg="start timing"`：`system_proxy_ms`（启用时）、`engine_create_ms`（sing-box 解析与构造）、
     `engine_start_ms`（sing-box 启动：出站、DNS、路由与规则集、入站，含打开 TUN 与安装 `auto_route`
     路由）、`total_ms`。sing-box 内部各组件不再细分：其计时只在上游日志里，而上游日志保持关闭。

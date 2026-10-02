@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -596,4 +597,131 @@ func waitFor[T any](ch <-chan T) <-chan struct{} {
 	done := make(chan struct{})
 	go func() { <-ch; close(done) }()
 	return done
+}
+
+// shortDrainIdle is shortDrain with idle connections of draining kernels
+// closed after idle.
+func shortDrainIdle(t *testing.T, idle time.Duration) {
+	t.Helper()
+	shortDrain(t, time.Minute)
+	previous := drainIdleClose
+	drainIdleClose = idle
+	t.Cleanup(func() { drainIdleClose = previous })
+}
+
+// keepAlive opens a CONNECT tunnel as the routed user to the quick target
+// and makes one request on it; the tunnel stays open for more.
+func (f *hotSwap) keepAlive(t *testing.T) (net.Conn, func() error) {
+	t.Helper()
+	username, password := f.user(t, "")
+	endpoint := f.core.LocalProxyEndpoints()[0]
+	tunnel, status, err := httpConnect(endpoint, username, password, f.quick.Listener.Addr().String())
+	if err != nil || status[:3] != "200" {
+		t.Fatalf("CONNECT: %q %v", status, err)
+	}
+	_ = tunnel.SetDeadline(time.Now().Add(30 * time.Second))
+	request := func() error {
+		code, err := tunnelGet(tunnel, f.quick.Listener.Addr().String())
+		if err == nil && code != http.StatusNoContent {
+			err = errors.New(strconv.Itoa(code))
+		}
+		return err
+	}
+	if err = request(); err != nil {
+		t.Fatal(err)
+	}
+	return tunnel, request
+}
+
+// A keep-alive connection that goes quiet in a draining kernel is closed
+// after drainIdleClose, and the kernel drains instead of waiting for
+// drainLimit.
+func TestDrainClosesIdleConnections(t *testing.T) {
+	shortDrainIdle(t, 500*time.Millisecond)
+	f := newHotSwap(t)
+	tunnel, _ := f.keepAlive(t)
+	defer tunnel.Close()
+	if _, err := f.core.ApplyProfile(f.profile("r2", []string{"a", "b"}, nil), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if switched := f.next(t, EventKernelSwitched, 5*time.Second); switched.KeptConnections != 1 {
+		t.Fatalf("switch event: %#v", switched)
+	}
+	drained := f.next(t, EventKernelDrained, 5*time.Second)
+	if drained.Code != "idle" {
+		t.Fatalf("drain event: %#v", drained)
+	}
+	if !strings.Contains(f.logged(), `msg="kernel drained" gen=1 reason=idle closed_connections=0 idle_closed=1`) {
+		t.Fatalf("log:\n%s", f.logged())
+	}
+	_ = tunnel.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := tunnel.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("idle connection still open: %v", err)
+	}
+}
+
+// A connection that keeps moving bytes is not idle, however long it runs in
+// a draining kernel; the kernel drains once it ends.
+func TestDrainKeepsActiveConnections(t *testing.T) {
+	shortDrainIdle(t, 500*time.Millisecond)
+	f := newHotSwap(t)
+	trickle := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(20*1024))
+		for range 20 {
+			if _, err := w.Write(make([]byte, 1024)); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			time.Sleep(100 * time.Millisecond) // well under the idle threshold
+		}
+	}))
+	defer trickle.Close()
+	username, password := f.user(t, "")
+	endpoint := f.core.LocalProxyEndpoints()[0]
+	tunnel, status, err := httpConnect(endpoint, username, password, trickle.Listener.Addr().String())
+	if err != nil || status[:3] != "200" {
+		t.Fatalf("CONNECT: %q %v", status, err)
+	}
+	defer tunnel.Close()
+	_ = tunnel.SetDeadline(time.Now().Add(30 * time.Second))
+	if _, err = io.WriteString(tunnel, "GET / HTTP/1.1\r\nHost: trickle\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(tunnel), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.core.ApplyProfile(f.profile("r2", []string{"a", "b"}, nil), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.next(t, EventKernelSwitched, 5*time.Second)
+	if n, err := io.Copy(io.Discard, response.Body); err != nil || n != 20*1024 {
+		t.Fatalf("2 s trickle across the drain: %d %v", n, err)
+	}
+	tunnel.Close()
+	f.next(t, EventKernelDrained, 5*time.Second)
+	if !strings.Contains(f.logged(), `msg="kernel drained" gen=1 reason=idle closed_connections=0 idle_closed=0`) {
+		t.Fatalf("log:\n%s", f.logged())
+	}
+}
+
+// Pauses shorter than the threshold do not close a draining connection.
+func TestDrainToleratesShortPauses(t *testing.T) {
+	shortDrainIdle(t, 600*time.Millisecond)
+	f := newHotSwap(t)
+	tunnel, request := f.keepAlive(t)
+	defer tunnel.Close()
+	if _, err := f.core.ApplyProfile(f.profile("r2", []string{"a", "b"}, nil), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.next(t, EventKernelSwitched, 5*time.Second)
+	for i := range 2 {
+		time.Sleep(300 * time.Millisecond)
+		if err := request(); err != nil {
+			t.Fatalf("request %d after a short pause: %v", i, err)
+		}
+	}
+	if got := f.core.Status().DrainingKernels; got != 1 {
+		t.Fatalf("draining kernels %d: the connection was closed", got)
+	}
 }

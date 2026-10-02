@@ -36,6 +36,9 @@ type Connection struct {
 type tracked struct {
 	connection       Connection
 	upload, download atomic.Uint64
+	// lastActive is when a byte last went either way (unix nanoseconds),
+	// for closing idle connections of a draining kernel.
+	lastActive atomic.Int64
 	// gen is the kernel generation that routed the connection; metadata is
 	// what its router matched; closeConn closes it (set once wrapped).
 	gen       uint64
@@ -62,8 +65,16 @@ func newTelemetry() *telemetry { return &telemetry{connections: map[string]*trac
 // the client. (bufio.NewCounterConn takes read counters first, as sing-box's
 // clash API does with upload; before 0.5.16 the two were swapped.)
 func (item *tracked) counters(t *telemetry) (upload, download []N.CountFunc) {
-	return []N.CountFunc{func(n int64) { item.upload.Add(uint64(n)); t.upload.Add(uint64(n)) }},
-		[]N.CountFunc{func(n int64) { item.download.Add(uint64(n)); t.download.Add(uint64(n)) }}
+	return []N.CountFunc{func(n int64) {
+			item.upload.Add(uint64(n))
+			t.upload.Add(uint64(n))
+			item.lastActive.Store(time.Now().UnixNano())
+		}},
+		[]N.CountFunc{func(n int64) {
+			item.download.Add(uint64(n))
+			t.download.Add(uint64(n))
+			item.lastActive.Store(time.Now().UnixNano())
+		}}
 }
 func (t *telemetry) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, rule adapter.Rule, outbound adapter.Outbound) net.Conn {
 	return t.routedConnection(0, conn, metadata, rule, outbound)
@@ -97,6 +108,7 @@ func (t *telemetry) add(gen uint64, metadata adapter.InboundContext, outbound ad
 		tag = adapter.OutboundTag(outbound)
 	}
 	item := &tracked{gen: gen, metadata: metadata, connection: Connection{ID: randomConnectionID(), OutboundTag: tag, Network: metadata.Network, Destination: metadata.Destination.String(), StartedAt: time.Now()}}
+	item.lastActive.Store(item.connection.StartedAt.UnixNano())
 	t.mu.Lock()
 	t.connections[item.connection.ID] = item
 	t.mu.Unlock()
@@ -167,6 +179,7 @@ type trackedView struct {
 	outboundTag string
 	metadata    adapter.InboundContext
 	route       []string
+	lastActive  time.Time
 }
 
 // generation lists the open connections of kernel gen.
@@ -176,7 +189,7 @@ func (t *telemetry) generation(gen uint64) []trackedView {
 	var items []trackedView
 	for _, item := range t.connections {
 		if item.gen == gen {
-			items = append(items, trackedView{item: item, outboundTag: item.connection.OutboundTag, metadata: item.metadata, route: append([]string(nil), item.route...)})
+			items = append(items, trackedView{item: item, outboundTag: item.connection.OutboundTag, metadata: item.metadata, route: append([]string(nil), item.route...), lastActive: time.Unix(0, item.lastActive.Load())})
 		}
 	}
 	return items
