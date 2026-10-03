@@ -10,8 +10,11 @@
 #   PPVPN_BUILD_NUMBER         monotonic counter shared by the release
 #   PPVPN_RELEASE_CHANNEL      dev | stable, recorded in release-meta
 #   PPVPN_VERSION              x.y.z from the release tag (default: project version)
-#   PPVPN_API_BASE_DEFAULT     backend for Release builds; each build's Sparkle
-#                              feed is <api_base>/api/v1/desktop/releases/<platform>/appcast.xml
+#   PPVPN_API_BASE_DEFAULT     backend for Release builds
+#   PPVPN_UPDATE_SITE          base address of the update site; with a channel, each
+#                              build's Sparkle feed is
+#                              <site>/desktop/<channel>/appcast-<platform>.xml;
+#                              without either, the build has no update feed
 #   PPVPN_SPARKLE_PUBLIC_KEY   EdDSA public key; empty disables updates
 #   SPARKLE_PRIVATE_KEY        EdDSA private key (base64); signs the DMGs
 #   MACOS_SIGNING_P12_BASE64   the fixed self-signed "PPVPN Code Signing"
@@ -40,6 +43,11 @@ command -v xcodegen >/dev/null || brew install xcodegen
 bash scripts/stage-macos-core.sh
 bash scripts/build-service.sh macos
 
+# A build for a channel updates from that channel's feed; one without has no feed.
+if [[ -n "${PPVPN_RELEASE_CHANNEL:-}" && -z "${PPVPN_UPDATE_SITE:-}" ]]; then
+  echo "PPVPN_UPDATE_SITE is required for a channel build" >&2
+  exit 3
+fi
 export PPVPN_API_BASE_DEFAULT
 export PPVPN_SPARKLE_PUBLIC_KEY="${PPVPN_SPARKLE_PUBLIC_KEY:-}"
 export PPVPN_BUILD_NUMBER
@@ -106,7 +114,10 @@ for arch in $MACOS_ARCHS; do
     exit 4
   fi
   feed="$(/usr/libexec/PlistBuddy -c 'Print PPVPNUpdateFeedURL' "$app/Contents/Info.plist")"
-  expected="$PPVPN_API_BASE_DEFAULT/api/v1/desktop/releases/$platform/appcast.xml"
+  expected=""
+  if [[ -n "${PPVPN_UPDATE_SITE:-}" && -n "${PPVPN_RELEASE_CHANNEL:-}" ]]; then
+    expected="${PPVPN_UPDATE_SITE%/}/desktop/$PPVPN_RELEASE_CHANNEL/appcast-$platform.xml"
+  fi
   [[ "$feed" == "$expected" ]] || { echo "feed URL mismatch ($arch): $feed" >&2; exit 4; }
 
   cp "dist/macos/"*"-$platform.dmg" "dist/macos/release-meta-$platform.json" "$staging_dir/"
