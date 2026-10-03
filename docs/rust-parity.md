@@ -65,7 +65,7 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 
 | # | 行为 | Go 0.5.21 | Rust 现状 | 还缺什么 |
 | --- | --- | --- | --- | --- |
-| X1 | 主机有 IPv6 但没有自己的 IPv6 出口时，直连双栈域名仍然能通（0.5.17 修复，验收清单"功能与行为"） | `handOffDirectIPv6`：`direct` 换成 `domaindest(ipv6_only)` 包装 `direct-host`，后者解析时只取 IPv4；TUN 本身不变 | 翻译层已实现（`translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain`），改用 sail 现有能力：TUN inbound 加一条匹配 `2000::/3` 的 route-options 规则，设 `override_destination: "proxy_and_direct"`（后面规则的值优先，sail 有同样形状的路由测试）；`direct` 带 `domain_resolver {dns-local, ipv4_only}`。不需要 Sail 改动 | ① 探测已接入 Engine（`engine::tun`：每次 apply 和 start 各探一次并写日志，结果填到 `Tun.no_host_ipv6_route`；`reprobe_host_ipv6` 在结果变化时 reload 并发 `KernelSwitched`），触发来源等网络事件（sail 的网卡事件，E1b；Go 的防抖随之实现）；② kernel 切换或 reload 后，反向映射是否还在（Go 用共享的存储，见 `TestRestoreFallsBackToTheSharedReverseMapping`；sail 的 reload 会清空 DNS 缓存，反向映射是否随之清空待确认）；③ lab 用例：IPv6 无出口的主机上，直连双栈域名能通 |
+| X1 | 主机有 IPv6 但没有自己的 IPv6 出口时，直连双栈域名仍然能通（0.5.17 修复，验收清单"功能与行为"） | `handOffDirectIPv6`：`direct` 换成 `domaindest(ipv6_only)` 包装 `direct-host`，后者解析时只取 IPv4；TUN 本身不变 | 翻译层已实现（`translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain`），改用 sail 现有能力：TUN inbound 加一条匹配 `2000::/3` 的 route-options 规则，设 `override_destination: "proxy_and_direct"`（后面规则的值优先，sail 有同样形状的路由测试）；`direct` 带 `domain_resolver {dns-local, ipv4_only}`。不需要 Sail 改动 | ① 探测已接入 Engine（`engine::tun`：每次 apply 和 start 各探一次并写日志，结果填到 `Tun.no_host_ipv6_route`；`reprobe_host_ipv6` 在结果变化时 reload 并发 `KernelSwitched`）；网络变化时由 `engine::network` 触发，最后一次变化 2 s 后探测（同 Go 的防抖），离线期间跳过（过渡实现的来源见上）；② kernel 切换或 reload 后，反向映射是否还在（Go 用共享的存储，见 `TestRestoreFallsBackToTheSharedReverseMapping`；sail 的 reload 会清空 DNS 缓存，反向映射是否随之清空待确认）；③ lab 用例：IPv6 无出口的主机上，直连双栈域名能通 |
 
 ## 测试宿主的约定
 
@@ -97,7 +97,11 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
-sail 的网络事件（E1b）合入之前，`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）通过 `Instance::manager()?.network()` 读取 sail 的状态和 `changes()` 通道。它和 sail 自己处理网络移动时读的是同一个通道，所以已经是事件驱动、只有一个来源；但 `manager()` 不在 `sail::embed` 的稳定接口里，可能不经通知变动。E1b 合入后改用 `Event::Network` 和 `instance.network()`，这一节随之删除。
+sail 的网络事件（E1b）合入之前，`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）通过 `Instance::manager()?.network()` 读取 sail 的状态和 `changes()` 通道。它和 sail 自己处理网络移动时读的是同一个通道，所以已经是事件驱动、只有一个来源；但 `manager()` 不在 `sail::embed` 的稳定接口里，可能不经通知变动。Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每次变化转成 `on_network`（NetworkChanged、`Degraded{NoDefaultInterface}`、探测的离线状态）；TUN 实例在最后一次变化 2 s 后重新探测主机 IPv6 出口；start 时读一次 `network()` 快照，只设离线状态，不报变化；`default interface` 日志行同 Go 的格式，但没有 `mtu`（sail 的快照不带）。
+
+已知限制：watch 只保留最新的一条。读取方落后时，`generation` 会跳号；如果这条变化的 `old` 和上次看到的网络不同，就先按 `old` 补报一步（`engine::network::tests::a_missed_step_is_replayed_from_the_changes_old`），所以"离线后马上恢复"仍然会报出两步。但一次跳号里更短的抖动会丢失，等 sail 嵌入侧的有界广播事件合入后解决。
+
+E1b 合入后改用 `Event::Network` 和 `instance.network()`，这一节随之删除。
 
 ## Lab 用例（`test/lab/engine/cases`）
 
@@ -233,18 +237,18 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/reversemap` `TestCapacityEvictsTheEntryClosestToExpiry` | Capacity evicts the entry closest to expiry |  | todo |  |
 | `internal/reversemap` `TestRecordLookupAndExpiry` | Record lookup and expiry |  | todo |  |
 | `internal/runtime` `TestApplyProfileProbesHostIPv6ForTUN` | The desktop TUN carries IPv6 only when the host probe allows it; the probe runs on every apply because IPv6 can be toggled between starts. | `ppvpn-core` `engine::tun::tests::a_tun_instance_runs_a_tun_inbound_a_standard_one_does_not`、`ppvpn-core` `engine::tun::tests::the_probe_decides_the_tun_ipv6_and_the_hand_off` | done | 探测函数可注入（`Inner::set_host_ipv6_probe`）；apply 和 start 各探一次，Standard 实例和移动平台不探测 |
-| `internal/runtime` `TestDefaultInterfaceChangeEmitsNetworkChanged` | Every default interface change of the running engine is reported as NetworkChanged: the new interface's name and index, or none. |  | todo |  |
+| `internal/runtime` `TestDefaultInterfaceChangeEmitsNetworkChanged` | Every default interface change of the running engine is reported as NetworkChanged: the new interface's name and index, or none. | `ppvpn-core` `engine::network::tests::every_change_of_the_running_engine_is_network_changed` | done | 来源是 sail 的网络 watch（过渡实现，见上）；离线进入、恢复退出 `Degraded{NoDefaultInterface}` |
 | `internal/runtime` `TestDefaultInterfaceLogLine` | Default interface log line |  | todo |  |
 | `internal/runtime` `TestHostIPv6RouteDecidesDirectHandOff` | A host with IPv6 enabled but no IPv6 path keeps the IPv6 TUN and wraps direct; the probe runs on every apply and again at start, and its result is logged. | `ppvpn-core` `engine::tun::tests::the_probe_decides_the_tun_ipv6_and_the_hand_off` | done | 读不到出口（`Err`）时照旧使用 IPv6、不做 hand-off；日志一行（`host ipv6`，含结果、policy 和 Err 的原因），日志内容未断言 |
 | `internal/runtime` `TestProbesFailFastWithoutDefaultInterface` | With no default interface (offline) both probes fail at once with ErrNoDefaultInterface instead of waiting out their timeout; with one, or when the engine cannot tell, … | `ppvpn-core` `probe::entrance::tests::entrance_offline_fails_fast_and_probes_nothing`、`ppvpn-core` `probe::availability::tests::availability_offline_fails_fast_and_dials_nothing` | done | 探测层：默认网卡状态由参数注入（Unknown/Present 照常探测，Absent 立即失败且不拨号）；Engine 接线后由 sail 的网卡监视器提供，Engine 层用例待接线 |
-| `internal/runtime` `TestReprobeDebouncesBursts` | A burst of changes (a Wi-Fi switch) re-arms one probe: each change stops the pending one, and only the last fires. |  | todo |  |
+| `internal/runtime` `TestReprobeDebouncesBursts` | A burst of changes (a Wi-Fi switch) re-arms one probe: each change stops the pending one, and only the last fires. | `ppvpn-core` `engine::network::tests::a_burst_of_changes_reprobes_once_after_the_delay` | done | REPROBE_DELAY 2 s，同 Go |
 | `internal/runtime` `TestReprobeDefersToApply` | An apply between the change and the probe builds for the new state; the probe then finds nothing to do. |  | todo |  |
 | `internal/runtime` `TestReprobeKeepsKernelWhenUnchanged` | Same result: nothing rebuilt, no change logged. | `ppvpn-core` `engine::tun::tests::an_unchanged_ipv6_path_does_nothing` | done | 与 Go 一样，比较的是运行中构建的 hand-off；主机关掉 IPv6 留给下一次 apply 或 start |
 | `internal/runtime` `TestReprobeRealTimerFires` | The default scheduler is time.AfterFunc: a change still leads to a probe on its own (with a short delay and a generous deadline). |  | todo |  |
 | `internal/runtime` `TestReprobeSkipsWhileOffline` | A link goes down: the path looks lost only because there is no network. | `ppvpn-core` `engine::tun::tests::offline_or_stopped_does_not_probe` | done | 离线状态取自 `on_network`（来源是 sail 的网卡事件，E1b，未接线）；端到端：netns CI network-change，updown 模式 0–4 |
 | `internal/runtime` `TestReprobeSwitchesWhenIPv6PathAppears` | The host gains an IPv6 path: switch back to the plain build. | `ppvpn-core` `engine::tun::tests::a_changed_ipv6_path_switches_kernels` | done | reload 后发 `KernelSwitched`；连接数要等排空（第 1 组）接上，目前为 0 |
 | `internal/runtime` `TestReprobeSwitchesWhenIPv6PathIsLost` | The host loses its IPv6 path (joins an IPv4-only network): one kernel switch to the hand-off build, no restart, armed ReprobeDelay out. | `ppvpn-core` `engine::tun::tests::a_changed_ipv6_path_switches_kernels` | done | reload 后发 `KernelSwitched`；Go 的 ReprobeDelay 防抖随网卡事件接线实现。端到端：netns CI updown 模式 2（在线时切换一次） |
-| `internal/runtime` `TestStopCancelsPendingReprobe` | Stop cancels a pending re-probe. |  | todo |  |
+| `internal/runtime` `TestStopCancelsPendingReprobe` | Stop cancels a pending re-probe. | `ppvpn-core` `engine::network::tests::stop_cancels_a_pending_reprobe` | done |  |
 | `internal/runtime` `TestTUNApplyWithoutIPv6PathSwitchesKernels` | With the host's IPv6 state unchanged, a TUN apply is a kernel switch: the no-IPv6-path build (direct wrapped, direct-host resolving IPv4 only, see #48) changes … |  | todo |  |
 | `internal/runtime` `TestTUNRouteResolvesAndHandsDomainsToNode` | runs the TUN route and DNS configuration on a real sing-box. |  | todo |  |
 

@@ -34,6 +34,7 @@ mod cleanup;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+mod network;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
@@ -68,6 +69,7 @@ struct Inner {
     /// Held from `new` to `shutdown` (or the last handle's drop).
     state_dir: Mutex<Option<StateDirLock>>,
     tun: tun::TunState,
+    network: network::NetworkState,
 }
 
 impl Drop for Inner {
@@ -128,6 +130,7 @@ impl Engine {
     pub(crate) fn with_runtime(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Engine {
         let inner = Arc::new(Inner {
             tun: tun::TunState::new(&config),
+            network: network::NetworkState::default(),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),

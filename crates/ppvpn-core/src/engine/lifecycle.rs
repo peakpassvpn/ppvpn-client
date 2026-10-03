@@ -195,6 +195,7 @@ impl Inner {
             self.settle(&mut live);
             self.publish(Event::CoreStarted { at: now() });
         }
+        self.network_started();
         self.refresh().await;
         Ok(())
     }
@@ -210,6 +211,7 @@ impl Inner {
         if let Err(e) = self.runtime.stop().await {
             return Err(self.runtime_error(&e));
         }
+        self.network_stopped();
         let mut live = self.live();
         live.running = false;
         live.run += 1;
@@ -354,8 +356,7 @@ impl Inner {
 
     /// The default interface changed (`None`: none). Offline while running
     /// is `Degraded{NoDefaultInterface}`; `NetworkChanged` is sent while
-    /// running, as Go's.
-    #[allow(dead_code)] // its source is not wired yet
+    /// running, as Go's. Its source is sail's network watch (network.rs).
     pub(super) fn on_network(&self, interface: Option<(&str, u32)>) {
         let mut live = self.live();
         live.offline = interface.is_none();
@@ -408,6 +409,7 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     let handle = tokio::runtime::Handle::try_current().ok()?;
     let mut switches = inner.runtime.group_switches();
     let mut states = inner.runtime.states();
+    let mut networks = inner.runtime.network_changes();
     let weak: Weak<Inner> = Arc::downgrade(inner);
     Some(handle.spawn(async move {
         let mut tick = tokio::time::interval(REFRESH);
@@ -422,6 +424,16 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                     }
                     None => switches_open = false,
                 },
+                changed = networks.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    let change = networks.borrow_and_update().clone();
+                    let Some(inner) = weak.upgrade() else { return };
+                    if let Some(change) = change {
+                        inner.on_network_change(change);
+                    }
+                }
                 changed = states.changed() => {
                     if changed.is_err() {
                         return;
