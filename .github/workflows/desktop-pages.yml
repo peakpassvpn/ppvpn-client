@@ -1,0 +1,124 @@
+name: desktop-pages
+
+# The update site, deployed to GitHub Pages: the stable channel's pointer
+# and Sparkle feeds (desktop/…) and its apt and dnf repositories (linux/…).
+# The whole site is rebuilt from the GitHub Releases on every deployment (a
+# Pages deployment replaces the site), so the releases are its only source
+# and running this again by hand restores it.
+#
+# Only the stable channel is deployed. The directory core/ is reserved for
+# the core's own pages: when it has any, they must be built here too,
+# because the repository has one Pages site.
+#
+# Called by desktop-release.yml after a stable release is published; by
+# hand to rebuild the site as it is.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-pages
+  cancel-in-progress: false
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The package repositories' signing key signs the apt and dnf indexes.
+    environment: desktop-release-stable
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SITE_BASE: ${{ vars.DESKTOP_SITE_BASE }}
+      DOWNLOAD_BASE: https://github.com/${{ github.repository }}/releases/download
+      # Releases whose deb stays installable from the apt repository.
+      KEEP: '5'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            desktop/scripts/ci
+            desktop/apps/linux/packaging
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends apt-utils createrepo-c rpm gnupg gpgv jq
+      # Stable releases are the tags desktop-vX.Y.Z that are not prereleases.
+      # "Newest" is the highest version, not the latest published: a release
+      # published again later must not move the channel back.
+      - name: The stable releases, newest first
+        run: |
+          set -eu
+          if [ -z "$SITE_BASE" ]; then
+            echo "the variable DESKTOP_SITE_BASE (the update site's https address) is not set" >&2
+            exit 1
+          fi
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease,isDraft \
+            --jq '.[] | select(.isDraft or .isPrerelease | not) | .tagName' \
+            | grep -E '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -t v -k 2 -V -r | head -n "$KEEP" > tags || true
+          if [ ! -s tags ]; then
+            echo "no stable desktop release: nothing to deploy" >&2
+            exit 1
+          fi
+          cat tags
+      - name: Download their Linux packages, and the newest release's metadata
+        run: |
+          set -eu
+          while read -r tag; do
+            mkdir -p "linux-releases/$tag"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "linux-releases/$tag" \
+              --pattern 'release-meta-linux-x64-*.json' --pattern '*.deb' --pattern '*.rpm'
+          done < tags
+          newest=$(head -n 1 tags)
+          mkdir newest
+          gh release download "$newest" --repo "$GITHUB_REPOSITORY" --dir newest --pattern 'release-meta-*.json'
+          echo "NEWEST=$newest" >> "$GITHUB_ENV"
+      - name: Pointer and feeds
+        run: |
+          set -eu
+          python3 desktop/scripts/ci/update_site.py build --assets newest --tag "$NEWEST" --channel stable \
+            --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site
+          python3 desktop/scripts/ci/update_site.py check site/desktop/channels/stable.json --channel stable
+      - name: apt and dnf repositories
+        env:
+          PKG_GPG_PRIVATE_KEY: ${{ secrets.PPVPN_PKG_GPG_PRIVATE_KEY }}
+          PKG_GPG_PASSPHRASE: ${{ secrets.PPVPN_PKG_GPG_PASSPHRASE }}
+        run: |
+          set -eu
+          # The key must be the one whose public half the packages ship.
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons desktop/apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
+          export PKG_GPG_FINGERPRINT
+          desktop/scripts/ci/build-linux-repo.sh --channel stable --releases linux-releases \
+            --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site --keep "$KEEP"
+      - name: The site
+        run: |
+          set -eu
+          # One version in the pointer, the feeds and the Linux update check.
+          version=$(jq -er .version site/desktop/channels/stable.json)
+          [ "$(jq -er .version site/linux/stable/latest.json)" = "$version" ] \
+            || { echo "latest.json and the channel pointer name different versions" >&2; exit 1; }
+          find site -type f | sort
+          du -sh site
+          # Pages refuses a site over 1 GB.
+          [ "$(du -sm site | cut -f1)" -lt 900 ] || { echo "the site is close to the Pages limit of 1 GB" >&2; exit 1; }
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: site
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
