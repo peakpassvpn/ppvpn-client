@@ -193,3 +193,47 @@ async fn a_standard_instance_never_reprobes() {
     settle().await;
     assert_eq!(asked.load(Ordering::SeqCst), 0);
 }
+
+/// A timer that fired leaves the cancellable slot: a change after it can
+/// no longer abort a re-probe under way (its reload, say), only queue one.
+#[tokio::test(start_paused = true)]
+async fn a_fired_reprobe_is_not_cancelled_by_the_next_change() {
+    let (engine, fake, asked) = instance(Role::Tun);
+    running(&engine).await;
+    let before = asked.load(Ordering::SeqCst);
+    fake.change_network(wifi(), "default_interface");
+    settle().await;
+    assert!(engine.inner.network.track().timer.is_some(), "armed");
+    tokio::time::sleep(REPROBE_DELAY + Duration::from_millis(100)).await;
+    settle().await;
+    assert!(
+        engine.inner.network.track().timer.is_none(),
+        "fired, left the slot"
+    );
+    fake.change_network(wired(), "default_interface");
+    settle().await;
+    tokio::time::sleep(REPROBE_DELAY + Duration::from_millis(100)).await;
+    settle().await;
+    assert_eq!(asked.load(Ordering::SeqCst), before + 2, "both ran");
+}
+
+/// Offline is sail's report while it runs: after a stop the network is
+/// unknown, not offline.
+#[tokio::test]
+async fn stop_forgets_offline() {
+    let (engine, fake, _) = instance(Role::Standard);
+    running(&engine).await;
+    fake.change_network(offline(), "state");
+    settle().await;
+    assert!(no_default_interface(&engine));
+    engine.stop().await.unwrap();
+    assert!(!engine.inner.live().offline);
+    // A change from the stopped run that arrives late changes nothing.
+    engine.inner.on_network_change(NetworkChange {
+        generation: 9,
+        reason: "state".into(),
+        old: wifi(),
+        new: offline(),
+    });
+    assert!(!engine.inner.live().offline);
+}

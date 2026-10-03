@@ -31,12 +31,17 @@ pub(super) struct NetworkState {
 
 #[derive(Default)]
 struct Track {
-    /// The last change's generation (0 after a start: sail counts from 1).
+    /// The last change's generation in this run (0 before the first: sail
+    /// counts from 1 at each start).
     generation: u64,
-    /// The network last seen, from a start's snapshot or a change.
+    /// The network last seen in this run, from the start's snapshot or a
+    /// change.
     last: Option<NetworkSnapshot>,
-    /// The armed re-probe, if any.
-    reprobe: Option<JoinHandle<()>>,
+    /// The re-probe timer while it still sleeps; once it fires it leaves
+    /// here, so a later change never cancels a re-probe under way.
+    timer: Option<JoinHandle<()>>,
+    /// Which arming the sleeping timer belongs to.
+    armed: u64,
 }
 
 impl NetworkState {
@@ -75,16 +80,17 @@ fn log_default_interface(event: &str, snapshot: &NetworkSnapshot) {
 
 impl Inner {
     /// After a start: the network as sail has it now. Not a change, so no
-    /// NetworkChanged; the offline state follows it.
+    /// NetworkChanged; the offline state follows it. A change this run has
+    /// already reported is newer than the snapshot and stays.
     pub(super) fn network_started(&self) {
-        let snapshot = self.runtime.network();
-        {
-            let mut track = self.network.track();
-            track.generation = 0;
-            track.last = snapshot.clone();
+        let mut track = self.network.track();
+        if track.generation > 0 {
+            return;
         }
+        let snapshot = self.runtime.network();
+        track.last = snapshot.clone();
         // A snapshot that knows no network yet (no interface, not offline)
-        // says nothing: what was known before stays.
+        // says nothing.
         if let Some(snapshot) = snapshot.filter(|s| s.offline || s.interface.is_some()) {
             log_default_interface("start", &snapshot);
             let mut live = self.live();
@@ -93,15 +99,33 @@ impl Inner {
         }
     }
 
-    /// At stop: a pending re-probe goes with the run.
+    /// At stop or shutdown: the run's network goes with it. A sleeping
+    /// re-probe is cancelled (one under way holds the operation lock and
+    /// ends first), and the network is unknown again: offline no longer
+    /// holds once sail no longer runs.
     pub(super) fn network_stopped(&self) {
-        if let Some(reprobe) = self.network.track().reprobe.take() {
-            reprobe.abort();
+        {
+            let mut track = self.network.track();
+            if let Some(timer) = track.timer.take() {
+                timer.abort();
+            }
+            track.armed += 1;
+            track.generation = 0;
+            track.last = None;
+        }
+        let mut live = self.live();
+        if live.offline {
+            live.offline = false;
+            self.settle(&mut live);
         }
     }
 
-    /// One change from sail's network watch.
+    /// One change from sail's network watch, while it runs.
     pub(super) fn on_network_change(self: &Arc<Self>, change: NetworkChange) {
+        if !self.live().running {
+            // Late, from a run that has stopped.
+            return;
+        }
         let missed = {
             let mut track = self.network.track();
             let jumped = change.generation > track.generation + 1;
@@ -122,8 +146,9 @@ impl Inner {
     }
 
     /// (Re)arms the host IPv6 re-probe on a TUN instance: REPROBE_DELAY
-    /// after the last change. The re-probe itself skips while offline and
-    /// waits for an apply in progress.
+    /// after the last change. Only a timer that still sleeps is cancelled;
+    /// a re-probe under way runs to its end, and the next waits for it on
+    /// the operation lock. The re-probe itself skips while offline.
     fn arm_reprobe(self: &Arc<Self>) {
         if self.config.role != Role::Tun {
             return;
@@ -133,14 +158,23 @@ impl Inner {
         };
         let weak: Weak<Inner> = Arc::downgrade(self);
         let mut track = self.network.track();
-        if let Some(previous) = track.reprobe.take() {
+        if let Some(previous) = track.timer.take() {
             previous.abort();
         }
-        track.reprobe = Some(handle.spawn(async move {
+        track.armed += 1;
+        let armed = track.armed;
+        track.timer = Some(handle.spawn(async move {
             tokio::time::sleep(REPROBE_DELAY).await;
-            if let Some(inner) = weak.upgrade() {
-                inner.reprobe_host_ipv6().await;
+            let Some(inner) = weak.upgrade() else { return };
+            {
+                let mut track = inner.network.track();
+                if track.armed != armed {
+                    return;
+                }
+                // Fired: no longer cancellable.
+                track.timer = None;
             }
+            inner.reprobe_host_ipv6().await;
         }));
     }
 }
