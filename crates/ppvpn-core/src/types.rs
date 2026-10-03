@@ -77,7 +77,9 @@ pub struct ShutdownReport {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ProbeMethod {
+    /// Also `""`, as Core API v1 reads it.
     #[default]
+    #[serde(alias = "")]
     Tcp,
     Icmp,
 }
@@ -192,8 +194,9 @@ pub struct LocalProxyMetadata {
     pub auth_required: bool,
 }
 
-/// A local proxy credential: native credential panels only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A local proxy credential: native credential panels only. Its `Debug`
+/// leaves the username and password out, so a log line never carries them.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct LocalProxyCredential {
     pub kind: LocalProxyKind,
@@ -204,6 +207,41 @@ pub struct LocalProxyCredential {
     pub password: String,
 }
 
+impl std::fmt::Debug for LocalProxyCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalProxyCredential")
+            .field("kind", &self.kind)
+            .field("node_id", &self.node_id)
+            .field("listen", &self.listen)
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
+}
+
 fn is_zero(value: &u16) -> bool {
     *value == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_credential_debugs_without_its_secrets() {
+        let secret = format!("s{}", std::process::id());
+        let credential = LocalProxyCredential {
+            kind: LocalProxyKind::Node,
+            node_id: "jp".into(),
+            listen: "127.0.0.1".into(),
+            port: 7890,
+            username: format!("u{secret}"),
+            password: secret.clone(),
+        };
+        let shown = format!("{credential:?}");
+        assert!(
+            !shown.contains(&secret),
+            "the debug output carries a secret"
+        );
+        assert!(shown.contains("jp") && shown.contains("7890"));
+    }
 }

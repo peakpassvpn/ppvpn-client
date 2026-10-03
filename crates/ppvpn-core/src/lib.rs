@@ -15,6 +15,8 @@ mod hostipv6;
 pub(crate) mod localdns;
 mod localproxy;
 mod logfmt;
+#[allow(dead_code, unused_imports)] // until the Engine calls it (engine.rs)
+mod probe;
 pub(crate) mod profile;
 pub mod request;
 mod runtime;
