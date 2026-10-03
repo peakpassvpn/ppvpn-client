@@ -70,7 +70,9 @@ jobs:
           cargo test --locked
           cargo clippy --locked --all-targets -- -D warnings
       - name: Check scripts
-        run: bash -n desktop/scripts/*.sh
+        run: |
+          bash -n desktop/scripts/*.sh desktop/scripts/ci/*.sh
+          python3 -m unittest discover -s desktop/scripts/ci -p '*_test.py' -v
 
   # The shared layers every app depends on: the client crate as the apps link
   # it (the Go core over IPC), the C# view models (App.Core) used by Windows
