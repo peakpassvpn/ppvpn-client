@@ -455,6 +455,7 @@ async fn follow_dials(instance: Instance, tx: mpsc::Sender<DialFailed>) {
                 stage: dial_stage(failure.stage).into(),
                 error: format!("{:?}", failure.kind),
                 count,
+                more_to_try: failure.more_to_try,
             });
         }
     }
