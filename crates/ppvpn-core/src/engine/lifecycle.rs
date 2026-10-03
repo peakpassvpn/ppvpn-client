@@ -31,7 +31,10 @@ const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
 const REFRESH: Duration = Duration::from_secs(1);
 
 impl Inner {
-    pub(super) async fn apply(&self, request: ApplyRequest) -> Result<ApplyResult, Error> {
+    pub(super) async fn apply(
+        self: &Arc<Self>,
+        request: ApplyRequest,
+    ) -> Result<ApplyResult, Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
@@ -78,13 +81,17 @@ impl Inner {
         // The dedupe key against the live values, select and pin included.
         let (running, unchanged) = {
             let live = self.live();
+            let running = live
+                .running
+                .then(|| live.applied.as_ref().map(|a| a.translation.clone()))
+                .flatten();
             let unchanged = live.applied.as_ref().is_some_and(|a| {
                 a.profile.revision == profile.revision
                     && a.mode == request.routing_mode
                     && a.selected == selected
                     && a.pins == pins
             });
-            (live.running, unchanged)
+            (running, unchanged)
         };
         if unchanged {
             // Nothing done, nothing sent; the result still tells the host
@@ -103,13 +110,15 @@ impl Inner {
         let options = self.options(request.routing_mode, &selected, &pins);
         let translation = translate::translate(&profile, &options)
             .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
-        let switch = if running {
-            if let Err(e) = self.runtime.reload(&translation.json).await {
-                let error = self.runtime_error(&e);
-                return Err(self.reload_failed(error, RELOAD_REFUSED));
+        let switch = if let Some(running) = &running {
+            let switch = self
+                .switch_to(running, &translation)
+                .await
+                .map_err(|error| self.reload_failed(error, RELOAD_REFUSED))?;
+            if switch == SwitchKind::KernelSwitch {
+                self.reassert(&translation, &selected, &pins).await;
             }
-            self.reassert(&translation, &selected, &pins).await;
-            Some(SwitchKind::KernelSwitch)
+            Some(switch)
         } else {
             // Not running: kept for start, so it must load.
             let json = translation.json.clone();
@@ -147,7 +156,7 @@ impl Inner {
                 });
             }
         }
-        if running {
+        if running.is_some() {
             self.refresh().await;
         }
         Ok(ApplyResult {
@@ -360,7 +369,7 @@ impl Inner {
             return;
         };
         let mut live = self.live();
-        if !live.running || live.fatal.is_some() {
+        if !live.running || live.fatal.is_some() || (live.restarting && code != "panicked") {
             return;
         }
         live.running = false;
