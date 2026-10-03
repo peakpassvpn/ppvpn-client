@@ -74,7 +74,10 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
   - 创建时会先**幂等地清扫上次的残留**，只限本库创建、并且能可靠识别的东西：
     - Linux：Sail 在 `state_dir/run` 下的台账记下的改动，由 `sail::embed::sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表和 fw4 的 drop-in；另外按 `tunrules` 的命名空间清扫优先级 9091–9101 的 ip rule 和表 2091；
     - macOS：不需要清扫。强杀后 utun 和经它的路由随进程一起消失（Sail 的常驻 CI 每次都验证）；Sail 接受这个 run_dir，但在 macOS 上不写台账；
-    - Windows：不需要清扫。强杀后 Wintun 适配器及其路由、DNS 随进程一起消失：Wintun 在创建它的进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。依据是 Sail 在 VM 上的实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：`Stop-Process -Force` 后 3 秒内适配器、它的 `0.0.0.0/0` 和 `::/0` 路由、它的 DNS 都没有了；运行中重启 VM 后也没有适配器和 PnP 记录；再次启动用同一 GUID 重建正常。局限：只测了一台 VM、一个 Wintun 版本、windows-gnu 构建，没有开 `strict_route`。我们用 MSVC 构建并开 `strict_route`；它的 WFP 过滤器属于动态会话，理论上同样随进程消失，但没有实测。用我们自己的配置复测之前，这一条不算验收（`docs/rust-parity.md`，切换前要复测的项目）。
+    - Windows：不需要清扫。强杀后 Wintun 适配器及其路由、DNS 随进程一起消失：Wintun 在创建它的进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。依据是 Sail 在 VM 上的两次实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：
+      - tun + auto_route：`Stop-Process -Force` 后 3 秒内，适配器、它的 `0.0.0.0/0` 和 `::/0` 路由、它的 DNS 都没有了；运行中重启 VM 后也没有适配器和 PnP 记录；再次启动用同一 GUID 重建正常。
+      - 再加 `strict_route` 和排除段（绕开 `10.0.0.0/8`、`192.168.0.0/16`，加 `::/0`）：运行时有 Wintun 适配器、metric 0 的路由、TUN 的 DNS、6 个 WFP 过滤器和 1 个名为 sail 的子层；强杀后约 0.5 秒内全部消失，+1、+3、+10 秒都没有回来；物理默认路由没有被改动，之后出口和 DNS 正常；第二次启动再强杀，结果相同。WFP 过滤器属于动态会话，随进程一起撤掉。
+      - 局限只剩一项：测的是 windows-gnu 构建（Windows 的 TUN 和 WFP 代码与当前 master 相同），没有用我们的 MSVC 构建测。所以用我们自己的构建复测之前，这一条不算验收（`docs/rust-parity.md`，切换前要复测的项目）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
   - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
