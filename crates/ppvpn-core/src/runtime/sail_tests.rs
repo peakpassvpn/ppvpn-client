@@ -11,6 +11,23 @@ use super::*;
 
 const WAIT: Duration = Duration::from_secs(5);
 
+/// A password made for this run: none is written in the source.
+fn password() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut out = String::new();
+    for _ in 0..2 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        );
+        out.push_str(&format!("{:016x}", h.finish()));
+    }
+    out
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -120,6 +137,7 @@ fn options(name: &str) -> Options {
 async fn runs_sail_through_the_local_proxy() {
     let echo = echo().await;
     let port = free_port();
+    let (p1, p2) = (password(), password());
     let runtime = SailRuntime::new(options("chain")).unwrap();
     let mut states = runtime.states();
     let mut logs = runtime.logs();
@@ -129,16 +147,16 @@ async fn runs_sail_through_the_local_proxy() {
     // The minimal chain: a hand-written configuration, one connection
     // through the local proxy.
     runtime
-        .start(&config(port, &[("u1", "p1")], false))
+        .start(&config(port, &[("u1", &p1)], false))
         .await
         .unwrap();
     wait_for(&mut states, RuntimeState::Running).await;
-    let mut proxied = socks(port, "u1", "p1", echo)
+    let mut proxied = socks(port, "u1", &p1, echo)
         .await
         .expect("u1 through the proxy");
     round_trip(&mut proxied, b"through the local proxy").await;
     assert!(
-        socks(port, "u1", "wrong", echo).await.is_none(),
+        socks(port, "u1", &password(), echo).await.is_none(),
         "a wrong password is refused"
     );
 
@@ -213,11 +231,11 @@ async fn runs_sail_through_the_local_proxy() {
 
     // Users replaced in place: the listener stays, the old user is refused.
     runtime
-        .replace_inbound_users("local", vec![("u2".into(), "p2".into())])
+        .replace_inbound_users("local", vec![("u2".into(), p2.clone())])
         .await
         .unwrap();
-    assert!(socks(port, "u1", "p1", echo).await.is_none(), "u1 is gone");
-    let mut kept = socks(port, "u2", "p2", echo)
+    assert!(socks(port, "u1", &p1, echo).await.is_none(), "u1 is gone");
+    let mut kept = socks(port, "u2", &p2, echo)
         .await
         .expect("u2 through the proxy");
     round_trip(&mut kept, b"as u2").await;
@@ -225,7 +243,7 @@ async fn runs_sail_through_the_local_proxy() {
     // A reload keeps the listener and open connections; a failed one
     // changes nothing.
     runtime
-        .reload(&config(port, &[("u2", "p2")], true))
+        .reload(&config(port, &[("u2", &p2)], true))
         .await
         .unwrap();
     round_trip(&mut kept, b"after the reload").await;
