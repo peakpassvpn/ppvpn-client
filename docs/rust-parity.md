@@ -360,19 +360,19 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestUDPReadNeverSilentlyTruncatesDatagram` | Udp read never silently truncates datagram |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
 | `internal/runtime` `TestUDPWritePreservesOneCallPerDatagram` | Udp write preserves one call per datagram |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
 | `ipc` `TestUnixSocketIsPrivateAndServes` | Unix socket is private and serves |  | todo |  |
-| `localproxy` `TestMigratesVersion1StateInPlace` | Migrates version1 state in place |  | todo |  |
-| `localproxy` `TestParseUsername` | Parse username |  | todo |  |
-| `localproxy` `TestPrefixesAreRandomLowercaseAlphanumerics` | Prefixes are random lowercase alphanumerics |  | todo |  |
-| `localproxy` `TestRejectsUnsupportedOrCorruptState` | Rejects unsupported or corrupt state |  | todo |  |
-| `localproxy` `TestRejectsWeakStatePermissions` | Rejects weak state permissions |  | todo |  |
-| `localproxy` `TestRemovedNodeHasNoEndpoint` | Removed node has no endpoint |  | todo |  |
-| `localproxy` `TestRoutedEndpoint` | Routed endpoint |  | todo |  |
-| `localproxy` `TestSharedEndpointsAreStableAndPrivate` | Shared endpoints are stable and private |  | todo |  |
-| `localproxy` `TestStartupPrefers7890AndFallsBackWhenBusy` | Startup prefers7890 and falls back when busy |  | todo |  |
-| `localproxy` `TestStartupReplacesOccupiedPersistedPortOnly` | Startup replaces occupied persisted port only |  | todo |  |
-| `localproxy` `TestStartupUsesPreferredPortWhenFree` | Startup uses preferred port when free |  | todo |  |
-| `localproxy` `TestSystemProxyPortPrefers7891FallsBackAndPersists` | System proxy port prefers7891 falls back and persists |  | todo |  |
-| `localproxy` `TestSystemProxyPortUsesPreferredWhenFree` | System proxy port uses preferred when free |  | todo |  |
+| `localproxy` `TestMigratesVersion1StateInPlace` | Migrates version1 state in place | `ppvpn-core` `localproxy::tests::migrates_version_1_state_in_place` | done |  |
+| `localproxy` `TestParseUsername` | Parse username | `ppvpn-core` `localproxy::tests::parse_username_splits_prefix_and_node` | done |  |
+| `localproxy` `TestPrefixesAreRandomLowercaseAlphanumerics` | Prefixes are random lowercase alphanumerics | `ppvpn-core` `localproxy::tests::prefixes_are_random_lowercase_alphanumerics` | done |  |
+| `localproxy` `TestRejectsUnsupportedOrCorruptState` | Rejects unsupported or corrupt state | `ppvpn-core` `localproxy::tests::unsupported_or_corrupt_state_is_rebuilt` | done | 有意偏离：Go 拒绝这类文件（serve 起不来，要手工删文件）；Rust 重建 prefix、密码和端口并记一行 warn，读文件本身的 I/O 错误仍然报错（`unreadable_state_fails`）。决定出处：本 PR（Rust 移植约定"损坏时重建"） |
+| `localproxy` `TestRejectsWeakStatePermissions` | Rejects weak state permissions | `ppvpn-core` `localproxy::tests::weak_state_permissions_renew_the_secret` | done | 有意偏离：Go 拒绝；Rust 保留端口、重新生成 prefix 和密码（旧密码已不算秘密），按 0600 写回。只在 Unix 上检查；Windows 的 ACL 由宿主的私有目录保证，Rust 不设置 ACL（Go 用 privateacl） |
+| `localproxy` `TestRemovedNodeHasNoEndpoint` | Removed node has no endpoint | `ppvpn-core` `localproxy::tests::removed_node_has_no_endpoint` | done | 未知节点报 `NODE_NOT_FOUND`（field=`node_id`） |
+| `localproxy` `TestRoutedEndpoint` | Routed endpoint | `ppvpn-core` `localproxy::tests::routed_user_is_the_bare_prefix` | done | 有意偏离：Go 没有节点 endpoint 时没有 routed 用户（`PROFILE_NOT_APPLIED`）；Rust 在 `new` 之后、apply 之前就能读 routed 凭据，metadata 只含 routed 一项（host-integration.md 第 3 节） |
+| `localproxy` `TestSharedEndpointsAreStableAndPrivate` | Shared endpoints are stable and private | `ppvpn-core` `localproxy::tests::shared_endpoints_are_stable_and_private` | done | 另断言状态文件不含节点 id（第 4.6 节：`state_dir` 不存 Profile） |
+| `localproxy` `TestStartupPrefers7890AndFallsBackWhenBusy` | Startup prefers7890 and falls back when busy | `ppvpn-core` `localproxy::tests::startup_prefers_7890_and_falls_back_when_busy` | done |  |
+| `localproxy` `TestStartupReplacesOccupiedPersistedPortOnly` | Startup replaces occupied persisted port only | `ppvpn-core` `localproxy::tests::startup_replaces_occupied_persisted_port_only` | done | Go 的 `Ensure`/`ReconcileForStartup` 对应 Rust 的内存状态/`reconcile_port`；端口变化时返回 `LocalProxyEndpointChanged` |
+| `localproxy` `TestStartupUsesPreferredPortWhenFree` | Startup uses preferred port when free | `ppvpn-core` `localproxy::tests::startup_uses_preferred_port_when_free` | done |  |
+| `localproxy` `TestSystemProxyPortPrefers7891FallsBackAndPersists` | System proxy port prefers7891 falls back and persists | `ppvpn-core` `localproxy::tests::system_proxy_port_prefers_7891_falls_back_and_persists` | done |  |
+| `localproxy` `TestSystemProxyPortUsesPreferredWhenFree` | System proxy port uses preferred when free | `ppvpn-core` `localproxy::tests::system_proxy_port_uses_preferred_when_free` | done |  |
 | `mobile` `TestBridgeDoesNotExposeNodeCredentials` | Bridge does not expose node credentials |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
 | `mobile` `TestBridgeRejectsUnknownRoutingMode` | Bridge rejects unknown routing mode |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
 | `mobile` `TestFlowIOTimeoutZeroMeansNoDeadline` | Flow io timeout zero means no deadline |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |

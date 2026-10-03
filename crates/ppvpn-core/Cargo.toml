@@ -22,9 +22,11 @@ sha2 = "0.10"
 # The versions sail resolves (Cargo.lock), so nothing is built twice.
 async-trait = "0.1"
 futures-util = "0.3"
+getrandom = "0.4"
 hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
