@@ -62,12 +62,17 @@ jobs:
       - name: Check scripts
         run: bash -n desktop/scripts/*.sh
 
-  # The client crate as the apps link it (the Go core over IPC).
+  # The shared layers every app depends on: the client crate as the apps link
+  # it (the Go core over IPC), the C# view models (App.Core) used by Windows
+  # and Linux, and the Linux app's own unit tests (no GTK runtime needed).
   desktop-client:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -83,6 +88,24 @@ jobs:
         run: |
           cargo test --locked
           cargo clippy --locked --all-targets -- -D warnings
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+      - name: Cache uniffi-bindgen-cs
+        id: bindgen
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs
+          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
+      - name: Install uniffi-bindgen-cs
+        if: steps.bindgen.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs
+      - name: Generate C# bindings
+        run: desktop/crates/ppvpn-client/scripts/build-dotnet.sh x86_64-unknown-linux-gnu
+      - name: Test App.Core
+        run: dotnet test desktop/apps/shared/PPVPN.App.Core.Tests
+      - name: Test the Linux app
+        run: dotnet test desktop/apps/linux/PPVPN.Linux.Tests
 
   # The client with the Rust ppvpn-core linked in (feature `rust-core`, off
   # in releases until the switch). Linux only here; rust.yml builds the
