@@ -18,6 +18,9 @@ path = "uniffi-bindgen.rs"
 # Link the Rust ppvpn-core (in process) instead of driving the Go core over
 # IPC. Off by default; CI checks it on Linux.
 rust-core = ["dep:ppvpn-core"]
+# Compiles the Linux enhanced-mode end-to-end test (src/e2e_linux.rs; CI job
+# desktop-linux-enhanced). Test-only: no code outside #[cfg(test)].
+linux-e2e = []
 
 [build-dependencies]
 sha2 = "0.10"

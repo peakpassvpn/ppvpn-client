@@ -32,6 +32,9 @@ pub(crate) struct Backend {
     pub(crate) register_status: Mutex<Option<&'static str>>,
     /// Request heads (lower-cased) of `GET /api/v1/health`.
     pub(crate) health_heads: Mutex<Vec<String>>,
+    /// Body of `GET /api/v1/me/proxy-profile`; none answers 404
+    /// `SUBSCRIPTION_NOT_FOUND`.
+    pub(crate) profile: Mutex<Option<String>>,
 }
 
 impl Backend {
@@ -140,10 +143,13 @@ impl Backend {
                 "200 OK",
                 r#"{"items":[{"id":"t1","name":"P","is_personal":true,"is_default":true}]}"#.into(),
             ),
-            ("GET", "/api/v1/me/proxy-profile") => (
-                "404 Not Found",
-                r#"{"code":"SUBSCRIPTION_NOT_FOUND"}"#.into(),
-            ),
+            ("GET", "/api/v1/me/proxy-profile") => match self.profile.lock().unwrap().clone() {
+                Some(profile) => ("200 OK", profile),
+                None => (
+                    "404 Not Found",
+                    r#"{"code":"SUBSCRIPTION_NOT_FOUND"}"#.into(),
+                ),
+            },
             ("GET", "/api/v1/messages/unread-count") => (
                 "200 OK",
                 json!({"count": *self.unread.lock().unwrap()}).to_string(),
