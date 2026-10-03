@@ -5,6 +5,7 @@
 //! `fullRestartReasons`, whose whitelist and words this keeps.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -87,7 +88,7 @@ impl Inner {
     /// `running` back; if that fails too, the instance is stopped. Called
     /// under the operation lock.
     pub(super) async fn switch_to(
-        &self,
+        self: &Arc<Self>,
         running: &Translation,
         next: &Translation,
     ) -> Result<SwitchKind, Error> {
@@ -105,7 +106,11 @@ impl Inner {
         result.map(|()| SwitchKind::FullRestart { reasons })
     }
 
-    async fn restart(&self, running: &Translation, next: &Translation) -> Result<(), Error> {
+    async fn restart(
+        self: &Arc<Self>,
+        running: &Translation,
+        next: &Translation,
+    ) -> Result<(), Error> {
         if let Err(e) = self.runtime.stop().await {
             return Err(self.runtime_error(&e));
         }
@@ -131,14 +136,20 @@ impl Inner {
                 })
             }
         };
-        {
-            // A new run of sail: what was read of the old one goes.
+        let retry = {
+            // A new run of sail: what was read of the old one goes. A local
+            // proxy listener still left out is retried in the new run.
             let mut live = self.live();
             live.run += 1;
             live.clear_runtime();
+            live.local_proxy_unavailable = self.local_proxy_left_out();
             self.settle(&mut live);
-        }
+            live.local_proxy_unavailable.then_some(live.run)
+        };
         self.network_started();
+        if let Some(run) = retry {
+            self.retry_local_proxy(run);
+        }
         match error {
             None => Ok(()),
             Some(error) => Err(error),

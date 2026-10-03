@@ -200,3 +200,49 @@ async fn a_failed_restart_puts_the_running_configuration_back() {
     assert_eq!(engine.status().state, EngineState::Running);
     assert_eq!(engine.status().revision.as_deref(), Some(R1));
 }
+
+/// A full restart while the local proxy listener is left out keeps it out
+/// and retries it in the new run (the old run's retry ends with it).
+#[tokio::test(start_paused = true)]
+async fn a_full_restart_retries_a_left_out_local_proxy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = Arc::new(FakeRuntime::default());
+    let engine = Engine::with_runtime(
+        EngineConfig::new(Role::Standard, Platform::Linux, tmp.path())
+            .with_local_proxy(crate::config::LocalProxyConfig::new().with_preferred_port(0)),
+        fake.clone(),
+    );
+    engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
+    engine.inner.refuse_local_proxy(1);
+    engine.start().await.unwrap();
+    let left_out = EngineState::Degraded {
+        reasons: vec![crate::status::DegradedReason::LocalProxyUnavailable],
+    };
+    assert_eq!(engine.status().state, left_out);
+
+    // Another listener appears: a full restart, still without the local
+    // proxy listener.
+    let running = engine
+        .inner
+        .live()
+        .applied
+        .as_ref()
+        .unwrap()
+        .translation
+        .clone();
+    let mut next = running.clone();
+    let mut config: Value = serde_json::from_str(&next.json).unwrap();
+    config["inbounds"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": 1 }));
+    next.json = config.to_string();
+    let switch = engine.inner.switch_to(&running, &next).await.unwrap();
+    assert!(matches!(switch, SwitchKind::FullRestart { .. }));
+    assert_eq!(engine.status().state, left_out);
+    assert!(!fake.inbounds().iter().any(|t| t == LOCAL_PROXY_INBOUND_TAG));
+
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert!(fake.inbounds().iter().any(|t| t == LOCAL_PROXY_INBOUND_TAG));
+    assert_eq!(engine.status().state, EngineState::Running);
+}

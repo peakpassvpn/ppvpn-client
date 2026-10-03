@@ -31,7 +31,10 @@ const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
 const REFRESH: Duration = Duration::from_secs(1);
 
 impl Inner {
-    pub(super) async fn apply(&self, request: ApplyRequest) -> Result<ApplyResult, Error> {
+    pub(super) async fn apply(
+        self: &Arc<Self>,
+        request: ApplyRequest,
+    ) -> Result<ApplyResult, Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
