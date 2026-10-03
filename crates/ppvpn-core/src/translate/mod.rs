@@ -357,6 +357,38 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     Ok(translation)
 }
 
+/// The credentials a translation carries (the nodes', the local proxy's):
+/// what no log line or leftover may show (contract sections 3 and 10).
+pub(crate) fn secrets(json: &str) -> Vec<String> {
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    match (key.as_str(), value) {
+                        ("password" | "uuid" | "short_id", Value::String(s)) => {
+                            // A Shadowsocks 2022 password is keys joined by ':'.
+                            out.extend(s.split(':').map(str::to_owned));
+                            out.push(s.clone());
+                        }
+                        _ => walk(value, out),
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(value) = serde_json::from_str::<Value>(json) {
+        walk(&value, &mut out);
+    }
+    // Short values would redact ordinary words.
+    out.retain(|s| s.len() >= 6);
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Runs sail's own check on a translation: it must load with no error and
 /// no warning (a warning is a field sail would ignore or degrade).
 pub(crate) fn check(json: &str) -> Result<(), Error> {

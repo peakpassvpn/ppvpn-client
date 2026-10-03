@@ -129,6 +129,13 @@ impl Drop for Inner {
                 runtime: running.then(|| self.runtime.clone()),
                 steps: Vec::new(),
                 state_dir: self.state_dir.get_mut().ok().and_then(Option::take),
+                secrets: self
+                    .live
+                    .get_mut()
+                    .ok()
+                    .and_then(|live| live.applied.as_ref())
+                    .map(|a| translate::secrets(&a.translation.json))
+                    .unwrap_or_default(),
             };
             cleanup::cleanup_on_drop(parts);
         }
@@ -236,6 +243,12 @@ impl Engine {
             // Released by the teardown when it is done: another instance
             // may take the directory once it is free.
             state_dir: inner.state_dir.lock().expect("state dir lock").take(),
+            secrets: inner
+                .live()
+                .applied
+                .as_ref()
+                .map(|a| translate::secrets(&a.translation.json))
+                .unwrap_or_default(),
         };
         // A sleeping re-probe or local proxy retry goes first; one under
         // way held `op` and is done.

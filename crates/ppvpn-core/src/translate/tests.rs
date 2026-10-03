@@ -888,3 +888,22 @@ fn dns_members_map_back_to_their_server() {
             .dns_local_listener
     );
 }
+
+/// The credentials a translation carries are what leftovers redact.
+#[test]
+fn secrets_are_the_translations_credentials() {
+    let local = LocalProxy {
+        listen: "127.0.0.1".into(),
+        port: 7890,
+        prefix: "pp".into(),
+        password: format!("lp{:x}", std::process::id() as u64 * 7919 + 13),
+    };
+    let options = Options {
+        local_proxy: Some(local.clone()),
+        ..Options::default()
+    };
+    let t = translate(&contract(), &options).unwrap();
+    let secrets = secrets(&t.json);
+    assert!(secrets.contains(&local.password));
+    assert!(secrets.iter().all(|s| s.len() >= 6));
+}

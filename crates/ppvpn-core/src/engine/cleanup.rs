@@ -98,6 +98,9 @@ pub(super) struct Parts {
     pub runtime: Option<Arc<dyn Runtime>>,
     pub steps: Vec<Step>,
     pub state_dir: Option<StateDirLock>,
+    /// The instance's credentials, kept out of every leftover's detail
+    /// (it reaches the host's log; contract section 3).
+    pub secrets: Vec<String>,
 }
 
 /// `shutdown`: takes `parts` down within `deadline` and reports what is left.
@@ -110,6 +113,7 @@ pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport 
         runtime,
         steps,
         state_dir,
+        secrets,
     } = parts;
     let mut leftovers = Vec::new();
     if let Some(runtime) = runtime {
@@ -149,7 +153,7 @@ pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport 
             format!("no thread: {e}"),
         )),
     }
-    report(leftovers)
+    report(leftovers, &secrets)
 }
 
 /// The last handle went without `shutdown`: the same teardown on a thread of
@@ -167,6 +171,7 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
                 runtime,
                 steps,
                 state_dir,
+                secrets,
             } = parts;
             let mut leftovers = Vec::new();
             if let Some(runtime) = runtime {
@@ -192,7 +197,7 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
                 );
             }
             leftovers.append(&mut run_steps(steps, until, state_dir));
-            let _ = tx.send(leftovers);
+            let _ = tx.send(redacted(leftovers, &secrets));
         });
     let leftovers = match spawned {
         Ok(_) => rx
@@ -210,7 +215,8 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
             format!("no thread: {e}"),
         )],
     };
-    report(leftovers)
+    // Redacted on the cleanup thread, which has the secrets.
+    report(leftovers, &[])
 }
 
 /// Runs the steps in order until `until`, then releases the state directory.
@@ -255,7 +261,24 @@ fn runtime_left(detail: impl Into<String>) -> Leftover {
     Leftover::new(LeftoverKind::Runtime, "runtime", detail)
 }
 
-fn report(leftovers: Vec<Leftover>) -> ShutdownReport {
+/// `leftovers` with every credential in their detail replaced: a stop's
+/// error, a step's or sail's text could quote one.
+fn redacted(leftovers: Vec<Leftover>, secrets: &[String]) -> Vec<Leftover> {
+    leftovers
+        .into_iter()
+        .map(|mut leftover| {
+            for secret in secrets {
+                if leftover.detail.contains(secret.as_str()) {
+                    leftover.detail = leftover.detail.replace(secret.as_str(), "<redacted>");
+                }
+            }
+            leftover
+        })
+        .collect()
+}
+
+fn report(leftovers: Vec<Leftover>, secrets: &[String]) -> ShutdownReport {
+    let leftovers = redacted(leftovers, secrets);
     for leftover in &leftovers {
         tracing::warn!(kind = ?leftover.kind, name = %leftover.name,
             detail = %leftover.detail, "not cleaned up");
@@ -337,6 +360,37 @@ mod tests {
                 "sail task tun-read (1) still running after 2000 ms"
             )]
         );
+    }
+
+    /// A leftover's detail reaches the host's log: whatever quotes a
+    /// credential (a stop's error, a step's), it shows none.
+    #[tokio::test]
+    async fn leftovers_never_show_a_credential() {
+        let mut buf = [0u8; 12];
+        getrandom::fill(&mut buf).unwrap();
+        let secret: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+        let runtime = Arc::new(FakeRuntime::default());
+        runtime.start("{}").await.unwrap();
+        runtime.fail_next(
+            crate::runtime::fake::Op::Stop,
+            crate::runtime::RuntimeError::new("io", format!("user p-a:{secret} refused")),
+        );
+        let quoted = secret.clone();
+        let parts = Parts {
+            runtime: Some(runtime),
+            steps: vec![Step::new(LeftoverKind::Rule, "routing", move || {
+                Err(format!("rule for {quoted} is gone"))
+            })],
+            secrets: vec![secret.clone()],
+            ..Parts::default()
+        };
+        let report = cleanup(parts, SHUTDOWN_LIMIT).await;
+        assert_eq!(report.leftovers.len(), 2, "{report:?}");
+        assert!(report.leftovers.iter().all(|l| !l.detail.contains(&secret)));
+        assert!(report
+            .leftovers
+            .iter()
+            .all(|l| l.detail.contains("<redacted>")));
     }
 
     #[tokio::test]
