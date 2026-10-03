@@ -2439,6 +2439,7 @@ dependencies = [
  "libc",
  "mimalloc",
  "ppvpn-account",
+ "ppvpn-cli",
  "ppvpn-core",
  "secret-service",
  "security-framework",
