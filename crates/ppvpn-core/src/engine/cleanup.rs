@@ -21,7 +21,7 @@ use crate::config::{EngineConfig, Platform, Role};
 use crate::error::Error;
 use crate::runtime::Runtime;
 use crate::state_dir::StateDirLock;
-use crate::types::ShutdownReport;
+use crate::types::{Leftover, LeftoverKind, ShutdownReport};
 use crate::{translate, tunrules};
 
 /// `shutdown`'s limit.
@@ -70,6 +70,8 @@ pub(super) fn sweep(config: &EngineConfig) -> Result<(), Error> {
 /// One synchronous piece of the teardown: restore the routing rules, remove
 /// the TUN's DNS, ... An error is a leftover with its message.
 pub(super) struct Step {
+    /// What it undoes, for its leftover.
+    pub kind: LeftoverKind,
     pub name: &'static str,
     pub run: Box<dyn FnOnce() -> Result<(), String> + Send>,
 }
@@ -77,10 +79,12 @@ pub(super) struct Step {
 #[allow(dead_code)] // the platform modules' steps (tunrules, TUN DNS) use it
 impl Step {
     pub(super) fn new(
+        kind: LeftoverKind,
         name: &'static str,
         run: impl FnOnce() -> Result<(), String> + Send + 'static,
     ) -> Self {
         Step {
+            kind,
             name,
             run: Box::new(run),
         }
@@ -111,15 +115,15 @@ pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport 
     if let Some(runtime) = runtime {
         match tokio::time::timeout_at(until.into(), runtime.stop()).await {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => leftovers.push(format!("runtime: {e}")),
-            Err(_) => leftovers.push("runtime: stop timed out".into()),
+            Ok(Err(e)) => leftovers.push(runtime_left(e.to_string())),
+            Err(_) => leftovers.push(runtime_left("stop timed out")),
         }
         // sail's own report of the tasks its stop could not end.
         leftovers.extend(
             runtime
                 .stop_leftovers()
                 .into_iter()
-                .map(|l| format!("runtime: {l}")),
+                .map(|l| Leftover::new(LeftoverKind::Runtime, "runtime", l)),
         );
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -133,9 +137,17 @@ pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport 
             Ok(Ok(mut left)) => leftovers.append(&mut left),
             // No report: what the thread had not finished is unknown from
             // here, so name the phase.
-            _ => leftovers.push("cleanup steps: did not finish in time".into()),
+            _ => leftovers.push(Leftover::new(
+                LeftoverKind::Steps,
+                "cleanup",
+                "did not finish in time",
+            )),
         },
-        Err(e) => leftovers.push(format!("cleanup steps: no thread: {e}")),
+        Err(e) => leftovers.push(Leftover::new(
+            LeftoverKind::Steps,
+            "cleanup",
+            format!("no thread: {e}"),
+        )),
     }
     report(leftovers)
 }
@@ -168,15 +180,15 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
                     });
                 match stopped {
                     Ok(Ok(Ok(()))) => {}
-                    Ok(Ok(Err(e))) => leftovers.push(format!("runtime: {e}")),
-                    Ok(Err(_)) => leftovers.push("runtime: stop timed out".into()),
-                    Err(e) => leftovers.push(format!("runtime: {e}")),
+                    Ok(Ok(Err(e))) => leftovers.push(runtime_left(e.to_string())),
+                    Ok(Err(_)) => leftovers.push(runtime_left("stop timed out")),
+                    Err(e) => leftovers.push(runtime_left(e.to_string())),
                 }
                 leftovers.extend(
                     runtime
                         .stop_leftovers()
                         .into_iter()
-                        .map(|l| format!("runtime: {l}")),
+                        .map(|l| Leftover::new(LeftoverKind::Runtime, "runtime", l)),
                 );
             }
             leftovers.append(&mut run_steps(steps, until, state_dir));
@@ -185,8 +197,18 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
     let leftovers = match spawned {
         Ok(_) => rx
             .recv_timeout(DROP_LIMIT + REPORT_GRACE)
-            .unwrap_or_else(|_| vec!["cleanup at drop: did not finish in time".into()]),
-        Err(e) => vec![format!("cleanup at drop: no thread: {e}")],
+            .unwrap_or_else(|_| {
+                vec![Leftover::new(
+                    LeftoverKind::Steps,
+                    "cleanup at drop",
+                    "did not finish in time",
+                )]
+            }),
+        Err(e) => vec![Leftover::new(
+            LeftoverKind::Steps,
+            "cleanup at drop",
+            format!("no thread: {e}"),
+        )],
     };
     report(leftovers)
 }
@@ -196,7 +218,7 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
 /// when one blocks; a step that misses it, and every step after it, is a
 /// leftover. The lock is released only when every step finished: otherwise
 /// a new instance could start beside a teardown still at work.
-fn run_steps(steps: Vec<Step>, until: Instant, state_dir: Option<StateDirLock>) -> Vec<String> {
+fn run_steps(steps: Vec<Step>, until: Instant, state_dir: Option<StateDirLock>) -> Vec<Leftover> {
     let mut leftovers = Vec::new();
     let mut steps = steps.into_iter();
     while let Some(step) = steps.next() {
@@ -210,10 +232,14 @@ fn run_steps(steps: Vec<Step>, until: Instant, state_dir: Option<StateDirLock>) 
             });
         match started.ok().and_then(|_| rx.recv_timeout(left).ok()) {
             Some(Ok(())) => {}
-            Some(Err(e)) => leftovers.push(format!("{}: {e}", step.name)),
+            Some(Err(e)) => leftovers.push(Leftover::new(step.kind, step.name, e)),
             None => {
-                leftovers.push(format!("{}: did not finish in time", step.name));
-                leftovers.extend(steps.map(|s| format!("{}: not run", s.name)));
+                leftovers.push(Leftover::new(
+                    step.kind,
+                    step.name,
+                    "did not finish in time",
+                ));
+                leftovers.extend(steps.map(|s| Leftover::new(s.kind, s.name, "not run")));
                 // Kept held: the directory stays this instance's until the
                 // process ends.
                 std::mem::forget(state_dir);
@@ -225,9 +251,14 @@ fn run_steps(steps: Vec<Step>, until: Instant, state_dir: Option<StateDirLock>) 
     leftovers
 }
 
-fn report(leftovers: Vec<String>) -> ShutdownReport {
+fn runtime_left(detail: impl Into<String>) -> Leftover {
+    Leftover::new(LeftoverKind::Runtime, "runtime", detail)
+}
+
+fn report(leftovers: Vec<Leftover>) -> ShutdownReport {
     for leftover in &leftovers {
-        tracing::warn!(leftover = %leftover, "not cleaned up");
+        tracing::warn!(kind = ?leftover.kind, name = %leftover.name,
+            detail = %leftover.detail, "not cleaned up");
     }
     ShutdownReport { leftovers }
 }
@@ -247,7 +278,7 @@ mod tests {
         let l = log.clone();
         (log, move |name| {
             let l = l.clone();
-            Step::new(name, move || {
+            Step::new(LeftoverKind::Route, name, move || {
                 l.lock().unwrap().push(name);
                 Ok(())
             })
@@ -262,7 +293,7 @@ mod tests {
     }
 
     fn sleeping(name: &'static str) -> Step {
-        Step::new(name, || {
+        Step::new(LeftoverKind::Route, name, || {
             thread::sleep(Duration::from_secs(3));
             Ok(())
         })
@@ -300,7 +331,11 @@ mod tests {
         let report = cleanup(parts, SHUTDOWN_LIMIT).await;
         assert_eq!(
             report.leftovers,
-            ["runtime: sail task tun-read (1) still running after 2000 ms"]
+            [Leftover::new(
+                LeftoverKind::Runtime,
+                "runtime",
+                "sail task tun-read (1) still running after 2000 ms"
+            )]
         );
     }
 
@@ -309,13 +344,22 @@ mod tests {
         let (log, step) = order();
         let parts = Parts {
             steps: vec![
-                Step::new("routing", || Err("rule 9093 is gone".into())),
+                Step::new(LeftoverKind::Rule, "routing", || {
+                    Err("rule 9093 is gone".into())
+                }),
                 step("dns"),
             ],
             ..Parts::default()
         };
         let report = cleanup(parts, SHUTDOWN_LIMIT).await;
-        assert_eq!(report.leftovers, ["routing: rule 9093 is gone"]);
+        assert_eq!(
+            report.leftovers,
+            [Leftover::new(
+                LeftoverKind::Rule,
+                "routing",
+                "rule 9093 is gone"
+            )]
+        );
         assert_eq!(*log.lock().unwrap(), ["dns"]);
     }
 
@@ -323,7 +367,10 @@ mod tests {
     async fn a_stuck_step_does_not_hold_cleanup_past_its_deadline() {
         let dir = state_dir("stuck");
         let parts = Parts {
-            steps: vec![sleeping("routing"), Step::new("dns", || Ok(()))],
+            steps: vec![
+                sleeping("routing"),
+                Step::new(LeftoverKind::Dns, "dns", || Ok(())),
+            ],
             state_dir: Some(StateDirLock::acquire(&dir).unwrap()),
             ..Parts::default()
         };
@@ -336,7 +383,10 @@ mod tests {
         );
         assert_eq!(
             report.leftovers,
-            ["routing: did not finish in time", "dns: not run"]
+            [
+                Leftover::new(LeftoverKind::Route, "routing", "did not finish in time"),
+                Leftover::new(LeftoverKind::Dns, "dns", "not run"),
+            ]
         );
         // The teardown may still be at work: the directory is not given away.
         assert!(StateDirLock::acquire(&dir).is_err());
@@ -351,7 +401,7 @@ mod tests {
         let parts = Parts {
             runtime: Some(runtime.clone()),
             steps: vec![
-                Step::new("slow", || {
+                Step::new(LeftoverKind::Route, "slow", || {
                     thread::sleep(Duration::from_millis(200));
                     Ok(())
                 }),
