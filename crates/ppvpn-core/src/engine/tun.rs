@@ -313,26 +313,29 @@ impl Inner {
             ipv6: true,
             no_host_ipv6_route: handed_off,
         };
-        let translation =
-            match translate::translate(&profile, &self.options(mode, &selected, &pins)) {
-                Ok(translation) => translation,
-                Err(e) => {
-                    tracing::error!(previous_policy = policy(previous), policy = policy(state),
+        let build = || translate::translate(&profile, &self.options(mode, &selected, &pins));
+        let translation = match build() {
+            Ok(translation) => translation,
+            Err(e) => {
+                tracing::error!(previous_policy = policy(previous), policy = policy(state),
                         rebuilt = false, error = %e, "host ipv6 changed");
-                    return;
-                }
-            };
+                return;
+            }
+        };
         // The selection and the pins are as applied: sail keeps them across
         // a reload. The TUN itself does not change here, so this is a
         // reload; should it ever change, the switch restarts instead.
         let Some(running) = self.live().applied.as_ref().map(|a| a.translation.clone()) else {
             return;
         };
-        if let Err(error) = self.switch_to(&running, &translation).await {
-            tracing::error!(previous_policy = policy(previous), policy = policy(state),
-                rebuilt = false, error = %error, "host ipv6 changed");
-            return;
-        }
+        let translation = match self.switch_to(&running, translation, &build).await {
+            Ok((_, translation)) => translation,
+            Err(error) => {
+                tracing::error!(previous_policy = policy(previous), policy = policy(state),
+                    rebuilt = false, error = %error, "host ipv6 changed");
+                return;
+            }
+        };
         tracing::info!(
             previous_policy = policy(previous),
             policy = policy(state),
