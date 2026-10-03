@@ -19,6 +19,7 @@ path = "src/main.rs"
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 clap_complete = "4"
 libc = "0.2"
+ppvpn-account = { path = "../ppvpn-account" }
 ppvpn-core = { path = "../ppvpn-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,8 +28,18 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-threa
 
 # musl's allocator costs about 2.5x the CPU of glibc's under high throughput
 # (sail's measurement), so static Linux builds use mimalloc.
+# Device credentials live only in the platform secret store, never in a
+# plain file: Keychain on macOS, Secret Service on Linux (pure-Rust D-Bus and
+# crypto on tokio, so static musl builds need no libdbus or OpenSSL).
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "4", default-features = false, features = ["rt-tokio-crypto-rust"] }
+
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
 [dev-dependencies]
+base64.workspace = true
 tempfile = "3"
