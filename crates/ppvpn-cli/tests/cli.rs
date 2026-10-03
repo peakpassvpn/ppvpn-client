@@ -243,12 +243,12 @@ fn doctor_reports_build_and_directories() {
 }
 
 #[test]
-fn account_commands_are_not_implemented_yet() {
+fn commands_not_wired_to_the_daemon_yet() {
     for args in [
         &["use", "hk-1"][..],
         &["proxy", "credential"],
-        &["login", "--no-browser"],
-        &["account"],
+        &["nodes"],
+        &["traffic"],
     ] {
         let out = run(&[&["--json"][..], args].concat());
         assert_eq!(out.code, 1, "{args:?}");
