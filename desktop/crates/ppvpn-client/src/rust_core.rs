@@ -102,6 +102,18 @@ impl EngineLauncher {
             core = %Engine::version().core_version,
             "standard core: in-process Rust engine created"
         );
+        // Only `new` resets the local proxy credentials; the reason stays in
+        // the status for the instance's lifetime (section 4.6).
+        let reset = engine
+            .status()
+            .local_proxy
+            .and_then(|p| p.credentials_reset);
+        if let Some(reason) = reset {
+            tracing::warn!(
+                ?reason,
+                "standard engine: local proxy credentials were reset; apps holding the old ones must copy them again"
+            );
+        }
         let (stop, stop_rx) = oneshot::channel::<()>();
         let owned = engine.clone();
         let states = engine.subscribe(&[EventKind::StateChanged]);

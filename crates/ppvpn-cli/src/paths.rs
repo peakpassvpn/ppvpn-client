@@ -40,6 +40,8 @@ pub struct Paths {
     pub secret: PathBuf,
     /// The background daemon's stdout and stderr.
     pub daemon_log: PathBuf,
+    /// Core's and sail's log lines (0600); the previous one is `core.log.1`.
+    pub core_log: PathBuf,
     /// Core's `state_dir`.
     pub state_dir: PathBuf,
 }
@@ -101,6 +103,7 @@ impl Paths {
             lock: runtime_dir.join("daemon.lock"),
             secret: runtime_dir.join("session.secret"),
             daemon_log: runtime_dir.join("daemon.log"),
+            core_log: runtime_dir.join("core.log"),
             socket,
             socket_dir,
             runtime_dir,

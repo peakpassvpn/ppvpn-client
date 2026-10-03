@@ -4,7 +4,10 @@
 //! older than [`KEEP_DAYS`] are deleted at startup.
 //!
 //! Level `info` by default; `PPVPN_LOG` accepts a `tracing` filter such as
-//! `debug` or `ppvpn_client=trace`. Never log tokens, credentials, local-proxy
+//! `debug` or `ppvpn_client=trace`. With the Rust core (`rust-core`), sail's
+//! and the engine's events go to the engine's own log through their tracing
+//! layers, never into this file; the filter applies to this file only, so it
+//! cannot drop the engine's debug lines. Never log tokens, credentials, local-proxy
 //! passwords or profile bodies: the log pages of the apps show these files.
 
 use std::path::Path;
@@ -12,6 +15,9 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing_appender::rolling::{Builder, Rotation};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 /// Log files kept per kind, today included.
 pub(crate) const KEEP_DAYS: u64 = 7;
@@ -31,6 +37,13 @@ pub(crate) fn filter_directive(env: Option<&str>) -> String {
         Some(value) if tracing_subscriber::EnvFilter::try_new(value).is_ok() => value.to_string(),
         _ => "info".to_string(),
     }
+}
+
+/// The app log's filter: `directive` without the engine's targets, which
+/// have a log of their own. The more specific `=off` directives win over
+/// whatever `directive` says.
+fn file_directive(directive: &str) -> String {
+    format!("{directive},sail=off,ppvpn_core=off")
 }
 
 /// Days since the Unix epoch of a `YYYY-MM-DD` date.
@@ -117,11 +130,20 @@ pub(crate) fn install_with_prefix(log_dir: &str, prefix: &'static str) {
             return;
         };
         let directive = filter_directive(std::env::var(LOG_ENV).ok().as_deref());
-        let _ = tracing_subscriber::fmt()
+        let file = tracing_subscriber::fmt::layer()
             .with_ansi(false)
-            .with_env_filter(tracing_subscriber::EnvFilter::new(directive))
             .with_writer(appender)
-            .try_init();
+            .with_filter(tracing_subscriber::EnvFilter::new(file_directive(
+                &directive,
+            )));
+        let registry = tracing_subscriber::registry().with(file);
+        // Global (not thread-local): sail's and the engine's worker threads
+        // log through it.
+        #[cfg(feature = "rust-core")]
+        let registry = registry
+            .with(sail::embed::tracing_layer())
+            .with(ppvpn_core::tracing_layer());
+        let _ = registry.try_init();
         // A panic inside a background task is otherwise only printed to
         // stderr, which GUI apps discard; keep it in the log file too.
         let previous = std::panic::take_hook();
@@ -136,6 +158,18 @@ pub(crate) fn install_with_prefix(log_dir: &str, prefix: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_app_log_leaves_the_engine_targets_to_the_engine() {
+        for directive in ["info", "debug", "ppvpn_client=trace,sail=debug"] {
+            let file = file_directive(directive);
+            assert!(file.ends_with(",sail=off,ppvpn_core=off"), "{file}");
+            assert!(
+                tracing_subscriber::EnvFilter::try_new(&file).is_ok(),
+                "{file}"
+            );
+        }
+    }
 
     #[test]
     fn filter_defaults_to_info_and_accepts_valid_overrides() {
