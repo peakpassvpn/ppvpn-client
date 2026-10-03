@@ -58,6 +58,11 @@ impl Limiter {
             let window = self.window;
             // Those past the window would be logged anyway: forgotten.
             seen.retain(|_, e| now.duration_since(e.logged) < window);
+            if seen.len() >= LIMITER_SIZE {
+                // All still in their window: a new key is logged but not
+                // remembered, so the table stays bounded.
+                return Some(0);
+            }
         }
         let entry = seen.entry(key.to_owned()).or_insert(Entry {
             logged: now,

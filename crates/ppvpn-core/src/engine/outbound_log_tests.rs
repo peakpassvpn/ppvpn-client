@@ -92,3 +92,16 @@ fn chains_name_their_node_and_ingress() {
     );
     assert_eq!(through(&t, "block"), Through::Other);
 }
+
+/// Full of keys still in their window: a new one is logged, not
+/// remembered.
+#[test]
+fn a_full_limiter_stays_bounded() {
+    let l = Limiter::default();
+    let start = Instant::now();
+    for i in 0..LIMITER_SIZE {
+        l.allow(&format!("{i}:1"), start, 1);
+    }
+    assert_eq!(l.allow("new:1", start + Duration::from_secs(1), 1), Some(0));
+    assert_eq!(l.remembered(), LIMITER_SIZE);
+}
