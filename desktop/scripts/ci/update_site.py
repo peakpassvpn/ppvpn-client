@@ -4,7 +4,8 @@ the Sparkle feeds, written from the release metadata the package builds
 produce. Standard library only.
 
     update_site.py build --assets DIR --tag TAG --channel dev|stable \\
-        --download-base URL --site-base URL --out DIR
+        --download-base URL --site-base URL --out DIR \\
+        [--current POINTER [--allow-downgrade]]
     update_site.py check POINTER --channel dev|stable
 
 `build` reads DIR/release-meta-<platform>.json for all five platforms (a
@@ -16,6 +17,11 @@ release with one missing is not published: nothing is written) and writes
 An installer that is in DIR next to its metadata is checked against the
 metadata's length and SHA-256. Every asset's address is
 <download-base>/<tag>/<file>; the feeds are under <site-base>.
+
+With --current, the channel's pointer as published now, the release must be
+newer than it by (version, build): running an old tag's release again must
+not point the channel and its feeds back at the old version.
+--allow-downgrade lifts that, for a deliberate rollback.
 
 `check` applies to a pointer the rules its readers apply, so that a
 pointer they would refuse is never deployed.
@@ -215,12 +221,28 @@ def appcast(pointer, platform):
 """
 
 
-def build(assets, tag, channel, download_base, site_base, out):
+def release_order(pointer):
+    """What "newer" compares: the version's numbers, then the build."""
+    return tuple(int(part) for part in pointer["version"].split(".")) + (pointer["build"],)
+
+
+def refuse_downgrade(pointer, current, channel):
+    """`current` is the channel's published pointer; `pointer` must be newer."""
+    check_pointer(current, channel)
+    if release_order(pointer) <= release_order(current):
+        raise Refused(
+            f"{pointer['version']} build {pointer['build']} is not newer than the published "
+            f"{current['version']} build {current['build']} (--allow-downgrade to publish it anyway)")
+
+
+def build(assets, tag, channel, download_base, site_base, out, current=None, allow_downgrade=False):
     """Writes the pointer and the feeds; nothing is written unless all of it can be."""
     for name, url in (("download-base", download_base), ("site-base", site_base)):
         if not url.startswith("https://"):
             raise Refused(f"--{name} is not an https URL")
     pointer = build_pointer(load_release(assets), tag, channel, download_base, site_base)
+    if current is not None and not allow_downgrade:
+        refuse_downgrade(pointer, current, channel)
     files = {f"desktop/channels/{channel}.json": json.dumps(pointer, indent=2, ensure_ascii=False) + "\n"}
     for platform in SPARKLE:
         files[f"desktop/{channel}/appcast-{platform}.xml"] = appcast(pointer, platform)
@@ -242,13 +264,20 @@ def main(argv=None):
     b.add_argument("--download-base", required=True)
     b.add_argument("--site-base", required=True)
     b.add_argument("--out", required=True)
+    b.add_argument("--current", help="the channel's published pointer; the release must be newer")
+    b.add_argument("--allow-downgrade", action="store_true", help="publish even if not newer than --current")
     c = commands.add_parser("check")
     c.add_argument("pointer")
     c.add_argument("--channel", required=True, choices=CHANNELS)
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
-            for path in build(args.assets, args.tag, args.channel, args.download_base, args.site_base, args.out):
+            current = None
+            if args.current:
+                with open(args.current, encoding="utf-8") as f:
+                    current = json.load(f)
+            for path in build(args.assets, args.tag, args.channel, args.download_base, args.site_base, args.out,
+                              current=current, allow_downgrade=args.allow_downgrade):
                 print(path)
         else:
             with open(args.pointer, encoding="utf-8") as f:

@@ -158,6 +158,58 @@ class Build(unittest.TestCase):
             site.build(self.assets.name, "desktop-v0.4.0", "stable", "http://example.com", SITE, self.out.name)
 
 
+class Downgrade(unittest.TestCase):
+    def published(self, version="0.4.0", build="1234"):
+        """The pointer of an already published stable release."""
+        with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
+            release(assets, version=version, build=build)
+            site.build(assets, f"desktop-v{version}", "stable", DOWNLOAD, SITE, out)
+            with open(os.path.join(out, "desktop", "channels", "stable.json"), encoding="utf-8") as f:
+                return json.load(f)
+
+    def publish(self, version, build, current, **options):
+        with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
+            release(assets, version=version, build=build)
+            site.build(assets, f"desktop-v{version}", "stable", DOWNLOAD, SITE, out, current=current, **options)
+            return sorted(os.listdir(out))
+
+    def test_newer_releases_are_published(self):
+        current = self.published("0.4.0", "1234")
+        for version, build in (("0.4.0", "1235"), ("0.4.1", "1235"), ("0.10.0", "1300"), ("1.0.0", "1235")):
+            with self.subTest(version=version, build=build):
+                self.assertEqual(self.publish(version, build, current), ["desktop"])
+
+    def test_the_same_or_an_older_release_is_refused(self):
+        current = self.published("0.4.0", "1234")
+        # The same release again, an older build, an older version (also
+        # with a higher build), and a version that only sorts higher as text.
+        for version, build in (("0.4.0", "1234"), ("0.4.0", "1233"), ("0.3.9", "1233"), ("0.3.9", "2000")):
+            with self.subTest(version=version, build=build), self.assertRaises(site.Refused):
+                self.publish(version, build, current)
+        with self.assertRaises(site.Refused):
+            self.publish("0.9.0", "2000", self.published("0.10.0", "1234"))
+
+    def test_a_refused_release_writes_nothing(self):
+        current = self.published("0.4.0", "1234")
+        with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
+            release(assets, version="0.3.9", build="1200")
+            with self.assertRaises(site.Refused):
+                site.build(assets, "desktop-v0.3.9", "stable", DOWNLOAD, SITE, out, current=current)
+            self.assertEqual(os.listdir(out), [])
+
+    def test_allow_downgrade(self):
+        current = self.published("0.4.0", "1234")
+        self.assertEqual(self.publish("0.3.9", "1200", current, allow_downgrade=True), ["desktop"])
+
+    def test_the_published_pointer_must_be_this_channel_s_and_valid(self):
+        current = self.published("0.4.0", "1234")
+        current["channel"] = "dev"
+        with self.assertRaises(site.Refused):
+            self.publish("0.4.1", "1235", current)
+        with self.assertRaises(site.Refused):
+            self.publish("0.4.1", "1235", {"schema": 1})
+
+
 class Check(unittest.TestCase):
     def pointer(self):
         with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
