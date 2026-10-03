@@ -100,9 +100,7 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 - Docker 多节点 lab 的场景（G2：B1–B7、t3/t4/t56/t9），在移植到 runner 之前都在这里；
 - systemd-networkd 管理的链路抖动（`TestTUNRulesSurviveNetworkdLinkFlap`），runner 上没有 networkd 管理的链路。
 
-**Rust 的 network-change（CI 的 `network-change-rust`，main 2026-10-03 晚）**：apply 和 start、E2、E3、E4（updown 五个模式，模式 2 切换一次内核）、E5、E6、`local dns servers` 日志行都已通过；宿主无残留。还差两项，补齐后去掉 continue-on-error：
-- E1：start 刚返回时，sail 的网络快照里可能还没有默认网卡，dns-local 的第一条查询回 SERVFAIL，直到第一次网卡变化才恢复（Engine 侧在修）。
-- D1：TUN 其实已经打开。之前判为“tun interface: none”，是因为脚本只认 Go 的地址形式（`10.60.159.89/30`），sail 配的是点对点地址（`10.60.159.89 peer 10.60.159.90/30`）。脚本已改为两种形式都认。
+**Rust 的 network-change（CI 的 `network-change-rust`）**：严格模式，必须通过（不再是 continue-on-error）。E1–E6、D1、updown 五个模式（模式 2 切换一次内核）、`local dns servers` 日志行都通过；宿主无残留。最后两项是 sail b3533615（启动时网络快照已就绪）和 D1 按地址识别 sail 的点对点 TUN 地址。
 
 D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给 lab 用的开关来构建不绑定的 core，Engine 里还没有，暂缺。D3（入口只给域名）需要节点，在 `test/lab/engine` 的 t4 里跑（`lab.sh up ... <ppvpn-core-lab>`，引擎 `rust`），同样等 TUN。
 
