@@ -256,8 +256,11 @@ pub(crate) struct RuntimeTraffic {
 pub(crate) struct RuntimeConnection {
     pub id: u64,
     pub inbound: String,
-    /// Outbound tags, outermost first; the Engine maps them back to nodes
-    /// with the translation's tag map.
+    /// Outbound tags, outermost first (as `Routed::chain`; sail lists them
+    /// the Clash way, members first, and the runtime turns them): the
+    /// outbound the rules named, then each group's member, the last the one
+    /// that carries it. The Engine maps them back to nodes with the
+    /// translation's tag map.
     pub chain: Vec<String>,
     /// `tcp` or `udp`.
     pub network: String,

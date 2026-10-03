@@ -650,7 +650,9 @@ impl Runtime for SailRuntime {
             .map(|c| RuntimeConnection {
                 id: c.id,
                 inbound: c.inbound_tag,
-                chain: c.chains,
+                // Clash's order (members first), turned outermost first as
+                // Routed's and DialFailed's.
+                chain: c.chains.into_iter().rev().collect(),
                 network: match c.network {
                     embed::Network::Tcp => "tcp".into(),
                     embed::Network::Udp => "udp".into(),

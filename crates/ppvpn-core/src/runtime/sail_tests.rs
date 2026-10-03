@@ -608,3 +608,53 @@ async fn the_instance_s_own_dns_query_is_told_once_taken() {
     );
     runtime.stop().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chains_are_outermost_first_through_nested_groups() {
+    let echo = echo().await;
+    let port = free_port();
+    let p1 = password();
+    // A selector in a selector: outer takes pick, pick takes direct.
+    let config = serde_json::json!({
+        "log": { "level": "info" },
+        "inbounds": [{ "type": "mixed", "tag": "local", "listen": "127.0.0.1", "listen_port": port,
+                       "users": [{ "username": "u1", "password": p1 }] }],
+        "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            { "type": "selector", "tag": "pick", "outbounds": ["direct"], "default": "direct" },
+            { "type": "selector", "tag": "outer", "outbounds": ["pick"], "default": "pick" }
+        ],
+        "route": { "final": "outer" }
+    })
+    .to_string();
+    let runtime = SailRuntime::new(options("nested")).unwrap();
+    let mut routes = runtime.routes();
+    runtime.start(&config).await.unwrap();
+    let mut proxied = socks(port, "u1", &p1, echo)
+        .await
+        .expect("through the proxy");
+    round_trip(&mut proxied, b"nested").await;
+    let want = ["outer", "pick", "direct"].map(String::from).to_vec();
+
+    // connections(): sail's Clash-shaped chains, turned.
+    let open = runtime.connections().await.unwrap();
+    let c = open
+        .iter()
+        .find(|c| c.destination == echo.to_string())
+        .expect("the proxied connection");
+    assert_eq!(c.chain, want, "connections()");
+
+    // Routed: the same order.
+    let routed = tokio::time::timeout(WAIT, async {
+        loop {
+            let r = routes.recv().await.expect("the channel");
+            if r.destination == echo.to_string() {
+                return r;
+            }
+        }
+    })
+    .await
+    .expect("routed in time");
+    assert_eq!(routed.chain, want, "routed");
+    runtime.stop().await.unwrap();
+}
