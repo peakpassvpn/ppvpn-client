@@ -118,7 +118,7 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 | macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
 | Windows | todo（切换前缺口） | Sail 在 Windows 上还没有台账和 sweep；强杀后 Wintun 适配器及其路由、DNS 会不会残留还没测 |
 
-运行中开关系统代理监听，用的是 `Runtime::add_inbound` / `remove_inbound`（#149，`runtime/sail.rs`），经 `Instance::manager()` 调用 sail 的 `add_inbound` / `remove_inbound`，在 embed 的稳定接口之外。sail 的 reload 不会新增或删除监听（embed.md 的 Reload 表），所以不能用 reload 做。`remove_inbound` 在 sail 移除监听之后，还会关掉从这个 inbound 进来的连接（在真实 sail 上测过），所以关闭系统代理只断开它自己的连接，`engine::proxy_tests::system_proxy_listener_toggles` 断言了这一点。Sail 会在 `Instance` 上提供这两个方法，届时改用它们。
+运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。已知缺口（Sail）：多路复用入站上，sail 断开其中的各条流，但暂时不断开承载它们的连接；系统代理监听是 mixed，没有多路复用，不受影响。
 
 ## Lab 用例（`test/lab/engine/cases`）
 
