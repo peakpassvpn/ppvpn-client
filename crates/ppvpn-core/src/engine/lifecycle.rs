@@ -472,6 +472,10 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     let mut states = inner.runtime.states();
     let mut networks = inner.runtime.network_changes();
     let mut failures = inner.runtime.dial_failures();
+    // Routed connections only at debug: sail builds them only for a
+    // subscriber, and only the debug `connection` line uses them.
+    let mut routes =
+        (inner.config.log.level == crate::config::LogLevel::Debug).then(|| inner.runtime.routes());
     let weak: Weak<Inner> = Arc::downgrade(inner);
     Some(handle.spawn(async move {
         let mut tick = tokio::time::interval(REFRESH);
@@ -493,6 +497,18 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                         inner.on_dial_failed(failed).await;
                     }
                     None => failures_open = false,
+                },
+                routed = async {
+                    match routes.as_mut() {
+                        Some(routes) => routes.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match routed {
+                    Some(routed) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_routed(&routed);
+                    }
+                    None => routes = None,
                 },
                 changed = networks.changed() => {
                     if changed.is_err() {
