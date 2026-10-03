@@ -110,14 +110,34 @@ impl Daemon {
     pub async fn bind(paths: &Paths, os: Os) -> Result<(Daemon, UnixListener)> {
         paths.ensure()?;
         let lock = DaemonLock::acquire(paths)?;
+        let engine = ppvpn_core::Engine::new(engine_config(paths, os))
+            .await
+            .map_err(|e| WireError::from(&e).into_cli())?;
+        Daemon::listen(paths, engine, lock)
+    }
+
+    /// [`Daemon::bind`] on an engine the caller made: tests use one on
+    /// ppvpn-core's in-memory runtime. Not in the binary that ships.
+    #[cfg(feature = "testing")]
+    pub fn bind_engine(
+        paths: &Paths,
+        engine: ppvpn_core::Engine,
+    ) -> Result<(Daemon, UnixListener)> {
+        paths.ensure()?;
+        let lock = DaemonLock::acquire(paths)?;
+        Daemon::listen(paths, engine, lock)
+    }
+
+    fn listen(
+        paths: &Paths,
+        engine: ppvpn_core::Engine,
+        lock: DaemonLock,
+    ) -> Result<(Daemon, UnixListener)> {
         let env_err = |what: &str, err: io::Error| {
             CliError::environment("RUNTIME_DIRECTORY_UNAVAILABLE", format!("{what}: {err}"))
         };
         remove_stale_socket(paths)
             .map_err(|e| env_err("cannot remove the stale control socket", e))?;
-        let engine = ppvpn_core::Engine::new(engine_config(paths, os))
-            .await
-            .map_err(|e| WireError::from(&e).into_cli())?;
         let secret = new_secret().map_err(|e| env_err("cannot create the session secret", e))?;
         write_private_file(&paths.secret, secret.as_bytes())
             .map_err(|e| env_err("cannot write the session secret", e))?;

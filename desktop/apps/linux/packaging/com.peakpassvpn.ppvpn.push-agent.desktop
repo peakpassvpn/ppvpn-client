@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=PPVPN Notifications
+Name[zh_CN]=PPVPN 通知
+Comment=Shows PPVPN notifications while the app is closed
+Comment[zh_CN]=在 PPVPN 未打开时显示通知
+Exec=/usr/lib/ppvpn/ppvpn-push-agent
+Icon=com.peakpassvpn.ppvpn.desktop
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
