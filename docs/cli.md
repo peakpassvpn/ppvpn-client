@@ -23,7 +23,8 @@ The device credential is kept in the platform secret store and nowhere else:
 
 There is no plain-file fallback. Where no secret store is available (for example a server without a Secret
 Service) or the keyring stays locked, the CLI reports `CREDENTIAL_STORE_UNAVAILABLE` or
-`CREDENTIAL_STORE_LOCKED` (exit 8) and does not log in. Access tokens are never written to disk.
+`CREDENTIAL_STORE_LOCKED` (exit 8) and does not log in. A locked keyring is asked to unlock (its own prompt);
+when that is not answered within 60 seconds, the keyring counts as locked. Access tokens are never written to disk.
 
 `ppvpn account` prints the authorized account. `ppvpn logout` revokes the device session and removes the
 local credential. Without a saved login, commands that need one report `NOT_LOGGED_IN` (exit 3) before any
