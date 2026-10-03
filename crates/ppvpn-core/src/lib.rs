@@ -19,6 +19,9 @@ mod logfmt;
 mod probe;
 pub(crate) mod profile;
 pub mod request;
+// Rule sets are wired up by the engine; until then only their tests use them.
+#[allow(dead_code, unused_imports)]
+mod rulesets;
 mod runtime;
 mod state_dir;
 pub mod status;
