@@ -26,7 +26,8 @@ const CANDIDATE_FAILED: &str = "candidate validation or build failed";
 /// What it says when the runtime refused the new configuration.
 const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
 
-/// How often the watcher reads the runtime's groups (health) while running.
+/// How often the watcher reads the runtime's groups (health), traffic and
+/// connections while running.
 const REFRESH: Duration = Duration::from_secs(1);
 
 impl Inner {
@@ -252,8 +253,9 @@ impl Inner {
         }
     }
 
-    /// Reads the runtime's groups into the snapshot, unless the run it read
-    /// them from is over.
+    /// Reads the runtime's groups, traffic and connections into the
+    /// snapshot (the queries are synchronous and never wait on sail), unless
+    /// the run it read them from is over.
     pub(super) async fn refresh(&self) {
         let run = {
             let live = self.live();
@@ -262,12 +264,22 @@ impl Inner {
             }
             live.run
         };
-        let Ok(groups) = self.runtime.groups().await else {
-            return;
-        };
+        let groups = self.runtime.groups().await;
+        let traffic = self.runtime.traffic().await;
+        let connections = self.runtime.connections().await;
         let mut live = self.live();
-        if live.running && live.run == run {
+        if !live.running || live.run != run {
+            return;
+        }
+        if let Ok(groups) = groups {
             live.groups = groups.into_iter().map(|g| (g.tag.clone(), g)).collect();
+        }
+        if let Ok(traffic) = traffic {
+            live.traffic = traffic;
+            live.traffic_at = Some(now());
+        }
+        if let Ok(connections) = connections {
+            live.connections = connections;
         }
     }
 

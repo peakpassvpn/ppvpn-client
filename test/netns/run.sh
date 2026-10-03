@@ -44,17 +44,24 @@ OUT=${NETNS_OUT:-$(mktemp -d)}
 # count its traffic), routes' remaining lifetimes (RA routes count down),
 # link statistics (only link names are listed).
 volatile() { sed -E 's/ expires [0-9]+sec//g; s/counter packets [0-9]+ bytes [0-9]+/counter/g; s/quota (over )?[0-9]+ [a-z]+( used [0-9]+ [a-z]+)?/quota/g'; }
+# The runner's own hardware: Azure attaches accelerated-networking VFs
+# (enP<domain>s<n>) to the host whenever it likes, with a link and a
+# systemd-resolved entry, during a test or not. Tests make veths, tuns and
+# namespaces, never such a device, so these are left out of the links and
+# resolved lists (rules, routes and nft are compared as they are).
+HOST_NIC='enP[0-9]+s[0-9]+'
+hostnic() { grep -vE "^${HOST_NIC}\$|\(${HOST_NIC}\)" || true; }
 snapshot() { # file
 	{
 		echo "## ip -4 rule"; ip -4 rule show
 		echo "## ip -6 rule"; ip -6 rule show
 		echo "## ip -4 route (all tables)"; ip -4 route show table all | grep -vE '^(local|broadcast) ' | volatile || true
 		echo "## ip -6 route (all tables)"; ip -6 route show table all | grep -vE '^(local|multicast|anycast) ' | volatile || true
-		echo "## links"; ip -o link show | awk -F': ' '{print $2}' | sed 's/@.*//' | sort
+		echo "## links"; ip -o link show | awk -F': ' '{print $2}' | sed 's/@.*//' | hostnic | sort
 		echo "## nft"; { nft -s list ruleset 2>/dev/null || echo "(nft unavailable)"; } | volatile
 		echo "## resolv.conf"; sha256sum /etc/resolv.conf 2>/dev/null || echo "(none)"
-		echo "## resolvectl dns"; resolvectl dns 2>/dev/null || echo "(no systemd-resolved)"
-		echo "## resolvectl domain"; resolvectl domain 2>/dev/null || true
+		echo "## resolvectl dns"; { resolvectl dns 2>/dev/null || echo "(no systemd-resolved)"; } | hostnic
+		echo "## resolvectl domain"; { resolvectl domain 2>/dev/null || true; } | hostnic
 	} > "$1"
 }
 
