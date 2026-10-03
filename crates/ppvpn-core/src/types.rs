@@ -77,7 +77,9 @@ pub struct ShutdownReport {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ProbeMethod {
+    /// Also `""`, as Core API v1 reads it.
     #[default]
+    #[serde(alias = "")]
     Tcp,
     Icmp,
 }

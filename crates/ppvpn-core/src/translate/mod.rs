@@ -34,7 +34,9 @@ use crate::request::RoutingMode;
 
 mod tun;
 #[allow(unused_imports)] // the Engine's, once it is wired to the runtime
-pub(crate) use tun::{interface_name, local_dns_servers, LocalDns, Tun};
+pub(crate) use tun::{
+    interface_name, local_dns_servers, LocalDns, Tun, IPROUTE2_RULE_INDEX, IPROUTE2_TABLE_INDEX,
+};
 
 /// The selector over every node, in profile order.
 pub(crate) const SELECTED_TAG: &str = "selected";

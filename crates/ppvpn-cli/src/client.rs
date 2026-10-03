@@ -51,7 +51,13 @@ impl Client {
     }
 
     pub async fn call(&self, call: Call) -> Result<Value> {
-        tokio::time::timeout(CALL_TIMEOUT, self.call_once(call))
+        self.call_within(call, CALL_TIMEOUT).await
+    }
+
+    /// [`Client::call`] with its own deadline, for calls that take as long
+    /// as the user asked (probes).
+    pub async fn call_within(&self, call: Call, timeout: Duration) -> Result<Value> {
+        tokio::time::timeout(timeout, self.call_once(call))
             .await
             .map_err(|_| core_unavailable("the daemon did not answer in time"))?
     }
