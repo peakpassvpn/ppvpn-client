@@ -152,6 +152,7 @@ async fn runs_sail_through_the_local_proxy() {
         .await
         .unwrap();
     wait_for(&mut states, RuntimeState::Running).await;
+    assert_eq!(runtime.tun_name(), None, "no tun inbound");
     let mut proxied = socks(port, "u1", &p1, echo)
         .await
         .expect("u1 through the proxy");
