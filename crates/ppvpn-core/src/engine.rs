@@ -38,6 +38,7 @@ mod selection;
 #[cfg(test)]
 mod selection_tests;
 mod state;
+mod tun;
 
 use bus::Bus;
 pub(crate) use bus::Subscription;
@@ -66,6 +67,7 @@ struct Inner {
     watcher: Mutex<Option<JoinHandle<()>>>,
     /// Held from `new` to `shutdown` (or the last handle's drop).
     state_dir: Mutex<Option<StateDirLock>>,
+    tun: tun::TunState,
 }
 
 impl Drop for Inner {
@@ -101,6 +103,7 @@ impl Engine {
     /// here (`PERMISSION_DENIED`, `WINTUN_UNAVAILABLE`, `STATE_DIR_IN_USE`,
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
+        tun::check(&config)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         cleanup::sweep(&config)?;
         let runtime = SailRuntime::new(sail::embed::Options::new()).map_err(|e| e.to_error())?;
@@ -113,6 +116,7 @@ impl Engine {
     /// lock.
     pub(crate) fn with_runtime(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Engine {
         let inner = Arc::new(Inner {
+            tun: tun::TunState::new(&config),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),
@@ -452,6 +456,7 @@ impl Inner {
                 LogLevel::Debug => "debug",
             }
             .into(),
+            tun: self.tun_options(),
             ..translate::Options::default()
         }
     }
