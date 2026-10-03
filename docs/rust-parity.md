@@ -53,6 +53,14 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | N1 | 越过 `expires_at` 时进入 `Degraded{ProfileExpired}`，由定时器触发；转发照常，apply 一份未过期的 Profile 后清除 | #86（Core 定） | | todo |
 | N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护 | #86（Desktop B） | | todo（G5 实机验收） |
 
+## 硬切换前的阻塞项
+
+下面几项在 Rust 版里还没有完整对应 Go 的行为，或者还没在 lab 里验证过。全部解决之前不能硬切换。
+
+| # | 行为 | Go 0.5.21 | Rust 现状 | 还缺什么 |
+| --- | --- | --- | --- | --- |
+| X1 | 主机有 IPv6 但没有自己的 IPv6 出口时，直连双栈域名仍然能通（0.5.17 修复，验收清单"功能与行为"） | `handOffDirectIPv6`：`direct` 换成 `domaindest(ipv6_only)` 包装 `direct-host`，后者解析时只取 IPv4；TUN 本身不变 | 翻译层已实现（`translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain`），改用 sail 现有能力：TUN inbound 加一条匹配 `2000::/3` 的 route-options 规则，设 `override_destination: "proxy_and_direct"`（后面规则的值优先，sail 有同样形状的路由测试）；`direct` 带 `domain_resolver {dns-local, ipv4_only}`。不需要 Sail 改动 | ① Engine 探测主机的 IPv6 出口（Go `internal/hostipv6`：每次 apply 和 start 各探一次，并写日志），结果填到 `Tun.no_host_ipv6_route`；② kernel 切换或 reload 后，反向映射是否还在（Go 用共享的存储，见 `TestRestoreFallsBackToTheSharedReverseMapping`；sail 的 reload 会清空 DNS 缓存，反向映射是否随之清空待确认）；③ lab 用例：IPv6 无出口的主机上，直连双栈域名能通 |
+
 ## 测试宿主的约定
 
 - 所有 lab 和性能检查都通过 `ppvpn-core-lab`（Rust 的测试宿主）驱动 Rust 版。它要提供和 `ppvpn-core serve` 相同的命令行、日志格式，以及 lab 实际用到的那部分 Core API v1（#45）。
@@ -157,6 +165,10 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | `internal/localdns` `TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal` | Usable leaves out tunnel loopback and foreign link local | `ppvpn-core` `localdns::servers::tests::usable_leaves_out_tunnel_loopback_and_foreign_link_local` | done | #45 A1–A3；A8（Windows 适配器）见 `adapters::tests` |
 
 ## 4. dnstransport guard 与 TUN 远端 DNS
+
+Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard 相同：依次问 1.1.1.1、8.8.8.8、9.9.9.9（DoT，经 selected 节点）；每个上游 3 s（`attempt_timeout`），最后一个用剩下的预算；总预算 8 s（`budget`），用完回 SERVFAIL；后备上游答过之后，10 分钟内从它开始问（`prefer_for`）；保持的连接静默超过一半时间时，换新连接重试一次。`dns.timeout` 是 10 s，对应 sing-box 的 `C.DNSTimeout`，Go 的 guard 就运行在它之下，sail 也要求 budget 小于它。所以 SERVFAIL 的时序与 Go 相同，B3（`test/lab/engine/repro/b3-sequential.sh`）和 `t4-host.sh` 4.5 的"8 s 内 SERVFAIL"不受影响。
+
+已知差异：Go 的 `idleReset`（30 s 没有成功且没有进行中的查询时重置连接池）在 sail 里没有对应项。sail 在网络变化（`network_moved`）时重置 DoT/DoH 等长连接；保持的连接超时，也会在同一次查询里换新连接。`TestGuardResetsThePoolAfterIdle` 一行按这个结论处理。
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |

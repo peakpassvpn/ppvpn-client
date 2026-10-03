@@ -33,11 +33,21 @@ pub(crate) const DNS_REMOTE_TAG: &str = "dns-remote";
 /// Public resolvers outside mainland China only: they resolve the domains
 /// routed to a proxy.
 pub(crate) const REMOTE_DNS_SERVERS: &[&str] = &["1.1.1.1", "8.8.8.8", "9.9.9.9"];
-/// The whole query budget (Go's DNS guard): past it the client gets SERVFAIL.
-const DNS_TIMEOUT: &str = "8s";
-/// A sequential server's budget for all of its members; sail wants it under
-/// dns.timeout, so the server fails before the query does.
-const SEQUENTIAL_BUDGET: &str = "7s";
+/// The DNS client's own limit around a query (sing-box's C.DNSTimeout, which
+/// Go's guard ran under).
+const DNS_TIMEOUT: &str = "10s";
+/// A sequential server is Go's DNS guard: each member gets `attempt`, the
+/// last what the budget leaves; past the budget the client gets SERVFAIL
+/// (sail wants the budget under dns.timeout, so the server fails first); a
+/// member that answered for the first is asked first for `prefer_for`.
+const SEQUENTIAL_BUDGET: &str = "8s";
+const REMOTE_ATTEMPT: &str = "3s";
+/// Go's localdns gives each physical resolver 2 s.
+const LOCAL_ATTEMPT: &str = "2s";
+const SEQUENTIAL_PREFER_FOR: &str = "10m";
+/// Global unicast IPv6 (Go's domaindest globalIPv6): not IPv4-mapped, ULA,
+/// link-local or any other local scope.
+const GLOBAL_IPV6: &str = "2000::/3";
 /// The benchmark range fake-ip resolvers answer from.
 const FAKE_IP_RANGE: &str = "198.18.0.0/15";
 /// A domain name but not an IP literal (the HTTP sniffer copies a Host
@@ -75,6 +85,9 @@ pub(crate) struct Tun {
     pub desktop: bool,
     /// The tunnel's IPv6 address (desktop); off on hosts with IPv6 disabled.
     pub ipv6: bool,
+    /// The host has IPv6 but no IPv6 path of its own (no global address with
+    /// a default route): see [`Builder::tun_rules`]. Desktop with IPv6 only.
+    pub no_host_ipv6_route: bool,
     pub local_dns: LocalDns,
 }
 
@@ -146,10 +159,34 @@ fn contains(prefix: &str, ip: IpAddr) -> bool {
 
 impl Builder {
     /// The rules that precede every other, then the ingress bypass.
-    pub(super) fn tun_rules(&mut self, profile: &Profile) {
+    ///
+    /// On a host without an IPv6 path (Go's handOffDirectIPv6) the TUN stays
+    /// as it is (it routes IPv6, so nothing leaks around it, and a change of
+    /// the host's IPv6 state never restarts it), applications prefer the
+    /// AAAA answers of dual-stack names, and a direct dial to such an address
+    /// would fail at once. So a TUN connection to a global unicast IPv6
+    /// address is dialled direct by its domain (sniffed, else
+    /// reverse-mapped), and direct resolves names to IPv4 only. IPv4,
+    /// private, ULA and link-local destinations, and addresses whose name is
+    /// unknown, go out unchanged.
+    pub(super) fn tun_rules(&mut self, profile: &Profile, tun: &Tun) {
         self.rules.extend([
             json!({ "inbound": [TUN_INBOUND_TAG], "action": "sniff" }),
             json!({ "inbound": [TUN_INBOUND_TAG], "action": "route-options", "override_destination": true }),
+        ]);
+        if hands_off_direct_ipv6(tun) {
+            // A later rule's value goes before: proxies keep theirs.
+            self.rules.push(json!({
+                "inbound": [TUN_INBOUND_TAG],
+                "ip_cidr": [GLOBAL_IPV6],
+                "action": "route-options",
+                "override_destination": "proxy_and_direct",
+            }));
+            self.direct_resolver =
+                Some(json!({ "server": DNS_LOCAL_TAG, "strategy": "ipv4_only" }));
+            self.translation.direct_ipv6_hand_off = true;
+        }
+        self.rules.extend([
             json!({ "inbound": [TUN_INBOUND_TAG], "protocol": ["dns"], "action": "hijack-dns" }),
             json!({ "inbound": [TUN_INBOUND_TAG], "port": [53], "action": "hijack-dns" }),
             // Nothing exists there: reject at once rather than send it out
@@ -263,7 +300,7 @@ impl Builder {
                     servers.push(udp_server(&tag, server));
                     members.push(tag);
                 }
-                servers.push(sequential(DNS_LOCAL_TAG, members));
+                servers.push(sequential(DNS_LOCAL_TAG, members, LOCAL_ATTEMPT));
             }
         }
         let mut members = Vec::new();
@@ -274,7 +311,7 @@ impl Builder {
             );
             members.push(tag);
         }
-        servers.push(sequential(DNS_REMOTE_TAG, members));
+        servers.push(sequential(DNS_REMOTE_TAG, members, REMOTE_ATTEMPT));
         Ok(json!({
             "servers": servers,
             "rules": self.mirror_dns_rules(dns_rule_sets),
@@ -363,6 +400,19 @@ fn udp_server(tag: &str, server: &SocketAddr) -> Value {
 
 /// Asks `members` one after another, the next only when one does not
 /// answer, all within [`SEQUENTIAL_BUDGET`].
-fn sequential(tag: &str, members: Vec<String>) -> Value {
-    json!({ "type": "sequential", "tag": tag, "servers": members, "budget": SEQUENTIAL_BUDGET })
+fn sequential(tag: &str, members: Vec<String>, attempt: &str) -> Value {
+    json!({
+        "type": "sequential",
+        "tag": tag,
+        "servers": members,
+        "attempt_timeout": attempt,
+        "budget": SEQUENTIAL_BUDGET,
+        "prefer_for": SEQUENTIAL_PREFER_FOR,
+    })
+}
+
+/// The hand-off needs the TUN's IPv6: not on a host with IPv6 disabled,
+/// nor on mobile (an IPv4-only tunnel).
+fn hands_off_direct_ipv6(tun: &Tun) -> bool {
+    tun.desktop && tun.ipv6 && tun.no_host_ipv6_route
 }
