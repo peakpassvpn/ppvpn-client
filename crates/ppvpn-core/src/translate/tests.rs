@@ -517,7 +517,7 @@ fn dns_mirrors_domain_rules_in_order() {
             local("a1.edge.example.com"),
             local("a2.edge.example.com"),
             local("b1.edge.example.com"),
-            json!({"domain": ["blocked.example"], "domain_suffix": [".blocked.example"], "action": "reject", "method": "default"}),
+            json!({"domain": ["blocked.example"], "domain_suffix": [".blocked.example"], "action": "reject"}),
             // The D4 reject before it is not mirrored: the name resolves.
             json!({"domain": ["video.example"], "domain_suffix": [".video.example"], "action": "route", "server": "dns-remote"}),
             json!({"domain": ["direct.test"], "domain_suffix": [".direct.test"], "action": "route", "server": "dns-local"}),

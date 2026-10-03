@@ -333,9 +333,9 @@ impl Builder {
                         .into(),
                     );
                 }
+                // sail's DNS reject takes no method (it answers REFUSED).
                 Some("reject") => {
                     dns.insert("action".into(), "reject".into());
-                    dns.insert("method".into(), "default".into());
                 }
                 _ => continue,
             }
