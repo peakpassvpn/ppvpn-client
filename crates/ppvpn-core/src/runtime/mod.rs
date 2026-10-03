@@ -154,8 +154,10 @@ pub(crate) struct GroupSwitch {
 /// latest of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DialFailed {
-    /// The outbounds it went through, the groups' members first, joined by
-    /// `>` as the log's `out=` (`proxy-auto>hk-ss`).
+    /// The outbounds it went through, joined by `>` as the log's `out=`:
+    /// the route's outbound, then each group's member. sail adds a member
+    /// only once it connected, so a failure through a group names the
+    /// group alone (8f47c870).
     pub chain: String,
     /// Where it went, redacted as the log says it.
     pub destination: String,

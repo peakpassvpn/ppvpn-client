@@ -486,7 +486,10 @@ async fn a_failed_connection_is_told() {
         ("dial", "ConnectionRefused"),
         "{failed:?}"
     );
-    assert!(failed.chain.contains("direct"), "{failed:?}");
+    // The route's outbound alone: sail adds a group's member to the chain
+    // only once it connected (8f47c870), so a failure through the selector
+    // does not name the member.
+    assert_eq!(failed.chain, "pick", "{failed:?}");
     assert!(failed.count >= 1, "{failed:?}");
     runtime.stop().await.unwrap();
 }
