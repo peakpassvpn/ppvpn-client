@@ -89,6 +89,12 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 
 计划下一个 PR 接入 dns-local 的 E5（TUN 运行中切换默认网卡）和其余 D 组。
 
+## 过渡实现
+
+Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
+
+sail 的网络事件合入之前，Engine 用 sail 现有的状态查询加短间隔轮询做过渡，不另起监视器。网络事件合入后换成事件驱动，这一节随之删除。
+
 ## Lab 用例（`test/lab/engine/cases`）
 
 UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golden/routing`）里没有覆盖。它们写成 lab 的用例，在有特权容器的 Linux 主机上跑：`lab.sh case <组> sing|rust`。Go 0.5.21 的输出存为 `cases/<组>.baseline.txt`。Rust 版跑同一个脚本，结论按 id 记在这里。
@@ -214,12 +220,12 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/domaindest` `TestRestoreFallsBackToTheSharedReverseMapping` | After a kernel switch the new kernel's own reverse mapping is empty; the shared store still gives direct's ipv6_only wrapper (no host IPv6 path) the domain of a global … |  | todo |  |
 | `internal/domaindest` `TestRestoreIPv6Only` | Restore i pv6 only |  | todo |  |
 | `internal/domaindest` `TestRestore` | Restore |  | todo |  |
-| `internal/hostipv6` `TestDarwinDefaultRouteIndexes` | Darwin default route indexes |  | todo |  |
-| `internal/hostipv6` `TestLinuxAvailability` | Linux availability |  | todo |  |
-| `internal/hostipv6` `TestLinuxRoute` | Linux route |  | todo |  |
-| `internal/hostipv6` `TestRouteOnThisHost` | Route on this host |  | todo |  |
-| `internal/hostipv6` `TestWindowsAvailability` | Windows availability |  | todo |  |
-| `internal/hostipv6` `TestWindowsRoute` | Windows route |  | todo |  |
+| `internal/hostipv6` `TestDarwinDefaultRouteIndexes` | Darwin default route indexes | `ppvpn-core` `hostipv6::darwin::tests::default_routes_are_up_zero_routes`；另有 `parses_a_route_dump`、`route_needs_the_default_routes_interface_up_with_a_global_address` | done | 解析是纯函数，各平台的测试在所有 CI 平台上都跑；读取系统状态的部分按平台编译 |
+| `internal/hostipv6` `TestLinuxAvailability` | Linux availability | `ppvpn-core` `hostipv6::linux::tests::availability` | done | 解析是纯函数，各平台的测试在所有 CI 平台上都跑；读取系统状态的部分按平台编译 |
+| `internal/hostipv6` `TestLinuxRoute` | Linux route | `ppvpn-core` `hostipv6::linux::tests::route_needs_a_global_address_and_a_default_route_on_one_interface` | done | 解析是纯函数，各平台的测试在所有 CI 平台上都跑；读取系统状态的部分按平台编译 |
+| `internal/hostipv6` `TestRouteOnThisHost` | Route on this host | `ppvpn-core` `hostipv6::tests::route_on_this_host` | done | 解析是纯函数，各平台的测试在所有 CI 平台上都跑；读取系统状态的部分按平台编译 |
+| `internal/hostipv6` `TestWindowsAvailability` | Windows availability | `ppvpn-core` `hostipv6::windows::tests::availability` | done | 解析是纯函数，各平台的测试在所有 CI 平台上都跑；读取系统状态的部分按平台编译 |
+| `internal/hostipv6` `TestWindowsRoute` | Windows route | `ppvpn-core` `hostipv6::windows::tests::route_needs_an_up_adapter_with_a_global_address_and_a_gateway` | done | 解析是纯函数，各平台的测试在所有 CI 平台上都跑；读取系统状态的部分按平台编译 |
 | `internal/reversemap` `TestCapacityEvictsTheEntryClosestToExpiry` | Capacity evicts the entry closest to expiry |  | todo |  |
 | `internal/reversemap` `TestRecordLookupAndExpiry` | Record lookup and expiry |  | todo |  |
 | `internal/runtime` `TestApplyProfileProbesHostIPv6ForTUN` | The desktop TUN carries IPv6 only when the host probe allows it; the probe runs on every apply because IPv6 can be toggled between starts. |  | todo |  |
