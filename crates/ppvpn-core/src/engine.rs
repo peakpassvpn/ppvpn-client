@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::config::{EngineConfig, LogLevel, Role};
@@ -34,6 +33,7 @@ mod cleanup;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+mod logs;
 mod network;
 mod selection;
 #[cfg(test)]
@@ -43,6 +43,8 @@ mod tun;
 
 use bus::Bus;
 pub(crate) use bus::Subscription;
+pub use logs::tracing_layer;
+use logs::Logs;
 use state::Live;
 pub(crate) use state::TunRoutingSignal;
 
@@ -68,6 +70,8 @@ struct Inner {
     watcher: Mutex<Option<JoinHandle<()>>>,
     /// Held from `new` to `shutdown` (or the last handle's drop).
     state_dir: Mutex<Option<StateDirLock>>,
+    /// The instance's log lines, to its sink (section 10).
+    log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
 }
@@ -117,18 +121,27 @@ impl Engine {
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
         tun::check(&config)?;
+        logs::install();
+        let log = Logs::new(&config.log)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
-        cleanup::sweep(&config)?;
+        log.span().in_scope(|| cleanup::sweep(&config))?;
         let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
-        let engine = Engine::with_runtime(config, Arc::new(runtime));
+        let engine = Engine::build(config, Arc::new(runtime), log);
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
         Ok(engine)
     }
 
     /// An instance on `runtime` (tests: the fake), without the state_dir
     /// lock.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_runtime(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Engine {
+        let log = Logs::new(&config.log).unwrap_or_else(|_| Logs::discard());
+        Engine::build(config, runtime, log)
+    }
+
+    fn build(config: EngineConfig, runtime: Arc<dyn Runtime>, log: Logs) -> Engine {
+        log.attach(&runtime);
         let inner = Arc::new(Inner {
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
@@ -139,6 +152,7 @@ impl Engine {
             bus: Bus::default(),
             watcher: Mutex::new(None),
             state_dir: Mutex::new(None),
+            log,
         });
         *inner.watcher.lock().expect("watcher") = lifecycle::spawn_watcher(&inner);
         Engine { inner }
@@ -240,7 +254,7 @@ impl Engine {
             },
             tun_routing: (config.role == Role::Tun)
                 .then_some(live.tun_routing.unwrap_or(TunRouting::Ok)),
-            dropped_log_lines: self.inner.runtime.dropped_log_lines(),
+            dropped_log_lines: self.inner.log.dropped(),
             ..Status::default()
         }
     }
@@ -374,10 +388,10 @@ impl Engine {
         }
     }
 
-    /// The log lines, with `LogSink::Channel` (section 10).
+    /// The log lines, with `LogSink::Channel` (section 10): bounded, taken
+    /// once; a second call, or another sink, gets a closed receiver.
     pub fn logs(&self) -> LogReceiver {
-        let (_sender, receiver) = mpsc::channel(1);
-        LogReceiver { receiver }
+        self.inner.log.receiver()
     }
 
     /// The default interface changed (`None`: offline). Its source is

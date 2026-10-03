@@ -341,8 +341,8 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/config` `TestTUNCoreRulesComeFirst` | Desktop (auto_route) and mobile (platform-owned tunnel) TUN render the same sniff, DNS hijack and fake-ip rules ahead of everything else. |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestTUNDNSServersAndMirroredRules` | Tundns servers and mirrored rules |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestUnavailableRuleSetsAreSkipped` | A rule set without a local copy is dropped from every rule: a rule left without address matchers disappears, a rule with other matchers keeps them. |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/corelog` `TestDebugLinesOnlyAtDebugLevel` | Debug lines only at debug level |  | todo |  |
-| `internal/corelog` `TestFileLogIsWrittenImmediately` | File log is written immediately |  | todo |  |
+| `internal/corelog` `TestDebugLinesOnlyAtDebugLevel` | Debug lines only at debug level | `ppvpn-core` `engine::logs::tests::levels_and_instances_decide_who_gets_a_line` | done | 级别按实例：同一进程里 info 实例收不到 debug 行 |
+| `internal/corelog` `TestFileLogIsWrittenImmediately` | File log is written immediately | `ppvpn-core` `engine::logs::tests::a_file_gets_both_appended` | done | 写盘在引擎自己的线程里，队列空了就 flush，测试等到行出现为止 |
 | `internal/corelog` `TestLineFormatRedactionAndChain` | Line format redaction and chain |  | todo |  |
 | `internal/privateacl` `TestAccessErrorNamesPathAndRemedy` | Access error names path and remedy |  | todo |  |
 | `internal/privateacl` `TestBroaderACLIsNotRepaired` | Broader acl is not repaired |  | todo |  |

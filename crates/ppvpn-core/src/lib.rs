@@ -34,7 +34,7 @@ pub mod types;
 pub use config::{
     EngineConfig, LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform, Role, TunConfig,
 };
-pub use engine::{Engine, LOCAL_PROXY_CONTRACT_VERSION};
+pub use engine::{tracing_layer, Engine, LOCAL_PROXY_CONTRACT_VERSION};
 pub use error::{codes, Error};
 pub use event::{Event, EventItem, EventKind, EventReceiver, LogReceiver};
 pub use request::{
