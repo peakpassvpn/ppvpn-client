@@ -69,6 +69,9 @@ pub(crate) struct Live {
     pub run: u64,
     /// No default interface (sail's network events, E1b).
     pub offline: bool,
+    /// A full restart is under way: sail's states in between (a start that
+    /// fails and is put back) are not the instance's.
+    pub restarting: bool,
     /// The TUN's routing when not in place (None: ok).
     pub tun_routing: Option<TunRouting>,
     /// The state last reported (StateChanged).

@@ -229,9 +229,12 @@ impl Inner {
                 }
             };
         // The selection and the pins are as applied: sail keeps them across
-        // a reload.
-        if let Err(e) = self.runtime.reload(&translation.json).await {
-            let error = self.runtime_error(&e);
+        // a reload. The TUN itself does not change here, so this is a
+        // reload; should it ever change, the switch restarts instead.
+        let Some(running) = self.live().applied.as_ref().map(|a| a.translation.clone()) else {
+            return;
+        };
+        if let Err(error) = self.switch_to(&running, &translation).await {
             tracing::error!(previous_policy = policy(previous), policy = policy(state),
                 rebuilt = false, error = %error, "host ipv6 changed");
             return;

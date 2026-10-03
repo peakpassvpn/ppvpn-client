@@ -45,6 +45,7 @@ mod selection;
 #[cfg(test)]
 mod selection_tests;
 mod state;
+mod switch;
 mod tun;
 
 use bus::Bus;
