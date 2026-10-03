@@ -195,8 +195,10 @@ impl Engine {
             // may take the directory once it is free.
             state_dir: inner.state_dir.lock().expect("state dir lock").take(),
         };
-        // A sleeping re-probe goes first; one under way held `op` and is done.
+        // A sleeping re-probe or local proxy retry goes first; one under
+        // way held `op` and is done.
         inner.network_stopped();
+        inner.local_proxy_stopped();
         let report = cleanup::cleanup(parts, left).await;
         // Shut down before the operation lock goes, so nothing queued on it
         // (a re-probe, a lifecycle call) acts on the torn-down runtime.
