@@ -214,7 +214,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| `api` `TestNoDefaultInterfaceIsRetryable` | Offline probes fail fast as NO_DEFAULT_INTERFACE, retryable. | `ppvpn-core` `probe::tests::no_default_interface_is_retryable` | done | Engine 接线后由 Engine 传入 sail 监视器的默认网卡状态 |
+| `api` `TestNoDefaultInterfaceIsRetryable` | Offline probes fail fast as NO_DEFAULT_INTERFACE, retryable. | `ppvpn-core` `probe::tests::no_default_interface_is_retryable` | done | Engine 层见 `engine::probes_tests::entrance_probes_on_the_applied_profile` |
 | `internal/config` `TestDesktopTUNRoutesIPv6AndExcludesIPv6Ingress` | Desktop TUN carries an IPv6 address so IPv6 (and DNS to IPv6 resolvers) is routed into the tunnel instead of around it; every ingress IP, IPv4 or IPv6, stays excluded. |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestDesktopTUNWithoutHostIPv6IsIPv4Only` | A host with IPv6 disabled cannot give the TUN an IPv6 address (sing-tun fails the whole start), so the desktop TUN stays IPv4-only there and no IPv6 ingress prefix is … |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestKnownDomainRegexRejectsIPLiterals` | The fake-ip rule must treat an IP literal (what the HTTP sniffer reports for a request to a bare address) as "no domain". |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
@@ -236,7 +236,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestDefaultInterfaceChangeEmitsNetworkChanged` | Every default interface change of the running engine is reported as NetworkChanged: the new interface's name and index, or none. |  | todo |  |
 | `internal/runtime` `TestDefaultInterfaceLogLine` | Default interface log line |  | todo |  |
 | `internal/runtime` `TestHostIPv6RouteDecidesDirectHandOff` | A host with IPv6 enabled but no IPv6 path keeps the IPv6 TUN and wraps direct; the probe runs on every apply and again at start, and its result is logged. |  | todo |  |
-| `internal/runtime` `TestProbesFailFastWithoutDefaultInterface` | With no default interface (offline) both probes fail at once with ErrNoDefaultInterface instead of waiting out their timeout; with one, or when the engine cannot tell, … | `ppvpn-core` `probe::entrance::tests::entrance_offline_fails_fast_and_probes_nothing`、`ppvpn-core` `probe::availability::tests::availability_offline_fails_fast_and_dials_nothing` | done | 探测层：默认网卡状态由参数注入（Unknown/Present 照常探测，Absent 立即失败且不拨号）；Engine 接线后由 sail 的网卡监视器提供，Engine 层用例待接线 |
+| `internal/runtime` `TestProbesFailFastWithoutDefaultInterface` | With no default interface (offline) both probes fail at once with ErrNoDefaultInterface instead of waiting out their timeout; with one, or when the engine cannot tell, … | `ppvpn-core` `probe::entrance::tests::entrance_offline_fails_fast_and_probes_nothing`、`ppvpn-core` `probe::availability::tests::availability_offline_fails_fast_and_dials_nothing`、`ppvpn-core` `engine::probes_tests::entrance_probes_on_the_applied_profile`、`ppvpn-core` `engine::probes_tests::availability_probes_through_the_node` | done | 探测层：默认网卡状态由参数注入（Unknown/Present 照常探测，Absent 立即失败且不拨号）；Engine 层由 `on_network` 提供（来源是 sail 的网卡事件，接上之前为 Unknown） |
 | `internal/runtime` `TestReprobeDebouncesBursts` | A burst of changes (a Wi-Fi switch) re-arms one probe: each change stops the pending one, and only the last fires. |  | todo |  |
 | `internal/runtime` `TestReprobeDefersToApply` | An apply between the change and the probe builds for the new state; the probe then finds nothing to do. |  | todo |  |
 | `internal/runtime` `TestReprobeKeepsKernelWhenUnchanged` | Same result: nothing rebuilt, no change logged. |  | todo |  |
@@ -288,13 +288,13 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `api` `TestDebugGoroutinesOnlyAtDebugLevel` | GET /v1/debug/goroutines answers only at debug level and only to an authenticated caller. |  | todo |  |
 | `api` `TestFoldedErrorIsLoggedWithStageButNotReturned` | Folded error is logged with stage but not returned |  | todo |  |
 | `api` `TestGoldenContract` | Golden contract |  | n-a | golden 运行器本身；Rust 跑同一组文件（testdata/golden） |
-| `api` `TestLocalProxyAPIsReportDisabledCore` | Local proxy ap is report disabled core |  | todo |  |
-| `api` `TestLocalProxyMetadataAndCredentialAreSeparated` | Local proxy metadata and credential are separated |  | todo |  |
+| `api` `TestLocalProxyAPIsReportDisabledCore` | Local proxy ap is report disabled core | `ppvpn-core` `engine::proxy_tests::instances_without_a_local_proxy_refuse_its_calls` | done | TUN 实例和没有本地代理的 Standard 实例；`get-local-proxy-endpoints` 在库里不提供 |
+| `api` `TestLocalProxyMetadataAndCredentialAreSeparated` | Local proxy metadata and credential are separated | `ppvpn-core` `engine::proxy_tests::metadata_and_credentials_are_separate_and_follow_the_profile` | done | 有意不同：routed 凭据在 apply 之前就能读（host-integration 4.6）；`kind` 的请求校验（REQUEST_INVALID）属于 IPC，库里是两个方法 |
 | `api` `TestProbeEntrancesMethodAndShape` | Probe entrances method and shape | `ppvpn-core` `probe::entrance::tests::entrance_node_filter_and_shape`、`ppvpn-core` `probe::entrance::tests::parse_method` | done | method 是枚举，未知方法在解码时被拒；映射成 `PROBE_METHOD_UNSUPPORTED` 是将来 FFI 解码层的事 |
 | `api` `TestRoutingModeOnApplyAndStatus` | routing_mode is optional on validate/apply-profile, strictly checked, and reported by get-status; switching it re-applies the same revision. | `tests/golden_contract.rs` `scenarios_match_the_go_golden`（`apply_dedupe`） | done | routing_mode 在库里是类型化参数；`ROUTING_MODE_INVALID` 来自 `RoutingMode::parse` |
 | `api` `TestRuleSetHostsArePinnedAtValidateAndApply` | Rule set hosts are pinned at validate and apply |  | todo |  |
-| `api` `TestSetSystemProxyToggleAndStatus` | Set system proxy toggle and status |  | todo |  |
-| `api` `TestSystemProxyUnavailableWithoutStateOrInTUNCore` | System proxy unavailable without state or in tun core |  | todo |  |
+| `api` `TestSetSystemProxyToggleAndStatus` | Set system proxy toggle and status | `ppvpn-core` `engine::proxy_tests::system_proxy_listener_toggles` | done | 运行中开关走 reload（Go 原地增删监听），见 host-integration 4.6 |
+| `api` `TestSystemProxyUnavailableWithoutStateOrInTUNCore` | System proxy unavailable without state or in tun core | `ppvpn-core` `engine::proxy_tests::instances_without_a_local_proxy_refuse_its_calls` | done | 库里没有"无状态路径"的情形：`system_proxy=false` 的实例和 TUN 实例返回 SYSTEM_PROXY_UNAVAILABLE |
 | `api` `TestUnauthenticatedRejected` | Unauthenticated rejected |  | todo |  |
 | `api` `TestUnknownMethodUsesEnvelope` | Unknown method uses envelope |  | todo |  |
 | `api` `TestValidationErrorIsStructuredAndRedacted` | Validation error is structured and redacted |  | todo |  |
@@ -363,9 +363,9 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestSharedLocalProxyRoutesByUsername` | runs two nodes behind one loopback port: the username picks the node for HTTP and SOCKS5, traffic is counted and attributed per node, and bad credentials or removed … |  | todo |  |
 | `internal/runtime` `TestStandardCoreSelectNode` | drives select-node on a real non-TUN core, both before start (the selection must survive Start) and while running. | `ppvpn-core` `engine::selection_tests::select_node_before_and_after_a_profile` | done | 在 FakeRuntime 上：start 前选择的节点作为 `selected` 的默认值，运行中调用 `select("selected", 节点 tag)`；真实 sail 的 selector 由 `runtime::sail` 的测试覆盖 |
 | `internal/runtime` `TestSystemProxyFollowsSelectedNodeAndRules` | runs the standard (non-TUN) core with the system proxy toggled at runtime: traffic follows the selected node and the profile's DIRECT rule, counts toward traffic, and … |  | todo |  |
-| `internal/runtime` `TestSystemProxyStartFallsBackWhenPortTaken` | System proxy start falls back when port taken |  | todo |  |
-| `internal/runtime` `TestSystemProxyUnavailableInTUNCore` | System proxy unavailable in tun core |  | todo |  |
-| `internal/runtime` `TestTUNOnlyCoreRejectsLocalProxyAPIs` | covers `serve --tun --local-proxy=false`. |  | todo |  |
+| `internal/runtime` `TestSystemProxyStartFallsBackWhenPortTaken` | System proxy start falls back when port taken | `ppvpn-core` `engine::proxy_tests::system_proxy_start_falls_back_when_port_taken` | done |  |
+| `internal/runtime` `TestSystemProxyUnavailableInTUNCore` | System proxy unavailable in tun core | `ppvpn-core` `engine::proxy_tests::instances_without_a_local_proxy_refuse_its_calls` | done |  |
+| `internal/runtime` `TestTUNOnlyCoreRejectsLocalProxyAPIs` | covers `serve --tun --local-proxy=false`. | `ppvpn-core` `engine::proxy_tests::instances_without_a_local_proxy_refuse_its_calls`、`ppvpn-core` `engine::probes_tests::a_tun_instance_does_not_probe_availability` | done | TUN 实例的 selected_ingress 由 `engine::selection_tests` 覆盖 |
 | `internal/runtime` `TestTUNRuleSetDomainGoesDirect` | runs a local binary rule set on a real sing-box with the TUN route (fed by a SOCKS inbound carrying the TUN tag): a sniffed domain in a direct rule set connects straight … |  | todo |  |
 | `internal/runtime` `TestTelemetryCountsAndRemovesConnections` | The routed conn is the inbound (client) side, as sing-box hands it to the tracker: what the router reads from it is the client's upload, what it writes to it is the … |  | todo |  |
 | `internal/runtime` `TestTrackedSniffedConnectionKeepsCachedBytes` | Without a concurrent close the cached bytes come first, then the stream. |  | todo |  |

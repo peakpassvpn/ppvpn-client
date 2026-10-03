@@ -178,6 +178,8 @@ impl Inner {
                 a.pins.clone(),
             )
         };
+        // The listeners' ports may have been taken while stopped.
+        self.prepare_listeners()?;
         // Translated again: select and pin may have moved since the apply.
         let translation = translate::translate(&profile, &self.options(mode, &selected, &pins))?;
         if let Err(e) = self.runtime.start(&translation.json).await {
