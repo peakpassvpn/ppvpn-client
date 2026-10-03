@@ -54,6 +54,8 @@ pub(crate) struct FakeRuntime {
     /// reload leaves them, as sail's adds and removes no listener.
     inbounds: Mutex<Vec<String>>,
     traffic: Mutex<RuntimeTraffic>,
+    /// How often `traffic` was read.
+    traffic_reads: AtomicU64,
     tcp_route: Mutex<Option<SocketAddr>>,
     state: watch::Sender<RuntimeState>,
     switches: (
@@ -85,6 +87,7 @@ impl Default for FakeRuntime {
             connections: Mutex::default(),
             inbounds: Mutex::default(),
             traffic: Mutex::default(),
+            traffic_reads: AtomicU64::new(0),
             tcp_route: Mutex::default(),
             state: watch::channel(RuntimeState::Idle).0,
             switches: (switch_tx, Mutex::new(Some(switch_rx))),
@@ -188,6 +191,11 @@ impl FakeRuntime {
 
     pub(crate) fn set_connections(&self, connections: Vec<RuntimeConnection>) {
         *self.connections.lock().unwrap() = connections;
+    }
+
+    /// How often the runtime's traffic was read.
+    pub(crate) fn traffic_reads(&self) -> u64 {
+        self.traffic_reads.load(Ordering::Relaxed)
     }
 
     pub(crate) fn set_traffic(&self, traffic: RuntimeTraffic) {
@@ -372,6 +380,7 @@ impl Runtime for FakeRuntime {
     }
 
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError> {
+        self.traffic_reads.fetch_add(1, Ordering::Relaxed);
         self.running()?;
         Ok(*self.traffic.lock().unwrap())
     }

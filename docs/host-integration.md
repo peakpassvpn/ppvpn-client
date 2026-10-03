@@ -179,6 +179,8 @@ pub fn version() -> VersionInfo;                  // 关联函数，不需要实
 pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行，只能取一次，见第 10 节
 ```
 
+- **运行时数据的时效**：`status` 里的节点健康和当前入口、`traffic`、`connections` 都是引擎最近一次从运行时读到的值。引擎不为它们定时轮询，免得实例空闲时也被唤醒。宿主开始读取后，引擎每秒读一次运行时；宿主停止读取 10 秒后，就不再读。所以空闲后的第一次读取可能是旧值，`Traffic::measured_at` 标明了读取时间，下一次读取就是新的。入口切换（`NodeIngressSwitched`）和拨号失败会立即触发一次读取，不受这个节奏影响。
+
 `VersionInfo` 包含以下字段：
 
 - `core_version`：crate 版本；
