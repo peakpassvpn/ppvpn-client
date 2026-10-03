@@ -22,6 +22,10 @@ fn local_proxy(port: u16, password: &str, users: &[&str]) -> Value {
     })
 }
 
+fn secret(tag: char) -> String {
+    format!("{tag}{:x}", std::process::id())
+}
+
 fn tun(mtu: u32) -> Value {
     json!({ "type": "tun", "tag": TUN_INBOUND_TAG, "mtu": mtu, "auto_route": true })
 }
@@ -34,16 +38,18 @@ fn config(inbounds: Vec<Value>, route: Value) -> String {
 /// the engine; the reasons are Go's words.
 #[test]
 fn full_restart_reasons_are_a_whitelist() {
+    // Two passwords, made at run time (never a literal credential).
+    let (s, x) = (secret('s'), secret('x'));
     let route = json!({ "auto_detect_interface": true });
     let running = config(
-        vec![local_proxy(7890, "s", &["p-a", "p"]), tun(9000)],
+        vec![local_proxy(7890, &s, &["p-a", "p"]), tun(9000)],
         route.clone(),
     );
     let cases = [
         (
             "same",
             config(
-                vec![local_proxy(7890, "s", &["p-a", "p"]), tun(9000)],
+                vec![local_proxy(7890, &s, &["p-a", "p"]), tun(9000)],
                 route.clone(),
             ),
             "",
@@ -51,7 +57,7 @@ fn full_restart_reasons_are_a_whitelist() {
         (
             "local proxy users only",
             config(
-                vec![local_proxy(7890, "s", &["p-b", "p"]), tun(9000)],
+                vec![local_proxy(7890, &s, &["p-b", "p"]), tun(9000)],
                 route.clone(),
             ),
             "",
@@ -60,7 +66,7 @@ fn full_restart_reasons_are_a_whitelist() {
             "system proxy added",
             config(
                 vec![
-                    local_proxy(7890, "s", &["p-a", "p"]),
+                    local_proxy(7890, &s, &["p-a", "p"]),
                     tun(9000),
                     json!({ "type": "mixed", "tag": SYSTEM_PROXY_INBOUND_TAG, "listen": "127.0.0.1", "listen_port": 7891 }),
                 ],
@@ -71,7 +77,7 @@ fn full_restart_reasons_are_a_whitelist() {
         (
             "rules and nodes",
             config(
-                vec![local_proxy(7890, "s", &["p-a", "p"]), tun(9000)],
+                vec![local_proxy(7890, &s, &["p-a", "p"]), tun(9000)],
                 json!({ "auto_detect_interface": true, "final": "other" }),
             ),
             "",
@@ -79,7 +85,7 @@ fn full_restart_reasons_are_a_whitelist() {
         (
             "tun options",
             config(
-                vec![local_proxy(7890, "s", &["p-a", "p"]), tun(1500)],
+                vec![local_proxy(7890, &s, &["p-a", "p"]), tun(1500)],
                 route.clone(),
             ),
             "tun options changed",
@@ -87,7 +93,7 @@ fn full_restart_reasons_are_a_whitelist() {
         (
             "local proxy port",
             config(
-                vec![local_proxy(7899, "s", &["p-a", "p"]), tun(9000)],
+                vec![local_proxy(7899, &s, &["p-a", "p"]), tun(9000)],
                 route.clone(),
             ),
             "local proxy listener changed",
@@ -96,20 +102,20 @@ fn full_restart_reasons_are_a_whitelist() {
         (
             "local proxy password",
             config(
-                vec![local_proxy(7890, "x", &["p-a", "p"]), tun(9000)],
+                vec![local_proxy(7890, &x, &["p-a", "p"]), tun(9000)],
                 route.clone(),
             ),
             "",
         ),
         (
             "tun removed",
-            config(vec![local_proxy(7890, "s", &["p-a", "p"])], route.clone()),
+            config(vec![local_proxy(7890, &s, &["p-a", "p"])], route.clone()),
             "inbound tun added or removed",
         ),
         (
             "interface options",
             config(
-                vec![local_proxy(7890, "s", &["p-a", "p"]), tun(9000)],
+                vec![local_proxy(7890, &s, &["p-a", "p"]), tun(9000)],
                 json!({}),
             ),
             "interface options changed",
