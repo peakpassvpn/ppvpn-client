@@ -3,9 +3,8 @@ name: lab
 # The engine lab (test/lab/engine, gate G2 of #45) on a GitHub-hosted
 # runner: a Docker lab on internal networks (TEST-NET addresses, nodes in
 # containers, a privileged client), nothing outside the runner.
-#   cases   the lab's case groups on the Go core (strict: they are its
-#           baseline) and on the Rust core (reported only until its log
-#           lines and E1 are on main, as network-change-rust in netns.yml).
+#   cases   the lab's case groups on the Go core (its baseline) and on the
+#           Rust core, both strict (udp.3 expects per engine: D4).
 #           Each group first checks the core runs and answers get-status,
 #           and fails as a whole when it does not;
 #   repro   the Sail regression: every repro on the pinned sail and on
@@ -87,11 +86,7 @@ jobs:
             echo "::endgroup::"
           done
           exit $status
-      # The Rust core: reported, not failing, until the Engine's dns,
-      # connection and kernel-switch log lines (the cases read them) are on
-      # main (docs/rust-parity.md, Lab cases).
-      - name: cases on the Rust core (reported only)
-        continue-on-error: true
+      - name: cases on the Rust core
         run: |
           status=0
           for group in udp dns-hijack reverse-map; do

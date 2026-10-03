@@ -91,8 +91,8 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
 | tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 已有：`run.sh --libtest ppvpn_core.test tunrules::linux_tests::`（与 Go 并行） |
 | tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上（同一步，进程内关掉补回） |
-| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。**未通过**（continue-on-error），见下文 |
-| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | `network-change-rust`，内核切换看 `KernelSwitched` 事件。**未通过**（continue-on-error），见下文 |
+| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。通过（严格），见下文 |
+| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | `network-change-rust`，内核切换看 `KernelSwitched` 事件。通过（严格），见下文 |
 
 **Go 0.5.21 的已知滞后（Rust 必须修好）**：前端的网卡监视器报告默认网卡变化后，dns-local 和直连拨号用的是**内核自己的**监视器，网络事件连续不断时可能晚几秒才跟上。原因是 sing-tun 每收到一个 netlink 事件，就把 1 秒的检查重新计时；各个盒子的节奏不同，某一个就可能一直被推迟（#45；和 Desktop 在 Linux 实机上恢复慢 5.2 秒（#69）是同一个根源）。CI 里 network-change 对 Go 用 `SWITCH_GRACE_MS=6000`：在 6 秒内跟上才算通过，日志里记下实际滞后和第一次查询的结果。前端监视器自己也会被同样推迟（CI 上见过 5146 ms 才报告变化），所以有宽限时，等待"变化被报告"的上限是 10 秒（`CHANGE_REPORT_MS` 可改），日志里记下实际耗时。Rust 版的 ppvpn-core 必须在 `SWITCH_GRACE_MS=0`（默认）下通过：变化在 2 秒内被报告，变化后的第一次查询就用新网络。做法是全程只用一个监视器（同一个事件源同时用于日志、DNS 和拨号），并且防抖要有上限，不能被持续的事件无限推迟。
 
@@ -145,12 +145,12 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 
 | id | 行为 | Go 0.5.21 | Rust | 备注 |
 | --- | --- | --- | --- | --- |
-| `dns-hijack.1`–`.4` | 发往任意 IPv4、IPv6 地址，以及隧道自身 DNS 地址（`10.60.159.90`、`fde2:…::2`）的 53 端口查询都被劫持 | PASS | todo | |
-| `dns-hijack.5`–`.6` | 代理路由的域名由 dns-remote 解析，直连路由的域名由 dns-local 解析 | PASS | todo | |
-| `dns-hijack.7`–`.8` | 发往服务器 853 端口的 DoT 不被劫持，按普通连接路由 | PASS | todo | |
-| `udp.1`–`.2` | UDP 经选中节点；direct 规则下的 UDP 直连 | PASS | todo | |
-| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | todo | Rust 有意偏离（D4）：拒绝，用例按引擎区分期望，Rust 下判“没有应答” |
-| `reverse-map.1`–`.4` | 不带 Host 的连接按 DNS 应答的域名交给节点；内核热切换、改选节点后仍然有效 | PASS | todo | 对应 `TestKernelSwitchKeepsReverseMapping` |
+| `dns-hijack.1`–`.4` | 发往任意 IPv4、IPv6 地址，以及隧道自身 DNS 地址（`10.60.159.90`、`fde2:…::2`）的 53 端口查询都被劫持 | PASS | PASS | |
+| `dns-hijack.5`–`.6` | 代理路由的域名由 dns-remote 解析，直连路由的域名由 dns-local 解析 | PASS | PASS | |
+| `dns-hijack.7`–`.8` | 发往服务器 853 端口的 DoT 不被劫持，按普通连接路由 | PASS | PASS | |
+| `udp.1`–`.2` | UDP 经选中节点；direct 规则下的 UDP 直连 | PASS | PASS | |
+| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | PASS（拒绝） | Rust 有意偏离（D4）：拒绝，用例按引擎区分期望，Rust 下判“没有应答” |
+| `reverse-map.1`–`.4` | 不带 Host 的连接按 DNS 应答的域名交给节点；内核热切换、改选节点后仍然有效 | PASS | PASS | 对应 `TestKernelSwitchKeepsReverseMapping` |
 
 未覆盖：QUIC 嗅探（lab 镜像里没有 QUIC 客户端）。
 
