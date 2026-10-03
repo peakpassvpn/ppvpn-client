@@ -518,6 +518,43 @@ async fn shutdown_stops_the_runtime_and_ends_subscriptions() {
     assert_eq!(engine.shutdown().await, Ok(ShutdownReport::default()));
 }
 
+/// A runtime that failed is no longer running, but what it opened may
+/// still be there: shutdown stops it all the same, and so does the last
+/// handle's drop.
+#[tokio::test]
+async fn shutdown_stops_a_runtime_that_failed() {
+    let (failed, fake) = engine();
+    running(&failed).await;
+    fake.set_state(RuntimeState::Failed {
+        code: "io".into(),
+        message: "tun gone".into(),
+    });
+    while !matches!(failed.status().state, EngineState::Fatal { .. }) {
+        tokio::task::yield_now().await;
+    }
+    failed.shutdown().await.unwrap();
+    assert_eq!(fake.calls().last(), Some(&Call::Stop));
+
+    let (panicked, fake) = engine();
+    running(&panicked).await;
+    fake.set_state(RuntimeState::Failed {
+        code: "panicked".into(),
+        message: "boom".into(),
+    });
+    while !matches!(panicked.status().state, EngineState::Fatal { .. }) {
+        tokio::task::yield_now().await;
+    }
+    drop(panicked);
+    // The drop's teardown runs off the caller.
+    for _ in 0..200 {
+        if fake.calls().last() == Some(&Call::Stop) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(fake.calls().last(), Some(&Call::Stop));
+}
+
 #[tokio::test]
 async fn tun_routing_degrades_recovers_and_breaks() {
     use crate::engine::TunRoutingSignal;
