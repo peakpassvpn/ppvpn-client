@@ -74,8 +74,9 @@ const TUN_ROUTE_EXCLUDED: &[&str] = &[
 ];
 /// Our own Linux policy-routing table and rule range, apart from sing-tun's
 /// defaults (shared by mihomo, Clash Verge, ...), Tailscale and wg-quick.
-const IPROUTE2_TABLE_INDEX: u32 = 2091;
-const IPROUTE2_RULE_INDEX: u32 = 9091;
+/// The guard (`tunrules::Scope::desktop`) watches the same.
+pub(crate) const IPROUTE2_TABLE_INDEX: u32 = 2091;
+pub(crate) const IPROUTE2_RULE_INDEX: u32 = 9091;
 
 /// The TUN inbound and its DNS.
 #[derive(Debug, Clone, PartialEq, Eq)]
