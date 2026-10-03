@@ -123,16 +123,21 @@ impl Inner {
                 .flatten()
         };
         self.probe_host_ipv6();
-        let mut options = self.options(request.routing_mode, &selected, &pins);
-        options.rule_sets = rule_sets.files();
-        let translation = translate::translate(&profile, &options)
-            .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
+        let files = rule_sets.files();
+        let build = || {
+            let mut options = self.options(request.routing_mode, &selected, &pins);
+            options.rule_sets = files.clone();
+            translate::translate(&profile, &options)
+        };
+        let mut translation = build().map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
         let switch = if let Some(running) = &running {
-            let switch = self
-                .switch_to(running, &translation)
+            let (switch, now_running) = self
+                .switch_to(running, translation, &build)
                 .await
                 .map_err(|error| self.reload_failed(error, RELOAD_REFUSED))?;
+            translation = now_running;
             if switch == SwitchKind::KernelSwitch {
+                self.kernel_switched(&profile.revision);
                 self.reassert(&translation, &selected, &pins).await;
             }
             Some(switch)
@@ -226,6 +231,7 @@ impl Inner {
         if let Err(e) = started {
             return Err(self.runtime_error(&e));
         }
+        self.kernel_started();
         let run = {
             let mut live = self.live();
             live.running = true;

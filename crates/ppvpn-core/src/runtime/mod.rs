@@ -149,6 +149,25 @@ pub(crate) struct GroupSwitch {
     pub reason: String,
 }
 
+/// Connections through one chain of outbounds that failed (#45
+/// DialFailed): `count` since the one before for that chain, `last` the
+/// latest of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DialFailed {
+    /// The outbounds it went through, joined by `>` as the log's `out=`:
+    /// the route's outbound, then each group's member. sail adds a member
+    /// only once it connected, so a failure through a group names the
+    /// group alone (8f47c870).
+    pub chain: String,
+    /// Where it went, redacted as the log says it.
+    pub destination: String,
+    /// `dial`, `handshake` or `transfer`.
+    pub stage: String,
+    /// The I/O error's kind (`ConnectionRefused`, `TimedOut`, …).
+    pub error: String,
+    pub count: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct RuntimeTraffic {
     pub upload_bytes: u64,
@@ -228,6 +247,9 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     async fn unfix(&self, group: &str) -> Result<(), RuntimeError>;
     /// Group switches as they happen. Taken once (by the Engine, at new).
     fn group_switches(&self) -> mpsc::Receiver<GroupSwitch>;
+    /// Failed connections as they happen, through starts and stops; those
+    /// that do not fit while the reader is behind are dropped. Taken once.
+    fn dial_failures(&self) -> mpsc::Receiver<DialFailed>;
 
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError>;
     async fn connections(&self) -> Result<Vec<RuntimeConnection>, RuntimeError>;
