@@ -134,6 +134,28 @@ impl Engine {
     }
 }
 
+/// dns-local's interface of `snapshot`: none offline.
+fn interface_of(snapshot: &NetworkSnapshot) -> Option<Interface> {
+    if snapshot.offline {
+        return None;
+    }
+    snapshot.interface.as_ref().map(|name| Interface {
+        index: snapshot.index.unwrap_or(0),
+        name: name.clone(),
+    })
+}
+
+/// The interface dns-local asks the resolvers of: the network the run last
+/// reported, else, before it reported one (sail resolving its nodes during
+/// its first start), sail's snapshot, readable from the Starting phase on.
+fn local_dns_interface(
+    current: &Mutex<Option<Interface>>,
+    runtime: &dyn crate::runtime::Runtime,
+) -> Option<Interface> {
+    let known = current.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    known.or_else(|| runtime.network().as_ref().and_then(interface_of))
+}
+
 impl Inner {
     /// The TUN of a TUN instance (None otherwise), with the host's IPv6 as
     /// last probed.
@@ -171,6 +193,7 @@ impl Inner {
             _ => Vec::new(),
         };
         let current = self.tun.interface.clone();
+        let runtime = self.runtime.clone();
         let started = std::time::Instant::now();
         let cache = Cache::new(
             move |iface: &Interface| {
@@ -180,7 +203,7 @@ impl Inner {
                     localdns::source::overridden(&overridden)
                 }
             },
-            move || current.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            move || local_dns_interface(&current, runtime.as_ref()),
             localdns::servers::tunnel_prefixes(),
             move || started.elapsed(),
             |change: &Change| {
@@ -216,14 +239,7 @@ impl Inner {
     /// sail reported the network: dns-local follows the default interface
     /// and reads its resolvers again at the next query.
     pub(super) fn local_dns_network(&self, snapshot: &NetworkSnapshot) {
-        let interface = (!snapshot.offline)
-            .then(|| {
-                snapshot.interface.as_ref().map(|name| Interface {
-                    index: snapshot.index.unwrap_or(0),
-                    name: name.clone(),
-                })
-            })
-            .flatten();
+        let interface = interface_of(snapshot);
         *self.tun.interface.lock().unwrap_or_else(|e| e.into_inner()) = interface;
         if let Some(listener) = self.tun.listener.lock().expect("dns-local").as_ref() {
             listener.invalidate();
@@ -604,6 +620,48 @@ mod tests {
             ..NetworkSnapshot::default()
         });
         assert_eq!(*engine.inner.tun.interface.lock().unwrap(), None);
+    }
+
+    /// During the first start, before the run reported its network, sail
+    /// resolves its nodes through dns-local: it reads sail's snapshot (ready
+    /// from the Starting phase on) and dials through direct.
+    #[tokio::test]
+    async fn dns_local_works_during_the_first_start() {
+        let (engine, fake, _) = instance(Role::Tun, Platform::Linux);
+        engine.inner.start_local_dns().await.unwrap();
+        engine
+            .apply(crate::request::ApplyRequest::new(
+                super::super::lifecycle_tests::profile(R1),
+            ))
+            .await
+            .unwrap();
+        let gate = fake.hold_start();
+        let starting = {
+            let engine = engine.clone();
+            tokio::spawn(async move { engine.start().await })
+        };
+        let mut states = crate::runtime::Runtime::states(fake.as_ref());
+        while *states.borrow_and_update() != crate::runtime::RuntimeState::Starting {
+            states.changed().await.unwrap();
+        }
+        // Not reported yet: the run has not started.
+        assert_eq!(*engine.inner.tun.interface.lock().unwrap(), None);
+        let current = engine.inner.tun.interface.clone();
+        assert_eq!(
+            local_dns_interface(&current, engine.inner.runtime.as_ref()),
+            Some(Interface {
+                index: 2,
+                name: "eth0".into()
+            })
+        );
+        let dial = localdns::RuntimeDial {
+            runtime: engine.inner.runtime.clone(),
+            outbound: translate::DIRECT_TAG.into(),
+        };
+        let server = "192.0.2.53:53".parse().unwrap();
+        assert!(localdns::Dial::udp(&dial, server).await.is_ok());
+        gate.notify_one();
+        starting.await.unwrap().unwrap();
     }
 
     #[tokio::test]
