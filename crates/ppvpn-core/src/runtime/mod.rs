@@ -11,7 +11,7 @@
 #![allow(dead_code)] // the Engine is wired to it with the sail implementation
 
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -153,6 +153,39 @@ pub(crate) struct RuntimeConnection {
     pub started: SystemTime,
 }
 
+/// The network as sail sees it: the default route's interface and what
+/// identifies the network on it. `offline` when sail knew a network and now
+/// sees none (no default interface, address or type).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NetworkSnapshot {
+    pub interface: Option<String>,
+    pub index: Option<u32>,
+    pub gateway: Option<IpAddr>,
+    /// With their prefixes (`192.168.1.2/24`).
+    pub addresses: Vec<String>,
+    pub offline: bool,
+}
+
+/// A change of network that sail acts on (its DNS cache cleared, the
+/// connections of the old network reset): the same publication sail's own
+/// reaction reads, so the Engine's NetworkChanged and sail's reset come
+/// from one decision (one monitor, #45).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NetworkChange {
+    /// From 1 for each start of the runtime; a reader that sees a gap
+    /// missed changes in between (the channel keeps the latest only).
+    pub generation: u64,
+    /// `interface_changed` (another default interface), `moved` (the same
+    /// interface on another network, a wake included), `offline` (no
+    /// default interface) or `restored` (one again after none).
+    pub change: String,
+    /// `default_interface`, `state`, `host` (pushed), `wake`, or `lagged`
+    /// (made up from the snapshot after changes were missed).
+    pub reason: String,
+    pub old: NetworkSnapshot,
+    pub new: NetworkSnapshot,
+}
+
 /// A running sail. Every method may be called from any task; the
 /// implementation serialises what sail needs serialised.
 #[async_trait]
@@ -223,6 +256,23 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// kernel picks the utun and sail does not report it (until sail::embed
     /// does, the configured name is all there is, and macOS sets none).
     fn tun_name(&self) -> Option<String>;
+
+    /// The network now; None while the runtime does not run.
+    fn network(&self) -> Option<NetworkSnapshot>;
+    /// Each change of network, latest only (see `NetworkChange::generation`);
+    /// None until the first since the runtime started. The receiver lives
+    /// across starts and stops.
+    fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>>;
+}
+
+/// The kind a change from `old` to `new` would have had.
+pub(crate) fn made_up_kind(old: &NetworkSnapshot, new: &NetworkSnapshot) -> &'static str {
+    match (old.offline, new.offline) {
+        (_, true) => "offline",
+        (true, false) => "restored",
+        _ if (&old.interface, old.index) != (&new.interface, new.index) => "interface_changed",
+        _ => "moved",
+    }
 }
 
 /// The `interface_name` of the configuration's tun inbound, if it has one.

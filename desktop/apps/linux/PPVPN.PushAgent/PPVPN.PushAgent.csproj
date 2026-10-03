@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ppvpn-push-agent: shows backend pushes as desktop notifications while the
+    main app is closed. NativeAOT, so it idles in a few MB without the .NET
+    runtime; started from /etc/xdg/autostart and by the main app.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>ppvpn-push-agent</AssemblyName>
+    <RootNamespace>PPVPN.PushAgent</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <Version>0.1.0</Version>
+    <PublishAot>true</PublishAot>
+    <!-- No culture data needed: the agent formats nothing, so no libicu either. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <OptimizationPreference>Size</OptimizationPreference>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Platform/LinuxPaths.cs" Link="LinuxPaths.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
+      <_Parameter1>linux</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../shared/PPVPN.Client/PPVPN.Client.csproj" />
+  </ItemGroup>
+
+</Project>

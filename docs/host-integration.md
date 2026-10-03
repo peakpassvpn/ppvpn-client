@@ -72,9 +72,9 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
   - **本地代理状态在 `new` 时就生成或读取**：Standard 实例的 prefix、密码和端口，不依赖 apply，所以 `new` 之后就能读凭据和 metadata（第 4.6 节）。监听要到 `start` 才开。
   - **wintun.dll 由宿主随安装包分发**：签名版本和 Sail 使用的 `WINTUN_VERSION` 一致，路径通过 `TunConfig` 传入。引擎不下载它，也不内嵌。
   - 创建时会先**幂等地清扫上次的残留**，只限本库创建、并且能可靠识别的东西：
-    - Linux：优先级 9091–9101 的 ip rule 和表 2091（`tunrules` 的命名空间）；
-    - Windows：我们自己命名的 Wintun 适配器；
-    - macOS：我们创建的 utun 上的路由。
+    - Linux：Sail 在 `state_dir/run` 下的台账记下的改动，由 `sail::embed::sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表和 fw4 的 drop-in；另外按 `tunrules` 的命名空间清扫优先级 9091–9101 的 ip rule 和表 2091；
+    - macOS：不需要清扫。强杀后 utun 和经它的路由随进程一起消失（Sail 的常驻 CI 每次都验证）；Sail 接受这个 run_dir，但在 macOS 上不写台账；
+    - Windows：**目前不保证**。Sail 的 Windows TUN 还没有台账和 sweep，强杀后 Wintun 适配器及其路由、DNS 会不会残留还没有测；等 Sail 补上 Windows 的台账和 sweep（`docs/rust-parity.md`，切换前必须关掉的缺口）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
   - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
@@ -322,7 +322,7 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 | `SystemProxyChanged` | 是 | |
 | `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
 | `KernelSwitched`、`KernelDrained` | 是 | 热切换和排空 |
-| `NetworkChanged` | 是 | 默认网卡变化 |
+| `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
 | `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有；Rust 版三个平台都有。同时会反映在 `StateChanged` 里 |
 
 ## 7. 错误

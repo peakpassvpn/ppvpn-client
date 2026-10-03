@@ -1,0 +1,95 @@
+# deb and rpm for PPVPN, built by ../scripts/build-package.sh (which fills in every $-brace placeholder).
+#
+#   /usr/lib/ppvpn/ppvpn            the apphost; ppvpn-service only talks to this path
+#   /usr/lib/ppvpn/ppvpn-core       plus ppvpn-service{,-install,-uninstall}: copied into
+#                                   /usr/lib/ppvpn-service by the install helper (pkexec)
+#   /usr/lib/ppvpn/package-format   "deb" or "rpm": selects the update feed (BuildInfo.cs)
+#   /usr/lib/ppvpn/ppvpn-push-agent shows backend pushes as notifications; per user session
+#                                   from /etc/xdg/autostart (and started by the app)
+#
+# Minimum: glibc 2.35, GTK 4.6, libadwaita 1.1 (Ubuntu 22.04, Debian 12, Fedora 36).
+name: ppvpn
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${PPVPN_VERSION}
+release: ${PPVPN_BUILD_NUMBER}
+section: net
+priority: optional
+maintainer: ${PPVPN_PACKAGE_MAINTAINER}
+vendor: PeakPass VPN LLC
+homepage: https://www.peakpassvpn.com
+license: GPL-3.0-or-later
+description: |-
+  PPVPN desktop client
+  Connects to PeakPass VPN nodes through local proxies or, in Enhanced Mode,
+  routes all traffic of this computer (TUN) through a privileged system service.
+
+contents:
+  - src: ${PPVPN_STAGE_DIR}/app/
+    dst: /usr/lib/ppvpn
+    type: tree
+  - src: /usr/lib/ppvpn/ppvpn
+    dst: /usr/bin/ppvpn
+    type: symlink
+  - src: ${PPVPN_STAGE_DIR}/package-format.deb
+    dst: /usr/lib/ppvpn/package-format
+    packager: deb
+  - src: ${PPVPN_STAGE_DIR}/package-format.rpm
+    dst: /usr/lib/ppvpn/package-format
+    packager: rpm
+  - src: ${PPVPN_PACKAGING_DIR}/com.peakpassvpn.ppvpn.desktop.desktop
+    dst: /usr/share/applications/com.peakpassvpn.ppvpn.desktop.desktop
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_PACKAGING_DIR}/com.peakpassvpn.ppvpn.push-agent.desktop
+    dst: /etc/xdg/autostart/com.peakpassvpn.ppvpn.push-agent.desktop
+    type: config
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_STAGE_DIR}/icons/
+    dst: /usr/share/icons/hicolor
+    type: tree
+
+scripts:
+  postinstall: ${PPVPN_PACKAGING_DIR}/postinstall.sh
+  preremove: ${PPVPN_PACKAGING_DIR}/preremove.sh
+  postremove: ${PPVPN_PACKAGING_DIR}/postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      - libgtk-4-1 (>= 4.6)
+      - libadwaita-1-0 (>= 1.1)
+      - libsecret-1-0
+      # gdk-pixbuf's SVG loader: without it the Adwaita icon theme renders as broken images.
+      - librsvg2-common
+      - xdg-utils
+      - pkexec | policykit-1
+      # .NET globalization; the version is in the package name (Ubuntu 22.04: 70, Debian 12: 72,
+      # Ubuntu 24.04: 74, Debian 13: 76).
+      - libicu70 | libicu71 | libicu72 | libicu73 | libicu74 | libicu75 | libicu76 | libicu77 | libicu78
+      # .NET's HTTPS (the update notice's latest.json) goes through OpenSSL.
+      - libssl3 | libssl3t64
+    recommends:
+      - systemd
+  rpm:
+    depends:
+      - glibc >= 2.35
+      - gtk4 >= 4.6
+      - libadwaita >= 1.1
+      - libsecret
+      - librsvg2
+      - xdg-utils
+      - polkit
+      - libicu
+      - openssl-libs
+    recommends:
+      - systemd
+
+deb:
+  fields:
+    Bugs: https://www.peakpassvpn.com
+rpm:
+  group: Applications/Internet
+  compression: zstd

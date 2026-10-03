@@ -29,6 +29,10 @@ D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`�
 
 这几步（D1、D2、D3）由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
 
+不在 golden 里的偏离：
+
+- **TunRoutingRestored**（Core 组 2026-10-03 定）：Go 0.5.20 只在 `TunRoutingBroken` 之后才发；Rust 每次自愈补回都发，也就是从 `Degraded{TunRoutingRestoring}` 退出时发（host-integration 第 5、6 节）。在 Rust 的状态机里，Broken 属于 `Fatal`，之后不会再补回，所以照 Go 的做法这个事件就永远发不出来。宿主对它的处理应当是幂等的。
+
 D3 改变的只是失效的 `default_node_id`。选择由宿主持久化，引擎不留隐藏状态（2026-10-03 决定）：宿主每次 apply 都传入它保存的 `selected_node_id`，所以 `TestSameRevisionNoopAndMigrationKeepsSelection` 的"保持选择"在宿主传入选择时成立；宿主不传，就回到 `default_node_id`，重建实例和不重建的结果一样。
 
 Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
@@ -61,7 +65,7 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 
 | # | 行为 | Go 0.5.21 | Rust 现状 | 还缺什么 |
 | --- | --- | --- | --- | --- |
-| X1 | 主机有 IPv6 但没有自己的 IPv6 出口时，直连双栈域名仍然能通（0.5.17 修复，验收清单"功能与行为"） | `handOffDirectIPv6`：`direct` 换成 `domaindest(ipv6_only)` 包装 `direct-host`，后者解析时只取 IPv4；TUN 本身不变 | 翻译层已实现（`translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain`），改用 sail 现有能力：TUN inbound 加一条匹配 `2000::/3` 的 route-options 规则，设 `override_destination: "proxy_and_direct"`（后面规则的值优先，sail 有同样形状的路由测试）；`direct` 带 `domain_resolver {dns-local, ipv4_only}`。不需要 Sail 改动 | ① Engine 探测主机的 IPv6 出口（Go `internal/hostipv6`：每次 apply 和 start 各探一次，并写日志），结果填到 `Tun.no_host_ipv6_route`；② kernel 切换或 reload 后，反向映射是否还在（Go 用共享的存储，见 `TestRestoreFallsBackToTheSharedReverseMapping`；sail 的 reload 会清空 DNS 缓存，反向映射是否随之清空待确认）；③ lab 用例：IPv6 无出口的主机上，直连双栈域名能通 |
+| X1 | 主机有 IPv6 但没有自己的 IPv6 出口时，直连双栈域名仍然能通（0.5.17 修复，验收清单"功能与行为"） | `handOffDirectIPv6`：`direct` 换成 `domaindest(ipv6_only)` 包装 `direct-host`，后者解析时只取 IPv4；TUN 本身不变 | 翻译层已实现（`translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain`），改用 sail 现有能力：TUN inbound 加一条匹配 `2000::/3` 的 route-options 规则，设 `override_destination: "proxy_and_direct"`（后面规则的值优先，sail 有同样形状的路由测试）；`direct` 带 `domain_resolver {dns-local, ipv4_only}`。不需要 Sail 改动 | ① 探测已接入 Engine（`engine::tun`：每次 apply 和 start 各探一次并写日志，结果填到 `Tun.no_host_ipv6_route`；`reprobe_host_ipv6` 在结果变化时 reload 并发 `KernelSwitched`），触发来源等网络事件（sail 的网卡事件，E1b；Go 的防抖随之实现）；② kernel 切换或 reload 后，反向映射是否还在（Go 用共享的存储，见 `TestRestoreFallsBackToTheSharedReverseMapping`；sail 的 reload 会清空 DNS 缓存，反向映射是否随之清空待确认）；③ lab 用例：IPv6 无出口的主机上，直连双栈域名能通 |
 
 ## 测试宿主的约定
 
@@ -77,8 +81,8 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
 | tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 已有：`run.sh --libtest ppvpn_core.test tunrules::linux_tests::`（与 Go 并行） |
 | tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上（同一步，进程内关掉补回） |
-| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E6 | 被测二进制换成 `ppvpn-core-lab` |
-| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | 同上 |
+| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。**未通过**（continue-on-error），见下文 |
+| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | `network-change-rust`，内核切换看 `KernelSwitched` 事件。**未通过**（continue-on-error），见下文 |
 
 **Go 0.5.21 的已知滞后（Rust 必须修好）**：前端的网卡监视器报告默认网卡变化后，dns-local 和直连拨号用的是**内核自己的**监视器，网络事件连续不断时可能晚几秒才跟上。原因是 sing-tun 每收到一个 netlink 事件，就把 1 秒的检查重新计时；各个盒子的节奏不同，某一个就可能一直被推迟（#45；和 Desktop 在 Linux 实机上恢复慢 5.2 秒（#69）是同一个根源）。CI 里 network-change 对 Go 用 `SWITCH_GRACE_MS=6000`：在 6 秒内跟上才算通过，日志里记下实际滞后和第一次查询的结果。前端监视器自己也会被同样推迟（CI 上见过 5146 ms 才报告变化），所以有宽限时，等待"变化被报告"的上限是 10 秒（`CHANGE_REPORT_MS` 可改），日志里记下实际耗时。Rust 版的 ppvpn-core 必须在 `SWITCH_GRACE_MS=0`（默认）下通过：变化在 2 秒内被报告，变化后的第一次查询就用新网络。做法是全程只用一个监视器（同一个事件源同时用于日志、DNS 和拨号），并且防抖要有上限，不能被持续的事件无限推迟。
 
@@ -87,13 +91,28 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 - Docker 多节点 lab 的场景（G2：B1–B7、t3/t4/t56/t9），在移植到 runner 之前都在这里；
 - systemd-networkd 管理的链路抖动（`TestTUNRulesSurviveNetworkdLinkFlap`），runner 上没有 networkd 管理的链路。
 
-计划下一个 PR 接入 dns-local 的 E5（TUN 运行中切换默认网卡）和其余 D 组。
+**Rust 的 network-change（2026-10-03，在共享的 Linux 测试机上实跑，与 CI 的 `network-change-rust` 相同）**：apply 和 start 已通过；宿主无残留。其余未通过，缺的是 Engine 的这几块，补齐后去掉 continue-on-error：
+- Tun 实例还不打开 TUN（`tun interface: none`）：E1、E2、E3、E5 的查询和 updown 各模式的恢复都失败；D1 的抓包断言要求 TUN 存在，不会空过。
+- dns-local 还不是 core 自己的监听（#119）。在那之前翻译用的是 Sail 的 `local`，它走系统解析器：resolv.conf 为空时 glibc 退回 127.0.0.1，陷阱被查询（E6 失败）。
+- `NetworkChanged` 还没有事件源（Sail 的网络事件未接入）：三次"2 秒内报告变化"都失败。
+- `Engine::logs()` 还是空实现：没有 `local dns servers` 日志行。
+- updown 模式 2 需要 host IPv6 重探后切换一次内核（`KernelSwitched`）；其余模式切换次数为 0 是空过。
+
+D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给 lab 用的开关来构建不绑定的 core，Engine 里还没有，暂缺。D3（入口只给域名）需要节点，在 `test/lab/engine` 的 t4 里跑（`lab.sh up ... <ppvpn-core-lab>`，引擎 `rust`），同样等 TUN。
 
 ## 过渡实现
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
-sail 的网络事件合入之前，Engine 用 sail 现有的状态查询加短间隔轮询做过渡，不另起监视器。网络事件合入后换成事件驱动，这一节随之删除。
+`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
+
+强杀后的残留清扫（host-integration 第 3 节，切换前必须关掉的缺口）：`Engine::new` 把 sail 的 run_dir 设在 `state_dir/run`，并在清扫时调用 `sail::embed::sweep`。
+
+| 平台 | 状态 | 依据 |
+| --- | --- | --- |
+| Linux | done | Sail 在 run_dir 的台账记下改动，强杀后由下一次 `new` 的 `sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表、fw4 drop-in；另有 tunrules 按我们的优先级段和表清扫 |
+| macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
+| Windows | todo（切换前缺口） | Sail 在 Windows 上还没有台账和 sweep；强杀后 Wintun 适配器及其路由、DNS 会不会残留还没测 |
 
 ## Lab 用例（`test/lab/engine/cases`）
 
@@ -161,6 +180,8 @@ dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 
 
 过渡期已知限制（macOS）：TUN 不写网卡名，由 Sail 分配。Sail 改为由内核分配编号并报告实际名字之前，它固定用 `utun233`，这个编号被别的程序占用时启动失败。排除隧道网段由 dns-local 自己的隧道地址过滤保证。
 
+已知行为（macOS，Sail `98a5cbf5`，见 Sail 的 routing 文档）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 会替换它并打一行警告；停止时**不恢复**被替换的路由。
+
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
 | `cmd/ppvpn-core` `TestServeValidatesLocalDNSServers` | Serve validates local dns servers |  | todo |  |
@@ -211,11 +232,11 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
 | `api` `TestNoDefaultInterfaceIsRetryable` | Offline probes fail fast as NO_DEFAULT_INTERFACE, retryable. | `ppvpn-core` `probe::tests::no_default_interface_is_retryable` | done | Engine 接线后由 Engine 传入 sail 监视器的默认网卡状态 |
-| `internal/config` `TestDesktopTUNRoutesIPv6AndExcludesIPv6Ingress` | Desktop TUN carries an IPv6 address so IPv6 (and DNS to IPv6 resolvers) is routed into the tunnel instead of around it; every ingress IP, IPv4 or IPv6, stays excluded. |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/config` `TestDesktopTUNWithoutHostIPv6IsIPv4Only` | A host with IPv6 disabled cannot give the TUN an IPv6 address (sing-tun fails the whole start), so the desktop TUN stays IPv4-only there and no IPv6 ingress prefix is … |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
+| `internal/config` `TestDesktopTUNRoutesIPv6AndExcludesIPv6Ingress` | Desktop TUN carries an IPv6 address so IPv6 (and DNS to IPv6 resolvers) is routed into the tunnel instead of around it; every ingress IP, IPv4 or IPv6, stays excluded. | `ppvpn-core` `translate::tests::desktop_tun_routes_ipv6_and_keeps_ingresses_out`；Engine 层 `ppvpn-core` `engine::tun::tests::a_tun_instance_runs_a_tun_inbound_a_standard_one_does_not` | done | Engine 层断言 Tun 实例交给运行时的配置带 IPv6 地址和 auto_route，Standard 实例没有 TUN |
+| `internal/config` `TestDesktopTUNWithoutHostIPv6IsIPv4Only` | A host with IPv6 disabled cannot give the TUN an IPv6 address (sing-tun fails the whole start), so the desktop TUN stays IPv4-only there and no IPv6 ingress prefix is … | `ppvpn-core` `translate::tests::desktop_tun_routes_ipv6_and_keeps_ingresses_out`；Engine 层 `ppvpn-core` `engine::tun::tests::the_probe_decides_the_tun_ipv6_and_the_hand_off` | done | 主机 IPv6 由注入的探测给出：关闭时 TUN 只有 IPv4 地址，IPv6 入口前缀不排除 |
 | `internal/config` `TestKnownDomainRegexRejectsIPLiterals` | The fake-ip rule must treat an IP literal (what the HTTP sniffer reports for a request to a bare address) as "no domain". |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/config` `TestNoHostIPv6RouteHandsDirectIPv6ItsDomain` | A host with IPv6 enabled but no IPv6 path of its own keeps the same TUN (IPv6 address and routes, so nothing bypasses it) and only wraps direct. |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/config` `TestNoHostIPv6RouteLeavesIPv4OnlyTUNAlone` | The hand-off needs the TUN's IPv6: a host with IPv6 disabled, and mobile (IPv4-only tunnel), render direct as before. |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
+| `internal/config` `TestNoHostIPv6RouteHandsDirectIPv6ItsDomain` | A host with IPv6 enabled but no IPv6 path of its own keeps the same TUN (IPv6 address and routes, so nothing bypasses it) and only wraps direct. | `ppvpn-core` `translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain`；Engine 层 `ppvpn-core` `engine::tun::tests::the_probe_decides_the_tun_ipv6_and_the_hand_off` | done | 用 sail 的 `override_destination: "proxy_and_direct"` 代替 domaindest，见阻塞项 X1；TUN 本身不变 |
+| `internal/config` `TestNoHostIPv6RouteLeavesIPv4OnlyTUNAlone` | The hand-off needs the TUN's IPv6: a host with IPv6 disabled, and mobile (IPv4-only tunnel), render direct as before. | `ppvpn-core` `translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain` | done | 同一用例的后半段：IPv6 关闭和移动平台都不做 hand-off |
 | `internal/config` `TestTUNProxyTargetsCarryDomain` | Tun proxy targets carry domain |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/domaindest` `TestRestoreFallsBackToTheSharedReverseMapping` | After a kernel switch the new kernel's own reverse mapping is empty; the shared store still gives direct's ipv6_only wrapper (no host IPv6 path) the domain of a global … |  | todo |  |
 | `internal/domaindest` `TestRestoreIPv6Only` | Restore i pv6 only |  | todo |  |
@@ -228,18 +249,18 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/hostipv6` `TestWindowsRoute` | Windows route | `ppvpn-core` `hostipv6::windows::tests::route_needs_an_up_adapter_with_a_global_address_and_a_gateway` | done | 解析是纯函数，各平台的测试在所有 CI 平台上都跑；读取系统状态的部分按平台编译 |
 | `internal/reversemap` `TestCapacityEvictsTheEntryClosestToExpiry` | Capacity evicts the entry closest to expiry |  | todo |  |
 | `internal/reversemap` `TestRecordLookupAndExpiry` | Record lookup and expiry |  | todo |  |
-| `internal/runtime` `TestApplyProfileProbesHostIPv6ForTUN` | The desktop TUN carries IPv6 only when the host probe allows it; the probe runs on every apply because IPv6 can be toggled between starts. |  | todo |  |
+| `internal/runtime` `TestApplyProfileProbesHostIPv6ForTUN` | The desktop TUN carries IPv6 only when the host probe allows it; the probe runs on every apply because IPv6 can be toggled between starts. | `ppvpn-core` `engine::tun::tests::a_tun_instance_runs_a_tun_inbound_a_standard_one_does_not`、`ppvpn-core` `engine::tun::tests::the_probe_decides_the_tun_ipv6_and_the_hand_off` | done | 探测函数可注入（`Inner::set_host_ipv6_probe`）；apply 和 start 各探一次，Standard 实例和移动平台不探测 |
 | `internal/runtime` `TestDefaultInterfaceChangeEmitsNetworkChanged` | Every default interface change of the running engine is reported as NetworkChanged: the new interface's name and index, or none. |  | todo |  |
 | `internal/runtime` `TestDefaultInterfaceLogLine` | Default interface log line |  | todo |  |
-| `internal/runtime` `TestHostIPv6RouteDecidesDirectHandOff` | A host with IPv6 enabled but no IPv6 path keeps the IPv6 TUN and wraps direct; the probe runs on every apply and again at start, and its result is logged. |  | todo |  |
+| `internal/runtime` `TestHostIPv6RouteDecidesDirectHandOff` | A host with IPv6 enabled but no IPv6 path keeps the IPv6 TUN and wraps direct; the probe runs on every apply and again at start, and its result is logged. | `ppvpn-core` `engine::tun::tests::the_probe_decides_the_tun_ipv6_and_the_hand_off` | done | 读不到出口（`Err`）时照旧使用 IPv6、不做 hand-off；日志一行（`host ipv6`，含结果、policy 和 Err 的原因），日志内容未断言 |
 | `internal/runtime` `TestProbesFailFastWithoutDefaultInterface` | With no default interface (offline) both probes fail at once with ErrNoDefaultInterface instead of waiting out their timeout; with one, or when the engine cannot tell, … | `ppvpn-core` `probe::entrance::tests::entrance_offline_fails_fast_and_probes_nothing`、`ppvpn-core` `probe::availability::tests::availability_offline_fails_fast_and_dials_nothing` | done | 探测层：默认网卡状态由参数注入（Unknown/Present 照常探测，Absent 立即失败且不拨号）；Engine 接线后由 sail 的网卡监视器提供，Engine 层用例待接线 |
 | `internal/runtime` `TestReprobeDebouncesBursts` | A burst of changes (a Wi-Fi switch) re-arms one probe: each change stops the pending one, and only the last fires. |  | todo |  |
 | `internal/runtime` `TestReprobeDefersToApply` | An apply between the change and the probe builds for the new state; the probe then finds nothing to do. |  | todo |  |
-| `internal/runtime` `TestReprobeKeepsKernelWhenUnchanged` | Same result: nothing rebuilt, no change logged. |  | todo |  |
+| `internal/runtime` `TestReprobeKeepsKernelWhenUnchanged` | Same result: nothing rebuilt, no change logged. | `ppvpn-core` `engine::tun::tests::an_unchanged_ipv6_path_does_nothing` | done | 与 Go 一样，比较的是运行中构建的 hand-off；主机关掉 IPv6 留给下一次 apply 或 start |
 | `internal/runtime` `TestReprobeRealTimerFires` | The default scheduler is time.AfterFunc: a change still leads to a probe on its own (with a short delay and a generous deadline). |  | todo |  |
-| `internal/runtime` `TestReprobeSkipsWhileOffline` | A link goes down: the path looks lost only because there is no network. |  | todo | 端到端：netns CI network-change，updown 模式 0–4 |
-| `internal/runtime` `TestReprobeSwitchesWhenIPv6PathAppears` | The host gains an IPv6 path: switch back to the plain build. |  | todo |  |
-| `internal/runtime` `TestReprobeSwitchesWhenIPv6PathIsLost` | The host loses its IPv6 path (joins an IPv4-only network): one kernel switch to the hand-off build, no restart, armed ReprobeDelay out. |  | todo | 端到端：netns CI updown 模式 2（在线时切换一次） |
+| `internal/runtime` `TestReprobeSkipsWhileOffline` | A link goes down: the path looks lost only because there is no network. | `ppvpn-core` `engine::tun::tests::offline_or_stopped_does_not_probe` | done | 离线状态取自 `on_network`（来源是 sail 的网卡事件，E1b，未接线）；端到端：netns CI network-change，updown 模式 0–4 |
+| `internal/runtime` `TestReprobeSwitchesWhenIPv6PathAppears` | The host gains an IPv6 path: switch back to the plain build. | `ppvpn-core` `engine::tun::tests::a_changed_ipv6_path_switches_kernels` | done | reload 后发 `KernelSwitched`；连接数要等排空（第 1 组）接上，目前为 0 |
+| `internal/runtime` `TestReprobeSwitchesWhenIPv6PathIsLost` | The host loses its IPv6 path (joins an IPv4-only network): one kernel switch to the hand-off build, no restart, armed ReprobeDelay out. | `ppvpn-core` `engine::tun::tests::a_changed_ipv6_path_switches_kernels` | done | reload 后发 `KernelSwitched`；Go 的 ReprobeDelay 防抖随网卡事件接线实现。端到端：netns CI updown 模式 2（在线时切换一次） |
 | `internal/runtime` `TestStopCancelsPendingReprobe` | Stop cancels a pending re-probe. |  | todo |  |
 | `internal/runtime` `TestTUNApplyWithoutIPv6PathSwitchesKernels` | With the host's IPv6 state unchanged, a TUN apply is a kernel switch: the no-IPv6-path build (direct wrapped, direct-host resolving IPv4 only, see #48) changes … |  | todo |  |
 | `internal/runtime` `TestTUNRouteResolvesAndHandsDomainsToNode` | runs the TUN route and DNS configuration on a real sing-box. |  | todo |  |
@@ -335,16 +356,16 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/redact` `TestJSON` | Json |  | todo |  |
 | `internal/redact` `TestProxyURL` | Proxy url |  | todo |  |
 | `internal/redact` `TestShadowsocksKeys` | Shadowsocks keys |  | todo |  |
-| `internal/rulesets` `TestDownloadsRefuseRedirects` | Downloads refuse redirects |  | todo |  |
-| `internal/rulesets` `TestFailedUpdateKeepsLastGoodCopy` | A new profile version that cannot be fetched keeps the last good copy. |  | todo |  |
-| `internal/rulesets` `TestInspectClassifiesDNSMirroring` | Inspect classifies dns mirroring |  | todo |  |
-| `internal/rulesets` `TestPathStaysInsideDir` | Path stays inside dir |  | todo |  |
-| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache |  | todo |  |
-| `internal/rulesets` `TestPrepareRejectsDigestMismatchAndForeignHosts` | Prepare rejects digest mismatch and foreign hosts |  | todo |  |
-| `internal/rulesets` `TestPrepareRejectsInvalidRuleSet` | Prepare rejects invalid rule set |  | todo |  |
-| `internal/rulesets` `TestRecoverySweepsAllSetsAndRebuildsOnce` | When one set recovers, every other set that is not ready is retried at once (not on its own, possibly long, backoff), the downloads run concurrently, and the … |  | todo |  |
-| `internal/rulesets` `TestRecoveryTriggersRebuild` | A set that was never downloaded is retried; once it arrives the manager asks for a rebuild so the skipped rules take effect. |  | todo |  |
-| `internal/rulesets` `TestRefreshUsesETag` | A ready set is refreshed on its interval with If-None-Match and stays ready on 304. |  | todo |  |
+| `internal/rulesets` `TestDownloadsRefuseRedirects` | Downloads refuse redirects | `ppvpn-core` `rulesets::tests::downloads_refuse_redirects` | done |  |
+| `internal/rulesets` `TestFailedUpdateKeepsLastGoodCopy` | A new profile version that cannot be fetched keeps the last good copy. | `ppvpn-core` `rulesets::tests::failed_update_keeps_last_good_copy` | done |  |
+| `internal/rulesets` `TestInspectClassifiesDNSMirroring` | Inspect classifies dns mirroring | `ppvpn-core` `rulesets::tests::inspect_classifies_dns_mirroring` | done | 有意偏离：Rust 只接受 sail 能读的 .srs（版本到 5；AdGuard、`network_interface_address`、`default_interface_address` 判为 `RULE_SET_INVALID`），Go 1.13 读到版本 4 且接受这些条目。sail 读不了的集合不能交给内核（`rulesets::srs::tests`） |
+| `internal/rulesets` `TestPathStaysInsideDir` | Path stays inside dir | `ppvpn-core` `rulesets::tests::path_stays_inside_dir` | done |  |
+| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done |  |
+| `internal/rulesets` `TestPrepareRejectsDigestMismatchAndForeignHosts` | Prepare rejects digest mismatch and foreign hosts | `ppvpn-core` `rulesets::tests::prepare_rejects_digest_mismatch_and_foreign_hosts` | done |  |
+| `internal/rulesets` `TestPrepareRejectsInvalidRuleSet` | Prepare rejects invalid rule set | `ppvpn-core` `rulesets::tests::prepare_rejects_invalid_rule_set` | done |  |
+| `internal/rulesets` `TestRecoverySweepsAllSetsAndRebuildsOnce` | When one set recovers, every other set that is not ready is retried at once (not on its own, possibly long, backoff), the downloads run concurrently, and the … | `ppvpn-core` `rulesets::tests::recovery_sweeps_all_sets_and_rebuilds_once` | done |  |
+| `internal/rulesets` `TestRecoveryTriggersRebuild` | A set that was never downloaded is retried; once it arrives the manager asks for a rebuild so the skipped rules take effect. | `ppvpn-core` `rulesets::tests::recovery_triggers_rebuild` | done |  |
+| `internal/rulesets` `TestRefreshUsesETag` | A ready set is refreshed on its interval with If-None-Match and stays ready on 304. | `ppvpn-core` `rulesets::tests::refresh_uses_etag` | done |  |
 | `internal/runtime` `TestFixtureWithRealityStartsInLocalProxyMode` | starts the shared fixture (a VLESS REALITY primary with a Shadowsocks backup) in the unprivileged desktop mode. |  | todo |  |
 | `internal/runtime` `TestFreePortIsFreeForTCPAndUDP` | Free port is free for tcp and udp |  | todo |  |
 | `internal/runtime` `TestGoldenRouting` | Golden routing |  | n-a | golden 运行器本身；Rust 跑同一组文件（testdata/golden） |

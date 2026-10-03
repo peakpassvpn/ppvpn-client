@@ -1,0 +1,2 @@
+# PPVPN apt repository (https://pkg.peakpassvpn.com). Testers: replace "stable" with "dev".
+deb [signed-by=/usr/share/keyrings/ppvpn-archive-keyring.gpg] https://pkg.peakpassvpn.com/linux/apt stable main

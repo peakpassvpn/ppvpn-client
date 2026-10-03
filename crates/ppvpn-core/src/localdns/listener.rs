@@ -55,7 +55,7 @@ impl Drop for Listener {
 /// Binds TCP and UDP on one free port of 127.0.0.1 and serves `dns` there
 /// until the Listener is dropped.
 pub(crate) async fn start(dns: Arc<LocalDns>) -> io::Result<Listener> {
-    let (tcp, udp) = bind().await?;
+    let (tcp, udp) = bind_pair().await?;
     let addr = tcp.local_addr()?;
     let udp = Arc::new(udp);
     let mut tasks = Vec::new();
@@ -89,19 +89,35 @@ pub(crate) async fn start(dns: Arc<LocalDns>) -> io::Result<Listener> {
     Ok(Listener { addr, dns, tasks })
 }
 
-/// One free port for both: Windows excludes port ranges per protocol, so a
-/// TCP port may be forbidden for UDP; another is tried until one takes both.
-async fn bind() -> io::Result<(TcpListener, UdpSocket)> {
+/// One free loopback port for both TCP and UDP. Windows excludes port
+/// ranges per protocol (its Hyper-V ranges) and hands out ephemeral ports
+/// from them, so a port free for one may be refused to the other (10013):
+/// each try takes the ephemeral port of one protocol and asks the other for
+/// it, alternating which goes first, until one port takes both.
+pub(crate) async fn bind_pair() -> io::Result<(TcpListener, UdpSocket)> {
     let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
     let mut last = None;
-    for _ in 0..20 {
-        let tcp = TcpListener::bind(loopback).await?;
-        match UdpSocket::bind(tcp.local_addr()?).await {
-            Ok(udp) => return Ok((tcp, udp)),
+    for attempt in 0..64 {
+        let pair = if attempt % 2 == 0 {
+            let tcp = TcpListener::bind(loopback).await?;
+            UdpSocket::bind(tcp.local_addr()?)
+                .await
+                .map(|udp| (tcp, udp))
+        } else {
+            let udp = UdpSocket::bind(loopback).await?;
+            TcpListener::bind(udp.local_addr()?)
+                .await
+                .map(|tcp| (tcp, udp))
+        };
+        match pair {
+            Ok(pair) => return Ok(pair),
             Err(e) => last = Some(e),
         }
     }
-    Err(last.unwrap_or_else(|| io::Error::other("no loopback port free for both TCP and UDP")))
+    let last = last.map(|e| e.to_string()).unwrap_or_default();
+    Err(io::Error::other(format!(
+        "no loopback port free for both TCP and UDP (last: {last})"
+    )))
 }
 
 /// Length-prefixed queries on one connection, answered in order.

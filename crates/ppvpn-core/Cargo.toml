@@ -21,9 +21,15 @@ serde_json.workspace = true
 sha2 = "0.10"
 # The versions sail resolves (Cargo.lock), so nothing is built twice.
 async-trait = "0.1"
+bytes = "1"
 futures-util = "0.3"
 getrandom = "0.4"
 hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
+# Rule set downloads (HTTP/1.1 on sail's TLS) and reading .srs files.
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+miniz_oxide = "0.8"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
@@ -61,6 +67,8 @@ lab = []
 testing = []
 
 [dev-dependencies]
+# The rule set tests' TLS server and its certificate (sail's BoringSSL).
+btls = "0.5.6"
 ppvpn-core = { path = ".", features = ["testing"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
