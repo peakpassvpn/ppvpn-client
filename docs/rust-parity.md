@@ -23,13 +23,13 @@ Go core 冻结在 v0.5.21（#45）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`
 | D1 | `lifecycle.json` `start_without_profile` | `CORE_OPERATION_FAILED`（retryable=false） | `PROFILE_NOT_APPLIED`（retryable=false），不发事件 |
 | D2 | `selection.json` `select_unknown` | `CORE_OPERATION_FAILED` | `NODE_NOT_FOUND`（field=`node_id`，retryable=false），与 `pin-ingress` 一致；选中的节点不变 |
 | D2 | `selection.json` `select_before_profile` | `CORE_OPERATION_FAILED` | `PROFILE_NOT_APPLIED`（retryable=false） |
-| D3 | `apply_dedupe.json` `apply_unknown_default_node_keeps_selection` | 接受（`applied=true`，`ProfileApplied`）：Go 在校验前先用当前选中的节点覆盖了 `default_node_id` | apply 先校验原始 Profile：`default_node_id` 不存在就报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate-profile` 一致，已应用的 Profile 不变，发 `ReloadFailed`。校验通过后，若新 Profile 仍含当前选中的节点，就沿用它 |
+| D3 | `apply_dedupe.json` `apply_unknown_default_node_keeps_selection` | 接受（`applied=true`，`ProfileApplied`）：Go 在校验前先用当前选中的节点覆盖了 `default_node_id` | apply 先校验原始 Profile：`default_node_id` 不存在就报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate-profile` 一致，已应用的 Profile 不变，发 `ReloadFailed`。校验通过后，选中的节点取宿主随 apply 传入的 `selected_node_id`（它仍在新 Profile 里时）；宿主不传，就用新 Profile 的 `default_node_id`（host-integration 4.1） |
 
 D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`，在 Rust 下 `revision` 仍是 `2026-09-29T00:00:00Z#2`，因为 r3 被拒绝了；这两步也按此判定。
 
 这几步（D1、D2、D3）由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
 
-D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
+D3 改变的只是失效的 `default_node_id`。选择由宿主持久化，引擎不留隐藏状态（2026-10-03 决定）：宿主每次 apply 都传入它保存的 `selected_node_id`，所以 `TestSameRevisionNoopAndMigrationKeepsSelection` 的"保持选择"在宿主传入选择时成立；宿主不传，就回到 `default_node_id`，重建实例和不重建的结果一样。
 
 Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
 
