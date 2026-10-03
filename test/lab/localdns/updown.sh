@@ -119,11 +119,11 @@ first=$(awk -v up="$UP" '$1 > up && $2 == "ok" {print $1; exit}' "$OUT/probe.log
 RECOVERED=$(( ${first:-0} > 0 ? ${first:-0} - UP : -1 ))
 SW_ALL=$(switches)
 echo "mode=$MODE recovered_ms=$RECOVERED switches_before_up=$SW_OFF switches_total=$SW_ALL" | tee -a "$OUT/steps.log"
-check "recovered within ${LIMIT_MS} ms of the link coming up (got $RECOVERED)" '[ "$RECOVERED" -ge 0 ] && [ "$RECOVERED" -le "$LIMIT_MS" ]'
-check "no kernel switch while offline (got $SW_OFF)" '[ "$SW_OFF" = 0 ]'
+check "[E4] recovered within ${LIMIT_MS} ms of the link coming up (got $RECOVERED)" '[ "$RECOVERED" -ge 0 ] && [ "$RECOVERED" -le "$LIMIT_MS" ]'
+check "[E4] no kernel switch while offline (got $SW_OFF)" '[ "$SW_OFF" = 0 ]'
 case $MODE in
-2) check "one kernel switch, after the link came back (got $SW_ALL)" '[ "$SW_ALL" = 1 ]' ;;
-*) check "no kernel switch in all (got $SW_ALL)" '[ "$SW_ALL" = 0 ]' ;;
+2) check "[E4] one kernel switch, after the link came back (got $SW_ALL)" '[ "$SW_ALL" = 1 ]' ;;
+*) check "[E4] no kernel switch in all (got $SW_ALL)" '[ "$SW_ALL" = 0 ]' ;;
 esac
 grep -E 'msg="(default interface|host ipv6|host ipv6 changed|kernel switched)"' "$OUT/core.log" | sed -E 's/ (mtu|index)=[0-9]+//g' | cut -c12-200 >> "$OUT/steps.log"
 exit $FAILED

@@ -169,9 +169,17 @@ settle() { # answer regex, what
   log "dns-local followed $(( $(now) - CHANGED_AT )) ms after the reported change ($2): $r; the first query got: $first"
 }
 
+# Checks carry the #45 dns-local case they cover: D1 (no query to a physical
+# resolver enters the TUN), E1 (another interface), E2 (another network on
+# the same interface), E3 (no resolvers yet), E5 (the switch with the TUN
+# running: every step here), E6 (the 127.0.0.1 trap). E4 is updown.sh. D2
+# (the same run on a build without the socket binding must fail D1) needs
+# a way to build the core without it; D3 (an ingress given by domain only)
+# needs a node: test/lab/engine t4.
+
 # 1. Network A.
 r=$(q); log "network A: $r"
-check "network A answered by A" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.1" ]'
+check "[E1] network A answered by A" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.1" ]'
 
 # 2. Switch the default route to network B (another interface): the first
 # query after the switch must already be answered by B.
@@ -182,8 +190,8 @@ await_change cb $k "default route to cb"
 settle '^ok 192\.0\.2\.2 ' "default route to cb"
 a_before=$(count dns-a)
 r=$(q); log "network B: $r"
-check "first query after the change answered by B" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.2" ]'
-check "no query reached A after the change" '[ "$(count dns-a)" = "$a_before" ]'
+check "[E1, E5] first query after the change answered by B" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.2" ]'
+check "[E1, E5] no query reached A after the change" '[ "$(count dns-a)" = "$a_before" ]'
 
 # 3. Another network on the same interface (a Wi-Fi switch on en0): new
 # address on cb, new resolver in the file (each step writes the resolvers
@@ -196,8 +204,8 @@ await_change cb $k "new address and resolver on cb"
 settle '^ok 192\.0\.2\.3 ' "new address and resolver on cb"
 b_before=$(count dns-b)
 r=$(q); log "same interface, new network: $r"
-check "same interface, new network answered by the new resolver" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.3" ]'
-check "no query reached the old resolver after the change" '[ "$(count dns-b)" = "$b_before" ]'
+check "[E2] same interface, new network answered by the new resolver" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.3" ]'
+check "[E2] no query reached the old resolver after the change" '[ "$(count dns-b)" = "$b_before" ]'
 
 # 4. DHCP has not handed out DNS yet: queries fail fast (no 3 s timeout),
 # then the servers appear without another interface change and are used
@@ -210,8 +218,8 @@ await_change cb $k "cb without resolvers"
 settle '^fail SERVFAIL ' "cb without resolvers"
 for i in 1 2 3; do
   r=$(q); log "no resolvers: $r"
-  check "no resolvers: query $i gets SERVFAIL" '[ "$(echo $r | cut -d" " -f1,2)" = "fail SERVFAIL" ]'
-  check "no resolvers: query $i fails within 500 ms" '[ "$(echo $r | cut -d" " -f3)" -lt 500 ]'
+  check "[E3] no resolvers: query $i gets SERVFAIL" '[ "$(echo $r | cut -d" " -f1,2)" = "fail SERVFAIL" ]'
+  check "[E3] no resolvers: query $i fails within 500 ms" '[ "$(echo $r | cut -d" " -f3)" -lt 500 ]'
 done
 resolvers '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' 10.202.0.1
 APPEAR=$(now); log "resolver appears in the file (no interface change)"
@@ -222,13 +230,13 @@ for i in $(seq 30); do
   sleep 0.1
 done
 log "recovered after ${recovered:-never} ms"
-check "servers that appear are used within 1.5 s" '[ -n "$recovered" ] && [ "$recovered" -lt 1500 ]'
+check "[E3] servers that appear are used within 1.5 s" '[ -n "$recovered" ] && [ "$recovered" -lt 1500 ]'
 
-check "the 127.0.0.1 trap was never asked" '[ "$(count dns-trap)" = 0 ]'
+check "[E6] the 127.0.0.1 trap was never asked" '[ "$(count dns-trap)" = 0 ]'
 sleep 0.5; kill $(cat $R/tcpdump.pid) 2>/dev/null || true; sleep 0.3
-check "capture on the TUN saw the queries to its own resolver" '[ "$(grep -c "> 10\.60\.159\.90\.53:" "$OUT/tun-dns.txt")" -gt 0 ]'
-check "no query to a physical resolver entered the TUN" '! grep -Eq "> 10\.20[12]\.0\.(1|53)\.53:" "$OUT/tun-dns.txt"'
-check "every resolver saw only physical source addresses" '! cat "$OUT/dns-a.log" "$OUT/dns-b.log" "$OUT/dns-b2.log" | grep -v " from 10\.20[12]\.0\.[0-9]*:" | grep -q .'
+check "[D1] capture on the TUN saw the queries to its own resolver" '[ "$(grep -c "> 10\.60\.159\.90\.53:" "$OUT/tun-dns.txt")" -gt 0 ]'
+check "[D1] no query to a physical resolver entered the TUN" '[ -n "$TUN" ] && ! grep -Eq "> 10\.20[12]\.0\.(1|53)\.53:" "$OUT/tun-dns.txt"'
+check "[D1] every resolver saw only physical source addresses" '! cat "$OUT/dns-a.log" "$OUT/dns-b.log" "$OUT/dns-b2.log" | grep -v " from 10\.20[12]\.0\.[0-9]*:" | grep -q .'
 grep 'msg="local dns servers"' "$OUT/core.log" | tee -a "$OUT/steps.log" || true
 check "a local dns servers line per change" '[ "$(grep -c "msg=\"local dns servers\"" "$OUT/core.log")" -ge 4 ]'
 log "result: $([ $FAILED = 0 ] && echo PASS || echo FAIL)"
