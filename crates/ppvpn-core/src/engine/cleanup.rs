@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::EngineConfig;
+use crate::config::{EngineConfig, Platform, Role};
 use crate::error::Error;
 use crate::runtime::Runtime;
 use crate::state_dir::StateDirLock;
 use crate::types::ShutdownReport;
+use crate::{translate, tunrules};
 
 /// `shutdown`'s limit.
 pub(super) const SHUTDOWN_LIMIT: Duration = Duration::from_secs(10);
@@ -33,9 +34,19 @@ const REPORT_GRACE: Duration = Duration::from_millis(200);
 
 /// Idempotently removes what a previous instance on this host left (rules,
 /// routes, adapters it can tell are its own), before anything else at `new`.
+///
+/// Linux Tun instances: the TUN routing rules and table a previous
+/// instance's sail left (tunrules: our own priority range and table only).
+/// A sweep that fails is logged and does not stop `new`: what it could not
+/// remove does not keep this instance from working, and the guard puts
+/// back what this instance needs. Other platforms come with their sweep.
 pub(super) fn sweep(config: &EngineConfig) -> Result<(), Error> {
-    // sweep: the platform sweep module (separate PR) runs here.
-    let _ = config;
+    if config.role == Role::Tun && config.platform == Platform::Linux {
+        let scope = tunrules::Scope::desktop(translate::interface_name(config.platform));
+        if let Err(e) = tunrules::sweep(&scope) {
+            tracing::warn!(error = %e, "tun routing leftovers could not be removed");
+        }
+    }
     Ok(())
 }
 
@@ -347,5 +358,15 @@ mod tests {
         });
         assert!(report.leftovers.is_empty(), "{report:?}");
         assert_eq!(runtime.state(), RuntimeState::Stopped);
+    }
+
+    #[test]
+    fn sweep_leaves_alone_what_it_does_not_own() {
+        // A Standard instance has no TUN routing; nor has any instance off
+        // Linux yet: nothing to sweep, nothing that can fail.
+        let standard = EngineConfig::new(Role::Standard, Platform::Linux, state_dir("sweep"));
+        assert!(sweep(&standard).is_ok());
+        let macos = EngineConfig::new(Role::Tun, Platform::Macos, state_dir("sweep-mac"));
+        assert!(sweep(&macos).is_ok());
     }
 }
