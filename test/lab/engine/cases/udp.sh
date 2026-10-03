@@ -36,4 +36,4 @@ case $ENGINE in
 rust) check udp.3 "UDP routed to a node with udp=false is refused (D4)" "$(r=$(udp); echo "${r:-none}")" 'none' ;;
 *) check udp.3 "UDP routed to a node with udp=false still goes through it" "$(udp)" '198\.51\.100\.13' ;;
 esac
-stop_core; summary
+dials_taken udp; stop_core; summary
