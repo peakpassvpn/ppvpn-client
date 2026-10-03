@@ -1,6 +1,6 @@
 //! What the Engine needs from a running sail, and nothing more (crate
 //! private). The sail implementation is over `sail::embed`; the Engine's own
-//! tests use [`fake::FakeRuntime`]. Shapes follow sail's docs/embed.md:
+//! tests use `fake::FakeRuntime`. Shapes follow sail's docs/embed.md:
 //! subscribe, then read; a failed reload changes nothing; a dial goes
 //! through one named outbound, whatever the rules say.
 //!
@@ -20,8 +20,10 @@ use tokio::sync::{mpsc, watch};
 
 use crate::error::{codes, Error};
 
-/// Built outside tests too: the golden contract tests (tests/) drive an
-/// Engine on it through `internal`.
+/// For tests only: this crate's own, and (with the `testing` feature, which
+/// the crate's dev-dependency on itself turns on) the golden contract tests
+/// in tests/, through `internal`. Never in a host's build.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) mod fake;
 pub(crate) mod sail;
 
