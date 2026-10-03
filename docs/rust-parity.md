@@ -27,6 +27,8 @@ Go core 冻结在 v0.5.21（#45）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`
 
 D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`，在 Rust 下 `revision` 仍是 `2026-09-29T00:00:00Z#2`，因为 r3 被拒绝了；这两步也按此判定。
 
+这几步由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
+
 D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
 
 Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
@@ -112,7 +114,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | `internal/runtime` `TestApplyKeepsRunningConnections` | An apply while a download runs (new rules, same nodes) switches kernels without touching the download: it completes in full after the switch, new connections use the new … |  | todo |  |
 | `internal/runtime` `TestApplyKernelStartFailureLeavesTheOldKernel` | A kernel that fails to start is discarded: ApplyProfile fails, the old kernel and its connections are untouched, and the old profile stays. |  | todo |  |
 | `internal/runtime` `TestApplyReachesConnectionsOfOlderKernels` | A switch applies the new profile to every replaced kernel still draining, not only the one it replaces: a download started two applies earlier is counted as kept, and … |  | todo |  |
-| `internal/runtime` `TestAtomicApplyRollback` | Atomic apply rollback |  | todo |  |
+| `internal/runtime` `TestAtomicApplyRollback` | Atomic apply rollback | `ppvpn-core` `engine::lifecycle_tests::a_failed_apply_keeps_what_runs_and_says_why` | done | 在 FakeRuntime 上：校验失败、翻译失败、运行时拒绝 reload 时，生效的 Profile 和状态都不变，并发 `ReloadFailed`（带 `code`）；真实 sail 上的回滚由 sail 的 reload 保证（失败不改变任何东西） |
 | `internal/runtime` `TestCloseOnSwitchDecidesByRecordedNode` | closeOnSwitch decides by the node the routing kernel recorded, not by looking the connection's tags up in the previous build, so it holds even if tags stop being stable … |  | todo |  |
 | `internal/runtime` `TestConcurrentLifecycleOperationsDoNotLeakEngines` | Concurrent lifecycle operations do not leak engines |  | todo |  |
 | `internal/runtime` `TestDrainClosesIdleConnections` | A keep-alive connection that goes quiet in a draining kernel is closed after drainIdleClose, and the kernel drains instead of waiting for drainLimit. |  | todo |  |
@@ -129,8 +131,8 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | `internal/runtime` `TestProfileRejectRuleDoesNotCrashCore` | hits a profile reject rule on a real sing-box. |  | todo |  |
 | `internal/runtime` `TestRapidAppliesDrainEveryKernel` | Rapid applies stack draining kernels; each drains on its own once its connections end, and none is left behind. |  | todo |  |
 | `internal/runtime` `TestRoutingModeSwitchKeepsConnections` | Switching routing_mode is a kernel switch: an existing connection keeps running (global only loosens what rules allowed), new ones follow global. |  | todo |  |
-| `internal/runtime` `TestRoutingModeSwitchesWithoutNewRevision` | The routing mode is part of what an apply changes: switching it re-applies the same revision, the global mode renders only baseline rules with the selected node as final … |  | todo |  |
-| `internal/runtime` `TestSameRevisionNoopAndMigrationKeepsSelection` | Same revision noop and migration keeps selection |  | todo |  |
+| `internal/runtime` `TestRoutingModeSwitchesWithoutNewRevision` | The routing mode is part of what an apply changes: switching it re-applies the same revision, the global mode renders only baseline rules with the selected node as final … | `tests/golden_contract.rs` `scenarios_match_the_go_golden`（`apply_dedupe`）、`ppvpn-core` `translate::tests::global_keeps_baseline_rules_and_proxies_the_rest` | done | |
+| `internal/runtime` `TestSameRevisionNoopAndMigrationKeepsSelection` | Same revision noop and migration keeps selection | `ppvpn-core` `engine::lifecycle_tests::apply_dedupes_on_the_live_values`、`tests/golden_contract.rs` `scenarios_match_the_go_golden`（`apply_dedupe`） | done | 去重键是 (revision, routing_mode, selected_node_id, pins)，与当前生效的值比较（host-integration 4.1）。选择由宿主随 apply 传入：传入的节点仍在新 Profile 里就沿用，否则用 `default_node_id` 并返回 `selection_reset` |
 
 ## 2. Linux TUN 路由规则守护（tunrules）
 
@@ -275,7 +277,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `api` `TestLocalProxyAPIsReportDisabledCore` | Local proxy ap is report disabled core |  | todo |  |
 | `api` `TestLocalProxyMetadataAndCredentialAreSeparated` | Local proxy metadata and credential are separated |  | todo |  |
 | `api` `TestProbeEntrancesMethodAndShape` | Probe entrances method and shape |  | todo |  |
-| `api` `TestRoutingModeOnApplyAndStatus` | routing_mode is optional on validate/apply-profile, strictly checked, and reported by get-status; switching it re-applies the same revision. |  | todo |  |
+| `api` `TestRoutingModeOnApplyAndStatus` | routing_mode is optional on validate/apply-profile, strictly checked, and reported by get-status; switching it re-applies the same revision. | `tests/golden_contract.rs` `scenarios_match_the_go_golden`（`apply_dedupe`） | done | routing_mode 在库里是类型化参数；`ROUTING_MODE_INVALID` 来自 `RoutingMode::parse` |
 | `api` `TestRuleSetHostsArePinnedAtValidateAndApply` | Rule set hosts are pinned at validate and apply |  | todo |  |
 | `api` `TestSetSystemProxyToggleAndStatus` | Set system proxy toggle and status |  | todo |  |
 | `api` `TestSystemProxyUnavailableWithoutStateOrInTUNCore` | System proxy unavailable without state or in tun core |  | todo |  |

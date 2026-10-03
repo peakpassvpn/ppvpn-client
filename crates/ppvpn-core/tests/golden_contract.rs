@@ -1,17 +1,27 @@
-//! Profile validation against Go 0.5.21's contract golden
-//! (testdata/golden/contract): every validate-profile and apply-profile step
-//! must reach the same outcome — accepted, or the same error code, field and
-//! retryable. Steps where the Rust engine deliberately differs are listed in
-//! `DEPARTURES` with their expected outcome (docs/rust-parity.md); steps that
-//! exist only because Core API v1 is IPC are in `IPC_ONLY`.
+//! The Rust engine against Go 0.5.21's contract golden
+//! (testdata/golden/contract):
+//!
+//! - validation: every validate-profile and apply-profile step must reach
+//!   the same outcome — accepted, or the same error code, field and
+//!   retryable;
+//! - scenarios (`SCENARIOS`): every step of the file, in order, on one
+//!   Engine over the fake runtime: the response and the events it sent.
+//!
+//! Steps where the Rust engine deliberately differs are listed with their
+//! expected outcome (docs/rust-parity.md, D1–D3, D5); steps that exist only
+//! because Core API v1 is IPC are in `IPC_ONLY`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use ppvpn_core::internal::validate_request;
-use ppvpn_core::{ApplyRequest, RoutingMode};
-use serde_json::Value;
+use futures_util::FutureExt;
+use ppvpn_core::internal::{engine_on_fake_runtime, validate_request};
+use ppvpn_core::{
+    ApplyRequest, Engine, EngineConfig, Error, EventItem, EventKind, Platform,
+    ProbeAvailabilityRequest, Role, RoutingMode,
+};
+use serde_json::{json, Value};
 
 /// (file, step, expected code and field): D3 — apply validates the profile
 /// as given, as validate-profile does.
@@ -192,5 +202,221 @@ fn apply_patch(doc: &mut Value, op: &Value) {
             items.insert(last.parse::<usize>().unwrap(), op["value"].clone())
         }
         _ => panic!("bad patch target: {path}"),
+    }
+}
+
+/// The scenario files run step by step.
+const SCENARIOS: &[&str] = &["lifecycle", "apply_dedupe"];
+
+/// (file, step, Rust's response, Rust's events): D1–D3. A response is the
+/// golden's envelope; events are listed by their golden fields.
+fn scenario_departure(file: &str, step: &str) -> Option<(Value, Value)> {
+    let error = |code: &str, field: Option<&str>| {
+        let mut error = json!({ "code": code, "retryable": false });
+        if let Some(field) = field {
+            error["field"] = field.into();
+        }
+        json!({ "ok": false, "error": error })
+    };
+    match (file, step) {
+        // D1: no profile is PROFILE_NOT_APPLIED, and nothing is sent.
+        ("lifecycle", "start_without_profile") => {
+            Some((error("PROFILE_NOT_APPLIED", None), json!([])))
+        }
+        // D3: the profile as given; the applied one stays.
+        ("apply_dedupe", "apply_unknown_default_node_keeps_selection") => Some((
+            error("DEFAULT_NODE_NOT_FOUND", Some("selection.default_node_id")),
+            json!([{ "type": "ReloadFailed" }]),
+        )),
+        // D2: an unknown node is NODE_NOT_FOUND, before a profile
+        // PROFILE_NOT_APPLIED.
+        ("selection", "select_unknown") => {
+            Some((error("NODE_NOT_FOUND", Some("node_id")), json!([])))
+        }
+        ("selection", "select_before_profile") => {
+            Some((error("PROFILE_NOT_APPLIED", None), json!([])))
+        }
+        _ => None,
+    }
+}
+
+/// (file, step): D3's knock-on — r3 was refused, so r2 is still applied.
+const STILL_R2: &[(&str, &str)] = &[
+    ("apply_dedupe", "status_r3"),
+    ("apply_dedupe", "status_still_r3"),
+];
+
+/// Fields the Rust engine adds to a status (section 5): not in Go's.
+const RUST_ONLY_STATUS_FIELDS: &[&str] = &["dropped_log_lines"];
+
+#[tokio::test]
+async fn scenarios_match_the_go_golden() {
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for name in SCENARIOS {
+        let file: Value =
+            serde_json::from_slice(&fs::read(contract_dir().join(format!("{name}.json"))).unwrap())
+                .unwrap();
+        let state_dir =
+            std::env::temp_dir().join(format!("ppvpn-core-golden-{name}-{}", std::process::id()));
+        // No local proxy, no system proxy, no TUN: the golden's platform.
+        let engine = engine_on_fake_runtime(EngineConfig::new(
+            Role::Standard,
+            Platform::Linux,
+            state_dir,
+        ));
+        // StateChanged is new with the library; its tests are the engine's.
+        let kinds: Vec<EventKind> = EventKind::ALL
+            .iter()
+            .copied()
+            .filter(|k| *k != EventKind::StateChanged)
+            .collect();
+        let mut events = engine.subscribe(&kinds);
+        let steps = file["steps"].as_array().unwrap();
+        let expects = file["expect"].as_array().unwrap();
+        for (step, expect) in steps.iter().zip(expects) {
+            let step_name = step["name"].as_str().unwrap();
+            let (mut want, want_events) = match scenario_departure(name, step_name) {
+                Some(departure) => departure,
+                None => (expect["response"].clone(), expect["events"].clone()),
+            };
+            if STILL_R2.contains(&(*name, step_name)) {
+                want["data"]["revision"] = "2026-09-29T00:00:00Z#2".into();
+            }
+            let got = run_step(&engine, step).await;
+            let mut got_events = Vec::new();
+            while let Some(Some(item)) = events.recv().now_or_never() {
+                match item {
+                    EventItem::Event { event } => {
+                        got_events.push(serde_json::to_value(event).unwrap())
+                    }
+                    other => panic!("{name}/{step_name}: {other:?}"),
+                }
+            }
+            checked += 1;
+            let method = step["method"].as_str().unwrap();
+            if let Err(why) = same_response(method, &want, &got) {
+                failures.push(format!(
+                    "{name}/{step_name}: {why}\n  got  {got}\n  want {want}"
+                ));
+            }
+            if let Err(why) = same_events(&want_events, &got_events) {
+                failures.push(format!(
+                    "{name}/{step_name}: events: {why}\n  got  {got_events:?}\n  want {want_events}"
+                ));
+            }
+        }
+        engine.shutdown().await.unwrap();
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} steps differ:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// One step through the library, as the golden's envelope.
+async fn run_step(engine: &Engine, step: &Value) -> Value {
+    let body = &step["body"];
+    let text = |key: &str| body[key].as_str().unwrap_or("").to_owned();
+    let result: Result<Value, Error> = match step["method"].as_str().unwrap() {
+        "apply-profile" => match RoutingMode::parse(body["routing_mode"].as_str().unwrap_or("")) {
+            Err(e) => Err(e),
+            Ok(mode) => {
+                let profile = match step.get("profile_ref") {
+                    Some(reference) => serde_json::to_vec(&resolve(reference)).unwrap(),
+                    None => Vec::new(),
+                };
+                engine
+                    .apply(ApplyRequest::new(profile).with_routing_mode(mode))
+                    .await
+                    .map(|r| serde_json::to_value(r).unwrap())
+            }
+        },
+        "start" => engine.start().await.map(|()| json!({})),
+        "stop" => engine.stop().await.map(|()| json!({})),
+        "get-status" => {
+            let mut status = serde_json::to_value(engine.status()).unwrap();
+            for field in RUST_ONLY_STATUS_FIELDS {
+                status.as_object_mut().unwrap().remove(*field);
+            }
+            Ok(status)
+        }
+        "select-node" => engine
+            .select_node(&text("node_id"))
+            .await
+            .map(|()| json!({ "node_id": text("node_id") })),
+        "get-selected-node" => Ok(serde_json::to_value(engine.selected_node()).unwrap()),
+        "list-nodes" => Ok(serde_json::to_value(engine.nodes()).unwrap()),
+        "pin-ingress" => {
+            let key = body["endpoint_key"].as_str();
+            engine
+                .pin_ingress(&text("node_id"), key)
+                .await
+                .map(|()| json!({ "node_id": text("node_id"), "endpoint_key": key }))
+        }
+        "probe-availability" => engine
+            .probe_availability(ProbeAvailabilityRequest::new(
+                text("node_id"),
+                text("target"),
+                body["timeout_ms"].as_u64().unwrap_or(0),
+            ))
+            .await
+            .map(|r| serde_json::to_value(r).unwrap()),
+        other => panic!("no library call for {other}"),
+    };
+    match result {
+        Ok(data) => json!({ "ok": true, "data": data }),
+        Err(e) => {
+            let mut error = json!({ "code": e.code, "retryable": e.retryable });
+            if let Some(field) = e.field {
+                error["field"] = field.into();
+            }
+            json!({ "ok": false, "error": error })
+        }
+    }
+}
+
+/// apply-profile's golden data holds `applied` only (Go's response); every
+/// other response is compared whole.
+fn same_response(method: &str, want: &Value, got: &Value) -> Result<(), String> {
+    if want["ok"] != got["ok"] {
+        return Err("ok differs".into());
+    }
+    if want["ok"] == false {
+        return (want["error"] == got["error"])
+            .then_some(())
+            .ok_or_else(|| "error differs".into());
+    }
+    let same = if method == "apply-profile" {
+        contains(&got["data"], &want["data"])
+    } else {
+        want["data"] == got["data"]
+    };
+    same.then_some(()).ok_or_else(|| "data differs".into())
+}
+
+/// Same kinds in the same order; each with the golden's fields (Rust may
+/// add fields: `ReloadFailed.code`); `at` is not compared.
+fn same_events(want: &Value, got: &[Value]) -> Result<(), String> {
+    let want = want.as_array().unwrap();
+    if want.len() != got.len() {
+        return Err(format!("{} events, want {}", got.len(), want.len()));
+    }
+    for (w, g) in want.iter().zip(got) {
+        if !contains(g, w) {
+            return Err(format!("{g} lacks {w}"));
+        }
+    }
+    Ok(())
+}
+
+/// Every field of `want` is in `got` with the same value (objects only at
+/// the top; below that values compare whole).
+fn contains(got: &Value, want: &Value) -> bool {
+    match want.as_object() {
+        Some(fields) => fields.iter().all(|(k, v)| got.get(k) == Some(v)),
+        None => got == want,
     }
 }
