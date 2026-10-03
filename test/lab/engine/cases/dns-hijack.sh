@@ -23,8 +23,8 @@ check dns-hijack.4 "query to the tunnel's own IPv6 DNS address" "$(a @fde2:ec40:
 check dns-hijack.5 "a proxied name is resolved by dns-remote" "$(a @198.51.100.99 hj5.split.lab.test A >/dev/null; server hj5.split.lab.test)" 'dns-remote'
 check dns-hijack.6 "a direct-routed name is resolved by dns-local" "$(a @198.51.100.99 direct-split.lab.test A >/dev/null; server direct-split.lab.test)" 'dns-local'
 # No dns line holds with no core too: the DoT server must also have
-# answered (any status: dot7 is not in its hosts), and the core's log must
-# have dns lines at all (5, 6).
-check dns-hijack.7 "DoT to a server (port 853) is answered and not hijacked: no dns log line" "$(a=$(kdig +tls +timeout=8 @198.51.100.53 dot7.lab.test A 2>/dev/null | sed -n 's/.*status: \([A-Z]*\).*/\1/p' | head -1); s=$(server dot7.lab.test); echo "answered=${a:-none} dns=${s:-none}")" 'answered=(NOERROR|NXDOMAIN) dns=none'
+# answered, with any status (dot7 is not in its hosts: SERVFAIL), and the
+# core's log must have dns lines at all (5, 6).
+check dns-hijack.7 "DoT to a server (port 853) is answered and not hijacked: no dns log line" "$(a=$(kdig +tls +timeout=8 @198.51.100.53 dot7.lab.test A 2>/dev/null | sed -n 's/.*status: \([A-Z]*\).*/\1/p' | head -1); s=$(server dot7.lab.test); echo "answered=${a:-none} dns=${s:-none}")" 'answered=[A-Z]+ dns=none'
 check dns-hijack.8 "DoT to a server is routed as a connection (a connection log line)" "$(grep -E 'msg=connection .*destination=198\.51\.100\.53:853' $R/core.log | sed -n 's/.*outbound=\([^ ]*\).*/\1/p' | tail -1)" '.+'
 stop_core; summary

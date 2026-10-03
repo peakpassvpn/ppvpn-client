@@ -19,8 +19,9 @@ jq '.revision = "udp-direct" | .routing.rules = [{"id":"udp-direct","match":{"ip
   /work/profile.json > /run/udp-direct.json
 PROFILE=/run/udp-direct.json apply >/dev/null && api start >/dev/null; sleep 1
 # Leaving directly is what the client does with no core at all: the core's
-# connection line to the echo, through direct, is the positive signal.
-check udp.2 "UDP under a direct rule leaves directly, through the core" "$(udp) via=$(outbound_to '198\.51\.100\.50:9999')" '198\.51\.100\.100 via=direct'
+# connection line to the echo, through direct (Go: direct-host), is the
+# positive signal.
+check udp.2 "UDP under a direct rule leaves directly, through the core" "$(udp) via=$(outbound_to '198\.51\.100\.50:9999')" '198\.51\.100\.100 via=direct(-host)?'
 api stop >/dev/null
 
 # 3: UDP routed to us, whose node and ingress say udp=false. Go 0.5.21

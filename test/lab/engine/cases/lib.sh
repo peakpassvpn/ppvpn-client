@@ -16,13 +16,17 @@ check() {
   else CASE_FAIL=$((CASE_FAIL + 1)); echo "FAIL $1 $2: got=$3 want=$4"; fi
 }
 # up <group>: the core started, applied, started its run and answers
-# get-status with ok; else the whole group fails here, not check by check
-# (a check whose expectation the host meets without a core would pass).
+# get-status with ok and a running state (degraded runs too); else the whole
+# group fails here, not check by check (a check whose expectation the host
+# meets without a core would pass).
 up() {
-  if [ -S $R/core.sock ] && api get-status | jq -e '.ok == true and .data.state == "running"' >/dev/null 2>&1; then
-    echo "== core up (engine=$ENGINE)"; return 0
-  fi
+  status=$( [ -S $R/core.sock ] && api get-status)
+  state=$(printf '%s' "$status" | jq -r 'select(.ok == true) | .data.state' 2>/dev/null)
+  case $state in
+  running|degraded) echo "== core up (engine=$ENGINE, state=$state)"; return 0 ;;
+  esac
   echo "FAIL $1.up the core runs and answers get-status: the group is not run"
+  echo "  get-status: $(printf '%s' "$status" | head -c 600)"
   [ -f $R/stdout ] && sed 's/^/  stdout: /' $R/stdout | tail -20
   [ -f $R/core.log ] && sed 's/^/  log: /' $R/core.log | tail -20
   CASE_FAIL=$((CASE_FAIL + 1)); summary; exit 1
