@@ -230,9 +230,11 @@ jobs:
           if find target/$TARGET/debug/build -path '*btls-sys-*/out/build' -maxdepth 4 | grep -q .; then
             echo "::error::btls-sys compiled BoringSSL instead of linking the prebuilt one"; exit 1
           fi
-          lipo -archs "$prebuilt/lib/libssl.a" "$prebuilt/lib/libcrypto.a"
           bin=$(ls -t target/$TARGET/debug/deps/ppvpn_core-* | grep -v '\.d$' | head -n 1)
-          lipo -archs "$bin"
+          for f in "$prebuilt/lib/libssl.a" "$prebuilt/lib/libcrypto.a" "$bin"; do
+            echo "$f: $(lipo -archs "$f")"
+            lipo "$f" -verify_arch x86_64
+          done
       - name: Rosetta
         id: rosetta
         run: |
