@@ -133,7 +133,7 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 
 Sail E2（实例的任务都放进作用域）进行中，sail bfe72d36 是第一步：`sail::embed::PANICS_ARE_CAUGHT` 可用，`Engine::new` 断言它为真（以 `panic = "unwind"` 构建，sail 的 panic 只让实例失败，宿主照常运行）；停止时还没结束的任务由 sail 的停止报告列出，进入 `ShutdownReport.leftovers`（`runtime: sail task <名> (<数>) still running after <ms> ms`），这样的停止不算失败，另记一行 warn。协议、TUN、DNS、入站各模块的任务还在分批移入作用域，保证尚不完整。
 
-连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`，地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。
+连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`（出站链外层在前，最后一个是承载连接的出站；这是 sail 2eb3fe47 代码的实际顺序，它的文档注释写的是相反的顺序，已请 Sail 确认），地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。
 
 DNS 交换（`Runtime::dns_exchanges`）来自 sail 的 `events(Kinds::DNS)`，和路由结果一样只在 debug 时取：每个应答或失败的查询一条，客户端的和实例自己拨号用的都有（`for_instance`），sequential 服务器的每个成员各一条（`attempt`）；名字不带末尾的点，记录最多 16 条另有总数。启动时查询集中，通道容量 256，落后时丢弃并记一行丢了多少。Engine 侧的 `msg=dns` 行（远端的部分）由它生成。
 

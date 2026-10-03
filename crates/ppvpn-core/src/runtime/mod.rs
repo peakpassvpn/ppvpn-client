@@ -178,8 +178,10 @@ pub(crate) struct Routed {
     pub rule: Option<usize>,
     /// `outbound`, `reject`, `drop` or `hijack_dns`.
     pub action: String,
-    /// The outbound that carried it first, then the groups' choices back to
-    /// the outbound the rules named; empty where none was asked.
+    /// Outermost first, as `DialFailed::chain`: the outbound the rules named,
+    /// then the member each group on the way took; the last carried it.
+    /// Empty where none was asked. (sail's code at 2eb3fe47; its doc says
+    /// the reverse order, asked of Sail.)
     pub chain: Vec<String>,
     /// What the outbound was asked to reach (`host:port`).
     pub request_destination: Option<String>,
