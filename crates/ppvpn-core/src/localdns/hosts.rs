@@ -1,4 +1,4 @@
-//! The system's hosts file: names in it are answered without a query (#45
+//! The system's hosts file: names in it are answered without a query (#214
 //! dns-local case C6), as the Go core's transport did.
 
 use std::collections::HashMap;

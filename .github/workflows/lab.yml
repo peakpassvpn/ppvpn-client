@@ -1,6 +1,6 @@
 name: lab
 
-# The engine lab (test/lab/engine, gate G2 of #45) on a GitHub-hosted
+# The engine lab (test/lab/engine, gate G2 of #214) on a GitHub-hosted
 # runner: a Docker lab on internal networks (TEST-NET addresses, nodes in
 # containers, a privileged client), nothing outside the runner.
 #   cases   the lab's case groups on the Go core (its baseline) and on the

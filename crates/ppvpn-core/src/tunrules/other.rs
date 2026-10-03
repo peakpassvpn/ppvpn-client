@@ -1,5 +1,5 @@
 //! Only Linux routes the TUN by policy rules; elsewhere there is nothing
-//! here to guard (macOS and Windows get their own routing checks, #45 N2).
+//! here to guard (macOS and Windows get their own routing checks, #214 N2).
 
 use std::io;
 

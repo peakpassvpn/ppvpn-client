@@ -12,7 +12,7 @@ Core 版本以 `version/version.go` 的 `CoreVersion` 为准（`ppvpn-core versi
 - [Core API v1](docs/core-api.md)：认证、请求/响应、所有方法、DTO、事件及错误码
 - [桌面平台接入](docs/desktop.md)：Windows 与 macOS 都由特权 service 以 TUN 模式运行 core
 - [移动端接入](docs/mobile.md)：iOS Network Extension 与 Android `VpnService`
-- [Rust 版行为对照](docs/rust-parity.md)：Go 测试与 Rust `ppvpn-core`（`crates/ppvpn-core`）用例的逐条对照（#45 硬切换的前提）
+- [Rust 版行为对照](docs/rust-parity.md)：Go 测试与 Rust `ppvpn-core`（`crates/ppvpn-core`）用例的逐条对照（#214 硬切换的前提）
 - [贡献须知](CONTRIBUTING.md)：敏感信息检查与 pre-push 钩子（每个 clone 执行 `git config core.hooksPath .githooks`）
 - [安全模型](docs/security.md)：密钥边界、IPC、日志、持久化和威胁假设
 - [构建与发布](docs/release.md)：测试门禁、跨平台构建、校验和与发布检查表

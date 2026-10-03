@@ -32,7 +32,7 @@ Each round prints one `PERF {...}` line per instance (see report.py):
 <proto> is ss (Shadowsocks 2022) or anytls, both against tools' fakenode on
 loopback; nothing leaves the host.
 
-Tier B (#45's thresholds that depend on the machine: CPU, throughput,
+Tier B (#214's thresholds that depend on the machine: CPU, throughput,
 latency), the standard instance only, each engine of --engine in turn in
 every round (A B A B ...: Go and Rust measured as a pair, on one machine,
 in one run), with a `PERF {...}` line per engine and round carrying its

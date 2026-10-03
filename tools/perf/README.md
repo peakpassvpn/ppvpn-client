@@ -34,7 +34,7 @@ All metrics use the same profile: one Shadowsocks 2022 node and one AnyTLS node,
 
 ## Caveats
 
-- **RSS and size are the engine's alone.** The Rust engine runs inside the hosts' processes, so the hosts' total RSS and installer size are Desktop's measurements (#45). Against Go, sizes are a trend only.
+- **RSS and size are the engine's alone.** The Rust engine runs inside the hosts' processes, so the hosts' total RSS and installer size are Desktop's measurements (#214). Against Go, sizes are a trend only.
 - **The fake node's certificate is trusted only on Linux.** AnyTLS trusts it through `SSL_CERT_FILE`, which Go honours on Linux but not on macOS, so the measurement runs on Linux. The Rust engine's lab binary must accept a CA file the same way, for example a flag or `SSL_CERT_FILE` with rustls-native-certs, for this script to measure it.
 - **Allocations do not compare across engines.** Go's runtime and a Rust allocator count differently.
 - **Out of scope for tier A:** CPU, throughput and latency depend on the runner. Tier B measures them, below.
@@ -47,7 +47,7 @@ sudo -E tools/perf/measure.py --engine-bin build/ppvpn-core --fakenode "$FAKENOD
 
 ## Tier B
 
-CPU, throughput and latency (#45's performance thresholds) depend on the machine, so they are not measured in CI. They are measured by hand on a dedicated Linux host, with the same scripts: `measure.py --tier b`. The numbers go into an issue, not into the repository.
+CPU, throughput and latency (#214's performance thresholds) depend on the machine, so they are not measured in CI. They are measured by hand on a dedicated Linux host, with the same scripts: `measure.py --tier b`. The numbers go into an issue, not into the repository.
 
 - **Pairs.** Each round measures every engine given with `--engine`, in turn (Go, Rust, Go, Rust, ...), in one run. Go 0.5.21 and the Rust engine are therefore always compared on the same machine on the same day. Hosts are rebuilt, so numbers from different runs or days are not compared.
 - **Cores.** `--engine-cpus`, `--load-cpus` and `--node-cpus` pin the engine, loadgen and fakenode to their own cores (`taskset -c`), so that the load and the fake node do not take the engine's CPU. Give them disjoint sets within the cores the job was granted.

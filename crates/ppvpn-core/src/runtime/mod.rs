@@ -149,7 +149,7 @@ pub(crate) struct GroupSwitch {
     pub reason: String,
 }
 
-/// Connections through one chain of outbounds that failed (#45
+/// Connections through one chain of outbounds that failed (#214
 /// DialFailed): `count` since the one before for that chain, `last` the
 /// latest of them.
 /// A connection once the rules decided of it and, where they sent it to an
@@ -286,7 +286,7 @@ pub(crate) struct NetworkSnapshot {
 /// A change of network that sail acts on (its DNS cache cleared, the
 /// connections of the old network reset): the same publication sail's own
 /// reaction reads, so the Engine's NetworkChanged and sail's reset come
-/// from one decision (one monitor, #45).
+/// from one decision (one monitor, #214).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NetworkChange {
     /// From 1 for each start of the runtime; a reader that sees a gap

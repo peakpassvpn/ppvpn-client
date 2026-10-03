@@ -157,7 +157,7 @@ await_change() { # interface, previous count of its changes, what changed
 # The change is logged from the front's interface monitor; dns-local (and
 # direct dials) follow the kernel's own monitor, which on Go core 0.5.21 can
 # lag by seconds while network events keep coming (each restarts sing-tun's
-# 1 s debounce; #45, docs/rust-parity.md). SWITCH_GRACE_MS > 0 (the Go
+# 1 s debounce; #214, docs/rust-parity.md). SWITCH_GRACE_MS > 0 (the Go
 # baseline in CI) waits up to that long after the reported change for
 # dns-local to follow, and logs how long it took; 0 (the default, and the
 # requirement for the Rust core) asks the first query after the change.
@@ -173,7 +173,7 @@ settle() { # answer regex, what
   log "dns-local followed $(( $(now) - CHANGED_AT )) ms after the reported change ($2): $r; the first query got: $first"
 }
 
-# Checks carry the #45 dns-local case they cover: D1 (no query to a physical
+# Checks carry the #214 dns-local case they cover: D1 (no query to a physical
 # resolver enters the TUN), E1 (another interface), E2 (another network on
 # the same interface), E3 (no resolvers yet), E5 (the switch with the TUN
 # running: every step here), E6 (the 127.0.0.1 trap). E4 is updown.sh. D2

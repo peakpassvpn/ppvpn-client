@@ -3,8 +3,8 @@
 A Docker lab in which the same scripts drive core's behaviour on two engines:
 the Go core with sing-box (`ppvpn-core serve`) and, for Sail, the standalone
 `sail` binary (repros) or an engine with a Sail kernel behind the same
-control surface (core-level tests; for the Rust ppvpn-core, see #45:
-`ppvpn-core-lab`). It is gate G2 of #45 and the place where Sail gaps are
+control surface (core-level tests; for the Rust ppvpn-core, see #214:
+`ppvpn-core-lab`). It is gate G2 of #214 and the place where Sail gaps are
 reproduced and regressed. Moved here from the prototype branch
 `proto/sail-engine` (archived; its Go engine code is not part of main).
 
@@ -92,7 +92,7 @@ against sing-box 1.13.12 (run logs stay outside the repository):
 | B4 fallback group | every new connection waits the full timeout; alive:true, no history | one failed dial marks the member; history visible; INFO switch line; ~15 s before switching back |
 | B5 runtime API | unauthenticated | secret required, loopback only, 401, api.sock 0600 |
 | B6 DNS cookie (dig, c-ares) | cached answers replay a stale cookie: timeouts | each client's cookie echoed (= sing-box) |
-| B7 DNS servers' sockets under a TUN | loop through the TUN (also 0.15) | loop through the TUN; `bind_interface` avoids it (fix pending, #45) |
+| B7 DNS servers' sockets under a TUN | loop through the TUN (also 0.15) | loop through the TUN; `bind_interface` avoids it (fix pending, #214) |
 | 9 inbound without a port | 200, listens nowhere | 400 with the reason |
 | 10 HTTP proxy Host | rewritten with `:80` | kept (= sing-box) |
 | 12a reload errors | 202, no reason | 200 / 400 with the reason, config kept |

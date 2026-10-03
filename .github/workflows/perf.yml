@@ -1,6 +1,6 @@
 name: perf
 
-# The performance checks' tier A (#45): numbers that barely depend on the
+# The performance checks' tier A (#214): numbers that barely depend on the
 # machine — release binary sizes, the engine process's RSS idle and under a
 # fixed loopback load, allocations, apply and kernel-switch time — measured
 # at each main push and compared with the last main run and with the Go

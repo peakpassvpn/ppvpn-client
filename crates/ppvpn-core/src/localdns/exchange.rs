@@ -17,7 +17,7 @@ pub const SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Opens a datagram or stream to a resolver. [`RuntimeDial`] goes through
 /// sail's direct outbound, whose dialer is bound to the default interface,
-/// so that a query to a physical resolver never enters the TUN (#45
+/// so that a query to a physical resolver never enters the TUN (#214
 /// dns-local case D1); [`PlainDial`] does not bind (tests).
 #[async_trait]
 pub(crate) trait Dial: Send + Sync {
@@ -183,7 +183,7 @@ pub fn answers(answer: &Message, query: &Message) -> bool {
 
 /// SERVFAIL for `query`. Sent when no server could answer (none read, or all
 /// failed): an error would leave a hijacked query unanswered and the client
-/// waiting for its own timeout (#45 dns-local case C1). Never cached.
+/// waiting for its own timeout (#214 dns-local case C1). Never cached.
 pub fn server_failure(query: &Message) -> Message {
     let mut response = Message::error_msg(query.id, query.op_code, ResponseCode::ServFail);
     response.metadata.recursion_desired = query.recursion_desired;

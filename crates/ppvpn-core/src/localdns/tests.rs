@@ -1,4 +1,4 @@
-//! #45 dns-local group C: what a query gets. The resolvers are fakes on
+//! #214 dns-local group C: what a query gets. The resolvers are fakes on
 //! loopback; the servers the cache hands out are documentation addresses
 //! (loopback ones are never usable), mapped onto the fakes by [`MapDial`].
 
