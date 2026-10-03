@@ -7,8 +7,10 @@ name: desktop-package
 # - A pull request that touches the packaging (this workflow, the packaging
 #   scripts and files) builds all three without any secret: unsigned on
 #   Windows, ad-hoc signed on macOS, no update signature.
-# - By hand, for a test build of any ref.
-# - Called by the release workflow, which passes the signing secrets.
+# - By hand, for a test build of any ref: as a pull request's, without
+#   secrets, against the production backend.
+# - Called by the release workflow with an environment: the jobs then run
+#   in it and read the signing secrets and the backend address from it.
 #
 # None of these jobs is a required check, and none may share a name with
 # one (rust.yml's `macos`): a required check is matched by job name.
@@ -44,10 +46,13 @@ on:
         description: dev or stable
         type: string
         required: true
-      api_base:
-        description: Backend base URL baked into the apps
+      environment:
+        description: >-
+          Environment holding the signing secrets and the backend address;
+          the jobs that use them run in it, under its branch rules and
+          reviewers. Empty: no secret is read.
         type: string
-        required: true
+        required: false
       version:
         description: x.y.z from the release tag
         type: string
@@ -56,7 +61,12 @@ on:
         description: Release-wide build counter shared by all platforms (0-65535)
         type: string
         required: true
+    # Secrets of the environment above. A job reads them only when an
+    # environment is given: never for a pull request or a run by hand.
     secrets:
+      PPVPN_API_BASE:
+        description: Backend base URL baked into the apps (default production). A secret, because inputs show on the run's page.
+        required: false
       SPARKLE_PRIVATE_KEY:
         description: EdDSA (ed25519) private key of the update feeds (macOS and Windows)
         required: false
@@ -88,8 +98,6 @@ env:
   PPVPN_RELEASE_CHANNEL: ${{ inputs.channel != 'none' && inputs.channel || '' }}
   PPVPN_VERSION: ${{ inputs.version || '' }}
   PPVPN_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}
-  # The backend of each job below: the release workflow sets it; every
-  # other build is against production.
   # Public half of the update feeds' key; empty disables in-app updates.
   PPVPN_SPARKLE_PUBLIC_KEY: ${{ vars.PPVPN_SPARKLE_PUBLIC_KEY }}
 
@@ -112,11 +120,12 @@ jobs:
   package-linux:
     needs: package-inputs
     runs-on: ubuntu-22.04
+    environment: ${{ inputs.environment }}
     timeout-minutes: 60
     env:
       ZIG_VERSION: '0.13.0'
       NFPM_VERSION: '2.47.0'
-      PPVPN_API_BASE: ${{ inputs.api_base || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE: ${{ inputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
       # latest.json of this channel's apt/dnf repository, polled for the
       # in-app update notice (builds without a channel use stable's).
       PPVPN_UPDATE_FEED: https://pkg.peakpassvpn.com/linux/${{ inputs.channel == 'dev' && 'dev' || 'stable' }}/latest.json
@@ -186,14 +195,15 @@ jobs:
   package-windows:
     needs: package-inputs
     runs-on: windows-latest
+    environment: ${{ inputs.environment }}
     timeout-minutes: 90
     env:
-      PPVPN_API_BASE: ${{ inputs.api_base || 'https://www.peakpassvpn.com' }}
-      SPARKLE_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      PPVPN_API_BASE: ${{ inputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      SPARKLE_PRIVATE_KEY: ${{ inputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
       # Optional Authenticode through desktop/scripts/sign-windows.ps1; off
       # unless these are configured.
-      WINDOWS_CERTIFICATE: ${{ github.event_name != 'pull_request' && secrets.WINDOWS_CERTIFICATE || '' }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+      WINDOWS_CERTIFICATE: ${{ inputs.environment && secrets.WINDOWS_CERTIFICATE || '' }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ inputs.environment && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
       WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
       PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
       PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
@@ -250,15 +260,16 @@ jobs:
   package-macos:
     needs: package-inputs
     runs-on: macos-15
+    environment: ${{ inputs.environment }}
     timeout-minutes: 90
     env:
       CI_PROJECT_DIR: ${{ github.workspace }}/desktop
       MACOS_ARCHS: arm64 x86_64
-      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_base || 'https://www.peakpassvpn.com' }}
-      SPARKLE_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      SPARKLE_PRIVATE_KEY: ${{ inputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
       # The release signing certificate; without it the build is ad-hoc signed.
-      MACOS_SIGNING_P12_BASE64: ${{ github.event_name != 'pull_request' && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
-      MACOS_SIGNING_P12_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
+      MACOS_SIGNING_P12_BASE64: ${{ inputs.environment && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
+      MACOS_SIGNING_P12_PASSWORD: ${{ inputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Fetch the vendored core
