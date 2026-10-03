@@ -59,7 +59,8 @@ name ("engine"):
 --part splits the run by what it needs, so that each part asks for the
 cores it uses: light (idle, latency, connections, CPU at 100 Mbit/s; the
 load and the fake node can share a core) and throughput (unpaced: the
-engine, the load and the fake node each busy). report.py merges the parts'
+engine, the load and the fake node each busy; within four logical CPUs the
+engine takes a physical core, the load and the node a hyper-thread each). report.py merges the parts'
 logs of one engine.
 A first `ENV {...}` line says where: the CPU model, cores, memory, kernel,
 the cores each part was pinned to, and --label's (the hostq job). The
