@@ -84,15 +84,33 @@ public sealed partial class SettingsViewModel : ObservableObject
     Task SetRoutingModeAsync(RoutingModeOption? option) =>
         option is null ? Task.CompletedTask : Main.SetRoutingModeAsync(option.Mode);
 
+    /// <summary>About › <c>aboutSource</c>: where the GPL source is published.</summary>
+    public const string SourceUrl = "https://github.com/peakpassvpn/ppvpn-core";
+
+    /// <summary>About › <c>aboutViewLicense</c>: the GNU GPL version 3.</summary>
+    public const string LicenseUrl = "https://www.gnu.org/licenses/gpl-3.0.html";
+
+    /// <summary>About: the copyright line, the same in every language.</summary>
+    public const string Copyright = "© 2026 PeakPass VPN LLC";
+
+    [RelayCommand]
+    void OpenSource() => OpenOrCopy(SourceUrl);
+
+    [RelayCommand]
+    void OpenLicense() => OpenOrCopy(LicenseUrl);
+
+    /// <summary>Opens a link in the browser, or copies it when no browser opens.</summary>
+    void OpenOrCopy(string url)
+    {
+        if (!_services.OpenUrl(url)) _services.CopyText(url);
+    }
+
     /// <summary>
     /// <c>editRoutingRules</c>: the team's routing rules on the web (they apply to all its devices);
     /// copied instead when no browser opens.
     /// </summary>
     [RelayCommand]
-    void OpenRoutingRules()
-    {
-        if (!_services.OpenUrl(Main.RoutingRulesUrl)) _services.CopyText(Main.RoutingRulesUrl);
-    }
+    void OpenRoutingRules() => OpenOrCopy(Main.RoutingRulesUrl);
 
     /// <summary>The API override placeholder: the build's effective default base.</summary>
     public string ApiPlaceholder => _services.DefaultApiBase;

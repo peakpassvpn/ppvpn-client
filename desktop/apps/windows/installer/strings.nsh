@@ -4,6 +4,8 @@ LangString NeedsWindows10 ${LANG_ENGLISH} "PPVPN requires 64-bit Windows 10 vers
 LangString NeedsWindows10 ${LANG_SIMPCHINESE} "PPVPN 需要 64 位 Windows 10 1809 或更高版本。"
 LangString SetupRunning ${LANG_ENGLISH} "PPVPN Setup is already running."
 LangString SetupRunning ${LANG_SIMPCHINESE} "PPVPN 安装程序已在运行。"
+LangString LicenseBottom ${LANG_ENGLISH} "PPVPN is free software under the GNU GPL, version 3 or later. You do not have to accept this license to install or use PPVPN. Click Next to continue."
+LangString LicenseBottom ${LANG_SIMPCHINESE} "PPVPN 是自由软件，按 GNU GPL 第 3 版或更高版本发布。安装和使用 PPVPN 无需接受本许可。单击「下一步」继续。"
 LangString TasksTitle ${LANG_ENGLISH} "Additional Tasks"
 LangString TasksTitle ${LANG_SIMPCHINESE} "附加任务"
 LangString TasksSubtitle ${LANG_ENGLISH} "Choose the additional tasks Setup should perform."

@@ -18,6 +18,57 @@
         }
       }
     },
+    "aboutLicense": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PPVPN 是自由软件，按 GNU 通用公共许可证第 3 版或（由你选择）任何更高版本发布。本程序不提供任何担保。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PPVPN is free software, released under the GNU General Public License, version 3 or (at your option) any later version. It comes with ABSOLUTELY NO WARRANTY."
+          }
+        }
+      }
+    },
+    "aboutSource": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "源代码"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source code"
+          }
+        }
+      }
+    },
+    "aboutViewLicense": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看许可证"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View license"
+          }
+        }
+      }
+    },
     "account": {
       "extractionState": "manual",
       "localizations": {

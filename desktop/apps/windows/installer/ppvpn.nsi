@@ -110,6 +110,11 @@ Var DataCheckbox
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchApp
 
 !insertmacro MUI_PAGE_WELCOME
+; GPL-3.0-or-later (LICENSE.txt, copied by package.ps1 from the repository's LICENSE). The GPL
+; asks for no acceptance, so the page only informs: Next instead of "I Agree".
+!define MUI_LICENSEPAGE_BUTTON "$(^NextBtn)"
+!define MUI_LICENSEPAGE_TEXT_BOTTOM "$(LicenseBottom)"
+!insertmacro MUI_PAGE_LICENSE "${STAGE_DIR}\LICENSE.txt"
 Page custom TasksPage TasksPageLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH

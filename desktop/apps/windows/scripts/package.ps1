@@ -243,6 +243,12 @@ Copy-Item -LiteralPath $CoreExe -Destination (Join-Path $stage "ppvpn-core.exe")
 $ownBinaries = @("ppvpn.exe", "ppvpn-push-agent.exe", "ppvpn-core.exe", "ppvpn-service.exe", "ppvpn-service-install.exe", "ppvpn-service-uninstall.exe", $clientDll)
 foreach ($name in $ownBinaries) { Invoke-Sign (Join-Path $stage $name) }
 
+# The GPL text: the installer's license page and LICENSE.txt in the install directory. Copied from
+# the repository's LICENSE (CRLF, so the installer's text box and Notepad show the paragraphs).
+$license = Join-Path (Split-Path $repo -Parent) "LICENSE"
+if (-not (Test-Path -LiteralPath $license)) { throw "LICENSE not found at $license" }
+Write-Utf8NoBom (Join-Path $stage "LICENSE.txt") (((Get-Content -Raw -LiteralPath $license) -replace "`r?`n", "`r`n"))
+
 # --- install-files.txt: what this version installs (the next upgrade removes it) ---
 $stageRoot = (Resolve-Path $stage).Path.TrimEnd('\') + '\'
 $files = Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object { $_.FullName.Substring($stageRoot.Length) }
