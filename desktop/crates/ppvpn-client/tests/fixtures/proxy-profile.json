@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "revision": "e4f7155c1310e350e297fd67a6259dc85bdce93e7000feda5d607a1c0563a758",
+  "generated_at": "2026-09-29T00:00:00Z",
+  "expires_at": "2099-01-01T00:00:00Z",
+  "nodes": [
+    {
+      "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101",
+      "name": "洛杉矶-203.0.113.10",
+      "entry_key": "cn-optimized",
+      "exit": {
+        "ip": "203.0.113.10",
+        "region": "洛杉矶"
+      },
+      "capabilities": {
+        "tcp": true,
+        "udp": true
+      },
+      "ingresses": [
+        {
+          "role": "primary",
+          "endpoint_key": "11",
+          "replica_ordinal": 0,
+          "protocol": "shadowsocks",
+          "endpoint": {
+            "domain": "e11.contract.example.com",
+            "ip": "8.8.8.8",
+            "port": 8388
+          },
+          "credentials": {
+            "shadowsocks": {
+              "method": "2022-blake3-aes-256-gcm",
+              "user_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+              "identity_keys": [
+                "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU="
+              ]
+            }
+          },
+          "capabilities": {
+            "tcp": true,
+            "udp": true
+          }
+        },
+        {
+          "role": "backup",
+          "endpoint_key": "12",
+          "replica_ordinal": 1,
+          "protocol": "vless",
+          "endpoint": {
+            "domain": "e12.contract.example.com",
+            "ip": "8.8.4.4",
+            "port": 8443
+          },
+          "credentials": {
+            "vless": {
+              "uuid": "00000000-0000-4000-8000-000000000101",
+              "flow": "xtls-rprx-vision"
+            }
+          },
+          "tls": {
+            "server_name": "www.example.com",
+            "reality": {
+              "public_key": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
+              "short_id": "abcd"
+            }
+          },
+          "capabilities": {
+            "tcp": true,
+            "udp": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101-fe6d3468cf5c",
+      "name": "洛杉矶-203.0.113.10-standard",
+      "entry_key": "standard",
+      "exit": {
+        "ip": "203.0.113.10",
+        "region": "洛杉矶"
+      },
+      "capabilities": {
+        "tcp": true,
+        "udp": true
+      },
+      "ingresses": [
+        {
+          "role": "primary",
+          "endpoint_key": "13",
+          "replica_ordinal": 0,
+          "protocol": "anytls",
+          "endpoint": {
+            "domain": "e13.contract.example.com",
+            "ip": "1.1.1.1",
+            "port": 443
+          },
+          "credentials": {
+            "anytls": {
+              "password": "fixture-anytls-password-101"
+            }
+          },
+          "tls": {
+            "server_name": "e13.contract.example.com"
+          },
+          "capabilities": {
+            "tcp": true,
+            "udp": true
+          }
+        },
+        {
+          "role": "backup",
+          "endpoint_key": "14",
+          "replica_ordinal": 1,
+          "protocol": "shadowsocks",
+          "endpoint": {
+            "domain": "e14.contract.example.com",
+            "port": 8388
+          },
+          "credentials": {
+            "shadowsocks": {
+              "method": "2022-blake3-aes-256-gcm",
+              "user_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+              "identity_keys": [
+                "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU="
+              ]
+            }
+          },
+          "capabilities": {
+            "tcp": true,
+            "udp": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-102",
+      "name": "东京-203.0.113.20",
+      "entry_key": "cn-optimized",
+      "exit": {
+        "ip": "203.0.113.20",
+        "region": "东京"
+      },
+      "capabilities": {
+        "tcp": true,
+        "udp": true
+      },
+      "ingresses": [
+        {
+          "role": "primary",
+          "endpoint_key": "21",
+          "replica_ordinal": 0,
+          "protocol": "shadowsocks",
+          "endpoint": {
+            "domain": "e21.contract.example.com",
+            "ip": "9.9.9.9",
+            "port": 8388
+          },
+          "credentials": {
+            "shadowsocks": {
+              "method": "2022-blake3-aes-256-gcm",
+              "user_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+              "identity_keys": [
+                "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY="
+              ]
+            }
+          },
+          "capabilities": {
+            "tcp": true,
+            "udp": true
+          }
+        },
+        {
+          "role": "backup",
+          "endpoint_key": "22",
+          "replica_ordinal": 1,
+          "protocol": "anytls",
+          "endpoint": {
+            "domain": "e22.contract.example.com",
+            "ip": "1.0.0.1",
+            "port": 443
+          },
+          "credentials": {
+            "anytls": {
+              "password": "fixture-anytls-password-102"
+            }
+          },
+          "tls": {
+            "server_name": "e22.contract.example.com"
+          },
+          "capabilities": {
+            "tcp": true,
+            "udp": true
+          }
+        }
+      ]
+    }
+  ],
+  "selection": {
+    "mode": "manual",
+    "default_node_id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101"
+  },
+  "routing": {
+    "rules": [
+      {
+        "id": "bypass-private",
+        "match": {
+          "ip_is_private": true
+        },
+        "action": {
+          "type": "direct"
+        }
+      }
+    ],
+    "final": {
+      "type": "proxy",
+      "target": "selected"
+    }
+  }
+}
