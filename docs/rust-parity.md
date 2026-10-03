@@ -67,6 +67,14 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | --- | --- | --- | --- | --- |
 | X1 | 主机有 IPv6 但没有自己的 IPv6 出口时，直连双栈域名仍然能通（0.5.17 修复，验收清单"功能与行为"） | `handOffDirectIPv6`：`direct` 换成 `domaindest(ipv6_only)` 包装 `direct-host`，后者解析时只取 IPv4；TUN 本身不变 | 翻译层已实现（`translate::tests::without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain`），改用 sail 现有能力：TUN inbound 加一条匹配 `2000::/3` 的 route-options 规则，设 `override_destination: "proxy_and_direct"`（后面规则的值优先，sail 有同样形状的路由测试）；`direct` 带 `domain_resolver {dns-local, ipv4_only}`。不需要 Sail 改动 | ① 探测已接入 Engine（`engine::tun`：每次 apply 和 start 各探一次并写日志，结果填到 `Tun.no_host_ipv6_route`；`reprobe_host_ipv6` 在结果变化时 reload 并发 `KernelSwitched`）；网络变化时由 `engine::network` 触发，最后一次变化 2 s 后探测（同 Go 的防抖），离线期间跳过（过渡实现的来源见上）；② kernel 切换或 reload 后，反向映射是否还在（Go 用共享的存储，见 `TestRestoreFallsBackToTheSharedReverseMapping`；sail 的 reload 会清空 DNS 缓存，反向映射是否随之清空待确认）；③ lab 用例：IPv6 无出口的主机上，直连双栈域名能通 |
 
+## 切换前要复测的项目
+
+下面几项已经有别人的实测结论，但测的不是我们的构建或配置。切换前要用我们自己的配置复测一遍。
+
+| # | 行为 | 已有依据 | 复测方法 |
+| --- | --- | --- | --- |
+| R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：windows-gnu 构建，没有开 `strict_route`（见下文"过渡实现"里的清扫表） | 等 Engine 在 Windows 上能打开 TUN 后，在 windows-latest（管理员）上加一个 CI 用例：用我们的 MSVC 构建和配置（开 `strict_route`）起 Tun 实例，强杀，再检查 Wintun 适配器、它的路由、DNS 和 WFP 过滤器都不在 |
+
 ## 测试宿主的约定
 
 - 所有 lab 和性能检查都通过 `ppvpn-core-lab`（Rust 的测试宿主）驱动 Rust 版。它要提供和 `ppvpn-core serve` 相同的命令行、日志格式，以及 lab 实际用到的那部分 Core API v1（#45）。
@@ -110,13 +118,13 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 
 落后时的处理：sail 的事件是有界广播，落后时会收到 `Lagged`，Runtime 按快照补一条 `reason=lagged` 的变化。Engine 还保留按 generation 跳号补报一步的逻辑：跳号、并且这条变化的 `old` 和上次看到的网络不同时，先按 `old` 补报一步（`engine::network::tests::a_missed_step_is_replayed_from_the_changes_old`）。离线判断只看 sail 的 offline 标志（`NetworkChange.change` 为 `offline` 时快照的 offline 为真）。
 
-强杀后的残留清扫（host-integration 第 3 节，切换前必须关掉的缺口）：`Engine::new` 把 sail 的 run_dir 设在 `state_dir/run`，并在清扫时调用 `sail::embed::sweep`。
+强杀后的残留清扫（host-integration 第 3 节）：`Engine::new` 把 sail 的 run_dir 设在 `state_dir/run`，并在清扫时调用 `sail::embed::sweep`。
 
 | 平台 | 状态 | 依据 |
 | --- | --- | --- |
 | Linux | done | Sail 在 run_dir 的台账记下改动，强杀后由下一次 `new` 的 `sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表、fw4 drop-in；另有 tunrules 按我们的优先级段和表清扫 |
 | macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
-| Windows | todo（切换前缺口） | Sail 在 Windows 上还没有台账和 sweep；强杀后 Wintun 适配器及其路由、DNS 会不会残留还没测 |
+| Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录。未覆盖 MSVC 构建和 `strict_route`（WFP 过滤器），见"切换前要复测的项目" |
 
 运行中开关系统代理监听，用的是 `Runtime::add_inbound` / `remove_inbound`（#149，`runtime/sail.rs`），经 `Instance::manager()` 调用 sail 的 `add_inbound` / `remove_inbound`，在 embed 的稳定接口之外。sail 的 reload 不会新增或删除监听（embed.md 的 Reload 表），所以不能用 reload 做。`remove_inbound` 在 sail 移除监听之后，还会关掉从这个 inbound 进来的连接（在真实 sail 上测过），所以关闭系统代理只断开它自己的连接，`engine::proxy_tests::system_proxy_listener_toggles` 断言了这一点。Sail 会在 `Instance` 上提供这两个方法，届时改用它们。
 
