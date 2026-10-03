@@ -339,16 +339,16 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/redact` `TestJSON` | Json |  | todo |  |
 | `internal/redact` `TestProxyURL` | Proxy url |  | todo |  |
 | `internal/redact` `TestShadowsocksKeys` | Shadowsocks keys |  | todo |  |
-| `internal/rulesets` `TestDownloadsRefuseRedirects` | Downloads refuse redirects |  | todo |  |
-| `internal/rulesets` `TestFailedUpdateKeepsLastGoodCopy` | A new profile version that cannot be fetched keeps the last good copy. |  | todo |  |
-| `internal/rulesets` `TestInspectClassifiesDNSMirroring` | Inspect classifies dns mirroring |  | todo |  |
-| `internal/rulesets` `TestPathStaysInsideDir` | Path stays inside dir |  | todo |  |
-| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache |  | todo |  |
-| `internal/rulesets` `TestPrepareRejectsDigestMismatchAndForeignHosts` | Prepare rejects digest mismatch and foreign hosts |  | todo |  |
-| `internal/rulesets` `TestPrepareRejectsInvalidRuleSet` | Prepare rejects invalid rule set |  | todo |  |
-| `internal/rulesets` `TestRecoverySweepsAllSetsAndRebuildsOnce` | When one set recovers, every other set that is not ready is retried at once (not on its own, possibly long, backoff), the downloads run concurrently, and the … |  | todo |  |
-| `internal/rulesets` `TestRecoveryTriggersRebuild` | A set that was never downloaded is retried; once it arrives the manager asks for a rebuild so the skipped rules take effect. |  | todo |  |
-| `internal/rulesets` `TestRefreshUsesETag` | A ready set is refreshed on its interval with If-None-Match and stays ready on 304. |  | todo |  |
+| `internal/rulesets` `TestDownloadsRefuseRedirects` | Downloads refuse redirects | `ppvpn-core` `rulesets::tests::downloads_refuse_redirects` | done |  |
+| `internal/rulesets` `TestFailedUpdateKeepsLastGoodCopy` | A new profile version that cannot be fetched keeps the last good copy. | `ppvpn-core` `rulesets::tests::failed_update_keeps_last_good_copy` | done |  |
+| `internal/rulesets` `TestInspectClassifiesDNSMirroring` | Inspect classifies dns mirroring | `ppvpn-core` `rulesets::tests::inspect_classifies_dns_mirroring` | done | 有意偏离：Rust 只接受 sail 能读的 .srs（版本到 5；AdGuard、`network_interface_address`、`default_interface_address` 判为 `RULE_SET_INVALID`），Go 1.13 读到版本 4 且接受这些条目。sail 读不了的集合不能交给内核（`rulesets::srs::tests`） |
+| `internal/rulesets` `TestPathStaysInsideDir` | Path stays inside dir | `ppvpn-core` `rulesets::tests::path_stays_inside_dir` | done |  |
+| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done |  |
+| `internal/rulesets` `TestPrepareRejectsDigestMismatchAndForeignHosts` | Prepare rejects digest mismatch and foreign hosts | `ppvpn-core` `rulesets::tests::prepare_rejects_digest_mismatch_and_foreign_hosts` | done |  |
+| `internal/rulesets` `TestPrepareRejectsInvalidRuleSet` | Prepare rejects invalid rule set | `ppvpn-core` `rulesets::tests::prepare_rejects_invalid_rule_set` | done |  |
+| `internal/rulesets` `TestRecoverySweepsAllSetsAndRebuildsOnce` | When one set recovers, every other set that is not ready is retried at once (not on its own, possibly long, backoff), the downloads run concurrently, and the … | `ppvpn-core` `rulesets::tests::recovery_sweeps_all_sets_and_rebuilds_once` | done |  |
+| `internal/rulesets` `TestRecoveryTriggersRebuild` | A set that was never downloaded is retried; once it arrives the manager asks for a rebuild so the skipped rules take effect. | `ppvpn-core` `rulesets::tests::recovery_triggers_rebuild` | done |  |
+| `internal/rulesets` `TestRefreshUsesETag` | A ready set is refreshed on its interval with If-None-Match and stays ready on 304. | `ppvpn-core` `rulesets::tests::refresh_uses_etag` | done |  |
 | `internal/runtime` `TestFixtureWithRealityStartsInLocalProxyMode` | starts the shared fixture (a VLESS REALITY primary with a Shadowsocks backup) in the unprivileged desktop mode. |  | todo |  |
 | `internal/runtime` `TestFreePortIsFreeForTCPAndUDP` | Free port is free for tcp and udp |  | todo |  |
 | `internal/runtime` `TestGoldenRouting` | Golden routing |  | n-a | golden 运行器本身；Rust 跑同一组文件（testdata/golden） |
