@@ -222,8 +222,12 @@ pub async fn set_system_proxy_listener(&self, enabled: bool) -> Result<SystemPro
   - 监听失败时，例如端口被占用而且换不了，进入 `Degraded{LocalProxyUnavailable}`，并按退避重试。
 - **系统代理监听**：`set_system_proxy_listener` 只开关 7891 的无认证监听。操作系统的代理设置（指向这个端口）由宿主负责。
   - 幂等；开关状态不持久化，`new` 之后是关的。端口优先级：持久化的端口、7891、任意空闲端口，不会和本地代理端口相同。
-  - 未 start 时只改状态，`start` 时生效（届时端口被占用就换一个）；运行中开关会 reload 配置（Go 版原地增删监听）。都发出 `SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。
-  - 拿不到端口或运行时拒绝新配置时返回 `SYSTEM_PROXY_START_FAILED`（retryable=true），开关保持原样。
+  - 未 start 时只改状态，`start` 时生效（届时端口被占用就换一个）。运行中开关是原地增删这一个监听（和 Go 版一样），不 reload 配置。都发出 `SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。
+  - 运行中开关的保证：
+    - 打开时，任何已有连接都不受影响；
+    - 按节点的本地代理和 routed 用户的监听始终可用，地址和端口不变；
+    - 关闭时停止系统代理的监听，不再接受新连接，其他监听和它们上面的连接不受影响。系统代理监听上已经建立的连接是立即断开还是保留到结束，以实测为准（待补）；`stop()` 时它们一定断开。
+  - 拿不到端口或运行时拒绝时返回 `SYSTEM_PROXY_START_FAILED`（retryable=true），开关保持原样。
 - **TUN 实例**：本组方法返回 `LOCAL_PROXY_DISABLED`；`set_system_proxy_listener` 返回 `SYSTEM_PROXY_UNAVAILABLE`。
 - **与 Go 版有意不同的三处**（Core 组和 Desktop 已定）：
   1. **状态文件损坏时重建**：不是 JSON、版本未知、prefix 非法、prefix 和密码不成对时，Go 版拒绝启动；Rust 版重建（新的 prefix 和密码），否则 `new` 会一直失败，直到有人手动删掉文件。读文件本身的 I/O 错误仍然返回错误。

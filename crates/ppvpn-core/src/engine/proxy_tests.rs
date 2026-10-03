@@ -318,14 +318,18 @@ async fn system_proxy_listener_toggles() {
         listening.port
     );
 
+    // While running the listener alone comes and goes: no reload (a
+    // reload neither opens nor closes a listener), the local proxy's stays.
+    let listening = |fake: &FakeRuntime, tag: &str| fake.listening().iter().any(|t| t == tag);
+    assert!(listening(&fake, SYSTEM_PROXY_INBOUND_TAG));
     let off = engine.set_system_proxy_listener(false).await.unwrap();
     assert_eq!(
         serde_json::to_string(&off).unwrap(),
         r#"{"available":true,"enabled":false,"listening":false}"#
     );
-    assert_eq!(reloads(&fake), 1);
-    assert!(inbound(&fake, SYSTEM_PROXY_INBOUND_TAG).is_none());
-    assert!(inbound(&fake, LOCAL_PROXY_INBOUND_TAG).is_some());
+    assert_eq!(reloads(&fake), 0);
+    assert!(!listening(&fake, SYSTEM_PROXY_INBOUND_TAG), "closed");
+    assert!(listening(&fake, LOCAL_PROXY_INBOUND_TAG), "untouched");
     match drain(&mut rx).as_slice() {
         [Event::SystemProxyChanged {
             revision, message, ..
@@ -334,23 +338,53 @@ async fn system_proxy_listener_toggles() {
     }
 
     // The runtime refuses it: still off, SYSTEM_PROXY_START_FAILED.
-    fake.fail_next(Op::Reload, RuntimeError::new("config", "refused"));
+    fake.fail_next(Op::AddInbound, RuntimeError::new("config", "refused"));
     let err = engine.set_system_proxy_listener(true).await.unwrap_err();
     assert_eq!(
         (err.code, err.retryable),
         (codes::SYSTEM_PROXY_START_FAILED, true)
     );
     assert!(!engine.status().system_proxy.enabled);
+    assert!(!listening(&fake, SYSTEM_PROXY_INBOUND_TAG));
     assert!(drain(&mut rx).is_empty());
 
     let on = engine.set_system_proxy_listener(true).await.unwrap();
     assert!(on.enabled && on.listening);
-    assert_eq!(reloads(&fake), 3);
-    assert_eq!(
-        inbound(&fake, SYSTEM_PROXY_INBOUND_TAG).unwrap()["listen_port"],
-        on.port
-    );
+    assert_eq!(reloads(&fake), 0);
+    assert!(listening(&fake, SYSTEM_PROXY_INBOUND_TAG), "open");
+    assert!(listening(&fake, LOCAL_PROXY_INBOUND_TAG));
+    // The translation the next reload or start uses has it.
+    let json = engine
+        .inner
+        .live()
+        .applied
+        .as_ref()
+        .unwrap()
+        .translation
+        .json
+        .clone();
+    let config: Value = serde_json::from_str(&json).unwrap();
+    assert!(config["inbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["tag"] == SYSTEM_PROXY_INBOUND_TAG && i["listen_port"] == on.port));
     assert_eq!(engine.status().state, EngineState::Running);
+
+    // stop closes it with everything else, its connections included.
+    fake.set_connections(vec![crate::runtime::RuntimeConnection {
+        id: 7,
+        inbound: SYSTEM_PROXY_INBOUND_TAG.into(),
+        chain: vec!["direct".into()],
+        network: "tcp".into(),
+        destination: "192.0.2.10:443".into(),
+        upload_bytes: 0,
+        download_bytes: 0,
+        started: std::time::SystemTime::now(),
+    }]);
+    engine.stop().await.unwrap();
+    assert!(fake.listening().is_empty());
+    assert!(fake.calls().iter().any(|c| matches!(c, Call::Stop)));
 }
 
 /// Go: TestSystemProxyStartFallsBackWhenPortTaken.

@@ -52,6 +52,15 @@ pub(crate) struct SailRuntime {
     tasks: Vec<JoinHandle<()>>,
 }
 
+/// An error of the runtime manager (sail's own, outside embed).
+fn manager_error(e: sail::Error) -> RuntimeError {
+    let code = match e {
+        sail::Error::Config(_) => "config",
+        _ => "failed",
+    };
+    RuntimeError::new(code, format!("{e:#}"))
+}
+
 fn error(e: embed::Error) -> RuntimeError {
     RuntimeError::new(e.code(), e.message())
 }
@@ -487,6 +496,24 @@ impl Runtime for SailRuntime {
         let mut now = snapshot(&network.snapshot());
         now.offline = network.is_down();
         Some(now)
+    }
+
+    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError> {
+        // Through the runtime manager, outside sail::embed's stable API,
+        // until embed offers it (rust-parity: transitional).
+        let manager = self.instance.manager().map_err(error)?;
+        let mut config = sail::config::from_string(&format!(r#"{{"inbounds":[{inbound}]}}"#))
+            .map_err(|e| RuntimeError::new("config", format!("{e:#}")))?;
+        let inbound = config
+            .inbounds
+            .pop()
+            .ok_or_else(|| RuntimeError::new("config", "no inbound"))?;
+        manager.add_inbound(inbound).await.map_err(manager_error)
+    }
+
+    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError> {
+        let manager = self.instance.manager().map_err(error)?;
+        manager.remove_inbound(tag).await.map_err(manager_error)
     }
 
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {

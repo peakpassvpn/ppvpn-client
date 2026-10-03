@@ -258,6 +258,15 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// None until the first since the runtime started. The receiver lives
     /// across starts and stops.
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>>;
+
+    /// Starts listening for one more inbound (`inbound`: one sing-box
+    /// inbound, JSON) without a reload: a reload keeps the listeners as they
+    /// are and neither opens nor closes one. Other listeners and open
+    /// connections are untouched.
+    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError>;
+    /// Stops listening for the inbound `tag` and removes it, without a
+    /// reload. Other listeners and their connections are untouched.
+    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError>;
 }
 
 /// The `interface_name` of the configuration's tun inbound, if it has one.

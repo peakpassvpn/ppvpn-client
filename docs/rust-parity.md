@@ -99,6 +99,8 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 sail 的网络事件（E1b）合入之前，`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）通过 `Instance::manager()?.network()` 读取 sail 的状态和 `changes()` 通道。它和 sail 自己处理网络移动时读的是同一个通道，所以已经是事件驱动、只有一个来源；但 `manager()` 不在 `sail::embed` 的稳定接口里，可能不经通知变动。E1b 合入后改用 `Event::Network` 和 `instance.network()`，这一节随之删除。
 
+运行中开关系统代理监听，用的是 `Runtime::add_inbound` / `remove_inbound`（`runtime/sail.rs`），也经 `Instance::manager()` 调用 sail 的 `add_inbound` / `remove_inbound`，同样在 embed 的稳定接口之外。sail 的 reload 不会新增或删除监听（embed.md 的 Reload 表），所以不能用 reload 做。Sail 会在 `Instance` 上提供这两个方法，届时改用它们。待补的实测（netns 的 Rust lab）：关闭系统代理监听时，它上面已建立的连接是立即断开还是保留；`stop()` 时一定断开。
+
 ## Lab 用例（`test/lab/engine/cases`）
 
 UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golden/routing`）里没有覆盖。它们写成 lab 的用例，在有特权容器的 Linux 主机上跑：`lab.sh case <组> sing|rust`。Go 0.5.21 的输出存为 `cases/<组>.baseline.txt`。Rust 版跑同一个脚本，结论按 id 记在这里。

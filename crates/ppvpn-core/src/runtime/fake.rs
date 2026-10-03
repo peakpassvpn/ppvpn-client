@@ -22,6 +22,8 @@ pub(crate) enum Call {
     DialUdp(String, Target),
     ReplaceInboundUsers(String, Vec<(String, String)>),
     NetworkChanged,
+    AddInbound(String),
+    RemoveInbound(String),
 }
 
 /// Which call the next failure is for.
@@ -33,6 +35,8 @@ pub(crate) enum Op {
     Select,
     Dial,
     ReplaceInboundUsers,
+    AddInbound,
+    RemoveInbound,
 }
 
 const LOG_CAPACITY: usize = 64;
@@ -57,6 +61,9 @@ pub(crate) struct FakeRuntime {
     network: Mutex<NetworkSnapshot>,
     network_changes: watch::Sender<Option<NetworkChange>>,
     generation: AtomicU64,
+    /// The inbound tags listening, as sail's: set by a start, changed only
+    /// by add_inbound/remove_inbound (a reload keeps them), gone at stop.
+    listening: Mutex<Vec<String>>,
 }
 
 impl Default for FakeRuntime {
@@ -79,11 +86,17 @@ impl Default for FakeRuntime {
             network: Mutex::default(),
             network_changes: watch::channel(None).0,
             generation: AtomicU64::new(0),
+            listening: Mutex::default(),
         }
     }
 }
 
 impl FakeRuntime {
+    /// The inbound tags listening now.
+    pub(crate) fn listening(&self) -> Vec<String> {
+        self.listening.lock().unwrap().clone()
+    }
+
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.calls.lock().unwrap().clone()
     }
@@ -226,6 +239,17 @@ impl FakeRuntime {
     }
 }
 
+/// The tags of a configuration's inbounds.
+fn inbound_tags(config: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(config)
+        .ok()
+        .and_then(|v| v["inbounds"].as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|i| i["tag"].as_str().map(str::to_owned))
+        .collect()
+}
+
 #[async_trait]
 impl Runtime for FakeRuntime {
     async fn start(&self, config: &str) -> Result<(), RuntimeError> {
@@ -243,6 +267,7 @@ impl Runtime for FakeRuntime {
         }
         *self.config.lock().unwrap() = Some(config.to_owned());
         self.take_groups_of(config);
+        *self.listening.lock().unwrap() = inbound_tags(config);
         self.state.send_replace(RuntimeState::Running);
         Ok(())
     }
@@ -261,6 +286,7 @@ impl Runtime for FakeRuntime {
         self.check(Op::Stop)?;
         self.state.send_replace(RuntimeState::Stopping);
         self.connections.lock().unwrap().clear();
+        self.listening.lock().unwrap().clear();
         self.state.send_replace(RuntimeState::Stopped);
         Ok(())
     }
@@ -388,6 +414,35 @@ impl Runtime for FakeRuntime {
     fn network(&self) -> Option<NetworkSnapshot> {
         (*self.state.borrow() == RuntimeState::Running)
             .then(|| self.network.lock().unwrap().clone())
+    }
+
+    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError> {
+        self.record(Call::AddInbound(inbound.to_owned()));
+        self.running()?;
+        self.check(Op::AddInbound)?;
+        let tag = serde_json::from_str::<serde_json::Value>(inbound)
+            .ok()
+            .and_then(|v| v["tag"].as_str().map(str::to_owned))
+            .ok_or_else(|| RuntimeError::new("config", "an inbound needs a tag"))?;
+        let mut listening = self.listening.lock().unwrap();
+        if listening.contains(&tag) {
+            return Err(RuntimeError::new("config", format!("inbound {tag} exists")));
+        }
+        listening.push(tag);
+        Ok(())
+    }
+
+    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError> {
+        self.record(Call::RemoveInbound(tag.to_owned()));
+        self.running()?;
+        self.check(Op::RemoveInbound)?;
+        let mut listening = self.listening.lock().unwrap();
+        let before = listening.len();
+        listening.retain(|t| t != tag);
+        if listening.len() == before {
+            return Err(RuntimeError::new("not_found", format!("inbound {tag}")));
+        }
+        Ok(())
     }
 
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {

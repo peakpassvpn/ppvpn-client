@@ -148,8 +148,9 @@ impl Inner {
     }
 
     /// Turns the system proxy listener on or off (idempotent). Before a
-    /// start it only takes effect at the start; while running the
-    /// configuration is reloaded with or without it.
+    /// start it only takes effect at the start; while running the listener
+    /// alone is added or removed (a reload neither opens nor closes one),
+    /// and nothing else is touched.
     pub(super) async fn set_system_proxy_listener(
         &self,
         enabled: bool,
@@ -186,7 +187,10 @@ impl Inner {
             proxies.system_proxy = enabled;
         }
         if let (true, Some((profile, mode, selected, pins))) = (running, &applied) {
-            if let Err(error) = self.reload_listeners(profile, *mode, selected, pins).await {
+            if let Err(error) = self
+                .toggle_listener(enabled, profile, *mode, selected, pins)
+                .await
+            {
                 if let Some(mut proxies) = self.proxies() {
                     proxies.system_proxy = !enabled;
                 }
@@ -209,17 +213,26 @@ impl Inner {
         Ok(self.system_proxy_status(running))
     }
 
-    /// While running: the configuration again, with the listeners as they
-    /// are now.
-    async fn reload_listeners(
+    /// While running: the system proxy listener alone is added or removed,
+    /// and the translation the next reload or start uses follows.
+    async fn toggle_listener(
         &self,
+        enabled: bool,
         profile: &Profile,
         mode: RoutingMode,
         selected: &str,
         pins: &BTreeMap<String, String>,
     ) -> Result<(), Error> {
         let translation = translate::translate(profile, &self.options(mode, selected, pins))?;
-        if let Err(e) = self.runtime.reload(&translation.json).await {
+        let result = if enabled {
+            let inbound = system_proxy_inbound(&translation.json)?;
+            self.runtime.add_inbound(&inbound).await
+        } else {
+            self.runtime
+                .remove_inbound(translate::SYSTEM_PROXY_INBOUND_TAG)
+                .await
+        };
+        if let Err(e) = result {
             return Err(self.runtime_error(&e));
         }
         let mut live = self.live();
@@ -253,4 +266,28 @@ fn start_failed(error: Error) -> Error {
         true,
         format!("system proxy listener: {}", error.message),
     )
+}
+
+/// The system proxy inbound of a translation, as JSON.
+fn system_proxy_inbound(config: &str) -> Result<String, Error> {
+    let config: serde_json::Value = serde_json::from_str(config).map_err(|e| {
+        Error::new(
+            codes::CORE_OPERATION_FAILED,
+            false,
+            format!("translation: {e}"),
+        )
+    })?;
+    config["inbounds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|i| i["tag"] == translate::SYSTEM_PROXY_INBOUND_TAG)
+        .map(|i| i.to_string())
+        .ok_or_else(|| {
+            Error::new(
+                codes::CORE_OPERATION_FAILED,
+                false,
+                "translation: no system proxy inbound",
+            )
+        })
 }
