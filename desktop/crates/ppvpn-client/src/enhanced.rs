@@ -3232,6 +3232,16 @@ mod tests {
         assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
     }
 
+    /// Waits until the service saw more than `n` connects. Recovery runs on
+    /// timers: a fixed sleep before asserting it flaked on loaded runners.
+    async fn wait_connects_above(h: &Harness, n: usize, what: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while h.service.connects.load(Ordering::SeqCst) <= n {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     /// Waits until the controller reaches `phase`.
     async fn wait_phase(h: &Harness, phase: ConnectionPhase) -> EnhancedState {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -3328,11 +3338,7 @@ mod tests {
 
         // The core has no verdict yet: one round's grace, then recovery.
         *h.service.status_nodes.lock().unwrap() = Some(nodes_with_k2(None));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(
-            h.service.connects.load(Ordering::SeqCst) > 1,
-            "recovered after the grace round"
-        );
+        wait_connects_above(&h, 1, "recovered after the grace round").await;
     }
 
     #[tokio::test]
@@ -3357,11 +3363,7 @@ mod tests {
             1,
             "core kept while settling"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(
-            h.service.connects.load(Ordering::SeqCst) > 1,
-            "recovery reconnected once the window passed"
-        );
+        wait_connects_above(&h, 1, "recovery reconnected once the window passed").await;
     }
 
     #[tokio::test]
@@ -3443,8 +3445,7 @@ mod tests {
             .entrance_failures
             .store(usize::MAX, Ordering::SeqCst);
         h.enhanced.set_health_interval(Duration::from_millis(20));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(h.service.connects.load(Ordering::SeqCst) > 1, "recovered");
+        wait_connects_above(&h, 1, "recovered").await;
     }
 
     #[tokio::test]
