@@ -40,6 +40,13 @@ secret-service = { version = "4", default-features = false, features = ["rt-toki
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
+[features]
+# Test support for tests/ (a daemon on ppvpn-core's in-memory runtime):
+# turned on by the dev-dependency on this crate below, so never in the
+# `ppvpn` binary that ships.
+testing = ["ppvpn-core/testing"]
+
 [dev-dependencies]
 base64.workspace = true
+ppvpn-cli = { path = ".", features = ["testing"] }
 tempfile = "3"
