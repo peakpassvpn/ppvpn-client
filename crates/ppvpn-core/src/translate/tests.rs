@@ -127,6 +127,18 @@ fn every_fixture_passes_sail_check() {
             },
         ),
         (
+            "contract, TUN desktop without a host IPv6 path",
+            contract(),
+            Options {
+                tun: Some(Tun {
+                    no_host_ipv6_route: true,
+                    ..desktop_tun(LocalDns::System)
+                }),
+                local_proxy: Some(local_proxy()),
+                ..Options::default()
+            },
+        ),
+        (
             "routing, TUN desktop, final direct",
             with_final(routing(), "direct"),
             Options {
@@ -378,6 +390,7 @@ fn desktop_tun(local_dns: LocalDns) -> Tun {
     Tun {
         desktop: true,
         ipv6: true,
+        no_host_ipv6_route: false,
         local_dns,
     }
 }
@@ -482,6 +495,7 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
         tun: Some(Tun {
             desktop: false,
             ipv6: false,
+            no_host_ipv6_route: true,
             local_dns: LocalDns::System,
         }),
         ..Options::default()
@@ -508,7 +522,7 @@ fn dns_mirrors_domain_rules_in_order() {
     let dns = &config["dns"];
     assert_eq!(dns["final"], "dns-remote");
     assert_eq!(dns["reverse_mapping"], true);
-    assert_eq!(dns["timeout"], "8s");
+    assert_eq!(dns["timeout"], "10s");
     let local = |d: &str| json!({"domain": [d], "action": "route", "server": "dns-local"});
     assert_eq!(
         dns["rules"].as_array().unwrap().clone(),
@@ -552,7 +566,7 @@ fn dns_servers_local_then_remote_in_order() {
             {"type": "tls", "tag": "dns-remote-1.1.1.1", "server": "1.1.1.1", "detour": "selected"},
             {"type": "tls", "tag": "dns-remote-8.8.8.8", "server": "8.8.8.8", "detour": "selected"},
             {"type": "tls", "tag": "dns-remote-9.9.9.9", "server": "9.9.9.9", "detour": "selected"},
-            {"type": "sequential", "tag": "dns-remote", "servers": ["dns-remote-1.1.1.1", "dns-remote-8.8.8.8", "dns-remote-9.9.9.9"], "budget": "7s"},
+            {"type": "sequential", "tag": "dns-remote", "servers": ["dns-remote-1.1.1.1", "dns-remote-8.8.8.8", "dns-remote-9.9.9.9"], "attempt_timeout": "3s", "budget": "8s", "prefer_for": "10m"},
         ])
     );
     let empty = Options {
@@ -640,4 +654,66 @@ fn cidrs_are_masked_as_go_does() {
     assert_eq!(masked_prefix("10.0.0.0/33"), None);
     assert_eq!(masked_prefix("10.0.0.0/08"), None);
     assert_eq!(masked_prefix("10.0.0.0"), None);
+}
+
+#[test]
+fn without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain() {
+    let options = Options {
+        tun: Some(Tun {
+            no_host_ipv6_route: true,
+            ..desktop_tun(LocalDns::System)
+        }),
+        ..Options::default()
+    };
+    let t = translate(&contract(), &options).unwrap();
+    assert!(t.direct_ipv6_hand_off);
+    let config = value(&t);
+    let rules = config["route"]["rules"].as_array().unwrap();
+    // After the TUN's own override, so it goes before for global IPv6.
+    assert_eq!(
+        rules[1],
+        json!({"inbound": ["tun"], "action": "route-options", "override_destination": true})
+    );
+    assert_eq!(
+        rules[2],
+        json!({"inbound": ["tun"], "ip_cidr": ["2000::/3"], "action": "route-options", "override_destination": "proxy_and_direct"})
+    );
+    assert_eq!(
+        outbound(&config, DIRECT_TAG),
+        &json!({"type": "direct", "tag": "direct", "domain_resolver": {"server": "dns-local", "strategy": "ipv4_only"}})
+    );
+    // The TUN itself is the same as on a host with an IPv6 path.
+    let with_path = value(&translate(&contract(), &tun_options()).unwrap());
+    assert_eq!(config["inbounds"], with_path["inbounds"]);
+
+    // It needs the TUN's IPv6: not without it, nor on mobile.
+    for tun in [
+        Tun {
+            ipv6: false,
+            no_host_ipv6_route: true,
+            ..desktop_tun(LocalDns::System)
+        },
+        Tun {
+            desktop: false,
+            ipv6: false,
+            no_host_ipv6_route: true,
+            local_dns: LocalDns::System,
+        },
+    ] {
+        let options = Options {
+            tun: Some(tun),
+            ..Options::default()
+        };
+        let t = translate(&contract(), &options).unwrap();
+        assert!(!t.direct_ipv6_hand_off);
+        let config = value(&t);
+        assert!(outbound(&config, DIRECT_TAG)
+            .get("domain_resolver")
+            .is_none());
+        assert!(config["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["override_destination"] != "proxy_and_direct"));
+    }
 }

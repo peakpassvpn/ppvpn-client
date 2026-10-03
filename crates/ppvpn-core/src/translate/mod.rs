@@ -147,6 +147,9 @@ pub(crate) struct Translation {
     pub groups: BTreeMap<String, String>,
     /// Multi-ingress node tag → its ingress tags, in failover order.
     pub members: BTreeMap<String, Vec<String>>,
+    /// Direct hands a global IPv6 destination its domain and resolves to
+    /// IPv4 only (a host without an IPv6 path; see [`tun`]).
+    pub direct_ipv6_hand_off: bool,
 }
 
 /// Translates a validated profile. Errors here are the translation's own
@@ -160,12 +163,14 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
             ingress_keys: BTreeMap::new(),
             groups: BTreeMap::new(),
             members: BTreeMap::new(),
+            direct_ipv6_hand_off: false,
         },
         outbounds: Vec::new(),
         inbounds: Vec::new(),
         rules: Vec::new(),
         rule_sets: Vec::new(),
         has_direct: false,
+        direct_resolver: None,
         auto_detect_interface: false,
         no_dns_mirror: HashSet::new(),
         udp_off: profile
@@ -207,8 +212,8 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }));
     b.outbounds.extend(node_outbounds);
 
-    if options.tun.is_some() {
-        b.tun_rules(profile);
+    if let Some(tun) = &options.tun {
+        b.tun_rules(profile, tun);
     }
     if let Some(local_proxy) = &options.local_proxy {
         b.local_proxy(profile, local_proxy)?;
@@ -272,6 +277,13 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }
     if let Some(final_tag) = final_tag {
         route.insert("final".into(), Value::String(final_tag));
+    }
+    if let Some(resolver) = b.direct_resolver.take() {
+        for outbound in &mut b.outbounds {
+            if outbound["tag"] == DIRECT_TAG {
+                outbound["domain_resolver"] = resolver.clone();
+            }
+        }
     }
     if b.auto_detect_interface {
         // The core's own sockets (handshakes, direct traffic) bind to the
@@ -349,6 +361,8 @@ struct Builder {
     rules: Vec<Value>,
     rule_sets: Vec<Value>,
     has_direct: bool,
+    /// direct's own resolver (the IPv6 hand-off).
+    direct_resolver: Option<Value>,
     auto_detect_interface: bool,
     /// Rules made for D4: never mirrored into DNS.
     no_dns_mirror: HashSet<usize>,
