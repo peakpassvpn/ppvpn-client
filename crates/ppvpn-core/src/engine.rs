@@ -117,7 +117,8 @@ impl Engine {
         tun::check(&config)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         cleanup::sweep(&config)?;
-        let runtime = SailRuntime::new(sail::embed::Options::new()).map_err(|e| e.to_error())?;
+        let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
+        let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
         let engine = Engine::with_runtime(config, Arc::new(runtime));
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
         Ok(engine)
