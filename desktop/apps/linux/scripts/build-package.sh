@@ -118,6 +118,8 @@ install -m 0755 "$AGENT/ppvpn-push-agent" "$STAGE/app/ppvpn-push-agent"
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   install -m 0755 "$SERVICE_OUT/$bin" "$STAGE/app/$bin"
 done
+# GPL-3.0-or-later: the license text, installed where each package format keeps it (nfpm.yaml).
+install -m 0644 "$REPO_DIR/../LICENSE" "$STAGE/LICENSE"
 printf 'deb\n' > "$STAGE/package-format.deb"
 printf 'rpm\n' > "$STAGE/package-format.rpm"
 # The development copy of the app icon is not needed: the package installs it into hicolor.
