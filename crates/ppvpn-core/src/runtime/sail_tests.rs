@@ -303,6 +303,13 @@ async fn runs_sail_through_the_local_proxy() {
     );
     let err = runtime.traffic().await.unwrap_err();
     assert_eq!(err.code, "not_running");
+    // Dials are taken while it starts (sail 47a1cc34), never once stopped.
+    let err = runtime
+        .dial_tcp("direct", Target::Addr(echo), WAIT)
+        .await
+        .err()
+        .expect("stopped");
+    assert_eq!(err.code, "not_running");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
