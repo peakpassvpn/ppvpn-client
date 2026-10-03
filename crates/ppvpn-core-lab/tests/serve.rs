@@ -277,3 +277,30 @@ fn flags_are_checked_as_the_go_core_checks_them() {
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"core_version\""));
 }
+
+#[test]
+fn a_socket_path_that_is_a_file_is_left_alone() {
+    let dir = std::env::temp_dir().join(format!("pl-notsock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("not-a-socket");
+    std::fs::write(&file, b"keep me").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ppvpn-core-lab"))
+        .arg("serve")
+        .args([
+            "--socket",
+            &path(&dir, "not-a-socket"),
+            "--session-secret-file",
+            &path(&dir, "secret"),
+        ])
+        .args(["--state-dir", &path(&dir, "state")])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "binding over a file fails");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        b"keep me",
+        "the file is not removed"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

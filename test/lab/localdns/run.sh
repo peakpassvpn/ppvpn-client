@@ -95,7 +95,7 @@ resolvers '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' 10.201.0.1
 # The core, TUN only, every domain routed direct (dns-local answers all).
 "$LAB" apply-body "$PROFILE" > $R/apply.json
 TEST_SOURCE=""; [ "$ENGINE" = go ] && TEST_SOURCE="PPVPN_LOCALDNS_TEST_FILE=$TESTFILE"
-env $TEST_SOURCE ip netns exec ldns-c $PIN "$CORE" serve --socket $R/core.sock --session-secret-file $R/secret \
+env ${TEST_SOURCE:+"$TEST_SOURCE"} ip netns exec ldns-c $PIN "$CORE" serve --socket $R/core.sock --session-secret-file $R/secret \
   --state-dir $R/state --log-file "$OUT/core.log" --log-level debug --tun --local-proxy=false > "$OUT/core.stdout" 2>&1 &
 echo $! > $R/pid
 for i in $(seq 50); do [ -S $R/core.sock ] && [ -s $R/secret ] && break; sleep 0.1; done

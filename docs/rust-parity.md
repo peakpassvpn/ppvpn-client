@@ -29,6 +29,10 @@ D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`�
 
 这几步（D1、D2、D3）由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
 
+不在 golden 里的偏离：
+
+- **TunRoutingRestored**（Core 组 2026-10-03 定）：Go 0.5.20 只在 `TunRoutingBroken` 之后才发；Rust 每次自愈补回都发，也就是从 `Degraded{TunRoutingRestoring}` 退出时发（host-integration 第 5、6 节）。在 Rust 的状态机里，Broken 属于 `Fatal`，之后不会再补回，所以照 Go 的做法这个事件就永远发不出来。宿主对它的处理应当是幂等的。
+
 D3 改变的只是失效的 `default_node_id`。选择由宿主持久化，引擎不留隐藏状态（2026-10-03 决定）：宿主每次 apply 都传入它保存的 `selected_node_id`，所以 `TestSameRevisionNoopAndMigrationKeepsSelection` 的"保持选择"在宿主传入选择时成立；宿主不传，就回到 `default_node_id`，重建实例和不重建的结果一样。
 
 Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
@@ -100,7 +104,7 @@ D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
-sail 的网络事件合入之前，Engine 用 sail 现有的状态查询加短间隔轮询做过渡，不另起监视器。网络事件合入后换成事件驱动，这一节随之删除。
+sail 的网络事件（E1b）合入之前，`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）通过 `Instance::manager()?.network()` 读取 sail 的状态和 `changes()` 通道。它和 sail 自己处理网络移动时读的是同一个通道，所以已经是事件驱动、只有一个来源；但 `manager()` 不在 `sail::embed` 的稳定接口里，可能不经通知变动。E1b 合入后改用 `Event::Network` 和 `instance.network()`，这一节随之删除。
 
 ## Lab 用例（`test/lab/engine/cases`）
 
