@@ -132,6 +132,7 @@ impl Engine {
 
     /// An instance on `runtime` (tests: the fake), without the state_dir
     /// lock.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_runtime(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Engine {
         let log = Logs::new(&config.log).unwrap_or_else(|_| Logs::discard());
         Engine::build(config, runtime, log)

@@ -141,6 +141,7 @@ impl Logs {
 
     /// A log that keeps nothing: what an instance falls back to when its
     /// sink cannot be opened where no error can be returned.
+    #[cfg(any(test, feature = "testing"))]
     pub(super) fn discard() -> Logs {
         Logs::new(&LogConfig::default()).expect("a log without a sink")
     }
