@@ -150,6 +150,12 @@ impl Engine {
     /// here (`PERMISSION_DENIED`, `WINTUN_UNAVAILABLE`, `STATE_DIR_IN_USE`,
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
+        // A panic in sail fails the instance and leaves the host running
+        // (section 7, CORE_PANICKED) only when panics unwind.
+        const _: () = assert!(
+            sail::embed::PANICS_ARE_CAUGHT,
+            "ppvpn-core needs panic = \"unwind\": sail's panics would end the process"
+        );
         tun::check(&config)?;
         logs::install();
         let log = Logs::new(&config.log)?;

@@ -117,7 +117,9 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。
 
-连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（路由选中的出站；sail 只在成员连上之后才把它加进链，所以经组失败时链里只有组名）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
+连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（最外层在前：路由选中的出站，再是沿途各组选的成员，直到所试的成员，如 `F>G>m`；sail 2eb3fe47 起成员在拨号前就进链）、是否还有成员可试（`more_to_try`：组内每个成员的失败各报一条，只有这条连接最后一次失败为 false）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
+
+sail 2eb3fe47 的两个已知缺口不涉及我们：嵌套在 tryall 里的组最后一次失败可能仍报 `more_to_try=true`，smart 组传输中途的重连不上报；翻译只生成 selector 和 fallback 组，没有 tryall、smart（也没有 url-test）。
 
 Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每次变化转成 `on_network`（NetworkChanged、`Degraded{NoDefaultInterface}`、探测的离线状态）；TUN 实例在最后一次变化 2 s 后重新探测主机 IPv6 出口；start 时读一次 `network()` 快照，只设离线状态，不报变化；`default interface` 日志行同 Go 的格式，但没有 `mtu`（sail 的快照不带）。
 
@@ -130,6 +132,12 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 | Linux | done | Sail 在 run_dir 的台账记下改动，强杀后由下一次 `new` 的 `sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表、fw4 drop-in；另有 tunrules 按我们的优先级段和表清扫 |
 | macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
 | Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录。未覆盖 MSVC 构建和 `strict_route`（WFP 过滤器），见"切换前要复测的项目" |
+
+Sail E2（实例的任务都放进作用域）进行中，sail bfe72d36 是第一步：`sail::embed::PANICS_ARE_CAUGHT` 可用，`Engine::new` 断言它为真（以 `panic = "unwind"` 构建，sail 的 panic 只让实例失败，宿主照常运行）；停止时还没结束的任务由 sail 的停止报告列出，进入 `ShutdownReport.leftovers`（`runtime: sail task <名> (<数>) still running after <ms> ms`），这样的停止不算失败，另记一行 warn。协议、TUN、DNS、入站各模块的任务还在分批移入作用域，保证尚不完整。
+
+连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`（出站链外层在前，最后一个是承载连接的出站；这是 sail 2eb3fe47 代码的实际顺序，它的文档注释写的是相反的顺序，已请 Sail 确认），地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。
+
+DNS 交换（`Runtime::dns_exchanges`）来自 sail 的 `events(Kinds::DNS)`，和路由结果一样只在 debug 时取：每个应答或失败的查询一条，客户端的和实例自己拨号用的都有（`for_instance`），sequential 服务器的每个成员各一条（`attempt`）；名字不带末尾的点，记录最多 16 条另有总数。启动时查询集中，通道容量 256，落后时丢弃并记一行丢了多少。Engine 侧的 `msg=dns` 行（远端的部分）由它生成。
 
 运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。sail 76d1cafd 起，握手中的连接和多路复用的承载连接也一并断开。
 

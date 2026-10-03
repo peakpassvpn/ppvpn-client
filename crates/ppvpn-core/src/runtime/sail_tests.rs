@@ -107,6 +107,33 @@ async fn socks(port: u16, user: &str, password: &str, to: SocketAddr) -> Option<
     (head[1] == 0).then_some(s)
 }
 
+/// A SOCKS5 CONNECT through the local proxy to `name`:`port`, as `user`:
+/// the proxy resolves the name. Whether it connected.
+async fn socks_to_domain(port: u16, user: &str, password: &str, name: &str, to: u16) -> bool {
+    let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)).await else {
+        return false;
+    };
+    let mut reply = [0u8; 2];
+    let mut auth = vec![1, user.len() as u8];
+    auth.extend_from_slice(user.as_bytes());
+    auth.push(password.len() as u8);
+    auth.extend_from_slice(password.as_bytes());
+    let mut connect = vec![5, 1, 0, 3, name.len() as u8];
+    connect.extend_from_slice(name.as_bytes());
+    connect.extend_from_slice(&to.to_be_bytes());
+    let mut head = [0u8; 10];
+    s.write_all(&[5, 1, 2]).await.is_ok()
+        && s.read_exact(&mut reply).await.is_ok()
+        && s.write_all(&auth).await.is_ok()
+        && s.read_exact(&mut reply).await.is_ok()
+        && reply == [1, 0]
+        && s.write_all(&connect).await.is_ok()
+        && tokio::time::timeout(WAIT, s.read_exact(&mut head))
+            .await
+            .is_ok_and(|r| r.is_ok())
+        && head[1] == 0
+}
+
 async fn round_trip(s: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin), text: &[u8]) {
     s.write_all(text).await.unwrap();
     let mut got = vec![0u8; text.len()];
@@ -488,10 +515,146 @@ async fn a_failed_connection_is_told() {
         ("dial", "ConnectionRefused"),
         "{failed:?}"
     );
-    // The route's outbound alone: sail adds a group's member to the chain
-    // only once it connected (8f47c870), so a failure through the selector
-    // does not name the member.
-    assert_eq!(failed.chain, "pick", "{failed:?}");
+    // The route's outbound, then the member the selector took (2eb3fe47);
+    // a selector has no other member to try.
+    assert_eq!(
+        (failed.chain.as_str(), failed.more_to_try),
+        ("pick>direct", false),
+        "{failed:?}"
+    );
     assert!(failed.count >= 1, "{failed:?}");
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_routed_connection_is_told_once_taken() {
+    let echo = echo().await;
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("routed")).unwrap();
+    let mut routes = runtime.routes();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    let mut proxied = socks(port, "u1", &p1, echo)
+        .await
+        .expect("through the proxy");
+    round_trip(&mut proxied, b"routed").await;
+    let routed = tokio::time::timeout(WAIT, async {
+        loop {
+            let r = routes.recv().await.expect("the channel");
+            if r.destination == echo.to_string() {
+                return r;
+            }
+        }
+    })
+    .await
+    .expect("routed in time");
+    // route.final is the selector pick, on direct: outermost first, the
+    // last the outbound that carried it.
+    assert_eq!(
+        (
+            routed.network.as_str(),
+            routed.inbound.as_str(),
+            routed.action.as_str(),
+            routed.rule,
+            routed.chain.clone(),
+            routed.error.as_deref(),
+        ),
+        (
+            "tcp",
+            "local",
+            "outbound",
+            None,
+            vec!["pick".to_owned(), "direct".to_owned()],
+            None
+        ),
+        "{routed:?}"
+    );
+    assert!(routed.connect_ms.is_some(), "{routed:?}");
+    runtime.stop().await.unwrap();
+    assert!(runtime.stop_leftovers().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_instance_s_own_dns_query_is_told_once_taken() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("dns-exchange")).unwrap();
+    let mut exchanges = runtime.dns_exchanges();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    // A name the proxy dials goes through sail's DNS (the system's
+    // resolver, as the configuration has no dns section); .invalid never
+    // resolves, so the exchange is told whatever the network.
+    let _ = socks_to_domain(port, "u1", &p1, "dns-exchange.invalid", 80).await;
+    let exchange = tokio::time::timeout(WAIT, async {
+        loop {
+            let e = exchanges.recv().await.expect("the channel");
+            if e.name == "dns-exchange.invalid" {
+                return e;
+            }
+        }
+    })
+    .await
+    .expect("told in time");
+    assert!(exchange.for_instance, "{exchange:?}");
+    assert!(
+        exchange.rcode.is_some() || exchange.error.is_some(),
+        "answered or failed: {exchange:?}"
+    );
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chains_are_outermost_first_through_nested_groups() {
+    let echo = echo().await;
+    let port = free_port();
+    let p1 = password();
+    // A selector in a selector: outer takes pick, pick takes direct.
+    let config = serde_json::json!({
+        "log": { "level": "info" },
+        "inbounds": [{ "type": "mixed", "tag": "local", "listen": "127.0.0.1", "listen_port": port,
+                       "users": [{ "username": "u1", "password": p1 }] }],
+        "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            { "type": "selector", "tag": "pick", "outbounds": ["direct"], "default": "direct" },
+            { "type": "selector", "tag": "outer", "outbounds": ["pick"], "default": "pick" }
+        ],
+        "route": { "final": "outer" }
+    })
+    .to_string();
+    let runtime = SailRuntime::new(options("nested")).unwrap();
+    let mut routes = runtime.routes();
+    runtime.start(&config).await.unwrap();
+    let mut proxied = socks(port, "u1", &p1, echo)
+        .await
+        .expect("through the proxy");
+    round_trip(&mut proxied, b"nested").await;
+    let want = ["outer", "pick", "direct"].map(String::from).to_vec();
+
+    // connections(): sail's Clash-shaped chains, turned.
+    let open = runtime.connections().await.unwrap();
+    let c = open
+        .iter()
+        .find(|c| c.destination == echo.to_string())
+        .expect("the proxied connection");
+    assert_eq!(c.chain, want, "connections()");
+
+    // Routed: the same order.
+    let routed = tokio::time::timeout(WAIT, async {
+        loop {
+            let r = routes.recv().await.expect("the channel");
+            if r.destination == echo.to_string() {
+                return r;
+            }
+        }
+    })
+    .await
+    .expect("routed in time");
+    assert_eq!(routed.chain, want, "routed");
     runtime.stop().await.unwrap();
 }
