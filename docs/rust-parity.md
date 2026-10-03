@@ -115,6 +115,10 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
 
+组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。
+
+连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（路由选中的出站；sail 只在成员连上之后才把它加进链，所以经组失败时链里只有组名）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
+
 Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每次变化转成 `on_network`（NetworkChanged、`Degraded{NoDefaultInterface}`、探测的离线状态）；TUN 实例在最后一次变化 2 s 后重新探测主机 IPv6 出口；start 时读一次 `network()` 快照，只设离线状态，不报变化；`default interface` 日志行同 Go 的格式，但没有 `mtu`（sail 的快照不带）。
 
 落后时的处理：sail 的事件是有界广播，落后时会收到 `Lagged`，Runtime 按快照补一条 `reason=lagged` 的变化。Engine 还保留按 generation 跳号补报一步的逻辑：跳号、并且这条变化的 `old` 和上次看到的网络不同时，先按 `old` 补报一步（`engine::network::tests::a_missed_step_is_replayed_from_the_changes_old`）。离线判断只看 sail 的 offline 标志（`NetworkChange.change` 为 `offline` 时快照的 offline 为真）。

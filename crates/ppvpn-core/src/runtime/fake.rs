@@ -61,6 +61,10 @@ pub(crate) struct FakeRuntime {
         Mutex<Option<mpsc::Receiver<GroupSwitch>>>,
     ),
     logs: (mpsc::Sender<String>, Mutex<Option<mpsc::Receiver<String>>>),
+    failures_seen: (
+        mpsc::Sender<DialFailed>,
+        Mutex<Option<mpsc::Receiver<DialFailed>>>,
+    ),
     dropped: AtomicU64,
     network: Mutex<NetworkSnapshot>,
     network_changes: watch::Sender<Option<NetworkChange>>,
@@ -71,6 +75,7 @@ impl Default for FakeRuntime {
     fn default() -> Self {
         let (switch_tx, switch_rx) = mpsc::channel(64);
         let (log_tx, log_rx) = mpsc::channel(LOG_CAPACITY);
+        let (dial_tx, dial_rx) = mpsc::channel(64);
         Self {
             calls: Mutex::default(),
             config: Mutex::default(),
@@ -84,6 +89,7 @@ impl Default for FakeRuntime {
             state: watch::channel(RuntimeState::Idle).0,
             switches: (switch_tx, Mutex::new(Some(switch_rx))),
             logs: (log_tx, Mutex::new(Some(log_rx))),
+            failures_seen: (dial_tx, Mutex::new(Some(dial_rx))),
             dropped: AtomicU64::new(0),
             network: Mutex::default(),
             network_changes: watch::channel(None).0,
@@ -207,6 +213,12 @@ impl FakeRuntime {
             to: to.to_owned(),
             reason: reason.to_owned(),
         });
+    }
+
+    /// As if connections through `chain` failed.
+    #[allow(dead_code)] // for the Engine's tests once it follows them
+    pub(crate) fn dial_failed(&self, failed: DialFailed) {
+        let _ = self.failures_seen.0.try_send(failed);
     }
 
     /// A log line from sail; dropped and counted when the reader is behind.
@@ -336,6 +348,15 @@ impl Runtime for FakeRuntime {
 
     fn group_switches(&self) -> mpsc::Receiver<GroupSwitch> {
         self.switches.1.lock().unwrap().take().expect("taken once")
+    }
+
+    fn dial_failures(&self) -> mpsc::Receiver<DialFailed> {
+        self.failures_seen
+            .1
+            .lock()
+            .unwrap()
+            .take()
+            .expect("taken once")
     }
 
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError> {

@@ -196,7 +196,8 @@ async fn runs_sail_through_the_local_proxy() {
     );
     assert!(now_secs() + 1 >= local.started.duration_since(UNIX_EPOCH).unwrap().as_secs());
 
-    // Groups: select moves a selector and the poll reports the switch.
+    // Groups: select moves a selector and tells the switch (sail tells
+    // only fallback and url-test switches).
     // (Fixing a fallback and unfix come with the Engine's pin, on the
     // translation's fallback groups.)
     let pick = runtime
@@ -211,7 +212,7 @@ async fn runs_sail_through_the_local_proxy() {
         ("direct", false, 2)
     );
     runtime.select("pick", "direct-b").await.unwrap();
-    let switch = tokio::time::timeout(GROUP_POLL * 3, switches.recv())
+    let switch = tokio::time::timeout(WAIT, switches.recv())
         .await
         .expect("a switch")
         .unwrap();
@@ -459,5 +460,36 @@ async fn inbounds_added_and_removed_while_running() {
         runtime.remove_inbound("extra").await.is_err(),
         "gone already"
     );
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_connection_is_told() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("dial-failed")).unwrap();
+    let mut failures = runtime.dial_failures();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+
+    // Nothing listens there: the direct outbound's connect is refused.
+    let closed: SocketAddr = ([127, 0, 0, 1], free_port()).into();
+    let _ = socks(port, "u1", &p1, closed).await;
+    let failed = tokio::time::timeout(WAIT, failures.recv())
+        .await
+        .expect("a failure in time")
+        .unwrap();
+    assert_eq!(
+        (failed.stage.as_str(), failed.error.as_str()),
+        ("dial", "ConnectionRefused"),
+        "{failed:?}"
+    );
+    // The route's outbound alone: sail adds a group's member to the chain
+    // only once it connected (8f47c870), so a failure through the selector
+    // does not name the member.
+    assert_eq!(failed.chain, "pick", "{failed:?}");
+    assert!(failed.count >= 1, "{failed:?}");
     runtime.stop().await.unwrap();
 }
