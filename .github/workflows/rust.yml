@@ -69,7 +69,8 @@ jobs:
 
   # Windows with the MSVC toolchain, natively: what the desktop links (the
   # Windows service and client are MSVC builds). As sail's windows-msvc job,
-  # on every pull request here.
+  # on every pull request here. The crates the desktop links only:
+  # ppvpn-cli does not support Windows (it ships for Linux and macOS).
   windows-msvc:
     runs-on: windows-latest
     timeout-minutes: 90
@@ -102,7 +103,7 @@ jobs:
           where nasm || { echo "::error::nasm is not on PATH: BoringSSL would build without its assembly"; exit 1; }
           nasm -v
       - name: build
-        run: cargo build --workspace --all-targets --locked --target x86_64-pc-windows-msvc
+        run: cargo build -p ppvpn-core -p ppvpn-account --all-targets --locked --target x86_64-pc-windows-msvc
       - name: BoringSSL has its assembly
         run: |
           cache=$(find target/x86_64-pc-windows-msvc/debug/build -path '*btls-sys-*/out/build/CMakeCache.txt' | head -1)
@@ -117,7 +118,7 @@ jobs:
           )
           args=()
           for test in "${skip[@]}"; do args+=(--skip "$test"); done
-          cargo test --workspace --locked --target x86_64-pc-windows-msvc -- --exact "${args[@]}"
+          cargo test -p ppvpn-core -p ppvpn-account --locked --target x86_64-pc-windows-msvc -- --exact "${args[@]}"
 
   macos:
     runs-on: macos-latest
