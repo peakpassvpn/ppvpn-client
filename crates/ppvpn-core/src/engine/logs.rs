@@ -3,8 +3,8 @@
 //! per instance, and from it to the instance's `LogSink`.
 //!
 //! - The process's subscriber: [`install`] tries once to set the global
-//!   default to sail's layer plus [`tracing_layer`]; a host that installed
-//!   its own adds both to it.
+//!   default to [`tracing_layer`] (sail's layer and ours); a host that
+//!   installed its own adds that one layer to it.
 //! - Which instance a line is for: an event's `instance` field, else the
 //!   closest enclosing span with one ([`Logs::span`]). An event with
 //!   neither goes to every instance.
@@ -44,25 +44,32 @@ const INSTANCE_FIELD: &str = "instance";
 static PIPES: RwLock<Vec<Weak<Pipe>>> = RwLock::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Sets the process's subscriber, once: sail's layer (each sail instance's
-/// lines to its `Instance::logs`) and ours. A host's own subscriber, set
-/// before, stays; the host then adds both layers itself (section 10).
+/// Sets the process's subscriber, once, to [`tracing_layer`]. A host's own
+/// subscriber, set before, stays; the host then adds the layer itself
+/// (section 10).
 pub(crate) fn install() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let subscriber = tracing_subscriber::registry()
-            .with(sail::embed::tracing_layer())
-            .with(tracing_layer());
+        let subscriber = tracing_subscriber::registry().with(tracing_layer());
         let _ = tracing::subscriber::set_global_default(subscriber);
     });
 }
 
-/// The layer that turns ppvpn-core's own events (targets `ppvpn_core` and
-/// `ppvpn_core::…`) into the log lines of the instances they are for. A
-/// host that installs its own `tracing` subscriber adds it, with
-/// `sail::embed::tracing_layer()`; without them no line reaches the
-/// instances' sinks (section 10).
+/// The layer that turns sail's and ppvpn-core's events into the log lines
+/// of the instances they are for: sail's layer (each sail instance's lines
+/// to its `Instance::logs`) and ppvpn-core's own. A host that installs its
+/// own `tracing` subscriber adds it; without it no line reaches the
+/// instances' sinks (section 10). The host needs no path into sail.
 pub fn tracing_layer<S>() -> impl Layer<S> + Send + Sync + 'static
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
+{
+    sail::embed::tracing_layer().and_then(core_layer())
+}
+
+/// ppvpn-core's own events (targets `ppvpn_core` and `ppvpn_core::…`) as
+/// log lines of the instances they are for.
+pub(super) fn core_layer<S>() -> impl Layer<S> + Send + Sync + 'static
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
