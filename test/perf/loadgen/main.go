@@ -5,6 +5,8 @@
 //	stream:   -conns connections sending -rate-mbit in total, paced, for
 //	          -duration (unpaced, as fast as they go, when -rate-mbit is
 //	          0: throughput); the sink echoes, so as much comes back.
+//	          -direction up only sends (to fakenode's discard port as
+//	          -target), down only reads (from its source port), unpaced.
 //	churn:    -churn-rate new connections per second, each sending and
 //	          reading back -churn-bytes, for -duration.
 //	pingpong: one connection sending -ping-bytes and reading them back,
@@ -62,6 +64,7 @@ func main() {
 	churnBytes := flag.Int("churn-bytes", 4096, "churn: bytes each connection sends and reads back")
 	pingBytes := flag.Int("ping-bytes", 64, "pingpong: bytes each round trip")
 	direct := flag.Bool("direct", false, "dial the target itself, not through the proxy")
+	direction := flag.String("direction", "both", "stream: both (echo), up (send only) or down (read only)")
 	duration := flag.Duration("duration", 30*time.Second, "how long the load runs")
 	flag.Parse()
 	if (*proxy == "" && !*direct) || *target == "" {
@@ -75,7 +78,11 @@ func main() {
 	started := time.Now()
 	switch *mode {
 	case "stream":
-		stream(dial, *conns, *rate, *duration, &r)
+		if *direction == "both" {
+			stream(dial, *conns, *rate, *duration, &r)
+		} else {
+			oneWay(dial, *conns, *direction == "up", *duration, &r)
+		}
 	case "churn":
 		churn(dial, *churnRate, *churnBytes, *duration, &r)
 	case "pingpong":
@@ -295,4 +302,42 @@ func (r *result) setTimes(times []time.Duration) {
 	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
 	at := func(q float64) int64 { return times[int(q*float64(len(times)-1))].Microseconds() }
 	r.Samples, r.P50Us, r.P99Us = len(times), at(0.50), at(0.99)
+}
+
+// oneWay runs conns connections that only send (up) or only read (down),
+// unpaced, until the deadline.
+func oneWay(dial func() (net.Conn, error), conns int, up bool, duration time.Duration, r *result) {
+	deadline := time.Now().Add(duration)
+	var wg sync.WaitGroup
+	for range conns {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := dial()
+			if err != nil {
+				atomic.AddInt64(&r.FailedConnects, 1)
+				return
+			}
+			defer conn.Close()
+			atomic.AddInt64(&r.Connections, 1)
+			_ = conn.SetDeadline(deadline)
+			buf := make([]byte, 32<<10)
+			for time.Now().Before(deadline) {
+				if up {
+					n, err := conn.Write(buf)
+					atomic.AddInt64(&r.BytesSent, int64(n))
+					if err != nil {
+						return
+					}
+				} else {
+					n, err := conn.Read(buf)
+					atomic.AddInt64(&r.BytesReceived, int64(n))
+					if err != nil {
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
