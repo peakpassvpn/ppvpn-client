@@ -291,6 +291,25 @@ fn status_output(status: Value, pid: Option<u32>) -> (Value, String) {
     if let Some(mode) = status["routing_mode"].as_str() {
         human.push_str(&format!("\nRouting mode: {mode}"));
     }
+    let proxy = &status["local_proxy"];
+    if let (Some(listen), Some(port)) = (proxy["listen"].as_str(), proxy["port"].as_u64()) {
+        let listening = match proxy["listening"].as_bool() {
+            Some(false) => " (not listening)",
+            _ => "",
+        };
+        human.push_str(&format!("\nLocal proxy: {listen}:{port}{listening}"));
+    }
+    // Set for the instance's lifetime: core does not track who has seen it.
+    if let Some(reason) = proxy["credentials_reset"].as_str() {
+        let why = match reason {
+            "corrupt" => "its state file was damaged",
+            "insecure_permissions" => "its state file was readable by other users",
+            other => other,
+        };
+        human.push_str(&format!(
+            "\nNote: the local proxy credential was replaced when this instance started ({why}). Applications using the old one need the new one: ppvpn proxy credential"
+        ));
+    }
     let mut value = json!({"ok": true, "daemon_running": pid.is_some()});
     if let Some(pid) = pid {
         value["pid"] = json!(pid);
@@ -519,4 +538,47 @@ fn logout(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
         out.success(&json!({"ok": true, "local_removed": true}), "Logged out.")
             .map_err(output_error)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_text_shows_the_local_proxy_and_a_credential_reset() {
+        let (value, human) = status_output(
+            json!({
+                "state": "running",
+                "routing_mode": "rules",
+                "local_proxy": {"listen": "127.0.0.1", "port": 7890, "listening": true},
+            }),
+            Some(7),
+        );
+        assert_eq!(
+            human,
+            "Core: running\nRouting mode: rules\nLocal proxy: 127.0.0.1:7890"
+        );
+        assert_eq!(value["pid"], 7);
+
+        let (value, human) = status_output(
+            json!({
+                "state": "degraded",
+                "local_proxy": {
+                    "listen": "127.0.0.1", "port": 7890, "listening": false,
+                    "credentials_reset": "corrupt",
+                },
+            }),
+            Some(7),
+        );
+        // --json passes core's field through as it is.
+        assert_eq!(value["local_proxy"]["credentials_reset"], "corrupt");
+        let lines: Vec<&str> = human.lines().collect();
+        assert_eq!(lines[1], "Local proxy: 127.0.0.1:7890 (not listening)");
+        assert!(lines[2].starts_with("Note: the local proxy credential was replaced"));
+        assert!(lines[2].contains("its state file was damaged"));
+        assert!(lines[2].ends_with("ppvpn proxy credential"));
+
+        let (_, human) = status_output(json!({"state": "stopped"}), None);
+        assert_eq!(human, "Core: stopped");
+    }
 }
