@@ -22,6 +22,7 @@ use crate::error::{codes, Error};
 
 #[cfg(test)]
 pub(crate) mod fake;
+pub(crate) mod sail;
 
 /// Where a runtime is in its life (`sail::embed::State`).
 #[derive(Debug, Clone, PartialEq, Eq)]
