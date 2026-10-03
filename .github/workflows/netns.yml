@@ -3,9 +3,9 @@ name: netns
 # Tests that need a real TUN, each in a network namespace of its own on the
 # runner (test/netns/run.sh), with a check that the runner's own routes,
 # rules, links, nftables and DNS are as they were afterwards (gates G3 and
-# G7 of #45). Engine-independent by design: the same scripts are to run on
-# the Rust engine later. No internet: documentation addresses and local
-# fake nodes only.
+# G7 of #45). Engine-independent by design: the same scripts run the Go
+# core's tests and the Rust crate's (run.sh --libtest). No internet:
+# documentation addresses and local fake nodes only.
 
 on:
   pull_request:
@@ -18,7 +18,12 @@ permissions:
 jobs:
   tun:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The Rust test binary builds sail and BoringSSL from source until this
+    # job's cache (saved from main) has them.
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -47,6 +52,23 @@ jobs:
         run: sudo NETNS_TIMEOUT=240 test/netns/run.sh "$RUNNER_TEMP/runtime.test" -test.run 'TestTUNRulesRestoredAfterDeletion' -test.timeout 230s
       - name: TUN rules broken is reported (restoring off)
         run: sudo NETNS_TIMEOUT=240 NETNS_ENV=PPVPN_TEST_TUN_RULES_NO_RESTORE=1 test/netns/run.sh "$RUNNER_TEMP/runtime.test" -test.run 'TestTUNRulesBrokenIsReported' -test.timeout 230s
+      # The Rust crate's guard (crates/ppvpn-core/src/tunrules) against a
+      # real sail TUN: the same two cases, restoring off in-process.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the Rust test binary (as the runner user)
+        run: |
+          set -euo pipefail
+          bin=$(cargo test -p ppvpn-core --lib --no-run --locked --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .profile.test and .target.name == "ppvpn_core") | .executable')
+          test -x "$bin"
+          cp "$bin" "$RUNNER_TEMP/ppvpn_core.test"
+      - name: TUN rules put back and broken reported (Rust)
+        run: sudo NETNS_TIMEOUT=240 test/netns/run.sh --libtest "$RUNNER_TEMP/ppvpn_core.test" 'tunrules::linux_tests::'
 
   network-change:
     # dns-local and the host-IPv6 re-probe across network changes (#61, #69):
@@ -75,11 +97,13 @@ jobs:
         # network.
         run: sudo NETNS_TIMEOUT=180 NETNS_ENV=SWITCH_GRACE_MS=6000 test/netns/run.sh --host test/lab/localdns/run.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json "$RUNNER_TEMP/localdns"
       - name: link down/up, no kernel switch while offline (#69), modes 0-4
+        # SWITCH_GRACE_MS: the Go baseline's limits (recovery within 6 s, not
+        # 2.5 s), as for dns-local above; the Rust core keeps the strict ones.
         run: |
           status=0
           for mode in 0 1 2 3 4; do
             echo "::group::mode $mode"
-            sudo NETNS_TIMEOUT=90 test/netns/run.sh --host test/lab/localdns/updown.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json $mode "$RUNNER_TEMP/updown-$mode" || status=1
+            sudo NETNS_TIMEOUT=90 NETNS_ENV=SWITCH_GRACE_MS=6000 test/netns/run.sh --host test/lab/localdns/updown.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json $mode "$RUNNER_TEMP/updown-$mode" || status=1
             echo "::endgroup::"
           done
           exit $status
