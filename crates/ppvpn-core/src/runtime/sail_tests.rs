@@ -365,6 +365,8 @@ async fn network_changes_are_sails_own() {
         .start(&config(free_port(), &[], false))
         .await
         .unwrap();
+    // Settled at start (sail b3533615): the default interface, or offline,
+    // at generation 1, told by no event.
     assert!(runtime.network().is_some());
     assert_eq!(*changes.borrow_and_update(), None, "no change yet");
 
@@ -393,7 +395,7 @@ async fn network_changes_are_sails_own() {
         (change.change.as_str(), change.reason.as_str()),
         ("moved", "wake")
     );
-    assert!(change.generation >= 1);
+    assert!(change.generation >= 2, "after the start's: {change:?}");
     assert_eq!(change.old, change.new, "announced: the state did not move");
 
     runtime.stop().await.unwrap();
