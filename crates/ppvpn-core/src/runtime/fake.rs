@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::*;
 
@@ -78,6 +78,8 @@ pub(crate) struct FakeRuntime {
     network: Mutex<NetworkSnapshot>,
     network_changes: watch::Sender<Option<NetworkChange>>,
     generation: AtomicU64,
+    /// Holds the next start in Starting (`hold_start`).
+    start_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl Default for FakeRuntime {
@@ -114,6 +116,7 @@ impl Default for FakeRuntime {
                 ..NetworkSnapshot::default()
             }),
             network_changes: watch::channel(None).0,
+            start_gate: Mutex::new(None),
             generation: AtomicU64::new(0),
         }
     }
@@ -308,6 +311,24 @@ impl FakeRuntime {
         }
     }
 
+    /// sail dials and reads its network from the Starting phase on (its
+    /// outbounds are built then; 47a1cc34).
+    fn dialable(&self) -> Result<(), RuntimeError> {
+        match *self.state.borrow() {
+            RuntimeState::Starting | RuntimeState::Running => Ok(()),
+            _ => Err(RuntimeError::new("not_running", "not running")),
+        }
+    }
+
+    /// The next `start` stays in Starting until the returned gate is
+    /// notified (what runs during a start).
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn hold_start(&self) -> Arc<tokio::sync::Notify> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *self.start_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
     fn running(&self) -> Result<(), RuntimeError> {
         if *self.state.borrow() == RuntimeState::Running {
             Ok(())
@@ -325,6 +346,10 @@ impl Runtime for FakeRuntime {
             return Err(RuntimeError::new("state", "already running"));
         }
         self.state.send_replace(RuntimeState::Starting);
+        let gate = self.start_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
         if let Err(error) = self.check(Op::Start) {
             self.state.send_replace(RuntimeState::Failed {
                 code: error.code.clone(),
@@ -470,7 +495,7 @@ impl Runtime for FakeRuntime {
         _timeout: Duration,
     ) -> Result<Box<dyn AsyncReadWrite>, RuntimeError> {
         self.record(Call::DialTcp(outbound.to_owned(), to));
-        self.running()?;
+        self.dialable()?;
         self.check(Op::Dial)?;
         let route = *self.tcp_route.lock().unwrap();
         if let Some(route) = route {
@@ -490,7 +515,7 @@ impl Runtime for FakeRuntime {
         _timeout: Duration,
     ) -> Result<Box<dyn Datagram>, RuntimeError> {
         self.record(Call::DialUdp(outbound.to_owned(), to));
-        self.running()?;
+        self.dialable()?;
         self.check(Op::Dial)?;
         Ok(Box::new(Echo::default()))
     }
@@ -519,8 +544,9 @@ impl Runtime for FakeRuntime {
     }
 
     fn network(&self) -> Option<NetworkSnapshot> {
-        (*self.state.borrow() == RuntimeState::Running)
-            .then(|| self.network.lock().unwrap().clone())
+        self.dialable()
+            .ok()
+            .map(|()| self.network.lock().unwrap().clone())
     }
 
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {

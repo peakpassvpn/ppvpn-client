@@ -223,30 +223,45 @@ pub(super) fn connection_line(t: Option<&Translation>, r: &Routed) {
     );
 }
 
+/// The logical server and the resolver of an exchange: a sequential
+/// server's member (what sail names) maps back to its server, as the
+/// translation recorded it, with the member's resolver as `upstream`.
+fn dns_server<'a>(t: Option<&'a Translation>, e: &'a DnsExchange) -> (&'a str, Option<&'a str>) {
+    let tag = e.server.as_deref().unwrap_or("");
+    match t.and_then(|t| t.dns_members.get(tag)) {
+        Some((server, upstream)) => (server.as_str(), Some(upstream.as_str())),
+        None => (tag, None),
+    }
+}
+
 /// Whether an exchange of sail's gets a `dns` line: sent upstream, and not
-/// dns-local's (it logs its own).
-fn logs_dns(e: &DnsExchange) -> bool {
-    e.source == "exchanged" && e.server.as_deref() != Some(crate::translate::DNS_LOCAL_TAG)
+/// one of the engine's dns-local listener (it logs its own, with the
+/// resolver it asked).
+fn logs_dns(t: Option<&Translation>, e: &DnsExchange) -> bool {
+    let own_listener = t.is_none_or(|t| t.dns_local_listener);
+    e.source == "exchanged"
+        && !(own_listener && dns_server(t, e).0 == crate::translate::DNS_LOCAL_TAG)
 }
 
 /// Go's dnstransport `dns` line for one of sail's exchanges (at debug):
 /// those sent upstream only, as Go (answers from the cache or a rule have
-/// none); dns-local's are its own lines (localdns), with the resolver it
-/// asked. `name` with its final dot, `rcode` in miekg's words, `attempt`
-/// for a sequential server.
-pub(super) fn dns_line(e: &DnsExchange) {
-    if !logs_dns(e) {
+/// none). `name` with its final dot, `server` the logical server and
+/// `upstream` the resolver its member asked, `attempt` for a sequential
+/// server, `rcode` in miekg's words.
+pub(super) fn dns_line(t: Option<&Translation>, e: &DnsExchange) {
+    if !logs_dns(t, e) {
         return;
     }
     let name = format!("{}.", e.name);
-    let server = e.server.as_deref().unwrap_or("");
+    let (server, upstream) = dns_server(t, e);
     let ms = e.duration_ms.unwrap_or(0);
-    // `attempt` only for a sequential server (absent when None, as Go's).
+    // `upstream` and `attempt` only where they apply (absent when None).
     match e.rcode.filter(|_| e.error.is_none()) {
         Some(rcode) => tracing::debug!(
             name = %name,
             "type" = %e.qtype,
             server,
+            upstream,
             attempt = e.attempt,
             rcode = %crate::localdns::rcode_name(rcode),
             answers = e.answers_total,
@@ -257,6 +272,7 @@ pub(super) fn dns_line(e: &DnsExchange) {
             name = %name,
             "type" = %e.qtype,
             server,
+            upstream,
             attempt = e.attempt,
             error = %e.error.as_deref().unwrap_or("no answer"),
             ms,
@@ -266,6 +282,12 @@ pub(super) fn dns_line(e: &DnsExchange) {
 }
 
 impl Inner {
+    /// One of sail's DNS exchanges (from the watcher, at debug only).
+    pub(super) fn on_dns_exchange(&self, exchange: &DnsExchange) {
+        let live = self.live();
+        dns_line(live.applied.as_ref().map(|a| &a.translation), exchange);
+    }
+
     /// One routed connection (from the watcher, at debug only).
     pub(super) fn on_routed(&self, routed: &Routed) {
         let live = self.live();

@@ -510,7 +510,10 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                         None => std::future::pending().await,
                     }
                 } => match exchanged {
-                    Some(exchanged) => super::outbound_log::dns_line(&exchanged),
+                    Some(exchanged) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_dns_exchange(&exchanged);
+                    }
                     None => exchanges = None,
                 },
                 changed = networks.changed() => {
