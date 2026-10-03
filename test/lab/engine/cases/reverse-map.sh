@@ -7,6 +7,7 @@
 ENGINE=${1:-sing}; . /lab/cases/lib.sh
 start_core $ENGINE --tun=true --local-proxy=true >/dev/null && apply >/dev/null && api start >/dev/null
 sleep 1
+up reverse-map
 # hostless: HTTP/1.0 without Host to .60, the address the core answered.
 hostless() { printf 'GET / HTTP/1.0\r\n\r\n' | nc -w 6 198.51.100.60 80 | tail -1 | exit_of; }
 dig +short +tries=1 +time=8 @198.51.100.99 split.lab.test A >/dev/null

@@ -17,7 +17,8 @@ start_core() {
     --log-file $R/core.log --log-level ${LOG_LEVEL:-debug} "$@" >$R/stdout 2>&1 &
   echo $! > $R/pid
   for i in $(seq 50); do [ -S $R/core.sock ] && [ -s $R/secret ] && return 0; sleep 0.1; done
-  echo "core did not start"; cat $R/stdout $R/core.log; return 1
+  # To stderr: the case scripts discard start_core's stdout.
+  { echo "core did not start ($bin)"; cat $R/stdout $R/core.log; } >&2; return 1
 }
 stop_core() { [ -f $R/pid ] && kill $(cat $R/pid) 2>/dev/null && sleep 0.5; pkill -x sail 2>/dev/null; return 0; }
 api() { # method [json body]

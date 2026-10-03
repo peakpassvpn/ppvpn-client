@@ -115,7 +115,9 @@ sleep 2
 # a query to a physical resolver entering the TUN would loop. Capture DNS on
 # the TUN for the whole run; queries to the TUN's own resolver 10.60.159.90
 # are the positive control that the capture works.
-TUN=$(ip -n ldns-c -o -4 addr show | awk '/ 10\.60\.159\.89\// {print $2}')
+# The TUN by its address: Go's sing-box gives 10.60.159.89/30, sail a
+# point-to-point 10.60.159.89 peer 10.60.159.90/30; the names differ too.
+TUN=$(ip -n ldns-c -o -4 addr show | awk '/ inet 10\.60\.159\.89[ \/]/ {print $2}')
 log "tun interface: ${TUN:-none}"
 c tcpdump -l -n -i "$TUN" 'port 53' > "$OUT/tun-dns.txt" 2>"$OUT/tcpdump.err" &
 echo $! > $R/tcpdump.pid
