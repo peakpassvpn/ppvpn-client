@@ -16,6 +16,7 @@ mod logfmt;
 pub(crate) mod profile;
 pub mod request;
 mod runtime;
+mod state_dir;
 pub mod status;
 mod translate;
 pub mod types;

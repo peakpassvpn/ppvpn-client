@@ -14,6 +14,7 @@ use crate::config::{EngineConfig, Role};
 use crate::error::{codes, Error};
 use crate::event::{EventItem, EventKind, EventReceiver, LogReceiver};
 use crate::request::{validate_request, ApplyRequest, ApplyResult};
+use crate::state_dir::StateDirLock;
 use crate::status::{EngineState, Status, SystemProxyStatus};
 use crate::types::{
     AvailabilityResult, Connection, EntranceResult, LocalProxyCredential, LocalProxyMetadata,
@@ -35,6 +36,8 @@ pub struct Engine {
 struct Inner {
     config: EngineConfig,
     state: Mutex<Lifecycle>,
+    /// Held from `new` to `shutdown` (or the last handle's drop).
+    state_dir: Mutex<Option<StateDirLock>>,
 }
 
 #[derive(Default)]
@@ -57,10 +60,12 @@ impl Engine {
     /// here (`PERMISSION_DENIED`, `WINTUN_UNAVAILABLE`, `STATE_DIR_IN_USE`,
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
+        let state_dir = StateDirLock::acquire(&config.state_dir)?;
         Ok(Engine {
             inner: Arc::new(Inner {
                 config,
                 state: Mutex::new(Lifecycle::default()),
+                state_dir: Mutex::new(Some(state_dir)),
             }),
         })
     }
@@ -71,6 +76,8 @@ impl Engine {
     /// logged. Afterwards lifecycle calls return `ENGINE_SHUT_DOWN`.
     pub async fn shutdown(&self) -> Result<ShutdownReport, Error> {
         self.inner.state.lock().expect("lifecycle lock").shut_down = true;
+        // Last: another instance may take the directory once it is free.
+        self.inner.state_dir.lock().expect("state dir lock").take();
         Ok(ShutdownReport::default())
     }
 
@@ -272,6 +279,14 @@ mod tests {
 
     fn assert_send_sync_clone<T: Send + Sync + Clone + 'static>() {}
 
+    /// A fresh state directory for one test.
+    fn state_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ppvpn-core-engine-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
     #[test]
     fn engine_is_send_sync_clone() {
         assert_send_sync_clone::<Engine>();
@@ -282,7 +297,7 @@ mod tests {
         let engine = Engine::new(EngineConfig::new(
             Role::Standard,
             Platform::Linux,
-            "/nonexistent",
+            state_dir("shutdown"),
         ))
         .await
         .unwrap();
@@ -300,7 +315,7 @@ mod tests {
         let engine = Engine::new(EngineConfig::new(
             Role::Tun,
             Platform::Linux,
-            "/nonexistent",
+            state_dir("tun"),
         ))
         .await
         .unwrap();
@@ -309,7 +324,7 @@ mod tests {
             codes::LOCAL_PROXY_DISABLED
         );
         let standard = Engine::new(
-            EngineConfig::new(Role::Standard, Platform::Linux, "/x")
+            EngineConfig::new(Role::Standard, Platform::Linux, state_dir("standard"))
                 .with_local_proxy(LocalProxyConfig::new()),
         )
         .await
@@ -322,6 +337,21 @@ mod tests {
                 .code,
             codes::SYSTEM_PROXY_UNAVAILABLE
         );
+    }
+
+    #[tokio::test]
+    async fn state_dir_is_one_instances_until_shutdown() {
+        let dir = state_dir("lock");
+        let config = || EngineConfig::new(Role::Standard, Platform::Linux, dir.clone());
+        let first = Engine::new(config()).await.unwrap();
+        let err = Engine::new(config()).await.unwrap_err();
+        assert_eq!((err.code, err.retryable), (codes::STATE_DIR_IN_USE, false));
+        first.shutdown().await.unwrap();
+        let second = Engine::new(config()).await.expect("free after shutdown");
+        drop(second);
+        Engine::new(config())
+            .await
+            .expect("free after the last handle's drop");
     }
 
     #[test]
