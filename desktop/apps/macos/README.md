@@ -3,11 +3,13 @@
 Native SwiftUI + AppKit app (macOS 13+): menu bar extra, one main window
 (shown at launch), and a Settings scene. All client logic lives in the shared
 Rust crate `crates/ppvpn-client`, consumed through its UniFFI Swift package.
+Paths and commands here are relative to `desktop/`.
 
 ## Build
 
 ```bash
-# 1. ppvpn-core and the privileged-service helpers (embedded into Contents/MacOS)
+# 1. ppvpn-core and the privileged-service helpers (embedded into Contents/MacOS).
+#    A Debug build works without them.
 scripts/stage-macos-core.sh
 scripts/build-service.sh macos
 
