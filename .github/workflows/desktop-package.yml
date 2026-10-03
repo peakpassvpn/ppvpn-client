@@ -98,6 +98,12 @@ env:
   PPVPN_RELEASE_CHANNEL: ${{ inputs.channel != 'none' && inputs.channel || '' }}
   PPVPN_VERSION: ${{ inputs.version || '' }}
   PPVPN_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}
+  # The update site (feeds, apt/dnf repositories). A build for a channel
+  # updates from <site>/desktop/<channel>/appcast-<platform>.xml (macOS,
+  # Windows) and <site>/linux/<channel>/latest.json (Linux; builds without
+  # a channel poll stable's); the macOS and Windows builds without a
+  # channel have no feed.
+  PPVPN_UPDATE_SITE: ${{ vars.DESKTOP_SITE_BASE }}
   # Public half of the update feeds' key; empty disables in-app updates.
   PPVPN_SPARKLE_PUBLIC_KEY: ${{ vars.PPVPN_SPARKLE_PUBLIC_KEY }}
 
@@ -126,9 +132,6 @@ jobs:
       ZIG_VERSION: '0.13.0'
       NFPM_VERSION: '2.47.0'
       PPVPN_API_BASE: ${{ inputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
-      # latest.json of this channel's apt/dnf repository, polled for the
-      # in-app update notice (builds without a channel use stable's).
-      PPVPN_UPDATE_FEED: https://pkg.peakpassvpn.com/linux/${{ inputs.channel == 'dev' && 'dev' || 'stable' }}/latest.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master

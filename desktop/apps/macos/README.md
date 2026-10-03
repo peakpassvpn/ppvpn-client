@@ -52,12 +52,13 @@ are staged universal) and re-signs inside out, then checks each binary's
 architecture, that the app and the push agent link the single framework in
 `Contents/Frameworks`, and the signature. It ad-hoc signs the DMG and writes
 `release-meta-macos-<arm64|x64>.json` (schema 1: platform, channel, version,
-build, file, length, sha256, ed_signature, min_os, published_at) for the
-backend's appcast. `SPARKLE_PRIVATE_KEY_FILE` fills `ed_signature`;
+build, file, length, sha256, ed_signature, min_os, published_at), from which
+the update site's feed is written. `SPARKLE_PRIVATE_KEY_FILE` fills `ed_signature`;
 `PPVPN_BUILD_NUMBER` (CI run number) makes `CFBundleVersion` = `<version>.<n>`.
-With `PPVPN_API_BASE_DEFAULT` set, each build's Sparkle feed is
-`<api_base>/api/v1/desktop/releases/macos-<arm64|x64>/appcast.xml`, so each
-package only updates to the same architecture. CI (`scripts/ci/build-macos-native.sh`)
+With `PPVPN_UPDATE_SITE` and a channel set, each build's Sparkle feed is
+`<site>/desktop/<channel>/appcast-macos-<arm64|x64>.xml`, so each
+package only updates to the same architecture; a build without a channel has
+no feed. CI (`scripts/ci/build-macos-native.sh`)
 builds both on an Apple silicon runner into one artifact.
 
 ## Signing and installing

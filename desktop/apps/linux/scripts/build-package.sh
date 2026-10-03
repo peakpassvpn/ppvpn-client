@@ -21,7 +21,7 @@
 #   PPVPN_RELEASE_CHANNEL     dev | stable, recorded in release-meta (empty: null, not publishable)
 #   PPVPN_API_BASE            backend baked into the app (default https://www.peakpassvpn.com)
 #   PPVPN_UPDATE_FEED         latest.json the app polls for the update notice
-#                             (default https://pkg.peakpassvpn.com/linux/<channel or stable>/latest.json)
+#                             (default <PPVPN_UPDATE_SITE, else https://pkg.peakpassvpn.com>/linux/<channel or stable>/latest.json)
 #   PPVPN_CORE_DIR            directory with ppvpn-core-linux-amd64 (default: the vendored
 #                             core, vendor/ppvpn-core/<CURRENT>, verified against its manifest)
 #   PPVPN_PACKAGE_MAINTAINER  deb Maintainer / rpm Packager (default: PeakPass VPN LLC <support@peakpassvpn.com>)
@@ -44,7 +44,9 @@ VERSION="${PPVPN_VERSION:-$(dotnet msbuild "$PROJECT" -nologo -getProperty:Versi
 BUILD="${PPVPN_BUILD_NUMBER:-0}"
 CHANNEL="${PPVPN_RELEASE_CHANNEL:-}"
 API_BASE="${PPVPN_API_BASE:-https://www.peakpassvpn.com}"
-UPDATE_FEED="${PPVPN_UPDATE_FEED:-https://pkg.peakpassvpn.com/linux/${CHANNEL:-stable}/latest.json}"
+# A build without a channel polls stable's latest.json, as it always did, on purpose: a
+# local build's version is 0.0.0.0, which never sees an update notice.
+UPDATE_FEED="${PPVPN_UPDATE_FEED:-${PPVPN_UPDATE_SITE:-https://pkg.peakpassvpn.com}/linux/${CHANNEL:-stable}/latest.json}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must be x.y.z, got '$VERSION'" >&2; exit 2; }
 [[ "$BUILD" =~ ^[0-9]+$ ]] || { echo "error: build number must be an integer, got '$BUILD'" >&2; exit 2; }
 case "$CHANNEL" in ''|dev|stable) ;; *) echo "error: channel must be dev or stable" >&2; exit 2 ;; esac

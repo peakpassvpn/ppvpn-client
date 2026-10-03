@@ -400,7 +400,8 @@ and `build_number`; secret `SPARKLE_PRIVATE_KEY`; output `artifact`).
   `dotnet publish` of the push agent.
 - `package`: `scripts/ci-build.ps1`, which verifies the vendored core with
   `scripts/verify-vendored-core.mjs` and runs `package.ps1` with `-ApiBase <api_base>`
-  (the app's backend) and the feed `<api_base>/api/v1/desktop/releases/windows-x64/appcast.xml`,
+  (the app's backend) and, for a channel build, the feed
+  `<PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-windows-x64.xml`,
   the public key from `vars.PPVPN_SPARKLE_PUBLIC_KEY` and the private key from
   `SPARKLE_PRIVATE_KEY` (written to a temporary file that is deleted afterwards,
   never printed; not available to pull requests). A build with a channel fails
@@ -426,16 +427,16 @@ downloads the installer, checks its EdDSA (ed25519) signature and runs it with
 
 - Build properties (MSBuild `-p:` or environment variables of the same name),
   embedded as assembly metadata:
-  - `PPVPN_UPDATE_FEED_URL`: default
-    `<PPVPN_API_BASE>/api/v1/desktop/releases/windows-x64/appcast.xml`.
+  - `PPVPN_UPDATE_FEED_URL`: no default; `ci-build.ps1` passes the channel's
+    feed on the update site.
   - `PPVPN_UPDATE_PUBLIC_KEY`: base64 ed25519 public key; no default.
   - Without both, updates are disabled and Settings → About hides
     "Check for Updates" (like the macOS app).
 - Settings → About → "检查更新" runs a check with UI. WinSparkle also checks
   in the background at startup on its own schedule (once a day); its state lives
   in `HKCU\Software\PPVPN\WinSparkle`.
-- The appcast is served by the backend. Its enclosure URL is the stable
-  `…/windows-x64/download`, which redirects (302) to a short-lived R2 URL.
+- The appcast is a file on the update site. Its enclosure URL is the
+  installer's GitHub Release asset, which redirects (302) to GitHub's storage.
   WinSparkle follows the redirect and checks the signature of the downloaded
   bytes. Tested on the VM with a local feed: a tampered installer and an
   enclosure without a signature are both rejected ("更新未正确签名") and
@@ -467,8 +468,8 @@ public key as `PPVPN_UPDATE_PUBLIC_KEY` and the private key to `package.ps1`.
 ### Release metadata
 
 `package.ps1` writes `dist/windows/release-meta-windows-x64.json` next to the
-installer. Both are uploaded to R2; the backend builds the appcast from the
-JSON (`scripts/appcast-example.xml` shows the mapping). macOS uses the same
+installer. Both become assets of the GitHub Release; the update site's appcast
+is written from the JSON (`scripts/appcast-example.xml` shows the mapping). macOS uses the same
 format.
 
 ```json

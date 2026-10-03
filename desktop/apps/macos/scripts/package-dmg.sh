@@ -5,8 +5,11 @@
 #   SKIP_BOOTSTRAP=1           reuse the existing PPVPNClient package / project
 #   PPVPN_BINARIES_DIR         staged core + service helpers (see embed-binaries.sh)
 #   PPVPN_API_BASE_DEFAULT     backend baked into the build (default: the project's)
-#   PPVPN_UPDATE_FEED_URL      Sparkle appcast; derived from PPVPN_API_BASE_DEFAULT
-#                              per platform when unset (neither: updates disabled)
+#   PPVPN_UPDATE_FEED_URL      Sparkle appcast. Unset: the channel's feed on the update
+#                              site, <PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-<platform>.xml,
+#                              when both the site and the channel are given;
+#                              otherwise updates are disabled
+#   PPVPN_UPDATE_SITE          base address of the update site
 #   PPVPN_SPARKLE_PUBLIC_KEY   Sparkle EdDSA public key
 #   SPARKLE_PRIVATE_KEY_FILE   when set, sign the DMG for Sparkle (sign_update)
 #   PPVPN_CODESIGN_IDENTITY    signing identity in the keychain search list, e.g.
@@ -22,7 +25,7 @@
 #
 # Output (dist/macos), <platform> = macos-arm64 | macos-x64:
 #   PPVPN-<version>-<platform>.dmg
-#   release-meta-<platform>.json   read by the backend to serve the appcast
+#   release-meta-<platform>.json   what the update site's feed and pointer are written from
 set -euo pipefail
 
 ARCH="${1:-}"
@@ -51,8 +54,8 @@ REPO_DIR="$(cd "$APP_DIR/../.." && pwd)"
 BUILD_DIR="$APP_DIR/build/release-$ARCH"
 OUT_DIR="$REPO_DIR/dist/macos"
 FEED_URL="${PPVPN_UPDATE_FEED_URL:-}"
-if [[ -z "$FEED_URL" && -n "${PPVPN_API_BASE_DEFAULT:-}" ]]; then
-  FEED_URL="$PPVPN_API_BASE_DEFAULT/api/v1/desktop/releases/$PLATFORM/appcast.xml"
+if [[ -z "$FEED_URL" && -n "${PPVPN_UPDATE_SITE:-}" && -n "$CHANNEL" ]]; then
+  FEED_URL="${PPVPN_UPDATE_SITE%/}/desktop/$CHANNEL/appcast-$PLATFORM.xml"
 fi
 
 if [[ "${SKIP_BOOTSTRAP:-}" != 1 ]]; then
