@@ -48,6 +48,10 @@ if [[ -n "${PPVPN_RELEASE_CHANNEL:-}" && -z "${PPVPN_UPDATE_SITE:-}" ]]; then
   echo "PPVPN_UPDATE_SITE is required for a channel build" >&2
   exit 3
 fi
+if [[ -n "${PPVPN_UPDATE_SITE:-}" && ! "$PPVPN_UPDATE_SITE" =~ ^https://[^/[:space:]]+(/[^[:space:]]*)?$ ]]; then
+  echo "PPVPN_UPDATE_SITE must be an https URL" >&2
+  exit 3
+fi
 export PPVPN_API_BASE_DEFAULT
 export PPVPN_SPARKLE_PUBLIC_KEY="${PPVPN_SPARKLE_PUBLIC_KEY:-}"
 export PPVPN_BUILD_NUMBER

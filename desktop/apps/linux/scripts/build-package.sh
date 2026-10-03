@@ -44,6 +44,8 @@ VERSION="${PPVPN_VERSION:-$(dotnet msbuild "$PROJECT" -nologo -getProperty:Versi
 BUILD="${PPVPN_BUILD_NUMBER:-0}"
 CHANNEL="${PPVPN_RELEASE_CHANNEL:-}"
 API_BASE="${PPVPN_API_BASE:-https://www.peakpassvpn.com}"
+# A build without a channel polls stable's latest.json, as it always did, on purpose: a
+# local build's version is 0.0.0.0, which never sees an update notice.
 UPDATE_FEED="${PPVPN_UPDATE_FEED:-${PPVPN_UPDATE_SITE:-https://pkg.peakpassvpn.com}/linux/${CHANNEL:-stable}/latest.json}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must be x.y.z, got '$VERSION'" >&2; exit 2; }
 [[ "$BUILD" =~ ^[0-9]+$ ]] || { echo "error: build number must be an integer, got '$BUILD'" >&2; exit 2; }
