@@ -48,7 +48,7 @@ up)
 	# glibc one (cargo build -p ppvpn-core-lab --release on Linux).
 	if [ -n "${4:-}" ]; then put ppvpn-core-lab "$4"; fi
 	for f in rs-a.srs rs-b.srs; do [ -s "$LAB_WORK/$f" ] || echo "warning: $LAB_WORK/$f missing (lab.sh rules, or copy them in)" >&2; done
-	docker image inspect "$LAB_IMAGE" >/dev/null 2>&1 || "$0" build
+	docker image inspect "$LAB_IMAGE" >/dev/null 2>&1 || sh "$0" build
 	sh "$HERE/up.sh" "$LAB_WORK" "$LAB_WORK/nodes" "$LAB_WORK/core"
 	;;
 down)
