@@ -70,4 +70,4 @@ testing = []
 btls = "0.5.6"
 ppvpn-core = { path = ".", features = ["testing"] }
 tempfile = "3"
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "test-util", "time"] }
