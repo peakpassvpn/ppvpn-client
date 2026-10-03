@@ -137,6 +137,7 @@ impl Inner {
                 .map_err(|error| self.reload_failed(error, RELOAD_REFUSED))?;
             translation = now_running;
             if switch == SwitchKind::KernelSwitch {
+                self.kernel_switched(&profile.revision);
                 self.reassert(&translation, &selected, &pins).await;
             }
             Some(switch)
@@ -230,6 +231,7 @@ impl Inner {
         if let Err(e) = started {
             return Err(self.runtime_error(&e));
         }
+        self.kernel_started();
         let run = {
             let mut live = self.live();
             live.running = true;

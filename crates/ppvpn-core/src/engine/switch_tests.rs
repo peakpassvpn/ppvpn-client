@@ -383,3 +383,23 @@ async fn a_restart_checks_the_listener_ports_again() {
         .json
         .contains(&format!("\"listen_port\":{after}")));
 }
+
+/// Every reload switch is `KernelSwitched` (and Go's `kernel switched`
+/// line), the apply's included; a full restart is not one.
+#[tokio::test]
+async fn a_hot_apply_sends_kernel_switched() {
+    let (engine, _fake) = tun_instance();
+    running(&engine).await;
+    let mut rx = engine.subscribe(&[crate::event::EventKind::KernelSwitched]);
+    engine.apply(ApplyRequest::new(profile(R2))).await.unwrap();
+    let events = super::super::lifecycle_tests::drain(&mut rx);
+    assert!(
+        matches!(events.as_slice(), [crate::event::Event::KernelSwitched { revision, .. }] if revision == R2),
+        "{events:?}"
+    );
+    engine
+        .apply(ApplyRequest::new(moved_entry("2026-09-29T00:00:00Z#3")))
+        .await
+        .unwrap();
+    assert!(super::super::lifecycle_tests::drain(&mut rx).is_empty());
+}

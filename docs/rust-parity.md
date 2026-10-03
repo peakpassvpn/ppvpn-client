@@ -113,6 +113,8 @@ D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
+`KernelSwitched` 的连接数和 `draining_kernels`（以及 `kernel switched` 日志行的同名字段）暂时都是 0：要等第 1 组的排空接上。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
+
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
 
 组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。

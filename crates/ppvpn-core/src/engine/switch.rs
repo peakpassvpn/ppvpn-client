@@ -5,6 +5,7 @@
 //! `fullRestartReasons`, whose whitelist and words this keeps.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -159,6 +160,7 @@ impl Inner {
                 }
             }
         };
+        self.kernel_started();
         let retry = {
             // A new run of sail: what was read of the old one goes. A local
             // proxy listener still left out is retried in the new run.
@@ -202,6 +204,34 @@ impl Inner {
             Ok(()) => Ok(translation),
             Err(e) => Err(self.runtime_error(&e)),
         }
+    }
+
+    /// A kernel of its own started (start, restart): the next switch's
+    /// `previous`.
+    pub(super) fn kernel_started(&self) {
+        self.kernel_gen.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A reload switched kernels for `revision` (Go's `kernel switched`
+    /// line and `KernelSwitched`). The connection counts and the draining
+    /// kernels come with the drain (rust-parity group 1): 0 until then.
+    pub(super) fn kernel_switched(&self, revision: &str) {
+        let gen = self.kernel_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        tracing::info!(
+            gen,
+            previous = gen - 1,
+            closed_connections = 0u32,
+            kept_connections = 0u32,
+            draining_kernels = 0u32,
+            "kernel switched"
+        );
+        self.publish(crate::event::Event::KernelSwitched {
+            at: super::now(),
+            revision: revision.into(),
+            closed_connections: 0,
+            kept_connections: 0,
+            draining_kernels: 0,
+        });
     }
 
     /// Neither configuration starts again: the instance is stopped.
