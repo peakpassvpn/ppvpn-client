@@ -30,6 +30,29 @@ pub enum Call {
     Status,
     Apply(ppvpn_core::ApplyRequest),
     Start,
+    Nodes,
+    SelectNode {
+        node_id: String,
+    },
+    /// `endpoint_key: None` restores automatic failover.
+    PinIngress {
+        node_id: String,
+        endpoint_key: Option<String>,
+    },
+    /// Applies the profile the daemon holds again, with another mode.
+    SetRoutingMode {
+        routing_mode: ppvpn_core::RoutingMode,
+    },
+    Traffic,
+    Connections,
+    ProbeEntrances(ppvpn_core::ProbeEntrancesRequest),
+    ProbeAvailability(ppvpn_core::ProbeAvailabilityRequest),
+    /// The local proxy endpoints, without secrets.
+    ProxyEndpoints,
+    /// A node's credential, or the routed one without a node.
+    ProxyCredential {
+        node_id: Option<String>,
+    },
     /// Shuts the engine down and ends the daemon.
     Shutdown,
 }
@@ -118,6 +141,17 @@ mod tests {
         assert!(matches!(back.call, Call::Apply(_)));
         let ping: Request = serde_json::from_str(r#"{"secret":"x","method":"ping"}"#).unwrap();
         assert!(matches!(ping.call, Call::Ping));
+        let pin: Request = serde_json::from_str(
+            r#"{"secret":"x","method":"pin_ingress","params":{"node_id":"hk","endpoint_key":null}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            pin.call,
+            Call::PinIngress {
+                endpoint_key: None,
+                ..
+            }
+        ));
     }
 
     #[test]
