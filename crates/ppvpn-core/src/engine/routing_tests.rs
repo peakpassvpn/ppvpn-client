@@ -86,3 +86,28 @@ async fn the_guard_runs_with_the_linux_tun() {
     running(&standard).await;
     assert!(!standard.inner.guard_running());
 }
+
+/// A stop that fails leaves the TUN running: it stays guarded.
+#[tokio::test]
+async fn a_failed_stop_keeps_the_tun_guarded() {
+    let fake = Arc::new(FakeRuntime::default());
+    let tun = Engine::with_runtime(
+        EngineConfig::new(Role::Tun, Platform::Linux, "/nonexistent"),
+        fake.clone(),
+    );
+    tun.inner
+        .set_host_ipv6_probe(|| super::super::tun::HostIpv6 {
+            available: true,
+            route: Ok(true),
+        });
+    tun.inner.routing.enabled.store(true, Ordering::SeqCst);
+    running(&tun).await;
+    fake.fail_next(
+        crate::runtime::fake::Op::Stop,
+        crate::runtime::RuntimeError::new("io", "busy"),
+    );
+    tun.stop().await.unwrap_err();
+    assert_eq!(tun.inner.guard_running(), cfg!(target_os = "linux"));
+    tun.stop().await.unwrap();
+    assert!(!tun.inner.guard_running());
+}
