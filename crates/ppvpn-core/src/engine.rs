@@ -135,7 +135,7 @@ impl Engine {
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         log.span().in_scope(|| cleanup::sweep(&config))?;
         let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
-        let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
+        let runtime = SailRuntime::new(options).map_err(|e| e.to_error_on(config.platform))?;
         let engine = Engine::assemble(config, Arc::new(runtime), log)?;
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
         engine.inner.start_local_dns().await?;
@@ -487,7 +487,7 @@ impl Inner {
             live.fatal = Some(FatalReason::Panic);
             self.settle(&mut live);
         }
-        error.to_error()
+        error.to_error_on(self.config.platform)
     }
 
     /// The translation inputs of this instance. The local proxy, the system
