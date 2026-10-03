@@ -26,6 +26,8 @@ fn not_running() -> CliError {
         "CORE_NOT_RUNNING",
         "the local proxy is not running; run ppvpn start",
     )
+    // As core's own CORE_NOT_RUNNING: it works once the instance runs.
+    .retryable()
 }
 
 fn connect(paths: &Paths) -> Result<Client> {

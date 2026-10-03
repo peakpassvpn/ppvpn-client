@@ -262,7 +262,7 @@ fn commands_for_the_running_instance_need_the_daemon() {
         let out = run(&[&["--json"][..], args].concat());
         assert_eq!(out.code, 5, "{args:?}");
         assert_eq!(out.json()["code"], "CORE_NOT_RUNNING", "{args:?}");
-        assert_eq!(out.json()["retryable"], false, "{args:?}");
+        assert_eq!(out.json()["retryable"], true, "{args:?}");
     }
     let out = run(&["nodes"]);
     assert_eq!(out.code, 5);
