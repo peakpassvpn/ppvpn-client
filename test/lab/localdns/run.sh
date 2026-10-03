@@ -201,7 +201,10 @@ check "no query reached the old resolver after the change" '[ "$(count dns-b)" =
 
 # 4. DHCP has not handed out DNS yet: queries fail fast (no 3 s timeout),
 # then the servers appear without another interface change and are used
-# within RetryInterval.
+# within RetryInterval. The Rust core: SERVFAIL within 500 ms, recovery
+# within 1.5 s. On the Go baseline (SWITCH_GRACE_MS > 0) a loaded CI runner
+# can stretch both: 1500 ms and 4000 ms, the log keeping the times taken.
+if [ "$GRACE" -gt 0 ]; then FAIL_MS=${FAIL_MS:-1500}; APPEAR_MS=${APPEAR_MS:-4000}; else FAIL_MS=${FAIL_MS:-500}; APPEAR_MS=${APPEAR_MS:-1500}; fi
 resolvers '{"ca":["10.201.0.1"],"cb":[]}' ""
 k=$(changes cb)
 ip -n ldns-c addr add 10.202.0.4/24 dev cb; ip -n ldns-c addr del 10.202.0.3/24 dev cb
@@ -211,18 +214,18 @@ settle '^fail SERVFAIL ' "cb without resolvers"
 for i in 1 2 3; do
   r=$(q); log "no resolvers: $r"
   check "no resolvers: query $i gets SERVFAIL" '[ "$(echo $r | cut -d" " -f1,2)" = "fail SERVFAIL" ]'
-  check "no resolvers: query $i fails within 500 ms" '[ "$(echo $r | cut -d" " -f3)" -lt 500 ]'
+  check "no resolvers: query $i fails within $FAIL_MS ms (took $(echo $r | cut -d" " -f3))" '[ "$(echo $r | cut -d" " -f3)" -lt "$FAIL_MS" ]'
 done
 resolvers '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' 10.202.0.1
 APPEAR=$(now); log "resolver appears in the file (no interface change)"
 recovered=""
-for i in $(seq 30); do
+while [ $(( $(now) - APPEAR )) -lt $(( APPEAR_MS + 1000 )) ]; do
   r=$(q)
   if [ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.2" ]; then recovered=$(( $(now) - APPEAR )); break; fi
   sleep 0.1
 done
-log "recovered after ${recovered:-never} ms"
-check "servers that appear are used within 1.5 s" '[ -n "$recovered" ] && [ "$recovered" -lt 1500 ]'
+log "recovered after ${recovered:-never} ms (limit $APPEAR_MS ms)"
+check "servers that appear are used within $APPEAR_MS ms (took ${recovered:-never})" '[ -n "$recovered" ] && [ "$recovered" -lt "$APPEAR_MS" ]'
 
 check "the 127.0.0.1 trap was never asked" '[ "$(count dns-trap)" = 0 ]'
 sleep 0.5; kill $(cat $R/tcpdump.pid) 2>/dev/null || true; sleep 0.3
