@@ -232,7 +232,9 @@ pub struct Status {
                                             // healthy、last_check_at、consecutive_failures、active），同 get-status
                                             // 名称、entry_label、region 等节点资料见 nodes() / selected_node()（同 list-nodes）
     pub local_proxy: Option<LocalProxyStatus>, // listen、port、listening（不含凭据）
-    pub rule_sets: Vec<RuleSetStatus>,
+    pub rule_sets: Vec<RuleSetStatus>,     // id、state（ready | stale | unavailable）、updated_at、error、
+                                            // failures（非 ready 时连续下载失败次数，0 时省略）、
+                                            // next_retry_at（非 ready 时下次重试时间；主机未固定或没有存储时省略），同 get-status
     pub system_proxy: SystemProxyStatus,
     pub draining_kernels: u32,
     pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded（Linux、macOS、Windows）

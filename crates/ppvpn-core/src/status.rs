@@ -159,6 +159,13 @@ pub struct RuleSetStatus {
     pub updated_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    /// Consecutive failed downloads while not ready; omitted when zero.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub failures: u32,
+    /// When a set that is not ready is retried; none when ready, or when
+    /// nothing changes before the next apply (host not pinned, no storage).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_retry_at: Option<DateTime<Utc>>,
 }
 
 /// The unauthenticated loopback listener for OS proxy settings (7891).
@@ -187,4 +194,48 @@ pub struct LocalProxyStatus {
 
 fn is_zero(port: &u16) -> bool {
     *port == 0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// As Go's get-status: failures and next_retry_at only when they say
+    /// something.
+    #[test]
+    fn rule_set_status_omits_quiet_fields() {
+        let ready = RuleSetStatus {
+            id: "cn".into(),
+            state: "ready".into(),
+            updated_at: None,
+            error: String::new(),
+            failures: 0,
+            next_retry_at: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&ready).unwrap(),
+            serde_json::json!({"id": "cn", "state": "ready"})
+        );
+        let retrying = RuleSetStatus {
+            state: "unavailable".into(),
+            error: "RULE_SET_DOWNLOAD_FAILED".into(),
+            failures: 3,
+            next_retry_at: Some("2026-10-03T08:00:20Z".parse().unwrap()),
+            ..ready
+        };
+        assert_eq!(
+            serde_json::to_value(&retrying).unwrap(),
+            serde_json::json!({
+                "id": "cn",
+                "state": "unavailable",
+                "error": "RULE_SET_DOWNLOAD_FAILED",
+                "failures": 3,
+                "next_retry_at": "2026-10-03T08:00:20Z",
+            })
+        );
+    }
 }
