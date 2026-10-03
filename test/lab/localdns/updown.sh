@@ -35,7 +35,7 @@ mkdir -p "$5"; OUT=$(realpath "$5"); rm -rf "${OUT:?}"/*
 R=$OUT/run; mkdir -p "$R"
 # The Rust core must recover within 2.5 s. On the Go baseline
 # (SWITCH_GRACE_MS > 0, as CI runs it) the kernel's own interface monitor can
-# be held back by each netlink event (#45, docs/rust-parity.md): 3035 ms was
+# be held back by each netlink event (#214, docs/rust-parity.md): 3035 ms was
 # seen on a CI runner. It gets up to 6 s, and the log keeps the time taken.
 GRACE=${SWITCH_GRACE_MS:-0}
 if [ "$GRACE" -gt 0 ]; then LIMIT_MS=${LIMIT_MS:-6000}; else LIMIT_MS=${LIMIT_MS:-2500}; fi

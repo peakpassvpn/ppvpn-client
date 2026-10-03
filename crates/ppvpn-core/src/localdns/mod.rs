@@ -4,7 +4,7 @@
 //! interface (the runtime's [`Dial`]), never through the TUN and never to
 //! 127.0.0.1. With none to ask, a query gets SERVFAIL at once.
 //!
-//! #45 dns-local cases: A (reading and filtering) in `servers`, `scutil` and
+//! #214 dns-local cases: A (reading and filtering) in `servers`, `scutil` and
 //! `adapters`, B (the cache) in `cache`, C (queries) here. D and E need the
 //! runtime and run in the lab and netns CI.
 

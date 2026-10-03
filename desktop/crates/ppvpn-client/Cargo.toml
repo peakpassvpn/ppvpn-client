@@ -27,7 +27,7 @@ sha2 = "0.10"
 
 [dependencies]
 ppvpn-account = { path = "../../../crates/ppvpn-account" }
-# The Rust core (ppvpn-core#45), behind `rust-core` until the hosts switch.
+# The Rust core (ppvpn-core#214), behind `rust-core` until the hosts switch.
 ppvpn-core = { path = "../../../crates/ppvpn-core", optional = true }
 uniffi = { version = "=0.31.0", features = ["cli", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "process", "io-util"] }

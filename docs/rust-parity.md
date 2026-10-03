@@ -1,6 +1,6 @@
 # Rust 版与 Go 版的行为对照
 
-Go core 冻结在 v0.5.21（#45）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`）硬切换前，下表每一行都要有结论：
+Go core 冻结在 v0.5.21（#214）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`）硬切换前，下表每一行都要有结论：
 
 - **todo**：还没有对应的 Rust 用例；
 - **done**：`Rust 用例` 一列写明对应的测试（crate 路径和名称），行为与 Go 一致；
@@ -10,13 +10,13 @@ Go core 冻结在 v0.5.21（#45）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`
 
 配套的语言无关基准在 [`testdata/golden/`](../testdata/golden/README.md)：Core API 契约（`contract/`）和路由判定（`routing/`）。Rust 跑同一组文件，即可覆盖其中的行为；对应的 Go 运行器（`TestGoldenContract`、`TestGoldenRouting`）在下表标为 n-a。
 
-分组沿用 #45 评审意见里的八组。"行为摘要"取自 Go 测试的注释，没有注释的取测试名；细节以 Go 测试为准。
+分组沿用 #214 评审意见里的八组。"行为摘要"取自 Go 测试的注释，没有注释的取测试名；细节以 Go 测试为准。
 
 新增 Go 测试（只允许测试和文档）时，在对应分组里加一行。
 
 ## Rust 有意偏离 Go golden 的行为
 
-以下几项 Go 0.5.21 的行为已按现状记录在 `testdata/golden/contract`。#45 的待定项 D1–D3 已经决定（2026-10-03）：Rust 版修正这些行为，Go 的 golden 不改。Rust 跑这几个步骤时，按下表的"Rust 预期"判定，不按 golden。其余步骤仍按 golden 判定。
+以下几项 Go 0.5.21 的行为已按现状记录在 `testdata/golden/contract`。#214 的待定项 D1–D3 已经决定（2026-10-03）：Rust 版修正这些行为，Go 的 golden 不改。Rust 跑这几个步骤时，按下表的"Rust 预期"判定，不按 golden。其余步骤仍按 golden 判定。
 
 | # | golden 步骤 | Go 0.5.21（golden） | Rust 预期 |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@ D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`�
 
 D3 改变的只是失效的 `default_node_id`。选择由宿主持久化，引擎不留隐藏状态（2026-10-03 决定）：宿主每次 apply 都传入它保存的 `selected_node_id`，所以 `TestSameRevisionNoopAndMigrationKeepsSelection` 的"保持选择"在宿主传入选择时成立；宿主不传，就回到 `default_node_id`，重建实例和不重建的结果一样。
 
-Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
+Profile 本身的解码错误也有一项偏离（#214 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
 
 | # | golden 步骤 | Go 0.5.21（golden） | Rust 预期 |
 | --- | --- | --- | --- |
@@ -45,7 +45,7 @@ Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 
 
 `validation.json` 的 `request_invalid_unknown_field`（请求体里有未知字段）只在 IPC 下存在，库里没有对应的情形，标为 n-a。
 
-lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust 版遵守 `capabilities.udp`；Backend 已确认生产上所有入口下发的都是 `udp=true`，所以不影响现有用户）：
+lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust 版遵守 `capabilities.udp`；Backend 已确认生产上所有入口下发的都是 `udp=true`，所以不影响现有用户）：
 
 | # | lab 用例 | Go 0.5.21（baseline） | Rust 预期 |
 | --- | --- | --- | --- |
@@ -83,7 +83,7 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 
 ## 测试宿主的约定
 
-- 所有 lab 和性能检查都通过 `ppvpn-core-lab`（Rust 的测试宿主）驱动 Rust 版。它要提供和 `ppvpn-core serve` 相同的命令行、日志格式，以及 lab 实际用到的那部分 Core API v1（#45）。
+- 所有 lab 和性能检查都通过 `ppvpn-core-lab`（Rust 的测试宿主）驱动 Rust 版。它要提供和 `ppvpn-core serve` 相同的命令行、日志格式，以及 lab 实际用到的那部分 Core API v1（#214）。
 - `ppvpn-core-lab` 必须能信任测试时现场生成的 CA：性能检查的 AnyTLS 假节点（`tools/perf`）就是这样。Go 版通过 `SSL_CERT_FILE` 实现（只在 Linux 上有效）；Rust 版要支持 `SSL_CERT_FILE`，例如 rustls-native-certs，或者提供等价的命令行参数来注入 CA 文件，否则 `tools/perf/measure.py` 测不了 AnyTLS。
 
 ## netns CI（G3、G7）
@@ -95,10 +95,10 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
 | tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 已有：`run.sh --libtest ppvpn_core.test tunrules::linux_tests::`（与 Go 并行） |
 | tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上（同一步，进程内关掉补回） |
-| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。通过（严格），见下文 |
+| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #214 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。通过（严格），见下文 |
 | network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | `network-change-rust`，内核切换看 `KernelSwitched` 事件。通过（严格），见下文 |
 
-**Go 0.5.21 的已知滞后（Rust 必须修好）**：前端的网卡监视器报告默认网卡变化后，dns-local 和直连拨号用的是**内核自己的**监视器，网络事件连续不断时可能晚几秒才跟上。原因是 sing-tun 每收到一个 netlink 事件，就把 1 秒的检查重新计时；各个盒子的节奏不同，某一个就可能一直被推迟（#45；和 Desktop 在 Linux 实机上恢复慢 5.2 秒（#69）是同一个根源）。CI 里 network-change 对 Go 用 `SWITCH_GRACE_MS=6000`：在 6 秒内跟上才算通过，日志里记下实际滞后和第一次查询的结果。前端监视器自己也会被同样推迟（CI 上见过 5146 ms 才报告变化），所以有宽限时，等待"变化被报告"的上限是 10 秒（`CHANGE_REPORT_MS` 可改），日志里记下实际耗时。Rust 版的 ppvpn-core 必须在 `SWITCH_GRACE_MS=0`（默认）下通过：变化在 2 秒内被报告，变化后的第一次查询就用新网络。做法是全程只用一个监视器（同一个事件源同时用于日志、DNS 和拨号），并且防抖要有上限，不能被持续的事件无限推迟。
+**Go 0.5.21 的已知滞后（Rust 必须修好）**：前端的网卡监视器报告默认网卡变化后，dns-local 和直连拨号用的是**内核自己的**监视器，网络事件连续不断时可能晚几秒才跟上。原因是 sing-tun 每收到一个 netlink 事件，就把 1 秒的检查重新计时；各个盒子的节奏不同，某一个就可能一直被推迟（#214；和 Desktop 在 Linux 实机上恢复慢 5.2 秒（#69）是同一个根源）。CI 里 network-change 对 Go 用 `SWITCH_GRACE_MS=6000`：在 6 秒内跟上才算通过，日志里记下实际滞后和第一次查询的结果。前端监视器自己也会被同样推迟（CI 上见过 5146 ms 才报告变化），所以有宽限时，等待"变化被报告"的上限是 10 秒（`CHANGE_REPORT_MS` 可改），日志里记下实际耗时。Rust 版的 ppvpn-core 必须在 `SWITCH_GRACE_MS=0`（默认）下通过：变化在 2 秒内被报告，变化后的第一次查询就用新网络。做法是全程只用一个监视器（同一个事件源同时用于日志、DNS 和拨号），并且防抖要有上限，不能被持续的事件无限推迟。
 
 **不在 CI 里的**（继续在共享测试主机上用 hostq 跑，见 `test/lab/engine`）：
 - 真实节点、弱网（netem）、长时间运行和内存（G4、G6）；
@@ -119,7 +119,7 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。
 
-连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（最外层在前：路由选中的出站，再是沿途各组选的成员，直到所试的成员，如 `F>G>m`；sail 2eb3fe47 起成员在拨号前就进链）、是否还有成员可试（`more_to_try`：组内每个成员的失败各报一条，只有这条连接最后一次失败为 false）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
+连接失败（#214 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（最外层在前：路由选中的出站，再是沿途各组选的成员，直到所试的成员，如 `F>G>m`；sail 2eb3fe47 起成员在拨号前就进链）、是否还有成员可试（`more_to_try`：组内每个成员的失败各报一条，只有这条连接最后一次失败为 false）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
 
 sail 2eb3fe47 的两个已知缺口不涉及我们：嵌套在 tryall 里的组最后一次失败可能仍报 `more_to_try=true`，smart 组传输中途的重连不上报；翻译只生成 selector 和 fallback 组，没有 tryall、smart（也没有 url-test）。
 
@@ -215,16 +215,16 @@ macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一
 | --- | --- | --- | --- | --- |
 | `cmd/ppvpn-core` `TestServeValidatesLocalDNSServers` | Serve validates local dns servers |  | todo |  |
 | `internal/config` `TestLocalDNSServers` | Host-supplied physical resolvers become a static ppvpn-local dns-local with every one outside the tunnel, in order; with none left (or none given) dns-local reads the … |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/localdns` `TestCacheFailsFastWithoutServers` | DHCP has not handed out DNS yet: queries fail at once with a clear error (never 127.0.0.1, never a 5 s timeout), and the interface is read again at most once per … | `ppvpn-core` `localdns::cache::tests::fails_fast_without_servers` | done | #45 B3、B7；端到端仍由 netns CI network-change 覆盖 |
-| `internal/localdns` `TestCacheFollowsInterfaceChanges` | Cache follows interface changes | `ppvpn-core` `localdns::cache::tests::follows_interface_changes` | done | #45 B1、B2、B7；端到端仍由 netns CI network-change 覆盖 |
-| `internal/localdns` `TestCacheReadsOnceForConcurrentQueries` | Concurrent queries after an invalidation share one read. | `ppvpn-core` `localdns::cache::tests::concurrent_queries_share_one_read` | done | #45 B6 |
-| `internal/localdns` `TestCacheRefreshes` | Cache refreshes | `ppvpn-core` `localdns::cache::tests::refreshes` | done | #45 B4、B5 |
-| `internal/localdns` `TestExchangeAsksServersInOrder` | Exchange asks servers in order | `ppvpn-core` `localdns::tests::next_server_after_a_silent_one`、`ppvpn-core` `localdns::tests::answer_names_its_upstream` | done | #45 C2、C5；另有 C3 `truncated_answer_retries_over_tcp`、C4 `reply_with_another_id_is_dropped`、C6 `hosts_file_names_are_answered_locally` |
-| `internal/localdns` `TestExchangeFailureRereads` | Every server failing marks the read servers suspect, so the next query reads the interface again (after RetryInterval). | `ppvpn-core` `localdns::tests::next_server_after_a_silent_one` | done | #45 B4（全部失败后回 SERVFAIL，下次查询重读） |
-| `internal/localdns` `TestExchangeWithoutServersAnswersServfailAtOnce` | Without servers a hijacked query gets SERVFAIL at once (an error would leave the client waiting for its own timeout), with the cause logged. | `ppvpn-core` `localdns::tests::without_servers_servfail_at_once` | done | #45 C1 |
-| `internal/localdns` `TestGlobalServers` | Global servers | `ppvpn-core` `localdns::scutil::tests::global_servers_of_the_default_interface`、`ppvpn-core` `localdns::scutil::tests::another_vpns_dns_is_not_the_default_interfaces` | done | #45 A4–A6；fixture 取自 Go 测试（`src/localdns/testdata`） |
-| `internal/localdns` `TestScopedServers` | Scoped servers | `ppvpn-core` `localdns::scutil::tests::scoped_servers_of_an_interface` | done | #45 A7 |
-| `internal/localdns` `TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal` | Usable leaves out tunnel loopback and foreign link local | `ppvpn-core` `localdns::servers::tests::usable_leaves_out_tunnel_loopback_and_foreign_link_local` | done | #45 A1–A3；A8（Windows 适配器）见 `adapters::tests` |
+| `internal/localdns` `TestCacheFailsFastWithoutServers` | DHCP has not handed out DNS yet: queries fail at once with a clear error (never 127.0.0.1, never a 5 s timeout), and the interface is read again at most once per … | `ppvpn-core` `localdns::cache::tests::fails_fast_without_servers` | done | #214 B3、B7；端到端仍由 netns CI network-change 覆盖 |
+| `internal/localdns` `TestCacheFollowsInterfaceChanges` | Cache follows interface changes | `ppvpn-core` `localdns::cache::tests::follows_interface_changes` | done | #214 B1、B2、B7；端到端仍由 netns CI network-change 覆盖 |
+| `internal/localdns` `TestCacheReadsOnceForConcurrentQueries` | Concurrent queries after an invalidation share one read. | `ppvpn-core` `localdns::cache::tests::concurrent_queries_share_one_read` | done | #214 B6 |
+| `internal/localdns` `TestCacheRefreshes` | Cache refreshes | `ppvpn-core` `localdns::cache::tests::refreshes` | done | #214 B4、B5 |
+| `internal/localdns` `TestExchangeAsksServersInOrder` | Exchange asks servers in order | `ppvpn-core` `localdns::tests::next_server_after_a_silent_one`、`ppvpn-core` `localdns::tests::answer_names_its_upstream` | done | #214 C2、C5；另有 C3 `truncated_answer_retries_over_tcp`、C4 `reply_with_another_id_is_dropped`、C6 `hosts_file_names_are_answered_locally` |
+| `internal/localdns` `TestExchangeFailureRereads` | Every server failing marks the read servers suspect, so the next query reads the interface again (after RetryInterval). | `ppvpn-core` `localdns::tests::next_server_after_a_silent_one` | done | #214 B4（全部失败后回 SERVFAIL，下次查询重读） |
+| `internal/localdns` `TestExchangeWithoutServersAnswersServfailAtOnce` | Without servers a hijacked query gets SERVFAIL at once (an error would leave the client waiting for its own timeout), with the cause logged. | `ppvpn-core` `localdns::tests::without_servers_servfail_at_once` | done | #214 C1 |
+| `internal/localdns` `TestGlobalServers` | Global servers | `ppvpn-core` `localdns::scutil::tests::global_servers_of_the_default_interface`、`ppvpn-core` `localdns::scutil::tests::another_vpns_dns_is_not_the_default_interfaces` | done | #214 A4–A6；fixture 取自 Go 测试（`src/localdns/testdata`） |
+| `internal/localdns` `TestScopedServers` | Scoped servers | `ppvpn-core` `localdns::scutil::tests::scoped_servers_of_an_interface` | done | #214 A7 |
+| `internal/localdns` `TestUsableLeavesOutTunnelLoopbackAndForeignLinkLocal` | Usable leaves out tunnel loopback and foreign link local | `ppvpn-core` `localdns::servers::tests::usable_leaves_out_tunnel_loopback_and_foreign_link_local` | done | #214 A1–A3；A8（Windows 适配器）见 `adapters::tests` |
 
 ## 4. dnstransport guard 与 TUN 远端 DNS
 
@@ -398,8 +398,8 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestFixtureWithRealityStartsInLocalProxyMode` | starts the shared fixture (a VLESS REALITY primary with a Shadowsocks backup) in the unprivileged desktop mode. |  | todo |  |
 | `internal/runtime` `TestFreePortIsFreeForTCPAndUDP` | Free port is free for tcp and udp |  | todo |  |
 | `internal/runtime` `TestGoldenRouting` | Golden routing |  | n-a | golden 运行器本身；Rust 跑同一组文件（testdata/golden） |
-| `internal/runtime` `TestOpenFlowHonorsAuthorizedClassificationAcrossSelectedSwitch` | Open flow honors authorized classification across selected switch |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
-| `internal/runtime` `TestOpenFlowRejectsDecisionFromOldProfileSnapshot` | Open flow rejects decision from old profile snapshot |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
+| `internal/runtime` `TestOpenFlowHonorsAuthorizedClassificationAcrossSelectedSwitch` | Open flow honors authorized classification across selected switch |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
+| `internal/runtime` `TestOpenFlowRejectsDecisionFromOldProfileSnapshot` | Open flow rejects decision from old profile snapshot |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
 | `internal/runtime` `TestRealSingBoxRunsMultipleLocalProxies` | Real sing box runs multiple local proxies |  | todo |  |
 | `internal/runtime` `TestRoutedLocalProxyUserFollowsProfileRules` | : the bare prefix on the shared local proxy routes like the system proxy (7891): profile rules first (DIRECT included), then the selected node; select-node and … |  | todo |  |
 | `internal/runtime` `TestRuleSetUnavailableThenRecovered` | A rule set that cannot be downloaded never blocks apply or start: its rule is skipped and reported; once the set arrives the core rebuilds with it. |  | todo |  |
@@ -418,9 +418,9 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestTrackedSniffedConnectionReadRacesClose` | A sniffed connection reaches the tracker as a bufio.CachedConn holding the sniffed bytes. |  | todo |  |
 | `internal/runtime` `TestTrackedSniffedPacketConnectionKeepsCachedPacket` | A sniffed UDP flow keeps its first (cached) packet and destination. |  | todo |  |
 | `internal/runtime` `TestTrafficDirection` | : upload is what the client sends toward the remote, download is what the remote returns. |  | todo |  |
-| `internal/runtime` `TestTransparentFlowAdapterUsesCompiledDecisionAndNodeOutbound` | Transparent flow adapter uses compiled decision and node outbound |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
-| `internal/runtime` `TestUDPReadNeverSilentlyTruncatesDatagram` | Udp read never silently truncates datagram |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
-| `internal/runtime` `TestUDPWritePreservesOneCallPerDatagram` | Udp write preserves one call per datagram |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
+| `internal/runtime` `TestTransparentFlowAdapterUsesCompiledDecisionAndNodeOutbound` | Transparent flow adapter uses compiled decision and node outbound |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
+| `internal/runtime` `TestUDPReadNeverSilentlyTruncatesDatagram` | Udp read never silently truncates datagram |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
+| `internal/runtime` `TestUDPWritePreservesOneCallPerDatagram` | Udp write preserves one call per datagram |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
 | `ipc` `TestUnixSocketIsPrivateAndServes` | Unix socket is private and serves |  | todo |  |
 | `localproxy` `TestMigratesVersion1StateInPlace` | Migrates version1 state in place | `ppvpn-core` `localproxy::tests::migrates_version_1_state_in_place` | done |  |
 | `localproxy` `TestParseUsername` | Parse username | `ppvpn-core` `localproxy::tests::parse_username_splits_prefix_and_node` | done |  |
@@ -435,9 +435,9 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `localproxy` `TestStartupUsesPreferredPortWhenFree` | Startup uses preferred port when free | `ppvpn-core` `localproxy::tests::startup_uses_preferred_port_when_free` | done |  |
 | `localproxy` `TestSystemProxyPortPrefers7891FallsBackAndPersists` | System proxy port prefers7891 falls back and persists | `ppvpn-core` `localproxy::tests::system_proxy_port_prefers_7891_falls_back_and_persists` | done |  |
 | `localproxy` `TestSystemProxyPortUsesPreferredWhenFree` | System proxy port uses preferred when free | `ppvpn-core` `localproxy::tests::system_proxy_port_uses_preferred_when_free` | done |  |
-| `mobile` `TestBridgeDoesNotExposeNodeCredentials` | Bridge does not expose node credentials |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
-| `mobile` `TestBridgeRejectsUnknownRoutingMode` | Bridge rejects unknown routing mode |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
-| `mobile` `TestFlowIOTimeoutZeroMeansNoDeadline` | Flow io timeout zero means no deadline |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
+| `mobile` `TestBridgeDoesNotExposeNodeCredentials` | Bridge does not expose node credentials |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
+| `mobile` `TestBridgeRejectsUnknownRoutingMode` | Bridge rejects unknown routing mode |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
+| `mobile` `TestFlowIOTimeoutZeroMeansNoDeadline` | Flow io timeout zero means no deadline |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#214、#71），Rust 不提供 |
 | `probe` `TestAvailabilityCancellation` | Availability cancellation | `ppvpn-core` `probe::availability::tests::availability_cancellation` | done |  |
 | `probe` `TestAvailabilityUsesAuthenticatedNodeProxy` | Availability uses authenticated node proxy | `ppvpn-core` `probe::availability::tests::availability_goes_through_the_node_outbound` | done | Rust 不经本地代理用户，直接经节点 outbound（`Runtime::dial_tcp`）发 GET，与本地代理用户的去向相同；另有 `availability_status_and_redirects`、`availability_failures` |
 | `probe` `TestEntranceAllFailedReportsPrimary` | Entrance all failed reports primary | `ppvpn-core` `probe::entrance::tests::entrance_all_failed_reports_primary` | done |  |

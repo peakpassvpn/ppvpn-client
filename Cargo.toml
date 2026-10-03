@@ -1,4 +1,4 @@
-# The Rust ppvpn-core (#45): a library linking sail directly, hosted in
+# The Rust ppvpn-core (#214): a library linking sail directly, hosted in
 # process by Desktop and the CLI. The Go core (cmd/, internal/, ...) stays
 # frozen at v0.5.21 beside it until the hosts switch over.
 [workspace]
@@ -18,7 +18,7 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/peakpassvpn/ppvpn-core"
 
 [workspace.dependencies]
-# sail by commit (#45: regressions run on named commits, no release needed).
+# sail by commit (#214: regressions run on named commits, no release needed).
 # Moving it is a commit of its own that also takes sail's [patch.crates-io]
 # below as of that commit (CI runs sail's tools/embed-patch-check.py).
 # auto-reload is not among sail's defaults and must stay on: without it the

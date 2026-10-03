@@ -3,8 +3,8 @@
 //! query it sends here is answered by [`LocalDns`]: the default interface's
 //! resolvers asked in order through sail's direct outbound, hosts-file
 //! names answered at once, SERVFAIL at once when there is no resolver.
-//! sail's own `local` server is not used: it lacks what #45's dns-local
-//! cases need (the comparison is in #45).
+//! sail's own `local` server is not used: it lacks what #214's dns-local
+//! cases need (the comparison is in #214).
 //!
 //! TCP and UDP on the same port of 127.0.0.1; only loopback peers are
 //! answered. A change of network does not touch the listener or sail's

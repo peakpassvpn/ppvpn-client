@@ -1,4 +1,4 @@
-//! The Rust ppvpn-core (#45): a library hosts link and run in process. Its
+//! The Rust ppvpn-core (#214): a library hosts link and run in process. Its
 //! public API and semantics are the contract in docs/host-integration.md;
 //! every public change goes with that document in the same PR.
 //!

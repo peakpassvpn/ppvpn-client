@@ -1,6 +1,6 @@
 //! The runtime's figures (groups and their health, traffic, connections)
 //! are read while the host reads them, not on a timer of their own: an
-//! idle instance wakes for nothing (#45, idle power). The first host read
+//! idle instance wakes for nothing (#214, idle power). The first host read
 //! starts a refresher that reads the runtime every [`READ_REFRESH`] while
 //! the host keeps reading, and ends [`READ_IDLE`] after its last read; a
 //! read returns what was last read (`Traffic::measured_at` says when).

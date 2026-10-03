@@ -1,6 +1,6 @@
 # Go core 0.5.21 基线（切换到 Rust 引擎前）
 
-[#45](https://github.com/peakpassvpn/ppvpn-core/issues/45) 的切换门槛要求 Rust 版和这份基线对比。
+[#214](https://github.com/peakpassvpn/ppvpn-core/issues/45) 的切换门槛要求 Rust 版和这份基线对比。
 安装包大小取打包时写进发布元数据（release-meta）的 `length`，不需要另测。
 
 ## 安装包大小

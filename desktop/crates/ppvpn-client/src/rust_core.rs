@@ -1,4 +1,4 @@
-//! The Rust `ppvpn-core` (ppvpn-core#45, docs/host-integration.md), linked in
+//! The Rust `ppvpn-core` (ppvpn-core#214, docs/host-integration.md), linked in
 //! process. Behind the `rust-core` feature while the Go core still runs the
 //! connection; the hosts switch over in one release.
 //!

@@ -1,6 +1,6 @@
 # 宿主接入：Rust `ppvpn-core` 的公开 API
 
-状态：**设计稿，待评审**（先由 core 审，再交 Desktop、CLI 评审）。依据：#45 的"宿主对 `ppvpn-core` 的接口要求""engine 与 desktop 的运行时边界"两节，以及 Desktop 给出的大纲（[评论](https://github.com/peakpassvpn/ppvpn-core/issues/45#issuecomment-5958856823)）。本文和 `crates/ppvpn-core` 在同一个 PR 里维护、随 crate 版本一起发布。切换到 Rust 版以后，它取代 `docs/desktop.md` 和 `docs/core-api.md`。
+状态：**设计稿，待评审**（先由 core 审，再交 Desktop、CLI 评审）。依据：#214 的"宿主对 `ppvpn-core` 的接口要求""engine 与 desktop 的运行时边界"两节，以及 Desktop 给出的大纲（[评论](https://github.com/peakpassvpn/ppvpn-core/issues/45#issuecomment-5958856823)）。本文和 `crates/ppvpn-core` 在同一个 PR 里维护、随 crate 版本一起发布。切换到 Rust 版以后，它取代 `docs/desktop.md` 和 `docs/core-api.md`。
 
 下文的签名是 Rust 草案，用来说明形状和语义。字段名以最终代码为准，但这里写下的语义就是契约。
 
@@ -19,7 +19,7 @@
 
 ## 2. 实例与拓扑
 
-一个 `Engine` 就是一个实例，对应现在的一个 `ppvpn-core serve` 进程。desktop 运行两个实例（#45 已定）：
+一个 `Engine` 就是一个实例，对应现在的一个 `ppvpn-core serve` 进程。desktop 运行两个实例（#214 已定）：
 
 | 实例 | 所在进程 | 权限 | 启用的能力 |
 | --- | --- | --- | --- |
@@ -135,7 +135,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
 - **去重**：去重的键是 `(revision, routing_mode, selected_node_id, pins)`，在引擎里判断。比较的对象是实例**当前生效**的值，包括 apply 之后 `select_node`、`pin_ingress` 做的改动。所以宿主把持久化的最新状态原样传回来时，不会触发重新 apply。
 - **`pins` 的校验**：`pins` 里同一个节点出现多次时，按校验错误拒绝：`PINS_INVALID`（field=`pins[i].node_id`，retryable=false）。
 - **pin 的处理**：`pins` 是宿主持久化的完整集合。新 Profile 里已经不存在的节点或入口，它的 pin 会被清除，并在 `cleared_pins` 里返回，同时发出 `NodeIngressPinCleared` 事件。返回值和事件内容相同：返回值给发起 apply 的调用方，事件给其他订阅者。宿主对两者的处理应当是幂等的。
-- **校验顺序**（D3，#45 已决定）：先校验**原始** Profile，再沿用当前选中的节点。
+- **校验顺序**（D3，#214 已决定）：先校验**原始** Profile，再沿用当前选中的节点。
   - `default_node_id` 不存在时，报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate` 一致。Go 0.5.21 在这种情况下会接受，见 `docs/rust-parity.md`。
   - 后端保证 `default_node_id` 指向下发的节点之一（`nodes[0]`），所以被拒只会发生在异常的 Profile 上。
   - 校验通过后选节点：传入的 `selected_node_id` 仍在新 Profile 里就用它；不在（或没有传）就用 `default_node_id`，传了却不在时 `selection_reset=true`。不再看实例内部"当前选中的节点"，所以重建实例和不重建的结果一样。
@@ -389,7 +389,7 @@ pub struct Error {
 
 - **客户端底线规则**：私网、CGNAT 和保留地址段直连，排在所有 Profile 规则之前；隧道自身网段和不带域名的 fake-ip 段直接拒绝。
 - **按节点用户**：本地代理的按节点用户固定走该节点，不受规则影响；routed 用户和系统代理按 Profile 规则走。
-- **`capabilities.udp=false`**（D4，#45 已决定）：UDP 被路由到 `udp=false` 的节点或入口时立即拒绝，不改走别的节点，也不直连，并记一行 debug 日志；多入口节点做故障转移时，`udp=false` 的入口不承接 UDP。Go 0.5.21 不检查这个字段。
+- **`capabilities.udp=false`**（D4，#214 已决定）：UDP 被路由到 `udp=false` 的节点或入口时立即拒绝，不改走别的节点，也不直连，并记一行 debug 日志；多入口节点做故障转移时，`udp=false` 的入口不承接 UDP。Go 0.5.21 不检查这个字段。
 
 ## 9. 由引擎负责的恢复
 
@@ -450,7 +450,7 @@ pub struct Error {
   - Engine 在 `new` 时（仅 Tun 实例）在 127.0.0.1 的随机端口上起 UDP 和 TCP 监听。监听自己读默认网卡的 DNS 服务器（Windows 读适配器，macOS 读 scutil，Linux 读 resolv.conf 或 systemd-resolved 里该网卡的 DNS）；宿主给了 `local_dns_servers` 时改用这些静态服务器。查询按顺序发出，每个服务器有超时，TC 时改用 TCP，没有服务器时立即回 SERVFAIL。
   - Sail 的 dns-local 服务器渲染成指向这个监听的 **tcp** 服务器。Sail 的 udp 客户端遇到截断应答不会改走 TCP，用 tcp 能拿到完整应答。
   - 服务器列表变化不需要 reload Sail；网卡变化的触发来自 Sail 的网络事件（只用 Sail 一个网卡监视器），监听收到后让缓存失效。
-  - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#45）。
+  - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#214）。
   - 上游查询优先经 Runtime 的 `dial_udp`/`dial_tcp` 走 direct 出站，由 Sail 的默认拨号器绑定物理网卡，不进 TUN。
 - **TUN 网卡名**：Linux 固定为 `ppvpn0`，Windows 固定为 `PPVPN`（Wintun 适配器名，按名字复用；适配器 GUID 由名字确定生成，不会每次变化）。名字要显式交给 Sail，原因是 Sail 只有在名字显式给出时，才会把这块网卡当作自己的：选默认网卡和过滤 DNS 服务器时都要排除它；名字也便于日志和抓包。
   - macOS 不写名字，由 Sail 选：取比现有最大的 `utunN` 大一的编号，并通过 embed 报告实际拿到的名字（`tun_names()`），Runtime 读出来用于日志和状态。选好的名字在打开前被别的程序抢走时，Sail 换下一个空闲的名字重试，最多试 3 个；仍然失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true）。排除隧道网段由 Sail 的这一行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。

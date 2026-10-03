@@ -44,20 +44,20 @@ import sys
 # single-round runners plus three; "spread" is (max - min) / median of the
 # rounds. A compared number is a median of three, so it varies less.
 THRESHOLDS = [
-    # Tier B (#45's thresholds, against Go measured as a pair on one
+    # Tier B (#214's thresholds, against Go measured as a pair on one
     # machine on one day; never against main: tier B runs by hand).
-    ("_mbit", None, 0.05, False, "#45: throughput at least 95% of Go's", "down"),
-    ("extra_p50_us", None, 2000, False, "#45: p50 at most Go + 2 ms", "abs"),
-    ("extra_p99_us", None, 0.10, False, "#45: p99 at most 110% of Go's"),
-    ("connect_p50_us", None, 0.10, False, "#45: first packet p50 at most 110% of Go's"),
-    ("cpu100_pct", None, 0.10, False, "#45: CPU at 100 Mbit/s at most 110% of Go's"),
-    ("idle_cpu_pct", None, 0.0, False, "#45: idle CPU not above Go's"),
+    ("_mbit", None, 0.05, False, "#214: throughput at least 95% of Go's", "down"),
+    ("extra_p50_us", None, 2000, False, "#214: p50 at most Go + 2 ms", "abs"),
+    ("extra_p99_us", None, 0.10, False, "#214: p99 at most 110% of Go's"),
+    ("connect_p50_us", None, 0.10, False, "#214: first packet p50 at most 110% of Go's"),
+    ("cpu100_pct", None, 0.10, False, "#214: CPU at 100 Mbit/s at most 110% of Go's"),
+    ("idle_cpu_pct", None, 0.0, False, "#214: idle CPU not above Go's"),
     ("idle_switches_per_s", None, None, False, "record only: wakeups, roughly"),
     ("_cpu_pct", None, None, False, "record only: where the throughput's bottleneck was"),
     ("_load_limited", None, None, False, "1: the throughput beside it is the load side's"),
     ("_us", None, None, False, "record only"),
     # Reproducible (spread 0). Against Go a trend only: Rust links the
-    # engine into the host, whose installer Desktop measures (#45).
+    # engine into the host, whose installer Desktop measures (#214).
     ("size_bytes", 0.02, None, False, "spread 0; Go vs Rust: trend only"),
     # Same engine only: Go's GC and a Rust allocator count differently.
     ("allocations_per_mib", 0.03, 0.03, True, "spread <=1.6%"),
@@ -68,7 +68,7 @@ THRESHOLDS = [
     ("rss_kb", 0.10, 0.20, False, "spread <=8.5%; against Go: Desktop's 120%"),
     # A few milliseconds at a resolution of one: spread 75-100%. Desktop's
     # "not worse than Go" for apply and kernel_switch_ms is judged on the
-    # lab hosts and real machines instead (#45).
+    # lab hosts and real machines instead (#214).
     ("_ms", None, None, False, "record only: spread 75-100% at 1 ms resolution"),
 ]
 

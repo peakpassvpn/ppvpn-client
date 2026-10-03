@@ -1,4 +1,4 @@
-//! The network as sail sees it (one monitor, #45): NetworkChanged, the
+//! The network as sail sees it (one monitor, #214): NetworkChanged, the
 //! offline state (Degraded{NoDefaultInterface}, probes failing fast with
 //! NO_DEFAULT_INTERFACE) and, on a TUN instance, the host IPv6 re-probe
 //! REPROBE_DELAY after the last change of a burst.
