@@ -1,4 +1,4 @@
-# Performance checks, tier A
+# Performance checks, tiers A and B
 
 `.github/workflows/perf.yml` measures, at each main push, the numbers that barely depend on the machine:
 
@@ -37,10 +37,39 @@ All metrics use the same profile: one Shadowsocks 2022 node and one AnyTLS node,
 - **RSS and size are the engine's alone.** The Rust engine runs inside the hosts' processes, so the hosts' total RSS and installer size are Desktop's measurements (#45). Against Go, sizes are a trend only.
 - **The fake node's certificate is trusted only on Linux.** AnyTLS trusts it through `SSL_CERT_FILE`, which Go honours on Linux but not on macOS, so the measurement runs on Linux. The Rust engine's lab binary must accept a CA file the same way, for example a flag or `SSL_CERT_FILE` with rustls-native-certs, for this script to measure it.
 - **Allocations do not compare across engines.** Go's runtime and a Rust allocator count differently.
-- **Out of scope for tier A:** CPU, throughput and latency depend on the runner. They are measured before the switch, on the lab hosts and real machines.
+- **Out of scope for tier A:** CPU, throughput and latency depend on the runner. Tier B measures them, below.
 
 Run it locally on a Linux host, as root for the TUN instance:
 
 ```sh
 sudo -E tools/perf/measure.py --engine-bin build/ppvpn-core --fakenode "$FAKENODE" --loadgen "$LOADGEN" --rounds 3
+```
+
+## Tier B
+
+CPU, throughput and latency (#45's performance thresholds) depend on the machine, so they are not measured in CI. They are measured by hand on a dedicated Linux host, with the same scripts: `measure.py --tier b`. The numbers go into an issue, not into the repository.
+
+- **Pairs.** Each round measures every engine given with `--engine`, in turn (Go, Rust, Go, Rust, ...), in one run. Go 0.5.21 and the Rust engine are therefore always compared on the same machine on the same day. Hosts are rebuilt, so numbers from different runs or days are not compared.
+- **Cores.** `--engine-cpus`, `--load-cpus` and `--node-cpus` pin the engine, loadgen and fakenode to their own cores (`taskset -c`), so that the load and the fake node do not take the engine's CPU. Give them disjoint sets within the cores the job was granted.
+- **Where.** The first output line, `ENV {...}`, records the CPU model, cores, memory, kernel, date and the pinning, plus `--label` values: give the job's id, for example `--label hostq_job=<id>`. The report quotes it.
+- **What.** The standard instance only (local proxy), against the fake node on loopback. Nothing leaves the host.
+  - idle CPU and context switches over 60 s;
+  - throughput with 1 and 8 connections, unpaced, 20 s each, per protocol (`tput1_mbit`, `tput8_mbit`);
+  - CPU at a paced 100 Mbit/s (`cpu100_pct`, 100 = one core);
+  - 64-byte round trips through the proxy against direct ones to the sink (`extra_p50_us`, `extra_p99_us`);
+  - new connections until their first byte comes back (`connect_p50_us`).
+- **Thresholds** (`report.py`, against the Go engine of the same run): throughput at least 95%, extra latency p50 at most Go + 2 ms and p99 at most 110%, connection p50 at most 110%, CPU at 100 Mbit/s at most 110%, idle CPU not above Go's.
+- **Not here:**
+  - the TUN path's latency, until the Rust engine opens its TUN;
+  - real nodes and the 24 h soak (G4, G6);
+  - macOS wakeups (powermetrics) and the hosts' total RSS (Desktop, G5).
+- **AnyTLS** trusts the fake node's certificate through `SSL_CERT_FILE`. The Go engine honours it on Linux. The Rust engine goes through sail's system store (`rustls-native-certs`), which honours it too, because the translation does not choose another store.
+
+```sh
+sudo -E tools/perf/measure.py --tier b --rounds 3 \
+  --engine go=build/ppvpn-core --engine rust=target/release/ppvpn-core-lab \
+  --fakenode "$FAKENODE" --loadgen "$LOADGEN" \
+  --engine-cpus 2,3 --load-cpus 4,5 --node-cpus 6,7 --label hostq_job=<id> | tee tierb.log
+for e in go rust; do tools/perf/report.py collect --sha "$(git rev-parse HEAD)" --engine $e tierb.log > $e.json; done
+tools/perf/report.py compare rust.json --baseline go.json
 ```
