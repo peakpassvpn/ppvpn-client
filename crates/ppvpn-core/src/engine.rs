@@ -34,6 +34,9 @@ mod cleanup;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+mod selection;
+#[cfg(test)]
+mod selection_tests;
 mod state;
 
 use bus::Bus;
@@ -194,10 +197,7 @@ impl Engine {
 
     /// Selects the node of new connections; the host persists it (4.3).
     pub async fn select_node(&self, node_id: &str) -> Result<(), Error> {
-        self.inner.admit()?;
-        self.inner.require_applied()?;
-        let _ = node_id;
-        Err(Error::not_implemented("select_node"))
+        self.inner.select_node(node_id).await
     }
 
     /// Pins a node to one ingress, or back to automatic with `None` (4.3).
@@ -206,10 +206,7 @@ impl Engine {
         node_id: &str,
         endpoint_key: Option<&str>,
     ) -> Result<(), Error> {
-        self.inner.admit()?;
-        self.inner.require_applied()?;
-        let _ = (node_id, endpoint_key);
-        Err(Error::not_implemented("pin_ingress"))
+        self.inner.pin_ingress(node_id, endpoint_key).await
     }
 
     /// The authoritative snapshot (section 5).
@@ -236,24 +233,54 @@ impl Engine {
         }
     }
 
+    /// The applied profile's nodes (`list-nodes`); empty without one.
     pub fn nodes(&self) -> Vec<NodeInfo> {
-        Vec::new()
+        let live = self.inner.live();
+        live.applied
+            .as_ref()
+            .map(|a| a.profile.nodes.iter().map(selection::node_info).collect())
+            .unwrap_or_default()
     }
 
+    /// The selected node (`get-selected-node`); None without a profile.
     pub fn selected_node(&self) -> Option<NodeInfo> {
-        None
+        let live = self.inner.live();
+        let applied = live.applied.as_ref()?;
+        applied.node(&applied.selected).map(selection::node_info)
     }
 
+    /// Cumulative bytes as last read from the runtime (every second while
+    /// running); `measured_at` is when.
     pub fn traffic(&self) -> Traffic {
+        let live = self.inner.live();
         Traffic {
-            upload_bytes: 0,
-            download_bytes: 0,
-            measured_at: now(),
+            upload_bytes: live.traffic.upload_bytes,
+            download_bytes: live.traffic.download_bytes,
+            measured_at: live.traffic_at.unwrap_or_else(now),
         }
     }
 
+    /// The open connections as last read from the runtime (every second
+    /// while running), each with the node its outbound chain goes through
+    /// (empty: direct).
     pub fn connections(&self) -> Vec<Connection> {
-        Vec::new()
+        let live = self.inner.live();
+        let nodes = live.applied.as_ref().map(|a| &a.translation.outbound_nodes);
+        live.connections
+            .iter()
+            .map(|c| Connection {
+                id: c.id.to_string(),
+                node_id: nodes
+                    .and_then(|nodes| c.chain.iter().find_map(|tag| nodes.get(tag)))
+                    .cloned()
+                    .unwrap_or_default(),
+                network: c.network.clone(),
+                destination: c.destination.clone(),
+                upload_bytes: c.upload_bytes,
+                download_bytes: c.download_bytes,
+                started_at: DateTime::<Utc>::from(c.started),
+            })
+            .collect()
     }
 
     /// Versions; hosts show them in diagnostics.
@@ -405,13 +432,6 @@ impl Inner {
                 false,
                 "the instance is fatal: drop it and create another",
             ));
-        }
-        Ok(())
-    }
-
-    fn require_applied(&self) -> Result<(), Error> {
-        if self.live().applied.is_none() {
-            return Err(not_applied());
         }
         Ok(())
     }
