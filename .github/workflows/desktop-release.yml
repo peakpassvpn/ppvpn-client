@@ -1,0 +1,235 @@
+name: desktop-release
+
+# The only workflow that publishes the desktop client. By hand only; it
+# gives the three platforms one version and one build number, builds them
+# (desktop-package.yml, in the channel's environment, which holds the
+# signing secrets and, for dev, the backend address), and publishes the
+# installers as a GitHub Release with SHA256SUMS and build provenance.
+#
+#   stable: run on the tag desktop-vX.Y.Z. Always published.
+#   dev:    any ref of this repository. Published only when asked: by
+#           default the installers stay workflow artifacts. A published dev
+#           build is a prerelease tagged desktop-vX.Y.Z-dev.<build>.
+#
+# A desktop release is never the repository's "latest" release: that is
+# the core's (release.yml, tags vX.Y.Z, which the desktop tags do not match).
+#
+# The update site (feeds, channel pointers, apt/dnf repositories) is
+# deployed by a later step; here the site's pointer and feeds are only
+# generated, as a check of the release and for inspection.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        type: choice
+        options: [dev, stable]
+        required: true
+      version:
+        description: Version x.y.z (stable runs must be on the tag desktop-v<version>)
+        required: true
+      publish_dev:
+        description: dev only - publish a GitHub prerelease (off - the installers stay workflow artifacts)
+        type: boolean
+        default: false
+      allow_downgrade:
+        description: Publish even if not newer than the channel's published release (a deliberate rollback)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - id: resolve
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          PUBLISH_DEV: ${{ inputs.publish_dev }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          # The last build number published before this workflow existed,
+          # so that the counter never goes back (it is the fourth field of
+          # the Windows file version, which updates compare).
+          BUILD_OFFSET: ${{ vars.DESKTOP_BUILD_OFFSET || '0' }}
+        run: |
+          set -eu
+          version=${VERSION#v}
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "version must be x.y.z, got '$VERSION'" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$BUILD_OFFSET" | grep -Eq '^[0-9]+$'; then
+            echo "the variable DESKTOP_BUILD_OFFSET must be a number" >&2
+            exit 1
+          fi
+          # One counter for every platform and channel: this workflow's run
+          # number over the offset. It must only ever grow, so no other
+          # workflow may publish.
+          build=$((BUILD_OFFSET + RUN_NUMBER))
+          if [ "$build" -gt 65535 ]; then
+            echo "build number $build exceeds 65535" >&2
+            exit 1
+          fi
+          case "$CHANNEL" in
+            stable)
+              tag="desktop-v$version"
+              publish=true
+              if [ "$REF_TYPE" != tag ] || [ "$REF_NAME" != "$tag" ]; then
+                echo "stable releases must run on the tag $tag (got $REF_TYPE $REF_NAME)" >&2
+                exit 1
+              fi
+              ;;
+            dev)
+              tag="desktop-v$version-dev.$build"
+              publish=$PUBLISH_DEV
+              ;;
+            *) echo "unknown channel $CHANNEL" >&2; exit 1 ;;
+          esac
+          {
+            echo "version=$version"
+            echo "build_number=$build"
+            echo "tag=$tag"
+            echo "publish=$publish"
+          } >>"$GITHUB_OUTPUT"
+          echo "$CHANNEL $version build $build, tag $tag, publish: $publish" >>"$GITHUB_STEP_SUMMARY"
+
+  package:
+    needs: prepare
+    uses: ./.github/workflows/desktop-package.yml
+    with:
+      channel: ${{ inputs.channel }}
+      version: ${{ needs.prepare.outputs.version }}
+      build_number: ${{ needs.prepare.outputs.build_number }}
+      environment: desktop-release-${{ inputs.channel }}
+    # The package jobs run in the environment and take its secrets.
+    secrets: inherit
+
+  # Only when publishing (an unpublished dev build ends with the package
+  # jobs' artifacts). The release's files, checked as a whole before
+  # anything is published:
+  # all five platforms, each installer against its metadata, the update
+  # signatures, the tag, and that the channel does not go back.
+  release-files:
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, package]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      CHANNEL: ${{ inputs.channel }}
+      SITE_BASE: ${{ vars.DESKTOP_SITE_BASE }}
+      ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: desktop/scripts/ci
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-*
+          path: artifacts
+      - name: Collect
+        run: |
+          set -eu
+          mkdir release
+          find artifacts -type f | while read -r file; do
+            name=$(basename "$file")
+            [ ! -e "release/$name" ] || { echo "two artifacts carry $name" >&2; exit 1; }
+            mv "$file" "release/$name"
+          done
+          ls -l release
+      - name: The channel's published pointer
+        id: current
+        run: |
+          set -eu
+          if [ -z "$SITE_BASE" ]; then
+            echo "the variable DESKTOP_SITE_BASE (the update site's https address) is not set" >&2
+            exit 1
+          fi
+          # 200: compare against it. 404: the channel has no release yet.
+          # Anything else is an error, not "no release".
+          status=$(curl -sS -o current.json -w '%{http_code}' "${SITE_BASE%/}/desktop/channels/$CHANNEL.json")
+          case "$status" in
+            200) echo "args=--current current.json" >>"$GITHUB_OUTPUT" ;;
+            404) echo "args=" >>"$GITHUB_OUTPUT" ;;
+            *) echo "the update site answered $status for the channel pointer" >&2; exit 1 ;;
+          esac
+      - name: Check the release; generate its pointer and feeds
+        env:
+          CURRENT: ${{ steps.current.outputs.args }}
+        run: |
+          set -eu
+          downgrade=""
+          [ "$ALLOW_DOWNGRADE" != true ] || downgrade=--allow-downgrade
+          # shellcheck disable=SC2086
+          python3 desktop/scripts/ci/update_site.py build --assets release --tag "$TAG" --channel "$CHANNEL" \
+            --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download" \
+            --site-base "$SITE_BASE" --out site $CURRENT $downgrade
+      - name: SHA256SUMS
+        run: cd release && sha256sum -- * >../SHA256SUMS && mv ../SHA256SUMS . && cat SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
+          path: release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site-preview
+          path: site/
+          if-no-files-found: error
+
+  publish:
+    # Attest that this workflow built the files, then publish them. A file
+    # uploaded to the release by hand fails `gh attestation verify`.
+    needs: [prepare, release-files]
+    runs-on: ubuntu-latest
+    environment: desktop-release-${{ inputs.channel }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      CHANNEL: ${{ inputs.channel }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD: ${{ needs.prepare.outputs.build_number }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: release
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          # Releases are immutable: a tag is published once.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "the release $TAG already exists" >&2
+            exit 1
+          fi
+          notes="PPVPN desktop $VERSION (build $BUILD), $CHANNEL channel. Commit \`$GITHUB_SHA\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/desktop-release.yml\`."
+          if [ "$CHANNEL" = stable ]; then
+            # On the tag it runs on. Never the repository's latest release.
+            gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --latest=false --title "PPVPN desktop $VERSION" --notes "$notes"
+          else
+            gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --latest=false --title "PPVPN desktop $VERSION dev build $BUILD" --notes "$notes"
+          fi
