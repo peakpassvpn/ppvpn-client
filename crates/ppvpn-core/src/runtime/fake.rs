@@ -46,6 +46,7 @@ pub(crate) struct FakeRuntime {
     explicit_groups: AtomicBool,
     connections: Mutex<Vec<RuntimeConnection>>,
     traffic: Mutex<RuntimeTraffic>,
+    tcp_route: Mutex<Option<SocketAddr>>,
     state: watch::Sender<RuntimeState>,
     switches: (
         mpsc::Sender<GroupSwitch>,
@@ -67,6 +68,7 @@ impl Default for FakeRuntime {
             explicit_groups: AtomicBool::new(false),
             connections: Mutex::default(),
             traffic: Mutex::default(),
+            tcp_route: Mutex::default(),
             state: watch::channel(RuntimeState::Idle).0,
             switches: (switch_tx, Mutex::new(Some(switch_rx))),
             logs: (log_tx, Mutex::new(Some(log_rx))),
@@ -149,6 +151,12 @@ impl FakeRuntime {
 
     pub(crate) fn set_traffic(&self, traffic: RuntimeTraffic) {
         *self.traffic.lock().unwrap() = traffic;
+    }
+
+    /// TCP dials from now on connect to `to` (a test's local listener),
+    /// whatever their target; without it they get a stream that is closed.
+    pub(crate) fn route_tcp_to(&self, to: SocketAddr) {
+        *self.tcp_route.lock().unwrap() = Some(to);
     }
 
     /// As if sail moved on its own (a crash, a panic).
@@ -312,6 +320,13 @@ impl Runtime for FakeRuntime {
         self.record(Call::DialTcp(outbound.to_owned(), to));
         self.running()?;
         self.check(Op::Dial)?;
+        let route = *self.tcp_route.lock().unwrap();
+        if let Some(route) = route {
+            let stream = tokio::net::TcpStream::connect(route)
+                .await
+                .map_err(|e| RuntimeError::new("failed", e.to_string()))?;
+            return Ok(Box::new(stream));
+        }
         let (near, _far) = tokio::io::duplex(64);
         Ok(Box::new(near))
     }
