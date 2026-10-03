@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparkle-format appcast for PPVPN on Windows, as read by WinSparkle 0.9.x.
+  The backend serves it at
+    https://www.peakpassvpn.com/api/v1/desktop/releases/windows-x64/appcast.xml
+  and builds it from dist/windows/release-meta-windows-x64.json, which
+  apps/windows/scripts/package.ps1 writes next to the installer:
+
+    release-meta field      appcast
+    ─────────────────────   ──────────────────────────────────────────────
+    version                 sparkle:shortVersionString  (shown to the user)
+    build                   sparkle:version             (compared by WinSparkle;
+                                                         the app's FileVersion)
+    length                  enclosure length            (bytes)
+    ed_signature            enclosure sparkle:edSignature (EdDSA/ed25519 over the
+                                                         installer bytes, base64)
+    min_os                  sparkle:minimumSystemVersion
+    installer_arguments     enclosure sparkle:installerArguments ("/S": silent install)
+    platform                enclosure sparkle:os        ("windows-x64")
+    channel                 which feed the item goes into (dev or stable)
+    published_at            pubDate                     (RFC 822 in the feed)
+    file, sha256            not in the feed; used by the backend to locate and
+                            check the object in R2
+
+  The enclosure url is the stable backend download URL. It answers with a 302
+  to a short-lived signed R2 URL; WinSparkle (WinINet) follows the redirect
+  and verifies sparkle:edSignature against the final downloaded bytes with the
+  public key compiled into the app (PPVPN_UPDATE_PUBLIC_KEY). An enclosure
+  with a missing or wrong signature is rejected and nothing is run.
+
+  WinSparkle picks the highest sparkle:version it can use among all items,
+  so older items may stay in the feed. Only sparkle:releaseNotesLink or
+  description (inline HTML) is shown as release notes.
+-->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>PPVPN for Windows</title>
+    <link>https://www.peakpassvpn.com</link>
+    <language>zh-CN</language>
+    <item>
+      <title>PPVPN 0.3.1</title>
+      <pubDate>Tue, 29 Sep 2026 12:24:28 +0000</pubDate>
+      <sparkle:version>0.3.1.2</sparkle:version>
+      <sparkle:shortVersionString>0.3.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>10.0.17763</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <ul>
+          <li>Release notes shown in the update dialog (HTML).</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://www.peakpassvpn.com/api/v1/desktop/releases/windows-x64/download"
+        sparkle:os="windows-x64"
+        sparkle:installerArguments="/S"
+        length="78135228"
+        type="application/octet-stream"
+        sparkle:edSignature="BASE64_ED25519_SIGNATURE_OF_THE_INSTALLER" />
+    </item>
+  </channel>
+</rss>

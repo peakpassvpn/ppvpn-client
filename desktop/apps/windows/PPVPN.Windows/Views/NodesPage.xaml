@@ -1,0 +1,412 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="PPVPN.Windows.Views.NodesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:PPVPN.Windows.Controls"
+    xmlns:vm="using:PPVPN.App.Core.ViewModels"
+    xmlns:local="using:PPVPN.Windows"
+    xmlns:loc="using:PPVPN.Windows.Strings"
+    xmlns:views="using:PPVPN.Windows.Views"
+    NavigationCacheMode="Required">
+
+    <Page.Resources>
+        <!-- Table columns: 36 | name ≥130 1.3* | tier 80 | region ≥90 .9* | routes ≥130 1.5* | latency 96. -->
+        <DataTemplate x:Key="NodeRowTemplate" x:DataType="vm:NodeItemViewModel">
+            <Grid Height="40" Background="Transparent">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="36" />
+                    <ColumnDefinition Width="1.3*" MinWidth="130" />
+                    <ColumnDefinition Width="80" />
+                    <ColumnDefinition Width="0.9*" MinWidth="90" />
+                    <ColumnDefinition Width="1.5*" MinWidth="130" />
+                    <ColumnDefinition Width="96" />
+                </Grid.ColumnDefinitions>
+                <Grid.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Command="{x:Bind SetCurrentCommand}" Text="{loc:S Key=setCurrent}">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE73E;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Command="{x:Bind TestOneCommand}" Text="{loc:S Key=testOne}">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xEC4A;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Command="{x:Bind CopyHttpCommand}" IsEnabled="{x:Bind HasProxy, Mode=OneWay}" Text="{loc:S Key=copyHttp}">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8C8;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Command="{x:Bind CopySocksCommand}" IsEnabled="{x:Bind HasProxy, Mode=OneWay}" Text="{loc:S Key=copySocks}" />
+                    </MenuFlyout>
+                </Grid.ContextFlyout>
+
+                <FontIcon
+                    HorizontalAlignment="Center"
+                    FontSize="14"
+                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                    Glyph="&#xE73E;"
+                    Visibility="{x:Bind IsCurrent, Mode=OneWay}" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Border
+                        Width="20"
+                        Height="14"
+                        VerticalAlignment="Center"
+                        BorderBrush="{ThemeResource FlagRingBrush}"
+                        BorderThickness="1"
+                        CornerRadius="2">
+                        <Image Source="{x:Bind local:Ui.Flag(CountryCode)}" Stretch="UniformToFill" />
+                    </Border>
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontWeight="{x:Bind local:Ui.Weight(IsCurrent), Mode=OneWay}"
+                        Text="{x:Bind Name}"
+                        TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Border
+                    Grid.Column="2"
+                    Padding="8,2,8,2"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Background="{ThemeResource AccentSoftBrush}"
+                    CornerRadius="4"
+                    Visibility="{x:Bind HasTier}">
+                    <TextBlock
+                        FontSize="12"
+                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                        Text="{x:Bind Tier}"
+                        TextTrimming="CharacterEllipsis" />
+                </Border>
+                <TextBlock
+                    Grid.Column="3"
+                    Margin="8,0,8,0"
+                    VerticalAlignment="Center"
+                    Text="{x:Bind Region}"
+                    TextTrimming="CharacterEllipsis" />
+                <TextBlock
+                    Grid.Column="4"
+                    VerticalAlignment="Center"
+                    FontFamily="{StaticResource MonoFontFamily}"
+                    FontSize="12"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{x:Bind Routes, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis"
+                    Visibility="{x:Bind local:Ui.Collapsed(HasLineChoice), Mode=OneWay}" />
+                <!-- Several lines: pick one to pin it, or 自动 (automatic failover). -->
+                <StackPanel
+                    Grid.Column="4"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="6"
+                    Visibility="{x:Bind HasLineChoice, Mode=OneWay}">
+                    <ComboBox
+                        MinWidth="120"
+                        MaxWidth="220"
+                        Padding="8,2,4,2"
+                        MinHeight="28"
+                        AutomationProperties.Name="{loc:S Key=colRoutes}"
+                        FontSize="12"
+                        ItemsSource="{x:Bind Lines, Mode=OneWay}"
+                        SelectedItem="{x:Bind SelectedLine, Mode=OneWay}"
+                        SelectionChanged="OnLineChanged" />
+                    <FontIcon
+                        VerticalAlignment="Center"
+                        FontSize="14"
+                        Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                        Glyph="&#xE7BA;"
+                        ToolTipService.ToolTip="{loc:S Key=ingressDownT}"
+                        Visibility="{x:Bind PinnedUnavailable, Mode=OneWay}" />
+                </StackPanel>
+                <Grid Grid.Column="5" Margin="0,0,12,0" HorizontalAlignment="Right">
+                    <ProgressRing
+                        Width="16"
+                        Height="16"
+                        MinWidth="0"
+                        MinHeight="0"
+                        IsActive="{x:Bind IsTesting, Mode=OneWay}"
+                        Visibility="{x:Bind IsTesting, Mode=OneWay}" />
+                    <StackPanel
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="4"
+                        Visibility="{x:Bind local:Ui.Collapsed(IsTesting), Mode=OneWay}">
+                        <FontIcon
+                            FontSize="12"
+                            Foreground="{x:Bind local:Ui.StatusToneBrush(LatencyTone), Mode=OneWay}"
+                            Glyph="&#xE823;"
+                            Visibility="{x:Bind views:NodesPage.IsLatency(LatencyKind, 'Timeout'), Mode=OneWay}" />
+                        <FontIcon
+                            FontSize="12"
+                            Foreground="{x:Bind local:Ui.StatusToneBrush(LatencyTone), Mode=OneWay}"
+                            Glyph="&#xEB90;"
+                            Visibility="{x:Bind views:NodesPage.IsLatency(LatencyKind, 'Failed'), Mode=OneWay}" />
+                        <TextBlock
+                            Foreground="{x:Bind local:Ui.StatusToneBrush(LatencyTone), Mode=OneWay}"
+                            Text="{x:Bind LatencyText, Mode=OneWay}"
+                            ToolTipService.ToolTip="{x:Bind LatencyTooltip, Mode=OneWay}" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </DataTemplate>
+
+        <Style x:Key="RowContainerStyle" TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="4,0,4,0" />
+            <Setter Property="MinHeight" Value="40" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="{StaticResource ToolPagePadding}" RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar: test method, test all, refresh. -->
+        <Grid ColumnSpacing="8" Visibility="{x:Bind views:NodesPage.NotView(ViewModel.ViewState, 'Restricted'), Mode=OneWay}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" FontSize="13" Text="{loc:S Key=probe}" />
+            <Border
+                Grid.Column="1"
+                Padding="2"
+                VerticalAlignment="Center"
+                Background="{ThemeResource ControlAltFillColorSecondaryBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="5">
+                <StackPanel Orientation="Horizontal" Spacing="2">
+                    <RadioButton x:Name="MethodIcmp" Checked="OnMethodChecked" Content="Ping" GroupName="ProbeMethod" Style="{StaticResource SegmentStyle}" Tag="0" />
+                    <RadioButton x:Name="MethodTcp" Checked="OnMethodChecked" Content="TCP" GroupName="ProbeMethod" Style="{StaticResource SegmentStyle}" Tag="1" />
+                    <RadioButton x:Name="MethodConnect" Checked="OnMethodChecked" Content="Connect" GroupName="ProbeMethod" Style="{StaticResource SegmentStyle}" Tag="2" />
+                </StackPanel>
+            </Border>
+            <Button
+                Grid.Column="3"
+                Command="{x:Bind ViewModel.TestAllCommand}"
+                Style="{StaticResource SubtleButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon FontSize="14" Glyph="&#xEC4A;" />
+                    <TextBlock Text="{loc:S Key=testAll}" />
+                </StackPanel>
+            </Button>
+            <Button
+                Grid.Column="4"
+                Command="{x:Bind ViewModel.RefreshCommand}"
+                Style="{StaticResource SubtleButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                    <TextBlock Text="{loc:S Key=refreshNodes}" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <InfoBar
+            Title="{loc:S Key=cfgT}"
+            Grid.Row="1"
+            IsClosable="False"
+            IsOpen="{x:Bind ViewModel.ConfigInvalid, Mode=OneWay}"
+            Message="{loc:S Key=cfgD}"
+            Severity="Warning" />
+
+        <!-- Table -->
+        <Border Grid.Row="2" Style="{StaticResource CardStyle}" Visibility="{x:Bind views:NodesPage.IsView(ViewModel.ViewState, 'Data'), Mode=OneWay}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="36" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Margin="4,0,4,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="36" />
+                        <ColumnDefinition Width="1.3*" MinWidth="130" />
+                        <ColumnDefinition Width="80" />
+                        <ColumnDefinition Width="0.9*" MinWidth="90" />
+                        <ColumnDefinition Width="1.5*" MinWidth="130" />
+                        <ColumnDefinition Width="96" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=colName}" />
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=colTier}" />
+                    <TextBlock Grid.Column="3" Margin="8,0,8,0" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=colRegion}" />
+                    <TextBlock Grid.Column="4" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=colRoutes}" />
+                    <TextBlock Grid.Column="5" Margin="0,0,12,0" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=colLatency}" />
+                </Grid>
+                <ListView
+                    x:Name="Table"
+                    Grid.Row="1"
+                    Padding="0,4,0,4"
+                    DoubleTapped="OnRowDoubleTapped"
+                    IsDoubleTapEnabled="True"
+                    ItemContainerStyle="{StaticResource RowContainerStyle}"
+                    ItemTemplate="{StaticResource NodeRowTemplate}"
+                    ItemsSource="{x:Bind ViewModel.Items}"
+                    SelectedItem="{x:Bind ViewModel.SelectedItem, Mode=TwoWay}"
+                    SelectionMode="Single" />
+            </Grid>
+        </Border>
+
+        <!-- Empty states: loading, invalid without history, restricted. -->
+        <StackPanel
+            Grid.Row="2"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="8"
+            Visibility="{x:Bind views:NodesPage.IsView(ViewModel.ViewState, 'Loading'), Mode=OneWay}">
+            <ProgressRing Width="40" Height="40" IsActive="True" />
+            <TextBlock Margin="0,8,0,0" HorizontalAlignment="Center" FontSize="20" FontWeight="SemiBold" Text="{loc:S Key=loadingT}" />
+            <TextBlock HorizontalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=loadingD}" />
+        </StackPanel>
+        <StackPanel
+            Grid.Row="2"
+            MaxWidth="420"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="8"
+            Visibility="{x:Bind views:NodesPage.IsView(ViewModel.ViewState, 'InvalidNoHistory'), Mode=OneWay}">
+            <FontIcon FontSize="48" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE7BA;" />
+            <TextBlock Margin="0,8,0,0" HorizontalAlignment="Center" FontSize="20" FontWeight="SemiBold" Text="{loc:S Key=invalidT}" />
+            <TextBlock
+                HorizontalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="{loc:S Key=invalidD}"
+                TextAlignment="Center"
+                TextWrapping="Wrap" />
+            <Button Margin="0,8,0,0" HorizontalAlignment="Center" Command="{x:Bind ViewModel.RefreshCommand}" Content="{loc:S Key=refreshNodes}" />
+        </StackPanel>
+        <views:ProfileEmptyState Grid.Row="2" VerticalAlignment="Top" Visibility="{x:Bind views:NodesPage.IsView(ViewModel.ViewState, 'Restricted'), Mode=OneWay}" />
+
+        <!-- The selected node's local proxy (shared port; the user name selects the node). -->
+        <Border
+            Grid.Row="3"
+            Padding="16,10,16,10"
+            Style="{StaticResource CardStyle}"
+            Visibility="{x:Bind views:NodesPage.ShowProxyBar(ViewModel.ViewState, ViewModel.HasSelection), Mode=OneWay}">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Border
+                    Width="20"
+                    Height="14"
+                    VerticalAlignment="Center"
+                    BorderBrush="{ThemeResource FlagRingBrush}"
+                    BorderThickness="1"
+                    CornerRadius="2">
+                    <Image Source="{x:Bind local:Ui.Flag(ViewModel.SelectedItem.CountryCode), Mode=OneWay}" Stretch="UniformToFill" />
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                    <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedNodeProxyTitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                    <!-- User and password on their own lines: the user name is long (<prefix>-<node id>)
+                         and one line pushed the password's buttons under HTTP / SOCKS5 in narrow windows. -->
+                    <!-- Left-aligned, so the star column is as wide as the name but never wider than the card. -->
+                    <Grid
+                        HorizontalAlignment="Left"
+                        ColumnSpacing="2"
+                        Visibility="{x:Bind local:Ui.Visible(ViewModel.SelectedItem.HasProxy), Mode=OneWay}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <!-- Trimmed when narrow; whole in the tooltip and the copy. -->
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextTrimming="CharacterEllipsis"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.SelectedNodeProxy.Username, Mode=OneWay}">
+                            <Run Text="{loc:S Key=user}" />
+                            <Run FontFamily="{StaticResource MonoFontFamily}" Text="{x:Bind ViewModel.SelectedNodeProxy.Username, Mode=OneWay}" />
+                        </TextBlock>
+                        <controls:CopyButton
+                            Grid.Column="1"
+                            Width="24"
+                            Height="24"
+                            MinHeight="24"
+                            Padding="0"
+                            AutomationProperties.Name="{loc:S Key=copy}"
+                            CopyCommand="{x:Bind ViewModel.SelectedNodeProxy.CopyUsernameCommand, Mode=OneWay}"
+                            IconOnly="True"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="{loc:S Key=copy}" />
+                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="2">
+                            <TextBlock VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                                <Run Text="{loc:S Key=authPass}" />
+                                <Run FontFamily="{StaticResource MonoFontFamily}" Text="{x:Bind ViewModel.SelectedNodeProxy.PasswordDisplay, Mode=OneWay}" />
+                            </TextBlock>
+                            <Button
+                                Width="24"
+                                Height="24"
+                                MinHeight="24"
+                                Padding="0"
+                                AutomationProperties.Name="{x:Bind local:Ui.EyeText(ViewModel.SelectedNodeProxy.PasswordRevealed), Mode=OneWay}"
+                                Command="{x:Bind ViewModel.SelectedNodeProxy.TogglePasswordRevealedCommand, Mode=OneWay}"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                ToolTipService.ToolTip="{x:Bind local:Ui.EyeText(ViewModel.SelectedNodeProxy.PasswordRevealed), Mode=OneWay}">
+                                <FontIcon FontSize="12" Glyph="{x:Bind local:Ui.EyeGlyph(ViewModel.SelectedNodeProxy.PasswordRevealed), Mode=OneWay}" />
+                            </Button>
+                            <controls:CopyButton
+                                Width="24"
+                                Height="24"
+                                MinHeight="24"
+                                Padding="0"
+                                AutomationProperties.Name="{loc:S Key=copy}"
+                                CopyCommand="{x:Bind ViewModel.SelectedNodeProxy.CopyPasswordCommand, Mode=OneWay}"
+                                IconOnly="True"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                ToolTipService.ToolTip="{loc:S Key=copy}" />
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.Main.ProxyUnavailableText, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Collapsed(ViewModel.SelectedItem.HasProxy), Mode=OneWay}" />
+                </StackPanel>
+                <controls:CopyButton
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    CopyCommand="{x:Bind ViewModel.SelectedNodeProxy.CopyHttpCommand, Mode=OneWay}"
+                    IsEnabled="{x:Bind ViewModel.SelectedItem.HasProxy, Mode=OneWay}"
+                    Label="{x:Bind views:NodesPage.ProxyLabel('HTTP', ViewModel.SelectedNodeProxy), Mode=OneWay}" />
+                <controls:CopyButton
+                    Grid.Column="3"
+                    VerticalAlignment="Center"
+                    CopyCommand="{x:Bind ViewModel.SelectedNodeProxy.CopySocksCommand, Mode=OneWay}"
+                    IsEnabled="{x:Bind ViewModel.SelectedItem.HasProxy, Mode=OneWay}"
+                    Label="{x:Bind views:NodesPage.ProxyLabel('SOCKS5', ViewModel.SelectedNodeProxy), Mode=OneWay}" />
+            </Grid>
+        </Border>
+
+        <!-- Status line -->
+        <Grid Grid.Row="4" Visibility="{x:Bind views:NodesPage.IsView(ViewModel.ViewState, 'Data'), Mode=OneWay}">
+            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                <Run Text="{x:Bind ViewModel.NodeCountText, Mode=OneWay}" />
+                <Run Text="{x:Bind views:NodesPage.Dot(ViewModel.TestingText), Mode=OneWay}" />
+            </TextBlock>
+            <TextBlock
+                HorizontalAlignment="Right"
+                FontSize="12"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                Text="{loc:S Key=nodesHint}" />
+        </Grid>
+    </Grid>
+</Page>

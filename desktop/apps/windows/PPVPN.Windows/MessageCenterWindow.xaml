@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="PPVPN.Windows.MessageCenterWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:PPVPN.Windows"
+    xmlns:loc="using:PPVPN.Windows.Strings"
+    xmlns:vm="using:PPVPN.App.Core.ViewModels">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="Root">
+        <Grid.Resources>
+            <!-- Row: 3px severity bar, unread dot, 32 type icon, title + time, type · severity, body (2 lines), actions, ›. -->
+            <DataTemplate x:Key="MessageTemplate" x:DataType="vm:InboxItemViewModel">
+                <Grid
+                    Padding="8,12,16,12"
+                    Background="Transparent"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="0,1,0,0"
+                    ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="3" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="32" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.ContextFlyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Command="{x:Bind MarkReadCommand}" IsEnabled="{x:Bind IsUnread, Mode=OneWay}" Text="{loc:S Key=markRead}" />
+                            <MenuFlyoutItem Command="{x:Bind OpenLinkCommand}" IsEnabled="{x:Bind HasLink}" Text="{loc:S Key=viewDetails}" />
+                        </MenuFlyout>
+                    </Grid.ContextFlyout>
+                    <Border Width="3" Background="{x:Bind local:MessageCenterWindow.BarBrush(Tone)}" CornerRadius="1.5" />
+                    <Ellipse
+                        Grid.Column="1"
+                        Width="8"
+                        Height="8"
+                        Margin="0,12,0,0"
+                        VerticalAlignment="Top"
+                        Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                        Visibility="{x:Bind IsUnread, Mode=OneWay}" />
+                    <Border
+                        Grid.Column="2"
+                        Width="32"
+                        Height="32"
+                        VerticalAlignment="Top"
+                        Background="{x:Bind local:MessageCenterWindow.IconBackground(Tone)}"
+                        CornerRadius="16">
+                        <FontIcon
+                            FontSize="15"
+                            Foreground="{x:Bind local:MessageCenterWindow.IconBrush(Tone)}"
+                            Glyph="{x:Bind local:MessageCenterWindow.TypeGlyph(Category)}" />
+                    </Border>
+                    <StackPanel Grid.Column="3" Spacing="2">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                FontWeight="{x:Bind local:Ui.ReadWeight(IsRead), Mode=OneWay}"
+                                Text="{x:Bind Title}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind RelativeTime, Mode=OneWay}" />
+                        </Grid>
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                            <Run Text="{x:Bind TypeLabel}" />
+                            <Run
+                                FontWeight="SemiBold"
+                                Foreground="{x:Bind local:MessageCenterWindow.IconBrush(Tone)}"
+                                Text="{x:Bind local:MessageCenterWindow.SeveritySuffix(HasSeverityLabel, SeverityLabel)}" />
+                        </TextBlock>
+                        <TextBlock
+                            FontSize="13"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            MaxLines="2"
+                            Text="{x:Bind Content}"
+                            TextTrimming="CharacterEllipsis"
+                            TextWrapping="Wrap" />
+                        <StackPanel Margin="0,4,0,0" Orientation="Horizontal" Spacing="4">
+                            <Button
+                                Height="28"
+                                Padding="10,0,10,0"
+                                Command="{x:Bind OpenLinkCommand}"
+                                FontSize="12"
+                                Visibility="{x:Bind HasLink}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{loc:S Key=viewDetails}" />
+                                    <FontIcon FontSize="10" Glyph="&#xE8A7;" />
+                                </StackPanel>
+                            </Button>
+                            <HyperlinkButton
+                                Height="28"
+                                Padding="8,0,8,0"
+                                Command="{x:Bind MarkReadCommand}"
+                                Content="{loc:S Key=markRead}"
+                                FontSize="12"
+                                Visibility="{x:Bind IsUnread, Mode=OneWay}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <FontIcon
+                        Grid.Column="4"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Glyph="&#xE76C;" />
+                </Grid>
+            </DataTemplate>
+            <Style x:Key="MessageContainerStyle" TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="CornerRadius" Value="0" />
+            </Style>
+            <Style x:Key="Bone" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource ControlAltFillColorTertiaryBrush}" />
+                <Setter Property="CornerRadius" Value="4" />
+                <Setter Property="HorizontalAlignment" Value="Left" />
+            </Style>
+        </Grid.Resources>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="AppTitleBar" Height="40">
+            <StackPanel
+                Margin="16,0,0,0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="8">
+                <Image Width="16" Height="16" Source="ms-appx:///Assets/AppLogo.png" />
+                <TextBlock VerticalAlignment="Center" FontSize="12" Text="{loc:S Key=msgWindowTitle}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- List -->
+        <Grid
+            x:Name="ListPane"
+            Grid.Row="1"
+            Visibility="{x:Bind local:Ui.Collapsed(Inbox.IsDetailOpen), Mode=OneWay}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="52" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid Padding="16,0,8,0">
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontSize="12"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{x:Bind Inbox.HeaderText, Mode=OneWay}" />
+                <Button
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    Command="{x:Bind Inbox.MarkAllReadCommand}"
+                    IsEnabled="{x:Bind Inbox.CanMarkAllRead, Mode=OneWay}"
+                    Style="{StaticResource SubtleButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="14" Glyph="&#xE8FB;" />
+                        <TextBlock FontSize="13" Text="{loc:S Key=markAllRead}" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+
+            <InfoBar
+                Title="{loc:S Key=msgErrT}"
+                Grid.Row="1"
+                Margin="12,0,12,8"
+                IsClosable="False"
+                IsOpen="{x:Bind Inbox.HasLoadError, Mode=OneWay}"
+                Message="{loc:S Key=msgErrD}"
+                Severity="Error">
+                <InfoBar.ActionButton>
+                    <Button Command="{x:Bind Inbox.RetryCommand}" Content="{loc:S Key=retry}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+
+            <!-- First load: 6 skeleton rows (breathing). -->
+            <StackPanel x:Name="Skeleton" Grid.Row="2" Visibility="{x:Bind Inbox.IsFirstLoad, Mode=OneWay}" />
+
+            <!-- Empty -->
+            <StackPanel
+                Grid.Row="2"
+                Margin="32,0,32,48"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="8"
+                Visibility="{x:Bind Inbox.IsEmpty, Mode=OneWay}">
+                <FontIcon FontSize="48" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Glyph="&#xE715;" />
+                <TextBlock Margin="0,8,0,0" HorizontalAlignment="Center" FontWeight="SemiBold" Text="{loc:S Key=msgEmptyT}" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    FontSize="13"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{loc:S Key=msgEmptyD}"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <ListView
+                x:Name="Messages"
+                Grid.Row="2"
+                IsItemClickEnabled="True"
+                ItemClick="OnMessageClick"
+                ItemContainerStyle="{StaticResource MessageContainerStyle}"
+                ItemTemplate="{StaticResource MessageTemplate}"
+                ItemsSource="{x:Bind Inbox.Messages}"
+                SelectionMode="None"
+                Visibility="{x:Bind Inbox.IsReady, Mode=OneWay}">
+                <ListView.Footer>
+                    <Grid Height="44">
+                        <StackPanel
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            Visibility="{x:Bind Inbox.IsLoadingMore, Mode=OneWay}">
+                            <ProgressRing Width="16" Height="16" MinWidth="0" MinHeight="0" IsActive="{x:Bind Inbox.IsLoadingMore, Mode=OneWay}" />
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=loadingMore}" />
+                        </StackPanel>
+                        <TextBlock
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="{loc:S Key=noMore}"
+                            Visibility="{x:Bind Inbox.IsExhausted, Mode=OneWay}" />
+                    </Grid>
+                </ListView.Footer>
+            </ListView>
+        </Grid>
+
+        <!-- Detail (same window) -->
+        <Grid
+            Grid.Row="1"
+            Visibility="{x:Bind Inbox.IsDetailOpen, Mode=OneWay}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="48" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid Padding="8,0,8,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                <Button
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="{loc:S Key=backToList}"
+                    Command="{x:Bind Inbox.BackCommand}"
+                    Style="{StaticResource SubtleButtonStyle}"
+                    ToolTipService.ToolTip="{loc:S Key=backToList}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="12" Glyph="&#xE76B;" />
+                        <TextBlock Text="{loc:S Key=msgCenter}" />
+                    </StackPanel>
+                </Button>
+                <!-- A clicked push without an inbox message (read-only): no position, previous / next or read toggle. -->
+                <StackPanel
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="2"
+                    Visibility="{x:Bind local:Ui.Collapsed(Inbox.IsDetailReadOnly), Mode=OneWay}">
+                    <TextBlock
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind Inbox.PositionText, Mode=OneWay}" />
+                    <Button
+                        Command="{x:Bind Inbox.PreviousCommand}"
+                        IsEnabled="{x:Bind Inbox.CanPrevious, Mode=OneWay}"
+                        Opacity="{x:Bind local:MessageCenterWindow.EndOpacity(Inbox.CanPrevious), Mode=OneWay}"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="{loc:S Key=prevMsg}">
+                        <FontIcon FontSize="12" Glyph="&#xE70E;" />
+                    </Button>
+                    <Button
+                        Command="{x:Bind Inbox.NextCommand}"
+                        IsEnabled="{x:Bind Inbox.CanNext, Mode=OneWay}"
+                        Opacity="{x:Bind local:MessageCenterWindow.EndOpacity(Inbox.CanNext), Mode=OneWay}"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="{loc:S Key=nextMsg}">
+                        <FontIcon FontSize="12" Glyph="&#xE70D;" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <Grid Padding="20,20,20,24" ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="3" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="3" Background="{x:Bind local:MessageCenterWindow.BarBrush(Inbox.Detail.Tone), Mode=OneWay}" CornerRadius="1.5" />
+                    <StackPanel Grid.Column="1" Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon
+                                FontSize="14"
+                                Foreground="{x:Bind local:MessageCenterWindow.IconBrush(Inbox.Detail.Tone), Mode=OneWay}"
+                                Glyph="{x:Bind local:MessageCenterWindow.TypeGlyph(Inbox.Detail.Category), Mode=OneWay}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind Inbox.Detail.TypeLabel, Mode=OneWay}" />
+                            <Border
+                                Padding="6,1,6,2"
+                                VerticalAlignment="Center"
+                                BorderBrush="{x:Bind local:MessageCenterWindow.IconBrush(Inbox.Detail.Tone), Mode=OneWay}"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Visibility="{x:Bind Inbox.Detail.HasSeverityLabel, Mode=OneWay}">
+                                <TextBlock
+                                    FontSize="11"
+                                    FontWeight="SemiBold"
+                                    Foreground="{x:Bind local:MessageCenterWindow.IconBrush(Inbox.Detail.Tone), Mode=OneWay}"
+                                    Text="{x:Bind Inbox.Detail.SeverityLabel, Mode=OneWay}" />
+                            </Border>
+                        </StackPanel>
+                        <TextBlock
+                            FontSize="20"
+                            FontWeight="SemiBold"
+                            IsTextSelectionEnabled="True"
+                            Text="{x:Bind Inbox.Detail.Title, Mode=OneWay}"
+                            TextWrapping="Wrap" />
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind Inbox.Detail.DetailTimeText, Mode=OneWay}" />
+                        <Border Style="{StaticResource RowDividerStyle}" />
+                        <TextBlock
+                            FontSize="14"
+                            IsTextSelectionEnabled="True"
+                            LineHeight="24"
+                            Text="{x:Bind Inbox.Detail.Content, Mode=OneWay}"
+                            TextWrapping="Wrap" />
+                        <StackPanel
+                            Margin="0,8,0,0"
+                            Orientation="Horizontal"
+                            Spacing="10"
+                            Visibility="{x:Bind Inbox.Detail.HasLink, Mode=OneWay}">
+                            <Button Command="{x:Bind Inbox.Detail.OpenLinkCommand, Mode=OneWay}" Style="{StaticResource AccentButtonStyle}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{loc:S Key=viewDetails}" />
+                                    <FontIcon FontSize="11" Glyph="&#xE8A7;" />
+                                </StackPanel>
+                            </Button>
+                            <TextBlock VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{loc:S Key=openLinkHint}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+            <Grid
+                Grid.Row="2"
+                Padding="12,8,16,12"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0"
+                Visibility="{x:Bind local:Ui.Collapsed(Inbox.IsDetailReadOnly), Mode=OneWay}">
+                <Button
+                    Command="{x:Bind Inbox.ToggleDetailReadCommand}"
+                    Content="{x:Bind Inbox.DetailReadActionText, Mode=OneWay}"
+                    Style="{StaticResource SubtleButtonStyle}" />
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
