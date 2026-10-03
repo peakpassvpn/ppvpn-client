@@ -125,14 +125,16 @@ jobs:
     # read its secrets themselves.
 
   # Only when publishing (an unpublished dev build ends with the package
-  # jobs' artifacts). The release's files, checked as a whole before
-  # anything is published:
+  # jobs' artifacts). The release's files: the rpms signed, then everything
+  # checked as a whole before anything is published:
   # all five platforms, each installer against its metadata, the update
   # signatures, the tag, and that the channel does not go back.
   release-files:
     if: needs.prepare.outputs.publish == 'true'
     needs: [prepare, package]
     runs-on: ubuntu-latest
+    # For the package repositories' signing key, which signs the rpms here.
+    environment: desktop-release-${{ inputs.channel }}
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       CHANNEL: ${{ inputs.channel }}
@@ -141,7 +143,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: desktop/scripts/ci
+          sparse-checkout: |
+            desktop/scripts/ci
+            desktop/apps/linux/packaging
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: desktop-*
@@ -156,6 +160,23 @@ jobs:
             mv "$file" "release/$name"
           done
           ls -l release
+      # The rpm becomes a release asset signed: the dnf repository points at
+      # the asset. Signing changes the file, so its metadata is rewritten
+      # here, before the checks, the checksums and the provenance below.
+      # The key must be the one whose public half the packages ship
+      # (packaging/ppvpn.asc), which clients already trust.
+      - name: Sign the rpms
+        env:
+          PKG_GPG_PRIVATE_KEY: ${{ secrets.PPVPN_PKG_GPG_PRIVATE_KEY }}
+          PKG_GPG_PASSPHRASE: ${{ secrets.PPVPN_PKG_GPG_PASSPHRASE }}
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rpm gnupg jq
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons desktop/apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
+          export PKG_GPG_FINGERPRINT
+          desktop/scripts/ci/sign-linux-rpms.sh release
       - name: The channel's published pointer
         id: current
         run: |
