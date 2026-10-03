@@ -833,6 +833,8 @@ fn debug_leaves_credentials_out() {
         members: Default::default(),
         direct_ipv6_hand_off: false,
         rule_ids: Vec::new(),
+        dns_members: Default::default(),
+        dns_local_listener: false,
     };
     let shown = format!("{translation:?}");
     assert!(!shown.contains(&secret), "{shown}");
@@ -861,5 +863,28 @@ fn every_route_rule_maps_back_to_what_made_it() {
     assert_eq!(
         t.rule_ids.len(),
         value(&t)["route"]["rules"].as_array().unwrap().len()
+    );
+}
+
+/// sail names a sequential DNS server's member; the translation records
+/// which server it belongs to and the resolver it asks.
+#[test]
+fn dns_members_map_back_to_their_server() {
+    let t = translate(&contract(), &tun_options()).unwrap();
+    assert_eq!(
+        t.dns_members.get("dns-remote-1.1.1.1"),
+        Some(&("dns-remote".to_owned(), "1.1.1.1".to_owned()))
+    );
+    assert!(!t.dns_local_listener, "dns-local is sail's own here");
+    let listener = Options {
+        tun: Some(desktop_tun(LocalDns::Listener(
+            "127.0.0.1:5353".parse().unwrap(),
+        ))),
+        ..Options::default()
+    };
+    assert!(
+        translate(&contract(), &listener)
+            .unwrap()
+            .dns_local_listener
     );
 }

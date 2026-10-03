@@ -51,6 +51,8 @@ fn translation() -> Translation {
         members: Default::default(),
         direct_ipv6_hand_off: false,
         rule_ids: Vec::new(),
+        dns_members: Default::default(),
+        dns_local_listener: false,
     };
     t.outbound_nodes.insert("node-a".into(), "a".into());
     t.outbound_nodes.insert("node-a-1".into(), "a".into());
@@ -166,39 +168,43 @@ fn exchange(server: Option<&str>, source: &str) -> crate::runtime::DnsExchange {
     }
 }
 
-/// As Go: only exchanges sent upstream get a line; dns-local's own lines
-/// (with the resolver it asked) stand for its exchanges.
+/// As Go: only exchanges sent upstream get a line; those of the engine's
+/// own dns-local listener are its own lines.
 #[test]
 fn only_upstream_exchanges_of_sails_servers_are_logged() {
-    assert!(logs_dns(&exchange(Some("dns-remote"), "exchanged")));
-    assert!(!logs_dns(&exchange(Some("dns-remote"), "cached")));
-    assert!(!logs_dns(&exchange(Some("dns-remote"), "optimistic")));
-    assert!(!logs_dns(&exchange(None, "rule")));
-    assert!(!logs_dns(&exchange(
-        Some(crate::translate::DNS_LOCAL_TAG),
-        "exchanged"
-    )));
+    let mut t = translation();
+    t.dns_local_listener = true;
+    let t = Some(&t);
+    assert!(logs_dns(t, &exchange(Some("dns-remote"), "exchanged")));
+    assert!(!logs_dns(t, &exchange(Some("dns-remote"), "cached")));
+    assert!(!logs_dns(t, &exchange(Some("dns-remote"), "optimistic")));
+    assert!(!logs_dns(t, &exchange(None, "rule")));
+    assert!(!logs_dns(
+        t,
+        &exchange(Some(crate::translate::DNS_LOCAL_TAG), "exchanged")
+    ));
     assert_eq!(crate::localdns::rcode_name(3), "NXDOMAIN");
 }
 
-/// Each member that fails is its own line: the chain names it, outermost
-/// first, so the line names its ingress.
+/// sail names the member of a sequential server that answered: the line
+/// names the server, and the member's resolver as `upstream` (lab
+/// dns-hijack.5: `server=dns-remote`).
 #[test]
-fn each_failed_member_names_its_ingress() {
+fn a_member_maps_back_to_its_server() {
     let mut t = translation();
-    t.outbound_nodes.insert("node-a-2".into(), "a".into());
-    t.ingress_keys.insert("node-a-2".into(), "9002".into());
-    for (chain, key) in [
-        ("selected>node-a>node-a-auto>node-a-1", "9001"),
-        ("selected>node-a>node-a-auto>node-a-2", "9002"),
-    ] {
-        assert_eq!(
-            through(&t, chain),
-            Through::Node {
-                node_id: "a".into(),
-                endpoint_key: Some(key.into()),
-                group: true
-            }
-        );
-    }
+    t.dns_members.insert(
+        "dns-remote-1.1.1.1".into(),
+        ("dns-remote".into(), "1.1.1.1".into()),
+    );
+    t.dns_members.insert(
+        "dns-local-0".into(),
+        ("dns-local".into(), "192.0.2.1:53".into()),
+    );
+    let e = exchange(Some("dns-remote-1.1.1.1"), "exchanged");
+    assert_eq!(dns_server(Some(&t), &e), ("dns-remote", Some("1.1.1.1")));
+    let e = exchange(Some("dns-remote"), "exchanged");
+    assert_eq!(dns_server(Some(&t), &e), ("dns-remote", None));
+    // dns-local made of servers (not the engine's listener) is sail's: logged.
+    let e = exchange(Some("dns-local-0"), "exchanged");
+    assert!(logs_dns(Some(&t), &e));
 }

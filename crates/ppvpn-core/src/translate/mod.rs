@@ -173,6 +173,11 @@ pub(crate) struct Translation {
     /// the engine's own (`tun`, `local-proxy`, `final`). sail names a
     /// connection's rule by this index.
     pub rule_ids: Vec<String>,
+    /// A sequential DNS server's member tag → the server it is a member of
+    /// and the resolver it asks: sail names the member that answered.
+    pub dns_members: BTreeMap<String, (String, String)>,
+    /// dns-local is the engine's own listener (which logs its exchanges).
+    pub dns_local_listener: bool,
 }
 
 impl std::fmt::Debug for Translation {
@@ -186,6 +191,8 @@ impl std::fmt::Debug for Translation {
             .field("members", &self.members)
             .field("direct_ipv6_hand_off", &self.direct_ipv6_hand_off)
             .field("rule_ids", &self.rule_ids)
+            .field("dns_members", &self.dns_members)
+            .field("dns_local_listener", &self.dns_local_listener)
             .finish()
     }
 }
@@ -203,6 +210,8 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
             members: BTreeMap::new(),
             direct_ipv6_hand_off: false,
             rule_ids: Vec::new(),
+            dns_members: BTreeMap::new(),
+            dns_local_listener: false,
         },
         outbounds: Vec::new(),
         inbounds: Vec::new(),
