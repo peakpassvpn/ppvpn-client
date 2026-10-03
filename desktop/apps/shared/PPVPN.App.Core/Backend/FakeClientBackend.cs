@@ -338,12 +338,15 @@ public sealed class FakeClientBackend : IClientBackend
         PublishUnread();
     }
 
-    void PublishUnread()
-    {
-        uint unread;
-        lock (_gate) unread = (uint)_inbox.Count(m => !m.Read);
-        Update(s => s.Auth is AuthState.SignedIn ? s with { UnreadNotifications = unread } : s);
-    }
+    /// <summary>
+    /// Counts inside <see cref="Update"/>'s lock: a count taken before it could land after a
+    /// newer one (the first badge poll runs on the thread pool) and bring back a read message.
+    /// </summary>
+    void PublishUnread() =>
+        Update(s => s.Auth is AuthState.SignedIn ? s with { UnreadNotifications = UnreadCount() } : s);
+
+    /// <summary>Unread messages; call with <c>_gate</c> held.</summary>
+    uint UnreadCount() => (uint)_inbox.Count(m => !m.Read);
 
     /// <summary>The design's sample messages (kind / event key as the backend sends them).</summary>
     static readonly (string Kind, string Event, MessageCategory Category, MessageSeverity Severity, bool Link, string Title, string Body)[] MessageTemplates =
@@ -922,12 +925,10 @@ public sealed class FakeClientBackend : IClientBackend
         var installed = _platform.PrivilegedServiceInstalled();
         // Before the SignedIn snapshot, so a list loaded at sign-in already has them.
         SeedMessages();
-        uint unread;
-        lock (_gate) unread = (uint)_inbox.Count(m => !m.Read);
         Update(s => s with
         {
             Auth = new AuthState.SignedIn(),
-            UnreadNotifications = unread,
+            UnreadNotifications = UnreadCount(),
             Account = new Account("acct-7f3a", "Alice", null, AccountEmail),
             Team = _teams.First(t => t.Id == PersonalTeamId),
             ProfileStatus = new ProfileStatus.Loading(),
