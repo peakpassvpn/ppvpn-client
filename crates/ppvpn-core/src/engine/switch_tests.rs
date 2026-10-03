@@ -222,7 +222,8 @@ async fn a_full_restart_retries_a_left_out_local_proxy() {
         fake.clone(),
     );
     engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
-    engine.inner.refuse_local_proxy(1);
+    // The start's check, then the restart's.
+    engine.inner.refuse_local_proxy(2);
     engine.start().await.unwrap();
     let left_out = EngineState::Degraded {
         reasons: vec![crate::status::DegradedReason::LocalProxyUnavailable],
@@ -248,7 +249,12 @@ async fn a_full_restart_retries_a_left_out_local_proxy() {
         None => config["inbounds"] = json!([extra]),
     }
     next.json = config.to_string();
-    let switch = engine.inner.switch_to(&running, &next).await.unwrap();
+    let build = || -> Result<Translation, Error> { Ok(next.clone()) };
+    let (switch, _) = engine
+        .inner
+        .switch_to(&running, next.clone(), &build)
+        .await
+        .unwrap();
     assert!(matches!(switch, SwitchKind::FullRestart { .. }));
     assert_eq!(engine.status().state, left_out);
     assert!(!fake.inbounds().iter().any(|t| t == LOCAL_PROXY_INBOUND_TAG));
@@ -256,4 +262,144 @@ async fn a_full_restart_retries_a_left_out_local_proxy() {
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     assert!(fake.inbounds().iter().any(|t| t == LOCAL_PROXY_INBOUND_TAG));
     assert_eq!(engine.status().state, EngineState::Running);
+}
+
+fn change(generation: u64, kind: &str, offline: bool) -> crate::runtime::NetworkChange {
+    let wired = crate::runtime::NetworkSnapshot {
+        interface: Some("eth0".into()),
+        index: Some(2),
+        ..Default::default()
+    };
+    let none = crate::runtime::NetworkSnapshot {
+        offline: true,
+        ..Default::default()
+    };
+    let (old, new) = if offline {
+        (wired, none)
+    } else {
+        (none, wired)
+    };
+    crate::runtime::NetworkChange {
+        generation,
+        change: kind.into(),
+        reason: "state".into(),
+        old,
+        new,
+    }
+}
+
+/// While a restart replaces the run, a late change of the old run is not
+/// taken: the new run reads the network when it starts.
+#[tokio::test]
+async fn a_late_network_change_during_a_restart_is_ignored() {
+    let (engine, _fake) = tun_instance();
+    running(&engine).await;
+    engine.inner.live().restarting = true;
+    engine.inner.on_network_change(change(1, "offline", true));
+    engine.inner.live().restarting = false;
+    assert_eq!(engine.status().state, EngineState::Running);
+}
+
+/// A re-probe waiting when a restart stops the old run is armed again in
+/// the new one.
+#[tokio::test(start_paused = true)]
+async fn a_restart_arms_a_waiting_reprobe_again() {
+    let fake = Arc::new(FakeRuntime::default());
+    let engine = Engine::with_runtime(
+        EngineConfig::new(Role::Tun, Platform::Linux, "/nonexistent"),
+        fake.clone(),
+    );
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = asked.clone();
+    engine.inner.set_host_ipv6_probe(move || {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        HostIpv6 {
+            available: true,
+            route: Ok(true),
+        }
+    });
+    running(&engine).await;
+    // A change arms the re-probe; the restart comes before it fires.
+    engine.inner.on_network_change(change(1, "restored", false));
+    engine
+        .apply(ApplyRequest::new(moved_entry(R2)))
+        .await
+        .unwrap();
+    let before = asked.load(std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+    assert_eq!(
+        asked.load(std::sync::atomic::Ordering::SeqCst),
+        before + 1,
+        "re-probed in the new run"
+    );
+}
+
+/// A restart checks the listeners' ports again once the old ones are
+/// closed, as a start does: a shared port taken meanwhile moves.
+#[tokio::test]
+async fn a_restart_checks_the_listener_ports_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = Arc::new(FakeRuntime::default());
+    let engine = Engine::with_runtime(
+        EngineConfig::new(Role::Standard, Platform::Linux, tmp.path())
+            .with_local_proxy(crate::config::LocalProxyConfig::new().with_preferred_port(0)),
+        fake.clone(),
+    );
+    running(&engine).await;
+    let before = engine.status().local_proxy.unwrap().port;
+    let _squatter = std::net::TcpListener::bind(("127.0.0.1", before)).unwrap();
+    let (profile, mode, selected, pins, running) = {
+        let live = engine.inner.live();
+        let a = live.applied.as_ref().unwrap();
+        (
+            a.profile.clone(),
+            a.mode,
+            a.selected.clone(),
+            a.pins.clone(),
+            a.translation.clone(),
+        )
+    };
+    // Another listener appears, so the switch is a restart.
+    let build = || -> Result<Translation, Error> {
+        let mut t =
+            crate::translate::translate(&profile, &engine.inner.options(mode, &selected, &pins))?;
+        let mut config: Value = serde_json::from_str(&t.json).unwrap();
+        config["inbounds"].as_array_mut().unwrap().push(
+            json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": 1 }),
+        );
+        t.json = config.to_string();
+        Ok(t)
+    };
+    let next = build().unwrap();
+    let (switch, now_running) = engine
+        .inner
+        .switch_to(&running, next, &build)
+        .await
+        .unwrap();
+    assert!(matches!(switch, SwitchKind::FullRestart { .. }));
+    let after = engine.status().local_proxy.unwrap().port;
+    assert_ne!(after, before);
+    assert!(now_running
+        .json
+        .contains(&format!("\"listen_port\":{after}")));
+}
+
+/// Every reload switch is `KernelSwitched` (and Go's `kernel switched`
+/// line), the apply's included; a full restart is not one.
+#[tokio::test]
+async fn a_hot_apply_sends_kernel_switched() {
+    let (engine, _fake) = tun_instance();
+    running(&engine).await;
+    let mut rx = engine.subscribe(&[crate::event::EventKind::KernelSwitched]);
+    engine.apply(ApplyRequest::new(profile(R2))).await.unwrap();
+    let events = super::super::lifecycle_tests::drain(&mut rx);
+    assert!(
+        matches!(events.as_slice(), [crate::event::Event::KernelSwitched { revision, .. }] if revision == R2),
+        "{events:?}"
+    );
+    engine
+        .apply(ApplyRequest::new(moved_entry("2026-09-29T00:00:00Z#3")))
+        .await
+        .unwrap();
+    assert!(super::super::lifecycle_tests::drain(&mut rx).is_empty());
 }

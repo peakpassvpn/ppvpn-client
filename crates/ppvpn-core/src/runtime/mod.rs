@@ -149,6 +149,103 @@ pub(crate) struct GroupSwitch {
     pub reason: String,
 }
 
+/// Connections through one chain of outbounds that failed (#45
+/// DialFailed): `count` since the one before for that chain, `last` the
+/// latest of them.
+/// A connection once the rules decided of it and, where they sent it to an
+/// outbound, once its dial ended (sail's `Routed`): a TCP connection, a UDP
+/// session or a stream of a multiplexed one. Addresses and domains whole:
+/// the Engine redacts what it logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Routed {
+    /// As `connections()` lists it; None where it never opened.
+    pub id: Option<u64>,
+    /// `tcp` or `udp`.
+    pub network: String,
+    /// The inbound's tag.
+    pub inbound: String,
+    /// `ip:port`.
+    pub source: String,
+    /// Where it was to go, as the rules saw it (`host:port`).
+    pub destination: String,
+    pub domain: Option<String>,
+    /// `request`, `fake_ip`, `sniffed` or `reverse_mapping`.
+    pub domain_source: Option<String>,
+    /// The protocol sniffing recognized.
+    pub protocol: Option<String>,
+    /// The deciding rule's index in `route.rules` (a logical rule is one);
+    /// None for `route.final`, or a dial of the host's own.
+    pub rule: Option<usize>,
+    /// `outbound`, `reject`, `drop` or `hijack_dns`.
+    pub action: String,
+    /// Outermost first, as `DialFailed::chain`: the outbound the rules named,
+    /// then the member each group on the way took; the last carried it.
+    /// Empty where none was asked. (sail's code at 2eb3fe47; its doc says
+    /// the reverse order, asked of Sail.)
+    pub chain: Vec<String>,
+    /// What the outbound was asked to reach (`host:port`).
+    pub request_destination: Option<String>,
+    /// The address its TCP connection out was made to (`ip:port`).
+    pub target: Option<String>,
+    /// How the dial failed (the I/O error's kind); None when it connected
+    /// or none was made.
+    pub error: Option<String>,
+    pub connect_ms: Option<u64>,
+}
+
+/// A DNS query answered or failed (sail's `DnsExchange`): a client's, or
+/// the instance's own; a sequential server's members each once asked. The
+/// name and records whole: the Engine redacts what it logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DnsExchange {
+    /// As sail has it: without its final dot.
+    pub name: String,
+    /// `A`, `AAAA`, `HTTPS`, ...
+    pub qtype: String,
+    pub qtype_code: u16,
+    /// The server's tag; None where a rule answered.
+    pub server: Option<String>,
+    /// `exchanged`, `cached`, `optimistic` or `rule`.
+    pub source: String,
+    /// A sequential server's attempt, from 1: each failed member, and the
+    /// one that answered.
+    pub attempt: Option<u32>,
+    /// The answer's response code, as its number and as DNS names it
+    /// (`NOERROR`, `NXDOMAIN`, ...); None when it failed.
+    pub rcode: Option<u16>,
+    pub rcode_name: Option<String>,
+    /// Why there is no answer.
+    pub error: Option<String>,
+    /// The answer section's records as DNS writes their data, the first 16.
+    pub answers: Vec<String>,
+    pub answers_total: u32,
+    /// The least TTL of the records, as the client is given it.
+    pub ttl: Option<u32>,
+    /// How long the server took; None from the cache or a rule.
+    pub duration_ms: Option<u64>,
+    /// Asked by the instance itself (to dial a domain).
+    pub for_instance: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DialFailed {
+    /// The outbounds it went through, outermost first, joined by `>` as the
+    /// log's `out=`: the route's outbound, then the member each group on
+    /// the way took, down to the member tried (`pick>direct`; `F>G>m` for a
+    /// group G in a group F).
+    pub chain: String,
+    /// Where it went, redacted as the log says it.
+    pub destination: String,
+    /// `dial`, `handshake` or `transfer`.
+    pub stage: String,
+    /// The I/O error's kind (`ConnectionRefused`, `TimedOut`, …).
+    pub error: String,
+    pub count: u64,
+    /// Whether the group goes on to try another member: false for the
+    /// failure that ends the connection (each member's failure is told).
+    pub more_to_try: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct RuntimeTraffic {
     pub upload_bytes: u64,
@@ -159,8 +256,11 @@ pub(crate) struct RuntimeTraffic {
 pub(crate) struct RuntimeConnection {
     pub id: u64,
     pub inbound: String,
-    /// Outbound tags, outermost first; the Engine maps them back to nodes
-    /// with the translation's tag map.
+    /// Outbound tags, outermost first (as `Routed::chain`; sail lists them
+    /// the Clash way, members first, and the runtime turns them): the
+    /// outbound the rules named, then each group's member, the last the one
+    /// that carries it. The Engine maps them back to nodes with the
+    /// translation's tag map.
     pub chain: Vec<String>,
     /// `tcp` or `udp`.
     pub network: String,
@@ -216,6 +316,9 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     async fn reload(&self, config: &str) -> Result<(), RuntimeError>;
     /// Returns once listeners are closed and connections dropped.
     async fn stop(&self) -> Result<(), RuntimeError>;
+    /// What the last stop could not end within its bound (sail's tasks
+    /// still running), one line each; empty when it all ended.
+    fn stop_leftovers(&self) -> Vec<String>;
 
     /// Subscribe first, then read.
     fn states(&self) -> watch::Receiver<RuntimeState>;
@@ -228,6 +331,18 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     async fn unfix(&self, group: &str) -> Result<(), RuntimeError>;
     /// Group switches as they happen. Taken once (by the Engine, at new).
     fn group_switches(&self) -> mpsc::Receiver<GroupSwitch>;
+    /// Failed connections as they happen, through starts and stops; those
+    /// that do not fit while the reader is behind are dropped. Taken once.
+    fn dial_failures(&self) -> mpsc::Receiver<DialFailed>;
+    /// Each connection routed, through starts and stops; those that do not
+    /// fit while the reader is behind are dropped. Taken once, and only when
+    /// wanted (the Engine's log at debug): sail builds them only for a
+    /// subscriber, which taking this makes.
+    fn routes(&self) -> mpsc::Receiver<Routed>;
+    /// Each DNS query answered or failed, through starts and stops; as
+    /// `routes`, taken once and only when wanted (sail builds them only for
+    /// a subscriber), and dropped while the reader is behind.
+    fn dns_exchanges(&self) -> mpsc::Receiver<DnsExchange>;
 
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError>;
     async fn connections(&self) -> Result<Vec<RuntimeConnection>, RuntimeError>;

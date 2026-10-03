@@ -44,8 +44,8 @@ up)
 	mkdir -p "$LAB_WORK/nodes"
 	cp "$sail" "$LAB_WORK/nodes/sail"; chmod +x "$LAB_WORK/nodes/sail"
 	put core "$core"; put sing-box "$singbox"
-	# A Linux build of the same architecture; the image has gcompat for a
-	# glibc one (cargo build -p ppvpn-core-lab --release on Linux).
+	# A static musl build of the same architecture (ci-build.sh): a glibc one
+	# does not start in the Alpine client (gcompat lacks __res_init).
 	if [ -n "${4:-}" ]; then put ppvpn-core-lab "$4"; fi
 	for f in rs-a.srs rs-b.srs; do [ -s "$LAB_WORK/$f" ] || echo "warning: $LAB_WORK/$f missing (lab.sh rules, or copy them in)" >&2; done
 	docker image inspect "$LAB_IMAGE" >/dev/null 2>&1 || sh "$0" build

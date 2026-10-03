@@ -119,34 +119,46 @@ impl LocalDns {
 
     /// The answer to `query`. Never an error: a query with no server to ask
     /// gets SERVFAIL (C1), and so does one that every server failed (B4
-    /// then has the next query read the servers again).
+    /// then has the next query read the servers again). Logged at debug
+    /// level as Go's `dns` line (server `dns-local`, the resolver that
+    /// answered as `upstream`).
     pub async fn exchange(&self, query: &Message) -> Message {
+        let started = std::time::Instant::now();
+        let (answer, outcome) = self.answer(query).await;
+        log_exchange(query, &answer, &outcome, started.elapsed());
+        answer
+    }
+
+    async fn answer(&self, query: &Message) -> (Message, Outcome) {
         if let Some(answer) = self.hosts_answer(query) {
-            return answer;
+            return (answer, Outcome::Hosts);
         }
         // Reading may run scutil: off the async threads.
         let cache = self.cache.clone();
         let (iface, servers) = match tokio::task::spawn_blocking(move || cache.resolve()).await {
             Ok(Ok(found)) => found,
             Ok(Err(e)) => {
-                tracing::debug!(error = %e, "dns-local: servfail");
-                return exchange::server_failure(query);
+                return (
+                    exchange::server_failure(query),
+                    Outcome::Failed(e.to_string()),
+                );
             }
             Err(e) => {
-                tracing::debug!(error = %e, "dns-local: servfail");
-                return exchange::server_failure(query);
+                return (
+                    exchange::server_failure(query),
+                    Outcome::Failed(e.to_string()),
+                );
             }
         };
         let addrs: Vec<_> = servers.iter().map(|s| s.socket_addr(&iface)).collect();
         match exchange::exchange(&self.dial, &addrs, query).await {
-            Ok((answer, upstream)) => {
-                tracing::debug!(upstream = %upstream, "dns");
-                answer
-            }
+            Ok((answer, upstream)) => (answer, Outcome::Answered(upstream.to_string())),
             Err(errors) => {
                 self.cache.failed();
-                tracing::debug!(errors = %errors.join("; "), "dns-local: every server failed");
-                exchange::server_failure(query)
+                (
+                    exchange::server_failure(query),
+                    Outcome::Failed(format!("every server failed: {}", errors.join("; "))),
+                )
             }
         }
     }
@@ -180,6 +192,84 @@ impl LocalDns {
             answer.add_answer(Record::from_rdata(question.name.clone(), HOSTS_TTL, rdata));
         }
         Some(answer)
+    }
+}
+
+/// Where an answer came from, for the `dns` line.
+enum Outcome {
+    Hosts,
+    /// The resolver that answered.
+    Answered(String),
+    /// Why it is SERVFAIL.
+    Failed(String),
+}
+
+/// Go's dnstransport `dns` line, at debug level: name, type, server, then
+/// `upstream` and `rcode`/`answers`, or `error`; and `ms`. lab and the
+/// performance checks parse it.
+fn log_exchange(
+    query: &Message,
+    answer: &Message,
+    outcome: &Outcome,
+    elapsed: std::time::Duration,
+) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    let (name, qtype) = query
+        .queries
+        .first()
+        .map(|q| (q.name.to_ascii(), q.query_type.to_string()))
+        .unwrap_or_default();
+    let server = crate::translate::DNS_LOCAL_TAG;
+    let ms = elapsed.as_millis() as u64;
+    match outcome {
+        Outcome::Failed(error) => {
+            tracing::debug!(name = %name, "type" = %qtype, server, error = %error, ms, "dns");
+        }
+        // As Go: no upstream when no resolver was asked.
+        Outcome::Hosts => {
+            tracing::debug!(
+                name = %name,
+                "type" = %qtype,
+                server,
+                rcode = %rcode(answer.metadata.response_code),
+                answers = answer.answers.len(),
+                ms,
+                "dns"
+            );
+        }
+        Outcome::Answered(upstream) => {
+            tracing::debug!(
+                name = %name,
+                "type" = %qtype,
+                server,
+                upstream = %upstream,
+                rcode = %rcode(answer.metadata.response_code),
+                answers = answer.answers.len(),
+                ms,
+                "dns"
+            );
+        }
+    }
+}
+
+/// A response code in Go's (miekg/dns) words.
+fn rcode(code: ResponseCode) -> String {
+    rcode_name(u16::from(code))
+}
+
+/// A response code number in Go's (miekg/dns) words: the `dns` lines of
+/// dns-local and of sail's servers alike.
+pub(crate) fn rcode_name(code: u16) -> String {
+    match code {
+        0 => "NOERROR".into(),
+        1 => "FORMERR".into(),
+        2 => "SERVFAIL".into(),
+        3 => "NXDOMAIN".into(),
+        4 => "NOTIMP".into(),
+        5 => "REFUSED".into(),
+        other => other.to_string(),
     }
 }
 

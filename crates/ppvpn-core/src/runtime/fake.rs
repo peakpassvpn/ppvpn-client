@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::*;
 
@@ -51,9 +51,11 @@ pub(crate) struct FakeRuntime {
     connections: Mutex<Vec<RuntimeConnection>>,
     /// The inbounds' tags: the configuration's at start, then as
     /// add_inbound and remove_inbound change them; none after stop. A
-    /// reload leaves them, as sail's adds and removes no listener.
+    /// reload that would add or remove one is refused, as sail's is.
     inbounds: Mutex<Vec<String>>,
     traffic: Mutex<RuntimeTraffic>,
+    /// How often `traffic` was read.
+    traffic_reads: AtomicU64,
     tcp_route: Mutex<Option<SocketAddr>>,
     state: watch::Sender<RuntimeState>,
     switches: (
@@ -61,16 +63,32 @@ pub(crate) struct FakeRuntime {
         Mutex<Option<mpsc::Receiver<GroupSwitch>>>,
     ),
     logs: (mpsc::Sender<String>, Mutex<Option<mpsc::Receiver<String>>>),
+    failures_seen: (
+        mpsc::Sender<DialFailed>,
+        Mutex<Option<mpsc::Receiver<DialFailed>>>,
+    ),
+    routes_seen: (mpsc::Sender<Routed>, Mutex<Option<mpsc::Receiver<Routed>>>),
+    dns_seen: (
+        mpsc::Sender<DnsExchange>,
+        Mutex<Option<mpsc::Receiver<DnsExchange>>>,
+    ),
+    /// What stop_leftovers says after the next stops.
+    leftovers: Mutex<Vec<String>>,
     dropped: AtomicU64,
     network: Mutex<NetworkSnapshot>,
     network_changes: watch::Sender<Option<NetworkChange>>,
     generation: AtomicU64,
+    /// Holds the next start in Starting (`hold_start`).
+    start_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl Default for FakeRuntime {
     fn default() -> Self {
         let (switch_tx, switch_rx) = mpsc::channel(64);
         let (log_tx, log_rx) = mpsc::channel(LOG_CAPACITY);
+        let (dial_tx, dial_rx) = mpsc::channel(64);
+        let (route_tx, route_rx) = mpsc::channel(64);
+        let (dns_tx, dns_rx) = mpsc::channel(64);
         Self {
             calls: Mutex::default(),
             config: Mutex::default(),
@@ -80,16 +98,37 @@ impl Default for FakeRuntime {
             connections: Mutex::default(),
             inbounds: Mutex::default(),
             traffic: Mutex::default(),
+            traffic_reads: AtomicU64::new(0),
             tcp_route: Mutex::default(),
             state: watch::channel(RuntimeState::Idle).0,
             switches: (switch_tx, Mutex::new(Some(switch_rx))),
             logs: (log_tx, Mutex::new(Some(log_rx))),
+            failures_seen: (dial_tx, Mutex::new(Some(dial_rx))),
+            routes_seen: (route_tx, Mutex::new(Some(route_rx))),
+            dns_seen: (dns_tx, Mutex::new(Some(dns_rx))),
+            leftovers: Mutex::default(),
             dropped: AtomicU64::new(0),
-            network: Mutex::default(),
+            // Known at the start, as sail's start returns with its first
+            // detection done; `set_network` makes it unknown for a test.
+            network: Mutex::new(NetworkSnapshot {
+                interface: Some("eth0".into()),
+                index: Some(2),
+                ..NetworkSnapshot::default()
+            }),
             network_changes: watch::channel(None).0,
+            start_gate: Mutex::new(None),
             generation: AtomicU64::new(0),
         }
     }
+}
+
+/// The tags of a configuration's inbounds.
+fn inbound_tags(config: &str) -> Vec<String> {
+    let config: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
+    config["inbounds"]
+        .as_array()
+        .map(|list| list.iter().filter_map(inbound_tag).collect())
+        .unwrap_or_default()
 }
 
 impl FakeRuntime {
@@ -99,12 +138,7 @@ impl FakeRuntime {
     }
 
     fn take_inbounds_of(&self, config: &str) {
-        let config: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
-        let tags = config["inbounds"]
-            .as_array()
-            .map(|list| list.iter().filter_map(inbound_tag).collect())
-            .unwrap_or_default();
-        *self.inbounds.lock().unwrap() = tags;
+        *self.inbounds.lock().unwrap() = inbound_tags(config);
     }
 
     pub(crate) fn calls(&self) -> Vec<Call> {
@@ -178,6 +212,11 @@ impl FakeRuntime {
         *self.connections.lock().unwrap() = connections;
     }
 
+    /// How often the runtime's traffic was read.
+    pub(crate) fn traffic_reads(&self) -> u64 {
+        self.traffic_reads.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn set_traffic(&self, traffic: RuntimeTraffic) {
         *self.traffic.lock().unwrap() = traffic;
     }
@@ -209,9 +248,39 @@ impl FakeRuntime {
         });
     }
 
+    /// As if connections through `chain` failed.
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn dial_failed(&self, failed: DialFailed) {
+        let _ = self.failures_seen.0.try_send(failed);
+    }
+
+    /// As if sail routed a connection.
+    #[allow(dead_code)] // for the Engine's tests once it follows them
+    pub(crate) fn routed(&self, routed: Routed) {
+        let _ = self.routes_seen.0.try_send(routed);
+    }
+
+    /// As if sail's DNS answered or failed a query.
+    #[allow(dead_code)] // for the Engine's tests once it follows them
+    pub(crate) fn dns_exchanged(&self, exchange: DnsExchange) {
+        let _ = self.dns_seen.0.try_send(exchange);
+    }
+
+    /// As if sail's stops left these tasks running.
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn leave_after_stop(&self, leftovers: Vec<String>) {
+        *self.leftovers.lock().unwrap() = leftovers;
+    }
+
     /// A log line from sail; dropped and counted when the reader is behind.
     /// The network becomes `new`, as sail would publish it (`reason`:
     /// default_interface, state, host or wake).
+    /// The network becomes `new` without a change being reported (sail
+    /// learning its first default interface).
+    pub(crate) fn set_network(&self, new: NetworkSnapshot) {
+        *self.network.lock().unwrap() = new;
+    }
+
     pub(crate) fn change_network(&self, new: NetworkSnapshot, reason: &str) {
         let old = std::mem::replace(&mut *self.network.lock().unwrap(), new.clone());
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
@@ -242,6 +311,24 @@ impl FakeRuntime {
         }
     }
 
+    /// sail dials and reads its network from the Starting phase on (its
+    /// outbounds are built then; 47a1cc34).
+    fn dialable(&self) -> Result<(), RuntimeError> {
+        match *self.state.borrow() {
+            RuntimeState::Starting | RuntimeState::Running => Ok(()),
+            _ => Err(RuntimeError::new("not_running", "not running")),
+        }
+    }
+
+    /// The next `start` stays in Starting until the returned gate is
+    /// notified (what runs during a start).
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn hold_start(&self) -> Arc<tokio::sync::Notify> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *self.start_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
     fn running(&self) -> Result<(), RuntimeError> {
         if *self.state.borrow() == RuntimeState::Running {
             Ok(())
@@ -259,6 +346,10 @@ impl Runtime for FakeRuntime {
             return Err(RuntimeError::new("state", "already running"));
         }
         self.state.send_replace(RuntimeState::Starting);
+        let gate = self.start_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
         if let Err(error) = self.check(Op::Start) {
             self.state.send_replace(RuntimeState::Failed {
                 code: error.code.clone(),
@@ -273,10 +364,23 @@ impl Runtime for FakeRuntime {
         Ok(())
     }
 
+    /// As sail's: a reload that adds or removes an inbound (by tag, against
+    /// the running ones, those of add_inbound among them) is refused whole.
     async fn reload(&self, config: &str) -> Result<(), RuntimeError> {
         self.record(Call::Reload(config.to_owned()));
         self.running()?;
         self.check(Op::Reload)?;
+        let (mut now, mut wanted) = (self.inbounds(), inbound_tags(config));
+        now.sort();
+        wanted.sort();
+        if now != wanted {
+            return Err(RuntimeError::new(
+                "config",
+                format!(
+                    "a reload cannot add or remove inbounds: running {now:?}, given {wanted:?}"
+                ),
+            ));
+        }
         *self.config.lock().unwrap() = Some(config.to_owned());
         self.take_groups_of(config);
         Ok(())
@@ -338,7 +442,34 @@ impl Runtime for FakeRuntime {
         self.switches.1.lock().unwrap().take().expect("taken once")
     }
 
+    fn routes(&self) -> mpsc::Receiver<Routed> {
+        self.routes_seen
+            .1
+            .lock()
+            .unwrap()
+            .take()
+            .expect("taken once")
+    }
+
+    fn dns_exchanges(&self) -> mpsc::Receiver<DnsExchange> {
+        self.dns_seen.1.lock().unwrap().take().expect("taken once")
+    }
+
+    fn stop_leftovers(&self) -> Vec<String> {
+        self.leftovers.lock().unwrap().clone()
+    }
+
+    fn dial_failures(&self) -> mpsc::Receiver<DialFailed> {
+        self.failures_seen
+            .1
+            .lock()
+            .unwrap()
+            .take()
+            .expect("taken once")
+    }
+
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError> {
+        self.traffic_reads.fetch_add(1, Ordering::Relaxed);
         self.running()?;
         Ok(*self.traffic.lock().unwrap())
     }
@@ -364,7 +495,7 @@ impl Runtime for FakeRuntime {
         _timeout: Duration,
     ) -> Result<Box<dyn AsyncReadWrite>, RuntimeError> {
         self.record(Call::DialTcp(outbound.to_owned(), to));
-        self.running()?;
+        self.dialable()?;
         self.check(Op::Dial)?;
         let route = *self.tcp_route.lock().unwrap();
         if let Some(route) = route {
@@ -384,7 +515,7 @@ impl Runtime for FakeRuntime {
         _timeout: Duration,
     ) -> Result<Box<dyn Datagram>, RuntimeError> {
         self.record(Call::DialUdp(outbound.to_owned(), to));
-        self.running()?;
+        self.dialable()?;
         self.check(Op::Dial)?;
         Ok(Box::new(Echo::default()))
     }
@@ -413,8 +544,9 @@ impl Runtime for FakeRuntime {
     }
 
     fn network(&self) -> Option<NetworkSnapshot> {
-        (*self.state.borrow() == RuntimeState::Running)
-            .then(|| self.network.lock().unwrap().clone())
+        self.dialable()
+            .ok()
+            .map(|()| self.network.lock().unwrap().clone())
     }
 
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {
@@ -576,6 +708,24 @@ mod tests {
         assert_eq!(runtime.state(), RuntimeState::Running);
         runtime.reload("c").await.unwrap();
         assert_eq!(runtime.config().as_deref(), Some("c"));
+    }
+
+    #[tokio::test]
+    async fn a_reload_that_changes_the_inbounds_is_refused() {
+        let runtime = FakeRuntime::default();
+        let local = r#"{"inbounds":[{"type":"mixed","tag":"local"}]}"#;
+        let both =
+            r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"mixed","tag":"system"}]}"#;
+        runtime.start(local).await.unwrap();
+        runtime
+            .add_inbound(r#"{"type":"mixed","tag":"system"}"#)
+            .await
+            .unwrap();
+        assert_eq!(runtime.reload(local).await.unwrap_err().code, "config");
+        assert_eq!(runtime.config().as_deref(), Some(local), "nothing changed");
+        runtime.reload(both).await.unwrap();
+        runtime.remove_inbound("system").await.unwrap();
+        runtime.reload(local).await.unwrap();
     }
 
     #[tokio::test]

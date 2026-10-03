@@ -832,8 +832,78 @@ fn debug_leaves_credentials_out() {
         groups: Default::default(),
         members: Default::default(),
         direct_ipv6_hand_off: false,
+        rule_ids: Vec::new(),
+        dns_members: Default::default(),
+        dns_local_listener: false,
     };
     let shown = format!("{translation:?}");
     assert!(!shown.contains(&secret), "{shown}");
     assert!(shown.contains("bytes"), "{shown}");
+}
+
+/// sail names a connection's rule by its index in `route.rules`: each
+/// index maps back to the profile rule that made it (its D4 rejection
+/// included) or to the engine's own rules.
+#[test]
+fn every_route_rule_maps_back_to_what_made_it() {
+    let t = translate(&routing(), &Options::default()).unwrap();
+    let config = value(&t);
+    let rules = config["route"]["rules"].as_array().unwrap();
+    assert_eq!(t.rule_ids.len(), rules.len());
+    let video: Vec<usize> = (0..rules.len())
+        .filter(|&i| rules[i]["domain"] == json!(["video.example"]))
+        .collect();
+    assert_eq!(video.len(), 2, "the rule and its D4 rejection");
+    let id = &t.rule_ids[video[0]];
+    assert!(video.iter().all(|&i| &t.rule_ids[i] == id));
+    assert_ne!(id, "engine");
+
+    let t = translate(&contract(), &tun_options()).unwrap();
+    assert_eq!(t.rule_ids[0], "tun", "the TUN's sniff rule");
+    assert_eq!(
+        t.rule_ids.len(),
+        value(&t)["route"]["rules"].as_array().unwrap().len()
+    );
+}
+
+/// sail names a sequential DNS server's member; the translation records
+/// which server it belongs to and the resolver it asks.
+#[test]
+fn dns_members_map_back_to_their_server() {
+    let t = translate(&contract(), &tun_options()).unwrap();
+    assert_eq!(
+        t.dns_members.get("dns-remote-1.1.1.1"),
+        Some(&("dns-remote".to_owned(), "1.1.1.1".to_owned()))
+    );
+    assert!(!t.dns_local_listener, "dns-local is sail's own here");
+    let listener = Options {
+        tun: Some(desktop_tun(LocalDns::Listener(
+            "127.0.0.1:5353".parse().unwrap(),
+        ))),
+        ..Options::default()
+    };
+    assert!(
+        translate(&contract(), &listener)
+            .unwrap()
+            .dns_local_listener
+    );
+}
+
+/// The credentials a translation carries are what leftovers redact.
+#[test]
+fn secrets_are_the_translations_credentials() {
+    let local = LocalProxy {
+        listen: "127.0.0.1".into(),
+        port: 7890,
+        prefix: "pp".into(),
+        password: format!("lp{:x}", std::process::id() as u64 * 7919 + 13),
+    };
+    let options = Options {
+        local_proxy: Some(local.clone()),
+        ..Options::default()
+    };
+    let t = translate(&contract(), &options).unwrap();
+    let secrets = secrets(&t.json);
+    assert!(secrets.contains(&local.password));
+    assert!(secrets.iter().all(|s| s.len() >= 6));
 }

@@ -74,7 +74,10 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
   - 创建时会先**幂等地清扫上次的残留**，只限本库创建、并且能可靠识别的东西：
     - Linux：Sail 在 `state_dir/run` 下的台账记下的改动，由 `sail::embed::sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表和 fw4 的 drop-in；另外按 `tunrules` 的命名空间清扫优先级 9091–9101 的 ip rule 和表 2091；
     - macOS：不需要清扫。强杀后 utun 和经它的路由随进程一起消失（Sail 的常驻 CI 每次都验证）；Sail 接受这个 run_dir，但在 macOS 上不写台账；
-    - Windows：不需要清扫。强杀后 Wintun 适配器及其路由、DNS 随进程一起消失：Wintun 在创建它的进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。依据是 Sail 在 VM 上的实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：`Stop-Process -Force` 后 3 秒内适配器、它的 `0.0.0.0/0` 和 `::/0` 路由、它的 DNS 都没有了；运行中重启 VM 后也没有适配器和 PnP 记录；再次启动用同一 GUID 重建正常。局限：只测了一台 VM、一个 Wintun 版本、windows-gnu 构建，没有开 `strict_route`。我们用 MSVC 构建并开 `strict_route`；它的 WFP 过滤器属于动态会话，理论上同样随进程消失，但没有实测。用我们自己的配置复测之前，这一条不算验收（`docs/rust-parity.md`，切换前要复测的项目）。
+    - Windows：不需要清扫。强杀后 Wintun 适配器及其路由、DNS 随进程一起消失：Wintun 在创建它的进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。依据是 Sail 在 VM 上的两次实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：
+      - tun + auto_route：`Stop-Process -Force` 后 3 秒内，适配器、它的 `0.0.0.0/0` 和 `::/0` 路由、它的 DNS 都没有了；运行中重启 VM 后也没有适配器和 PnP 记录；再次启动用同一 GUID 重建正常。
+      - 再加 `strict_route` 和排除段（绕开 `10.0.0.0/8`、`192.168.0.0/16`，加 `::/0`）：运行时有 Wintun 适配器、metric 0 的路由、TUN 的 DNS、6 个 WFP 过滤器和 1 个名为 sail 的子层；强杀后约 0.5 秒内全部消失，+1、+3、+10 秒都没有回来；物理默认路由没有被改动，之后出口和 DNS 正常；第二次启动再强杀，结果相同。WFP 过滤器属于动态会话，随进程一起撤掉。
+      - 局限只剩一项：测的是 windows-gnu 构建（Windows 的 TUN 和 WFP 代码与当前 master 相同），没有用我们的 MSVC 构建测。所以用我们自己的构建复测之前，这一条不算验收（`docs/rust-parity.md`，切换前要复测的项目）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
   - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
@@ -84,7 +87,8 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
   - **Standard**：不限制数量，只要 `state_dir` 和本地代理端口不冲突即可（`cargo test` 和 CLI 的测试会并行创建多个）。
 - **句柄**：`Engine` 实现 `Clone`，是同一个实例的引用计数句柄（FFI 包装时句柄同样是引用计数）。
 - **正常退出**：用 `shutdown(&self).await`，任何一个句柄都可以调用，对整个实例生效，并且幂等。它先停止接受新连接，再关闭监听和 TUN，最后撤销规则和路由并清理 TUN 内的 DNS。
-  - 总耗时上限 **10 秒**（服务管理器的停止流程比这长得多）。正常情况下返回时都已完成；超时就返回，结果 `ShutdownReport { leftovers: Vec<String> }` 里列出没清理完的项，同时记一行 warn，剩下的由下一次 `new` 的清扫兜底。
+  - 总耗时上限 **10 秒**（服务管理器的停止流程比这长得多）。正常情况下返回时都已完成；超时就返回，结果 `ShutdownReport { leftovers: Vec<Leftover> }` 里列出没清理完的项，同时记一行 warn，剩下的由下一次 `new` 的清扫兜底。
+  - 每一项是 `Leftover { kind, name, detail }`。`kind` 是类别：`runtime`、`task`、`tun`、`route`、`dns`、`wfp`、`rule`（Linux 的 ip rule、nftables）、`steps`（清理本身没做完或没来得及做）。`name` 在类别内稳定，例如步骤名、适配器名、规则表，宿主据此判别是哪一项。`detail` 是出错的说明，用于日志，不用于判别；它不含凭据和 Profile 内容：引擎的步骤只写自己的说明，运行时和 Sail 的原文里出现的实例凭据（节点和本地代理的密码、UUID 等）一律换成 `<redacted>`。Sail 的停止报告给不出类别的项归为 `runtime`，原文放在 `detail`。JSON 形如 `{"kind":"route","name":"routing","detail":"did not finish in time"}`。
   - 之后，所有句柄上的生命周期调用都返回 `ENGINE_SHUT_DOWN`（retryable=false）；查询返回最后的快照，状态为 `Stopped`；订阅收到通道关闭。
 - **`drop`**：最后一个句柄被 drop、而之前没有调用过 `shutdown` 时，清理作为兜底仍会进行，保证宿主 panic 后依然干净：
   - `Drop` **不会在调用方的线程上 `block_on`**，在 tokio 运行时线程上那样做会 panic 或卡住线程。它把清理交给实例自己的清理线程，在有限时间内（目前定为 5 秒）同步完成：撤销规则和路由、关闭 TUN 的 fd 和监听 socket；这些都不需要异步。
@@ -142,7 +146,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
   - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
   - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
 - **规则集**：apply 前会准备规则集，总共最多等 10 秒。只从 `allowed_rule_set_hosts` 列出的主机下载（宿主传拉取 Profile 的 API 主机）；为空时一个也不下载，只用本地已有的、sha256 相符的缓存，其余规则集报 `RULE_SET_HOST_NOT_PINNED`（和 Go 一致，默认拒绝）。不为空时，Profile 里的规则集 URL 必须都在这些主机上，否则 apply 被拒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
-- **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`（停止再启动，`reasons` 说明是哪个监听变了，例如 `tun options changed`）。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
+- **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`（停止再启动，`reasons` 说明是哪个监听变了，例如 `tun options changed`）。重启和 `start` 一样会重新检查监听端口（被占就换，发 `LocalProxyEndpointChanged`），本地代理监听起不来时不带它启动（`Degraded{LocalProxyUnavailable}`）。重启期间状态保持 `Running`，不发 `CoreStopped`、`CoreStarted` 或 `StateChanged`；已有连接断开，监听短暂关闭，宿主从 apply 的结果 `switch = FullRestart { reasons }` 得知发生了重启。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
 ### 4.2 start / stop
 
@@ -178,6 +182,8 @@ pub fn connections(&self) -> Vec<Connection>;
 pub fn version() -> VersionInfo;                  // 关联函数，不需要实例
 pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行，只能取一次，见第 10 节
 ```
+
+- **运行时数据的时效**：`status` 里的节点健康和当前入口、`traffic`、`connections` 都是引擎最近一次从运行时读到的值。引擎不为它们定时轮询，免得实例空闲时也被唤醒。宿主开始读取后，引擎每秒读一次运行时；宿主停止读取 10 秒后，就不再读。所以空闲后的第一次读取可能是旧值，`Traffic::measured_at` 标明了读取时间，下一次读取就是新的。入口切换（`NodeIngressSwitched`）和拨号失败会立即触发一次读取，不受这个节奏影响。`status.tun_routing` 不属于这类数据：它由路由守护实时更新。目前只有 Linux 的 TUN 实例有守护；macOS 和 Windows 上它恒为 `ok`，这是切换前待补的缺口（`docs/rust-parity.md` N2）。
 
 `VersionInfo` 包含以下字段：
 
@@ -393,6 +399,8 @@ pub struct Error {
 - 网卡变化后：重新选默认网卡、重新探测 IPv6 出口、重新读本地 DNS，以及离线期间的处理。对此引擎保证两点：
   - 网络变化期间（包括断网、切换网卡）**不会进入 `Fatal`**，只会出现 `Degraded`，网络稳定后自动回到 `Running`；
   - 流量一旦绕过 TUN，**立即处理**：先尝试补回路由，补不回来就进入 `Fatal{TunRoutingBroken}`。
+  - `Fatal{TunRoutingBroken}` 时运行时和 TUN 照常运行，引擎不会自己停止（同 Go 0.5.20）：这时流量绕过 TUN 直连，用户的流量**正在泄露**到隧道之外，但没有断网。宿主**必须立即**丢弃并重建实例（先 `shutdown`，再 `new`、`apply`、`start`），由新实例重新装上路由，期间不要套用“网络正在稳定”的宽限。重建失败时，宿主告诉用户保护已经中断，由用户决定是否继续。Go 版宿主就是这样做的：Desktop 增强模式的健康检查读到 `tun_routing` 为 broken，就按泄露处理，不等宽限，立刻重连。
+  - 运行时失败或 panic 进入的 `Fatal`（`KernelUnrecoverable`、`Panic`）不一样：运行时已经失效，留着只剩系统里的残留（Windows 上 strict_route 的过滤器会挡住所有不走 TUN 的流量）。目前这些残留在宿主 `shutdown` 或 drop 实例时撤掉，撤不掉的报告在 `ShutdownReport.leftovers` 里；所以宿主看到这类 `Fatal`，应当立即 `shutdown`（或 drop）并重建，不要留着实例。进入 `Fatal` 时由引擎立即撤掉残留是计划中的行为（#208，等 Sail 的保证），做完后更新这一句。
 - 路由规则守护，以及 Wintun、utun 的自愈；
 - 热切换和排空；
 - 路由和规则层面的完整性：规则或路由都在，流量没有绕过 TUN。Linux 沿用 Go 0.5.20 的规则守护；**macOS 和 Windows 是 Rust 版新增的能力**，至少要能检测到并上报，能自愈的就自愈，由 G5 实机验收。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。

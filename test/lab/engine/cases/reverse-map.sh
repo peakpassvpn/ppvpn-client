@@ -7,6 +7,7 @@
 ENGINE=${1:-sing}; . /lab/cases/lib.sh
 start_core $ENGINE --tun=true --local-proxy=true >/dev/null && apply >/dev/null && api start >/dev/null
 sleep 1
+up reverse-map
 # hostless: HTTP/1.0 without Host to .60, the address the core answered.
 hostless() { printf 'GET / HTTP/1.0\r\n\r\n' | nc -w 6 198.51.100.60 80 | tail -1 | exit_of; }
 dig +short +tries=1 +time=8 @198.51.100.99 split.lab.test A >/dev/null
@@ -20,4 +21,4 @@ check reverse-map.2 "the apply switched kernels" "$(grep -c 'msg="kernel switche
 check reverse-map.3 "after the kernel switch the name is still known" "$(hostless)" '198\.51\.100\.1[12]'
 api select-node '{"node_id":"us"}' >/dev/null
 check reverse-map.4 "after selecting another node it goes there, by name" "$(hostless)" '198\.51\.100\.13'
-stop_core; summary
+dials_taken reverse-map; stop_core; summary

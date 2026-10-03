@@ -35,12 +35,14 @@ mod lifecycle;
 mod lifecycle_tests;
 mod logs;
 mod network;
+mod outbound_log;
 mod probes;
 #[cfg(test)]
 mod probes_tests;
 mod proxy;
 #[cfg(test)]
 mod proxy_tests;
+mod reads;
 mod routing;
 mod rule_sets;
 mod selection;
@@ -86,6 +88,13 @@ struct Inner {
     log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
+    /// The host's reads, which keep the runtime's figures fresh.
+    reads: reads::Reads,
+    /// Direct failures logged at most once per destination per window.
+    outbound_log: outbound_log::Limiter,
+    /// Counts the kernels of this instance (Go's `gen`): one per start or
+    /// restart, one per reload switch.
+    kernel_gen: std::sync::atomic::AtomicU64,
     /// The Linux desktop TUN's routing guard while it runs.
     routing: routing::RoutingGuard,
     /// The profile's rule sets: cache, downloads, refresh.
@@ -107,7 +116,7 @@ impl Drop for Inner {
         let running = self
             .live
             .get_mut()
-            .map(|live| live.running && !live.shut_down)
+            .map(|live| (live.running || live.needs_stop) && !live.shut_down)
             .unwrap_or(false);
         let shut_down = self
             .live
@@ -120,6 +129,13 @@ impl Drop for Inner {
                 runtime: running.then(|| self.runtime.clone()),
                 steps: Vec::new(),
                 state_dir: self.state_dir.get_mut().ok().and_then(Option::take),
+                secrets: self
+                    .live
+                    .get_mut()
+                    .ok()
+                    .and_then(|live| live.applied.as_ref())
+                    .map(|a| translate::secrets(&a.translation.json))
+                    .unwrap_or_default(),
             };
             cleanup::cleanup_on_drop(parts);
         }
@@ -141,6 +157,12 @@ impl Engine {
     /// here (`PERMISSION_DENIED`, `WINTUN_UNAVAILABLE`, `STATE_DIR_IN_USE`,
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
+        // A panic in sail fails the instance and leaves the host running
+        // (section 7, CORE_PANICKED) only when panics unwind.
+        const _: () = assert!(
+            sail::embed::PANICS_ARE_CAUGHT,
+            "ppvpn-core needs panic = \"unwind\": sail's panics would end the process"
+        );
         tun::check(&config)?;
         logs::install();
         let log = Logs::new(&config.log)?;
@@ -175,6 +197,9 @@ impl Engine {
             closing: rule_sets::Closing::default(),
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
+            outbound_log: outbound_log::Limiter::default(),
+            reads: reads::Reads::new(),
+            kernel_gen: std::sync::atomic::AtomicU64::new(0),
             routing: routing::RoutingGuard::default(),
             config,
             runtime,
@@ -205,7 +230,12 @@ impl Engine {
         let op = tokio::time::timeout_at(deadline, inner.op.lock())
             .await
             .ok();
-        let running = inner.live().running;
+        // Also a runtime that failed or panicked: stopping it takes down
+        // what it opened (the TUN, its filters).
+        let running = {
+            let live = inner.live();
+            live.running || live.needs_stop
+        };
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         let parts = cleanup::Parts {
             runtime: running.then(|| inner.runtime.clone()),
@@ -213,6 +243,12 @@ impl Engine {
             // Released by the teardown when it is done: another instance
             // may take the directory once it is free.
             state_dir: inner.state_dir.lock().expect("state dir lock").take(),
+            secrets: inner
+                .live()
+                .applied
+                .as_ref()
+                .map(|a| translate::secrets(&a.translation.json))
+                .unwrap_or_default(),
         };
         // A sleeping re-probe or local proxy retry goes first; one under
         // way held `op` and is done.
@@ -275,6 +311,7 @@ impl Engine {
 
     /// The authoritative snapshot (section 5).
     pub fn status(&self) -> Status {
+        self.inner.host_read();
         let config = &self.inner.config;
         let rule_sets = self.inner.rule_set_statuses();
         let live = self.inner.live();
@@ -320,6 +357,7 @@ impl Engine {
     /// Cumulative bytes as last read from the runtime (every second while
     /// running); `measured_at` is when.
     pub fn traffic(&self) -> Traffic {
+        self.inner.host_read();
         let live = self.inner.live();
         Traffic {
             upload_bytes: live.traffic.upload_bytes,
@@ -332,6 +370,7 @@ impl Engine {
     /// while running), each with the node its outbound chain goes through
     /// (empty: direct).
     pub fn connections(&self) -> Vec<Connection> {
+        self.inner.host_read();
         let live = self.inner.live();
         let nodes = live.applied.as_ref().map(|a| &a.translation.outbound_nodes);
         live.connections

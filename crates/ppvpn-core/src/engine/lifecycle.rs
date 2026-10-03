@@ -3,11 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
 use chrono::Utc;
 use tokio::task::JoinHandle;
-use tokio::time::MissedTickBehavior;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
 use super::{not_applied, now, shut_down, Error, Inner};
@@ -25,10 +23,6 @@ use crate::translate::{self, Translation, SELECTED_TAG};
 const CANDIDATE_FAILED: &str = "candidate validation or build failed";
 /// What it says when the runtime refused the new configuration.
 const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
-
-/// How often the watcher reads the runtime's groups (health), traffic and
-/// connections while running.
-const REFRESH: Duration = Duration::from_secs(1);
 
 impl Inner {
     pub(super) async fn apply(
@@ -123,16 +117,21 @@ impl Inner {
                 .flatten()
         };
         self.probe_host_ipv6();
-        let mut options = self.options(request.routing_mode, &selected, &pins);
-        options.rule_sets = rule_sets.files();
-        let translation = translate::translate(&profile, &options)
-            .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
+        let files = rule_sets.files();
+        let build = || {
+            let mut options = self.options(request.routing_mode, &selected, &pins);
+            options.rule_sets = files.clone();
+            translate::translate(&profile, &options)
+        };
+        let mut translation = build().map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
         let switch = if let Some(running) = &running {
-            let switch = self
-                .switch_to(running, &translation)
+            let (switch, now_running) = self
+                .switch_to(running, translation, &build)
                 .await
                 .map_err(|error| self.reload_failed(error, RELOAD_REFUSED))?;
+            translation = now_running;
             if switch == SwitchKind::KernelSwitch {
+                self.kernel_switched(&profile.revision);
                 self.reassert(&translation, &selected, &pins).await;
             }
             Some(switch)
@@ -212,6 +211,7 @@ impl Inner {
         // Translated again: select and pin may have moved since the apply.
         let mut translation =
             translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+        self.live().needs_stop = true;
         let mut started = self.runtime.start(&translation.json).await;
         if let Err(e) = &started {
             // The shared listener may have been taken since its port was
@@ -226,6 +226,7 @@ impl Inner {
         if let Err(e) = started {
             return Err(self.runtime_error(&e));
         }
+        self.kernel_started();
         let run = {
             let mut live = self.live();
             live.running = true;
@@ -267,6 +268,7 @@ impl Inner {
         self.local_proxy_stopped();
         let mut live = self.live();
         live.running = false;
+        live.needs_stop = false;
         live.run += 1;
         live.clear_runtime();
         self.settle(&mut live);
@@ -458,18 +460,24 @@ impl Inner {
 }
 
 /// Follows the runtime from `new` until the instance goes: group switches,
-/// its state, and the groups' health every REFRESH while running. Needs a
+/// failed dials, its state and the network, as they happen; no timer of its
+/// own (the figures are read while the host reads them, reads.rs). Needs a
 /// tokio runtime; without one (no current handle) nothing is followed.
 pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     let handle = tokio::runtime::Handle::try_current().ok()?;
     let mut switches = inner.runtime.group_switches();
     let mut states = inner.runtime.states();
     let mut networks = inner.runtime.network_changes();
+    let mut failures = inner.runtime.dial_failures();
+    // Routed connections and DNS exchanges only at debug: sail builds them
+    // only for a subscriber, and only the debug lines use them.
+    let debug = inner.config.log.level == crate::config::LogLevel::Debug;
+    let mut routes = debug.then(|| inner.runtime.routes());
+    let mut exchanges = debug.then(|| inner.runtime.dns_exchanges());
     let weak: Weak<Inner> = Arc::downgrade(inner);
     Some(handle.spawn(async move {
-        let mut tick = tokio::time::interval(REFRESH);
-        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut switches_open = true;
+        let mut failures_open = true;
         loop {
             tokio::select! {
                 switch = switches.recv(), if switches_open => match switch {
@@ -478,6 +486,37 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                         inner.on_switch(switch).await;
                     }
                     None => switches_open = false,
+                },
+                failed = failures.recv(), if failures_open => match failed {
+                    Some(failed) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_dial_failed(failed).await;
+                    }
+                    None => failures_open = false,
+                },
+                routed = async {
+                    match routes.as_mut() {
+                        Some(routes) => routes.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match routed {
+                    Some(routed) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_routed(&routed);
+                    }
+                    None => routes = None,
+                },
+                exchanged = async {
+                    match exchanges.as_mut() {
+                        Some(exchanges) => exchanges.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match exchanged {
+                    Some(exchanged) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_dns_exchange(&exchanged);
+                    }
+                    None => exchanges = None,
                 },
                 changed = networks.changed() => {
                     if changed.is_err() {
@@ -496,10 +535,6 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                     let state = states.borrow_and_update().clone();
                     let Some(inner) = weak.upgrade() else { return };
                     inner.on_runtime_state(state);
-                }
-                _ = tick.tick() => {
-                    let Some(inner) = weak.upgrade() else { return };
-                    inner.refresh().await;
                 }
             }
         }

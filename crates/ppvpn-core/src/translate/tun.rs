@@ -307,7 +307,7 @@ impl Builder {
 
     /// The DNS section, from the route rules as they stand.
     pub(super) fn tun_dns(
-        &self,
+        &mut self,
         tun: &Tun,
         final_direct: bool,
         dns_rule_sets: &HashSet<String>,
@@ -315,12 +315,15 @@ impl Builder {
         let mut servers = Vec::new();
         match &tun.local_dns {
             LocalDns::System => servers.push(json!({ "type": "local", "tag": DNS_LOCAL_TAG })),
-            LocalDns::Listener(listener) => servers.push(json!({
+            LocalDns::Listener(listener) => {
+                self.translation.dns_local_listener = true;
+                servers.push(json!({
                 "type": "tcp",
                 "tag": DNS_LOCAL_TAG,
                 "server": listener.ip().to_string(),
                 "server_port": listener.port(),
-            })),
+                }));
+            }
             LocalDns::Servers(list) if list.is_empty() => {
                 return Err(failed("no local DNS server outside the tunnel"))
             }
@@ -334,6 +337,9 @@ impl Builder {
                 for (i, server) in list.iter().enumerate() {
                     let tag = format!("{DNS_LOCAL_TAG}-{i}");
                     servers.push(udp_server(&tag, server));
+                    self.translation
+                        .dns_members
+                        .insert(tag.clone(), (DNS_LOCAL_TAG.into(), server.to_string()));
                     members.push(tag);
                 }
                 servers.push(sequential(DNS_LOCAL_TAG, members, LOCAL_ATTEMPT));
@@ -342,6 +348,9 @@ impl Builder {
         let mut members = Vec::new();
         for server in REMOTE_DNS_SERVERS {
             let tag = format!("{DNS_REMOTE_TAG}-{server}");
+            self.translation
+                .dns_members
+                .insert(tag.clone(), (DNS_REMOTE_TAG.into(), (*server).into()));
             servers.push(
                 json!({ "type": "tls", "tag": tag, "server": server, "detour": SELECTED_TAG }),
             );

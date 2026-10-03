@@ -73,6 +73,11 @@ pub(crate) struct Live {
     /// A full restart is under way: sail's states in between (a start that
     /// fails and is put back) are not the instance's.
     pub restarting: bool,
+    /// The runtime was started and not stopped since: shutdown and the last
+    /// handle's drop stop it, also once it failed or panicked (`running`
+    /// is false then, but what it opened may still be there; a stop of a
+    /// failed runtime is bounded and at worst an error).
+    pub needs_stop: bool,
     /// The TUN's routing when not in place (None: ok).
     pub tun_routing: Option<TunRouting>,
     /// This run goes without the shared local proxy listener.
