@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Release build of the native Windows app, as run by the package job of
-  .github/workflows/desktop-native-windows.yml. Also runs locally.
+  Release build of the native Windows app, as run by the package-windows job of
+  .github/workflows/desktop-package.yml. Also runs locally.
 
 .DESCRIPTION
   1. verifies the vendored ppvpn-core against its manifest (scripts/verify-vendored-core.mjs)
@@ -9,7 +9,7 @@
      with the API base, the feed URL derived from it, the channel, version, build number
      and update keys
 
-  Builds only; the R2 upload is a separate publish job.
+  Builds only; publishing is the release workflow's job.
 
   Parameters default to the environment the workflow sets:
     PPVPN_RELEASE_CHANNEL   dev | stable | empty (PR builds: no channel in release-meta)

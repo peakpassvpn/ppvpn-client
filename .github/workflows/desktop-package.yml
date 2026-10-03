@@ -1,0 +1,272 @@
+name: desktop-package
+
+# The desktop installers: Windows (NSIS), macOS (one DMG per architecture)
+# and Linux (deb and rpm), each with its release metadata, uploaded as
+# workflow artifacts. Builds only: nothing is published from here.
+#
+# - A pull request that touches the packaging (this workflow, the packaging
+#   scripts and files) builds all three without any secret: unsigned on
+#   Windows, ad-hoc signed on macOS, no update signature.
+# - By hand, for a test build of any ref.
+# - Called by the release workflow, which passes the signing secrets.
+#
+# None of these jobs is a required check, and none may share a name with
+# one (rust.yml's `macos`): a required check is matched by job name.
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/desktop-package.yml
+      - desktop/scripts/**
+      - desktop/apps/*/scripts/**
+      - desktop/apps/linux/packaging/**
+      - desktop/apps/windows/installer/**
+      - desktop/crates/ppvpn-client/scripts/**
+      - desktop/vendor/**
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel recorded in release-meta (none = test build)
+        type: choice
+        options: [none, dev, stable]
+        default: none
+      version:
+        description: x.y.z overriding the projects' version
+        type: string
+        required: false
+      build_number:
+        description: Build counter, 0-65535 (empty = run number)
+        type: string
+        required: false
+  workflow_call:
+    inputs:
+      channel:
+        description: dev or stable
+        type: string
+        required: true
+      api_base:
+        description: Backend base URL baked into the apps
+        type: string
+        required: true
+      version:
+        description: x.y.z from the release tag
+        type: string
+        required: true
+      build_number:
+        description: Release-wide build counter shared by all platforms (0-65535)
+        type: string
+        required: true
+    secrets:
+      SPARKLE_PRIVATE_KEY:
+        description: EdDSA (ed25519) private key of the update feeds (macOS and Windows)
+        required: false
+      MACOS_SIGNING_P12_BASE64:
+        required: false
+      MACOS_SIGNING_P12_PASSWORD:
+        required: false
+      WINDOWS_CERTIFICATE:
+        description: Optional base64 PFX for Authenticode
+        required: false
+      WINDOWS_CERTIFICATE_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-package-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # rust-toolchain.toml's version; keep them in step.
+  RUST_TOOLCHAIN: 1.98.1
+  UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  # 'none' (a test build) and pull requests record no channel.
+  PPVPN_RELEASE_CHANNEL: ${{ inputs.channel != 'none' && inputs.channel || '' }}
+  PPVPN_VERSION: ${{ inputs.version || '' }}
+  PPVPN_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}
+  # The backend of each job below: the release workflow sets it; every
+  # other build is against production.
+  # Public half of the update feeds' key; empty disables in-app updates.
+  PPVPN_SPARKLE_PUBLIC_KEY: ${{ vars.PPVPN_SPARKLE_PUBLIC_KEY }}
+
+jobs:
+  package-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate
+        run: |
+          case "$PPVPN_RELEASE_CHANNEL" in ''|dev|stable) ;; *) echo "channel must be dev or stable" >&2; exit 2 ;; esac
+          if [ -n "$PPVPN_VERSION" ] && ! [[ "$PPVPN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be x.y.z" >&2; exit 2
+          fi
+          if ! [[ "$PPVPN_BUILD_NUMBER" =~ ^[0-9]+$ ]] || [ "$PPVPN_BUILD_NUMBER" -gt 65535 ]; then
+            echo "build number must be an integer between 0 and 65535" >&2; exit 2
+          fi
+
+  # deb and rpm, x86_64, everything native linked against glibc 2.35
+  # (cargo-zigbuild). See desktop/apps/linux/scripts/build-package.sh.
+  package-linux:
+    needs: package-inputs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      ZIG_VERSION: '0.13.0'
+      NFPM_VERSION: '2.47.0'
+      PPVPN_API_BASE: ${{ inputs.api_base || 'https://www.peakpassvpn.com' }}
+      # latest.json of this channel's apt/dnf repository, polled for the
+      # in-app update notice (builds without a channel use stable's).
+      PPVPN_UPDATE_FEED: https://pkg.peakpassvpn.com/linux/${{ inputs.channel == 'dev' && 'dev' || 'stable' }}/latest.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-unknown-linux-gnu
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install packaging tools
+        run: |
+          # NativeAOT (the push agent) links with clang against zlib.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+          curl -sSfL "https://ziglang.org/download/$ZIG_VERSION/zig-linux-x86_64-$ZIG_VERSION.tar.xz" | sudo tar -xJ -C /opt
+          sudo ln -sf "/opt/zig-linux-x86_64-$ZIG_VERSION/zig" /usr/local/bin/zig
+          curl -sSfL "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nfpm
+          cargo install --locked cargo-zigbuild
+          cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs
+      - name: Fetch the vendored core
+        run: desktop/scripts/fetch-vendored-core.sh linux-x86_64
+      - name: Build packages
+        run: desktop/apps/linux/scripts/build-package.sh
+      # ppvpn-archive-keyring (deb) and ppvpn-release (rpm), which set the
+      # package repository up on a user's machine.
+      - name: Build repository setup packages
+        run: desktop/apps/linux/scripts/build-repo-packages.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-linux
+          if-no-files-found: error
+          path: |
+            desktop/dist/linux/*.deb
+            desktop/dist/linux/*.rpm
+            desktop/dist/linux/release-meta-linux-*.json
+
+  # Install and start the rpm under dnf (the deb is built, and so checked,
+  # on Ubuntu 22.04).
+  package-linux-smoke-rpm:
+    needs: package-linux
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: desktop/apps/linux/scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-linux
+          path: dist
+      - name: Install the x64 rpm
+        run: |
+          # The app only: ppvpn-release would enable the (production) repository.
+          dnf install -y ./dist/PPVPN-*-linux-x64.rpm xorg-x11-server-Xvfb dbus-daemon
+          rpm -q --scripts ppvpn
+      - name: Start it once
+        run: desktop/apps/linux/scripts/smoke-test.sh rpm
+      - name: Remove it
+        run: dnf remove -y ppvpn && test ! -e /usr/lib/ppvpn/ppvpn
+
+  # The NSIS installer. See desktop/apps/windows/README.md ("Packaging").
+  package-windows:
+    needs: package-inputs
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PPVPN_API_BASE: ${{ inputs.api_base || 'https://www.peakpassvpn.com' }}
+      SPARKLE_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      # Optional Authenticode through desktop/scripts/sign-windows.ps1; off
+      # unless these are configured.
+      WINDOWS_CERTIFICATE: ${{ github.event_name != 'pull_request' && secrets.WINDOWS_CERTIFICATE || '' }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+      PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
+      PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
+    steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+      - name: Ensure NSIS
+        shell: powershell
+        run: |
+          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
+            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          }
+          & $makensis /VERSION
+      - name: Cache uniffi-bindgen-cs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
+      # build-dotnet.ps1 refuses any other version of the generator.
+      - name: Install uniffi-bindgen-cs
+        shell: bash
+        run: |
+          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
+            cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
+          fi
+      - name: Fetch the vendored core
+        shell: bash
+        run: desktop/scripts/fetch-vendored-core.sh windows-x86_64
+      - name: Build installer and release metadata
+        shell: powershell
+        run: desktop/apps/windows/scripts/ci-build.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-windows-x64
+          if-no-files-found: error
+          path: |
+            desktop/dist/windows/*-setup.exe
+            desktop/dist/windows/release-meta-windows-x64.json
+
+  # Both DMGs, built on an Apple silicon runner. See
+  # desktop/scripts/ci/build-macos-native.sh.
+  package-macos:
+    needs: package-inputs
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CI_PROJECT_DIR: ${{ github.workspace }}/desktop
+      MACOS_ARCHS: arm64 x86_64
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_base || 'https://www.peakpassvpn.com' }}
+      SPARKLE_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      # The release signing certificate; without it the build is ad-hoc signed.
+      MACOS_SIGNING_P12_BASE64: ${{ github.event_name != 'pull_request' && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
+      MACOS_SIGNING_P12_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch the vendored core
+        run: desktop/scripts/fetch-vendored-core.sh macos-cli-arm64 macos-cli-x86_64
+      - name: Build DMGs and release metadata
+        run: bash desktop/scripts/ci/build-macos-native.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-macos
+          if-no-files-found: error
+          path: desktop/staging/macos-native
