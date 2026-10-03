@@ -399,7 +399,7 @@ pub struct Error {
   - 一行是 `<RFC 3339 UTC 时间，纳秒> level=<error|warn|info|debug> msg=<消息> key=value … source=<core|sail>`。`source=core` 是 `ppvpn-core` 自己的行，其余字段是事件的字段；`source=sail` 是 Sail 的行，Sail 的原文整个放在 `msg` 里。
   - 一个实例的两种行进同一个有界队列（1024 行），再按 `LogSink` 输出：
     - `None`：不保留任何行，也不计丢弃；
-    - `File { path }`：`Engine::new` 时打开文件（不存在就创建，Unix 上权限 0600），只追加；打不开时 `new` 返回 `CORE_OPERATION_FAILED`（field=`log.sink.path`）。写盘在引擎自己的线程里做，不阻塞打日志的一方；写失败的行计入丢弃；
+    - `File { path }`：`Engine::new` 时打开文件（不存在就创建，Unix 上权限 0600），只追加；打不开时 `new` 返回 `CORE_OPERATION_FAILED`（field=`log.sink.path`）。写盘在引擎自己的线程里做，不阻塞打日志的一方；写失败的行计入丢弃。只追加，core 不做轮转，也没有大小上限；实例存活期间引擎一直持有这个文件，宿主只能在 `Engine::new` 之前截断或改名；
     - `Channel`：用 `Engine::logs()` 取接收端。只能取一次，第二次调用（以及 sink 不是 `Channel` 时调用）得到一个已经结束的接收端（`recv()` 立即返回 `None`）。宿主不读或者已经丢掉接收端时，行照样丢弃并计数。实例的最后一个句柄释放后通道结束。
 - **tracing 订阅者**：`tracing` 的全局订阅者整个进程只有一个。`Engine::new` 尝试装一次 `tracing_subscriber::registry().with(sail::embed::tracing_layer()).with(ppvpn_core::tracing_layer())`；进程里已经有全局订阅者时什么也不装。
   - 宿主如果有自己的 tracing 订阅者，**必须**在上面加上 `sail::embed::tracing_layer()` 和 `ppvpn_core::tracing_layer()`，否则 Sail 和 `ppvpn-core` 的日志行进不了各实例的 sink；宿主的全局过滤器也要放行 `sail`、`ppvpn_core` 这两个 target，到实例所用的级别（debug）为止。
