@@ -25,9 +25,10 @@ pub(super) const REPROBE_DELAY: Duration = Duration::from_secs(2);
 
 /// After a start whose snapshot knows no network yet: how often, and how
 /// many times, the snapshot is read again until it does (sail reports no
-/// change for the first default interface).
+/// change for the first default interface; its detection takes at most
+/// 1 s). Past that the network counts as offline.
 const FIRST_NETWORK_POLL: Duration = Duration::from_millis(100);
-const FIRST_NETWORK_POLLS: u32 = 50;
+const FIRST_NETWORK_POLLS: u32 = 20;
 
 /// What the Engine follows of sail's network.
 #[derive(Default)]
@@ -151,8 +152,22 @@ impl Inner {
                     return;
                 }
             }
-            tracing::warn!("no default interface known since the start");
+            let Some(inner) = weak.upgrade() else { return };
+            inner.first_network_unknown(run);
         });
+    }
+
+    /// No network known 2 s after the start: offline, as sail will say
+    /// itself once it waits for its first detection.
+    fn first_network_unknown(&self, run: u64) {
+        let track = self.network.track();
+        let mut live = self.live();
+        if track.generation > 0 || !live.running || live.run != run {
+            return;
+        }
+        tracing::warn!("no default interface known 2 s after the start: offline");
+        live.offline = true;
+        self.settle(&mut live);
     }
 
     /// At stop or shutdown: the run's network goes with it. A sleeping

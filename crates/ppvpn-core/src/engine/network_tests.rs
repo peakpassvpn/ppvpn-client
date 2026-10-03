@@ -255,3 +255,13 @@ async fn the_first_network_is_read_after_a_start_that_knew_none() {
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert!(no_default_interface(&engine));
 }
+
+/// Still nothing known 2 s after the start: offline.
+#[tokio::test(start_paused = true)]
+async fn a_network_still_unknown_after_the_start_is_offline() {
+    let (engine, fake, _) = instance(Role::Tun);
+    fake.set_network(NetworkSnapshot::default());
+    running(&engine).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert!(no_default_interface(&engine));
+}
