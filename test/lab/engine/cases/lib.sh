@@ -31,6 +31,17 @@ up() {
   [ -f $R/core.log ] && sed 's/^/  log: /' $R/core.log | tail -20
   CASE_FAIL=$((CASE_FAIL + 1)); summary; exit 1
 }
+# dials_taken <group>: no dial of the run was refused as not running (sail
+# takes dials once its outbounds are built, before it resolves names: an
+# early dns-local query refused so is a regression), with at least one dns
+# line logged, so that an empty log does not pass. Run before stop_core: a
+# dial refused while stopping is not one.
+dials_taken() {
+  dns=$(grep -c 'msg=dns ' $R/core.log 2>/dev/null)
+  refused=$(grep -c 'not_running' $R/core.log 2>/dev/null)
+  check "$1.start" "dials while starting are taken: refused not_running, dns lines" \
+    "refused=${refused:-0} dns_lines=$([ "${dns:-0}" -gt 0 ] && echo some || echo none)" 'refused=0 dns_lines=some'
+}
 # outbound_to <destination>: the outbound of the last connection log line to
 # destination (host:port).
 outbound_to() { grep -E "msg=connection .*destination=$1( |$)" $R/core.log | sed -n 's/.*outbound=\([^ ]*\).*/\1/p' | tail -1; }

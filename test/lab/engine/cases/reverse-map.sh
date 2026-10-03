@@ -21,4 +21,4 @@ check reverse-map.2 "the apply switched kernels" "$(grep -c 'msg="kernel switche
 check reverse-map.3 "after the kernel switch the name is still known" "$(hostless)" '198\.51\.100\.1[12]'
 api select-node '{"node_id":"us"}' >/dev/null
 check reverse-map.4 "after selecting another node it goes there, by name" "$(hostless)" '198\.51\.100\.13'
-stop_core; summary
+dials_taken reverse-map; stop_core; summary
