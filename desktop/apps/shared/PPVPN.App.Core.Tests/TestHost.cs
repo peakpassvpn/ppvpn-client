@@ -172,11 +172,13 @@ sealed class TestServices : IAppServices
     public string DefaultApiBase => "https://api.example.test";
     public List<string> Copied { get; } = [];
     public List<string> Opened { get; } = [];
+    /// <summary>No browser opens: <see cref="OpenUrl"/> records the link and returns false.</summary>
+    public bool OpenFails { get; set; }
     public void CopyText(string text) => Copied.Add(text);
     public bool OpenUrl(string url)
     {
         Opened.Add(url);
-        return true;
+        return !OpenFails;
     }
     public bool OpenFolder(string path) => true;
     public bool LaunchAtLogin { get; set; }
