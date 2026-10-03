@@ -1,0 +1,117 @@
+name: PPVPN
+options:
+  bundleIdPrefix: com.peakpassvpn.ppvpn
+  deploymentTarget:
+    macOS: "13.0"
+  developmentLanguage: zh-Hans
+  # Localizable.xcstrings: zh-Hans source + en
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "0.3.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.10"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: YES
+    # Ad-hoc signing would add get-task-allow (debugger attach) to Release too.
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS[config=Release]: NO
+    DEAD_CODE_STRIPPING: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+packages:
+  PPVPNClient:
+    path: PPVPNClient
+  PPVPNAppLogic:
+    path: AppLogic
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    majorVersion: 2.6.0
+targets:
+  PPVPN:
+    type: application
+    platform: macOS
+    sources:
+      - path: PPVPN
+        excludes: [Info.plist]
+      - path: LaunchAgents/com.peakpassvpn.ppvpn.desktop.agent.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
+    info:
+      path: PPVPN/Info.plist
+      properties:
+        PPVPNAPIBaseDefault: $(PPVPN_API_BASE_DEFAULT)
+        LSUIElement: false
+        CFBundleLocalizations: [zh-Hans, en]
+        CFBundleURLTypes:
+          - CFBundleURLName: com.peakpassvpn.ppvpn.desktop
+            CFBundleURLSchemes: [ppvpn]
+        PPVPNUpdateFeedURL: $(PPVPN_UPDATE_FEED_URL)
+        SUPublicEDKey: $(PPVPN_SPARKLE_PUBLIC_KEY)
+        SUEnableAutomaticChecks: true
+    dependencies:
+      - package: PPVPNClient
+      - package: PPVPNAppLogic
+      - package: Sparkle
+      - target: PPVPNAgent
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
+    preBuildScripts:
+      - name: Embed ppvpn-core and service helpers
+        path: scripts/embed-binaries.sh
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+    postBuildScripts:
+      - name: Share PPVPNClientFFI.framework with the push agent
+        path: scripts/share-client-framework.sh
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peakpassvpn.ppvpn.desktop
+        PRODUCT_NAME: PPVPN
+        CODE_SIGN_ENTITLEMENTS: PPVPN/PPVPN.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        PPVPN_API_BASE_DEFAULT: https://www.peakpassvpn.com
+        # Sparkle appcast + EdDSA public key; empty disables updates.
+        PPVPN_UPDATE_FEED_URL: ""
+        PPVPN_SPARKLE_PUBLIC_KEY: ""
+        INFOPLIST_KEY_CFBundleDisplayName: PPVPN
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© PeakPass VPN LLC"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]: DEBUG
+  # Push agent: UI-less helper started by launchd at login (SMAppService.agent),
+  # embedded at Contents/Library/LoginItems/PPVPN Agent.app.
+  PPVPNAgent:
+    type: application
+    platform: macOS
+    sources:
+      - path: PPVPNAgent
+    dependencies:
+      - package: PPVPNClient
+      - package: PPVPNAppLogic
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peakpassvpn.ppvpn.desktop.agent
+        PRODUCT_NAME: PPVPN Agent
+        CODE_SIGN_ENTITLEMENTS: PPVPNAgent/PPVPNAgent.entitlements
+        # PPVPNClientFFI.framework is shared with the app, in
+        # PPVPN.app/Contents/Frameworks (Contents/Library/LoginItems/
+        # PPVPN Agent.app/Contents/MacOS is five levels below Contents).
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../../../../../Frameworks"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSUIElement: YES
+        # Notifications show under this name.
+        INFOPLIST_KEY_CFBundleDisplayName: PPVPN
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© PeakPass VPN LLC"
+        SKIP_INSTALL: YES

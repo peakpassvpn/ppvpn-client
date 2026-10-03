@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- The apphost must be named `ppvpn`: ppvpn-service only accepts IPC
+         clients whose /proc/<pid>/exe is /usr/lib/ppvpn/ppvpn (see
+         service/src/ipc.rs), so never launch the app as `dotnet ppvpn.dll`. -->
+    <AssemblyName>ppvpn</AssemblyName>
+    <RootNamespace>PPVPN.Linux</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <UseAppHost>true</UseAppHost>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GirCore.Adw-1" Version="0.8.1" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Tray icon theme, referenced by StatusNotifierItem.IconThemePath. -->
+    <None Include="Resources/**/*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- 4:3 flags (flag-icons, MIT) shared with the macOS app, as Resources/flags/<code>.png.
+       Renamed in a target: metadata functions need batching. -->
+  <Target Name="PPVPNFlagImages" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <_PPVPNFlag Include="../macos/PPVPN/Resources/Assets.xcassets/Flags/*.imageset/*@2x.png" />
+      <None Include="@(_PPVPNFlag)"
+            Link="Resources/flags/$([System.String]::Copy('%(_PPVPNFlag.Filename)').Replace('@2x', ''))%(_PPVPNFlag.Extension)"
+            CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+  <PropertyGroup>
+    <PPVPNApiBase Condition="'$(PPVPNApiBase)' == ''">$(PPVPN_API_BASE)</PPVPNApiBase>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
+      <_Parameter1>linux</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Set by scripts/build-package.sh; read by Platform/BuildInfo.cs. -->
+    <AssemblyMetadata Include="PPVPNApiBase" Value="$(PPVPNApiBase)" />
+    <AssemblyMetadata Include="PPVPNBuildNumber" Value="$(PPVPNBuildNumber)" />
+    <AssemblyMetadata Include="PPVPNUpdateFeed" Value="$(PPVPNUpdateFeed)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PPVPN.Linux.Tests" />
+    <!-- The test project lives in PPVPN.Linux.Tests/ and builds on its own. -->
+    <Compile Remove="PPVPN.Linux.Tests/**" />
+    <None Remove="PPVPN.Linux.Tests/**" />
+    <!-- So does the push agent (PPVPN.PushAgent/, NativeAOT). -->
+    <Compile Remove="PPVPN.PushAgent/**" />
+    <None Remove="PPVPN.PushAgent/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Brings PPVPN.Client (bindings + runtimes/<rid>/native) along. -->
+    <ProjectReference Include="../shared/PPVPN.App.Core/PPVPN.App.Core.csproj" />
+  </ItemGroup>
+
+</Project>

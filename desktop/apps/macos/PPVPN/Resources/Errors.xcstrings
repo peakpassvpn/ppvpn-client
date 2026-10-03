@@ -1,0 +1,771 @@
+{
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "AuthBrowserOpenFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法打开浏览器，请手动访问授权页面并输入代码。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't open the browser. Open the authorization page manually and enter the code."
+          }
+        }
+      }
+    },
+    "AuthDenied": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在浏览器中拒绝授权。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authorization was declined in the browser."
+          }
+        }
+      }
+    },
+    "AuthExpired": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录代码已过期，请重新登录。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in code expired. Please sign in again."
+          }
+        }
+      }
+    },
+    "AuthSessionInvalid": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录已失效，请重新登录。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session is no longer valid. Please sign in again."
+          }
+        }
+      }
+    },
+    "AuthUntrustedResponse": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录响应无法验证，请重试。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in response couldn't be verified. Try again."
+          }
+        }
+      }
+    },
+    "ConnectFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法通过该节点建立连接。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't connect through this node."
+          }
+        }
+      }
+    },
+    "ConnectHealthCheckFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接后无法访问服务，可能是 DNS 或网络被其他软件接管。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected, but the service couldn’t be reached. Another app may have taken over DNS or the network."
+          }
+        }
+      }
+    },
+    "CoreBinaryMissing": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用组件缺失，请重新安装 PPVPN。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A required component is missing. Please reinstall PPVPN."
+          }
+        }
+      }
+    },
+    "CoreIncompatible": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用组件版本不匹配，请重新安装 PPVPN。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A component version doesn't match. Please reinstall PPVPN."
+          }
+        }
+      }
+    },
+    "CredentialStoreFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读写系统凭据存储中的登录信息。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read or save your sign-in in the system credential store."
+          }
+        }
+      }
+    },
+    "CredentialStoreLocked": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "钥匙串或钥匙环已锁定，解锁后会自动恢复登录。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your keychain or keyring is locked. You’ll be signed in again once it’s unlocked."
+          }
+        }
+      }
+    },
+    "IcmpNotPermitted": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统不允许 Ping 测速，请改用 TCP。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ping isn't permitted on this system. Use TCP instead."
+          }
+        }
+      }
+    },
+    "Internal": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发生内部错误，请联系客服。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An internal error occurred. Please contact support."
+          }
+        }
+      }
+    },
+    "LocalStorageFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存本地数据，请检查磁盘空间和权限。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save local data. Check disk space and permissions."
+          }
+        }
+      }
+    },
+    "NetworkPathContended": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他 VPN 或代理接管了系统网络，请先关闭后重试。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another VPN or proxy took over the network. Turn it off and try again."
+          }
+        }
+      }
+    },
+    "NetworkUnreachable": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法连接到服务器，请检查网络连接。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't reach the server. Check your internet connection."
+          }
+        }
+      }
+    },
+    "NoSubscription": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前团队没有有效的订阅。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current team has no active subscription."
+          }
+        }
+      }
+    },
+    "NodeNotFound": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选节点已不可用，请重新选择。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected node is no longer available. Choose another one."
+          }
+        }
+      }
+    },
+    "NotImplemented": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该功能尚未实现。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This feature isn't available yet."
+          }
+        }
+      }
+    },
+    "NotSignedIn": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录已失效，请重新登录。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You are signed out. Please sign in again."
+          }
+        }
+      }
+    },
+    "ProbeFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "测速失败。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The latency test failed."
+          }
+        }
+      }
+    },
+    "ProfileExpired": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点配置已过期，正在重新获取。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The node configuration expired and is being refreshed."
+          }
+        }
+      }
+    },
+    "ProfileFetchFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法获取节点配置。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't download the node configuration."
+          }
+        }
+      }
+    },
+    "ProfileInvalid": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点配置无效，请联系客服。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The node configuration is invalid. Please contact support."
+          }
+        }
+      }
+    },
+    "RateLimited": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求过于频繁，请稍后再试。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many requests. Try again in a moment."
+          }
+        }
+      }
+    },
+    "RequestRejected": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求被服务器拒绝。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server rejected the request."
+          }
+        }
+      }
+    },
+    "ServerUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器暂时不可用，请稍后再试。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server is temporarily unavailable. Try again later."
+          }
+        }
+      }
+    },
+    "ServiceBusy": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "增强模式正在此账户的另一个会话中使用。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enhanced Mode is in use in another session of this account."
+          }
+        }
+      }
+    },
+    "ServiceClientRejected": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统服务拒绝了此应用，请重新安装 PPVPN。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system service rejected this app. Reinstall PPVPN."
+          }
+        }
+      }
+    },
+    "ServiceIncompatible": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统服务版本不兼容，请重新安装 PPVPN。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system service is incompatible. Please reinstall PPVPN."
+          }
+        }
+      }
+    },
+    "ServiceInstallCancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已取消安装系统服务，增强模式需要该服务。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installation was cancelled. Enhanced Mode needs the system service."
+          }
+        }
+      }
+    },
+    "ServiceInstallFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安装系统服务失败。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't install the system service."
+          }
+        }
+      }
+    },
+    "ServiceOwnedByAnotherUser": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "增强模式正被这台电脑上的其他系统用户使用，无法在此接管。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enhanced Mode is in use by another user on this computer and can’t be taken over here."
+          }
+        }
+      }
+    },
+    "ServiceUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统服务未运行，请重试。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system service isn't running. Try again."
+          }
+        }
+      }
+    },
+    "ServiceUninstallCancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已取消卸载系统服务。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uninstalling the system service was cancelled."
+          }
+        }
+      }
+    },
+    "StandardCoreFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本地代理意外停止。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local proxy stopped unexpectedly."
+          }
+        }
+      }
+    },
+    "StandardNotReady": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本地代理尚未就绪，请稍候。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local proxy isn't ready yet. Please wait a moment."
+          }
+        }
+      }
+    },
+    "SubscriptionExpired": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "订阅已到期。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your subscription has expired."
+          }
+        }
+      }
+    },
+    "SystemProxyFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法写入系统代理设置，可能已被其他软件接管。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t apply system proxy settings. Another app may be managing them."
+          }
+        }
+      }
+    },
+    "SystemProxyUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此桌面环境不支持设置系统代理。请改用增强模式，或在应用中手动填写本地代理。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This desktop doesn't expose system proxy settings. Use Enhanced Mode, or enter the local proxy in your apps."
+          }
+        }
+      }
+    },
+    "TeamDisabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前团队已停用。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current team has been disabled."
+          }
+        }
+      }
+    },
+    "Timeout": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接超时。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection timed out."
+          }
+        }
+      }
+    },
+    "Unexpected": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "操作失败：{m}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Something went wrong: {m}"
+          }
+        }
+      }
+    },
+    "Unknown": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发生未知错误（{c}）。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An unknown error occurred ({c})."
+          }
+        }
+      }
+    },
+    "Unreachable": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点无法访问。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The node is unreachable."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

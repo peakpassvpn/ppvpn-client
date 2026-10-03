@@ -14,7 +14,7 @@ use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpStream, UdpSocket};
 
 use super::*;
 use crate::runtime::{AsyncReadWrite, Datagram};
@@ -57,18 +57,7 @@ fn answer_for(query: &Message, last: u8, truncated: bool) -> Vec<u8> {
 
 /// Starts a fake on loopback (UDP and TCP on the same port); counts queries.
 async fn start(kind: Fake, queries: Arc<AtomicU32>) -> SocketAddr {
-    // A free port for both: Windows excludes port ranges per protocol (its
-    // runners' Hyper-V ranges), so a UDP port may be forbidden for TCP
-    // (10013); try another until one takes both.
-    let (udp, tcp) = 'bind: {
-        for _ in 0..20 {
-            let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            if let Ok(udp) = UdpSocket::bind(tcp.local_addr().unwrap()).await {
-                break 'bind (udp, tcp);
-            }
-        }
-        panic!("no loopback port free for both UDP and TCP");
-    };
+    let (tcp, udp) = listener::bind_pair().await.unwrap();
     let addr = udp.local_addr().unwrap();
     let counted = queries.clone();
     tokio::spawn(async move {
