@@ -1,7 +1,8 @@
 name: rust
 
 # The Rust ppvpn-core (crates/): format, clippy and tests on every pull
-# request and push to main, modelled on sail's lint and test jobs. sail and
+# request and push to main, modelled on sail's lint and test jobs; tests on
+# Linux, Windows (MSVC) and macOS (arm64). sail and
 # its BoringSSL are built from source (no prebuilt BoringSSL yet); the cache
 # makes that a one-off, and is saved from main only, so that pull requests
 # restore main's and do not push it out of the repository's cache quota.
@@ -40,6 +41,10 @@ jobs:
           manifest=$(cargo metadata --format-version 1 --locked --offline |
             python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "sail"))')
           python3 "$(dirname "$(dirname "$manifest")")/tools/embed-patch-check.py"
+      # Reports (never fails) shared packages our lock resolves otherwise
+      # than sail's: a lock regenerated for a new crate can drift.
+      - name: Cargo.lock against sail's
+        run: tools/sail-lock-compare.py
       - name: format
         run: cargo fmt --all --check
       - name: clippy
@@ -50,6 +55,75 @@ jobs:
     timeout-minutes: 60
     env:
       # Line numbers in a failing test's backtrace without full debug info.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: test
+        run: cargo test --workspace --locked
+
+  # Windows with the MSVC toolchain, natively: what the desktop links (the
+  # Windows service and client are MSVC builds). As sail's windows-msvc job,
+  # on every pull request here. The crates the desktop links only:
+  # ppvpn-cli does not support Windows (it ships for Linux and macOS).
+  windows-msvc:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: 0
+      # bindgen's libclang (btls-sys), from the runner's LLVM.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The runner's git checks text out with CRLF; fixtures compared byte
+      # for byte (localdns/testdata) must stay as committed.
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # BoringSSL builds without its assembly when CMake finds no NASM, and
+      # is then several times slower at AES-GCM and ChaCha20. The runner has
+      # one (Strawberry Perl's); its absence fails the job, not the speed.
+      - name: NASM on PATH
+        run: |
+          where nasm || { echo "::error::nasm is not on PATH: BoringSSL would build without its assembly"; exit 1; }
+          nasm -v
+      - name: build
+        run: cargo build -p ppvpn-core -p ppvpn-account --all-targets --locked --target x86_64-pc-windows-msvc
+      - name: BoringSSL has its assembly
+        run: |
+          cache=$(find target/x86_64-pc-windows-msvc/debug/build -path '*btls-sys-*/out/build/CMakeCache.txt' | head -1)
+          grep -E '^(OPENSSL_NO_ASM|CMAKE_ASM_NASM_COMPILER)[:=]' "$cache" || true
+          if grep -qE '^OPENSSL_NO_ASM:[A-Z]+=(1|ON|YES|TRUE)' "$cache"; then exit 1; fi
+          grep -qE '^CMAKE_ASM_NASM_COMPILER:[A-Z]+=.+' "$cache"
+      # Tests that cannot pass on Windows, each skipped by name with why; a
+      # new failure fails the job.
+      - name: test
+        run: |
+          skip=(
+          )
+          args=()
+          for test in "${skip[@]}"; do args+=(--skip "$test"); done
+          cargo test -p ppvpn-core -p ppvpn-account --locked --target x86_64-pc-windows-msvc -- --exact "${args[@]}"
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

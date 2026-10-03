@@ -58,9 +58,19 @@ fn answer_for(query: &Message, last: u8, truncated: bool) -> Vec<u8> {
 
 /// Starts a fake on loopback (UDP and TCP on the same port); counts queries.
 async fn start(kind: Fake, queries: Arc<AtomicU32>) -> SocketAddr {
-    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    // A free port for both: Windows excludes port ranges per protocol (its
+    // runners' Hyper-V ranges), so a UDP port may be forbidden for TCP
+    // (10013); try another until one takes both.
+    let (udp, tcp) = 'bind: {
+        for _ in 0..20 {
+            let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            if let Ok(udp) = UdpSocket::bind(tcp.local_addr().unwrap()).await {
+                break 'bind (udp, tcp);
+            }
+        }
+        panic!("no loopback port free for both UDP and TCP");
+    };
     let addr = udp.local_addr().unwrap();
-    let tcp = TcpListener::bind(addr).await.unwrap();
     let counted = queries.clone();
     tokio::spawn(async move {
         let mut buffer = vec![0u8; 65535];
