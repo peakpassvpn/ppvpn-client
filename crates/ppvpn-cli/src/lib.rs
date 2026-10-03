@@ -1,6 +1,7 @@
 //! The `ppvpn` command-line client as a library: the binary in `main.rs` is
 //! a thin wrapper, and tests drive [`run`] directly.
 
+pub mod account;
 pub mod buildinfo;
 pub mod cli;
 pub mod client;
@@ -10,8 +11,10 @@ pub mod daemon;
 pub mod env;
 pub mod error;
 pub mod identity;
+pub mod keystore;
 pub mod output;
 pub mod paths;
+pub mod queries;
 pub mod settings;
 
 use std::io::Write;
@@ -23,11 +26,30 @@ use crate::env::Env;
 use crate::error::CliError;
 use crate::output::Printer;
 
+/// What an embedder or a test may replace: the compiled-in build
+/// configuration and the platform secret store.
+#[derive(Clone, Default)]
+pub struct Hooks {
+    pub build: Option<buildinfo::BuildConfig>,
+    pub store: Option<std::sync::Arc<dyn ppvpn_account::auth::CredentialStore>>,
+}
+
 /// Runs one invocation and returns its exit code. `args` includes the
 /// program name.
 pub fn run(
     args: &[std::ffi::OsString],
     env: &Env,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
+    run_with(args, env, &Hooks::default(), stdout, stderr)
+}
+
+/// [`run`] with replaceable build configuration and secret store.
+pub fn run_with(
+    args: &[std::ffi::OsString],
+    env: &Env,
+    hooks: &Hooks,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
@@ -66,7 +88,7 @@ pub fn run(
         stdout,
         stderr,
     };
-    match commands::run(&cli, env, &mut printer) {
+    match commands::run(&cli, env, hooks, &mut printer) {
         Ok(()) => 0,
         Err(error) => {
             let _ = printer.failure(&error);
