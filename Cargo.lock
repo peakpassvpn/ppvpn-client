@@ -3009,7 +3009,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "sail"
 version = "0.16.0"
-source = "git+https://github.com/peakpassvpn/sail.git?rev=a59e9bd53ef1059cb3b163eefeb806c13c7c30c9#a59e9bd53ef1059cb3b163eefeb806c13c7c30c9"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=149e3b4bb8a53bee64e40a0d88f9bc4c963fe614#149e3b4bb8a53bee64e40a0d88f9bc4c963fe614"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3099,7 +3099,7 @@ dependencies = [
 [[package]]
 name = "sail-netstack"
 version = "0.1.0"
-source = "git+https://github.com/peakpassvpn/sail.git?rev=a59e9bd53ef1059cb3b163eefeb806c13c7c30c9#a59e9bd53ef1059cb3b163eefeb806c13c7c30c9"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=149e3b4bb8a53bee64e40a0d88f9bc4c963fe614#149e3b4bb8a53bee64e40a0d88f9bc4c963fe614"
 
 [[package]]
 name = "same-file"

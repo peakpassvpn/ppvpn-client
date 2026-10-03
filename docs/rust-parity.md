@@ -97,7 +97,15 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
-sail 的网络事件（E1b）合入之前，`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）通过 `Instance::manager()?.network()` 读取 sail 的状态和 `changes()` 通道。它和 sail 自己处理网络移动时读的是同一个通道，所以已经是事件驱动、只有一个来源；但 `manager()` 不在 `sail::embed` 的稳定接口里，可能不经通知变动。E1b 合入后改用 `Event::Network` 和 `instance.network()`，这一节随之删除。
+`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
+
+强杀后的残留清扫（host-integration 第 3 节，切换前必须关掉的缺口）：`Engine::new` 把 sail 的 run_dir 设在 `state_dir/run`，并在清扫时调用 `sail::embed::sweep`。
+
+| 平台 | 状态 | 依据 |
+| --- | --- | --- |
+| Linux | done | sail 的台账记下 TUN、路由和规则，强杀后由下一次 `new` 的 `sweep` 撤销；另有 tunrules 按我们的优先级段和表清扫 |
+| macOS | done（不靠台账） | 强杀后 utun 和经它的路由由内核回收；Sail 的常驻 CI 每次都验证 |
+| Windows | todo | Sail 的 Windows TUN 还不写台账，强杀后的残留（Wintun 适配器等）还没测 |
 
 ## Lab 用例（`test/lab/engine/cases`）
 

@@ -322,7 +322,7 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 | `SystemProxyChanged` | 是 | |
 | `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
 | `KernelSwitched`、`KernelDrained` | 是 | 热切换和排空 |
-| `NetworkChanged` | 是 | 默认网卡变化 |
+| `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
 | `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有；Rust 版三个平台都有。同时会反映在 `StateChanged` 里 |
 
 ## 7. 错误
