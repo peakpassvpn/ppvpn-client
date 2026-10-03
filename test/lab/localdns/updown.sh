@@ -84,7 +84,7 @@ echo '{"ca":["10.201.0.1"]}' > "$OUT/servers.json"
 sleep 0.5
 "$LAB" apply-body "$PROFILE" > "$R/apply.json"
 TEST_SOURCE=""; [ "$ENGINE" = go ] && TEST_SOURCE="PPVPN_LOCALDNS_TEST_FILE=$OUT/servers.json"
-env $TEST_SOURCE ip netns exec ud-c "$CORE" serve --socket "$R/core.sock" --session-secret-file "$R/secret" \
+env ${TEST_SOURCE:+"$TEST_SOURCE"} ip netns exec ud-c "$CORE" serve --socket "$R/core.sock" --session-secret-file "$R/secret" \
 	--state-dir "$R/state" --log-file "$OUT/core.log" --log-level debug --tun --local-proxy=false > "$OUT/core.stdout" 2>&1 &
 echo $! > "$R/pid"
 for i in $(seq 50); do [ -S "$R/core.sock" ] && [ -s "$R/secret" ] && break; sleep 0.1; done
