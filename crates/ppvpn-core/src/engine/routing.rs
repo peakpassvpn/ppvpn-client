@@ -105,6 +105,14 @@ impl Inner {
         self.routing.stop();
     }
 
+    /// After a stop that failed: the TUN still runs (unless the runtime
+    /// panicked), so it is guarded again, from a new snapshot.
+    pub(super) fn guard_restarted(self: &Arc<Self>) {
+        if self.live().running {
+            self.guard_started();
+        }
+    }
+
     /// Asks the guard for a check now (`reason` is logged with it).
     pub(super) fn guard_check(&self, reason: &str) {
         if let Some((guard, _)) = self

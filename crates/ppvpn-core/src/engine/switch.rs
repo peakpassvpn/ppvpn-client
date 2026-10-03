@@ -115,7 +115,10 @@ impl Inner {
         // Before the TUN closes: sail's cleanup must not be undone.
         self.guard_stopped();
         if let Err(e) = self.runtime.stop().await {
-            return Err(self.runtime_error(&e));
+            let error = self.runtime_error(&e);
+            // Still running: the TUN stays, and so does its guard.
+            self.guard_restarted();
+            return Err(error);
         }
         self.network_stopped();
         let started = self.runtime.start(&next.json).await;
