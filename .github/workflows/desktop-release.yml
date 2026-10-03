@@ -1,15 +1,15 @@
 name: desktop-release
 
 # The only workflow that publishes the desktop client. By hand only; it
-# gives the three platforms one version and one build number, builds them
-# (desktop-package.yml, in the channel's environment, which holds the
-# signing secrets and, for dev, the backend address), and publishes the
-# installers as a GitHub Release with SHA256SUMS and build provenance.
+# gives the three platforms one version and one build number and builds
+# them (desktop-package.yml, in the channel's environment, which holds the
+# signing secrets and, for dev, the backend address).
 #
-#   stable: run on the tag desktop-vX.Y.Z. Always published.
-#   dev:    run on the branch main. Published only when asked: by
-#           default the installers stay workflow artifacts. A published dev
-#           build is a prerelease tagged desktop-vX.Y.Z-dev.<build>.
+#   stable: run on the tag desktop-vX.Y.Z. The installers are published as
+#           a GitHub Release with SHA256SUMS and build provenance.
+#   dev:    run on the branch main. Never published: no release, no tag.
+#           The installers stay the package jobs' workflow artifacts (a dev
+#           build carries the dev backend's address).
 #
 # A desktop release is never the repository's "latest" release: that is
 # the core's (release.yml, tags vX.Y.Z, which the desktop tags do not match).
@@ -29,12 +29,8 @@ on:
       version:
         description: Version x.y.z (stable runs must be on the tag desktop-v<version>)
         required: true
-      publish_dev:
-        description: dev only - publish a GitHub prerelease (off - the installers stay workflow artifacts)
-        type: boolean
-        default: false
       allow_downgrade:
-        description: Publish even if not newer than the channel's published release (a deliberate rollback)
+        description: stable only - publish even if not newer than the published release (a deliberate rollback)
         type: boolean
         default: false
 
@@ -58,7 +54,6 @@ jobs:
         env:
           CHANNEL: ${{ inputs.channel }}
           VERSION: ${{ inputs.version }}
-          PUBLISH_DEV: ${{ inputs.publish_dev }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           RUN_NUMBER: ${{ github.run_number }}
@@ -95,8 +90,9 @@ jobs:
               fi
               ;;
             dev)
-              tag="desktop-v$version-dev.$build"
-              publish=$PUBLISH_DEV
+              # No tag and no release: tags are public too.
+              tag=""
+              publish=false
               # A second guard beside the environment's own branch rule.
               if [ "$REF_TYPE" != branch ] || [ "$REF_NAME" != main ]; then
                 echo "dev releases must run on the branch main (got $REF_TYPE $REF_NAME)" >&2
@@ -111,7 +107,7 @@ jobs:
             echo "tag=$tag"
             echo "publish=$publish"
           } >>"$GITHUB_OUTPUT"
-          echo "$CHANNEL $version build $build, tag $tag, publish: $publish" >>"$GITHUB_STEP_SUMMARY"
+          echo "$CHANNEL $version build $build, tag ${tag:-none}, publish: $publish" >>"$GITHUB_STEP_SUMMARY"
 
   package:
     needs: prepare
@@ -124,20 +120,20 @@ jobs:
     # No secret is passed: the package jobs run in the environment and
     # read its secrets themselves.
 
-  # Only when publishing (an unpublished dev build ends with the package
-  # jobs' artifacts). The release's files: the rpms signed, then everything
+  # Stable only (a dev build ends with the package jobs' artifacts). The
+  # release's files: the rpms signed, then everything
   # checked as a whole before anything is published:
   # all five platforms, each installer against its metadata, the update
   # signatures, the tag, and that the channel does not go back.
   release-files:
-    if: needs.prepare.outputs.publish == 'true'
+    if: inputs.channel == 'stable' && needs.prepare.outputs.publish == 'true'
     needs: [prepare, package]
     runs-on: ubuntu-latest
     # For the package repositories' signing key, which signs the rpms here.
-    environment: desktop-release-${{ inputs.channel }}
+    environment: desktop-release-stable
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
-      CHANNEL: ${{ inputs.channel }}
+      CHANNEL: stable
       SITE_BASE: ${{ vars.DESKTOP_SITE_BASE }}
       ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
     steps:
@@ -222,14 +218,13 @@ jobs:
     # uploaded to the release by hand fails `gh attestation verify`.
     needs: [prepare, release-files]
     runs-on: ubuntu-latest
-    environment: desktop-release-${{ inputs.channel }}
+    environment: desktop-release-stable
     permissions:
       contents: write
       id-token: write
       attestations: write
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
-      CHANNEL: ${{ inputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
       BUILD: ${{ needs.prepare.outputs.build_number }}
     steps:
@@ -250,15 +245,10 @@ jobs:
             echo "the release $TAG already exists" >&2
             exit 1
           fi
-          notes="PPVPN desktop $VERSION (build $BUILD), $CHANNEL channel. Commit \`$GITHUB_SHA\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/desktop-release.yml\`."
-          if [ "$CHANNEL" = stable ]; then
-            # On the tag it runs on. Never the repository's latest release.
-            gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --latest=false --title "PPVPN desktop $VERSION" --notes "$notes"
-          else
-            gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --prerelease --latest=false --title "PPVPN desktop $VERSION dev build $BUILD" --notes "$notes"
-          fi
+          notes="PPVPN desktop $VERSION (build $BUILD), stable channel. Commit \`$GITHUB_SHA\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/desktop-release.yml\`."
+          # On the tag it runs on. Never the repository's latest release.
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --latest=false --title "PPVPN desktop $VERSION" --notes "$notes"
 
   # The update site follows a stable release.
   site:
