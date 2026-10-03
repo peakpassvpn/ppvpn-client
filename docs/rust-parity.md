@@ -184,7 +184,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 
 dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 Sail 的 `local`（2026-10-03 决定）。Sail `local` 的缺口作为 Sail 的通用改进继续推进，**不阻塞切换**：忽略 macOS 手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败，以及 split DNS 和日志行。翻译层把 dns-local 渲染成指向监听的 tcp 服务器（`translate::tests::dns_local_listener_is_asked_over_tcp`）。下表的 Rust 用例指 `crate::localdns`。
 
-过渡期已知限制（macOS）：TUN 不写网卡名，由 Sail 分配。Sail 改为由内核分配编号并报告实际名字之前，它固定用 `utun233`，这个编号被别的程序占用时启动失败。排除隧道网段由 dns-local 自己的隧道地址过滤保证。
+macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一），实际名字从 `tun_names()` 读。选好的名字在打开前被抢走时，Sail 换名重试，最多 3 个，仍失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true；Linux、Windows 的名字是配置的，被占用时 retryable=false，见 host-integration 第 7 节）。排除隧道网段由 dns-local 自己的隧道地址过滤保证。
 
 已知行为（macOS，Sail `98a5cbf5`，见 Sail 的 routing 文档）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 会替换它并打一行警告；停止时**不恢复**被替换的路由。
 
