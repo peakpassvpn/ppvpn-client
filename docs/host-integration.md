@@ -176,7 +176,7 @@ pub fn selected_node(&self) -> Option<NodeInfo>;
 pub fn traffic(&self) -> Traffic;                 // 累计上传/下载，方向以客户端为准
 pub fn connections(&self) -> Vec<Connection>;
 pub fn version() -> VersionInfo;                  // 关联函数，不需要实例
-pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行
+pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行，只能取一次，见第 10 节
 ```
 
 `VersionInfo` 包含以下字段：
@@ -396,10 +396,19 @@ pub struct Error {
 ## 10. 日志
 
 - **输出方式**：日志行通过 `LogConfig` 交给宿主，可以是写入宿主提供的文件，也可以是一个按行接收的通道。格式与 Go 版一致（logfmt：`level=… msg=… key=value`），lab 和性能检查会解析这些行。
+  - 一行是 `<RFC 3339 UTC 时间，纳秒> level=<error|warn|info|debug> msg=<消息> key=value … source=<core|sail>`。`source=core` 是 `ppvpn-core` 自己的行，其余字段是事件的字段；`source=sail` 是 Sail 的行，Sail 的原文整个放在 `msg` 里。
+  - 一个实例的两种行进同一个有界队列（1024 行），再按 `LogSink` 输出：
+    - `None`：不保留任何行，也不计丢弃；
+    - `File { path }`：`Engine::new` 时打开文件（不存在就创建，Unix 上权限 0600），只追加；打不开时 `new` 返回 `CORE_OPERATION_FAILED`（field=`log.sink.path`）。写盘在引擎自己的线程里做，不阻塞打日志的一方；写失败的行计入丢弃；
+    - `Channel`：用 `Engine::logs()` 取接收端。只能取一次，第二次调用（以及 sink 不是 `Channel` 时调用）得到一个已经结束的接收端（`recv()` 立即返回 `None`）。宿主不读或者已经丢掉接收端时，行照样丢弃并计数。实例的最后一个句柄释放后通道结束。
+- **tracing 订阅者**：`tracing` 的全局订阅者整个进程只有一个。`Engine::new` 尝试装一次 `tracing_subscriber::registry().with(sail::embed::tracing_layer()).with(ppvpn_core::tracing_layer())`；进程里已经有全局订阅者时什么也不装。
+  - 宿主如果有自己的 tracing 订阅者，**必须**在上面加上 `sail::embed::tracing_layer()` 和 `ppvpn_core::tracing_layer()`，否则 Sail 和 `ppvpn-core` 的日志行进不了各实例的 sink；宿主的全局过滤器也要放行 `sail`、`ppvpn_core` 这两个 target，到实例所用的级别（debug）为止。
+  - 这时 Sail 不再装它自己的订阅者，不再往 stdout/stderr 打带颜色的日志。宿主自己的 layer 也会看到这两个 target 的事件，怎么处理是宿主的事。
+- **多实例**：同一进程里有几个实例时，`ppvpn-core` 的一行属于哪个实例，看事件上的 `instance` 字段，没有就看离它最近的、带 `instance` 字段的外层 span（引擎为每个实例建一个）。两者都没有的行是进程级的，发给每个实例。Sail 的行由 Sail 按实例区分。`instance` 字段不写进日志行。
 - **轮转**：由宿主负责，引擎只按行输出，不管文件大小。
-- **不阻塞数据面**：日志接收端阻塞时，引擎丢弃日志行，不让数据面等待。丢弃的行数计入 `status().dropped_log_lines`，恢复后再补一行 warn 汇总这段时间丢了多少。
-- **级别**：默认 info；debug 级别会记录每个连接和每次 DNS 查询（含域名），只在排障时开启。
-- **脱敏**：任何级别都不记录凭据。
+- **不阻塞数据面**：日志接收端阻塞时，引擎丢弃日志行，不让数据面等待。丢弃的行数计入 `status().dropped_log_lines`（引擎侧和 Sail 侧的合计，只增不减），恢复后再补一行 warn 汇总这段时间丢了多少：`level=warn msg="log lines dropped" dropped=<上次汇总以来丢的行数> source=core`，排在恢复后第一行的前面。
+- **级别**：默认 info；debug 级别会记录每个连接和每次 DNS 查询（含域名），只在排障时开启。`ppvpn-core` 的行由引擎按 `LogConfig.level` 过滤，Sail 的行由 Sail 按同一级别过滤。
+- **脱敏**：任何级别都不记录凭据（本地代理的密码、节点的密钥和密码）。本地代理状态文件损坏时，日志只写解析错误的类别和位置，不写文件内容。
 
 ## 11. 内部结构（不是契约，供评审参考）
 

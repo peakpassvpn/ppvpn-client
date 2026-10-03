@@ -26,6 +26,7 @@ getrandom = "0.4"
 hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 url = "2"
 
 # Unprivileged ICMP for entrance probes (src/probe/icmp.rs).
