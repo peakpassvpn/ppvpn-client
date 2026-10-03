@@ -4,9 +4,33 @@
 ppvpn-core's standard instance in its own process, exposing the authenticated local HTTP/SOCKS5 proxy. It
 does not create a TUN device or change system network settings.
 
-Status: the command-line contract, settings, directory layout and the daemon (`start`, `stop`, `status`,
-`--foreground`) are in place. Commands that need the account crate (`login`, profile download, …) or whose
-daemon call is not wired yet report `NOT_IMPLEMENTED`; their arguments are already parsed and checked.
+Status: every command is wired to `ppvpn-account` and to ppvpn-core's `Engine`. What a command returns
+follows the engine: while an engine method is not implemented yet, the command reports core's error
+(`CORE_OPERATION_FAILED`, exit 5).
+
+## Account
+
+`ppvpn login` starts a device authorization, prints the authorization URL and the confirmation code to
+stderr, opens the URL in the default browser unless `--no-browser` is given, and waits until the
+authorization is confirmed, denied or expired. A CLI login is its own device session, separate from the
+desktop app's: the CLI sends no product header and only accepts access tokens whose audience is `cli`.
+
+The device credential is kept in the platform secret store and nowhere else:
+
+- macOS: a generic password in the login Keychain (service `com.peakpassvpn.ppvpn.cli`);
+- Linux: an item in the Secret Service default collection (GNOME Keyring, KWallet, …), written over an
+  encrypted session.
+
+There is no plain-file fallback. Where no secret store is available (for example a server without a Secret
+Service) or the keyring stays locked, the CLI reports `CREDENTIAL_STORE_UNAVAILABLE` or
+`CREDENTIAL_STORE_LOCKED` (exit 8) and does not log in. Access tokens are never written to disk.
+
+`ppvpn account` prints the authorized account. `ppvpn logout` revokes the device session and removes the
+local credential. Without a saved login, commands that need one report `NOT_LOGGED_IN` (exit 3) before any
+request is made.
+
+`ppvpn start` downloads the account's proxy profile before it touches the daemon; a rejected access token is
+refreshed once. The profile is passed to core as received and is never written to disk.
 
 ## Daemon
 
@@ -31,8 +55,36 @@ map to exits 2 (`NODE_NOT_FOUND`, `INGRESS_NOT_FOUND`, `PINS_INVALID`, `ROUTING_
 and 8 (`STATE_DIR_IN_USE`, `PERMISSION_DENIED`); every other core code is a profile or request validation
 failure (exit 7).
 
-Until `ppvpn-account` provides the profile download, a `dev` build can read a profile from the absolute path in
-`PPVPN_PROFILE_FILE`; release builds report `NOT_IMPLEMENTED` from `start`.
+A `dev` build reads the profile from the absolute path in `PPVPN_PROFILE_FILE` when that variable is set,
+instead of downloading it; release builds ignore the variable.
+
+## The running instance
+
+`nodes`, `use`, `probe`, `traffic`, `connections`, `proxy`, `ingress` and its subcommands talk to the daemon.
+Without one they report `CORE_NOT_RUNNING` (exit 5); with a daemon that has no profile, selections and pins
+report core's `PROFILE_NOT_APPLIED`.
+
+- `use <node-id>` selects the node of new connections; open connections stay where they are. `ingress pin`
+  takes effect at once and turns failover off for that node; `ingress auto` turns it back on. Core does not
+  persist these choices: the CLI saves them to `settings.json` only after core accepted them, and passes them
+  with the next apply.
+- `mode <rules|global>` applies the profile the daemon holds again with the new mode, then saves it; `--json`
+  reports `"applied": true`. With nothing running, the mode is saved for the next start (`"applied": false`).
+  When the held profile has expired, the CLI downloads a new one and applies that with the new mode. When
+  core refuses the change, the saved mode is not changed. The daemon holds the profile in memory only.
+- `probe` measures TCP entrances (`--all`, or one node) or fetches `--target` through one node
+  (`--type availability`). A probe that ran and failed is a result (`"success": false` with an `error_code`),
+  not a command error; the exit code is 0.
+- `proxy` lists the local proxy endpoints without secrets. `proxy credential` prints the routed credential
+  (the routing mode and rules decide the node), `proxy credential <node-id>` a credential that always uses
+  that node. Both print the username, the password and ready-made `http://` and `socks5h://` URLs
+  (`http_url` and `socks5_url` with `--json`); these are the only commands whose output contains a secret.
+- `ingress [node-id]` shows each node's pin and its ingresses' health; `*` marks the ingress in use.
+
+With `--json`, the fields are core's (`docs/host-integration.md`, sections 4 and 5) under `"ok": true`:
+`nodes` gives `selected_node_id` and `nodes`; `traffic` gives `upload_bytes`, `download_bytes` and
+`measured_at`; `connections`, `proxy` and `ingress` give `connections`, `endpoints` and `nodes`; `probe`
+gives `type` and `results` (entrance) or `result` (availability).
 
 ## Commands
 
@@ -73,10 +125,10 @@ between 1 ms and 2 minutes, and a concurrency between 1 and 32.
 | Exit | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | other or internal error (including `NOT_IMPLEMENTED`) |
+| 1 | other or internal error |
 | 2 | invalid argument or build configuration |
 | 3 | login missing, expired or not permitted |
-| 4 | backend unavailable |
+| 4 | backend unavailable, untrusted, or nothing to serve for the account |
 | 5 | core not running or a core operation failed |
 | 6 | incompatible core or feature unavailable |
 | 7 | the backend's profile could not be applied |

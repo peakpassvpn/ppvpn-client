@@ -12,8 +12,10 @@ pub mod adapters;
 pub mod cache;
 pub mod exchange;
 pub mod hosts;
+pub(crate) mod listener;
 pub mod scutil;
 pub mod servers;
+pub(crate) mod source;
 
 use std::fmt;
 use std::net::IpAddr;
@@ -24,7 +26,7 @@ use hickory_proto::rr::rdata::{A, AAAA};
 use hickory_proto::rr::{RData, Record, RecordType};
 
 pub use cache::{Cache, Change};
-pub use exchange::{Dial, PlainDial};
+pub(crate) use exchange::{Dial, PlainDial, RuntimeDial};
 pub use hosts::Hosts;
 pub use servers::{Interface, Prefix, Server};
 
@@ -98,14 +100,14 @@ impl std::error::Error for LocalDnsError {}
 
 /// The dns-local transport: answers a query from the hosts file, else from
 /// the default interface's resolvers, else with SERVFAIL.
-pub struct LocalDns {
+pub(crate) struct LocalDns {
     cache: Arc<Cache>,
     hosts: Arc<Hosts>,
     dial: Arc<dyn Dial>,
 }
 
 impl LocalDns {
-    pub fn new(cache: Arc<Cache>, hosts: Arc<Hosts>, dial: Arc<dyn Dial>) -> Self {
+    pub(crate) fn new(cache: Arc<Cache>, hosts: Arc<Hosts>, dial: Arc<dyn Dial>) -> Self {
         LocalDns { cache, hosts, dial }
     }
 
