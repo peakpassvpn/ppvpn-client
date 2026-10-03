@@ -332,6 +332,7 @@ mod tests {
             runtime: Some(runtime.clone()),
             steps: vec![step("routing"), step("dns")],
             state_dir: Some(StateDirLock::acquire(&dir).unwrap()),
+            secrets: Vec::new(),
         };
         let report = cleanup(parts, SHUTDOWN_LIMIT).await;
         assert!(report.leftovers.is_empty(), "{report:?}");
@@ -462,6 +463,7 @@ mod tests {
                 step("dns"),
             ],
             state_dir: Some(StateDirLock::acquire(&dir).unwrap()),
+            secrets: Vec::new(),
         };
         let report = cleanup_on_drop(parts);
         assert!(report.leftovers.is_empty(), "{report:?}");
