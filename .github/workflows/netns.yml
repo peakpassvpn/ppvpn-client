@@ -139,19 +139,15 @@ jobs:
           go build -o "$RUNNER_TEMP/ldnslab" ./test/lab/localdns/ldnslab
           command -v tcpdump || { sudo apt-get update -qq && sudo apt-get install -y -qq tcpdump; }
       - name: dns-local follows network changes (#61), strict
-        # Blocked on the engine (apply and start pass): a Tun instance opens
-        # no TUN yet; dns-local is not the core's listener yet (#119), and
-        # until then sail's `local` asks the system resolver (127.0.0.1 when
-        # resolv.conf is empty: the trap); NetworkChanged has no source yet
-        # (sail's network events); Engine::logs() is a stub, so no "local
-        # dns servers" line. Drop continue-on-error once they are on main.
+        # One gap left on the engine: right after start, sail's network
+        # snapshot may have no default interface yet, so E1's first query
+        # gets SERVFAIL until the first change. Drop continue-on-error once
+        # that fix is on main (docs/rust-parity.md).
         continue-on-error: true
         run: sudo NETNS_TIMEOUT=180 NETNS_ENV="CORE_ENGINE=rust SWITCH_GRACE_MS=0" test/netns/run.sh --host test/lab/localdns/run.sh target/debug/ppvpn-core-lab "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json "$RUNNER_TEMP/localdns"
       - name: link down/up, no kernel switch while offline (#69), modes 0-4
-        # Blocked on the engine as above: no TUN, so the probe through it
-        # never recovers; mode 2 also needs the host-IPv6 re-probe to switch
-        # kernels (KernelSwitched). The switch counts of 0 pass vacuously
-        # until then.
+        # All five modes pass (mode 2 switches kernels once); dropped with
+        # the step above.
         continue-on-error: true
         run: |
           status=0

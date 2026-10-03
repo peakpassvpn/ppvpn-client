@@ -100,12 +100,9 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 - Docker 多节点 lab 的场景（G2：B1–B7、t3/t4/t56/t9），在移植到 runner 之前都在这里；
 - systemd-networkd 管理的链路抖动（`TestTUNRulesSurviveNetworkdLinkFlap`），runner 上没有 networkd 管理的链路。
 
-**Rust 的 network-change（2026-10-03，在共享的 Linux 测试机上实跑，与 CI 的 `network-change-rust` 相同）**：apply 和 start 已通过；宿主无残留。其余未通过，缺的是 Engine 的这几块，补齐后去掉 continue-on-error：
-- Tun 实例还不打开 TUN（`tun interface: none`）：E1、E2、E3、E5 的查询和 updown 各模式的恢复都失败；D1 的抓包断言要求 TUN 存在，不会空过。
-- dns-local 还不是 core 自己的监听（#119）。在那之前翻译用的是 Sail 的 `local`，它走系统解析器：resolv.conf 为空时 glibc 退回 127.0.0.1，陷阱被查询（E6 失败）。
-- `NetworkChanged` 还没有事件源（Sail 的网络事件未接入）：三次"2 秒内报告变化"都失败。
-- `Engine::logs()` 还是空实现：没有 `local dns servers` 日志行。
-- updown 模式 2 需要 host IPv6 重探后切换一次内核（`KernelSwitched`）；其余模式切换次数为 0 是空过。
+**Rust 的 network-change（CI 的 `network-change-rust`，main 2026-10-03 晚）**：apply 和 start、E2、E3、E4（updown 五个模式，模式 2 切换一次内核）、E5、E6、`local dns servers` 日志行都已通过；宿主无残留。还差两项，补齐后去掉 continue-on-error：
+- E1：start 刚返回时，sail 的网络快照里可能还没有默认网卡，dns-local 的第一条查询回 SERVFAIL，直到第一次网卡变化才恢复（Engine 侧在修）。
+- D1：TUN 其实已经打开。之前判为“tun interface: none”，是因为脚本只认 Go 的地址形式（`10.60.159.89/30`），sail 配的是点对点地址（`10.60.159.89 peer 10.60.159.90/30`）。脚本已改为两种形式都认。
 
 D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给 lab 用的开关来构建不绑定的 core，Engine 里还没有，暂缺。D3（入口只给域名）需要节点，在 `test/lab/engine` 的 t4 里跑（`lab.sh up ... <ppvpn-core-lab>`，引擎 `rust`），同样等 TUN。
 
@@ -131,7 +128,7 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 
 ## Lab 用例（`test/lab/engine/cases`）
 
-UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golden/routing`）里没有覆盖。它们写成 lab 的用例，在有特权容器的 Linux 主机上跑：`lab.sh case <组> sing|rust`。Go 0.5.21 的输出存为 `cases/<组>.baseline.txt`。Rust 版跑同一个脚本，结论按 id 记在这里。
+UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golden/routing`）里没有覆盖。它们写成 lab 的用例，在有特权容器的 Linux 主机上跑：`lab.sh case <组> sing|rust`。Go 0.5.21 的输出存为 `cases/<组>.baseline.txt`。Rust 版跑同一个脚本，结论按 id 记在这里。每组先确认 core 在运行、`get-status` 有应答，否则整组判失败、不逐条跑：没有 core 时，“直连”“没有某行日志”这类判据也会成立。这类判据都配了正向信号：`udp.2` 要求 core 的连接日志里这条 UDP 经 `direct`；`dns-hijack.7` 要求 DoT 服务器确实应答了。
 
 | id | 行为 | Go 0.5.21 | Rust | 备注 |
 | --- | --- | --- | --- | --- |
@@ -139,7 +136,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | `dns-hijack.5`–`.6` | 代理路由的域名由 dns-remote 解析，直连路由的域名由 dns-local 解析 | PASS | todo | |
 | `dns-hijack.7`–`.8` | 发往服务器 853 端口的 DoT 不被劫持，按普通连接路由 | PASS | todo | |
 | `udp.1`–`.2` | UDP 经选中节点；direct 规则下的 UDP 直连 | PASS | todo | |
-| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | todo | Rust 有意偏离（D4）：拒绝，见上文 |
+| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | todo | Rust 有意偏离（D4）：拒绝，用例按引擎区分期望，Rust 下判“没有应答” |
 | `reverse-map.1`–`.4` | 不带 Host 的连接按 DNS 应答的域名交给节点；内核热切换、改选节点后仍然有效 | PASS | todo | 对应 `TestKernelSwitchKeepsReverseMapping` |
 
 未覆盖：QUIC 嗅探（lab 镜像里没有 QUIC 客户端）。
