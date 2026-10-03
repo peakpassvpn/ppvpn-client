@@ -88,6 +88,21 @@ jobs:
           bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: test
         run: cargo test --locked
+      # The Secret Service store against a real keyring, in a D-Bus session
+      # of its own with an unlocked login keyring (no desktop session).
+      # tests/keystore.rs is built above and does nothing without the
+      # variable.
+      - name: secret store (Secret Service)
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus gnome-keyring
+          bin="$(ls -t target/debug/deps/keystore-* | grep -v '\.d$' | head -n 1)"
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            printf "%s" "ci-$RANDOM-$RANDOM" | gnome-keyring-daemon --unlock --components=secrets --daemonize >/dev/null
+            PPVPN_TEST_KEYSTORE=1 "$0" --nocapture
+          ' "$bin"
 
   # Windows with the MSVC toolchain, natively: what the desktop links (the
   # Windows service and client are MSVC builds). As sail's windows-msvc job,
@@ -165,3 +180,10 @@ jobs:
           bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock aarch64-apple-darwin | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: test
         run: cargo test --locked
+      # The Keychain store against the runner's login keychain. The step has
+      # its own timeout: a keychain prompt would wait for a person.
+      - name: secret store (Keychain)
+        timeout-minutes: 5
+        run: |
+          bin="$(ls -t target/debug/deps/keystore-* | grep -v '\.d$' | head -n 1)"
+          PPVPN_TEST_KEYSTORE=1 "$bin" --nocapture
