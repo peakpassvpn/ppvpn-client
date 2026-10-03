@@ -117,7 +117,9 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。
 
-连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（路由选中的出站；sail 只在成员连上之后才把它加进链，所以经组失败时链里只有组名）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
+连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（最外层在前：路由选中的出站，再是沿途各组选的成员，直到所试的成员，如 `F>G>m`；sail 2eb3fe47 起成员在拨号前就进链）、是否还有成员可试（`more_to_try`：组内每个成员的失败各报一条，只有这条连接最后一次失败为 false）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
+
+sail 2eb3fe47 的两个已知缺口不涉及我们：嵌套在 tryall 里的组最后一次失败可能仍报 `more_to_try=true`，smart 组传输中途的重连不上报；翻译只生成 selector 和 fallback 组，没有 tryall、smart（也没有 url-test）。
 
 Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每次变化转成 `on_network`（NetworkChanged、`Degraded{NoDefaultInterface}`、探测的离线状态）；TUN 实例在最后一次变化 2 s 后重新探测主机 IPv6 出口；start 时读一次 `network()` 快照，只设离线状态，不报变化；`default interface` 日志行同 Go 的格式，但没有 `mtu`（sail 的快照不带）。
 

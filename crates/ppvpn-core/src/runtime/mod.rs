@@ -227,10 +227,10 @@ pub(crate) struct DnsExchange {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DialFailed {
-    /// The outbounds it went through, joined by `>` as the log's `out=`:
-    /// the route's outbound, then each group's member. sail adds a member
-    /// only once it connected, so a failure through a group names the
-    /// group alone (8f47c870).
+    /// The outbounds it went through, outermost first, joined by `>` as the
+    /// log's `out=`: the route's outbound, then the member each group on
+    /// the way took, down to the member tried (`pick>direct`; `F>G>m` for a
+    /// group G in a group F).
     pub chain: String,
     /// Where it went, redacted as the log says it.
     pub destination: String,
@@ -239,6 +239,9 @@ pub(crate) struct DialFailed {
     /// The I/O error's kind (`ConnectionRefused`, `TimedOut`, …).
     pub error: String,
     pub count: u64,
+    /// Whether the group goes on to try another member: false for the
+    /// failure that ends the connection (each member's failure is told).
+    pub more_to_try: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
