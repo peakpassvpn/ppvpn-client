@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 
 use crate::profile::{Node, Profile};
 use crate::request::RoutingMode;
-use crate::runtime::GroupInfo;
+use crate::runtime::{GroupInfo, RuntimeConnection, RuntimeTraffic};
 use crate::status::{
     DegradedReason, EngineState, FatalReason, IngressHealth, IngressStatus, NodeStatus, TunRouting,
 };
@@ -77,6 +77,11 @@ pub(crate) struct Live {
     pub groups: HashMap<String, GroupInfo>,
     /// node id → its last ingress switch, while running.
     pub switched: HashMap<String, Switched>,
+    /// The runtime's counters as last read, and when; kept after a stop.
+    pub traffic: RuntimeTraffic,
+    pub traffic_at: Option<DateTime<Utc>>,
+    /// While running: the connections as last read.
+    pub connections: Vec<RuntimeConnection>,
 }
 
 impl Live {
@@ -115,6 +120,7 @@ impl Live {
     /// Forgets what only a running runtime knows.
     pub(crate) fn clear_runtime(&mut self) {
         self.groups.clear();
+        self.connections.clear();
         self.tun_routing = None;
         self.switched.clear();
     }

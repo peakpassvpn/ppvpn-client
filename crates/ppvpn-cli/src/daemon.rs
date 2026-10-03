@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -95,6 +95,10 @@ pub struct Daemon {
     paths: Paths,
     secret: String,
     engine: ppvpn_core::Engine,
+    /// What is applied, as the next apply would pass it: core keeps the
+    /// profile in memory only, and so does the daemon. A routing mode
+    /// change applies it again.
+    applied: Mutex<Option<ppvpn_core::ApplyRequest>>,
     record: ProcessRecord,
     _lock: DaemonLock,
 }
@@ -132,6 +136,7 @@ impl Daemon {
                 paths: paths.clone(),
                 secret,
                 engine,
+                applied: Mutex::new(None),
                 record,
                 _lock: lock,
             },
@@ -224,21 +229,118 @@ impl Daemon {
                 "core": ppvpn_core::Engine::version(),
             })),
             Call::Status => encode(&self.engine.status()),
-            Call::Apply(request) => match self.engine.apply(request).await {
-                Ok(result) => encode(&result),
-                Err(err) => Err(core(err)),
-            },
+            Call::Apply(request) => self.apply(request).await,
             Call::Start => self
                 .engine
                 .start()
                 .await
                 .map(|()| Value::Null)
                 .map_err(core),
+            Call::Nodes => encode(&json!({
+                "selected_node_id": self.engine.selected_node().map(|node| node.id),
+                "nodes": self.engine.nodes(),
+            })),
+            Call::SelectNode { node_id } => match self.engine.select_node(&node_id).await {
+                Ok(()) => {
+                    self.remember(|request| request.selected_node_id = Some(node_id));
+                    Ok(Value::Null)
+                }
+                Err(err) => Err(core(err)),
+            },
+            Call::PinIngress {
+                node_id,
+                endpoint_key,
+            } => match self
+                .engine
+                .pin_ingress(&node_id, endpoint_key.as_deref())
+                .await
+            {
+                Ok(()) => {
+                    self.remember(|request| {
+                        request.pins.retain(|pin| pin.node_id != node_id);
+                        if let Some(key) = endpoint_key {
+                            request.pins.push(ppvpn_core::Pin::new(node_id, key));
+                        }
+                    });
+                    Ok(Value::Null)
+                }
+                Err(err) => Err(core(err)),
+            },
+            Call::SetRoutingMode { routing_mode } => {
+                let held = self.applied.lock().expect("applied lock").clone();
+                match held {
+                    Some(mut request) => {
+                        request.routing_mode = routing_mode;
+                        self.apply(request).await
+                    }
+                    None => Err(WireError {
+                        code: ppvpn_core::codes::PROFILE_NOT_APPLIED.into(),
+                        field: None,
+                        retryable: false,
+                        message: "no profile has been applied".into(),
+                    }),
+                }
+            }
+            Call::Traffic => encode(&self.engine.traffic()),
+            Call::Connections => encode(&self.engine.connections()),
+            Call::ProbeEntrances(request) => match self.engine.probe_entrances(request).await {
+                Ok(results) => encode(&results),
+                Err(err) => Err(core(err)),
+            },
+            Call::ProbeAvailability(request) => {
+                match self.engine.probe_availability(request).await {
+                    Ok(result) => encode(&result),
+                    Err(err) => Err(core(err)),
+                }
+            }
+            Call::ProxyEndpoints => match self.engine.local_proxy_metadata() {
+                Ok(endpoints) => encode(&endpoints),
+                Err(err) => Err(core(err)),
+            },
+            Call::ProxyCredential { node_id } => {
+                let credential = match node_id {
+                    Some(node_id) => self.engine.local_proxy_credential(&node_id),
+                    None => self.engine.local_proxy_routed_credential(),
+                };
+                match credential {
+                    Ok(credential) => encode(&credential),
+                    Err(err) => Err(core(err)),
+                }
+            }
             Call::Shutdown => Ok(Value::Null),
         };
         match result {
             Ok(data) => Response::ok(data),
             Err(err) => Response::err(err),
+        }
+    }
+
+    async fn apply(
+        &self,
+        request: ppvpn_core::ApplyRequest,
+    ) -> std::result::Result<Value, WireError> {
+        match self.engine.apply(request.clone()).await {
+            Ok(result) => {
+                let mut request = request;
+                // What is live, not what was asked for: core may have reset
+                // the selection and cleared pins.
+                request.selected_node_id = Some(result.selected_node_id.clone());
+                request.pins.retain(|pin| {
+                    !result
+                        .cleared_pins
+                        .iter()
+                        .any(|cleared| cleared.node_id == pin.node_id)
+                });
+                *self.applied.lock().expect("applied lock") = Some(request);
+                encode(&result)
+            }
+            Err(err) => Err(WireError::from(&err)),
+        }
+    }
+
+    fn remember(&self, change: impl FnOnce(&mut ppvpn_core::ApplyRequest)) {
+        if let Some(request) = self.applied.lock().expect("applied lock").as_mut() {
+            change(request);
         }
     }
 }
