@@ -23,13 +23,6 @@ use crate::runtime::{NetworkChange, NetworkSnapshot};
 /// probed again (Go: ReprobeDelay): a burst of changes probes once.
 pub(super) const REPROBE_DELAY: Duration = Duration::from_secs(2);
 
-/// After a start whose snapshot knows no network yet: how often, and how
-/// many times, the snapshot is read again until it does (sail reports no
-/// change for the first default interface; its detection takes at most
-/// 1 s). Past that the network counts as offline.
-const FIRST_NETWORK_POLL: Duration = Duration::from_millis(100);
-const FIRST_NETWORK_POLLS: u32 = 20;
-
 /// What the Engine follows of sail's network.
 #[derive(Default)]
 pub(super) struct NetworkState {
@@ -99,103 +92,59 @@ impl Inner {
     /// After a start: the network as sail has it now. Not a change, so no
     /// NetworkChanged; the offline state follows it. A change this run has
     /// already reported is newer than the snapshot and stays.
-    pub(super) fn network_started(self: &Arc<Self>) {
-        if !self.take_first_network() {
-            self.await_first_network();
-        }
-    }
-
-    /// The snapshot as the run's first network, unless a change came first
-    /// (it is newer). False when the snapshot knows no network yet (no
-    /// interface, not offline): it says nothing.
-    fn take_first_network(&self) -> bool {
+    pub(super) fn network_started(&self) {
         let mut track = self.network.track();
         if track.generation > 0 {
-            return true;
+            return;
         }
         let snapshot = self.runtime.network();
         track.last = snapshot.clone();
-        let Some(snapshot) = snapshot.filter(|s| s.offline || s.interface.is_some()) else {
-            return false;
-        };
-        log_default_interface("start", &snapshot);
-        self.local_dns_network(&snapshot);
-        let mut live = self.live();
-        live.offline = snapshot.offline;
-        self.settle(&mut live);
-        true
-    }
-
-    /// Transitional, removed once sail's start returns with the snapshot
-    /// ready (a known interface or offline, then `Restored`): today sail
-    /// may start before it knows the default interface and reports no
-    /// change when it learns it, so dns-local would have no interface
-    /// (SERVFAIL) until the first change. The snapshot is read again for a
-    /// while, within this run.
-    fn await_first_network(self: &Arc<Self>) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let run = self.live().run;
-        let weak: Weak<Inner> = Arc::downgrade(self);
-        handle.spawn(async move {
-            for _ in 0..FIRST_NETWORK_POLLS {
-                tokio::time::sleep(FIRST_NETWORK_POLL).await;
-                let Some(inner) = weak.upgrade() else { return };
-                {
-                    let live = inner.live();
-                    if !live.running || live.run != run {
-                        return;
-                    }
-                }
-                if inner.take_first_network() {
-                    return;
-                }
+        // sail's start returns with its first detection done: a known
+        // interface, or offline (then `Restored`). A snapshot that knows
+        // neither says nothing; it should not happen.
+        match snapshot.filter(|s| s.offline || s.interface.is_some()) {
+            Some(snapshot) => {
+                log_default_interface("start", &snapshot);
+                self.local_dns_network(&snapshot);
+                let mut live = self.live();
+                live.offline = snapshot.offline;
+                self.settle(&mut live);
             }
-            let Some(inner) = weak.upgrade() else { return };
-            inner.first_network_unknown(run);
-        });
-    }
-
-    /// No network known 2 s after the start: offline, as sail will say
-    /// itself once it waits for its first detection.
-    fn first_network_unknown(&self, run: u64) {
-        let track = self.network.track();
-        let mut live = self.live();
-        if track.generation > 0 || !live.running || live.run != run {
-            return;
+            None => tracing::warn!("sail started without knowing the network"),
         }
-        tracing::warn!("no default interface known 2 s after the start: offline");
-        live.offline = true;
-        self.settle(&mut live);
     }
 
     /// At stop or shutdown: the run's network goes with it. A sleeping
     /// re-probe is cancelled (one under way holds the operation lock and
     /// ends first), and the network is unknown again: offline no longer
     /// holds once sail no longer runs.
-    pub(super) fn network_stopped(&self) {
-        {
+    /// Returns whether a re-probe was waiting (a full restart arms it again).
+    pub(super) fn network_stopped(&self) -> bool {
+        let waiting = {
             let mut track = self.network.track();
-            if let Some(timer) = track.timer.take() {
-                timer.abort();
-            }
+            let waiting = track.timer.take().map(|timer| timer.abort()).is_some();
             track.armed += 1;
             track.generation = 0;
             track.last = None;
-        }
+            waiting
+        };
         let mut live = self.live();
         if live.offline {
             live.offline = false;
             self.settle(&mut live);
         }
+        waiting
     }
 
     /// One change from sail's network watch, while it runs.
     pub(super) fn on_network_change(self: &Arc<Self>, change: NetworkChange) {
-        if !self.live().running {
-            // Late, from a run that has stopped.
-            return;
+        {
+            let live = self.live();
+            if !live.running || live.restarting {
+                // Late, from a run that has stopped (or is being replaced:
+                // the new run reads the network when it starts).
+                return;
+            }
         }
         let missed = {
             let mut track = self.network.track();
@@ -225,7 +174,7 @@ impl Inner {
     /// after the last change. Only a timer that still sleeps is cancelled;
     /// a re-probe under way runs to its end, and the next waits for it on
     /// the operation lock. The re-probe itself skips while offline.
-    fn arm_reprobe(self: &Arc<Self>) {
+    pub(super) fn arm_reprobe(self: &Arc<Self>) {
         if self.config.role != Role::Tun {
             return;
         }

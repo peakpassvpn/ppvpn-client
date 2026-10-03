@@ -113,9 +113,13 @@ D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
-启动后补读初始网卡（过渡实现，Sail 修复后去掉）：sail 的 start 返回时快照里可能还没有默认网卡，之后第一个网卡出现也不发事件，dns-local 就一直没有网卡，第一次网络变化之前都回 SERVFAIL（netns `network-change-rust` E1）。现在 `Inner::network_started` 在快照不知道网络时每 100 ms 再读一次，最多 2 s，之后按离线处理并记一行 warn（`engine::network::tests::the_first_network_is_read_after_a_start_that_knew_none`）。Sail 已确认是缺口：start 返回前快照就绪（已知网卡，或明确 offline），之后网卡出现发 `Restored`。Sail 修复后，`await_first_network` 随升级删除。
+`KernelSwitched` 的连接数和 `draining_kernels`（以及 `kernel switched` 日志行的同名字段）暂时都是 0：要等第 1 组的排空接上。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
 
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
+
+组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。
+
+连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（路由选中的出站；sail 只在成员连上之后才把它加进链，所以经组失败时链里只有组名）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
 
 Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每次变化转成 `on_network`（NetworkChanged、`Degraded{NoDefaultInterface}`、探测的离线状态）；TUN 实例在最后一次变化 2 s 后重新探测主机 IPv6 出口；start 时读一次 `network()` 快照，只设离线状态，不报变化；`default interface` 日志行同 Go 的格式，但没有 `mtu`（sail 的快照不带）。
 
@@ -377,7 +381,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/rulesets` `TestFailedUpdateKeepsLastGoodCopy` | A new profile version that cannot be fetched keeps the last good copy. | `ppvpn-core` `rulesets::tests::failed_update_keeps_last_good_copy` | done |  |
 | `internal/rulesets` `TestInspectClassifiesDNSMirroring` | Inspect classifies dns mirroring | `ppvpn-core` `rulesets::tests::inspect_classifies_dns_mirroring` | done | 有意偏离：Rust 只接受 sail 能读的 .srs（版本到 5；AdGuard、`network_interface_address`、`default_interface_address` 判为 `RULE_SET_INVALID`），Go 1.13 读到版本 4 且接受这些条目。sail 读不了的集合不能交给内核（`rulesets::srs::tests`） |
 | `internal/rulesets` `TestPathStaysInsideDir` | Path stays inside dir | `ppvpn-core` `rulesets::tests::path_stays_inside_dir` | done |  |
-| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done |  |
+| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done | 与 Go 一致：apply 的准备阶段一下载成功就覆盖缓存文件 `<id>.srs`（Go 在 `Prepare` 的 `fetchInto` 里 install），早于翻译和切换；随后 apply 失败时，运行中的配置读到的是新文件（sail 监视它）。跟进见 #182 |
 | `internal/rulesets` `TestPrepareRejectsDigestMismatchAndForeignHosts` | Prepare rejects digest mismatch and foreign hosts | `ppvpn-core` `rulesets::tests::prepare_rejects_digest_mismatch_and_foreign_hosts` | done |  |
 | `internal/rulesets` `TestPrepareRejectsInvalidRuleSet` | Prepare rejects invalid rule set | `ppvpn-core` `rulesets::tests::prepare_rejects_invalid_rule_set` | done |  |
 | `internal/rulesets` `TestRecoverySweepsAllSetsAndRebuildsOnce` | When one set recovers, every other set that is not ready is retried at once (not on its own, possibly long, backoff), the downloads run concurrently, and the … | `ppvpn-core` `rulesets::tests::recovery_sweeps_all_sets_and_rebuilds_once` | done |  |
