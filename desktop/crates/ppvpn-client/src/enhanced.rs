@@ -91,8 +91,9 @@ const DISCONNECT_UNCONFIRMED: &str = "DISCONNECT_UNCONFIRMED";
 /// proxied-path transaction runs. The direct request proves that TUN
 /// captures the app's own traffic (the core's counters grow), whichever
 /// outbound the profile routes it to (DIRECT once the profile carries the
-/// first-party rule, the node until then).
-const OFFICIAL_HEALTH_HOSTS: &[&str] = &["www.peakpassvpn.com"];
+/// first-party rule, the node until then). The domain and its subdomains,
+/// so every backend environment counts without naming one here.
+const OFFICIAL_HEALTH_DOMAIN: &str = "peakpassvpn.com";
 /// The backend's unauthenticated health route.
 const HEALTH_PATH: &str = "/api/v1/health";
 /// Deadline for the direct health request (connect and whole response).
@@ -2128,7 +2129,10 @@ fn is_path_cause(info: &ClientErrorInfo) -> bool {
 fn health_target(api_base: &str) -> Option<reqwest::Url> {
     let url = reqwest::Url::parse(api_base).ok()?;
     let host = url.host_str()?;
-    OFFICIAL_HEALTH_HOSTS.contains(&host).then_some(url)
+    let official = host
+        .strip_suffix(OFFICIAL_HEALTH_DOMAIN)
+        .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'));
+    official.then_some(url)
 }
 
 /// The backend's health endpoint (`GET /api/v1/health`: 200, `no-store`, no
@@ -2564,6 +2568,10 @@ mod tests {
     #[test]
     fn health_transaction_only_for_official_hosts() {
         assert!(health_target("https://www.peakpassvpn.com").is_some());
+        assert!(health_target("https://peakpassvpn.com").is_some());
+        assert!(health_target("https://api.peakpassvpn.com/").is_some());
+        assert!(health_target("https://peakpassvpn.com.example.com").is_none());
+        assert!(health_target("https://notpeakpassvpn.com").is_none());
         assert!(health_target("http://localhost:8080").is_none());
         assert!(health_target("http://127.0.0.1").is_none());
         assert!(health_target("https://staging.example.com").is_none());

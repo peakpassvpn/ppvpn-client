@@ -1228,7 +1228,7 @@ mod tests {
             (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
         });
         let launcher =
-            CrashyLauncher::with_hosts(core.clone(), Some(vec!["api.dev.example.com".into()]));
+            CrashyLauncher::with_hosts(core.clone(), Some(vec!["api.example.com".into()]));
         let standard = StandardCore::with_launcher(launcher, Arc::new(|_| {}));
         standard
             .apply_profile(br#"{"revision":"r1"}"#, "r1")
@@ -1241,7 +1241,7 @@ mod tests {
         let expected = |revision: &str| {
             serde_json::json!({
                 "profile": {"revision": revision},
-                "allowed_rule_set_hosts": ["api.dev.example.com"],
+                "allowed_rule_set_hosts": ["api.example.com"],
                 "routing_mode": "rules",
             })
         };
@@ -1255,7 +1255,7 @@ mod tests {
             (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
         });
         let launcher =
-            CrashyLauncher::with_hosts(core.clone(), Some(vec!["api.dev.example.com".into()]));
+            CrashyLauncher::with_hosts(core.clone(), Some(vec!["api.example.com".into()]));
         let routing = RoutingModeCell::default();
         let standard = StandardCore::with_routing(launcher, Arc::new(|_| {}), routing.clone());
         // Nothing running yet: nothing to re-apply.
@@ -1305,10 +1305,10 @@ mod tests {
     #[test]
     fn the_process_launcher_pins_the_configured_api_host() {
         let mut config = test_config("/nonexistent", "/nonexistent");
-        config.api_base = "https://api.dev.example.com".into();
+        config.api_base = "https://api.example.com".into();
         assert_eq!(
             ProcessLauncher::new(&config).rule_set_hosts,
-            vec!["api.dev.example.com".to_string()]
+            vec!["api.example.com".to_string()]
         );
         config.api_base = "https://api.example.com:8443/api/v1".into();
         assert_eq!(

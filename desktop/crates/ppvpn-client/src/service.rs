@@ -1296,7 +1296,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(value["take_over"], true);
-        let hosts = crate::core_ipc::rule_set_hosts("https://api.dev.example.com:8443/api");
+        let hosts = crate::core_ipc::rule_set_hosts("https://api.example.com:8443/api");
         let value = encode(ProfilePayload {
             session: &session,
             profile: &profile,
@@ -1308,7 +1308,7 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({"session_id":"abc","generation":3,"profile":{"revision":"r1"},
-                "take_over":false,"allowed_rule_set_hosts":["api.dev.example.com:8443"],
+                "take_over":false,"allowed_rule_set_hosts":["api.example.com:8443"],
                 "routing_mode":"global"})
         );
         assert_eq!(

@@ -1050,8 +1050,8 @@ mod tests {
             "https://www.peakpassvpn.com/dashboard/routing-rules"
         );
         assert_eq!(
-            url("https://api.dev.example.com/api/prefix/?x=1#f"),
-            "https://api.dev.example.com/dashboard/routing-rules"
+            url("https://api.example.com/api/prefix/?x=1#f"),
+            "https://api.example.com/dashboard/routing-rules"
         );
         assert_eq!(
             url("http://127.0.0.1:8080/"),
@@ -1066,8 +1066,8 @@ mod tests {
             "https://www.peakpassvpn.com/dashboard/products"
         );
         assert_eq!(
-            purchase_url_for("https://api.dev.example.com/api/prefix/?x=1#f"),
-            "https://api.dev.example.com/dashboard/products"
+            purchase_url_for("https://api.example.com/api/prefix/?x=1#f"),
+            "https://api.example.com/dashboard/products"
         );
         assert_eq!(
             purchase_url_for("http://127.0.0.1:8080/"),

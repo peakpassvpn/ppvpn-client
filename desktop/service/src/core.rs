@@ -1861,10 +1861,10 @@ pub(crate) mod tests {
         assert!(old.allowed_rule_set_hosts.is_empty());
         let new: ConnectPayload = serde_json::from_value(serde_json::json!({
             "session_id": "a", "generation": 1, "profile": {}, "take_over": false,
-            "allowed_rule_set_hosts": ["api.dev.example.com"]
+            "allowed_rule_set_hosts": ["api.example.com"]
         }))
         .unwrap();
-        assert_eq!(new.allowed_rule_set_hosts, ["api.dev.example.com"]);
+        assert_eq!(new.allowed_rule_set_hosts, ["api.example.com"]);
         let update: UpdateProfilePayload = serde_json::from_value(serde_json::json!({
             "session_id": "a", "generation": 1, "profile": {},
             "allowed_rule_set_hosts": ["api.example.com:8443"]
@@ -1875,7 +1875,7 @@ pub(crate) mod tests {
 
     #[test]
     fn apply_body_pins_hosts_only_for_cores_that_accept_them() {
-        let hosts = || vec!["api.dev.example.com".to_string()];
+        let hosts = || vec!["api.example.com".to_string()];
         let v = |core: &str| serde_json::json!({ "core_version": core });
         assert_eq!(pinned_hosts(&v("0.5.0"), hosts()), hosts());
         assert_eq!(pinned_hosts(&v("0.5.0-rc.1"), hosts()), hosts());
@@ -1888,7 +1888,7 @@ pub(crate) mod tests {
         assert_eq!(
             apply_body(&profile, &hosts(), None),
             serde_json::json!({ "profile": { "revision": "r1" },
-                "allowed_rule_set_hosts": ["api.dev.example.com"] })
+                "allowed_rule_set_hosts": ["api.example.com"] })
         );
         assert_eq!(
             apply_body(&profile, &[], None),
@@ -2484,7 +2484,7 @@ pub(crate) mod tests {
             profile: serde_json::json!({ "revision": "r1", "schema_version": 1 }),
             take_over: false,
             // The fake core reports "fake" as its version: not pinned.
-            allowed_rule_set_hosts: vec!["api.dev.example.com".into()],
+            allowed_rule_set_hosts: vec!["api.example.com".into()],
             routing_mode: Some("rules".into()),
         }
     }
