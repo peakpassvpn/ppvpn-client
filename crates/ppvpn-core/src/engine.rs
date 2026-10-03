@@ -123,6 +123,7 @@ impl Engine {
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
         let engine = Engine::with_runtime(config, Arc::new(runtime));
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
+        engine.inner.start_local_dns().await?;
         Ok(engine)
     }
 
