@@ -400,6 +400,15 @@ pub struct Error {
 - **运行时**：启停、原地 reload、事件、日志和经指定出站拨号，都在一个内部 trait 后面实现。Sail 的嵌入式 API（`sail::embed`，E1）就绪后接到这个 trait 上，在那之前不依赖 Sail 的内部模块。
 - **配置检查**：Profile 到 Sail 配置（sing-box JSON）的翻译是纯函数，只通过 `translate::check` 一处调用 Sail 的配置检查。E1 之前用 Sail 内部的检查函数，之后换成 `sail::embed::check`。
 - **产品策略**：故障转移的防抖参数、DNS 回退预算、本地代理用户名规则等，在 `ppvpn-core` 里实现，叠加在 Sail 提供的机制之上。
+- **dns-local（Tun 实例）**：用 `ppvpn-core` 自己的实现，移植自 Go 的 `internal/localdns`，不用 Sail 的 `local`。原因是 Sail 的 `local` 有几处直接影响用户的缺口：忽略 macOS 的手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败。这些作为 Sail 的通用改进继续推进，不阻塞切换。
+  - Engine 在 `new` 时（仅 Tun 实例）在 127.0.0.1 的随机端口上起 UDP 和 TCP 监听。监听自己读默认网卡的 DNS 服务器（Windows 读适配器，macOS 读 scutil，Linux 读 resolv.conf 或 systemd-resolved 里该网卡的 DNS）；宿主给了 `local_dns_servers` 时改用这些静态服务器。查询按顺序发出，每个服务器有超时，TC 时改用 TCP，没有服务器时立即回 SERVFAIL。
+  - Sail 的 dns-local 服务器渲染成指向这个监听的 **tcp** 服务器。Sail 的 udp 客户端遇到截断应答不会改走 TCP，用 tcp 能拿到完整应答。
+  - 服务器列表变化不需要 reload Sail；网卡变化的触发来自 Sail 的网络事件（只用 Sail 一个网卡监视器），监听收到后让缓存失效。
+  - 上游查询优先经 Runtime 的 `dial_udp`/`dial_tcp` 走 direct 出站，由 Sail 的默认拨号器绑定物理网卡，不进 TUN。
+- **TUN 网卡名**：Linux 固定为 `ppvpn0`，Windows 固定为 `PPVPN`（Wintun 适配器名，按名字复用；适配器 GUID 由名字确定生成，不会每次变化）。名字要显式交给 Sail，原因是 Sail 只有在名字显式给出时，才会把这块网卡当作自己的：选默认网卡和过滤 DNS 服务器时都要排除它；名字也便于日志和抓包。
+  - macOS 不写名字。Sail 按编号打开 utun，编号被占用时启动直接失败，不会自己换。Sail 会改为不写名字时由内核分配编号，并通过 embed 报告实际拿到的名字，Runtime 再读出来用于日志和状态。排除隧道网段这件事，由 Sail 改动后的行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。
+  - 过渡期的已知限制：Sail 的这项改动合入之前，不写名字时 Sail 固定用 `utun233`，这个编号被别的程序占用时启动会失败。
+  - 宿主不依赖这个名字：Desktop 靠地址、规则优先级和表号识别自己的 TUN。
 
 ## 12. 与 Core API v1 的对照
 

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::config::Platform;
 
 fn golden(path: &str) -> Profile {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -122,6 +123,28 @@ fn every_fixture_passes_sail_check() {
                         "192.168.50.1:53".parse().unwrap(),
                         "[2001:db8::53]:5353".parse().unwrap(),
                     ]))
+                }),
+                ..Options::default()
+            },
+        ),
+        (
+            "contract, TUN desktop, dns-local listener, unnamed (macOS)",
+            contract(),
+            Options {
+                tun: Some(Tun {
+                    interface_name: interface_name(Platform::Macos).into(),
+                    ..desktop_tun(listener())
+                }),
+                ..Options::default()
+            },
+        ),
+        (
+            "contract, TUN desktop, dns-local listener, Windows name",
+            contract(),
+            Options {
+                tun: Some(Tun {
+                    interface_name: interface_name(Platform::Windows).into(),
+                    ..desktop_tun(listener())
                 }),
                 ..Options::default()
             },
@@ -391,6 +414,7 @@ fn desktop_tun(local_dns: LocalDns) -> Tun {
         desktop: true,
         ipv6: true,
         no_host_ipv6_route: false,
+        interface_name: interface_name(Platform::Linux).into(),
         local_dns,
     }
 }
@@ -496,6 +520,7 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
             desktop: false,
             ipv6: false,
             no_host_ipv6_route: true,
+            interface_name: String::new(),
             local_dns: LocalDns::System,
         }),
         ..Options::default()
@@ -697,6 +722,7 @@ fn without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain() {
             desktop: false,
             ipv6: false,
             no_host_ipv6_route: true,
+            interface_name: String::new(),
             local_dns: LocalDns::System,
         },
     ] {
@@ -716,4 +742,45 @@ fn without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain() {
             .iter()
             .all(|r| r["override_destination"] != "proxy_and_direct"));
     }
+}
+
+fn listener() -> LocalDns {
+    LocalDns::Listener("127.0.0.1:53053".parse().unwrap())
+}
+
+#[test]
+fn dns_local_listener_is_asked_over_tcp() {
+    let options = Options {
+        tun: Some(desktop_tun(listener())),
+        ..Options::default()
+    };
+    let config = value(&translate(&contract(), &options).unwrap());
+    assert_eq!(
+        config["dns"]["servers"][0],
+        json!({"type": "tcp", "tag": "dns-local", "server": "127.0.0.1", "server_port": 53053})
+    );
+    assert_eq!(
+        config["route"]["default_domain_resolver"],
+        json!({"server": "dns-local"})
+    );
+}
+
+#[test]
+fn the_tun_is_named_per_platform() {
+    assert_eq!(interface_name(Platform::Linux), "ppvpn0");
+    assert_eq!(interface_name(Platform::Windows), "PPVPN");
+    // The kernel numbers a utun; sail reports the one it got.
+    assert_eq!(interface_name(Platform::Macos), "");
+    assert_eq!(interface_name(Platform::Ios), "");
+    let config = value(&translate(&contract(), &tun_options()).unwrap());
+    assert_eq!(config["inbounds"][0]["interface_name"], "ppvpn0");
+    let macos = Options {
+        tun: Some(Tun {
+            interface_name: interface_name(Platform::Macos).into(),
+            ..desktop_tun(LocalDns::System)
+        }),
+        ..Options::default()
+    };
+    let config = value(&translate(&contract(), &macos).unwrap());
+    assert!(config["inbounds"][0].get("interface_name").is_none());
 }
