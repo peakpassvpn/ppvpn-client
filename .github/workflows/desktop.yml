@@ -115,8 +115,8 @@ jobs:
 
   # The client with the Rust ppvpn-core linked in (feature `rust-core`, off
   # in releases until the switch). Linux only here; rust.yml builds the
-  # engine on Windows (MSVC) and macOS. sail and its BoringSSL build from
-  # source, so this job is slow on a cold cache.
+  # engine on Windows (MSVC) and macOS. sail builds from source; its
+  # BoringSSL comes prebuilt, as in rust.yml.
   desktop-rust-core:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -132,6 +132,16 @@ jobs:
         with:
           key: desktop-rust-core
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # BoringSSL as btls publishes it for the btls-sys Cargo.lock pins
+      # (checked against the release's SHA256SUMS and build attestation),
+      # instead of compiling it; the script at a fixed commit of btls.
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: Clippy and test with the Rust core
         working-directory: desktop/crates/ppvpn-client
         run: |
