@@ -53,6 +53,7 @@ THRESHOLDS = [
     ("cpu100_pct", None, 0.10, False, "#45: CPU at 100 Mbit/s at most 110% of Go's"),
     ("idle_cpu_pct", None, 0.0, False, "#45: idle CPU not above Go's"),
     ("idle_switches_per_s", None, None, False, "record only: wakeups, roughly"),
+    ("engine_cpu_pct", None, None, False, "record only: whether the engine was the bottleneck"),
     ("_us", None, None, False, "record only"),
     # Reproducible (spread 0). Against Go a trend only: Rust links the
     # engine into the host, whose installer Desktop measures (#45).

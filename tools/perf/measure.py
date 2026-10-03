@@ -46,6 +46,8 @@ name ("engine"):
     <proto>.tput1_mbit             one connection, unpaced, 20 s: Mbit/s
                                    echoed back
     <proto>.tput8_mbit             the same with 8 connections
+    <proto>.tput<n>_engine_cpu_pct the engine's CPU meanwhile (recorded:
+                                   whether the engine was the bottleneck)
     <proto>.cpu100_pct             the engine's CPU at 100 Mbit/s (8
                                    connections, paced), 20 s
     <proto>.rtt_p50_us / _p99_us   64-byte round trips through the proxy
@@ -196,7 +198,18 @@ def cpu_ticks(pid):
 
 
 def switches(engine):
-    return engine.status("voluntary_ctxt_switches") + engine.status("nonvoluntary_ctxt_switches")
+    """Context switches of all the engine's threads (/proc/<pid>/status
+    counts its main thread only)."""
+    total = 0
+    for task in os.listdir(f"/proc/{engine.process.pid}/task"):
+        try:
+            with open(f"/proc/{engine.process.pid}/task/{task}/status") as f:
+                for line in f:
+                    if line.startswith(("voluntary_ctxt_switches:", "nonvoluntary_ctxt_switches:")):
+                        total += int(line.split()[1])
+        except FileNotFoundError:
+            pass  # a thread that ended meanwhile
+    return total
 
 
 def pinned(cpus, command):
@@ -244,8 +257,11 @@ def measure_tier_b(args, work, ports, env, name, binary):
         for node in PROFILE_NODES:
             credential = engine.call("get-local-proxy-credential", {"node_id": node})
             for conns in (1, 8):
-                result = loadgen(args, credential, ports, "stream", "-conns", str(conns), "-rate-mbit", "0",
-                                 "-duration", seconds)
+                # With the engine's CPU meanwhile: near its cores' 100 per
+                # core, the engine is the bottleneck; well below, the load
+                # or the fake node is, and the number says less.
+                result, row[f"{node}.tput{conns}_engine_cpu_pct"] = busy(engine, lambda: loadgen(
+                    args, credential, ports, "stream", "-conns", str(conns), "-rate-mbit", "0", "-duration", seconds))
                 row[f"{node}.tput{conns}_mbit"] = round(result["bytes_received"] * 8 / result["elapsed_ms"] / 1000, 1)
             _, row[f"{node}.cpu100_pct"] = busy(engine, lambda: loadgen(
                 args, credential, ports, "stream", "-conns", "8", "-rate-mbit", "100", "-duration", seconds))
