@@ -152,7 +152,7 @@ impl Engine {
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
         // A panic in sail fails the instance and leaves the host running
         // (section 7, CORE_PANICKED) only when panics unwind.
-        assert!(
+        const _: () = assert!(
             sail::embed::PANICS_ARE_CAUGHT,
             "ppvpn-core needs panic = \"unwind\": sail's panics would end the process"
         );

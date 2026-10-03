@@ -178,8 +178,10 @@ pub(crate) struct Routed {
     pub rule: Option<usize>,
     /// `outbound`, `reject`, `drop` or `hijack_dns`.
     pub action: String,
-    /// The outbound that carried it first, then the groups' choices back to
-    /// the outbound the rules named; empty where none was asked.
+    /// Outermost first, as `DialFailed::chain`: the outbound the rules named,
+    /// then the member each group on the way took; the last carried it.
+    /// Empty where none was asked. (sail's code at 2eb3fe47; its doc says
+    /// the reverse order, asked of Sail.)
     pub chain: Vec<String>,
     /// What the outbound was asked to reach (`host:port`).
     pub request_destination: Option<String>,
@@ -227,10 +229,10 @@ pub(crate) struct DnsExchange {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DialFailed {
-    /// The outbounds it went through, joined by `>` as the log's `out=`:
-    /// the route's outbound, then each group's member. sail adds a member
-    /// only once it connected, so a failure through a group names the
-    /// group alone (8f47c870).
+    /// The outbounds it went through, outermost first, joined by `>` as the
+    /// log's `out=`: the route's outbound, then the member each group on
+    /// the way took, down to the member tried (`pick>direct`; `F>G>m` for a
+    /// group G in a group F).
     pub chain: String,
     /// Where it went, redacted as the log says it.
     pub destination: String,
@@ -239,6 +241,9 @@ pub(crate) struct DialFailed {
     /// The I/O error's kind (`ConnectionRefused`, `TimedOut`, …).
     pub error: String,
     pub count: u64,
+    /// Whether the group goes on to try another member: false for the
+    /// failure that ends the connection (each member's failure is told).
+    pub more_to_try: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
