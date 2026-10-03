@@ -658,7 +658,7 @@ impl Auth {
                 .await?;
             return Err(AuthError::Cancelled);
         }
-        let access = match access_token(&tokens, self.api.audience()) {
+        let access = match access_token(&tokens, self.api.token_audience()) {
             Ok(access) => access,
             Err(error) => {
                 self.cleanup_cancelled_activation(&pending, Some(&tokens.refresh_token))
@@ -714,7 +714,7 @@ impl Auth {
                 &json!({ "prepared_refresh_token": prepared }),
             )
             .await?;
-        let access = access_token(&tokens, self.api.audience())?;
+        let access = access_token(&tokens, self.api.token_audience())?;
         self.credentials.set(Slot::Active, &tokens.refresh_token)?;
         self.credentials.delete(Slot::PendingRefresh)?;
         Ok(access)
@@ -953,11 +953,25 @@ pub(crate) mod test_support {
     pub(crate) fn serve_with(
         responses: impl FnOnce(&str) -> Vec<(&'static str, String)>,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
+        let (base, seen, _) = serve_recording(responses);
+        (base, seen)
+    }
+
+    /// What the test server saw, shared with its thread.
+    pub(crate) type Captured = Arc<Mutex<Vec<String>>>;
+
+    /// [`serve_with`] that also returns each request's header block,
+    /// lowercased.
+    pub(crate) fn serve_recording(
+        responses: impl FnOnce(&str) -> Vec<(&'static str, String)>,
+    ) -> (String, Captured, Captured) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let responses = responses(&base);
         let seen = Arc::new(Mutex::new(Vec::new()));
         let captured = seen.clone();
+        let heads = Arc::new(Mutex::new(Vec::new()));
+        let captured_heads = heads.clone();
         std::thread::spawn(move || {
             let mut responses = responses.into_iter();
             loop {
@@ -999,6 +1013,11 @@ pub(crate) mod test_support {
                     return;
                 };
                 captured.lock().unwrap().push(format!("{method} {path}"));
+                let head = text.split("\r\n\r\n").next().unwrap_or_default();
+                captured_heads
+                    .lock()
+                    .unwrap()
+                    .push(head.to_ascii_lowercase());
                 let response = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -1006,7 +1025,7 @@ pub(crate) mod test_support {
                 let _ = socket.write_all(response.as_bytes());
             }
         });
-        (base, seen)
+        (base, seen, heads)
     }
 
     /// A `/auth/device/activate` or `/refresh/commit` body for audience `app`.
@@ -1040,7 +1059,8 @@ mod tests {
     fn api_with(base: &str, trust_local_backend: bool) -> Api {
         Api::new(api::ApiConfig {
             base: base.into(),
-            audience: "app".into(),
+            header_audience: Some("app".into()),
+            token_audience: "app".into(),
             accept_language: None,
             trust_local_backend,
         })
@@ -1505,5 +1525,66 @@ mod tests {
             auth.poll_until_done(generation).await,
             Err(AuthError::Expired)
         ));
+    }
+    fn device_code_body(base: &str) -> String {
+        format!(
+            r#"{{"device_code":"{}","user_code":"ABCD-EFGH","verification_uri_complete":"{base}/device/authorize?user_code=ABCD-EFGH","expires_in":600,"interval":5}}"#,
+            "d".repeat(64)
+        )
+    }
+
+    fn auth_with_audiences(base: &str, header: Option<&str>, token: &str) -> Auth {
+        let api = Api::new(api::ApiConfig {
+            base: base.into(),
+            header_audience: header.map(str::to_string),
+            token_audience: token.into(),
+            accept_language: None,
+            trust_local_backend: true,
+        });
+        Auth::new(Arc::new(api), Arc::new(MemoryStore::default()), config())
+    }
+
+    #[tokio::test]
+    async fn device_calls_send_the_product_audience_only_when_configured() {
+        // The header-less flow is how a CLI obtains `cli` tokens.
+        let (base, _, heads) =
+            test_support::serve_recording(|base| vec![("200 OK", device_code_body(base))]);
+        auth_with_audiences(&base, None, "cli")
+            .start("host", "linux", "1.0.0")
+            .await
+            .unwrap();
+        assert!(
+            !heads.lock().unwrap()[0].contains("x-product-aud"),
+            "no header audience configured, but the header was sent"
+        );
+
+        let (base, _, heads) =
+            test_support::serve_recording(|base| vec![("200 OK", device_code_body(base))]);
+        auth_with_audiences(&base, Some("app"), "app")
+            .start("host", "linux", "1.0.0")
+            .await
+            .unwrap();
+        assert!(heads.lock().unwrap()[0].contains("x-product-aud: app"));
+    }
+
+    #[test]
+    fn access_tokens_are_checked_against_the_token_audience() {
+        let cli = jwt(r#"{"aud":"cli","exp":4102444800}"#);
+        assert_eq!(
+            validate_access_token(&cli, "cli").unwrap(),
+            Some(4102444800)
+        );
+        assert!(matches!(
+            validate_access_token(&cli, "app"),
+            Err(AuthError::Untrusted(_))
+        ));
+        let api = Api::new(api::ApiConfig {
+            base: "https://api.example.com".into(),
+            header_audience: None,
+            token_audience: "cli".into(),
+            accept_language: None,
+            trust_local_backend: false,
+        });
+        assert_eq!(api.token_audience(), "cli");
     }
 }

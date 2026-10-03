@@ -140,8 +140,13 @@ pub struct ApiConfig {
     /// `trust_local_backend`.
     pub base: String,
     /// Product audience sent as `X-Product-Aud` on device-authorization
-    /// calls; access tokens must carry exactly this audience.
-    pub audience: String,
+    /// calls. `None` sends no header: the backend then runs its CLI device
+    /// authorization, which is the only way to obtain a `cli` token (it
+    /// rejects `cli` as a header value on purpose).
+    pub header_audience: Option<String>,
+    /// The audience access tokens must carry, exactly. Usually the header's
+    /// value; `cli` for the header-less CLI flow.
+    pub token_audience: String,
     /// `Accept-Language` value (e.g. `zh-CN`): the backend localises display
     /// names by it. `None` sends no header.
     pub accept_language: Option<String>,
@@ -155,7 +160,8 @@ pub struct ApiConfig {
 pub struct Api {
     http: reqwest::Client,
     base: String,
-    audience: String,
+    header_audience: Option<String>,
+    token_audience: String,
     /// `trust_local_backend` and a loopback base.
     trust_local: bool,
 }
@@ -209,14 +215,15 @@ impl Api {
         Self {
             http,
             base: config.base.trim().to_string(),
-            audience: config.audience,
+            header_audience: config.header_audience,
+            token_audience: config.token_audience,
             trust_local,
         }
     }
 
-    /// The product audience tokens must carry.
-    pub fn audience(&self) -> &str {
-        &self.audience
+    /// The audience access tokens must carry.
+    pub fn token_audience(&self) -> &str {
+        &self.token_audience
     }
 
     /// The local-backend test relaxations apply.
@@ -251,12 +258,11 @@ impl Api {
         path: &str,
         body: &Value,
     ) -> Result<T, ApiError> {
-        let request = self
-            .http
-            .post(self.endpoint(path)?)
-            .header("X-Product-Aud", &self.audience)
-            .json(body);
-        decode("POST", request.send().await).await
+        let mut request = self.http.post(self.endpoint(path)?);
+        if let Some(audience) = &self.header_audience {
+            request = request.header("X-Product-Aud", audience);
+        }
+        decode("POST", request.json(body).send().await).await
     }
 
     async fn get_bearer<T: DeserializeOwned>(
@@ -622,7 +628,8 @@ mod tests {
     fn api(base: &str, trust_local_backend: bool) -> Api {
         Api::new(ApiConfig {
             base: base.to_string(),
-            audience: "app".to_string(),
+            header_audience: Some("app".to_string()),
+            token_audience: "app".to_string(),
             accept_language: None,
             trust_local_backend,
         })

@@ -2,7 +2,7 @@
 //! browser device login that issues its credentials.
 //!
 //! The crate has no platform code. A host provides:
-//! - an [`api::ApiConfig`] (backend base URL, product audience, language,
+//! - an [`api::ApiConfig`] (backend base URL, product audiences, language,
 //!   local-backend test relaxations);
 //! - an [`auth::AuthConfig`] (where the browser authorization page lives);
 //! - a [`auth::CredentialStore`] over its secret store (Keychain, Credential
