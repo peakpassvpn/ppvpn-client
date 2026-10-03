@@ -68,6 +68,7 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
 
     `Fatal` 只用于运行中发生的、无法恢复的问题。
   - **`state_dir` 独占加锁**：实例打开它时加独占锁，直到 `shutdown` 或最后一个句柄 drop 后才释放。第二个实例打开同一个目录时返回 `STATE_DIR_IN_USE`（retryable=false）。
+    锁在清理的最后一步才释放：规则、路由、TUN 的 DNS 等各项都撤销完以后。如果 `shutdown`（10 秒）或 drop（5 秒）到了上限、还有某一步没做完，这把锁就**不释放**，一直保持到进程退出，免得新实例和还没结束的清理同时运行。这时在同一进程里马上再 `new` 一个用同一目录的实例，会得到 `STATE_DIR_IN_USE`；没做完的项会列在 `ShutdownReport.leftovers` 里（drop 时记一行 warn）。
   - **本地代理状态在 `new` 时就生成或读取**：Standard 实例的 prefix、密码和端口，不依赖 apply，所以 `new` 之后就能读凭据和 metadata（第 4.6 节）。监听要到 `start` 才开。
   - **wintun.dll 由宿主随安装包分发**：签名版本和 Sail 使用的 `WINTUN_VERSION` 一致，路径通过 `TunConfig` 传入。引擎不下载它，也不内嵌。
   - 创建时会先**幂等地清扫上次的残留**，只限本库创建、并且能可靠识别的东西：

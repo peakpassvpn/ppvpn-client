@@ -4,10 +4,9 @@
 ppvpn-core's standard instance in its own process, exposing the authenticated local HTTP/SOCKS5 proxy. It
 does not create a TUN device or change system network settings.
 
-Status: the command-line contract, settings, directory layout, the account commands (`login`, `account`,
-`logout`), the profile download and the daemon (`start`, `stop`, `status`, `--foreground`) are in place.
-Commands whose daemon call is not wired yet (`nodes`, `use`, `probe`, `traffic`, `connections`, `proxy`,
-`ingress`) report `NOT_IMPLEMENTED`; their arguments are already parsed and checked.
+Status: every command is wired to `ppvpn-account` and to ppvpn-core's `Engine`. What a command returns
+follows the engine: while an engine method is not implemented yet, the command reports core's error
+(`CORE_OPERATION_FAILED`, exit 5).
 
 ## Account
 
@@ -59,6 +58,34 @@ failure (exit 7).
 A `dev` build reads the profile from the absolute path in `PPVPN_PROFILE_FILE` when that variable is set,
 instead of downloading it; release builds ignore the variable.
 
+## The running instance
+
+`nodes`, `use`, `probe`, `traffic`, `connections`, `proxy`, `ingress` and its subcommands talk to the daemon.
+Without one they report `CORE_NOT_RUNNING` (exit 5); with a daemon that has no profile, selections and pins
+report core's `PROFILE_NOT_APPLIED`.
+
+- `use <node-id>` selects the node of new connections; open connections stay where they are. `ingress pin`
+  takes effect at once and turns failover off for that node; `ingress auto` turns it back on. Core does not
+  persist these choices: the CLI saves them to `settings.json` only after core accepted them, and passes them
+  with the next apply.
+- `mode <rules|global>` applies the profile the daemon holds again with the new mode, then saves it; `--json`
+  reports `"applied": true`. With nothing running, the mode is saved for the next start (`"applied": false`).
+  When the held profile has expired, the CLI downloads a new one and applies that with the new mode. When
+  core refuses the change, the saved mode is not changed. The daemon holds the profile in memory only.
+- `probe` measures TCP entrances (`--all`, or one node) or fetches `--target` through one node
+  (`--type availability`). A probe that ran and failed is a result (`"success": false` with an `error_code`),
+  not a command error; the exit code is 0.
+- `proxy` lists the local proxy endpoints without secrets. `proxy credential` prints the routed credential
+  (the routing mode and rules decide the node), `proxy credential <node-id>` a credential that always uses
+  that node. Both print the username, the password and ready-made `http://` and `socks5h://` URLs
+  (`http_url` and `socks5_url` with `--json`); these are the only commands whose output contains a secret.
+- `ingress [node-id]` shows each node's pin and its ingresses' health; `*` marks the ingress in use.
+
+With `--json`, the fields are core's (`docs/host-integration.md`, sections 4 and 5) under `"ok": true`:
+`nodes` gives `selected_node_id` and `nodes`; `traffic` gives `upload_bytes`, `download_bytes` and
+`measured_at`; `connections`, `proxy` and `ingress` give `connections`, `endpoints` and `nodes`; `probe`
+gives `type` and `results` (entrance) or `result` (availability).
+
 ## Commands
 
 ```text
@@ -98,7 +125,7 @@ between 1 ms and 2 minutes, and a concurrency between 1 and 32.
 | Exit | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | other or internal error (including `NOT_IMPLEMENTED`) |
+| 1 | other or internal error |
 | 2 | invalid argument or build configuration |
 | 3 | login missing, expired or not permitted |
 | 4 | backend unavailable, untrusted, or nothing to serve for the account |

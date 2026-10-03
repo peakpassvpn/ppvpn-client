@@ -211,3 +211,67 @@ fn a_killed_daemon_leaves_nothing_that_blocks_the_next_one() {
     assert_eq!(cli.run(&["--json", "stop"]).1["stopped"], true);
     assert!(child.wait().unwrap().success());
 }
+
+#[test]
+fn commands_reach_a_daemon_that_has_no_profile_yet() {
+    let home = home();
+    let cli = Cli { home: home.path() };
+    let mut child = cli.spawn_daemon();
+    let paths = Paths::resolve(&env_for(home.path())).unwrap();
+
+    assert_eq!(
+        cli.run(&["--json", "nodes"]),
+        (
+            0,
+            serde_json::json!({"ok": true, "selected_node_id": null, "nodes": []})
+        )
+    );
+    let (code, traffic) = cli.run(&["--json", "traffic"]);
+    assert_eq!(
+        (code, &traffic["upload_bytes"], &traffic["download_bytes"]),
+        (0, &serde_json::json!(0), &serde_json::json!(0)),
+        "{traffic}"
+    );
+    assert_eq!(
+        cli.run(&["--json", "connections"]),
+        (0, serde_json::json!({"ok": true, "connections": []}))
+    );
+    assert_eq!(
+        cli.run(&["--json", "ingress"]),
+        (0, serde_json::json!({"ok": true, "nodes": []}))
+    );
+    let (code, missing) = cli.run(&["--json", "ingress", "hk-1"]);
+    assert_eq!(
+        (code, missing["code"].as_str(), missing["field"].as_str()),
+        (2, Some("NODE_NOT_FOUND"), Some("node_id"))
+    );
+
+    // Core refuses selections and pins without a profile, and what core
+    // refused is not saved.
+    for args in [
+        &["--json", "use", "hk-1"][..],
+        &["--json", "ingress", "pin", "hk-1", "9002"],
+        &["--json", "ingress", "auto", "hk-1"],
+    ] {
+        let (code, refused) = cli.run(args);
+        assert_eq!(
+            (code, refused["code"].as_str()),
+            (5, Some("PROFILE_NOT_APPLIED")),
+            "{args:?}"
+        );
+    }
+    assert!(!paths.settings.exists(), "a refused choice was saved");
+
+    // Nothing is applied, so a new mode is saved for the next start.
+    assert_eq!(
+        cli.run(&["--json", "mode", "global"]),
+        (
+            0,
+            serde_json::json!({"ok": true, "routing_mode": "global", "applied": false})
+        )
+    );
+    assert_eq!(cli.run(&["--json", "mode"]).1["routing_mode"], "global");
+
+    assert_eq!(cli.run(&["--json", "stop"]).1["stopped"], true);
+    assert!(child.wait().unwrap().success());
+}

@@ -16,13 +16,13 @@ use crate::runtime::RuntimeState;
 use crate::status::{DegradedReason, EngineState};
 use crate::translate::{ingress_tag, node_tag, AUTO_SUFFIX, SELECTED_TAG};
 
-const NODE_1: &str = "3f2c9a1e-0000-4000-8000-000000000001-128";
-const NODE_2: &str = "3f2c9a1e-0000-4000-8000-000000000002-129";
-const R1: &str = "2026-09-29T00:00:00Z#1";
-const R2: &str = "2026-09-29T00:00:00Z#2";
+pub(super) const NODE_1: &str = "3f2c9a1e-0000-4000-8000-000000000001-128";
+pub(super) const NODE_2: &str = "3f2c9a1e-0000-4000-8000-000000000002-129";
+pub(super) const R1: &str = "2026-09-29T00:00:00Z#1";
+pub(super) const R2: &str = "2026-09-29T00:00:00Z#2";
 
 /// The contract golden's profile at `revision`, changed by `edit`.
-fn profile_with(revision: &str, edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+pub(super) fn profile_with(revision: &str, edit: impl FnOnce(&mut Value)) -> Vec<u8> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../testdata/golden/contract/profiles/base.json"
@@ -33,11 +33,11 @@ fn profile_with(revision: &str, edit: impl FnOnce(&mut Value)) -> Vec<u8> {
     serde_json::to_vec(&value).unwrap()
 }
 
-fn profile(revision: &str) -> Vec<u8> {
+pub(super) fn profile(revision: &str) -> Vec<u8> {
     profile_with(revision, |_| {})
 }
 
-fn engine() -> (Engine, Arc<FakeRuntime>) {
+pub(super) fn engine() -> (Engine, Arc<FakeRuntime>) {
     let fake = Arc::new(FakeRuntime::default());
     let engine = Engine::with_runtime(
         EngineConfig::new(Role::Standard, Platform::Linux, "/nonexistent"),
@@ -47,7 +47,7 @@ fn engine() -> (Engine, Arc<FakeRuntime>) {
 }
 
 /// The events already sent.
-fn drain(rx: &mut EventReceiver) -> Vec<Event> {
+pub(super) fn drain(rx: &mut EventReceiver) -> Vec<Event> {
     let mut events = Vec::new();
     while let Some(Some(item)) = rx.recv().now_or_never() {
         match item {
@@ -59,7 +59,7 @@ fn drain(rx: &mut EventReceiver) -> Vec<Event> {
 }
 
 /// The next event, waiting for the watcher.
-async fn next_event(rx: &mut EventReceiver) -> Event {
+pub(super) async fn next_event(rx: &mut EventReceiver) -> Event {
     match tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("an event in time")
@@ -69,11 +69,11 @@ async fn next_event(rx: &mut EventReceiver) -> Event {
     }
 }
 
-fn kinds(events: &[Event]) -> Vec<EventKind> {
+pub(super) fn kinds(events: &[Event]) -> Vec<EventKind> {
     events.iter().map(Event::kind).collect()
 }
 
-fn state_change(event: &Event) -> (EngineState, EngineState) {
+pub(super) fn state_change(event: &Event) -> (EngineState, EngineState) {
     match event {
         Event::StateChanged {
             state, previous, ..
@@ -82,7 +82,7 @@ fn state_change(event: &Event) -> (EngineState, EngineState) {
     }
 }
 
-async fn running(engine: &Engine) {
+pub(super) async fn running(engine: &Engine) {
     engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
     engine.start().await.unwrap();
 }
