@@ -139,6 +139,10 @@ impl EngineLauncher {
 /// returns once the subscription closes (the engine shut down), so a stop
 /// request decides.
 async fn until_fatal(engine: &Engine, mut states: EventReceiver) -> String {
+    // A Fatal between Engine::new and the subscription has no event.
+    if let Some(reason) = fatal_reason(&engine.status().state) {
+        return reason;
+    }
     loop {
         let state = match states.recv().await {
             Some(EventItem::Event {
@@ -420,6 +424,7 @@ mod tests {
         let version = super::version();
         assert!(!version.core_version.is_empty());
         assert!(!version.sail_version.is_empty());
+        assert!(!version.sail_commit.is_empty());
     }
 
     #[test]
