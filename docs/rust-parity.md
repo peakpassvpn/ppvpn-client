@@ -58,7 +58,7 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | # | 行为 | 来源 | Rust 用例 | 状态 |
 | --- | --- | --- | --- | --- |
 | N1 | 越过 `expires_at` 时进入 `Degraded{ProfileExpired}`，由定时器触发；转发照常，apply 一份未过期的 Profile 后清除 | #86（Core 定） | | todo |
-| N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护 | #86（Desktop B） | | todo（G5 实机验收） |
+| N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护。验收项：路由丢了补不回来、而 strict_route 的拦截还在（流量被挡住，不是绕过）时，进入 `Fatal` 的同时立即停止运行时，不等宿主（#208） | #86（Desktop B） | | todo（G5 实机验收） |
 | N3 | 本地代理监听打不开时，本次运行先不带它：start 照常成功，进入 `Degraded{LocalProxyUnavailable}`；之后按退避（1 s 起翻倍，最长 30 s）原地加回这个监听（`add_inbound`，不 reload），成功后恢复。sail 启动时因为这个监听失败（检查端口之后又被占用），就不带它再启动一次。stop 和 shutdown 取消重试 | host-integration 4.6、Desktop C；#148 | `ppvpn-core` `engine::proxy_tests::an_unavailable_local_proxy_degrades_and_is_retried`、`ppvpn-core` `engine::proxy_tests::a_start_failing_with_the_local_proxy_goes_on_without_it`、`ppvpn-core` `engine::proxy_tests::stop_cancels_the_local_proxy_retry` | done（运行中监听自己断掉的情况，sail 目前不报告，不在其中） |
 
 ## 硬切换前的阻塞项
