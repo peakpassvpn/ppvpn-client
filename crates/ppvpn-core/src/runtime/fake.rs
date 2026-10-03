@@ -66,6 +66,10 @@ pub(crate) struct FakeRuntime {
         Mutex<Option<mpsc::Receiver<DialFailed>>>,
     ),
     routes_seen: (mpsc::Sender<Routed>, Mutex<Option<mpsc::Receiver<Routed>>>),
+    dns_seen: (
+        mpsc::Sender<DnsExchange>,
+        Mutex<Option<mpsc::Receiver<DnsExchange>>>,
+    ),
     /// What stop_leftovers says after the next stops.
     leftovers: Mutex<Vec<String>>,
     dropped: AtomicU64,
@@ -80,6 +84,7 @@ impl Default for FakeRuntime {
         let (log_tx, log_rx) = mpsc::channel(LOG_CAPACITY);
         let (dial_tx, dial_rx) = mpsc::channel(64);
         let (route_tx, route_rx) = mpsc::channel(64);
+        let (dns_tx, dns_rx) = mpsc::channel(64);
         Self {
             calls: Mutex::default(),
             config: Mutex::default(),
@@ -95,6 +100,7 @@ impl Default for FakeRuntime {
             logs: (log_tx, Mutex::new(Some(log_rx))),
             failures_seen: (dial_tx, Mutex::new(Some(dial_rx))),
             routes_seen: (route_tx, Mutex::new(Some(route_rx))),
+            dns_seen: (dns_tx, Mutex::new(Some(dns_rx))),
             leftovers: Mutex::default(),
             dropped: AtomicU64::new(0),
             // Known at the start, as sail's start returns with its first
@@ -237,6 +243,12 @@ impl FakeRuntime {
     #[allow(dead_code)] // for the Engine's tests once it follows them
     pub(crate) fn routed(&self, routed: Routed) {
         let _ = self.routes_seen.0.try_send(routed);
+    }
+
+    /// As if sail's DNS answered or failed a query.
+    #[allow(dead_code)] // for the Engine's tests once it follows them
+    pub(crate) fn dns_exchanged(&self, exchange: DnsExchange) {
+        let _ = self.dns_seen.0.try_send(exchange);
     }
 
     /// As if sail's stops left these tasks running.
@@ -387,6 +399,10 @@ impl Runtime for FakeRuntime {
             .unwrap()
             .take()
             .expect("taken once")
+    }
+
+    fn dns_exchanges(&self) -> mpsc::Receiver<DnsExchange> {
+        self.dns_seen.1.lock().unwrap().take().expect("taken once")
     }
 
     fn stop_leftovers(&self) -> Vec<String> {

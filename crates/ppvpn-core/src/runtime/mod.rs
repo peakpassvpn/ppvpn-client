@@ -191,6 +191,40 @@ pub(crate) struct Routed {
     pub connect_ms: Option<u64>,
 }
 
+/// A DNS query answered or failed (sail's `DnsExchange`): a client's, or
+/// the instance's own; a sequential server's members each once asked. The
+/// name and records whole: the Engine redacts what it logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DnsExchange {
+    /// As sail has it: without its final dot.
+    pub name: String,
+    /// `A`, `AAAA`, `HTTPS`, ...
+    pub qtype: String,
+    pub qtype_code: u16,
+    /// The server's tag; None where a rule answered.
+    pub server: Option<String>,
+    /// `exchanged`, `cached`, `optimistic` or `rule`.
+    pub source: String,
+    /// A sequential server's attempt, from 1: each failed member, and the
+    /// one that answered.
+    pub attempt: Option<u32>,
+    /// The answer's response code, as its number and as DNS names it
+    /// (`NOERROR`, `NXDOMAIN`, ...); None when it failed.
+    pub rcode: Option<u16>,
+    pub rcode_name: Option<String>,
+    /// Why there is no answer.
+    pub error: Option<String>,
+    /// The answer section's records as DNS writes their data, the first 16.
+    pub answers: Vec<String>,
+    pub answers_total: u32,
+    /// The least TTL of the records, as the client is given it.
+    pub ttl: Option<u32>,
+    /// How long the server took; None from the cache or a rule.
+    pub duration_ms: Option<u64>,
+    /// Asked by the instance itself (to dial a domain).
+    pub for_instance: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DialFailed {
     /// The outbounds it went through, joined by `>` as the log's `out=`:
@@ -297,6 +331,10 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// wanted (the Engine's log at debug): sail builds them only for a
     /// subscriber, which taking this makes.
     fn routes(&self) -> mpsc::Receiver<Routed>;
+    /// Each DNS query answered or failed, through starts and stops; as
+    /// `routes`, taken once and only when wanted (sail builds them only for
+    /// a subscriber), and dropped while the reader is behind.
+    fn dns_exchanges(&self) -> mpsc::Receiver<DnsExchange>;
 
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError>;
     async fn connections(&self) -> Result<Vec<RuntimeConnection>, RuntimeError>;

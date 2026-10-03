@@ -13,6 +13,8 @@
 //! - routes, only once `routes()` is taken (the Engine logs at debug):
 //!   sail's `events(Kinds::ROUTE)` as [`Routed`], built by sail only while
 //!   someone subscribes;
+//! - DNS exchanges, likewise once `dns_exchanges()` is taken:
+//!   `events(Kinds::DNS)` as [`DnsExchange`];
 //! - logs: the instance's lines as logfmt, into a bounded channel; lines
 //!   that do not fit are dropped and counted, never waited for;
 //! - network: sail's network events (`instance.events(Kinds::NETWORK)`,
@@ -31,8 +33,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use super::{
-    AsyncReadWrite, Datagram, DialFailed, GroupInfo, GroupSwitch, MemberInfo, NetworkChange,
-    NetworkSnapshot, Routed, Runtime, RuntimeConnection, RuntimeError, RuntimeState,
+    AsyncReadWrite, Datagram, DialFailed, DnsExchange, GroupInfo, GroupSwitch, MemberInfo,
+    NetworkChange, NetworkSnapshot, Routed, Runtime, RuntimeConnection, RuntimeError, RuntimeState,
     RuntimeTraffic, Target,
 };
 use crate::logfmt;
@@ -46,6 +48,9 @@ const SWITCH_BUFFER: usize = 256;
 const DIAL_BUFFER: usize = 256;
 /// Routed connections that wait for the Engine before new ones are dropped.
 const ROUTE_BUFFER: usize = 1024;
+/// DNS exchanges that wait for the Engine before new ones are dropped
+/// (queries come in bursts at start).
+const DNS_BUFFER: usize = 256;
 
 /// Each group's member as last told, by tag: what a switch is from, and
 /// what the groups are compared with after falling behind.
@@ -61,6 +66,8 @@ pub(crate) struct SailRuntime {
     failures: Mutex<Option<mpsc::Receiver<DialFailed>>>,
     /// The routes' follower, started by the first `routes()`.
     route_task: Mutex<Option<JoinHandle<()>>>,
+    /// The DNS exchanges' follower, started by the first `dns_exchanges()`.
+    dns_task: Mutex<Option<JoinHandle<()>>>,
     logs: Mutex<Option<mpsc::Receiver<String>>>,
     dropped: Arc<AtomicU64>,
     /// sail's network changes, as ours (`network_changes`).
@@ -157,6 +164,7 @@ impl SailRuntime {
             members,
             failures: Mutex::new(Some(dial_rx)),
             route_task: Mutex::new(None),
+            dns_task: Mutex::new(None),
             logs: Mutex::new(Some(log_rx)),
             dropped,
             network,
@@ -241,6 +249,9 @@ impl Drop for SailRuntime {
             task.abort();
         }
         if let Some(task) = self.route_task.lock().expect("route task").take() {
+            task.abort();
+        }
+        if let Some(task) = self.dns_task.lock().expect("dns task").take() {
             task.abort();
         }
     }
@@ -368,6 +379,55 @@ async fn follow_routes(instance: Instance, tx: mpsc::Sender<Routed>) {
             }
             embed::Event::Lagged { kind, missed } if kind.contains(embed::Kinds::ROUTE) => {
                 tracing::debug!(missed, "routed connections dropped: the reader fell behind");
+            }
+            _ => {}
+        }
+    }
+}
+
+fn dns_exchange(e: &embed::DnsExchange) -> DnsExchange {
+    use embed::{DnsOutcome as O, DnsSource as S};
+    let (rcode, rcode_name, error) = match &e.outcome {
+        O::Answered { rcode, rcode_code } => (Some(*rcode_code), Some(rcode.clone()), None),
+        O::Failed { error } => (None, None, Some(error.clone())),
+        _ => (None, None, Some("unknown outcome".into())),
+    };
+    DnsExchange {
+        name: e.name.clone(),
+        qtype: e.qtype.clone(),
+        qtype_code: e.qtype_code,
+        server: e.server.clone(),
+        source: match e.source {
+            S::Exchanged => "exchanged",
+            S::Cached => "cached",
+            S::Optimistic => "optimistic",
+            S::Rule => "rule",
+            _ => "other",
+        }
+        .to_owned(),
+        attempt: e.attempt,
+        rcode,
+        rcode_name,
+        error,
+        answers: e.answers.clone(),
+        answers_total: e.answers_total,
+        ttl: e.ttl,
+        duration_ms: e.duration.map(|d| d.as_millis() as u64),
+        for_instance: e.for_instance,
+    }
+}
+
+/// sail's DNS exchanges, through every run. Behind (`Lagged`): those
+/// missed are gone, and how many is logged.
+async fn follow_dns(instance: Instance, tx: mpsc::Sender<DnsExchange>) {
+    let mut events = Box::pin(instance.events(embed::Kinds::DNS));
+    while let Some(event) = events.next().await {
+        match event {
+            embed::Event::DnsExchange(e) => {
+                let _ = tx.try_send(dns_exchange(&e));
+            }
+            embed::Event::Lagged { kind, missed } if kind.contains(embed::Kinds::DNS) => {
+                tracing::debug!(missed, "dns exchanges dropped: the reader fell behind");
             }
             _ => {}
         }
@@ -555,6 +615,14 @@ impl Runtime for SailRuntime {
         let mut task = self.route_task.lock().expect("route task");
         assert!(task.is_none(), "routes is taken once");
         *task = Some(tokio::spawn(follow_routes(self.instance.clone(), tx)));
+        rx
+    }
+
+    fn dns_exchanges(&self) -> mpsc::Receiver<DnsExchange> {
+        let (tx, rx) = mpsc::channel(DNS_BUFFER);
+        let mut task = self.dns_task.lock().expect("dns task");
+        assert!(task.is_none(), "dns_exchanges is taken once");
+        *task = Some(tokio::spawn(follow_dns(self.instance.clone(), tx)));
         rx
     }
 

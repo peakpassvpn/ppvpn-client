@@ -107,6 +107,33 @@ async fn socks(port: u16, user: &str, password: &str, to: SocketAddr) -> Option<
     (head[1] == 0).then_some(s)
 }
 
+/// A SOCKS5 CONNECT through the local proxy to `name`:`port`, as `user`:
+/// the proxy resolves the name. Whether it connected.
+async fn socks_to_domain(port: u16, user: &str, password: &str, name: &str, to: u16) -> bool {
+    let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)).await else {
+        return false;
+    };
+    let mut reply = [0u8; 2];
+    let mut auth = vec![1, user.len() as u8];
+    auth.extend_from_slice(user.as_bytes());
+    auth.push(password.len() as u8);
+    auth.extend_from_slice(password.as_bytes());
+    let mut connect = vec![5, 1, 0, 3, name.len() as u8];
+    connect.extend_from_slice(name.as_bytes());
+    connect.extend_from_slice(&to.to_be_bytes());
+    let mut head = [0u8; 10];
+    s.write_all(&[5, 1, 2]).await.is_ok()
+        && s.read_exact(&mut reply).await.is_ok()
+        && s.write_all(&auth).await.is_ok()
+        && s.read_exact(&mut reply).await.is_ok()
+        && reply == [1, 0]
+        && s.write_all(&connect).await.is_ok()
+        && tokio::time::timeout(WAIT, s.read_exact(&mut head))
+            .await
+            .is_ok_and(|r| r.is_ok())
+        && head[1] == 0
+}
+
 async fn round_trip(s: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin), text: &[u8]) {
     s.write_all(text).await.unwrap();
     let mut got = vec![0u8; text.len()];
@@ -538,4 +565,36 @@ async fn a_routed_connection_is_told_once_taken() {
     assert!(routed.connect_ms.is_some(), "{routed:?}");
     runtime.stop().await.unwrap();
     assert!(runtime.stop_leftovers().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_instance_s_own_dns_query_is_told_once_taken() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("dns-exchange")).unwrap();
+    let mut exchanges = runtime.dns_exchanges();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    // A name the proxy dials goes through sail's DNS (the system's
+    // resolver, as the configuration has no dns section); .invalid never
+    // resolves, so the exchange is told whatever the network.
+    let _ = socks_to_domain(port, "u1", &p1, "dns-exchange.invalid", 80).await;
+    let exchange = tokio::time::timeout(WAIT, async {
+        loop {
+            let e = exchanges.recv().await.expect("the channel");
+            if e.name == "dns-exchange.invalid" {
+                return e;
+            }
+        }
+    })
+    .await
+    .expect("told in time");
+    assert!(exchange.for_instance, "{exchange:?}");
+    assert!(
+        exchange.rcode.is_some() || exchange.error.is_some(),
+        "answered or failed: {exchange:?}"
+    );
+    runtime.stop().await.unwrap();
 }
