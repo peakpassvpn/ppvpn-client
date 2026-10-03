@@ -665,3 +665,74 @@ async fn chains_are_outermost_first_through_nested_groups() {
     assert_eq!(routed.chain, want, "routed");
     runtime.stop().await.unwrap();
 }
+
+/// `config` with one more mixed inbound, `extra` on `port`.
+fn with_extra(config: &str, port: u16) -> String {
+    let mut config: serde_json::Value = serde_json::from_str(config).unwrap();
+    config["inbounds"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": port }));
+    config.to_string()
+}
+
+// sail's reload keeps the inbounds a run has: one that adds or removes an
+// inbound (by tag) is refused whole, an inbound added at run time
+// (add_inbound) among them. The Engine's reloads carry what it added (the
+// local and system proxy listeners are in its translation while open).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reload_keeps_the_inbounds_add_inbound_made() {
+    let (port, extra_port) = (free_port(), free_port());
+    let p1 = password();
+    let base = config(port, &[("u1", &p1)], false);
+    let extra = serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": extra_port });
+
+    // 1. The reload names the added inbound: it goes through, the listener
+    // stays.
+    let runtime = SailRuntime::new(options("reload-with")).unwrap();
+    runtime.start(&base).await.unwrap();
+    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    runtime
+        .reload(&with_extra(&base, extra_port))
+        .await
+        .expect("a reload that names the added inbound");
+    assert!(
+        TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok(),
+        "the added listener stays"
+    );
+    runtime.stop().await.unwrap();
+
+    // 2. The reload leaves it out: refused whole, and so is every such
+    // reload, while one that names it goes through. (Sail plans to diff
+    // inbounds by tag on reload; ours is the configuration's view.)
+    let runtime = SailRuntime::new(options("reload-without")).unwrap();
+    runtime.start(&base).await.unwrap();
+    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    for attempt in 1..=2 {
+        let refused = runtime.reload(&base).await;
+        assert!(
+            refused.is_err(),
+            "attempt {attempt}: a reload without the added inbound is refused"
+        );
+    }
+    assert!(
+        TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok(),
+        "the refused reloads changed nothing"
+    );
+    runtime
+        .reload(&with_extra(&base, extra_port))
+        .await
+        .expect("one that names it still goes through");
+    runtime.stop().await.unwrap();
+
+    // 3. Removed first: the reload without it goes through.
+    let runtime = SailRuntime::new(options("reload-removed")).unwrap();
+    runtime.start(&base).await.unwrap();
+    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    runtime.remove_inbound("extra").await.unwrap();
+    runtime
+        .reload(&base)
+        .await
+        .expect("a reload after remove_inbound, without it");
+    runtime.stop().await.unwrap();
+}

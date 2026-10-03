@@ -51,7 +51,7 @@ pub(crate) struct FakeRuntime {
     connections: Mutex<Vec<RuntimeConnection>>,
     /// The inbounds' tags: the configuration's at start, then as
     /// add_inbound and remove_inbound change them; none after stop. A
-    /// reload leaves them, as sail's adds and removes no listener.
+    /// reload that would add or remove one is refused, as sail's is.
     inbounds: Mutex<Vec<String>>,
     traffic: Mutex<RuntimeTraffic>,
     /// How often `traffic` was read.
@@ -119,6 +119,15 @@ impl Default for FakeRuntime {
     }
 }
 
+/// The tags of a configuration's inbounds.
+fn inbound_tags(config: &str) -> Vec<String> {
+    let config: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
+    config["inbounds"]
+        .as_array()
+        .map(|list| list.iter().filter_map(inbound_tag).collect())
+        .unwrap_or_default()
+}
+
 impl FakeRuntime {
     /// The inbounds now, by tag.
     pub(crate) fn inbounds(&self) -> Vec<String> {
@@ -126,12 +135,7 @@ impl FakeRuntime {
     }
 
     fn take_inbounds_of(&self, config: &str) {
-        let config: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
-        let tags = config["inbounds"]
-            .as_array()
-            .map(|list| list.iter().filter_map(inbound_tag).collect())
-            .unwrap_or_default();
-        *self.inbounds.lock().unwrap() = tags;
+        *self.inbounds.lock().unwrap() = inbound_tags(config);
     }
 
     pub(crate) fn calls(&self) -> Vec<Call> {
@@ -335,10 +339,23 @@ impl Runtime for FakeRuntime {
         Ok(())
     }
 
+    /// As sail's: a reload that adds or removes an inbound (by tag, against
+    /// the running ones, those of add_inbound among them) is refused whole.
     async fn reload(&self, config: &str) -> Result<(), RuntimeError> {
         self.record(Call::Reload(config.to_owned()));
         self.running()?;
         self.check(Op::Reload)?;
+        let (mut now, mut wanted) = (self.inbounds(), inbound_tags(config));
+        now.sort();
+        wanted.sort();
+        if now != wanted {
+            return Err(RuntimeError::new(
+                "config",
+                format!(
+                    "a reload cannot add or remove inbounds: running {now:?}, given {wanted:?}"
+                ),
+            ));
+        }
         *self.config.lock().unwrap() = Some(config.to_owned());
         self.take_groups_of(config);
         Ok(())
@@ -665,6 +682,24 @@ mod tests {
         assert_eq!(runtime.state(), RuntimeState::Running);
         runtime.reload("c").await.unwrap();
         assert_eq!(runtime.config().as_deref(), Some("c"));
+    }
+
+    #[tokio::test]
+    async fn a_reload_that_changes_the_inbounds_is_refused() {
+        let runtime = FakeRuntime::default();
+        let local = r#"{"inbounds":[{"type":"mixed","tag":"local"}]}"#;
+        let both =
+            r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"mixed","tag":"system"}]}"#;
+        runtime.start(local).await.unwrap();
+        runtime
+            .add_inbound(r#"{"type":"mixed","tag":"system"}"#)
+            .await
+            .unwrap();
+        assert_eq!(runtime.reload(local).await.unwrap_err().code, "config");
+        assert_eq!(runtime.config().as_deref(), Some(local), "nothing changed");
+        runtime.reload(both).await.unwrap();
+        runtime.remove_inbound("system").await.unwrap();
+        runtime.reload(local).await.unwrap();
     }
 
     #[tokio::test]
