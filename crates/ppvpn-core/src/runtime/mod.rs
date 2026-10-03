@@ -18,7 +18,9 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, watch};
 
+use crate::config::Platform;
 use crate::error::{codes, Error};
+use crate::translate;
 
 /// For tests only: this crate's own, and (with the `testing` feature, which
 /// the crate's dev-dependency on itself turns on) the golden contract tests
@@ -66,6 +68,8 @@ impl RuntimeError {
             "panicked" => (codes::CORE_PANICKED, false),
             "not_running" => (codes::CORE_NOT_RUNNING, false),
             "timeout" | "io" => (codes::CORE_OPERATION_FAILED, true),
+            // A name we configured: another program holds it.
+            "tun_name_taken" => (codes::TUN_NAME_TAKEN, false),
             _ => (codes::CORE_OPERATION_FAILED, false),
         };
         Error::new(
@@ -73,6 +77,19 @@ impl RuntimeError {
             retryable,
             format!("sail {}: {}", self.code, self.message),
         )
+    }
+}
+
+impl RuntimeError {
+    /// [`to_error`](Self::to_error) on `platform`: a TUN name taken is
+    /// retryable where sail chose it (no `interface_name`; another free one
+    /// may be had), not where we configured it.
+    pub(crate) fn to_error_on(&self, platform: Platform) -> Error {
+        let mut error = self.to_error();
+        if error.code == codes::TUN_NAME_TAKEN {
+            error.retryable = translate::interface_name(platform).is_empty();
+        }
+        error
     }
 }
 
@@ -333,11 +350,35 @@ mod tests {
             ("not_running", codes::CORE_NOT_RUNNING, false),
             ("timeout", codes::CORE_OPERATION_FAILED, true),
             ("internal", codes::CORE_OPERATION_FAILED, false),
+            ("tun_name_taken", codes::TUN_NAME_TAKEN, false),
         ];
         for (sail, code, retryable) in cases {
             let error = RuntimeError::new(sail, "why").to_error();
             assert_eq!((error.code, error.retryable), (code, retryable), "{sail}");
             assert_eq!(error.message, format!("sail {sail}: why"));
         }
+    }
+
+    #[test]
+    fn a_tun_name_taken_is_retryable_only_where_sail_chose_it() {
+        let taken = RuntimeError::new(
+            "tun_name_taken",
+            "[tun] inbound: no free utun after 3 attempts, the last utun9",
+        );
+        for (platform, retryable) in [
+            (Platform::Macos, true),
+            (Platform::Linux, false),
+            (Platform::Windows, false),
+        ] {
+            let error = taken.to_error_on(platform);
+            assert_eq!(
+                (error.code, error.retryable),
+                (codes::TUN_NAME_TAKEN, retryable),
+                "{platform:?}"
+            );
+            assert!(error.message.contains("utun9"), "the name is told");
+        }
+        let other = RuntimeError::new("io", "why").to_error_on(Platform::Macos);
+        assert_eq!(other, RuntimeError::new("io", "why").to_error());
     }
 }

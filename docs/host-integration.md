@@ -74,7 +74,7 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
   - 创建时会先**幂等地清扫上次的残留**，只限本库创建、并且能可靠识别的东西：
     - Linux：Sail 在 `state_dir/run` 下的台账记下的改动，由 `sail::embed::sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表和 fw4 的 drop-in；另外按 `tunrules` 的命名空间清扫优先级 9091–9101 的 ip rule 和表 2091；
     - macOS：不需要清扫。强杀后 utun 和经它的路由随进程一起消失（Sail 的常驻 CI 每次都验证）；Sail 接受这个 run_dir，但在 macOS 上不写台账；
-    - Windows：**目前不保证**。Sail 的 Windows TUN 还没有台账和 sweep，强杀后 Wintun 适配器及其路由、DNS 会不会残留还没有测；等 Sail 补上 Windows 的台账和 sweep（`docs/rust-parity.md`，切换前必须关掉的缺口）。
+    - Windows：不需要清扫。强杀后 Wintun 适配器及其路由、DNS 随进程一起消失：Wintun 在创建它的进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。依据是 Sail 在 VM 上的实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：`Stop-Process -Force` 后 3 秒内适配器、它的 `0.0.0.0/0` 和 `::/0` 路由、它的 DNS 都没有了；运行中重启 VM 后也没有适配器和 PnP 记录；再次启动用同一 GUID 重建正常。局限：只测了一台 VM、一个 Wintun 版本、windows-gnu 构建，没有开 `strict_route`。我们用 MSVC 构建并开 `strict_route`；它的 WFP 过滤器属于动态会话，理论上同样随进程消失，但没有实测。用我们自己的配置复测之前，这一条不算验收（`docs/rust-parity.md`，切换前要复测的项目）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
   - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
@@ -110,7 +110,7 @@ pub struct ApplyRequest {
     pub routing_mode: RoutingMode,        // Rules | Global；默认 Rules
     pub selected_node_id: Option<String>, // 宿主持久化的选中节点；默认 None = 用 default_node_id
     pub pins: Vec<Pin>,                   // 宿主持久化的 ingress pin：{ node_id, endpoint_key }；默认空
-    pub allowed_rule_set_hosts: Vec<String>, // 默认空 = 不限制 Profile 里的 rule-set 主机
+    pub allowed_rule_set_hosts: Vec<String>, // 默认空 = 不允许从任何主机下载规则集；宿主必须显式给出
 }
 // 用 JSON 反序列化 ApplyRequest 时（例如将来的 FFI），只有 profile 是必需的；
 // 其余字段缺省时取上面注明的默认值。
@@ -141,8 +141,8 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
   - 同时，引擎在越过 `expires_at` 的那一刻进入 `Degraded{ProfileExpired}`。这由定时器触发，不必等到下一次重建才发现。这个原因只用于上报，不触发 `Fatal`，也不影响转发。apply 一份未过期的新 Profile 后清除。这是 Rust 版新增的行为，Go 0.5.21 只有日志。
   - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
   - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
-- **规则集**：apply 前会准备规则集，总共最多等 10 秒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
-- **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
+- **规则集**：apply 前会准备规则集，总共最多等 10 秒。只从 `allowed_rule_set_hosts` 列出的主机下载（宿主传拉取 Profile 的 API 主机）；为空时一个也不下载，只用本地已有的、sha256 相符的缓存，其余规则集报 `RULE_SET_HOST_NOT_PINNED`（和 Go 一致，默认拒绝）。不为空时，Profile 里的规则集 URL 必须都在这些主机上，否则 apply 被拒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
+- **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`（停止再启动，`reasons` 说明是哪个监听变了，例如 `tun options changed`）。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
 ### 4.2 start / stop
 
@@ -370,6 +370,7 @@ pub struct Error {
   - `STATE_DIR_IN_USE`：retryable=false，`state_dir` 已被另一个实例使用；
   - `PERMISSION_DENIED`：retryable=false，Tun 实例的权限不足（见第 2 节）；
   - `WINTUN_UNAVAILABLE`：retryable=false，找不到或加载不了宿主传入的 wintun.dll；
+  - `TUN_NAME_TAKEN`：`start` 时 TUN 网卡名被其他程序占用（第 11 节）。message 里有被占用的名字；名字由 Sail 选时，还有它试过的次数。名字由我们配置时（Linux `ppvpn0`、Windows `PPVPN`）retryable=false，多半是另一个 ppvpn-core 正在运行；名字由 Sail 选时（macOS）retryable=true，再次 `start` 可能成功。和 `TUN_INSTANCE_EXISTS` 不同：后者是同一进程里重复创建 Tun 实例，在 `new` 时返回；
   - `PINS_INVALID`：retryable=false，`pins` 里同一个节点出现多次，field=`pins[i].node_id`；
   - `PROFILE_MALFORMED`：retryable=false，Profile 不是合法 JSON 或者字段类型不对（D5）。
 - **`CORE_OPERATION_FAILED`**：只用于真正的内部错误，原因写进日志。Go 版有几种本该是结构化错误的情况会折叠成这个码，Rust 版改成具体的码（D1、D2）。
@@ -423,8 +424,8 @@ pub struct Error {
     - `None`：不保留任何行，也不计丢弃；
     - `File { path }`：`Engine::new` 时打开文件（不存在就创建，Unix 上权限 0600），只追加；打不开时 `new` 返回 `CORE_OPERATION_FAILED`（field=`log.sink.path`）。写盘在引擎自己的线程里做，不阻塞打日志的一方；写失败的行计入丢弃。只追加，core 不做轮转，也没有大小上限；实例存活期间引擎一直持有这个文件，宿主只能在 `Engine::new` 之前截断或改名；
     - `Channel`：用 `Engine::logs()` 取接收端。只能取一次，第二次调用（以及 sink 不是 `Channel` 时调用）得到一个已经结束的接收端（`recv()` 立即返回 `None`）。宿主不读或者已经丢掉接收端时，行照样丢弃并计数。实例的最后一个句柄释放后通道结束。
-- **tracing 订阅者**：`tracing` 的全局订阅者整个进程只有一个。`Engine::new` 尝试装一次 `tracing_subscriber::registry().with(sail::embed::tracing_layer()).with(ppvpn_core::tracing_layer())`；进程里已经有全局订阅者时什么也不装。
-  - 宿主如果有自己的 tracing 订阅者，**必须**在上面加上 `sail::embed::tracing_layer()` 和 `ppvpn_core::tracing_layer()`，否则 Sail 和 `ppvpn-core` 的日志行进不了各实例的 sink；宿主的全局过滤器也要放行 `sail`、`ppvpn_core` 这两个 target，到实例所用的级别（debug）为止。
+- **tracing 订阅者**：`tracing` 的全局订阅者整个进程只有一个。`Engine::new` 尝试装一次 `tracing_subscriber::registry().with(ppvpn_core::tracing_layer())`；进程里已经有全局订阅者时什么也不装。
+  - 宿主如果有自己的 tracing 订阅者，**必须**在上面加上 `ppvpn_core::tracing_layer()`（它已包含 Sail 的 layer，宿主不直接依赖 `sail`，也不写 `sail::` 路径），否则 Sail 和 `ppvpn-core` 的日志行进不了各实例的 sink；宿主的全局过滤器也要放行 `sail`、`ppvpn_core` 这两个 target，到实例所用的级别（debug）为止。
   - 这时 Sail 不再装它自己的订阅者，不再往 stdout/stderr 打带颜色的日志。宿主自己的 layer 也会看到这两个 target 的事件，怎么处理是宿主的事。
 - **多实例**：同一进程里有几个实例时，`ppvpn-core` 的一行属于哪个实例，看事件上的 `instance` 字段，没有就看离它最近的、带 `instance` 字段的外层 span（引擎为每个实例建一个）。两者都没有的行是进程级的，发给每个实例。Sail 的行由 Sail 按实例区分。`instance` 字段不写进日志行。
 - **轮转**：由宿主负责，引擎只按行输出，不管文件大小。
@@ -444,8 +445,8 @@ pub struct Error {
   - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#45）。
   - 上游查询优先经 Runtime 的 `dial_udp`/`dial_tcp` 走 direct 出站，由 Sail 的默认拨号器绑定物理网卡，不进 TUN。
 - **TUN 网卡名**：Linux 固定为 `ppvpn0`，Windows 固定为 `PPVPN`（Wintun 适配器名，按名字复用；适配器 GUID 由名字确定生成，不会每次变化）。名字要显式交给 Sail，原因是 Sail 只有在名字显式给出时，才会把这块网卡当作自己的：选默认网卡和过滤 DNS 服务器时都要排除它；名字也便于日志和抓包。
-  - macOS 不写名字。Sail 按编号打开 utun，编号被占用时启动直接失败，不会自己换。Sail 会改为不写名字时由内核分配编号，并通过 embed 报告实际拿到的名字，Runtime 再读出来用于日志和状态。排除隧道网段这件事，由 Sail 改动后的行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。
-  - 过渡期的已知限制：Sail 的这项改动合入之前，不写名字时 Sail 固定用 `utun233`，这个编号被别的程序占用时启动会失败。
+  - macOS 不写名字，由 Sail 选：取比现有最大的 `utunN` 大一的编号，并通过 embed 报告实际拿到的名字（`tun_names()`），Runtime 读出来用于日志和状态。选好的名字在打开前被别的程序抢走时，Sail 换下一个空闲的名字重试，最多试 3 个；仍然失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true）。排除隧道网段由 Sail 的这一行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。
+  - Linux 和 Windows 的名字是配置的，被占用时不换名，`start` 直接返回 `TUN_NAME_TAKEN`（retryable=false）。
   - 宿主不依赖这个名字：Desktop 靠地址、规则优先级和表号识别自己的 TUN。
 
 ## 12. 与 Core API v1 的对照

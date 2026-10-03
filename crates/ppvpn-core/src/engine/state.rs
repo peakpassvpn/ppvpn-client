@@ -37,8 +37,7 @@ impl Applied {
 }
 
 /// What the TUN routing guard reports (Linux tunrules; macOS and Windows
-/// later). Its source is the guard module (separate PR).
-#[allow(dead_code)] // sent by the guard, not wired yet
+/// later). Its source is the guard (engine/routing.rs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TunRoutingSignal {
     /// Routing was deleted and is being put back: Degraded.
@@ -69,8 +68,15 @@ pub(crate) struct Live {
     pub run: u64,
     /// No default interface (sail's network events, E1b).
     pub offline: bool,
+    /// The rule sets without a copy (ids, profile order).
+    pub rule_sets_unavailable: Vec<String>,
+    /// A full restart is under way: sail's states in between (a start that
+    /// fails and is put back) are not the instance's.
+    pub restarting: bool,
     /// The TUN's routing when not in place (None: ok).
     pub tun_routing: Option<TunRouting>,
+    /// This run goes without the shared local proxy listener.
+    pub local_proxy_unavailable: bool,
     /// The state last reported (StateChanged).
     pub state: EngineState,
     /// While running: sail's groups by tag, as last read.
@@ -110,6 +116,14 @@ impl Live {
             Some(TunRouting::Unguarded) => reasons.push(DegradedReason::TunRoutingUnguarded),
             _ => {}
         }
+        if self.local_proxy_unavailable {
+            reasons.push(DegradedReason::LocalProxyUnavailable);
+        }
+        for id in &self.rule_sets_unavailable {
+            reasons.push(DegradedReason::RuleSetUnavailable {
+                rule_set_id: id.clone(),
+            });
+        }
         if reasons.is_empty() {
             EngineState::Running
         } else {
@@ -122,6 +136,7 @@ impl Live {
         self.groups.clear();
         self.connections.clear();
         self.tun_routing = None;
+        self.local_proxy_unavailable = false;
         self.switched.clear();
     }
 

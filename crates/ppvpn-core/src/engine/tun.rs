@@ -264,7 +264,7 @@ impl Inner {
         state
     }
 
-    pub(super) async fn reprobe_host_ipv6(&self) {
+    pub(super) async fn reprobe_host_ipv6(self: &Arc<Self>) {
         if self.config.role != Role::Tun || !desktop(self.config.platform) {
             return;
         }
@@ -303,6 +303,11 @@ impl Inner {
             // is left to the next apply or start.
             return;
         }
+        // An expired profile is not built again (contract 4.1).
+        if let Some(error) = super::rule_sets::expired(&profile) {
+            self.rebuild_failed(error, "host ipv6 rebuild failed");
+            return;
+        }
         *self.tun.host.lock().expect("host ipv6") = state;
         let previous = Ipv6State {
             ipv6: true,
@@ -318,9 +323,12 @@ impl Inner {
                 }
             };
         // The selection and the pins are as applied: sail keeps them across
-        // a reload.
-        if let Err(e) = self.runtime.reload(&translation.json).await {
-            let error = self.runtime_error(&e);
+        // a reload. The TUN itself does not change here, so this is a
+        // reload; should it ever change, the switch restarts instead.
+        let Some(running) = self.live().applied.as_ref().map(|a| a.translation.clone()) else {
+            return;
+        };
+        if let Err(error) = self.switch_to(&running, &translation).await {
             tracing::error!(previous_policy = policy(previous), policy = policy(state),
                 rebuilt = false, error = %error, "host ipv6 changed");
             return;

@@ -17,7 +17,10 @@ path = "uniffi-bindgen.rs"
 [features]
 # Link the Rust ppvpn-core (in process) instead of driving the Go core over
 # IPC. Off by default; CI checks it on Linux.
-rust-core = ["dep:ppvpn-core", "dep:sail"]
+rust-core = ["dep:ppvpn-core"]
+# Compiles the Linux enhanced-mode end-to-end test (src/e2e_linux.rs; CI job
+# desktop-linux-enhanced). Test-only: no code outside #[cfg(test)].
+linux-e2e = []
 
 [build-dependencies]
 sha2 = "0.10"
@@ -26,8 +29,6 @@ sha2 = "0.10"
 ppvpn-account = { path = "../../../crates/ppvpn-account" }
 # The Rust core (ppvpn-core#45), behind `rust-core` until the hosts switch.
 ppvpn-core = { path = "../../../crates/ppvpn-core", optional = true }
-# sail's tracing layer, installed next to ours (host-integration.md section 10).
-sail = { workspace = true, optional = true }
 uniffi = { version = "=0.31.0", features = ["cli", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "process", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

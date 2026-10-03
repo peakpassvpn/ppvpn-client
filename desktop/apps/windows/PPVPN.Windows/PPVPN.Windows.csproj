@@ -42,12 +42,10 @@
   <!--
     Auto-update (WinSparkle). Both values are embedded as assembly metadata;
     when either is empty, updates are disabled and "Check for updates" is
-    hidden. The feed defaults to the backend's; override with
-    -p:PPVPN_UPDATE_FEED_URL=... or the environment variables of the same name.
+    hidden. There is no default feed: a release build gets its channel's
+    (ci-build.ps1), through -p:PPVPN_UPDATE_FEED_URL=... or the environment
+    variable of the same name.
   -->
-  <PropertyGroup>
-    <PPVPN_UPDATE_FEED_URL Condition="'$(PPVPN_UPDATE_FEED_URL)' == ''">$(PPVPN_API_BASE)/api/v1/desktop/releases/windows-x64/appcast.xml</PPVPN_UPDATE_FEED_URL>
-  </PropertyGroup>
 
   <ItemGroup>
     <AssemblyMetadata Include="PPVPN.ApiBase" Value="$(PPVPN_API_BASE)" />

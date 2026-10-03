@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
-use super::{not_applied, now, Error, Inner};
+use super::{not_applied, now, shut_down, Error, Inner};
 use crate::error::codes;
 use crate::event::Event;
 use crate::request::{
@@ -31,9 +31,10 @@ const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
 const REFRESH: Duration = Duration::from_secs(1);
 
 impl Inner {
-    pub(super) async fn apply(&self, request: ApplyRequest) -> Result<ApplyResult, Error> {
-        self.admit()?;
-        let _op = self.op.lock().await;
+    pub(super) async fn apply(
+        self: &Arc<Self>,
+        request: ApplyRequest,
+    ) -> Result<ApplyResult, Error> {
         self.admit()?;
         // D3: the profile as given, before any selection is carried over.
         let profile = validate_request(&request, Utc::now())
@@ -75,17 +76,17 @@ impl Inner {
             }
         }
 
-        // The dedupe key against the live values, select and pin included.
-        let (running, unchanged) = {
-            let live = self.live();
-            let unchanged = live.applied.as_ref().is_some_and(|a| {
+        // The dedupe key against the live values, select and pin included,
+        // and the hosts rule sets may come from (a new list may let a set be
+        // fetched).
+        let same_hosts = self.rule_set_hosts() == request.allowed_rule_set_hosts;
+        let unchanged = same_hosts
+            && self.live().applied.as_ref().is_some_and(|a| {
                 a.profile.revision == profile.revision
                     && a.mode == request.routing_mode
                     && a.selected == selected
                     && a.pins == pins
             });
-            (live.running, unchanged)
-        };
         if unchanged {
             // Nothing done, nothing sent; the result still tells the host
             // what its persisted selection and pins should be.
@@ -99,17 +100,42 @@ impl Inner {
             });
         }
 
+        // Rule sets never fail an apply: a set that cannot be had degrades
+        // its rules. Their downloads (up to PREPARE_TIMEOUT) run before the
+        // operation lock, so that a shutdown neither waits for them nor
+        // loses its budget to them; it cancels them.
+        let Some(rule_sets) = self
+            .prepare_rule_sets(
+                &profile,
+                request.routing_mode,
+                &request.allowed_rule_set_hosts,
+            )
+            .await
+        else {
+            return Err(shut_down());
+        };
+        let _op = self.op.lock().await;
+        self.admit()?;
+        let running = {
+            let live = self.live();
+            live.running
+                .then(|| live.applied.as_ref().map(|a| a.translation.clone()))
+                .flatten()
+        };
         self.probe_host_ipv6();
-        let options = self.options(request.routing_mode, &selected, &pins);
+        let mut options = self.options(request.routing_mode, &selected, &pins);
+        options.rule_sets = rule_sets.files();
         let translation = translate::translate(&profile, &options)
             .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
-        let switch = if running {
-            if let Err(e) = self.runtime.reload(&translation.json).await {
-                let error = self.runtime_error(&e);
-                return Err(self.reload_failed(error, RELOAD_REFUSED));
+        let switch = if let Some(running) = &running {
+            let switch = self
+                .switch_to(running, &translation)
+                .await
+                .map_err(|error| self.reload_failed(error, RELOAD_REFUSED))?;
+            if switch == SwitchKind::KernelSwitch {
+                self.reassert(&translation, &selected, &pins).await;
             }
-            self.reassert(&translation, &selected, &pins).await;
-            Some(SwitchKind::KernelSwitch)
+            Some(switch)
         } else {
             // Not running: kept for start, so it must load.
             let json = translation.json.clone();
@@ -147,7 +173,8 @@ impl Inner {
                 });
             }
         }
-        if running {
+        self.activate_rule_sets(rule_sets, request.allowed_rule_set_hosts);
+        if running.is_some() {
             self.refresh().await;
         }
         Ok(ApplyResult {
@@ -160,7 +187,7 @@ impl Inner {
         })
     }
 
-    pub(super) async fn start(&self) -> Result<(), Error> {
+    pub(super) async fn start(self: &Arc<Self>) -> Result<(), Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
@@ -183,26 +210,44 @@ impl Inner {
         self.prepare_listeners()?;
         self.probe_host_ipv6();
         // Translated again: select and pin may have moved since the apply.
-        let translation = translate::translate(&profile, &self.options(mode, &selected, &pins))?;
-        if let Err(e) = self.runtime.start(&translation.json).await {
+        let mut translation =
+            translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+        let mut started = self.runtime.start(&translation.json).await;
+        if let Err(e) = &started {
+            // The shared listener may have been taken since its port was
+            // checked: the run goes without it (section 4.6).
+            if e.code != "panicked" && self.leave_out_local_proxy() {
+                tracing::warn!(error = %e, "start failed with the local proxy listener, starting without it");
+                translation =
+                    translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+                started = self.runtime.start(&translation.json).await;
+            }
+        }
+        if let Err(e) = started {
             return Err(self.runtime_error(&e));
         }
-        {
+        let run = {
             let mut live = self.live();
             live.running = true;
             live.run += 1;
+            live.local_proxy_unavailable = self.local_proxy_left_out();
             if let Some(applied) = live.applied.as_mut() {
                 applied.translation = translation;
             }
             self.settle(&mut live);
             self.publish(Event::CoreStarted { at: now() });
+            live.local_proxy_unavailable.then_some(live.run)
+        };
+        if let Some(run) = run {
+            self.retry_local_proxy(run);
         }
         self.network_started();
+        self.guard_started();
         self.refresh().await;
         Ok(())
     }
 
-    pub(super) async fn stop(&self) -> Result<(), Error> {
+    pub(super) async fn stop(self: &Arc<Self>) -> Result<(), Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
@@ -210,10 +255,16 @@ impl Inner {
         if !running {
             return Ok(());
         }
+        // Before the TUN closes: sail's cleanup must not be undone.
+        self.guard_stopped();
         if let Err(e) = self.runtime.stop().await {
-            return Err(self.runtime_error(&e));
+            let error = self.runtime_error(&e);
+            // Still running: the TUN stays, and so does its guard.
+            self.guard_restarted();
+            return Err(error);
         }
         self.network_stopped();
+        self.local_proxy_stopped();
         let mut live = self.live();
         live.running = false;
         live.run += 1;
@@ -342,7 +393,7 @@ impl Inner {
             return;
         };
         let mut live = self.live();
-        if !live.running || live.fatal.is_some() {
+        if !live.running || live.fatal.is_some() || (live.restarting && code != "panicked") {
             return;
         }
         live.running = false;
@@ -354,6 +405,9 @@ impl Inner {
             FatalReason::KernelUnrecoverable
         });
         self.settle(&mut live);
+        drop(live);
+        // The TUN is gone with the runtime.
+        self.guard_stopped();
     }
 
     /// The default interface changed (`None`: none). Offline while running
@@ -379,7 +433,6 @@ impl Inner {
     /// The TUN routing guard's report: Restoring and Unguarded degrade,
     /// Restored ends both (`TunRoutingRestored`), Broken is Fatal
     /// (`TunRoutingBroken`).
-    #[allow(dead_code)] // its source is not wired yet
     pub(super) fn on_tun_routing(&self, signal: TunRoutingSignal) {
         let mut live = self.live();
         match signal {

@@ -157,6 +157,7 @@ impl Inner {
         log_default_interface("changed", &change.new);
         self.local_dns_network(&change.new);
         self.on_network(interface_if(&change.new, offline));
+        self.guard_check("network changed");
         self.arm_reprobe();
     }
 

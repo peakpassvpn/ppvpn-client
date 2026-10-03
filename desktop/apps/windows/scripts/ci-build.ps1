@@ -14,8 +14,10 @@
   Parameters default to the environment the workflow sets:
     PPVPN_RELEASE_CHANNEL   dev | stable | empty (PR builds: no channel in release-meta)
     PPVPN_API_BASE          backend base URL (required): baked into the app as its backend
-                            (PPVPN_API_BASE build property) and the update feed
-                            <base>/api/v1/desktop/releases/windows-x64/appcast.xml
+                            (PPVPN_API_BASE build property)
+    PPVPN_UPDATE_SITE       base address of the update site; with a channel the app's feed is
+                            <site>/desktop/<channel>/appcast-windows-x64.xml; without either
+                            the build has no update feed
     PPVPN_BUILD_NUMBER      fourth part of FileVersion (sparkle:version), 0-65535
     PPVPN_VERSION           x.y.z overriding VersionPrefix
     PPVPN_SPARKLE_PUBLIC_KEY  base64 ed25519 public key baked into the app (shared with macOS)
@@ -31,6 +33,7 @@
 param(
   [string] $Channel = $env:PPVPN_RELEASE_CHANNEL,
   [string] $ApiBase = $env:PPVPN_API_BASE,
+  [string] $UpdateSite = $env:PPVPN_UPDATE_SITE,
   [string] $BuildNumber = $env:PPVPN_BUILD_NUMBER,
   [string] $Version = $env:PPVPN_VERSION,
   # Passed through to package.ps1 (default: the vendored core).
@@ -57,7 +60,14 @@ if (-not $ApiBase) { throw "ApiBase (or PPVPN_API_BASE) is required." }
 $ApiBase = $ApiBase.Trim().TrimEnd("/")
 if ($ApiBase -notmatch '^https?://[^/\s]+(/\S*)?$') { throw "ApiBase must be an http(s) URL, not '$ApiBase'." }
 if ($inCi -and $ApiBase -notmatch '^https://') { throw "ApiBase must use https in CI." }
-$feedUrl = "$ApiBase/api/v1/desktop/releases/windows-x64/appcast.xml"
+# A build for a channel updates from that channel's feed; one without has no feed.
+if ($Channel -and -not $UpdateSite) { throw "UpdateSite (or PPVPN_UPDATE_SITE) is required for a channel build." }
+$feedUrl = ""
+if ($UpdateSite -and $Channel) {
+  $UpdateSite = $UpdateSite.Trim().TrimEnd("/")
+  if ($UpdateSite -notmatch '^https://[^/\s]+(/\S*)?$') { throw "UpdateSite must be an https URL, not '$UpdateSite'." }
+  $feedUrl = "$UpdateSite/desktop/$Channel/appcast-windows-x64.xml"
+}
 if ($BuildNumber -and ($BuildNumber -notmatch '^\d+$' -or [int]$BuildNumber -gt 65535)) {
   throw "BuildNumber must be an integer between 0 and 65535."
 }
@@ -96,7 +106,8 @@ if (-not $publicKey -or -not $privateKey) {
 $keyFile = $null
 try {
   $packageArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "package.ps1"),
-    "-ApiBase", $ApiBase, "-FeedUrl", $feedUrl)
+    "-ApiBase", $ApiBase)
+  if ($feedUrl) { $packageArgs += @("-FeedUrl", $feedUrl) }
   if ($Channel) { $packageArgs += @("-Channel", $Channel) }
   if ($Version) { $packageArgs += @("-Version", $Version) }
   if ($publicKey) { $packageArgs += @("-PublicKey", $publicKey) }

@@ -25,6 +25,7 @@ mod rulesets;
 mod runtime;
 mod state_dir;
 pub mod status;
+mod tls;
 mod translate;
 // The Engine starts it with the TUN; until then only its tests use it.
 #[allow(dead_code, unused_imports)]

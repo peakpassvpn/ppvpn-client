@@ -36,6 +36,7 @@ mod tun;
 #[allow(unused_imports)] // the Engine's, once it is wired to the runtime
 pub(crate) use tun::{
     interface_name, local_dns_servers, LocalDns, Tun, IPROUTE2_RULE_INDEX, IPROUTE2_TABLE_INDEX,
+    TUN_INBOUND_TAG,
 };
 
 /// The selector over every node, in profile order.
@@ -86,8 +87,9 @@ impl Default for HealthCheck {
 }
 
 /// The shared local proxy: one port, one password, a username per node
-/// (`<prefix>-<node id>`) and the routed user (`<prefix>`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// (`<prefix>-<node id>`) and the routed user (`<prefix>`). Its `Debug`
+/// leaves the password out.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct LocalProxy {
     /// The address it listens on (`LocalProxyConfig::listen`, 127.0.0.1 by
     /// default).
@@ -95,6 +97,16 @@ pub(crate) struct LocalProxy {
     pub port: u16,
     pub prefix: String,
     pub password: String,
+}
+
+impl std::fmt::Debug for LocalProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalProxy")
+            .field("listen", &self.listen)
+            .field("port", &self.port)
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LocalProxy {
@@ -137,8 +149,10 @@ pub(crate) struct Options {
     pub log_level: String,
 }
 
-/// The configuration and how its tags map back to the profile.
-#[derive(Debug, Clone, PartialEq)]
+/// The configuration and how its tags map back to the profile. Its `Debug`
+/// leaves the configuration out: it carries the nodes' and the local
+/// proxy's credentials.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Translation {
     pub json: String,
     /// node id → the outbound that is the node (the ingress itself for a
@@ -155,6 +169,20 @@ pub(crate) struct Translation {
     /// Direct hands a global IPv6 destination its domain and resolves to
     /// IPv4 only (a host without an IPv6 path; see [`tun`]).
     pub direct_ipv6_hand_off: bool,
+}
+
+impl std::fmt::Debug for Translation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Translation")
+            .field("json", &format_args!("<{} bytes>", self.json.len()))
+            .field("node_tags", &self.node_tags)
+            .field("outbound_nodes", &self.outbound_nodes)
+            .field("ingress_keys", &self.ingress_keys)
+            .field("groups", &self.groups)
+            .field("members", &self.members)
+            .field("direct_ipv6_hand_off", &self.direct_ipv6_hand_off)
+            .finish()
+    }
 }
 
 /// Translates a validated profile. Errors here are the translation's own
@@ -334,7 +362,7 @@ fn failed(message: impl Into<String>) -> Error {
 
 /// The routing the configuration is built from: in the global mode only the
 /// baseline rules (and their rule sets), then the selected node.
-fn effective_routing(profile: &Profile, mode: RoutingMode) -> crate::profile::Routing {
+pub(crate) fn effective_routing(profile: &Profile, mode: RoutingMode) -> crate::profile::Routing {
     let mut routing = profile.routing.clone();
     if mode == RoutingMode::Global {
         routing.rules.retain(|rule| rule.baseline);
