@@ -383,6 +383,106 @@ jobs:
               and .rpm.file == env.RPM_FILE and .rpm.url == $rpm_url and .rpm.sha256 == $rpm_sha
               and .rpm.size == $rpm_size' linux/stable/latest.json
           jq -e --arg rpm_url "$REPO_URL/download/$DEV_TAG/$RPM_FILE" '.rpm.url == $rpm_url' linux/dev/latest.json
+      # What a release does: the production key has a passphrase, handed to
+      # gpg and to rpmsign through a loopback pinentry. A second key made
+      # here, with a random passphrase, signs a fresh copy of the unsigned
+      # packages and a site of its own; the wrong passphrase must sign nothing.
+      - name: Sign and build with a passphrase-protected key
+        run: |
+          P="$T/passphrase"
+          release="$P/releases/$STABLE_TAG"
+          mkdir -p "$release"
+          # dist/ still holds the packages as built: unsigned.
+          cp dist/*.deb dist/*.rpm dist/release-meta-linux-*.json "$release/"
+          for meta in "$release"/release-meta-linux-x64-deb.json "$release"/release-meta-linux-x64-rpm.json; do
+            jq '.channel = "stable"' "$meta" >"$meta.part"
+            mv "$meta.part" "$meta"
+          done
+          rpm_meta="$release/release-meta-linux-x64-rpm.json"
+          digest() { sha256sum "$1" | cut -d' ' -f1; }
+          unsigned="$(digest "$release/$RPM_FILE")"
+          test "$unsigned" = "$(jq -er .sha256 dist/release-meta-linux-x64-rpm.json)"
+
+          passphrase="$(openssl rand -hex 24)"
+          echo "::add-mask::$passphrase"
+          wrong="$(openssl rand -hex 24)"
+          echo "::add-mask::$wrong"
+          test "${#passphrase}" = 48
+          test "$passphrase" != "$wrong"
+
+          export GNUPGHOME="$RUNNER_TEMP/passphrase-gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s' "$passphrase" >"$GNUPGHOME/passphrase"
+          cat >"$GNUPGHOME/key.conf" <<EOF
+          Key-Type: RSA
+          Key-Length: 4096
+          Key-Usage: sign
+          Name-Real: PPVPN repository passphrase self-test
+          Name-Email: passphrase@example.com
+          Expire-Date: 0
+          Passphrase: $passphrase
+          %commit
+          EOF
+          gpg --batch --quiet --generate-key "$GNUPGHOME/key.conf"
+          fingerprints="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10}')"
+          fingerprint="$(head -n 1 <<<"$fingerprints")"
+          [[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]]
+          test "$fingerprint" != "$PKG_GPG_FINGERPRINT"
+          # Kept in this step's shell only: never in the environment file, so never printed.
+          key="$(gpg --batch --pinentry-mode loopback --passphrase-file "$GNUPGHOME/passphrase" \
+            --armor --export-secret-keys "$fingerprint")"
+          [[ "$key" == *"PRIVATE KEY BLOCK"* ]]
+          gpg --batch --armor --export "$fingerprint" >"$P/key.asc"
+          gpg --batch --export "$fingerprint" >"$P/keyring.gpg"
+          test -s "$P/key.asc"
+          test -s "$P/keyring.gpg"
+          gpgconf --kill all
+          rm -rf "$GNUPGHOME"
+          unset GNUPGHOME
+
+          with_key() {   # passphrase, command...
+            PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" PKG_GPG_PASSPHRASE="$1" "${@:2}"
+          }
+          build() {   # passphrase, out
+            with_key "$1" desktop/scripts/ci/build-linux-repo.sh --channel stable --releases "$P/releases" \
+              --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$2"
+          }
+
+          # The wrong passphrase: nothing is signed, the rpm and its metadata stay as built.
+          if with_key "$wrong" desktop/scripts/ci/sign-linux-rpms.sh "$release"; then
+            echo "signed with the wrong passphrase" >&2; exit 1
+          fi
+          test "$(digest "$release/$RPM_FILE")" = "$unsigned"
+          test "$(jq -er .sha256 "$rpm_meta")" = "$unsigned"
+
+          # The right one: signed, verifiable with the key's public half, metadata rewritten.
+          with_key "$passphrase" desktop/scripts/ci/sign-linux-rpms.sh "$release"
+          signed="$(digest "$release/$RPM_FILE")"
+          test "$signed" != "$unsigned"
+          test "$(jq -er .sha256 "$rpm_meta")" = "$signed"
+          test "$(jq -er .length "$rpm_meta")" = "$(wc -c <"$release/$RPM_FILE" | tr -d ' ')"
+          mkdir "$P/rpmdb"
+          rpm --dbpath "$P/rpmdb" --import "$P/key.asc"
+          for rpm in "$release/$RPM_FILE" "$release"/ppvpn-release-*.noarch.rpm; do
+            verdict="$(rpm --dbpath "$P/rpmdb" -K "$rpm")"
+            echo "$verdict"
+            grep -q 'digests signatures OK' <<<"$verdict"
+          done
+
+          # The repositories: the wrong passphrase leaves no output directory.
+          if build "$wrong" "$P/refused"; then
+            echo "built with the wrong passphrase" >&2; exit 1
+          fi
+          test ! -e "$P/refused"
+          build "$passphrase" "$P/site"
+          dist_dir="$P/site/linux/apt/dists/stable"
+          repodata="$P/site/linux/rpm/stable/x86_64/repodata"
+          gpgv --keyring "$P/keyring.gpg" "$dist_dir/InRelease"
+          gpgv --keyring "$P/keyring.gpg" "$dist_dir/Release.gpg" "$dist_dir/Release"
+          gpgv --keyring "$P/keyring.gpg" "$repodata/repomd.xml.asc" "$repodata/repomd.xml"
+          published="$(gpg --batch --show-keys --with-colons "$P/site/linux/ppvpn.asc" | awk -F: '$1=="fpr"{print $10}')"
+          test "$(head -n 1 <<<"$published")" = "$fingerprint"
+          jq -e --arg sha "$signed" '.rpm.sha256 == $sha' "$P/site/linux/stable/latest.json"
       - name: Serve the site and the downloads
         run: |
           nohup python3 desktop/scripts/ci/repo-selftest-server.py --port "$REPO_PORT" \
