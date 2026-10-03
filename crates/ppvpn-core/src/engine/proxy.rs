@@ -163,6 +163,14 @@ impl Inner {
         }
     }
 
+    /// After a restart put the old configuration back: the shared listener
+    /// is left out exactly when it was.
+    pub(super) fn set_local_proxy_left_out(&self, left_out: bool) {
+        if let Ok(mut proxies) = self.local_proxy() {
+            proxies.unavailable = left_out;
+        }
+    }
+
     /// Whether this run goes without the shared listener.
     pub(super) fn local_proxy_left_out(&self) -> bool {
         self.local_proxy().is_ok_and(|p| p.unavailable)

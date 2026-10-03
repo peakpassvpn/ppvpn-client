@@ -271,14 +271,18 @@ impl Inner {
             .rule_sets
             .prepare(&sets_of(&profile, mode), &allowed_hosts, None)
             .await;
-        let mut options = self.options(mode, &selected, &pins);
-        options.rule_sets = snapshot.files();
-        let result = match translate::translate(&profile, &options) {
+        let files = snapshot.files();
+        let build = || {
+            let mut options = self.options(mode, &selected, &pins);
+            options.rule_sets = files.clone();
+            translate::translate(&profile, &options)
+        };
+        let result = match build() {
             Ok(translation) => match &running {
                 Some(running) => self
-                    .switch_to(running, &translation)
+                    .switch_to(running, translation, &build)
                     .await
-                    .map(|_| translation),
+                    .map(|(_, translation)| translation),
                 None => Ok(translation),
             },
             Err(e) => Err(e),
