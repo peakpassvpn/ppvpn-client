@@ -2082,12 +2082,14 @@ dependencies = [
  "futures-util",
  "hickory-proto",
  "idna",
+ "libc",
  "sail",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

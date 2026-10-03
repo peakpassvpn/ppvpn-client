@@ -9,6 +9,7 @@ pub mod config;
 mod engine;
 pub mod error;
 pub mod event;
+mod hostipv6;
 // dns-local is wired up by the runtime; until then only its tests use it.
 #[allow(dead_code, unused_imports)]
 pub(crate) mod localdns;
