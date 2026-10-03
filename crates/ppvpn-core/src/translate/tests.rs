@@ -832,8 +832,34 @@ fn debug_leaves_credentials_out() {
         groups: Default::default(),
         members: Default::default(),
         direct_ipv6_hand_off: false,
+        rule_ids: Vec::new(),
     };
     let shown = format!("{translation:?}");
     assert!(!shown.contains(&secret), "{shown}");
     assert!(shown.contains("bytes"), "{shown}");
+}
+
+/// sail names a connection's rule by its index in `route.rules`: each
+/// index maps back to the profile rule that made it (its D4 rejection
+/// included) or to the engine's own rules.
+#[test]
+fn every_route_rule_maps_back_to_what_made_it() {
+    let t = translate(&routing(), &Options::default()).unwrap();
+    let config = value(&t);
+    let rules = config["route"]["rules"].as_array().unwrap();
+    assert_eq!(t.rule_ids.len(), rules.len());
+    let video: Vec<usize> = (0..rules.len())
+        .filter(|&i| rules[i]["domain"] == json!(["video.example"]))
+        .collect();
+    assert_eq!(video.len(), 2, "the rule and its D4 rejection");
+    let id = &t.rule_ids[video[0]];
+    assert!(video.iter().all(|&i| &t.rule_ids[i] == id));
+    assert_ne!(id, "engine");
+
+    let t = translate(&contract(), &tun_options()).unwrap();
+    assert_eq!(t.rule_ids[0], "tun", "the TUN's sniff rule");
+    assert_eq!(
+        t.rule_ids.len(),
+        value(&t)["route"]["rules"].as_array().unwrap().len()
+    );
 }

@@ -50,6 +50,7 @@ fn translation() -> Translation {
         groups: Default::default(),
         members: Default::default(),
         direct_ipv6_hand_off: false,
+        rule_ids: Vec::new(),
     };
     t.outbound_nodes.insert("node-a".into(), "a".into());
     t.outbound_nodes.insert("node-a-1".into(), "a".into());
