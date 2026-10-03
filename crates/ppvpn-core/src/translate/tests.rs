@@ -30,6 +30,7 @@ const NODE_2: &str = "3f2c9a1e-0000-4000-8000-000000000002-129";
 
 fn local_proxy() -> LocalProxy {
     LocalProxy {
+        listen: "127.0.0.1".into(),
         port: 7890,
         prefix: "abcd1234".into(),
         password: "secret".into(),
@@ -783,4 +784,28 @@ fn the_tun_is_named_per_platform() {
     };
     let config = value(&translate(&contract(), &macos).unwrap());
     assert!(config["inbounds"][0].get("interface_name").is_none());
+}
+
+#[test]
+fn local_proxy_listens_where_configured() {
+    let options = Options {
+        local_proxy: Some(LocalProxy {
+            listen: "::1".into(),
+            ..local_proxy()
+        }),
+        ..Options::default()
+    };
+    let config = value(&translate(&contract(), &options).unwrap());
+    assert_eq!(config["inbounds"][0]["listen"], "::1");
+    let bad = Options {
+        local_proxy: Some(LocalProxy {
+            listen: "localhost".into(),
+            ..local_proxy()
+        }),
+        ..Options::default()
+    };
+    assert!(
+        translate(&contract(), &bad).is_err(),
+        "listen must be an address"
+    );
 }

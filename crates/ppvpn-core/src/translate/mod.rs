@@ -87,6 +87,9 @@ impl Default for HealthCheck {
 /// (`<prefix>-<node id>`) and the routed user (`<prefix>`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalProxy {
+    /// The address it listens on (`LocalProxyConfig::listen`, 127.0.0.1 by
+    /// default).
+    pub listen: String,
     pub port: u16,
     pub prefix: String,
     pub password: String,
@@ -431,7 +434,11 @@ impl Builder {
     }
 
     fn local_proxy(&mut self, profile: &Profile, proxy: &LocalProxy) -> Result<(), Error> {
-        if proxy.port == 0 || proxy.prefix.is_empty() || proxy.password.is_empty() {
+        if proxy.listen.parse::<std::net::IpAddr>().is_err()
+            || proxy.port == 0
+            || proxy.prefix.is_empty()
+            || proxy.password.is_empty()
+        {
             return Err(failed("invalid local proxy"));
         }
         let mut users = Vec::with_capacity(profile.nodes.len() + 1);
@@ -463,7 +470,7 @@ impl Builder {
         self.inbounds.push(json!({
             "type": "mixed",
             "tag": LOCAL_PROXY_INBOUND_TAG,
-            "listen": LOOPBACK,
+            "listen": proxy.listen,
             "listen_port": proxy.port,
             "users": users,
         }));
