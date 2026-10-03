@@ -49,9 +49,6 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: x86_64-unknown-linux-musl
-      # sail-cli runs in the Alpine nodes: a musl build (ci-build.sh).
-      - name: musl-gcc
-        run: sudo apt-get install -y --no-install-recommends musl-tools >/dev/null
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: lab
@@ -124,9 +121,6 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: x86_64-unknown-linux-musl
-      # sail-cli runs in the Alpine nodes: a musl build (ci-build.sh).
-      - name: musl-gcc
-        run: sudo apt-get install -y --no-install-recommends musl-tools >/dev/null
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: lab
