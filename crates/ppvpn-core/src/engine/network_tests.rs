@@ -241,3 +241,17 @@ async fn stop_forgets_offline() {
     });
     assert!(!engine.inner.live().offline);
 }
+
+/// sail may start before it knows the default interface and report no
+/// change when it learns it: the snapshot is read again after the start
+/// until it knows the network.
+#[tokio::test(start_paused = true)]
+async fn the_first_network_is_read_after_a_start_that_knew_none() {
+    let (engine, fake, _) = instance(Role::Tun);
+    fake.set_network(NetworkSnapshot::default());
+    running(&engine).await;
+    assert!(!no_default_interface(&engine));
+    fake.set_network(offline());
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(no_default_interface(&engine));
+}

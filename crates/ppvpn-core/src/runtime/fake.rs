@@ -212,6 +212,12 @@ impl FakeRuntime {
     /// A log line from sail; dropped and counted when the reader is behind.
     /// The network becomes `new`, as sail would publish it (`reason`:
     /// default_interface, state, host or wake).
+    /// The network becomes `new` without a change being reported (sail
+    /// learning its first default interface).
+    pub(crate) fn set_network(&self, new: NetworkSnapshot) {
+        *self.network.lock().unwrap() = new;
+    }
+
     pub(crate) fn change_network(&self, new: NetworkSnapshot, reason: &str) {
         let old = std::mem::replace(&mut *self.network.lock().unwrap(), new.clone());
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;

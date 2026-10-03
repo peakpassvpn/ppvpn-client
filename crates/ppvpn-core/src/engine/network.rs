@@ -23,6 +23,12 @@ use crate::runtime::{NetworkChange, NetworkSnapshot};
 /// probed again (Go: ReprobeDelay): a burst of changes probes once.
 pub(super) const REPROBE_DELAY: Duration = Duration::from_secs(2);
 
+/// After a start whose snapshot knows no network yet: how often, and how
+/// many times, the snapshot is read again until it does (sail reports no
+/// change for the first default interface).
+const FIRST_NETWORK_POLL: Duration = Duration::from_millis(100);
+const FIRST_NETWORK_POLLS: u32 = 50;
+
 /// What the Engine follows of sail's network.
 #[derive(Default)]
 pub(super) struct NetworkState {
@@ -92,22 +98,61 @@ impl Inner {
     /// After a start: the network as sail has it now. Not a change, so no
     /// NetworkChanged; the offline state follows it. A change this run has
     /// already reported is newer than the snapshot and stays.
-    pub(super) fn network_started(&self) {
+    pub(super) fn network_started(self: &Arc<Self>) {
+        if !self.take_first_network() {
+            self.await_first_network();
+        }
+    }
+
+    /// The snapshot as the run's first network, unless a change came first
+    /// (it is newer). False when the snapshot knows no network yet (no
+    /// interface, not offline): it says nothing.
+    fn take_first_network(&self) -> bool {
         let mut track = self.network.track();
         if track.generation > 0 {
-            return;
+            return true;
         }
         let snapshot = self.runtime.network();
         track.last = snapshot.clone();
-        // A snapshot that knows no network yet (no interface, not offline)
-        // says nothing.
-        if let Some(snapshot) = snapshot.filter(|s| s.offline || s.interface.is_some()) {
-            log_default_interface("start", &snapshot);
-            self.local_dns_network(&snapshot);
-            let mut live = self.live();
-            live.offline = snapshot.offline;
-            self.settle(&mut live);
-        }
+        let Some(snapshot) = snapshot.filter(|s| s.offline || s.interface.is_some()) else {
+            return false;
+        };
+        log_default_interface("start", &snapshot);
+        self.local_dns_network(&snapshot);
+        let mut live = self.live();
+        live.offline = snapshot.offline;
+        self.settle(&mut live);
+        true
+    }
+
+    /// Transitional, removed once sail's start returns with the snapshot
+    /// ready (a known interface or offline, then `Restored`): today sail
+    /// may start before it knows the default interface and reports no
+    /// change when it learns it, so dns-local would have no interface
+    /// (SERVFAIL) until the first change. The snapshot is read again for a
+    /// while, within this run.
+    fn await_first_network(self: &Arc<Self>) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let run = self.live().run;
+        let weak: Weak<Inner> = Arc::downgrade(self);
+        handle.spawn(async move {
+            for _ in 0..FIRST_NETWORK_POLLS {
+                tokio::time::sleep(FIRST_NETWORK_POLL).await;
+                let Some(inner) = weak.upgrade() else { return };
+                {
+                    let live = inner.live();
+                    if !live.running || live.run != run {
+                        return;
+                    }
+                }
+                if inner.take_first_network() {
+                    return;
+                }
+            }
+            tracing::warn!("no default interface known since the start");
+        });
     }
 
     /// At stop or shutdown: the run's network goes with it. A sleeping
