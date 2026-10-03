@@ -45,6 +45,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Registry",
 ] }
 
+[features]
+# Test support for tests/ (the in-memory runtime behind internal): turned on
+# by the dev-dependency on this crate below, so never in a host's build.
+testing = []
+
 [dev-dependencies]
+ppvpn-core = { path = ".", features = ["testing"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
