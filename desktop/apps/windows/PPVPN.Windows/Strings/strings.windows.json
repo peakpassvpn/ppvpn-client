@@ -1,0 +1,18 @@
+{
+  "zh": {
+    "msgWindowTitle": "消息中心 - PPVPN",
+    "followPaused": "已暂停跟随",
+    "backToLogin": "返回登录",
+    "noNode": "未选择节点",
+    "copyUrl": "复制地址",
+    "logMissing": "此日志文件尚不存在。"
+  },
+  "en": {
+    "msgWindowTitle": "Messages - PPVPN",
+    "followPaused": "Not following",
+    "backToLogin": "Back to sign-in",
+    "noNode": "No node selected",
+    "copyUrl": "Copy Address",
+    "logMissing": "This log file doesn’t exist yet."
+  }
+}

@@ -34,6 +34,7 @@ mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
 mod logs;
+mod network;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
@@ -72,6 +73,7 @@ struct Inner {
     /// The instance's log lines, to its sink (section 10).
     log: Logs,
     tun: tun::TunState,
+    network: network::NetworkState,
 }
 
 impl Drop for Inner {
@@ -142,6 +144,7 @@ impl Engine {
         log.attach(&runtime);
         let inner = Arc::new(Inner {
             tun: tun::TunState::new(&config),
+            network: network::NetworkState::default(),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),
@@ -178,8 +181,11 @@ impl Engine {
             // may take the directory once it is free.
             state_dir: inner.state_dir.lock().expect("state dir lock").take(),
         };
+        // A sleeping re-probe goes first; one under way held `op` and is done.
+        inner.network_stopped();
         let report = cleanup::cleanup(parts, left).await;
-        drop(op);
+        // Shut down before the operation lock goes, so nothing queued on it
+        // (a re-probe, a lifecycle call) acts on the torn-down runtime.
         {
             let mut live = inner.live();
             if !live.shut_down {
@@ -189,6 +195,7 @@ impl Engine {
                 inner.settle(&mut live);
             }
         }
+        drop(op);
         inner.bus.close();
         Ok(report)
     }

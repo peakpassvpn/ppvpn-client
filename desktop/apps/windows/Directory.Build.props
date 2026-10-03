@@ -1,0 +1,23 @@
+<Project>
+  <!--
+    Single source of truth for the Windows app version. The app, the
+    installer (scripts/package.ps1 reads these with `dotnet msbuild
+    -getProperty`) and the update feed all use these values.
+
+    VersionPrefix     user-visible semantic version (installer name, About, sparkle:shortVersionString);
+                      the SDK derives Version from it (plus VersionSuffix for pre-releases)
+    PpvpnBuildNumber  bumped for every published build; CI may override it with -p:PpvpnBuildNumber=N
+    FileVersion       VersionPrefix.Build, the monotonic version WinSparkle compares (sparkle:version)
+  -->
+  <PropertyGroup>
+    <VersionPrefix>0.3.0</VersionPrefix>
+    <PpvpnBuildNumber Condition="'$(PpvpnBuildNumber)' == ''">1</PpvpnBuildNumber>
+    <FileVersion>$(VersionPrefix).$(PpvpnBuildNumber)</FileVersion>
+    <AssemblyVersion>$(FileVersion)</AssemblyVersion>
+    <Product>PPVPN</Product>
+    <Company>PeakPass VPN LLC</Company>
+    <Copyright>© PeakPass VPN LLC</Copyright>
+    <!-- CI builds with -warnaserror; only high/critical NuGet advisories (NU1903/NU1904) fail it. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902</WarningsNotAsErrors>
+  </PropertyGroup>
+</Project>
