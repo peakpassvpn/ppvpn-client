@@ -23,6 +23,7 @@ use std::net::{IpAddr, SocketAddr};
 use serde_json::{json, Map, Value};
 
 use super::{failed, Builder, DIRECT_TAG, PRIVATE_PREFIXES, SELECTED_TAG};
+use crate::config::Platform;
 use crate::error::Error;
 use crate::profile::{normalize_domain, Profile};
 
@@ -88,7 +89,26 @@ pub(crate) struct Tun {
     /// The host has IPv6 but no IPv6 path of its own (no global address with
     /// a default route): see [`Builder::tun_rules`]. Desktop with IPv6 only.
     pub no_host_ipv6_route: bool,
+    /// The TUN device's name ([`interface_name`]); none on mobile, where the
+    /// host builds the tunnel.
+    pub interface_name: String,
     pub local_dns: LocalDns,
+}
+
+/// The TUN device's name on `platform`, when the core names it. sail
+/// counts its TUN as its own (default interface choice, DNS server filter)
+/// only when it is named, and logs and captures name it: `ppvpn0` on Linux,
+/// `PPVPN` on Windows (the Wintun adapter, reused by name; its GUID follows
+/// from the name). Not on macOS: sail opens a utun by its number and fails
+/// when it is taken, so the kernel picks it and sail reports the name it
+/// got. Not on mobile, where the host builds the tunnel. Hosts do not
+/// depend on the name.
+pub(crate) fn interface_name(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Linux => "ppvpn0",
+        Platform::Windows => "PPVPN",
+        _ => "",
+    }
 }
 
 /// Where dns-local asks.
@@ -100,6 +120,12 @@ pub(crate) enum LocalDns {
     /// These, in order (the host's override, or what the core's dns-local
     /// read from the default interface; a change is a reload).
     Servers(Vec<SocketAddr>),
+    /// The core's own dns-local (crate::localdns) listening on loopback:
+    /// it reads the default interface's resolvers, follows sail's network
+    /// events and asks the physical network itself. Asked over TCP, which
+    /// carries a whole answer: sail's UDP client does not retry a truncated
+    /// one over TCP.
+    Listener(SocketAddr),
 }
 
 /// Host-supplied physical resolvers: an IP, IP:port or [IPv6]:port each
@@ -238,6 +264,9 @@ impl Builder {
             "tag": TUN_INBOUND_TAG,
             "address": [TUN_INET4_ADDRESS],
         });
+        if !tun.interface_name.is_empty() {
+            inbound["interface_name"] = tun.interface_name.clone().into();
+        }
         if tun.desktop {
             if tun.ipv6 {
                 inbound["address"] = json!([TUN_INET4_ADDRESS, TUN_INET6_ADDRESS]);
@@ -285,6 +314,12 @@ impl Builder {
         let mut servers = Vec::new();
         match &tun.local_dns {
             LocalDns::System => servers.push(json!({ "type": "local", "tag": DNS_LOCAL_TAG })),
+            LocalDns::Listener(listener) => servers.push(json!({
+                "type": "tcp",
+                "tag": DNS_LOCAL_TAG,
+                "server": listener.ip().to_string(),
+                "server_port": listener.port(),
+            })),
             LocalDns::Servers(list) if list.is_empty() => {
                 return Err(failed("no local DNS server outside the tunnel"))
             }
