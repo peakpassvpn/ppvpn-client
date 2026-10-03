@@ -193,7 +193,14 @@ async fn serve_with_log(log: &Logger, f: &flags::FlagSet) -> Result<(), String> 
         secret,
         log: log.clone(),
     });
-    let listener = listen(&s.socket)?;
+    let listener = match listen(&s.socket) {
+        Ok(listener) => listener,
+        Err(e) => {
+            // The engine is up: take it down before the error goes out.
+            let _ = tokio::time::timeout(Duration::from_secs(10), engine.shutdown()).await;
+            return Err(e);
+        }
+    };
     log.info("serve ready", &[("socket", &s.socket)]);
 
     let (stdin_closed_tx, stdin_closed) = tokio::sync::oneshot::channel::<()>();
@@ -205,15 +212,18 @@ async fn serve_with_log(log: &Logger, f: &flags::FlagSet) -> Result<(), String> 
     } else {
         std::mem::forget(stdin_closed_tx);
     }
-    let reason = tokio::select! {
-        err = serve_socket(listener, api) => return Err(format!("ipc serve: {err}")),
-        reason = signal() => reason,
-        _ = stdin_closed => "stdin closed",
+    let outcome = tokio::select! {
+        err = serve_socket(listener, api) => Err(format!("ipc serve: {err}")),
+        reason = signal() => Ok(reason),
+        _ = stdin_closed => Ok("stdin closed"),
     };
-    log.info("serve stopping", &[("reason", &reason)]);
+    if let Ok(reason) = &outcome {
+        log.info("serve stopping", &[("reason", reason)]);
+    }
+    // Whatever ended serving: the engine goes down and the socket with it.
     let _ = tokio::time::timeout(Duration::from_secs(10), engine.shutdown()).await;
     let _ = std::fs::remove_file(&s.socket);
-    Ok(())
+    outcome.map(|_| ())
 }
 
 #[cfg(unix)]
@@ -224,8 +234,14 @@ fn listen(socket: &str) -> Result<tokio::net::UnixListener, String> {
             create_private_dir(dir).map_err(|e| format!("listen on {socket}: {e}"))?;
         }
     }
-    // A socket left by a core that was killed: nobody listens on it.
-    if std::os::unix::net::UnixStream::connect(socket).is_err() {
+    // A socket left by a core that was killed: a socket nobody listens on.
+    // Anything else at the path (a file given by mistake, a live core) is
+    // left alone, and binding then fails with what is there.
+    use std::os::unix::fs::FileTypeExt;
+    let stale = std::fs::symlink_metadata(socket).is_ok_and(|m| m.file_type().is_socket())
+        && std::os::unix::net::UnixStream::connect(socket)
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::ConnectionRefused);
+    if stale {
         let _ = std::fs::remove_file(socket);
     }
     let listener =
