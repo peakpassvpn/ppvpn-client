@@ -18,7 +18,7 @@ use chrono::Utc;
 use futures_util::FutureExt;
 use ppvpn_core::internal::{engine_on_fake_runtime, validate_request};
 use ppvpn_core::{
-    ApplyRequest, Engine, EngineConfig, Error, EventItem, EventKind, Platform,
+    codes, ApplyRequest, Engine, EngineConfig, Error, EventItem, EventKind, Platform,
     ProbeAvailabilityRequest, Role, RoutingMode,
 };
 use serde_json::{json, Value};
@@ -79,6 +79,14 @@ fn validation_matches_the_go_golden() {
             let want = expected(&name, step_name, &expect["response"]);
             let got = outcome(step);
             checked += 1;
+            // Every code a request is rejected with is in the list hosts use.
+            if let Some((code, _, _)) = &got {
+                if !codes::PROFILE_VALIDATION.contains(&code.as_str()) {
+                    failures.push(format!(
+                        "{name}/{step_name}: {code} is not in codes::PROFILE_VALIDATION"
+                    ));
+                }
+            }
             if got != want {
                 failures.push(format!("{name}/{step_name}: got {got:?}, want {want:?}"));
             }
