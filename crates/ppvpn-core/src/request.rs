@@ -70,7 +70,10 @@ pub struct ApplyRequest {
     /// Default none.
     #[serde(default)]
     pub pins: Vec<Pin>,
-    /// Default none: any host the profile names.
+    /// The hosts rule sets may be downloaded from (the API the profile came
+    /// from). Default none: nothing is downloaded, only verified cached
+    /// copies are used (`RULE_SET_HOST_NOT_PINNED`); when given, every rule
+    /// set URL of the profile must be on one of them.
     #[serde(default)]
     pub allowed_rule_set_hosts: Vec<String>,
 }
