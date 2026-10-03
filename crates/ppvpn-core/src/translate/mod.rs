@@ -245,6 +245,13 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         None => None,
     };
 
+    if let Some(resolver) = b.direct_resolver.take() {
+        for outbound in &mut b.outbounds {
+            if outbound["tag"] == DIRECT_TAG {
+                outbound["domain_resolver"] = resolver.clone();
+            }
+        }
+    }
     let mut root = Map::new();
     if !options.log_level.is_empty() {
         root.insert(
@@ -277,13 +284,6 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }
     if let Some(final_tag) = final_tag {
         route.insert("final".into(), Value::String(final_tag));
-    }
-    if let Some(resolver) = b.direct_resolver.take() {
-        for outbound in &mut b.outbounds {
-            if outbound["tag"] == DIRECT_TAG {
-                outbound["domain_resolver"] = resolver.clone();
-            }
-        }
     }
     if b.auto_detect_interface {
         // The core's own sockets (handshakes, direct traffic) bind to the
