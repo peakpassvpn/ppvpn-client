@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Gathers and compares the performance checks' tier A numbers.
+"""Gathers and compares the performance checks' tier A and B numbers.
 
 Adapted from peakpassvpn/sail tools/perf/report.py (Apache-2.0).
 
     report.py collect --sha SHA --engine ENGINE [--size NAME=FILE ...] LOG... > perf.json
         Takes the `PERF {...}` lines of measure.py and of the engine's
         allocation test from LOGs, and the sizes of FILEs, into one file of
-        numbers: the median of each over its rounds, and the rounds.
+        numbers: the median of each over its rounds, and the rounds. Lines
+        that name another engine ("engine", tier B's) are left out.
 
     report.py merge [--env KEY=VALUE ...] PERF.json... > perf.json
         One file of the files of one commit's jobs, with the measurement
@@ -33,13 +34,28 @@ import re
 import statistics
 import sys
 
-# metric suffix -> (largest growth against the last main run, against the
-# Go 0.5.21 baseline, only comparable within one engine, source). None: no
-# threshold, the number is recorded only. The most specific suffix first.
+# metric suffix -> (largest change against the last main run, against the
+# Go 0.5.21 baseline, only comparable within one engine, source[, how]).
+# None: no threshold, the number is recorded only. The most specific suffix
+# first. how: "up" (the default) crosses when the number grows by more than
+# the limit, "down" when it falls by more (throughput), "abs" when it grows
+# by more than the limit in its own unit.
 # Calibration (2026-10-03, testdata/perf/baseline-go-0.5.21.json): ten
 # single-round runners plus three; "spread" is (max - min) / median of the
 # rounds. A compared number is a median of three, so it varies less.
 THRESHOLDS = [
+    # Tier B (#45's thresholds, against Go measured as a pair on one
+    # machine on one day; never against main: tier B runs by hand).
+    ("_mbit", None, 0.05, False, "#45: throughput at least 95% of Go's", "down"),
+    ("extra_p50_us", None, 2000, False, "#45: p50 at most Go + 2 ms", "abs"),
+    ("extra_p99_us", None, 0.10, False, "#45: p99 at most 110% of Go's"),
+    ("connect_p50_us", None, 0.10, False, "#45: first packet p50 at most 110% of Go's"),
+    ("cpu100_pct", None, 0.10, False, "#45: CPU at 100 Mbit/s at most 110% of Go's"),
+    ("idle_cpu_pct", None, 0.0, False, "#45: idle CPU not above Go's"),
+    ("idle_switches_per_s", None, None, False, "record only: wakeups, roughly"),
+    ("_cpu_pct", None, None, False, "record only: where the throughput's bottleneck was"),
+    ("_load_limited", None, None, False, "1: the throughput beside it is the load side's"),
+    ("_us", None, None, False, "record only"),
     # Reproducible (spread 0). Against Go a trend only: Rust links the
     # engine into the host, whose installer Desktop measures (#45).
     ("size_bytes", 0.02, None, False, "spread 0; Go vs Rust: trend only"),
@@ -60,10 +76,20 @@ NAME = re.compile(r"^[a-z0-9_.-]+$")
 
 
 def threshold(metric):
-    for suffix, main, baseline, same_engine, source in THRESHOLDS:
+    for suffix, main, baseline, same_engine, source, *how in THRESHOLDS:
         if metric.endswith(suffix):
-            return main, baseline, same_engine, source
+            return main, baseline, same_engine, source, (how or ["up"])[0]
     return None
+
+
+def crosses(now, old, limit, how):
+    """Whether now, against old, crosses limit; and the change as shown."""
+    if how == "abs":
+        delta = now - old
+        return delta > limit, f"{delta:+.6g}"
+    growth = now / old - 1
+    over = growth < -limit if how == "down" else growth > limit
+    return over, f"{growth:+.1%}"
 
 
 def collect(args):
@@ -74,6 +100,8 @@ def collect(args):
                 if not line.startswith("PERF "):
                     continue
                 row = json.loads(line[5:])
+                if row.pop("engine", args.engine) != args.engine:
+                    continue
                 prefix = row.pop("profile")
                 row.pop("round", None)
                 for key, value in row.items():
@@ -145,6 +173,16 @@ def dump(data):
     print()
 
 
+def change_of(now, old):
+    return f"{now / old - 1:+.1%}" if old else "—"
+
+
+def limit_text_of(limit, how):
+    if how == "abs":
+        return f"+{limit:g}"
+    return f"{'-' if how == 'down' else ''}{limit:.0%}"
+
+
 def compare(args):
     new = load(args.new)
     against = []
@@ -162,20 +200,27 @@ def compare(args):
         cells = []
         for which, base in against:
             old = base["metrics"].get(metric)
-            if old is None or not old["median"]:
+            how = limits[4] if limits else "up"
+            if old is None or (how != "abs" and not old["median"]):
                 cells.append("—")
                 continue
             if limits and limits[2] and base["engine"] != new["engine"]:
                 cells.append("(same engine only)")
                 continue
-            growth = now["median"] / old["median"] - 1
+            # A throughput the load side capped, here or there, is not judged.
+            limited = metric.removesuffix("_mbit") + "_load_limited"
+            if metric.endswith("_mbit") and any(
+                    (f["metrics"].get(limited) or {}).get("median", 0) >= 0.5 for f in (new, base)):
+                cells.append(f"{change_of(now['median'], old['median'])} (load-limited, not judged)")
+                continue
             limit = limits and (limits[0] if which == "main" else limits[1])
-            over = limit is not None and growth > limit
+            over, change = crosses(now["median"], old["median"], limit if limit is not None else 0, how)
+            over = over and limit is not None
             if over:
-                crossed.append(f"{metric}: +{growth:.1%} against {which} (limit {limit:.0%})")
-            cells.append(f"{'**' if over else ''}{growth:+.1%}{'**' if over else ''}")
+                crossed.append(f"{metric}: {change} against {which} (limit {limit_text_of(limit, how)})")
+            cells.append(f"{'**' if over else ''}{change}{'**' if over else ''}")
         if limits:
-            limit_text = " / ".join("—" if v is None else f"{v:.0%}" for v in limits[:2])
+            limit_text = " / ".join("—" if v is None else limit_text_of(v, limits[4]) for v in limits[:2])
         else:
             limit_text = "—"
         lines.append(f"| {metric} | {now['median']:.6g} | " + " | ".join(cells) + f" | {limit_text} |")
