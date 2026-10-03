@@ -34,6 +34,16 @@ up() {
 # outbound_to <destination>: the outbound of the last connection log line to
 # destination (host:port).
 outbound_to() { grep -E "msg=connection .*destination=$1( |$)" $R/core.log | sed -n 's/.*outbound=\([^ ]*\).*/\1/p' | tail -1; }
-summary() { echo "== $CASE_PASS passed, $CASE_FAIL failed (engine=$ENGINE)"; [ "$CASE_FAIL" = 0 ]; }
+summary() {
+  echo "== $CASE_PASS passed, $CASE_FAIL failed (engine=$ENGINE)"
+  # On a failure, the log lines the checks read (dns, connection, kernel
+  # switched), so that a missing or differently written line shows here: a
+  # reported-only step uploads no artifact.
+  if [ "$CASE_FAIL" != 0 ] && [ -f $R/core.log ]; then
+    grep -E 'msg=(dns|connection|"kernel switched"|"dns:)' $R/core.log | tail -15 | sed 's/^/  log: /'
+    echo "  log: $(wc -l < $R/core.log) lines, $(grep -c 'level=debug' $R/core.log) at debug"
+  fi
+  [ "$CASE_FAIL" = 0 ]
+}
 # exit_of: the web target's "exit=<address> host=<host>" -> the address.
 exit_of() { sed -n 's/.*exit=\([^ ]*\).*/\1/p'; }
