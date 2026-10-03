@@ -70,7 +70,55 @@ pub struct VersionInfo {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ShutdownReport {
-    pub leftovers: Vec<String>,
+    pub leftovers: Vec<Leftover>,
+}
+
+/// One thing a teardown could not undo, for the host to tell apart by
+/// `kind` and `name`; `detail` is what went wrong, for the log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Leftover {
+    pub kind: LeftoverKind,
+    /// Stable within its kind: the step, the adapter, the table, the task.
+    pub name: String,
+    pub detail: String,
+}
+
+impl Leftover {
+    pub(crate) fn new(
+        kind: LeftoverKind,
+        name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Leftover {
+            kind,
+            name: name.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum LeftoverKind {
+    /// The runtime itself (its stop failed or timed out), or what sail's
+    /// stop report names without a kind.
+    Runtime,
+    /// A task of the runtime still running.
+    Task,
+    /// The TUN device or adapter.
+    Tun,
+    /// Routes.
+    Route,
+    /// The system's DNS settings.
+    Dns,
+    /// Windows filtering platform filters (strict route).
+    Wfp,
+    /// Linux policy rules (ip rule, nftables).
+    Rule,
+    /// The teardown's own steps (did not finish, did not run).
+    Steps,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
