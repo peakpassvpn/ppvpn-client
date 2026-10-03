@@ -52,6 +52,9 @@ volatile() { sed -E 's/ expires [0-9]+sec//g; s/counter packets [0-9]+ bytes [0-
 # resolved lists (rules, routes and nft are compared as they are).
 HOST_NIC='enP[0-9]+s[0-9]+'
 hostnic() { grep -vE "^${HOST_NIC}\$|\(${HOST_NIC}\)" || true; }
+# resolvectl status without the runner's VFs' blocks and the servers resolved
+# picks among the configured ones at the moment (Current DNS Server).
+hostlinks() { awk -v nic="\\(${HOST_NIC}\\)" '/^Link [0-9]+ / { skip = ($0 ~ nic) } !skip && !/Current DNS Server/ && NF'; }
 snapshot() { # file
 	{
 		echo "## ip -4 rule"; ip -4 rule show
@@ -64,6 +67,9 @@ snapshot() { # file
 		echo "## /etc/netns"; ls -A /etc/netns 2>/dev/null || true
 		echo "## resolvectl dns"; { resolvectl dns 2>/dev/null || echo "(no systemd-resolved)"; } | hostnic
 		echo "## resolvectl domain"; { resolvectl domain 2>/dev/null || true; } | hostnic
+		# Per link: default route, DNSSEC, DNS over TLS, LLMNR, mDNS, the
+		# servers and domains (a TUN's DNS set on a host link shows here).
+		echo "## resolvectl status"; { resolvectl status 2>/dev/null || true; } | hostlinks
 	} > "$1"
 }
 
@@ -96,7 +102,7 @@ else
 		args=(-test.v -test.count=1 "$@")
 	fi
 	# shellcheck disable=SC2086
-	ip netns exec "$T" env PPVPN_TEST_REAL_TUN=1 ${NETNS_ENV:-} \
+	ip netns exec "$T" sh "$HERE/no-host-dbus.sh" env PPVPN_TEST_REAL_TUN=1 ${NETNS_ENV:-} \
 		timeout --kill-after=10 "${NETNS_TIMEOUT:-300}" "$BIN" "${args[@]}" > "$OUT/test.txt" 2>&1 || status=$?
 	cat "$OUT/test.txt"
 	[ "$status" = 124 ] && echo "run.sh: the test binary timed out after ${NETNS_TIMEOUT:-300} s" >&2
