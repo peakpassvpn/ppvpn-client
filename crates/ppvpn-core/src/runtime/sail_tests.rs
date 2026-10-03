@@ -551,18 +551,25 @@ async fn a_routed_connection_is_told_once_taken() {
     })
     .await
     .expect("routed in time");
-    // route.final is the selector pick, on direct: the chain says the
-    // outbound that carried it first.
+    // route.final is the selector pick, on direct: outermost first, the
+    // last the outbound that carried it.
     assert_eq!(
         (
             routed.network.as_str(),
             routed.inbound.as_str(),
             routed.action.as_str(),
             routed.rule,
-            routed.chain.first().map(String::as_str),
+            routed.chain.clone(),
             routed.error.as_deref(),
         ),
-        ("tcp", "local", "outbound", None, Some("direct"), None),
+        (
+            "tcp",
+            "local",
+            "outbound",
+            None,
+            vec!["pick".to_owned(), "direct".to_owned()],
+            None
+        ),
         "{routed:?}"
     );
     assert!(routed.connect_ms.is_some(), "{routed:?}");
