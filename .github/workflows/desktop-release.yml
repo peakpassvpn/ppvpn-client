@@ -7,7 +7,7 @@ name: desktop-release
 # installers as a GitHub Release with SHA256SUMS and build provenance.
 #
 #   stable: run on the tag desktop-vX.Y.Z. Always published.
-#   dev:    any ref of this repository. Published only when asked: by
+#   dev:    run on the branch main. Published only when asked: by
 #           default the installers stay workflow artifacts. A published dev
 #           build is a prerelease tagged desktop-vX.Y.Z-dev.<build>.
 #
@@ -97,6 +97,11 @@ jobs:
             dev)
               tag="desktop-v$version-dev.$build"
               publish=$PUBLISH_DEV
+              # A second guard beside the environment's own branch rule.
+              if [ "$REF_TYPE" != branch ] || [ "$REF_NAME" != main ]; then
+                echo "dev releases must run on the branch main (got $REF_TYPE $REF_NAME)" >&2
+                exit 1
+              fi
               ;;
             *) echo "unknown channel $CHANNEL" >&2; exit 1 ;;
           esac
@@ -116,8 +121,8 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
       build_number: ${{ needs.prepare.outputs.build_number }}
       environment: desktop-release-${{ inputs.channel }}
-    # The package jobs run in the environment and take its secrets.
-    secrets: inherit
+    # No secret is passed: the package jobs run in the environment and
+    # read its secrets themselves.
 
   # Only when publishing (an unpublished dev build ends with the package
   # jobs' artifacts). The release's files, checked as a whole before
