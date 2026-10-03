@@ -22,8 +22,11 @@ fn local_proxy(port: u16, password: &str, users: &[&str]) -> Value {
     })
 }
 
-fn secret(tag: char) -> String {
-    format!("{tag}{:x}", std::process::id())
+/// Random bytes, hex: tests never hard-code a secret.
+fn secret() -> String {
+    let mut buf = [0u8; 8];
+    getrandom::fill(&mut buf).unwrap();
+    buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn tun(mtu: u32) -> Value {
@@ -38,8 +41,8 @@ fn config(inbounds: Vec<Value>, route: Value) -> String {
 /// the engine; the reasons are Go's words.
 #[test]
 fn full_restart_reasons_are_a_whitelist() {
-    // Two passwords, made at run time (never a literal credential).
-    let (s, x) = (secret('s'), secret('x'));
+    // Two passwords, random (never a literal credential).
+    let (s, x) = (secret(), secret());
     let route = json!({ "auto_detect_interface": true });
     let running = config(
         vec![local_proxy(7890, &s, &["p-a", "p"]), tun(9000)],
