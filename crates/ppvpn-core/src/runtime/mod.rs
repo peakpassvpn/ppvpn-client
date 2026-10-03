@@ -175,7 +175,12 @@ pub(crate) struct NetworkChange {
     /// From 1 for each start of the runtime; a reader that sees a gap
     /// missed changes in between (the channel keeps the latest only).
     pub generation: u64,
-    /// `default_interface`, `state`, `host` (pushed) or `wake`.
+    /// `interface_changed` (another default interface), `moved` (the same
+    /// interface on another network, a wake included), `offline` (no
+    /// default interface) or `restored` (one again after none).
+    pub change: String,
+    /// `default_interface`, `state`, `host` (pushed), `wake`, or `lagged`
+    /// (made up from the snapshot after changes were missed).
     pub reason: String,
     pub old: NetworkSnapshot,
     pub new: NetworkSnapshot,
@@ -259,14 +264,32 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// across starts and stops.
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>>;
 
-    /// Starts listening for one more inbound (`inbound`: one sing-box
-    /// inbound, JSON) without a reload: a reload keeps the listeners as they
-    /// are and neither opens nor closes one. Other listeners and open
-    /// connections are untouched.
+    /// Starts listening with `inbound` (one inbound of sing-box JSON) while
+    /// running: a reload neither adds nor removes listeners (embed.md,
+    /// Reload). The other inbounds and every connection stay.
     async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError>;
-    /// Stops listening for the inbound `tag` and removes it, without a
-    /// reload. Other listeners and their connections are untouched.
+    /// Stops listening on the inbound `tag` and closes the connections that
+    /// came in through it; the other inbounds and their connections stay.
     async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError>;
+}
+
+/// An inbound's tag in sing-box JSON: `tag`, else its `type`.
+pub(crate) fn inbound_tag(inbound: &serde_json::Value) -> Option<String> {
+    inbound["tag"]
+        .as_str()
+        .filter(|t| !t.is_empty())
+        .or_else(|| inbound["type"].as_str())
+        .map(str::to_owned)
+}
+
+/// The kind a change from `old` to `new` would have had.
+pub(crate) fn made_up_kind(old: &NetworkSnapshot, new: &NetworkSnapshot) -> &'static str {
+    match (old.offline, new.offline) {
+        (_, true) => "offline",
+        (true, false) => "restored",
+        _ if (&old.interface, old.index) != (&new.interface, new.index) => "interface_changed",
+        _ => "moved",
+    }
 }
 
 /// The `interface_name` of the configuration's tun inbound, if it has one.

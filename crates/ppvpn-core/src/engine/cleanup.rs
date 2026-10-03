@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::EngineConfig;
+use crate::config::{EngineConfig, Platform, Role};
 use crate::error::Error;
 use crate::runtime::Runtime;
 use crate::state_dir::StateDirLock;
 use crate::types::ShutdownReport;
+use crate::{translate, tunrules};
 
 /// `shutdown`'s limit.
 pub(super) const SHUTDOWN_LIMIT: Duration = Duration::from_secs(10);
@@ -31,11 +32,38 @@ pub(super) const DROP_LIMIT: Duration = Duration::from_secs(5);
 /// which names each step left (the steps keep the deadline themselves).
 const REPORT_GRACE: Duration = Duration::from_millis(200);
 
+/// Where sail writes down what an instance changes in the system (its TUN,
+/// routes, rules), so that the next start, or [`sweep`], undoes what a
+/// killed instance left: under the instance's own state directory.
+pub(super) fn run_dir(config: &EngineConfig) -> sail::embed::RunDir {
+    sail::embed::RunDir::Dir(config.state_dir.join("run"))
+}
+
 /// Idempotently removes what a previous instance on this host left (rules,
 /// routes, adapters it can tell are its own), before anything else at `new`.
+///
+/// - sail's ledger under [`run_dir`]: each change a killed instance's sail
+///   wrote down (Linux: its TUN, routes and rules). On macOS a kill leaves
+///   nothing (the kernel reclaims the utun and its routes); Windows writes
+///   no ledger yet (rust-parity).
+/// - Linux Tun instances, besides: our own rule priority range and table
+///   (tunrules), whatever wrote them.
+///
+/// A sweep that fails is logged and does not stop `new`: what it could not
+/// remove does not keep this instance from working, and the guard puts
+/// back what this instance needs.
 pub(super) fn sweep(config: &EngineConfig) -> Result<(), Error> {
-    // sweep: the platform sweep module (separate PR) runs here.
-    let _ = config;
+    if config.role == Role::Tun {
+        for undone in sail::embed::sweep(&run_dir(config)) {
+            tracing::info!(undone = %undone, "leftover of a killed instance removed");
+        }
+    }
+    if config.role == Role::Tun && config.platform == Platform::Linux {
+        let scope = tunrules::Scope::desktop(translate::interface_name(config.platform));
+        if let Err(e) = tunrules::sweep(&scope) {
+            tracing::warn!(error = %e, "tun routing leftovers could not be removed");
+        }
+    }
     Ok(())
 }
 
@@ -347,5 +375,15 @@ mod tests {
         });
         assert!(report.leftovers.is_empty(), "{report:?}");
         assert_eq!(runtime.state(), RuntimeState::Stopped);
+    }
+
+    #[test]
+    fn sweep_leaves_alone_what_it_does_not_own() {
+        // A Standard instance has no TUN routing; nor has any instance off
+        // Linux yet: nothing to sweep, nothing that can fail.
+        let standard = EngineConfig::new(Role::Standard, Platform::Linux, state_dir("sweep"));
+        assert!(sweep(&standard).is_ok());
+        let macos = EngineConfig::new(Role::Tun, Platform::Macos, state_dir("sweep-mac"));
+        assert!(sweep(&macos).is_ok());
     }
 }

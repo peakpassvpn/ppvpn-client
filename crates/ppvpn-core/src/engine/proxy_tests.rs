@@ -320,9 +320,32 @@ async fn system_proxy_listener_toggles() {
 
     // While running the listener alone comes and goes: no reload (a
     // reload neither opens nor closes a listener), the local proxy's stays.
-    let listening = |fake: &FakeRuntime, tag: &str| fake.listening().iter().any(|t| t == tag);
+    let listening = |fake: &FakeRuntime, tag: &str| fake.inbounds().iter().any(|t| t == tag);
     assert!(listening(&fake, SYSTEM_PROXY_INBOUND_TAG));
+    let connection = |id: u64, inbound: &str| crate::runtime::RuntimeConnection {
+        id,
+        inbound: inbound.into(),
+        chain: vec!["direct".into()],
+        network: "tcp".into(),
+        destination: "192.0.2.10:443".into(),
+        upload_bytes: 0,
+        download_bytes: 0,
+        started: std::time::SystemTime::now(),
+    };
+    fake.set_connections(vec![
+        connection(1, SYSTEM_PROXY_INBOUND_TAG),
+        connection(2, LOCAL_PROXY_INBOUND_TAG),
+    ]);
     let off = engine.set_system_proxy_listener(false).await.unwrap();
+    // Closing it ends its own connections only.
+    let left: Vec<u64> = fake
+        .connections()
+        .await
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(left, [2]);
     assert_eq!(
         serde_json::to_string(&off).unwrap(),
         r#"{"available":true,"enabled":false,"listening":false}"#
@@ -372,18 +395,9 @@ async fn system_proxy_listener_toggles() {
     assert_eq!(engine.status().state, EngineState::Running);
 
     // stop closes it with everything else, its connections included.
-    fake.set_connections(vec![crate::runtime::RuntimeConnection {
-        id: 7,
-        inbound: SYSTEM_PROXY_INBOUND_TAG.into(),
-        chain: vec!["direct".into()],
-        network: "tcp".into(),
-        destination: "192.0.2.10:443".into(),
-        upload_bytes: 0,
-        download_bytes: 0,
-        started: std::time::SystemTime::now(),
-    }]);
+    fake.set_connections(vec![connection(7, SYSTEM_PROXY_INBOUND_TAG)]);
     engine.stop().await.unwrap();
-    assert!(fake.listening().is_empty());
+    assert!(fake.inbounds().is_empty());
     assert!(fake.calls().iter().any(|c| matches!(c, Call::Stop)));
 }
 

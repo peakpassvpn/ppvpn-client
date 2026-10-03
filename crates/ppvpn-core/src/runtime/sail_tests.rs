@@ -350,8 +350,9 @@ async fn dns_local_dials_through_the_direct_outbound() {
     runtime.stop().await.unwrap();
 }
 
-// The network as sail sees it, and its changes as sail publishes them to
-// its own reaction (here a wake, which sail announces whatever the state).
+// The network as sail sees it (instance.network()), and its changes as
+// sail::embed's network events (here a wake, which sail announces whatever
+// the state: the same interface, another network, so `moved`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_changes_are_sails_own() {
     use sail::net::network::ChangeReason;
@@ -366,21 +367,97 @@ async fn network_changes_are_sails_own() {
     assert!(runtime.network().is_some());
     assert_eq!(*changes.borrow_and_update(), None, "no change yet");
 
-    runtime
-        .instance
-        .manager()
-        .unwrap()
-        .network()
-        .announce(ChangeReason::Wake);
-    tokio::time::timeout(WAIT, changes.changed())
-        .await
-        .expect("a change")
-        .unwrap();
+    // The subscription follows the start (sail subscribes once the run is
+    // up): announce until a change comes through.
+    tokio::time::timeout(WAIT, async {
+        loop {
+            runtime
+                .instance
+                .manager()
+                .unwrap()
+                .network()
+                .announce(ChangeReason::Wake);
+            if tokio::time::timeout(Duration::from_millis(200), changes.changed())
+                .await
+                .is_ok()
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("a change");
     let change = changes.borrow_and_update().clone().expect("the change");
-    assert_eq!(change.reason, "wake");
+    assert_eq!(
+        (change.change.as_str(), change.reason.as_str()),
+        ("moved", "wake")
+    );
     assert!(change.generation >= 1);
     assert_eq!(change.old, change.new, "announced: the state did not move");
 
     runtime.stop().await.unwrap();
     assert_eq!(runtime.network(), None);
+}
+
+/// A SOCKS5 connection without authentication through `port` to `to`.
+async fn socks_open(port: u16, to: SocketAddr) -> Option<TcpStream> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+    s.write_all(&[5, 1, 0]).await.ok()?;
+    let mut reply = [0u8; 2];
+    s.read_exact(&mut reply).await.ok()?;
+    let SocketAddr::V4(v4) = to else {
+        unreachable!("loopback v4")
+    };
+    let mut connect = vec![5, 1, 0, 1];
+    connect.extend_from_slice(&v4.ip().octets());
+    connect.extend_from_slice(&v4.port().to_be_bytes());
+    s.write_all(&connect).await.ok()?;
+    let mut head = [0u8; 10];
+    s.read_exact(&mut head).await.ok()?;
+    (head[1] == 0).then_some(s)
+}
+
+// An inbound added while running listens (a reload would not add it); its
+// removal stops the listener and closes its own connections only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inbounds_added_and_removed_while_running() {
+    let echo = echo().await;
+    let (main_port, extra_port) = (free_port(), free_port());
+    let runtime = SailRuntime::new(options("inbounds")).unwrap();
+    runtime.start(&config(main_port, &[], false)).await.unwrap();
+    let mut kept = socks_open(main_port, echo)
+        .await
+        .expect("the configured inbound");
+    round_trip(&mut kept, b"configured").await;
+
+    let extra = serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": extra_port });
+    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    let mut through_extra = socks_open(extra_port, echo)
+        .await
+        .expect("the added inbound listens");
+    round_trip(&mut through_extra, b"added").await;
+    assert!(
+        runtime.add_inbound(&extra.to_string()).await.is_err(),
+        "a tag in use"
+    );
+
+    runtime.remove_inbound("extra").await.unwrap();
+    assert!(
+        TcpStream::connect(("127.0.0.1", extra_port)).await.is_err(),
+        "no longer listening"
+    );
+    let mut buf = [0u8; 1];
+    let read = tokio::time::timeout(WAIT, through_extra.read(&mut buf))
+        .await
+        .expect("closed in time");
+    assert!(
+        matches!(read, Ok(0) | Err(_)),
+        "its connection is closed: {read:?}"
+    );
+    round_trip(&mut kept, b"the other inbound's connection stays").await;
+    assert!(
+        runtime.remove_inbound("extra").await.is_err(),
+        "gone already"
+    );
+    runtime.stop().await.unwrap();
 }

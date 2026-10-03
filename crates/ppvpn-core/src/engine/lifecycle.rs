@@ -99,6 +99,7 @@ impl Inner {
             });
         }
 
+        self.probe_host_ipv6();
         let options = self.options(request.routing_mode, &selected, &pins);
         let translation = translate::translate(&profile, &options)
             .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
@@ -180,6 +181,7 @@ impl Inner {
         };
         // The listeners' ports may have been taken while stopped.
         self.prepare_listeners()?;
+        self.probe_host_ipv6();
         // Translated again: select and pin may have moved since the apply.
         let translation = translate::translate(&profile, &self.options(mode, &selected, &pins))?;
         if let Err(e) = self.runtime.start(&translation.json).await {

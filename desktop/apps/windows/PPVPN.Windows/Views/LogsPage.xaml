@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="PPVPN.Windows.Views.LogsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:PPVPN.App.Core.ViewModels"
+    xmlns:loc="using:PPVPN.Windows.Strings"
+    xmlns:views="using:PPVPN.Windows.Views"
+    xmlns:local="using:PPVPN.Windows"
+    NavigationCacheMode="Required">
+
+    <Grid Padding="{StaticResource ToolPagePadding}" RowSpacing="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- File picker, following indicator, reveal in File Explorer. -->
+        <Grid ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" FontSize="13" Text="{loc:S Key=logFile}" />
+            <ComboBox
+                x:Name="FilePicker"
+                Grid.Column="1"
+                MinWidth="200"
+                AutomationProperties.Name="{loc:S Key=logFile}"
+                ItemsSource="{x:Bind ViewModel.Files, Mode=OneWay}"
+                SelectedItem="{x:Bind ViewModel.SelectedFile, Mode=TwoWay}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:LogFileOption">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="{x:Bind Label}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Text="{x:Bind FileName}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button
+                x:Name="FollowToggle"
+                Grid.Column="3"
+                Padding="10,4,10,4"
+                Click="OnFollowClick"
+                Style="{StaticResource SubtleButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Ellipse
+                        x:Name="FollowDot"
+                        Width="7"
+                        Height="7"
+                        VerticalAlignment="Center" />
+                    <TextBlock x:Name="FollowText" FontSize="13" />
+                </StackPanel>
+            </Button>
+            <Button Grid.Column="4" Command="{x:Bind ViewModel.OpenFolderCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon FontSize="14" Glyph="&#xE838;" />
+                    <TextBlock Text="{loc:S Key=revealWin}" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <!-- Filter: minimum level, search, copy what is shown. -->
+        <Grid Grid.Row="1" ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ComboBox
+                MinWidth="150"
+                AutomationProperties.Name="{loc:S Key=logAllLevels}"
+                ItemsSource="{x:Bind ViewModel.SeverityOptions}"
+                SelectedItem="{x:Bind ViewModel.SelectedSeverity, Mode=TwoWay}" />
+            <TextBox
+                Grid.Column="1"
+                Width="280"
+                HorizontalAlignment="Left"
+                AutomationProperties.Name="{loc:S Key=logSearch}"
+                PlaceholderText="{loc:S Key=logSearch}"
+                Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Grid.Column="2" Command="{x:Bind ViewModel.CopyVisibleCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon FontSize="14" Glyph="&#xE8C8;" />
+                    <TextBlock Text="{loc:S Key=copyShownLogs}" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <!-- One entry per row: time, level badge, source, message, then the fields dimmed. -->
+        <Border
+            Grid.Row="2"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="4">
+            <Grid>
+                <ListView
+                    x:Name="EntryList"
+                    Padding="0,6,0,6"
+                    IsItemClickEnabled="False"
+                    ItemsSource="{x:Bind ViewModel.VisibleEntries}"
+                    SelectionMode="None">
+                    <ListView.ItemContainerStyle>
+                        <Style BasedOn="{StaticResource DefaultListViewItemStyle}" TargetType="ListViewItem">
+                            <Setter Property="MinHeight" Value="0" />
+                            <Setter Property="Padding" Value="12,2,12,2" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="vm:LogEntry">
+                            <Grid ColumnSpacing="10" Opacity="{x:Bind views:LogsPage.EntryOpacity(IsDim)}">
+                                <!-- The message is not selectable (selectable rows doubled the list's cost); copy the whole line instead. -->
+                                <Grid.ContextFlyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem Click="OnCopyLine" Tag="{x:Bind}" Text="{loc:S Key=copyLogLine}">
+                                            <MenuFlyoutItem.Icon>
+                                                <FontIcon Glyph="&#xE8C8;" />
+                                            </MenuFlyoutItem.Icon>
+                                        </MenuFlyoutItem>
+                                    </MenuFlyout>
+                                </Grid.ContextFlyout>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="52" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    VerticalAlignment="Top"
+                                    FontFamily="{StaticResource MonoFontFamily}"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="{x:Bind TimeText}" />
+                                <Border
+                                    Grid.Column="1"
+                                    Padding="4,0,4,1"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top"
+                                    BorderBrush="{x:Bind views:LogsPage.ToneBrush(Tone)}"
+                                    BorderThickness="1"
+                                    CornerRadius="3"
+                                    Visibility="{x:Bind local:Ui.VisibleText(SeverityText)}">
+                                    <TextBlock
+                                        FontFamily="{StaticResource MonoFontFamily}"
+                                        FontSize="11"
+                                        FontWeight="SemiBold"
+                                        Foreground="{x:Bind views:LogsPage.ToneBrush(Tone)}"
+                                        Text="{x:Bind SeverityText}" />
+                                </Border>
+                                <TextBlock
+                                    Grid.Column="2"
+                                    MaxWidth="200"
+                                    VerticalAlignment="Top"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="{x:Bind Source}"
+                                    TextTrimming="CharacterEllipsis"
+                                    ToolTipService.ToolTip="{x:Bind Source}" />
+                                <TextBlock
+                                    Grid.Column="3"
+                                    FontFamily="{StaticResource MonoFontFamily}"
+                                    FontSize="12"
+                                    TextWrapping="Wrap">
+                                    <Run Text="{x:Bind DisplayMessage}" />
+                                    <Run Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind views:LogsPage.FieldsSuffix(FieldsText)}" />
+                                </TextBlock>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{loc:S Key=logMissing}"
+                    Visibility="{x:Bind ViewModel.IsMissing, Mode=OneWay}" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{loc:S Key=logNoMatches}"
+                    Visibility="{x:Bind ViewModel.HasNoMatches, Mode=OneWay}" />
+            </Grid>
+        </Border>
+
+        <TextBlock
+            Grid.Row="3"
+            FontFamily="{StaticResource MonoFontFamily}"
+            FontSize="12"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            IsTextSelectionEnabled="True"
+            Text="{x:Bind views:LogsPage.ShortPath(ViewModel.DisplayPath), Mode=OneWay}"
+            TextTrimming="CharacterEllipsis" />
+    </Grid>
+</Page>

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Three-state switch (40×20): off / on / busy. Busy = knob centred with a spinner inside, accent-soft
+  track and a 1px accent stroke. When not interactive it dims, except in the busy state (the spinner
+  keeps full opacity while preparing / authorizing / disconnecting).
+-->
+<UserControl
+    x:Class="PPVPN.Windows.Controls.StateToggle"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Width="40"
+    Height="20"
+    IsTabStop="True"
+    UseSystemFocusVisuals="True">
+    <Grid x:Name="Root" Background="Transparent">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="States">
+                <VisualState x:Name="Off">
+                    <VisualState.Setters>
+                        <Setter Target="Track.Background" Value="{ThemeResource ControlAltFillColorSecondaryBrush}" />
+                        <Setter Target="Track.BorderBrush" Value="{ThemeResource ControlStrongStrokeColorDefaultBrush}" />
+                        <Setter Target="KnobFill.Fill" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="On">
+                    <VisualState.Setters>
+                        <Setter Target="Track.Background" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                        <Setter Target="Track.BorderBrush" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                        <Setter Target="KnobFill.Fill" Value="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Busy">
+                    <VisualState.Setters>
+                        <Setter Target="Track.Background" Value="{ThemeResource AccentSoftBrush}" />
+                        <Setter Target="Track.BorderBrush" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                        <Setter Target="KnobFill.Fill" Value="{ThemeResource ControlSolidFillColorDefaultBrush}" />
+                        <Setter Target="KnobFill.Stroke" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                        <Setter Target="Spinner.Visibility" Value="Visible" />
+                        <Setter Target="Spinner.IsActive" Value="True" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Border
+            x:Name="Track"
+            BorderThickness="1"
+            CornerRadius="10" />
+        <Grid
+            x:Name="Knob"
+            Width="16"
+            Height="16"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Center"
+            RenderTransformOrigin="0.5,0.5">
+            <Grid.RenderTransform>
+                <CompositeTransform x:Name="KnobTransform" ScaleX="0.75" ScaleY="0.75" />
+            </Grid.RenderTransform>
+            <Ellipse x:Name="KnobFill" StrokeThickness="1" />
+            <ProgressRing
+                x:Name="Spinner"
+                Width="12"
+                Height="12"
+                MinWidth="0"
+                MinHeight="0"
+                Foreground="{ThemeResource AccentFillColorDefaultBrush}"
+                IsActive="False"
+                Visibility="Collapsed" />
+        </Grid>
+    </Grid>
+</UserControl>

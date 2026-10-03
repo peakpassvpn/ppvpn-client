@@ -14,8 +14,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use ppvpn_core::{
-    ApplyRequest, Engine, EngineConfig, LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform,
-    ProbeAvailabilityRequest, ProbeEntrancesRequest, Role, RoutingMode,
+    ApplyRequest, Engine, EngineConfig, EngineState, Event, EventItem, EventKind, EventReceiver,
+    LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform, ProbeAvailabilityRequest,
+    ProbeEntrancesRequest, Role, RoutingMode,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -103,9 +104,16 @@ impl EngineLauncher {
         );
         let (stop, stop_rx) = oneshot::channel::<()>();
         let owned = engine.clone();
-        // A stop request or a dropped sender shuts the engine down.
+        let states = engine.subscribe(&[EventKind::StateChanged]);
+        // A stop request, a dropped sender or a Fatal state shuts the engine
+        // down. Fatal reads as an unexpected exit, so the standard instance's
+        // supervisor recreates the engine and applies again, as it restarts
+        // a crashed Go core.
         let exited = Box::pin(async move {
-            let _ = stop_rx.await;
+            let status = tokio::select! {
+                _ = stop_rx => "stopped".to_string(),
+                reason = until_fatal(&owned, states) => format!("fatal: {reason}"),
+            };
             match owned.shutdown().await {
                 Ok(report) if report.leftovers.is_empty() => {}
                 Ok(report) => {
@@ -113,7 +121,7 @@ impl EngineLauncher {
                 }
                 Err(error) => tracing::warn!(%error, "engine shutdown failed"),
             }
-            "stopped".to_string()
+            status
         });
         Ok(Launched {
             transport: Arc::new(EngineTransport { engine }),
@@ -123,6 +131,48 @@ impl EngineLauncher {
             accepts_routing_mode: true,
             accepts_routed_proxy: true,
         })
+    }
+}
+
+/// Waits for the engine to reach `Fatal` and returns the reason as JSON.
+/// Logs `Degraded` reasons on the way: the engine heals those itself. Never
+/// returns once the subscription closes (the engine shut down), so a stop
+/// request decides.
+async fn until_fatal(engine: &Engine, mut states: EventReceiver) -> String {
+    // A Fatal between Engine::new and the subscription has no event.
+    if let Some(reason) = fatal_reason(&engine.status().state) {
+        return reason;
+    }
+    loop {
+        let state = match states.recv().await {
+            Some(EventItem::Event {
+                event: Event::StateChanged { state, .. },
+            }) => state,
+            // Fell behind: the current state is what counts.
+            Some(EventItem::Lagged { .. }) => engine.status().state,
+            Some(_) => continue,
+            None => std::future::pending().await,
+        };
+        if let Some(reason) = fatal_reason(&state) {
+            return reason;
+        }
+    }
+}
+
+/// The reason of a `Fatal` state as JSON; logs the reasons of a `Degraded`.
+fn fatal_reason(state: &EngineState) -> Option<String> {
+    match state {
+        EngineState::Fatal { reason } => {
+            let reason = serde_json::to_string(reason).unwrap_or_default();
+            tracing::warn!(%reason, "standard engine fatal");
+            Some(reason)
+        }
+        EngineState::Degraded { reasons } => {
+            let reasons = serde_json::to_string(reasons).unwrap_or_default();
+            tracing::info!(%reasons, "standard engine degraded");
+            None
+        }
+        _ => None,
     }
 }
 
@@ -374,6 +424,7 @@ mod tests {
         let version = super::version();
         assert!(!version.core_version.is_empty());
         assert!(!version.sail_version.is_empty());
+        assert!(!version.sail_commit.is_empty());
     }
 
     #[test]
@@ -433,6 +484,22 @@ mod tests {
         assert_eq!(launched.exited.await, "stopped");
         let after = core_ipc::start(transport.as_ref()).await.unwrap_err();
         assert_eq!(after.code(), Some("ENGINE_SHUT_DOWN"));
+    }
+
+    #[test]
+    fn only_fatal_ends_the_engine() {
+        use ppvpn_core::{DegradedReason, FatalReason};
+        let fatal = fatal_reason(&EngineState::Fatal {
+            reason: FatalReason::TunDeviceLost,
+        })
+        .unwrap();
+        assert!(fatal.contains("tun_device_lost"), "{fatal}");
+        let degraded = EngineState::Degraded {
+            reasons: vec![DegradedReason::NoDefaultInterface],
+        };
+        assert_eq!(fatal_reason(&degraded), None);
+        assert_eq!(fatal_reason(&EngineState::Running), None);
+        assert_eq!(fatal_reason(&EngineState::Stopped), None);
     }
 
     #[tokio::test]
