@@ -53,6 +53,8 @@ netlink-packet-route = "0.33"
 netlink-sys = "0.8"
 
 [features]
+# ppvpn-core-lab only: test hooks (dns-local's PPVPN_LOCALDNS_TEST_FILE).
+lab = []
 # Test support for tests/ (the in-memory runtime behind internal): turned on
 # by the dev-dependency on this crate below, so never in a host's build.
 testing = []
