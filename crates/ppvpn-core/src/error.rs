@@ -70,6 +70,77 @@ pub mod codes {
     pub const ROUTING_MODE_INVALID: &str = "ROUTING_MODE_INVALID";
     pub const PINS_INVALID: &str = "PINS_INVALID";
 
+    /// Every code `validate` and `apply` reject a request with before
+    /// anything changes: the profile, the routing mode, the allowed rule set
+    /// hosts and the pins. Retrying the same request fails again; the host
+    /// shows the error and keeps what is applied. The authoritative list:
+    /// hosts use it (or [`super::Error::is_profile_validation`]) rather than
+    /// keeping their own. Only grows.
+    pub const PROFILE_VALIDATION: &[&str] = &[
+        PROFILE_REQUIRED,
+        PROFILE_MALFORMED,
+        SCHEMA_UNSUPPORTED,
+        FIELD_REQUIRED,
+        TIME_RANGE_INVALID,
+        PROFILE_EXPIRED,
+        NODE_ID_INVALID,
+        NODE_ID_DUPLICATE,
+        ENTRY_KEY_INVALID,
+        EXIT_IP_INVALID,
+        CAPABILITIES_INVALID,
+        DEFAULT_NODE_NOT_FOUND,
+        SELECTION_MODE_UNSUPPORTED,
+        INGRESS_COUNT_INVALID,
+        INGRESS_ROLE_INVALID,
+        ENDPOINT_KEY_INVALID,
+        ENDPOINT_KEY_DUPLICATE,
+        INGRESS_LABEL_INVALID,
+        REPLICA_ORDINAL_INVALID,
+        PORT_INVALID,
+        ENTRY_IP_NOT_PUBLIC,
+        TRANSPORT_UNSUPPORTED,
+        CREDENTIALS_INVALID,
+        SHADOWSOCKS_METHOD_UNSUPPORTED,
+        SHADOWSOCKS_KEY_INVALID,
+        SHADOWSOCKS_SERVER_KEY_REMOVED,
+        REALITY_REQUIRED,
+        TLS_SERVER_NAME_INVALID,
+        REALITY_PUBLIC_KEY_INVALID,
+        REALITY_SHORT_ID_INVALID,
+        TLS_REQUIRED,
+        TLS_SERVER_NAME_MISMATCH,
+        PROTOCOL_UNSUPPORTED,
+        RULE_ID_INVALID,
+        RULE_ID_DUPLICATE,
+        RULE_MATCH_EMPTY,
+        DOMAIN_WILDCARD_UNSUPPORTED,
+        DOMAIN_INVALID,
+        DOMAIN_DUPLICATE,
+        CIDR_INVALID,
+        CIDR_DUPLICATE,
+        NETWORK_UNSUPPORTED,
+        NETWORK_DUPLICATE,
+        PORT_DUPLICATE,
+        PORT_RANGE_INVALID,
+        PORT_RANGE_DUPLICATE,
+        ROUTING_ACTION_INVALID,
+        ROUTING_NODE_NOT_FOUND,
+        ROUTING_TARGET_UNSUPPORTED,
+        ROUTING_ACTION_UNSUPPORTED,
+        RULE_SET_COUNT_INVALID,
+        RULE_SET_ID_INVALID,
+        RULE_SET_ID_DUPLICATE,
+        RULE_SET_URL_INVALID,
+        RULE_SET_SHA256_INVALID,
+        RULE_SET_INTERVAL_INVALID,
+        RULE_SET_NOT_FOUND,
+        RULE_SET_REF_DUPLICATE,
+        RULE_SET_HOSTS_INVALID,
+        RULE_SET_HOST_NOT_ALLOWED,
+        ROUTING_MODE_INVALID,
+        PINS_INVALID,
+    ];
+
     // Lifecycle, queries and probes (Core API v1's).
     pub const PROFILE_NOT_APPLIED: &str = "PROFILE_NOT_APPLIED";
     pub const CORE_NOT_RUNNING: &str = "CORE_NOT_RUNNING";
@@ -106,6 +177,12 @@ pub struct Error {
 }
 
 impl Error {
+    /// The request itself was rejected by validation
+    /// ([`codes::PROFILE_VALIDATION`]): not retryable, nothing changed.
+    pub fn is_profile_validation(&self) -> bool {
+        codes::PROFILE_VALIDATION.contains(&self.code)
+    }
+
     /// An error with a code that is not about one field.
     pub(crate) fn new(code: &'static str, retryable: bool, message: impl Into<String>) -> Self {
         Self {
@@ -151,3 +228,44 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn profile_validation_codes_are_the_validation_ones() {
+        let all: HashSet<_> = codes::PROFILE_VALIDATION.iter().collect();
+        assert_eq!(all.len(), codes::PROFILE_VALIDATION.len(), "a code twice");
+        for code in [
+            codes::PROFILE_REQUIRED,
+            codes::PROFILE_MALFORMED,
+            codes::PROFILE_EXPIRED,
+            codes::INGRESS_LABEL_INVALID,
+            codes::ROUTING_MODE_INVALID,
+            codes::RULE_SET_HOST_NOT_ALLOWED,
+            codes::PINS_INVALID,
+        ] {
+            assert!(
+                Error::invalid(code, "", "").is_profile_validation(),
+                "{code}"
+            );
+        }
+        // Not about the request: retrying or another call may help.
+        for code in [
+            codes::PROFILE_NOT_APPLIED,
+            codes::CORE_OPERATION_FAILED,
+            codes::NODE_NOT_FOUND,
+            codes::RULE_SET_STORAGE_UNAVAILABLE,
+            codes::ENGINE_SHUT_DOWN,
+            codes::STATE_DIR_IN_USE,
+        ] {
+            assert!(
+                !Error::new(code, false, "").is_profile_validation(),
+                "{code}"
+            );
+        }
+    }
+}

@@ -210,7 +210,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| `api` `TestNoDefaultInterfaceIsRetryable` | Offline probes fail fast as NO_DEFAULT_INTERFACE, retryable. |  | todo |  |
+| `api` `TestNoDefaultInterfaceIsRetryable` | Offline probes fail fast as NO_DEFAULT_INTERFACE, retryable. | `ppvpn-core` `probe::tests::no_default_interface_is_retryable` | done | Engine 接线后由 Engine 传入 sail 监视器的默认网卡状态 |
 | `internal/config` `TestDesktopTUNRoutesIPv6AndExcludesIPv6Ingress` | Desktop TUN carries an IPv6 address so IPv6 (and DNS to IPv6 resolvers) is routed into the tunnel instead of around it; every ingress IP, IPv4 or IPv6, stays excluded. |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestDesktopTUNWithoutHostIPv6IsIPv4Only` | A host with IPv6 disabled cannot give the TUN an IPv6 address (sing-tun fails the whole start), so the desktop TUN stays IPv4-only there and no IPv6 ingress prefix is … |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestKnownDomainRegexRejectsIPLiterals` | The fake-ip rule must treat an IP literal (what the HTTP sniffer reports for a request to a bare address) as "no domain". |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
@@ -232,7 +232,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestDefaultInterfaceChangeEmitsNetworkChanged` | Every default interface change of the running engine is reported as NetworkChanged: the new interface's name and index, or none. |  | todo |  |
 | `internal/runtime` `TestDefaultInterfaceLogLine` | Default interface log line |  | todo |  |
 | `internal/runtime` `TestHostIPv6RouteDecidesDirectHandOff` | A host with IPv6 enabled but no IPv6 path keeps the IPv6 TUN and wraps direct; the probe runs on every apply and again at start, and its result is logged. |  | todo |  |
-| `internal/runtime` `TestProbesFailFastWithoutDefaultInterface` | With no default interface (offline) both probes fail at once with ErrNoDefaultInterface instead of waiting out their timeout; with one, or when the engine cannot tell, … |  | todo |  |
+| `internal/runtime` `TestProbesFailFastWithoutDefaultInterface` | With no default interface (offline) both probes fail at once with ErrNoDefaultInterface instead of waiting out their timeout; with one, or when the engine cannot tell, … | `ppvpn-core` `probe::entrance::tests::entrance_offline_fails_fast_and_probes_nothing`、`ppvpn-core` `probe::availability::tests::availability_offline_fails_fast_and_dials_nothing` | done | 探测层：默认网卡状态由参数注入（Unknown/Present 照常探测，Absent 立即失败且不拨号）；Engine 接线后由 sail 的网卡监视器提供，Engine 层用例待接线 |
 | `internal/runtime` `TestReprobeDebouncesBursts` | A burst of changes (a Wi-Fi switch) re-arms one probe: each change stops the pending one, and only the last fires. |  | todo |  |
 | `internal/runtime` `TestReprobeDefersToApply` | An apply between the change and the probe builds for the new state; the probe then finds nothing to do. |  | todo |  |
 | `internal/runtime` `TestReprobeKeepsKernelWhenUnchanged` | Same result: nothing rebuilt, no change logged. |  | todo |  |
@@ -286,7 +286,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `api` `TestGoldenContract` | Golden contract |  | n-a | golden 运行器本身；Rust 跑同一组文件（testdata/golden） |
 | `api` `TestLocalProxyAPIsReportDisabledCore` | Local proxy ap is report disabled core |  | todo |  |
 | `api` `TestLocalProxyMetadataAndCredentialAreSeparated` | Local proxy metadata and credential are separated |  | todo |  |
-| `api` `TestProbeEntrancesMethodAndShape` | Probe entrances method and shape |  | todo |  |
+| `api` `TestProbeEntrancesMethodAndShape` | Probe entrances method and shape | `ppvpn-core` `probe::entrance::tests::entrance_node_filter_and_shape`、`ppvpn-core` `probe::entrance::tests::parse_method` | done | method 是枚举，未知方法在解码时被拒；映射成 `PROBE_METHOD_UNSUPPORTED` 是将来 FFI 解码层的事 |
 | `api` `TestRoutingModeOnApplyAndStatus` | routing_mode is optional on validate/apply-profile, strictly checked, and reported by get-status; switching it re-applies the same revision. | `tests/golden_contract.rs` `scenarios_match_the_go_golden`（`apply_dedupe`） | done | routing_mode 在库里是类型化参数；`ROUTING_MODE_INVALID` 来自 `RoutingMode::parse` |
 | `api` `TestRuleSetHostsArePinnedAtValidateAndApply` | Rule set hosts are pinned at validate and apply |  | todo |  |
 | `api` `TestSetSystemProxyToggleAndStatus` | Set system proxy toggle and status |  | todo |  |
@@ -388,19 +388,19 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `mobile` `TestBridgeDoesNotExposeNodeCredentials` | Bridge does not expose node credentials |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
 | `mobile` `TestBridgeRejectsUnknownRoutingMode` | Bridge rejects unknown routing mode |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
 | `mobile` `TestFlowIOTimeoutZeroMeansNoDeadline` | Flow io timeout zero means no deadline |  | n-a | flow adapter / mobile bridge：目前没有宿主使用（#45、#71），Rust 不提供 |
-| `probe` `TestAvailabilityCancellation` | Availability cancellation |  | todo |  |
-| `probe` `TestAvailabilityUsesAuthenticatedNodeProxy` | Availability uses authenticated node proxy |  | todo |  |
-| `probe` `TestEntranceAllFailedReportsPrimary` | Entrance all failed reports primary |  | todo |  |
-| `probe` `TestEntranceCanceled` | Entrance canceled |  | todo |  |
-| `probe` `TestEntranceDNSFailure` | Entrance dns failure |  | todo |  |
-| `probe` `TestEntranceFallsBackToBestBackup` | Entrance falls back to best backup |  | todo |  |
-| `probe` `TestEntrancePrimaryWinsWhenHealthy` | Entrance primary wins when healthy |  | todo |  |
-| `probe` `TestEntranceResolvesDomainWithoutIP` | Entrance resolves domain without ip |  | todo |  |
-| `probe` `TestEntranceTimeout` | Entrance timeout |  | todo |  |
-| `probe` `TestEntranceUsesLiteralIP` | Entrance uses literal ip |  | todo |  |
-| `probe` `TestParseMethod` | Parse method |  | todo |  |
-| `probe` `TestPingLoopback` | exercises the real unprivileged ICMP implementation. |  | todo |  |
-| `probe` `TestPingTimeoutAndCancel` | Ping timeout and cancel |  | todo |  |
+| `probe` `TestAvailabilityCancellation` | Availability cancellation | `ppvpn-core` `probe::availability::tests::availability_cancellation` | done |  |
+| `probe` `TestAvailabilityUsesAuthenticatedNodeProxy` | Availability uses authenticated node proxy | `ppvpn-core` `probe::availability::tests::availability_goes_through_the_node_outbound` | done | Rust 不经本地代理用户，直接经节点 outbound（`Runtime::dial_tcp`）发 GET，与本地代理用户的去向相同；另有 `availability_status_and_redirects`、`availability_failures` |
+| `probe` `TestEntranceAllFailedReportsPrimary` | Entrance all failed reports primary | `ppvpn-core` `probe::entrance::tests::entrance_all_failed_reports_primary` | done |  |
+| `probe` `TestEntranceCanceled` | Entrance canceled | `ppvpn-core` `probe::entrance::tests::entrance_canceled` | done | 另有 `entrance_cancel_ends_probes_in_flight` |
+| `probe` `TestEntranceDNSFailure` | Entrance dns failure | `ppvpn-core` `probe::entrance::tests::entrance_dns_failure` | done |  |
+| `probe` `TestEntranceFallsBackToBestBackup` | Entrance falls back to best backup | `ppvpn-core` `probe::entrance::tests::entrance_falls_back_to_best_backup` | done |  |
+| `probe` `TestEntrancePrimaryWinsWhenHealthy` | Entrance primary wins when healthy | `ppvpn-core` `probe::entrance::tests::entrance_primary_wins_when_healthy` | done |  |
+| `probe` `TestEntranceResolvesDomainWithoutIP` | Entrance resolves domain without ip | `ppvpn-core` `probe::entrance::tests::entrance_resolves_domain_without_ip` | done |  |
+| `probe` `TestEntranceTimeout` | Entrance timeout | `ppvpn-core` `probe::entrance::tests::entrance_timeout` | done |  |
+| `probe` `TestEntranceUsesLiteralIP` | Entrance uses literal ip | `ppvpn-core` `probe::entrance::tests::entrance_uses_literal_ip` | done |  |
+| `probe` `TestParseMethod` | Parse method | `ppvpn-core` `probe::entrance::tests::parse_method` | done | 空字符串同 Go 读作 tcp（serde alias） |
+| `probe` `TestPingLoopback` | exercises the real unprivileged ICMP implementation. | `ppvpn-core` `probe::icmp::tests::ping_loopback` | done | 不允许无特权 ICMP 的主机上跳过，同 Go |
+| `probe` `TestPingTimeoutAndCancel` | Ping timeout and cancel | `ppvpn-core` `probe::icmp::tests::ping_timeout_and_cancel` | done | 取消即丢弃 future |
 | `profile` `TestEntryIPOptional` | Entry ip optional |  | todo |  |
 | `profile` `TestFixtureProfileParsesAndValidates` | Fixture profile parses and validates |  | todo |  |
 | `profile` `TestIngressFailoverShapes` | Ingress failover shapes |  | todo |  |
