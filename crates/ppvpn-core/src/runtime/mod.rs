@@ -214,11 +214,47 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     fn logs(&self) -> mpsc::Receiver<String>;
     /// Log lines dropped so far (`Status::dropped_log_lines`).
     fn dropped_log_lines(&self) -> u64;
+
+    /// The TUN device's actual name while a configuration with a TUN runs:
+    /// for the Engine's log and status, and tunrules' `iif` rules. None
+    /// without a TUN, and where the name is not known yet: on macOS the
+    /// kernel picks the utun and sail does not report it (until sail::embed
+    /// does, the configured name is all there is, and macOS sets none).
+    fn tun_name(&self) -> Option<String>;
+}
+
+/// The `interface_name` of the configuration's tun inbound, if it has one.
+pub(crate) fn configured_tun_name(config: &str) -> Option<String> {
+    let config: serde_json::Value = serde_json::from_str(config).ok()?;
+    config["inbounds"]
+        .as_array()?
+        .iter()
+        .find(|inbound| inbound["type"] == "tun")?["interface_name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tun_name_is_the_tun_inbounds() {
+        let with = r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"tun","tag":"tun","interface_name":"ppvpn0"}]}"#;
+        assert_eq!(configured_tun_name(with).as_deref(), Some("ppvpn0"));
+        let unnamed = r#"{"inbounds":[{"type":"tun","tag":"tun"}]}"#;
+        assert_eq!(
+            configured_tun_name(unnamed),
+            None,
+            "macOS: the kernel names it"
+        );
+        assert_eq!(
+            configured_tun_name(r#"{"inbounds":[{"type":"mixed"}]}"#),
+            None
+        );
+        assert_eq!(configured_tun_name("not json"), None);
+    }
 
     #[test]
     fn sail_codes_map_to_engine_codes() {
