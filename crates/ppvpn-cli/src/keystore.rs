@@ -17,10 +17,20 @@ pub const SERVICE: &str = "com.peakpassvpn.ppvpn.cli";
 pub const ACCOUNT: &str = "device-credential";
 
 pub fn platform_store() -> Arc<dyn CredentialStore> {
-    Arc::new(PlatformStore)
+    store_for(SERVICE)
 }
 
-struct PlatformStore;
+/// The platform store under another service name: the tests' own, so they
+/// never read or replace a real login.
+pub fn store_for(service: &str) -> Arc<dyn CredentialStore> {
+    Arc::new(PlatformStore {
+        service: service.to_string(),
+    })
+}
+
+struct PlatformStore {
+    service: String,
+}
 
 #[cfg(target_os = "macos")]
 mod imp {
@@ -28,7 +38,7 @@ mod imp {
         delete_generic_password, get_generic_password, set_generic_password,
     };
 
-    use super::{StoreFailure, ACCOUNT, SERVICE};
+    use super::{StoreFailure, ACCOUNT};
 
     // Security.framework status codes.
     const ITEM_NOT_FOUND: i32 = -25300;
@@ -42,20 +52,20 @@ mod imp {
         }
     }
 
-    pub fn load() -> Result<Option<Vec<u8>>, StoreFailure> {
-        match get_generic_password(SERVICE, ACCOUNT) {
+    pub fn load(service: &str) -> Result<Option<Vec<u8>>, StoreFailure> {
+        match get_generic_password(service, ACCOUNT) {
             Ok(data) => Ok(Some(data)),
             Err(err) if err.code() == ITEM_NOT_FOUND => Ok(None),
             Err(err) => Err(failure("read", err)),
         }
     }
 
-    pub fn save(blob: &[u8]) -> Result<(), StoreFailure> {
-        set_generic_password(SERVICE, ACCOUNT, blob).map_err(|e| failure("write", e))
+    pub fn save(service: &str, blob: &[u8]) -> Result<(), StoreFailure> {
+        set_generic_password(service, ACCOUNT, blob).map_err(|e| failure("write", e))
     }
 
-    pub fn delete() -> Result<(), StoreFailure> {
-        match delete_generic_password(SERVICE, ACCOUNT) {
+    pub fn delete(service: &str) -> Result<(), StoreFailure> {
+        match delete_generic_password(service, ACCOUNT) {
             Ok(()) => Ok(()),
             Err(err) if err.code() == ITEM_NOT_FOUND => Ok(()),
             Err(err) => Err(failure("delete", err)),
@@ -66,10 +76,15 @@ mod imp {
 #[cfg(target_os = "linux")]
 mod imp {
     use std::collections::HashMap;
+    use std::time::Duration;
 
     use secret_service::{EncryptionType, SecretService};
 
-    use super::{StoreFailure, ACCOUNT, SERVICE};
+    use super::{StoreFailure, ACCOUNT};
+
+    /// How long the keyring's unlock prompt may take. Without a prompter
+    /// (a headless session) the request may never be answered.
+    const UNLOCK_TIMEOUT: Duration = Duration::from_secs(60);
 
     fn unavailable(err: impl std::fmt::Display) -> StoreFailure {
         StoreFailure {
@@ -78,8 +93,8 @@ mod imp {
         }
     }
 
-    fn attributes() -> HashMap<&'static str, &'static str> {
-        HashMap::from([("service", SERVICE), ("username", ACCOUNT)])
+    fn attributes(service: &str) -> HashMap<&str, &str> {
+        HashMap::from([("service", service), ("username", ACCOUNT)])
     }
 
     /// The trait is synchronous and may be called from inside a tokio
@@ -111,7 +126,7 @@ mod imp {
             .map_err(unavailable)?;
         if collection.is_locked().await.map_err(unavailable)? {
             // Asks the keyring to prompt; a headless session cannot.
-            let _ = collection.unlock().await;
+            let _ = tokio::time::timeout(UNLOCK_TIMEOUT, collection.unlock()).await;
             if collection.is_locked().await.map_err(unavailable)? {
                 return Err(StoreFailure {
                     locked: true,
@@ -122,14 +137,14 @@ mod imp {
         Ok(collection)
     }
 
-    pub fn load() -> Result<Option<Vec<u8>>, StoreFailure> {
+    pub fn load(name: &str) -> Result<Option<Vec<u8>>, StoreFailure> {
         block_on(async {
             let service = SecretService::connect(EncryptionType::Dh)
                 .await
                 .map_err(unavailable)?;
             let collection = collection(&service).await?;
             let items = collection
-                .search_items(attributes())
+                .search_items(attributes(name))
                 .await
                 .map_err(unavailable)?;
             match items.first() {
@@ -139,7 +154,7 @@ mod imp {
         })
     }
 
-    pub fn save(blob: &[u8]) -> Result<(), StoreFailure> {
+    pub fn save(name: &str, blob: &[u8]) -> Result<(), StoreFailure> {
         block_on(async {
             let service = SecretService::connect(EncryptionType::Dh)
                 .await
@@ -148,7 +163,7 @@ mod imp {
             collection
                 .create_item(
                     "PPVPN CLI device login",
-                    attributes(),
+                    attributes(name),
                     blob,
                     true,
                     "application/json",
@@ -159,14 +174,14 @@ mod imp {
         })
     }
 
-    pub fn delete() -> Result<(), StoreFailure> {
+    pub fn delete(name: &str) -> Result<(), StoreFailure> {
         block_on(async {
             let service = SecretService::connect(EncryptionType::Dh)
                 .await
                 .map_err(unavailable)?;
             let collection = collection(&service).await?;
             for item in collection
-                .search_items(attributes())
+                .search_items(attributes(name))
                 .await
                 .map_err(unavailable)?
             {
@@ -179,15 +194,15 @@ mod imp {
 
 impl CredentialStore for PlatformStore {
     fn load(&self) -> Result<Option<Vec<u8>>, StoreFailure> {
-        imp::load()
+        imp::load(&self.service)
     }
 
     fn save(&self, blob: Vec<u8>) -> Result<(), StoreFailure> {
-        imp::save(&blob)
+        imp::save(&self.service, &blob)
     }
 
     fn delete(&self) -> Result<(), StoreFailure> {
-        imp::delete()
+        imp::delete(&self.service)
     }
 }
 

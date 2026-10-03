@@ -89,13 +89,19 @@ impl Session {
             },
         };
         let paths = session.paths();
+        paths.ensure().unwrap();
         let engine = {
             let _guard = session.runtime.enter();
-            ppvpn_core::internal::engine_on_fake_runtime(ppvpn_core::EngineConfig::new(
-                ppvpn_core::Role::Standard,
-                ppvpn_core::Platform::Linux,
-                &paths.state_dir,
-            ))
+            // The local proxy's state (its credentials) is real; nothing
+            // listens on the in-memory runtime.
+            ppvpn_core::internal::engine_on_fake_runtime(
+                ppvpn_core::EngineConfig::new(
+                    ppvpn_core::Role::Standard,
+                    ppvpn_core::Platform::Linux,
+                    &paths.state_dir,
+                )
+                .with_local_proxy(ppvpn_core::LocalProxyConfig::new().with_preferred_port(0)),
+            )
         };
         let (daemon, listener) = {
             let _guard = session.runtime.enter();
@@ -339,4 +345,114 @@ fn a_mode_change_on_an_expired_profile_fetches_a_new_one() {
     assert_eq!(status["revision"], renewed["revision"], "{status}");
     assert_eq!(status["routing_mode"], "global", "{status}");
     assert_eq!(session.settings()["routing_mode"], "global");
+}
+
+#[test]
+fn proxy_credentials_come_from_core() {
+    let session = Session::new();
+    let refused = |args: &[&str]| {
+        let (code, value) = session.run(args);
+        (code, value["code"].as_str().map(str::to_string))
+    };
+
+    // The routed credential does not depend on a profile; a node's does.
+    let routed = session.ok(&["proxy", "credential"]);
+    assert_eq!(routed["kind"], "routed");
+    assert_eq!(routed["node_id"], "");
+    for field in ["username", "password", "listen"] {
+        assert!(
+            routed[field].as_str().is_some_and(|v| !v.is_empty()),
+            "{field} is missing"
+        );
+    }
+    // Both URLs carry the same credential and address.
+    let http = routed["http_url"].as_str().unwrap();
+    let socks = routed["socks5_url"].as_str().unwrap();
+    let address = format!(
+        "@{}:{}",
+        routed["listen"].as_str().unwrap(),
+        routed["port"].as_u64().unwrap()
+    );
+    assert!(http.starts_with("http://") && http.ends_with(&address));
+    assert!(socks.starts_with("socks5h://") && socks.ends_with(&address));
+    assert!(http["http://".len()..] == socks["socks5h://".len()..]);
+    assert_eq!(
+        refused(&["proxy", "credential", TOKYO]),
+        (2, Some("NODE_NOT_FOUND".to_string()))
+    );
+
+    session.write_profile(&fixture());
+    session.ok(&["start"]);
+
+    let node = session.ok(&["proxy", "credential", TOKYO]);
+    assert_eq!(node["kind"], "node");
+    assert_eq!(node["node_id"], TOKYO);
+    assert!(node["username"] != routed["username"]);
+    assert!(node["port"] == routed["port"]);
+    assert_eq!(
+        refused(&["proxy", "credential", "no-such-node"]),
+        (2, Some("NODE_NOT_FOUND".to_string()))
+    );
+
+    // The endpoint list has no secrets: one entry per node, then routed.
+    let listed = session.ok(&["proxy"]);
+    let endpoints = listed["endpoints"].as_array().unwrap();
+    let who: Vec<(&str, &str)> = endpoints
+        .iter()
+        .map(|e| (e["kind"].as_str().unwrap(), e["node_id"].as_str().unwrap()))
+        .collect();
+    assert_eq!(who, [("node", TOKYO), ("node", SAN_JOSE), ("routed", "")]);
+    assert!(endpoints
+        .iter()
+        .all(|e| e.get("password").is_none() && e.get("username").is_none()));
+
+    // The credential is the instance's: asking again gives the same one.
+    let again = session.ok(&["proxy", "credential"]);
+    assert!(again["username"] == routed["username"] && again["password"] == routed["password"]);
+}
+
+#[test]
+fn probes_keep_core_s_preconditions_and_a_failed_probe_is_a_result() {
+    let session = Session::new();
+    let refused = |args: &[&str]| {
+        let (code, value) = session.run(args);
+        (code, value["code"].as_str().map(str::to_string))
+    };
+    let availability = |node: &'static str| {
+        [
+            "probe",
+            node,
+            "--type",
+            "availability",
+            "--target",
+            "http://probe.example/",
+            "--timeout",
+            "2s",
+        ]
+    };
+
+    let not_applied = (5, Some("PROFILE_NOT_APPLIED".to_string()));
+    assert_eq!(refused(&["probe", "--all"]), not_applied);
+    assert_eq!(refused(&availability(TOKYO)), not_applied);
+
+    session.write_profile(&fixture());
+    session.ok(&["start"]);
+
+    // Unknown nodes are refused before anything is dialled.
+    let not_found = (2, Some("NODE_NOT_FOUND".to_string()));
+    assert_eq!(refused(&["probe", "no-such-node"]), not_found);
+    assert_eq!(refused(&availability("no-such-node")), not_found);
+
+    // The in-memory runtime's connection ends at once: the probe ran and
+    // failed, which is a result, not a command error.
+    let probed = session.ok(&availability(TOKYO));
+    assert_eq!(probed["type"], "availability", "{probed}");
+    assert_eq!(probed["result"]["node_id"], TOKYO, "{probed}");
+    assert_eq!(probed["result"]["success"], false, "{probed}");
+    assert!(
+        probed["result"]["error_code"]
+            .as_str()
+            .is_some_and(|code| !code.is_empty()),
+        "{probed}"
+    );
 }

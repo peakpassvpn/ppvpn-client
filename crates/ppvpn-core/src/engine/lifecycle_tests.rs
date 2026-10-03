@@ -602,9 +602,10 @@ async fn every_public_method_after_shutdown() {
     use crate::config::LocalProxyConfig;
     use crate::types::{ProbeAvailabilityRequest, ProbeEntrancesRequest, ProbeMethod};
 
+    let state_dir = tempfile::tempdir().unwrap();
     let engine = Engine::with_runtime(
-        EngineConfig::new(Role::Standard, Platform::Linux, "/nonexistent")
-            .with_local_proxy(LocalProxyConfig::new())
+        EngineConfig::new(Role::Standard, Platform::Linux, state_dir.path())
+            .with_local_proxy(LocalProxyConfig::new().with_preferred_port(0))
             .with_system_proxy(true),
         Arc::new(FakeRuntime::default()),
     );

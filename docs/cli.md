@@ -23,7 +23,8 @@ The device credential is kept in the platform secret store and nowhere else:
 
 There is no plain-file fallback. Where no secret store is available (for example a server without a Secret
 Service) or the keyring stays locked, the CLI reports `CREDENTIAL_STORE_UNAVAILABLE` or
-`CREDENTIAL_STORE_LOCKED` (exit 8) and does not log in. Access tokens are never written to disk.
+`CREDENTIAL_STORE_LOCKED` (exit 8) and does not log in. A locked keyring is asked to unlock (its own prompt);
+when that is not answered within 60 seconds, the keyring counts as locked. Access tokens are never written to disk.
 
 `ppvpn account` prints the authorized account. `ppvpn logout` revokes the device session and removes the
 local credential. Without a saved login, commands that need one report `NOT_LOGGED_IN` (exit 3) before any
@@ -58,10 +59,19 @@ failure (exit 7).
 A `dev` build reads the profile from the absolute path in `PPVPN_PROFILE_FILE` when that variable is set,
 instead of downloading it; release builds ignore the variable.
 
+`core.log` (in the runtime directory, `0600`) has core's and sail's log lines at the `info` level; nothing in
+it is a credential. Core only appends to it, so the daemon rotates it when it starts: a log over 8 MiB becomes
+`core.log.1`, replacing the previous one. `daemon.log` is the background daemon's own stdout and stderr.
+
+`status` (and `start`) show the local proxy's address. When core had to replace the local proxy credential as
+this instance started (a damaged state file, or one that other users could read), they also say so for as long
+as the instance runs, because applications that were given the old credential need the new one; `--json` has
+core's `local_proxy.credentials_reset` as it is.
+
 ## The running instance
 
 `nodes`, `use`, `probe`, `traffic`, `connections`, `proxy`, `ingress` and its subcommands talk to the daemon.
-Without one they report `CORE_NOT_RUNNING` (exit 5); with a daemon that has no profile, selections and pins
+Without one they report `CORE_NOT_RUNNING` (exit 5, retryable: it works after `ppvpn start`); with a daemon that has no profile, selections and pins
 report core's `PROFILE_NOT_APPLIED`.
 
 - `use <node-id>` selects the node of new connections; open connections stay where they are. `ingress pin`
@@ -139,7 +149,7 @@ between 1 ms and 2 minutes, and a concurrency between 1 and 32.
 | | macOS | Linux |
 | --- | --- | --- |
 | settings | `~/Library/Application Support/ppvpn-cli/settings.json` | `$XDG_CONFIG_HOME/ppvpn-cli/settings.json` |
-| runtime: control socket, session secret, process record, daemon lock and log | `~/Library/Application Support/ppvpn-cli/runtime/` | `$XDG_STATE_HOME/ppvpn-cli/runtime/` |
+| runtime: control socket, session secret, process record, daemon lock, `daemon.log` and `core.log` | `~/Library/Application Support/ppvpn-cli/runtime/` | `$XDG_STATE_HOME/ppvpn-cli/runtime/` |
 | core `state_dir` | `~/Library/Application Support/ppvpn-cli/state/` | `$XDG_STATE_HOME/ppvpn-cli/state/` |
 
 Unset or relative XDG variables fall back to `~/.config` and `~/.local/state`. Directories are `0700` and

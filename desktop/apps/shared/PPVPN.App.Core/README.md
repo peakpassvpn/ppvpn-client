@@ -3,10 +3,11 @@
 Platform-neutral view models for the .NET desktop apps: Windows (WinUI 3) and
 Linux (GTK 4 through Gir.Core). It targets `net8.0`, depends only on
 `CommunityToolkit.Mvvm` and `../PPVPN.Client`, and references no UI toolkit.
-The UI follows the native desktop design handoff in `design/desktop-handoff/`
-(`PPVPN 设计说明` is the spec, `ppvpn-core.js` the reference state machine),
-with one product change: a single **Connect** switch plus a connection mode
-(Enhanced / Compatible) instead of the design's two switches.
+The UI follows the native desktop design handoff, which is not part of this
+repository; its string catalog is the test fixture
+`PPVPN.App.Core.Tests/Fixtures/design-strings.json`. There is one product
+change: a single **Connect** switch plus a connection mode (Enhanced /
+Compatible) instead of the design's two switches.
 
 ## Layering
 

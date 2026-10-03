@@ -75,6 +75,7 @@ fn shared_endpoints_are_stable_and_private() {
     let dir = tmp.path().join("state");
     let profile = profile();
     let state = LocalProxyState::open(&dir, &any_port()).unwrap();
+    assert_eq!(state.credentials_reset(), None, "first credentials");
     let first = [
         state.credential(Some(&profile), NODE_1).unwrap(),
         state.credential(Some(&profile), NODE_2).unwrap(),
@@ -113,6 +114,7 @@ fn shared_endpoints_are_stable_and_private() {
 
     // A restart keeps prefix, password and port.
     let again = LocalProxyState::open(&dir, &any_port()).unwrap();
+    assert_eq!(again.credentials_reset(), None, "kept credentials");
     assert!(
         same(
             &again.credential(Some(&profile), NODE_1).unwrap(),
@@ -278,6 +280,7 @@ fn migrates_version_1_state_in_place() {
         .to_string(),
     );
     let state = LocalProxyState::open(tmp.path(), &any_port()).unwrap();
+    assert_eq!(state.credentials_reset(), None, "an upgrade is not a reset");
     let got = state.routed_credential();
     assert!(got.username != old_user, "legacy username survived");
     assert!(got.password != old_password, "legacy password survived");
@@ -338,6 +341,14 @@ fn unsupported_or_corrupt_state_is_rebuilt() {
     for (name, content) in contents {
         let tmp = tempfile::tempdir().unwrap();
         write_state(tmp.path(), &content);
+        // Readable by others too: the rebuilt file is private all the same,
+        // and the reason is the corruption.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = tmp.path().join(STATE_FILE);
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
         assert!(
             matches!(decode(content.as_bytes()), Loaded::Corrupt(_)),
             "{name}"
@@ -345,6 +356,18 @@ fn unsupported_or_corrupt_state_is_rebuilt() {
         let Ok(state) = LocalProxyState::open(tmp.path(), &any_port()) else {
             panic!("{name}: not rebuilt");
         };
+        assert_eq!(
+            state.credentials_reset(),
+            Some(CredentialsResetReason::Corrupt),
+            "{name}"
+        );
+        assert_eq!(
+            state.status(false).credentials_reset,
+            Some(CredentialsResetReason::Corrupt),
+            "{name}"
+        );
+        #[cfg(unix)]
+        assert_eq!(mode(&tmp.path().join(STATE_FILE)), 0o600, "{name}");
         let routed = state.routed_credential();
         assert!(valid_prefix(&routed.username), "{name}: invalid prefix");
         assert!(routed.password != password, "{name}: password kept");
@@ -382,6 +405,10 @@ fn weak_state_permissions_renew_the_secret() {
     .unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     let state = LocalProxyState::open(tmp.path(), &any_port()).unwrap();
+    assert_eq!(
+        state.credentials_reset(),
+        Some(CredentialsResetReason::InsecurePermissions)
+    );
     let routed = state.routed_credential();
     assert!(routed.username != prefix, "prefix kept");
     assert!(routed.password != password, "password kept");

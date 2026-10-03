@@ -190,6 +190,24 @@ pub struct LocalProxyStatus {
     pub listen: String,
     pub port: u16,
     pub listening: bool,
+    /// Set when this instance's `new` replaced the persisted prefix and
+    /// password, and why: clients holding the old credential must read it
+    /// again. Only `new` resets; it stays set for the instance's lifetime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_reset: Option<CredentialsResetReason>,
+}
+
+/// Why `new` replaced the local proxy credentials
+/// (`status.local_proxy.credentials_reset`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CredentialsResetReason {
+    /// The state file could not be used (not JSON, unknown version, invalid
+    /// values): rebuilt.
+    Corrupt,
+    /// Other users could read the state file: its secret is no longer one.
+    InsecurePermissions,
 }
 
 fn is_zero(port: &u16) -> bool {

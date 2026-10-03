@@ -88,6 +88,29 @@ fn engine_config(paths: &Paths, os: Os) -> ppvpn_core::EngineConfig {
     ppvpn_core::EngineConfig::new(ppvpn_core::Role::Standard, platform, &paths.state_dir)
         .with_local_proxy(ppvpn_core::LocalProxyConfig::new())
         .with_system_proxy(false)
+        .with_log(ppvpn_core::LogConfig::new(
+            ppvpn_core::LogLevel::Info,
+            ppvpn_core::LogSink::File {
+                path: paths.core_log.clone(),
+            },
+        ))
+}
+
+/// Above this, the next daemon starts a new core log.
+const CORE_LOG_LIMIT: u64 = 8 << 20;
+
+/// Core appends to its log file and leaves rotation to the host, which can
+/// only do it while no engine holds the file: before `Engine::new`. A log
+/// over `limit` becomes `<name>.1`, replacing the previous one, so the two
+/// together stay under about twice the limit plus one daemon's lifetime.
+fn rotate_log(path: &std::path::Path, limit: u64) {
+    let over = fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > limit);
+    if over {
+        let mut previous = path.as_os_str().to_owned();
+        previous.push(".1");
+        // Best effort: a log that cannot be rotated must not stop the daemon.
+        let _ = fs::rename(path, previous);
+    }
 }
 
 /// The daemon's state while it serves.
@@ -110,6 +133,7 @@ impl Daemon {
     pub async fn bind(paths: &Paths, os: Os) -> Result<(Daemon, UnixListener)> {
         paths.ensure()?;
         let lock = DaemonLock::acquire(paths)?;
+        rotate_log(&paths.core_log, CORE_LOG_LIMIT);
         let engine = ppvpn_core::Engine::new(engine_config(paths, os))
             .await
             .map_err(|e| WireError::from(&e).into_cli())?;
@@ -372,4 +396,33 @@ fn encode<T: serde::Serialize>(value: &T) -> std::result::Result<Value, WireErro
         retryable: false,
         message: format!("cannot encode the core response: {err}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_log_over_the_limit_becomes_the_previous_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("core.log");
+        let previous = dir.path().join("core.log.1");
+
+        // Nothing to rotate, and a log within the limit stays.
+        rotate_log(&log, 4);
+        fs::write(&log, b"1234").unwrap();
+        rotate_log(&log, 4);
+        assert_eq!(fs::read(&log).unwrap(), b"1234");
+        assert!(!previous.exists());
+
+        fs::write(&log, b"12345").unwrap();
+        rotate_log(&log, 4);
+        assert!(!log.exists());
+        assert_eq!(fs::read(&previous).unwrap(), b"12345");
+
+        // The next rotation replaces the previous log.
+        fs::write(&log, b"abcdef").unwrap();
+        rotate_log(&log, 4);
+        assert_eq!(fs::read(&previous).unwrap(), b"abcdef");
+    }
 }
