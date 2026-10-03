@@ -17,19 +17,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 use super::*;
+use crate::runtime::{AsyncReadWrite, Datagram};
 
 /// Dials the fake behind a documentation address.
 struct MapDial(HashMap<SocketAddr, SocketAddr>);
 
 #[async_trait]
 impl Dial for MapDial {
-    async fn udp(&self, server: SocketAddr) -> io::Result<UdpSocket> {
-        let socket = UdpSocket::bind("127.0.0.1:0").await?;
-        socket.connect(self.0[&server]).await?;
-        Ok(socket)
+    async fn udp(&self, server: SocketAddr) -> io::Result<Box<dyn Datagram>> {
+        PlainDial.udp(self.0[&server]).await
     }
-    async fn tcp(&self, server: SocketAddr) -> io::Result<TcpStream> {
-        TcpStream::connect(self.0[&server]).await
+    async fn tcp(&self, server: SocketAddr) -> io::Result<Box<dyn AsyncReadWrite>> {
+        PlainDial.tcp(self.0[&server]).await
     }
 }
 
@@ -353,4 +352,68 @@ fn error_texts() {
         source: "scutil-global".into(),
     };
     assert_eq!(none.to_string(), "no DNS servers on en0 (scutil-global)");
+}
+
+// The listener sail's dns-local server points at: UDP and TCP on one
+// loopback port, the answers LocalDns gives, several queries on one TCP
+// connection; invalidate makes the next query read the interface again.
+#[tokio::test]
+async fn the_listener_answers_over_udp_and_tcp() {
+    let rig = new_rig(&[Fake::Answers(7)], "").await;
+    let reads = rig.reads.clone();
+    let listener = listener::start(Arc::new(rig.dns)).await.unwrap();
+    assert!(listener.addr().ip().is_loopback());
+
+    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let asked = query("over-udp.example.", RecordType::A);
+    udp.send_to(&asked.to_vec().unwrap(), listener.addr())
+        .await
+        .unwrap();
+    let mut buffer = [0u8; 1500];
+    let (n, _) = tokio::time::timeout(Duration::from_secs(3), udp.recv_from(&mut buffer))
+        .await
+        .unwrap()
+        .unwrap();
+    let answer = Message::from_vec(&buffer[..n]).unwrap();
+    assert!(exchange::answers(&answer, &asked));
+    assert_eq!(addresses(&answer), ["192.0.2.7"]);
+
+    let mut tcp = TcpStream::connect(listener.addr()).await.unwrap();
+    for name in ["over-tcp.example.", "again.example."] {
+        let asked = query(name, RecordType::A).to_vec().unwrap();
+        let mut framed = (asked.len() as u16).to_be_bytes().to_vec();
+        framed.extend_from_slice(&asked);
+        tcp.write_all(&framed).await.unwrap();
+        let mut length = [0u8; 2];
+        tcp.read_exact(&mut length).await.unwrap();
+        let mut answer = vec![0u8; u16::from_be_bytes(length) as usize];
+        tcp.read_exact(&mut answer).await.unwrap();
+        assert_eq!(
+            addresses(&Message::from_vec(&answer).unwrap()),
+            ["192.0.2.7"],
+            "{name}"
+        );
+    }
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        1,
+        "one read for the three queries"
+    );
+
+    listener.invalidate();
+    udp.send_to(
+        &query("after.example.", RecordType::A).to_vec().unwrap(),
+        listener.addr(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), udp.recv_from(&mut buffer))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        2,
+        "read again after invalidate"
+    );
 }

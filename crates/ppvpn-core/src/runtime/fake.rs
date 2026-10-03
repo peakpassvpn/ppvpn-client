@@ -365,6 +365,13 @@ impl Runtime for FakeRuntime {
     fn dropped_log_lines(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
+
+    fn tun_name(&self) -> Option<String> {
+        if *self.state.borrow() != RuntimeState::Running {
+            return None;
+        }
+        super::configured_tun_name(self.config.lock().unwrap().as_deref()?)
+    }
 }
 
 /// A datagram association that answers what it is sent.

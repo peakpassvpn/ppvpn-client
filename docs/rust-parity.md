@@ -23,13 +23,13 @@ Go core 冻结在 v0.5.21（#45）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`
 | D1 | `lifecycle.json` `start_without_profile` | `CORE_OPERATION_FAILED`（retryable=false） | `PROFILE_NOT_APPLIED`（retryable=false），不发事件 |
 | D2 | `selection.json` `select_unknown` | `CORE_OPERATION_FAILED` | `NODE_NOT_FOUND`（field=`node_id`，retryable=false），与 `pin-ingress` 一致；选中的节点不变 |
 | D2 | `selection.json` `select_before_profile` | `CORE_OPERATION_FAILED` | `PROFILE_NOT_APPLIED`（retryable=false） |
-| D3 | `apply_dedupe.json` `apply_unknown_default_node_keeps_selection` | 接受（`applied=true`，`ProfileApplied`）：Go 在校验前先用当前选中的节点覆盖了 `default_node_id` | apply 先校验原始 Profile：`default_node_id` 不存在就报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate-profile` 一致，已应用的 Profile 不变，发 `ReloadFailed`。校验通过后，若新 Profile 仍含当前选中的节点，就沿用它 |
+| D3 | `apply_dedupe.json` `apply_unknown_default_node_keeps_selection` | 接受（`applied=true`，`ProfileApplied`）：Go 在校验前先用当前选中的节点覆盖了 `default_node_id` | apply 先校验原始 Profile：`default_node_id` 不存在就报 `DEFAULT_NODE_NOT_FOUND`（field=`selection.default_node_id`），与 `validate-profile` 一致，已应用的 Profile 不变，发 `ReloadFailed`。校验通过后，选中的节点取宿主随 apply 传入的 `selected_node_id`（它仍在新 Profile 里时）；宿主不传，就用新 Profile 的 `default_node_id`（host-integration 4.1） |
 
 D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`，在 Rust 下 `revision` 仍是 `2026-09-29T00:00:00Z#2`，因为 r3 被拒绝了；这两步也按此判定。
 
-这几步由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
+这几步（D1、D2、D3）由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
 
-D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
+D3 改变的只是失效的 `default_node_id`。选择由宿主持久化，引擎不留隐藏状态（2026-10-03 决定）：宿主每次 apply 都传入它保存的 `selected_node_id`，所以 `TestSameRevisionNoopAndMigrationKeepsSelection` 的"保持选择"在宿主传入选择时成立；宿主不传，就回到 `default_node_id`，重建实例和不重建的结果一样。
 
 Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 决定）。Go 的 IPC 层把这类错误折叠成 `CORE_OPERATION_FAILED`；库形态直接报 Profile 的问题：
 
@@ -75,8 +75,8 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | CI 步骤 | 脚本 | 覆盖的行为 | 相关 Go 测试 | Rust 接入 |
 | --- | --- | --- | --- | --- |
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
-| tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 换成 Rust 的同名集成测试 |
-| tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上 |
+| tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 已有：`run.sh --libtest ppvpn_core.test tunrules::linux_tests::`（与 Go 并行） |
+| tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上（同一步，进程内关掉补回） |
 | network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E6 | 被测二进制换成 `ppvpn-core-lab` |
 | network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | 同上 |
 
@@ -145,15 +145,15 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
 | `internal/config` `TestDesktopTUNUsesOwnIPRoute2Namespace` | Desktop tun uses own ip route2 namespace |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/runtime` `TestTUNRulesBrokenIsReported` | : rules that stay missing set the status to broken and send TunRoutingBroken. |  | todo | netns CI：tun 作业（关掉补回） |
-| `internal/runtime` `TestTUNRulesRestoredAfterDeletion` | deletes the TUN's policy routing the ways seen in the field (everything, as networkd does on a link down; just the goto target; the table's routes) and requires each to … |  | todo | netns CI：tun 作业，runner 上的独立 netns 中真实 TUN |
+| `internal/runtime` `TestTUNRulesBrokenIsReported` | : rules that stay missing set the status to broken and send TunRoutingBroken. | `ppvpn-core` `tunrules::linux_tests::tun_rules_broken_is_reported` | done | netns CI：tun 作业（`run.sh --libtest`），在进程内关掉补回，不用环境变量；守护层面断言 `Broken{missing}`，事件和 `Fatal` 由 Engine 接入后的测试覆盖。另验证手动补回后报 `Restored` |
+| `internal/runtime` `TestTUNRulesRestoredAfterDeletion` | deletes the TUN's policy routing the ways seen in the field (everything, as networkd does on a link down; just the goto target; the table's routes) and requires each to … | `ppvpn-core` `tunrules::linux_tests::tun_rules_restored_after_deletion` | done | netns CI：tun 作业（`run.sh --libtest`），独立 netns 中真实的 sail TUN；守护层面断言 `Restored`，`Status::tun_routing` 由 Engine 接入后的测试覆盖 |
 | `internal/runtime` `TestTUNRulesSurviveNetworkdLinkFlap` | reproduces the field report: with systemd-networkd managing a link (ManageForeignRoutingPolicyRules on, its default), taking the link down and up makes networkd drop the … |  | todo | 不在 CI：runner 没有 systemd-networkd 管理的链路；在容器里跑 |
-| `internal/tunrules` `TestMissingCountsDuplicates` | Missing counts duplicates |  | todo |  |
-| `internal/tunrules` `TestOwnedKeepsEverySingTunRule` | Owned keeps every sing tun rule |  | todo |  |
-| `internal/tunrules` `TestOwnedLeavesOtherProgramsRules` | Owned leaves other programs rules |  | todo |  |
-| `internal/tunrules` `TestRestoreOrderPutsGotoTargetsFirst` | Restore order puts goto targets first |  | todo |  |
-| `internal/tunrules` `TestRouteRestoreOrderPutsGatewayCoveringRoutesLast` | Route restore order puts gateway covering routes last |  | todo |  |
-| `internal/tunrules` `TestRuleString` | Rule string |  | todo |  |
+| `internal/tunrules` `TestMissingCountsDuplicates` | Missing counts duplicates | `ppvpn-core` `tunrules::tests::missing_counts_duplicates` | done |  |
+| `internal/tunrules` `TestOwnedKeepsEverySingTunRule` | Owned keeps every sing tun rule | `ppvpn-core` `tunrules::tests::owned_keeps_every_sing_tun_rule` | done | 另有 `owned_keeps_every_sail_auto_route_rule`：sail auto_route 为桌面 TUN 装的全部规则 |
+| `internal/tunrules` `TestOwnedLeavesOtherProgramsRules` | Owned leaves other programs rules | `ppvpn-core` `tunrules::tests::owned_leaves_other_programs_rules` | done |  |
+| `internal/tunrules` `TestRestoreOrderPutsGotoTargetsFirst` | Restore order puts goto targets first | `ppvpn-core` `tunrules::tests::restore_order_puts_goto_targets_first` | done |  |
+| `internal/tunrules` `TestRouteRestoreOrderPutsGatewayCoveringRoutesLast` | Route restore order puts gateway covering routes last | `ppvpn-core` `tunrules::tests::route_restore_order_puts_gateway_covering_routes_last` | done | sail 的路由没有网关，保留这个顺序是为了有网关的路由 |
+| `internal/tunrules` `TestRuleString` | Rule string | `ppvpn-core` `tunrules::tests::rule_string` | done | 字符串与 Go 逐字一致（宿主在 `missing` 里看到的就是它） |
 
 ## 3. dns-local
 
@@ -248,7 +248,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| `api` `TestPinIngressEndpoint` | Pin ingress endpoint |  | todo |  |
+| `api` `TestPinIngressEndpoint` | Pin ingress endpoint | `tests/golden_contract.rs` `scenarios_match_the_go_golden`（`pin_ingress`）、`ppvpn-core` `engine::selection_tests::pin_ingress_validates_then_pins_and_unpins` | done | `endpoint_key` 为 `None` 时恢复自动（选中节点 selector 里的 `<tag>-auto`） |
 | `internal/failover` `TestActiveTracksSwitchesAndNotifiesObserver` | Active tracks switches and notifies observer |  | todo |  |
 | `internal/failover` `TestCheckFallsBackToTheSecondURL` | checkAny passes when a later URL answers although the first does not. |  | todo |  |
 | `internal/failover` `TestDialTimeoutMovesToTheNextMember` | A member that hangs costs dialTimeout, then the next member serves the same dial. |  | todo |  |
@@ -357,7 +357,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestSelectNodeChangesOnlyNewFlowSelection` | Select node changes only new flow selection |  | todo |  |
 | `internal/runtime` `TestSharedLocalProxyConnectAuthFailureChallenges` | runs the real core: a CONNECT without Proxy-Authorization, with a wrong password or for an unknown user reads back a 407 Basic challenge and then a clean EOF (browsers … |  | todo |  |
 | `internal/runtime` `TestSharedLocalProxyRoutesByUsername` | runs two nodes behind one loopback port: the username picks the node for HTTP and SOCKS5, traffic is counted and attributed per node, and bad credentials or removed … |  | todo |  |
-| `internal/runtime` `TestStandardCoreSelectNode` | drives select-node on a real non-TUN core, both before start (the selection must survive Start) and while running. |  | todo |  |
+| `internal/runtime` `TestStandardCoreSelectNode` | drives select-node on a real non-TUN core, both before start (the selection must survive Start) and while running. | `ppvpn-core` `engine::selection_tests::select_node_before_and_after_a_profile` | done | 在 FakeRuntime 上：start 前选择的节点作为 `selected` 的默认值，运行中调用 `select("selected", 节点 tag)`；真实 sail 的 selector 由 `runtime::sail` 的测试覆盖 |
 | `internal/runtime` `TestSystemProxyFollowsSelectedNodeAndRules` | runs the standard (non-TUN) core with the system proxy toggled at runtime: traffic follows the selected node and the profile's DIRECT rule, counts toward traffic, and … |  | todo |  |
 | `internal/runtime` `TestSystemProxyStartFallsBackWhenPortTaken` | System proxy start falls back when port taken |  | todo |  |
 | `internal/runtime` `TestSystemProxyUnavailableInTUNCore` | System proxy unavailable in tun core |  | todo |  |
