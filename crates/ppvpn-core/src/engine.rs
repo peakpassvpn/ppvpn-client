@@ -54,6 +54,7 @@ pub(crate) use bus::Subscription;
 pub use logs::tracing_layer;
 use logs::Logs;
 use state::Live;
+#[cfg(test)]
 pub(crate) use state::TunRoutingSignal;
 
 /// The version of the local proxy contract (users, ports, metadata).
