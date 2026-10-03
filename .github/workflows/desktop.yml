@@ -16,6 +16,8 @@ on:
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
+      - test/netns/run.sh
+      - test/fakenode/**
       - .github/workflows/desktop.yml
   push:
     branches: [main]
@@ -25,6 +27,8 @@ on:
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
+      - test/netns/run.sh
+      - test/fakenode/**
       - .github/workflows/desktop.yml
 
 permissions:
@@ -151,6 +155,64 @@ jobs:
         run: |
           cargo clippy --locked --features rust-core --all-targets -- -D warnings
           cargo test --locked --features rust-core --lib rust_core
+
+  # Linux enhanced mode end to end, as root on the runner: the privileged
+  # service with the vendored Go core, the client crate connecting and
+  # disconnecting through it (src/e2e_linux.rs, feature linux-e2e), a mock
+  # backend and a local Shadowsocks node (test/fakenode). Checks the TUN, the
+  # core's policy rules and routing table, traffic through the node, and the
+  # cleanup after a disconnect and after kill -9 of the core (with and
+  # without the service). Inside run.sh's namespaces, which also checks that
+  # the runner's own network state is unchanged. No backend, no internet.
+  desktop-linux-enhanced:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-linux-enhanced
+          workspaces: |
+            desktop/crates/ppvpn-client
+            desktop/service
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fetch and verify the vendored core
+        run: desktop/scripts/fetch-vendored-core.sh linux-x86_64
+      - name: Build the service, the test client and the fake node
+        run: |
+          (cd desktop/service && cargo build --locked --bin ppvpn-service)
+          (cd desktop/crates/ppvpn-client && cargo clippy --locked --features linux-e2e --all-targets -- -D warnings)
+          client=$(cd desktop/crates/ppvpn-client && cargo test --locked --features linux-e2e --lib --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and (.target.kind | index("lib"))) | .executable' | tail -n 1)
+          test -x "$client"
+          echo "CLIENT_TEST=$client" >> "$GITHUB_ENV"
+          go build -tags "$(make -s print-desktop-tags)" -o "$RUNNER_TEMP/fakenode" ./test/fakenode
+      - name: Install the packages' layout
+        # Where the deb puts them: the service accepts only /usr/lib/ppvpn/ppvpn
+        # as a client, and runs the ppvpn-core next to itself.
+        run: |
+          core="desktop/vendor/ppvpn-core/$(cat desktop/vendor/ppvpn-core/CURRENT)/build/ppvpn-core-linux-amd64"
+          sudo install -D -o root -g root -m 0755 "$CLIENT_TEST" /usr/lib/ppvpn/ppvpn
+          sudo install -D -o root -g root -m 0755 "$core" /usr/lib/ppvpn/ppvpn-core
+          sudo install -D -o root -g root -m 0755 desktop/service/target/debug/ppvpn-service /usr/lib/ppvpn-service/ppvpn-service
+          sudo install -D -o root -g root -m 0755 "$core" /usr/lib/ppvpn-service/ppvpn-core
+      - name: Enhanced mode end to end
+        run: |
+          sudo NETNS_TIMEOUT=600 NETNS_ENV="PPVPN_E2E_FAKENODE=$RUNNER_TEMP/fakenode" \
+            test/netns/run.sh --libtest /usr/lib/ppvpn/ppvpn e2e_linux::enhanced_mode_routes_and_cleanup
+      - name: Service log
+        if: always()
+        run: sudo tail -n 200 /var/log/ppvpn/ppvpn-service.log || true
 
   # The macOS app's logic (desktop/apps/macos/AppLogic: no AppKit/SwiftUI),
   # tested on Linux against the Linux build of the client crate. Pinned to

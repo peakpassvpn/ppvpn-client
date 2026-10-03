@@ -17,6 +17,8 @@ mod core_ipc;
 mod cores;
 mod detect;
 mod device;
+#[cfg(all(test, target_os = "linux", feature = "linux-e2e"))]
+mod e2e_linux;
 mod enhanced;
 mod errors;
 mod ingress;

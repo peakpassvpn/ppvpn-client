@@ -49,6 +49,19 @@ contents:
   - src: ${PPVPN_STAGE_DIR}/icons/
     dst: /usr/share/icons/hicolor
     type: tree
+  # The GPL text (license: above), copied from the repository's LICENSE by build-package.sh:
+  # Debian's copyright file, and the license directory rpm-based distributions use.
+  - src: ${PPVPN_STAGE_DIR}/LICENSE
+    dst: /usr/share/doc/ppvpn/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_STAGE_DIR}/LICENSE
+    dst: /usr/share/licenses/ppvpn/LICENSE
+    packager: rpm
+    type: license
+    file_info:
+      mode: 0644
 
 scripts:
   postinstall: ${PPVPN_PACKAGING_DIR}/postinstall.sh
