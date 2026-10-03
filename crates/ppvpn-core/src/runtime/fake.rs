@@ -216,7 +216,7 @@ impl FakeRuntime {
     }
 
     /// As if connections through `chain` failed.
-    #[allow(dead_code)] // for the Engine's tests once it follows them
+    #[allow(dead_code)] // for the Engine's tests
     pub(crate) fn dial_failed(&self, failed: DialFailed) {
         let _ = self.failures_seen.0.try_send(failed);
     }

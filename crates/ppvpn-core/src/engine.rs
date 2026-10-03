@@ -35,6 +35,7 @@ mod lifecycle;
 mod lifecycle_tests;
 mod logs;
 mod network;
+mod outbound_log;
 mod probes;
 #[cfg(test)]
 mod probes_tests;
@@ -86,6 +87,8 @@ struct Inner {
     log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
+    /// Direct failures logged at most once per destination per window.
+    outbound_log: outbound_log::Limiter,
     /// The Linux desktop TUN's routing guard while it runs.
     routing: routing::RoutingGuard,
     /// The profile's rule sets: cache, downloads, refresh.
@@ -175,6 +178,7 @@ impl Engine {
             closing: rule_sets::Closing::default(),
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
+            outbound_log: outbound_log::Limiter::default(),
             routing: routing::RoutingGuard::default(),
             config,
             runtime,

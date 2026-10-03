@@ -469,11 +469,13 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     let mut switches = inner.runtime.group_switches();
     let mut states = inner.runtime.states();
     let mut networks = inner.runtime.network_changes();
+    let mut failures = inner.runtime.dial_failures();
     let weak: Weak<Inner> = Arc::downgrade(inner);
     Some(handle.spawn(async move {
         let mut tick = tokio::time::interval(REFRESH);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut switches_open = true;
+        let mut failures_open = true;
         loop {
             tokio::select! {
                 switch = switches.recv(), if switches_open => match switch {
@@ -482,6 +484,13 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                         inner.on_switch(switch).await;
                     }
                     None => switches_open = false,
+                },
+                failed = failures.recv(), if failures_open => match failed {
+                    Some(failed) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_dial_failed(failed).await;
+                    }
+                    None => failures_open = false,
                 },
                 changed = networks.changed() => {
                     if changed.is_err() {

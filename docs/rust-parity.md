@@ -40,6 +40,7 @@ Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 
 | # | golden 步骤 | Go 0.5.21（golden） | Rust 预期 |
 | --- | --- | --- | --- |
 | D5 | `validation.json` `profile_missing`（空 Profile） | `CORE_OPERATION_FAILED` | `PROFILE_REQUIRED`（retryable=false） |
+| D6 | （golden 没有对应步骤）多入口节点的成员拨号失败后，`status.nodes[].ingresses[].consecutive_failures` 的值 | 立即标为不健康，计数抬到 `UnhealthyAfter`（`failover.markUnhealthy`） | 立即标为不健康（sail 0.16 起），计数只加 1：计数取自 sail 组的成员状态，引擎不另算一套（#179） |
 | D5 | （golden 没有对应步骤）Profile 不是合法 JSON，或者字段类型不对（例如 `port` 大于 65535） | `CORE_OPERATION_FAILED` | `PROFILE_MALFORMED`（retryable=false） |
 
 `validation.json` 的 `request_invalid_unknown_field`（请求体里有未知字段）只在 IPC 下存在，库里没有对应的情形，标为 n-a。
@@ -309,11 +310,11 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| `internal/outboundlog` `TestLimiterForgetsOldDestinationsWhenFull` | Limiter forgets old destinations when full |  | todo |  |
-| `internal/outboundlog` `TestLimiterLogsOncePerWindowWithSuppressedCount` | Limiter logs once per window with suppressed count |  | todo |  |
+| `internal/outboundlog` `TestLimiterForgetsOldDestinationsWhenFull` | Limiter forgets old destinations when full | `ppvpn-core` `engine::outbound_log::tests::limiter_forgets_old_destinations_when_full` | done |  |
+| `internal/outboundlog` `TestLimiterLogsOncePerWindowWithSuppressedCount` | Limiter logs once per window with suppressed count | `ppvpn-core` `engine::outbound_log::tests::limiter_logs_once_per_window_with_suppressed_count` | done | sail 会把多次失败合成一个 `DialFailed{count}`：记一行，其余算进下一行的 `suppressed`（`a_batch_logs_one_line`） |
 | `internal/runtime` `TestApplyLogsRealityFingerprintsAtDebug` | At debug level an apply logs fingerprints of each REALITY ingress's parameters, never the values themselves. |  | todo |  |
-| `internal/runtime` `TestDirectOutboundFailuresAreLoggedAndLimited` | A failed direct connection logs the same "outbound failed" line as a node (no node_id or endpoint_key), once per destination per DirectLimit; the next line after the … |  | todo |  |
-| `internal/runtime` `TestOutboundFailuresAreLoggedAtDebug` | At debug level a failed node connection names the node, the ingress, the protocol, the stage and the error, and never the credentials: a dead port fails at dial; a … |  | todo |  |
+| `internal/runtime` `TestDirectOutboundFailuresAreLoggedAndLimited` | A failed direct connection logs the same "outbound failed" line as a node (no node_id or endpoint_key), once per destination per DirectLimit; the next line after the … | `ppvpn-core` `engine::outbound_log::tests::chains_name_their_node_and_ingress` | done | 来源是 sail 的 `DialFailed`（#179）。按目的地限流，同 Go 的 DirectLimit 10 s。和 Go 的差异：没有 `network` 和 `ms`，sail 不给；`error` 是 I/O 错误的类别，不是完整文本；多一个 `count` |
+| `internal/runtime` `TestOutboundFailuresAreLoggedAtDebug` | At debug level a failed node connection names the node, the ingress, the protocol, the stage and the error, and never the credentials: a dead port fails at dial; a … |  | todo | 部分实现（#179）：节点的失败按 `DialFailed` 记 `outbound failed`，带 node_id 和 endpoint_key。经故障转移组失败时，sail 目前只在 chain 里给组名，组内某个成员失败、换下一个成员成功时也不发事件，所以这一行只能写到节点，写不到入口。等 sail 把成员写进 chain、每个成员失败各发一次事件后，再改为 done |
 
 ## 8. 其他契约
 
