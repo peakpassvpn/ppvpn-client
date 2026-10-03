@@ -135,6 +135,8 @@ Sail E2（实例的任务都放进作用域）进行中，sail bfe72d36 是第�
 
 连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`，地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。 Engine 用它记 Go 的 `connection` 行（debug，键名同 Go 的 `logRouted`：id、inbound、network、destination、route_domain、protocol、rule、outbound、target、target_kind，另加 action 和 error）：rule 由 `Translation::rule_ids` 还原成 profile 的规则 id，没有规则时为 `final`；target 是出站被要求去的地址（`request_destination`）。和 Go 的差异：UDP 会话的 FakeIP 域名，以及 sniff 规则 override 的域名，sail 目前都标为 `request`。
 
+DNS 交换（`Runtime::dns_exchanges`）来自 sail 的 `events(Kinds::DNS)`，和路由结果一样只在 debug 时取：每个应答或失败的查询一条，客户端的和实例自己拨号用的都有（`for_instance`），sequential 服务器的每个成员各一条（`attempt`）；名字不带末尾的点，记录最多 16 条另有总数。启动时查询集中，通道容量 256，落后时丢弃并记一行丢了多少。Engine 侧的 `msg=dns` 行（远端的部分）由它生成。
+
 运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。sail 76d1cafd 起，握手中的连接和多路复用的承载连接也一并断开。
 
 ## Lab 用例（`test/lab/engine/cases`）
