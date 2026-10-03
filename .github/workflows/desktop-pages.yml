@@ -30,6 +30,9 @@ jobs:
     timeout-minutes: 30
     # The package repositories' signing key signs the apt and dnf indexes.
     environment: desktop-release-stable
+    permissions:
+      contents: read
+      attestations: read
     env:
       GH_TOKEN: ${{ github.token }}
       SITE_BASE: ${{ vars.DESKTOP_SITE_BASE }}
@@ -77,6 +80,33 @@ jobs:
           mkdir newest
           gh release download "$newest" --repo "$GITHUB_REPOSITORY" --dir newest --pattern 'release-meta-*.json'
           echo "NEWEST=$newest" >> "$GITHUB_ENV"
+      # The site redistributes only what the release workflow produced: every
+      # downloaded file must be in its release's SHA256SUMS with that hash,
+      # and carry build provenance signed by desktop-release.yml in this
+      # repository. One failure and nothing is deployed.
+      - name: Verify the downloads
+        run: |
+          set -eu
+          verify() {   # tag, directory
+            sums="sums/$1/SHA256SUMS"
+            mkdir -p "sums/$1"
+            [ -f "$sums" ] || gh release download "$1" --repo "$GITHUB_REPOSITORY" --dir "sums/$1" --pattern SHA256SUMS
+            for file in "$2"/*; do
+              name=$(basename "$file")
+              listed=$(awk -v name="$name" '$2 == name || $2 == "*" name { print $1 }' "$sums")
+              [ -n "$listed" ] || { echo "$1: $name is not in SHA256SUMS" >&2; exit 1; }
+              [ "$listed" = "$(sha256sum "$file" | cut -d' ' -f1)" ] || { echo "$1: $name does not have its SHA256SUMS hash" >&2; exit 1; }
+              gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml" >/dev/null \
+                || { echo "$1: $name has no provenance from desktop-release.yml" >&2; exit 1; }
+              echo "verified $1/$name"
+            done
+            gh attestation verify "$sums" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml" >/dev/null \
+              || { echo "$1: SHA256SUMS has no provenance from desktop-release.yml" >&2; exit 1; }
+          }
+          while read -r tag; do verify "$tag" "linux-releases/$tag"; done < tags
+          verify "$NEWEST" newest
       - name: Pointer and feeds
         run: |
           set -eu

@@ -267,5 +267,6 @@ jobs:
     uses: ./.github/workflows/desktop-pages.yml
     permissions:
       contents: read
+      attestations: read
       pages: write
       id-token: write
