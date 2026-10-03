@@ -2,10 +2,10 @@
 # process by Desktop and the CLI. The Go core (cmd/, internal/, ...) stays
 # frozen at v0.5.21 beside it until the hosts switch over.
 [workspace]
-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "desktop/crates/ppvpn-client"]
+members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "crates/ppvpn-core-lab", "desktop/crates/ppvpn-client"]
 # What a bare cargo command at the root builds, and so what rust.yml's
 # required jobs cover; the desktop client has its own jobs (desktop.yml).
-default-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account"]
+default-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "crates/ppvpn-core-lab"]
 # The privileged service keeps its own Cargo.lock and release profile (its
 # build id hashes that lock) until it links ppvpn-core.
 exclude = ["desktop/service"]
@@ -23,7 +23,7 @@ repository = "https://github.com/peakpassvpn/ppvpn-core"
 # below as of that commit (CI runs sail's tools/embed-patch-check.py).
 # auto-reload is not among sail's defaults and must stay on: without it the
 # runtime does not follow certificate files that change on disk.
-sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "235d12a9b5e1bfc3b8076409be21f80cf8e60029", features = ["auto-reload"] }
+sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "149e3b4bb8a53bee64e40a0d88f9bc4c963fe614", features = ["auto-reload"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 idna = "1"
@@ -34,8 +34,8 @@ serde_json = "1"
 # forks, so a crate that links sail must patch the same. Keep in step with
 # the sail rev (CI compares them).
 [patch.crates-io]
-btls = { git = "https://github.com/peakpassvpn/btls.git", rev = "3eb203a7ed44fd93d31056156a1ddfab5a6b9338" }
-btls-sys = { git = "https://github.com/peakpassvpn/btls.git", rev = "3eb203a7ed44fd93d31056156a1ddfab5a6b9338" }
+btls = { git = "https://github.com/peakpassvpn/btls.git", rev = "c0fb9dd9f610d0f76ae2b5afb30d65dce9b5e74c" }
+btls-sys = { git = "https://github.com/peakpassvpn/btls.git", rev = "c0fb9dd9f610d0f76ae2b5afb30d65dce9b5e74c" }
 quinn-proto = { git = "https://github.com/peakpassvpn/quinn.git", rev = "ac0737da7704788407daab3c5e6abd3dca7ae55e" }
 # tun-rs's netlink graph without paste (RUSTSEC-2024-0436); see
 # sail's tools/security/policy.toml for when these go.

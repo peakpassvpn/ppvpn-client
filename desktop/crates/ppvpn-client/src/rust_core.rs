@@ -14,8 +14,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use ppvpn_core::{
-    ApplyRequest, Engine, EngineConfig, LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform,
-    ProbeAvailabilityRequest, ProbeEntrancesRequest, Role, RoutingMode,
+    ApplyRequest, Engine, EngineConfig, EngineState, Event, EventItem, EventKind, EventReceiver,
+    LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform, ProbeAvailabilityRequest,
+    ProbeEntrancesRequest, Role, RoutingMode,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -101,11 +102,30 @@ impl EngineLauncher {
             core = %Engine::version().core_version,
             "standard core: in-process Rust engine created"
         );
+        // Only `new` resets the local proxy credentials; the reason stays in
+        // the status for the instance's lifetime (section 4.6).
+        let reset = engine
+            .status()
+            .local_proxy
+            .and_then(|p| p.credentials_reset);
+        if let Some(reason) = reset {
+            tracing::warn!(
+                ?reason,
+                "standard engine: local proxy credentials were reset; apps holding the old ones must copy them again"
+            );
+        }
         let (stop, stop_rx) = oneshot::channel::<()>();
         let owned = engine.clone();
-        // A stop request or a dropped sender shuts the engine down.
+        let states = engine.subscribe(&[EventKind::StateChanged]);
+        // A stop request, a dropped sender or a Fatal state shuts the engine
+        // down. Fatal reads as an unexpected exit, so the standard instance's
+        // supervisor recreates the engine and applies again, as it restarts
+        // a crashed Go core.
         let exited = Box::pin(async move {
-            let _ = stop_rx.await;
+            let status = tokio::select! {
+                _ = stop_rx => "stopped".to_string(),
+                reason = until_fatal(&owned, states) => format!("fatal: {reason}"),
+            };
             match owned.shutdown().await {
                 Ok(report) if report.leftovers.is_empty() => {}
                 Ok(report) => {
@@ -113,7 +133,7 @@ impl EngineLauncher {
                 }
                 Err(error) => tracing::warn!(%error, "engine shutdown failed"),
             }
-            "stopped".to_string()
+            status
         });
         Ok(Launched {
             transport: Arc::new(EngineTransport { engine }),
@@ -123,6 +143,48 @@ impl EngineLauncher {
             accepts_routing_mode: true,
             accepts_routed_proxy: true,
         })
+    }
+}
+
+/// Waits for the engine to reach `Fatal` and returns the reason as JSON.
+/// Logs `Degraded` reasons on the way: the engine heals those itself. Never
+/// returns once the subscription closes (the engine shut down), so a stop
+/// request decides.
+async fn until_fatal(engine: &Engine, mut states: EventReceiver) -> String {
+    // A Fatal between Engine::new and the subscription has no event.
+    if let Some(reason) = fatal_reason(&engine.status().state) {
+        return reason;
+    }
+    loop {
+        let state = match states.recv().await {
+            Some(EventItem::Event {
+                event: Event::StateChanged { state, .. },
+            }) => state,
+            // Fell behind: the current state is what counts.
+            Some(EventItem::Lagged { .. }) => engine.status().state,
+            Some(_) => continue,
+            None => std::future::pending().await,
+        };
+        if let Some(reason) = fatal_reason(&state) {
+            return reason;
+        }
+    }
+}
+
+/// The reason of a `Fatal` state as JSON; logs the reasons of a `Degraded`.
+fn fatal_reason(state: &EngineState) -> Option<String> {
+    match state {
+        EngineState::Fatal { reason } => {
+            let reason = serde_json::to_string(reason).unwrap_or_default();
+            tracing::warn!(%reason, "standard engine fatal");
+            Some(reason)
+        }
+        EngineState::Degraded { reasons } => {
+            let reasons = serde_json::to_string(reasons).unwrap_or_default();
+            tracing::info!(%reasons, "standard engine degraded");
+            None
+        }
+        _ => None,
     }
 }
 
@@ -374,6 +436,7 @@ mod tests {
         let version = super::version();
         assert!(!version.core_version.is_empty());
         assert!(!version.sail_version.is_empty());
+        assert!(!version.sail_commit.is_empty());
     }
 
     #[test]
@@ -433,6 +496,22 @@ mod tests {
         assert_eq!(launched.exited.await, "stopped");
         let after = core_ipc::start(transport.as_ref()).await.unwrap_err();
         assert_eq!(after.code(), Some("ENGINE_SHUT_DOWN"));
+    }
+
+    #[test]
+    fn only_fatal_ends_the_engine() {
+        use ppvpn_core::{DegradedReason, FatalReason};
+        let fatal = fatal_reason(&EngineState::Fatal {
+            reason: FatalReason::TunDeviceLost,
+        })
+        .unwrap();
+        assert!(fatal.contains("tun_device_lost"), "{fatal}");
+        let degraded = EngineState::Degraded {
+            reasons: vec![DegradedReason::NoDefaultInterface],
+        };
+        assert_eq!(fatal_reason(&degraded), None);
+        assert_eq!(fatal_reason(&EngineState::Running), None);
+        assert_eq!(fatal_reason(&EngineState::Stopped), None);
     }
 
     #[tokio::test]
@@ -528,38 +607,33 @@ mod tests {
         let unpin = core_ipc::pin_ingress(core, "n1", None).await.unwrap_err();
         assert_eq!(unpin.code(), Some("PROFILE_NOT_APPLIED"));
 
-        // Calls the engine does not implement yet answer like a failed Go
-        // call, not a transport error.
-        let not_implemented = |result: Result<Value, CoreCallError>| {
-            assert_eq!(code(&result), Some("CORE_OPERATION_FAILED"), "{result:?}");
+        // Probes and local proxy calls before a profile: the routed user
+        // and the system proxy listener exist from `new`, nodes do not.
+        let not_applied = |result: Result<Value, CoreCallError>| {
+            assert_eq!(code(&result), Some("PROFILE_NOT_APPLIED"), "{result:?}");
         };
-        not_implemented(
+        not_applied(
             core_ipc::probe_entrances(core, "tcp", &["n1".to_string()], 1_000, 4)
                 .await
                 .map(Value::from),
         );
-        not_implemented(
-            core_ipc::probe_availability(core, "n1", "http://example.test", 1_000).await,
+        not_applied(core_ipc::probe_availability(core, "n1", "http://example.test", 1_000).await);
+        assert!(core_ipc::local_proxies(core).await.unwrap().is_empty());
+        let routed = core_ipc::routed_local_proxy(core).await.unwrap();
+        assert!(
+            routed.is_some_and(|p| p.node_id.is_empty() && p.port != 0),
+            "no routed user before a profile"
         );
-        not_implemented(core_ipc::local_proxies(core).await.map(|_| Value::Null));
-        not_implemented(
-            core_ipc::routed_local_proxy(core)
-                .await
-                .map(|_| Value::Null),
-        );
-        not_implemented(
-            call(
-                &launched,
-                "/v1/get-local-proxy-credential",
-                json!({ "node_id": "n1" }),
-            )
-            .await,
-        );
-        not_implemented(
-            core_ipc::set_system_proxy(core, true)
-                .await
-                .map(|_| Value::Null),
-        );
+        let node = call(
+            &launched,
+            "/v1/get-local-proxy-credential",
+            json!({ "node_id": "n1" }),
+        )
+        .await;
+        assert_eq!(code(&node), Some("NODE_NOT_FOUND"));
+        let system = core_ipc::set_system_proxy(core, true).await.unwrap();
+        assert!(system.available && system.enabled && !system.listening);
+        assert!(system.port.is_some_and(|port| port != 0));
 
         // Malformed bodies and unknown paths.
         let bad = call(&launched, "/v1/select-node", json!({})).await;

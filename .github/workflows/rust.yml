@@ -2,9 +2,9 @@ name: rust
 
 # The Rust ppvpn-core (crates/): format, clippy and tests on every pull
 # request and push to main, modelled on sail's lint and test jobs; tests on
-# Linux, Windows (MSVC) and macOS (arm64). sail and
-# its BoringSSL are built from source (no prebuilt BoringSSL yet); the cache
-# makes that a one-off, and is saved from main only, so that pull requests
+# Linux, Windows (MSVC) and macOS (arm64). sail is built from source, with
+# the BoringSSL btls publishes for its pinned commit (prebuilt, verified) on
+# every job; the cache is saved from main only, so that pull requests
 # restore main's and do not push it out of the repository's cache quota.
 # The Go core keeps its own workflows (ci.yml, release.yml, netns.yml).
 # Clippy and the tests cover the workspace's default members (crates/); the
@@ -35,6 +35,16 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # BoringSSL as btls publishes it for the btls-sys Cargo.lock pins
+      # (checked against the release's SHA256SUMS and build attestation),
+      # instead of compiling it; the script at a fixed commit of btls.
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: fetch
         run: cargo fetch --locked
       # sail's own check, from the checkout of the sail commit Cargo.lock pins.
@@ -66,8 +76,33 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # BoringSSL as btls publishes it for the btls-sys Cargo.lock pins
+      # (checked against the release's SHA256SUMS and build attestation),
+      # instead of compiling it; the script at a fixed commit of btls.
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: test
         run: cargo test --locked
+      # The Secret Service store against a real keyring, in a D-Bus session
+      # of its own with an unlocked login keyring (no desktop session).
+      # tests/keystore.rs is built above and does nothing without the
+      # variable.
+      - name: secret store (Secret Service)
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus gnome-keyring
+          bin="$(ls -t target/debug/deps/keystore-* | grep -v '\.d$' | head -n 1)"
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            printf "%s" "ci-$RANDOM-$RANDOM" | gnome-keyring-daemon --unlock --components=secrets --daemonize >/dev/null
+            PPVPN_TEST_KEYSTORE=1 "$0" --nocapture
+          ' "$bin"
 
   # Windows with the MSVC toolchain, natively: what the desktop links (the
   # Windows service and client are MSVC builds). As sail's windows-msvc job,
@@ -79,7 +114,8 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_INCREMENTAL: 0
-      # bindgen's libclang (btls-sys), from the runner's LLVM.
+      # bindgen's libclang (btls-sys), from the runner's LLVM: still needed
+      # with the prebuilt BoringSSL (NASM and CMake are not).
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     defaults:
       run:
@@ -97,21 +133,18 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # BoringSSL builds without its assembly when CMake finds no NASM, and
-      # is then several times slower at AES-GCM and ChaCha20. The runner has
-      # one (Strawberry Perl's); its absence fails the job, not the speed.
-      - name: NASM on PATH
+      # BoringSSL as btls publishes it for the btls-sys Cargo.lock pins
+      # (checked against the release's SHA256SUMS and build attestation),
+      # instead of compiling it; the script at a fixed commit of btls.
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          where nasm || { echo "::error::nasm is not on PATH: BoringSSL would build without its assembly"; exit 1; }
-          nasm -v
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-pc-windows-msvc | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: build
         run: cargo build -p ppvpn-core -p ppvpn-account --all-targets --locked --target x86_64-pc-windows-msvc
-      - name: BoringSSL has its assembly
-        run: |
-          cache=$(find target/x86_64-pc-windows-msvc/debug/build -path '*btls-sys-*/out/build/CMakeCache.txt' | head -1)
-          grep -E '^(OPENSSL_NO_ASM|CMAKE_ASM_NASM_COMPILER)[:=]' "$cache" || true
-          if grep -qE '^OPENSSL_NO_ASM:[A-Z]+=(1|ON|YES|TRUE)' "$cache"; then exit 1; fi
-          grep -qE '^CMAKE_ASM_NASM_COMPILER:[A-Z]+=.+' "$cache"
       # Tests that cannot pass on Windows, each skipped by name with why; a
       # new failure fails the job.
       - name: test
@@ -135,5 +168,22 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # BoringSSL as btls publishes it for the btls-sys Cargo.lock pins
+      # (checked against the release's SHA256SUMS and build attestation),
+      # instead of compiling it; the script at a fixed commit of btls.
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock aarch64-apple-darwin | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: test
         run: cargo test --locked
+      # The Keychain store against the runner's login keychain. The step has
+      # its own timeout: a keychain prompt would wait for a person.
+      - name: secret store (Keychain)
+        timeout-minutes: 5
+        run: |
+          bin="$(ls -t target/debug/deps/keystore-* | grep -v '\.d$' | head -n 1)"
+          PPVPN_TEST_KEYSTORE=1 "$bin" --nocapture

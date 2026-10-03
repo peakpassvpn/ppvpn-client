@@ -62,7 +62,9 @@ if ($BuildNumber -and ($BuildNumber -notmatch '^\d+$' -or [int]$BuildNumber -gt 
   throw "BuildNumber must be an integer between 0 and 65535."
 }
 if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be x.y.z, not '$Version'." }
-Write-Host "channel '$Channel', api $ApiBase, feed $feedUrl, version $(if ($Version) { $Version } else { '(Directory.Build.props)' }), build number $(if ($BuildNumber) { $BuildNumber } else { '(Directory.Build.props)' })"
+# The backend may be a secret of the release environment: say which kind, not its value.
+$apiKind = if ($ApiBase -eq "https://www.peakpassvpn.com") { "production" } else { "custom" }
+Write-Host "channel '$Channel', api $apiKind, version $(if ($Version) { $Version } else { '(Directory.Build.props)' }), build number $(if ($BuildNumber) { $BuildNumber } else { '(Directory.Build.props)' })"
 
 # --- 1. vendored core ---------------------------------------------------------
 if (-not $CoreExe) {

@@ -72,9 +72,9 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
   - **本地代理状态在 `new` 时就生成或读取**：Standard 实例的 prefix、密码和端口，不依赖 apply，所以 `new` 之后就能读凭据和 metadata（第 4.6 节）。监听要到 `start` 才开。
   - **wintun.dll 由宿主随安装包分发**：签名版本和 Sail 使用的 `WINTUN_VERSION` 一致，路径通过 `TunConfig` 传入。引擎不下载它，也不内嵌。
   - 创建时会先**幂等地清扫上次的残留**，只限本库创建、并且能可靠识别的东西：
-    - Linux：优先级 9091–9101 的 ip rule 和表 2091（`tunrules` 的命名空间）；
-    - Windows：我们自己命名的 Wintun 适配器；
-    - macOS：我们创建的 utun 上的路由。
+    - Linux：Sail 在 `state_dir/run` 下的台账记下的改动，由 `sail::embed::sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表和 fw4 的 drop-in；另外按 `tunrules` 的命名空间清扫优先级 9091–9101 的 ip rule 和表 2091；
+    - macOS：不需要清扫。强杀后 utun 和经它的路由随进程一起消失（Sail 的常驻 CI 每次都验证）；Sail 接受这个 run_dir，但在 macOS 上不写台账；
+    - Windows：**目前不保证**。Sail 的 Windows TUN 还没有台账和 sweep，强杀后 Wintun 适配器及其路由、DNS 会不会残留还没有测；等 Sail 补上 Windows 的台账和 sweep（`docs/rust-parity.md`，切换前必须关掉的缺口）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
   - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
@@ -176,7 +176,7 @@ pub fn selected_node(&self) -> Option<NodeInfo>;
 pub fn traffic(&self) -> Traffic;                 // 累计上传/下载，方向以客户端为准
 pub fn connections(&self) -> Vec<Connection>;
 pub fn version() -> VersionInfo;                  // 关联函数，不需要实例
-pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行
+pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行，只能取一次，见第 10 节
 ```
 
 `VersionInfo` 包含以下字段：
@@ -194,11 +194,15 @@ pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日�
 pub async fn probe_entrances(&self, request: ProbeEntrancesRequest) -> Result<Vec<EntranceResult>, Error>;
 // { node_ids, method: Tcp | Icmp, timeout_ms, concurrency }
 pub async fn probe_availability(&self, request: ProbeAvailabilityRequest) -> Result<AvailabilityResult, Error>;
-// { node_id, target: URL, timeout_ms }；经该节点的本地代理用户发出
+// { node_id, target: URL, timeout_ms }；经该节点的出口（outbound）发出
 ```
 
 - **语义**：和 Core API v1 相同（`docs/architecture.md` 的"探测语义"一节）。
-- **离线时**：没有默认网卡时立即返回 `NO_DEFAULT_INTERFACE`（retryable=true），不等超时。
+- **入口探测**：直连测每个入口，不经隧道的规则。需要已 apply 的 Profile（否则 `PROFILE_NOT_APPLIED`），不需要已 start；每个节点发一个 `EntranceProbed`。
+- **可用性探测**：请求经该节点的出口发出，也就是该节点的本地代理用户所去的地方，但不经本地代理的监听，所以不受本地代理端口的影响（Go 版经本地代理用户发出）。每次探测发一个 `AvailabilityProbed`。
+  - **前置检查的顺序同 Go**：实例没有本地代理 → `LOCAL_PROXY_DISABLED`（retryable=false）；没有 apply → `PROFILE_NOT_APPLIED`（retryable=false）；没有 start → `CORE_NOT_RUNNING`（retryable=true）；之后才检查离线和节点（`NODE_NOT_FOUND`）。
+  - **TUN 实例**：始终返回 `LOCAL_PROXY_DISABLED`，不论是否在运行（Core 组决定，同 Go）。
+- **离线时**：没有默认网卡时立即返回 `NO_DEFAULT_INTERFACE`（retryable=true），不等超时，也不拨号。默认网卡的状态来自 Sail 的网络事件；在那之前，引擎当作"不确定"，照常探测。
 
 ### 4.6 本地代理凭据（仅 Standard）
 
@@ -217,7 +221,23 @@ pub async fn set_system_proxy_listener(&self, enabled: bool) -> Result<SystemPro
   - 实际端口有变化时，持久化新端口，发出 `LocalProxyEndpointChanged` 事件，`status` 里也能看到。
   - 监听失败时，例如端口被占用而且换不了，进入 `Degraded{LocalProxyUnavailable}`，并按退避重试。
 - **系统代理监听**：`set_system_proxy_listener` 只开关 7891 的无认证监听。操作系统的代理设置（指向这个端口）由宿主负责。
+  - 幂等；开关状态不持久化，`new` 之后是关的。端口优先级：持久化的端口、7891、任意空闲端口，不会和本地代理端口相同。
+  - 未 start 时只改状态，`start` 时生效（届时端口被占用就换一个）。运行中开关是原地增删这一个监听（和 Go 版一样），不 reload 配置。都发出 `SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。
+  - 运行中开关的保证：
+    - 打开时，任何已有连接都不受影响；
+    - 按节点的本地代理和 routed 用户的监听始终可用，地址和端口不变；
+    - 关闭时停止系统代理的监听，并断开它上面已经建立的连接；其他监听和它们上面的连接不受影响。`stop()` 时所有连接都会断开。
+  - 拿不到端口或运行时拒绝时返回 `SYSTEM_PROXY_START_FAILED`（retryable=true），开关保持原样。
 - **TUN 实例**：本组方法返回 `LOCAL_PROXY_DISABLED`；`set_system_proxy_listener` 返回 `SYSTEM_PROXY_UNAVAILABLE`。
+- **与 Go 版有意不同的三处**（Core 组和 Desktop 已定）：
+  1. **状态文件损坏时重建**：不是 JSON、版本未知、prefix 非法、prefix 和密码不成对时，Go 版拒绝启动；Rust 版重建（新的 prefix 和密码），否则 `new` 会一直失败，直到有人手动删掉文件。读文件本身的 I/O 错误仍然返回错误。
+  2. **权限不安全时重建凭据**：状态文件其他用户可读时（Unix），Go 版拒绝；Rust 版保留端口，重新生成 prefix 和密码。
+  3. **apply 之前就能读 routed 凭据**：routed 用户不依赖 Profile，`new` 之后就能读（第 3 节）；Go 版在没有节点时没有 routed 用户。按节点的凭据仍然只对已 apply 的 Profile 里的节点有效。
+
+  前两处重建的文件都只有本用户可读（Unix 上为 0600）。重建时 `new` 照常成功，`status().local_proxy.credentials_reset` 给出原因：`corrupt` 或 `insecure_permissions`。持有旧凭据的客户端（例如浏览器扩展）需要重新读取凭据。
+
+  - **重置只在 `new` 打开状态文件时发生**，之后不会再有，所以没有对应的事件：宿主在 `new` 之后读一次 `status().local_proxy.credentials_reset` 即可。
+  - 这个字段在本实例存活期间一直存在，core 不提供清除；是否重复提示由宿主决定。
 
 ## 5. 状态
 
@@ -232,7 +252,9 @@ pub struct Status {
     pub nodes: Vec<NodeStatus>,             // 每个节点：node_id、pinned_endpoint_key、各入口（endpoint_key、role、label、
                                             // healthy、last_check_at、consecutive_failures、active），同 get-status
                                             // 名称、entry_label、region 等节点资料见 nodes() / selected_node()（同 list-nodes）
-    pub local_proxy: Option<LocalProxyStatus>, // listen、port、listening（不含凭据）
+    pub local_proxy: Option<LocalProxyStatus>, // listen、port、listening（不含凭据）；credentials_reset：本实例 new 时
+                                            // 重建过凭据的原因（corrupt | insecure_permissions），没有重建时省略；
+                                            // 重置只在 new 时发生，没有对应事件，实例存活期间一直保留（第 4.6 节）
     pub rule_sets: Vec<RuleSetStatus>,     // id、state（ready | stale | unavailable）、updated_at、error、
                                             // failures（非 ready 时连续下载失败次数，0 时省略）、
                                             // next_retry_at（非 ready 时下次重试时间；主机未固定或没有存储时省略），同 get-status
@@ -322,7 +344,7 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 | `SystemProxyChanged` | 是 | |
 | `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
 | `KernelSwitched`、`KernelDrained` | 是 | 热切换和排空 |
-| `NetworkChanged` | 是 | 默认网卡变化 |
+| `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
 | `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有；Rust 版三个平台都有。同时会反映在 `StateChanged` 里 |
 
 ## 7. 错误
@@ -396,10 +418,19 @@ pub struct Error {
 ## 10. 日志
 
 - **输出方式**：日志行通过 `LogConfig` 交给宿主，可以是写入宿主提供的文件，也可以是一个按行接收的通道。格式与 Go 版一致（logfmt：`level=… msg=… key=value`），lab 和性能检查会解析这些行。
+  - 一行是 `<RFC 3339 UTC 时间，纳秒> level=<error|warn|info|debug> msg=<消息> key=value … source=<core|sail>`。`source=core` 是 `ppvpn-core` 自己的行，其余字段是事件的字段；`source=sail` 是 Sail 的行，Sail 的原文整个放在 `msg` 里。
+  - 一个实例的两种行进同一个有界队列（1024 行），再按 `LogSink` 输出：
+    - `None`：不保留任何行，也不计丢弃；
+    - `File { path }`：`Engine::new` 时打开文件（不存在就创建，Unix 上权限 0600），只追加；打不开时 `new` 返回 `CORE_OPERATION_FAILED`（field=`log.sink.path`）。写盘在引擎自己的线程里做，不阻塞打日志的一方；写失败的行计入丢弃。只追加，core 不做轮转，也没有大小上限；实例存活期间引擎一直持有这个文件，宿主只能在 `Engine::new` 之前截断或改名；
+    - `Channel`：用 `Engine::logs()` 取接收端。只能取一次，第二次调用（以及 sink 不是 `Channel` 时调用）得到一个已经结束的接收端（`recv()` 立即返回 `None`）。宿主不读或者已经丢掉接收端时，行照样丢弃并计数。实例的最后一个句柄释放后通道结束。
+- **tracing 订阅者**：`tracing` 的全局订阅者整个进程只有一个。`Engine::new` 尝试装一次 `tracing_subscriber::registry().with(sail::embed::tracing_layer()).with(ppvpn_core::tracing_layer())`；进程里已经有全局订阅者时什么也不装。
+  - 宿主如果有自己的 tracing 订阅者，**必须**在上面加上 `sail::embed::tracing_layer()` 和 `ppvpn_core::tracing_layer()`，否则 Sail 和 `ppvpn-core` 的日志行进不了各实例的 sink；宿主的全局过滤器也要放行 `sail`、`ppvpn_core` 这两个 target，到实例所用的级别（debug）为止。
+  - 这时 Sail 不再装它自己的订阅者，不再往 stdout/stderr 打带颜色的日志。宿主自己的 layer 也会看到这两个 target 的事件，怎么处理是宿主的事。
+- **多实例**：同一进程里有几个实例时，`ppvpn-core` 的一行属于哪个实例，看事件上的 `instance` 字段，没有就看离它最近的、带 `instance` 字段的外层 span（引擎为每个实例建一个）。两者都没有的行是进程级的，发给每个实例。Sail 的行由 Sail 按实例区分。`instance` 字段不写进日志行。
 - **轮转**：由宿主负责，引擎只按行输出，不管文件大小。
-- **不阻塞数据面**：日志接收端阻塞时，引擎丢弃日志行，不让数据面等待。丢弃的行数计入 `status().dropped_log_lines`，恢复后再补一行 warn 汇总这段时间丢了多少。
-- **级别**：默认 info；debug 级别会记录每个连接和每次 DNS 查询（含域名），只在排障时开启。
-- **脱敏**：任何级别都不记录凭据。
+- **不阻塞数据面**：日志接收端阻塞时，引擎丢弃日志行，不让数据面等待。丢弃的行数计入 `status().dropped_log_lines`（引擎侧和 Sail 侧的合计，只增不减），恢复后再补一行 warn 汇总这段时间丢了多少：`level=warn msg="log lines dropped" dropped=<上次汇总以来丢的行数> source=core`，排在恢复后第一行的前面。
+- **级别**：默认 info；debug 级别会记录每个连接和每次 DNS 查询（含域名），只在排障时开启。`ppvpn-core` 的行由引擎按 `LogConfig.level` 过滤，Sail 的行由 Sail 按同一级别过滤。
+- **脱敏**：任何级别都不记录凭据（本地代理的密码、节点的密钥和密码）。本地代理状态文件损坏时，日志只写解析错误的类别和位置，不写文件内容。
 
 ## 11. 内部结构（不是契约，供评审参考）
 

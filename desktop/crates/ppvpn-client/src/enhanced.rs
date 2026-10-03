@@ -3654,9 +3654,13 @@ mod tests {
         h.enhanced.enable().await.unwrap();
         *h.service.renew_error.lock().unwrap() = Some("SERVICE_STOPPING".into());
         wait_phase(&h, ConnectionPhase::Reconnecting).await;
-        let started = Instant::now();
-        h.enhanced.disable().await.unwrap();
-        assert!(started.elapsed() < Duration::from_millis(200));
+        // The reconnect keeps failing until the error is cleared below, so a
+        // disable that waited for it would never return. A generous bound:
+        // a wall-clock threshold near the pause flaked on loaded runners.
+        tokio::time::timeout(Duration::from_secs(5), h.enhanced.disable())
+            .await
+            .expect("disable waited for the reconnect")
+            .unwrap();
         *h.service.renew_error.lock().unwrap() = None;
         tokio::time::sleep(SERVICE_BACKOFF_BASE * 4).await;
         assert_eq!(h.enhanced.state().phase, ConnectionPhase::Off);

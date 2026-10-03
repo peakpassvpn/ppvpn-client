@@ -6,6 +6,7 @@
     xmlns:controls="using:PPVPN.Windows.Controls"
     xmlns:local="using:PPVPN.Windows"
     xmlns:loc="using:PPVPN.Windows.Strings"
+    xmlns:vm="using:PPVPN.App.Core.ViewModels"
     xmlns:views="using:PPVPN.Windows.Views"
     NavigationCacheMode="Required">
 
@@ -343,27 +344,39 @@
                 <!-- About -->
                 <TextBlock Style="{StaticResource GroupHeaderStyle}" Text="{loc:S Key=about}" />
                 <Border Style="{StaticResource CardStyle}">
-                    <Grid Style="{StaticResource RowGrid}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Image
-                            Width="20"
-                            Height="20"
-                            VerticalAlignment="Center"
-                            Source="ms-appx:///Assets/AppLogo.png" />
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock Text="PPVPN" />
-                            <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{x:Bind ViewModel.VersionText}" />
+                    <StackPanel>
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Image
+                                Width="20"
+                                Height="20"
+                                VerticalAlignment="Center"
+                                Source="ms-appx:///Assets/AppLogo.png" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="PPVPN" />
+                                <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{x:Bind ViewModel.VersionText}" />
+                            </StackPanel>
+                            <Button
+                                Grid.Column="2"
+                                Command="{x:Bind ViewModel.CheckForUpdatesCommand}"
+                                Content="{loc:S Key=checkNow}"
+                                IsEnabled="{x:Bind ViewModel.ShowUpdates}" />
+                        </Grid>
+                        <Border Style="{StaticResource RowDividerStyle}" />
+                        <!-- GPL notice (aboutLicense, the same wording on every platform), copyright, links. -->
+                        <StackPanel Padding="20,14,20,10" Spacing="4">
+                            <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{loc:S Key=aboutLicense}" TextWrapping="Wrap" />
+                            <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{x:Bind vm:SettingsViewModel.Copyright}" />
+                            <StackPanel Margin="-12,2,0,0" Orientation="Horizontal" Spacing="4">
+                                <HyperlinkButton Command="{x:Bind ViewModel.OpenSourceCommand}" Content="{loc:S Key=aboutSource}" />
+                                <HyperlinkButton Command="{x:Bind ViewModel.OpenLicenseCommand}" Content="{loc:S Key=aboutViewLicense}" />
+                            </StackPanel>
                         </StackPanel>
-                        <Button
-                            Grid.Column="2"
-                            Command="{x:Bind ViewModel.CheckForUpdatesCommand}"
-                            Content="{loc:S Key=checkNow}"
-                            IsEnabled="{x:Bind ViewModel.ShowUpdates}" />
-                    </Grid>
+                    </StackPanel>
                 </Border>
             </StackPanel>
         </Grid>

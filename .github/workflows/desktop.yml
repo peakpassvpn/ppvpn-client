@@ -100,14 +100,18 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Cache uniffi-bindgen-cs
-        id: bindgen
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs
           key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
+      # Either cache (this one or rust-cache, which keeps ~/.cargo/bin) may
+      # have restored the binary: install only when it is missing or of
+      # another version, and then over whatever is there.
       - name: Install uniffi-bindgen-cs
-        if: steps.bindgen.outputs.cache-hit != 'true'
-        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs
+        run: |
+          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
+            cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
+          fi
       - name: Generate C# bindings
         run: desktop/crates/ppvpn-client/scripts/build-dotnet.sh x86_64-unknown-linux-gnu
       - name: Test App.Core
@@ -117,8 +121,8 @@ jobs:
 
   # The client with the Rust ppvpn-core linked in (feature `rust-core`, off
   # in releases until the switch). Linux only here; rust.yml builds the
-  # engine on Windows (MSVC) and macOS. sail and its BoringSSL build from
-  # source, so this job is slow on a cold cache.
+  # engine on Windows (MSVC) and macOS. sail builds from source; its
+  # BoringSSL comes prebuilt, as in rust.yml.
   desktop-rust-core:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -134,6 +138,16 @@ jobs:
         with:
           key: desktop-rust-core
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # BoringSSL as btls publishes it for the btls-sys Cargo.lock pins
+      # (checked against the release's SHA256SUMS and build attestation),
+      # instead of compiling it; the script at a fixed commit of btls.
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: Clippy and test with the Rust core
         working-directory: desktop/crates/ppvpn-client
         run: |

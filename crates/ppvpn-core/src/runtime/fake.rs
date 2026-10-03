@@ -22,6 +22,8 @@ pub(crate) enum Call {
     DialUdp(String, Target),
     ReplaceInboundUsers(String, Vec<(String, String)>),
     NetworkChanged,
+    AddInbound(String),
+    RemoveInbound(String),
 }
 
 /// Which call the next failure is for.
@@ -33,6 +35,8 @@ pub(crate) enum Op {
     Select,
     Dial,
     ReplaceInboundUsers,
+    AddInbound,
+    RemoveInbound,
 }
 
 const LOG_CAPACITY: usize = 64;
@@ -45,6 +49,10 @@ pub(crate) struct FakeRuntime {
     /// Set by `set_groups`: the config no longer decides them.
     explicit_groups: AtomicBool,
     connections: Mutex<Vec<RuntimeConnection>>,
+    /// The inbounds' tags: the configuration's at start, then as
+    /// add_inbound and remove_inbound change them; none after stop. A
+    /// reload leaves them, as sail's adds and removes no listener.
+    inbounds: Mutex<Vec<String>>,
     traffic: Mutex<RuntimeTraffic>,
     tcp_route: Mutex<Option<SocketAddr>>,
     state: watch::Sender<RuntimeState>,
@@ -70,6 +78,7 @@ impl Default for FakeRuntime {
             groups: Mutex::default(),
             explicit_groups: AtomicBool::new(false),
             connections: Mutex::default(),
+            inbounds: Mutex::default(),
             traffic: Mutex::default(),
             tcp_route: Mutex::default(),
             state: watch::channel(RuntimeState::Idle).0,
@@ -84,6 +93,20 @@ impl Default for FakeRuntime {
 }
 
 impl FakeRuntime {
+    /// The inbounds now, by tag.
+    pub(crate) fn inbounds(&self) -> Vec<String> {
+        self.inbounds.lock().unwrap().clone()
+    }
+
+    fn take_inbounds_of(&self, config: &str) {
+        let config: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
+        let tags = config["inbounds"]
+            .as_array()
+            .map(|list| list.iter().filter_map(inbound_tag).collect())
+            .unwrap_or_default();
+        *self.inbounds.lock().unwrap() = tags;
+    }
+
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.calls.lock().unwrap().clone()
     }
@@ -192,8 +215,10 @@ impl FakeRuntime {
     pub(crate) fn change_network(&self, new: NetworkSnapshot, reason: &str) {
         let old = std::mem::replace(&mut *self.network.lock().unwrap(), new.clone());
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let change = made_up_kind(&old, &new).into();
         self.network_changes.send_replace(Some(NetworkChange {
             generation,
+            change,
             reason: reason.into(),
             old,
             new,
@@ -243,6 +268,7 @@ impl Runtime for FakeRuntime {
         }
         *self.config.lock().unwrap() = Some(config.to_owned());
         self.take_groups_of(config);
+        self.take_inbounds_of(config);
         self.state.send_replace(RuntimeState::Running);
         Ok(())
     }
@@ -262,6 +288,7 @@ impl Runtime for FakeRuntime {
         self.state.send_replace(RuntimeState::Stopping);
         self.connections.lock().unwrap().clear();
         self.state.send_replace(RuntimeState::Stopped);
+        self.inbounds.lock().unwrap().clear();
         Ok(())
     }
 
@@ -400,6 +427,45 @@ impl Runtime for FakeRuntime {
         }
         super::configured_tun_name(self.config.lock().unwrap().as_deref()?)
     }
+
+    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError> {
+        let value: serde_json::Value = serde_json::from_str(inbound)
+            .map_err(|e| RuntimeError::new("config", format!("inbound: {e}")))?;
+        let tag =
+            inbound_tag(&value).ok_or_else(|| RuntimeError::new("config", "inbound: no type"))?;
+        self.record(Call::AddInbound(tag.clone()));
+        self.running()?;
+        self.check(Op::AddInbound)?;
+        let mut inbounds = self.inbounds.lock().unwrap();
+        if inbounds.contains(&tag) {
+            return Err(RuntimeError::new(
+                "config",
+                format!("[{tag}] inbound: exists"),
+            ));
+        }
+        inbounds.push(tag);
+        Ok(())
+    }
+
+    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError> {
+        self.record(Call::RemoveInbound(tag.into()));
+        self.running()?;
+        self.check(Op::RemoveInbound)?;
+        let mut inbounds = self.inbounds.lock().unwrap();
+        let before = inbounds.len();
+        inbounds.retain(|t| t != tag);
+        if inbounds.len() == before {
+            return Err(RuntimeError::new(
+                "not_found",
+                format!("[{tag}] inbound: does not exist"),
+            ));
+        }
+        self.connections
+            .lock()
+            .unwrap()
+            .retain(|c| c.inbound != tag);
+        Ok(())
+    }
 }
 
 /// A datagram association that answers what it is sent.
@@ -428,6 +494,29 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[tokio::test]
+    async fn inbounds_follow_the_config_and_the_calls() {
+        let fake = FakeRuntime::default();
+        fake.start(r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"tun"}]}"#)
+            .await
+            .unwrap();
+        assert_eq!(fake.inbounds(), ["local", "tun"]);
+        fake.add_inbound(r#"{"type":"mixed","tag":"system"}"#)
+            .await
+            .unwrap();
+        assert!(fake
+            .add_inbound(r#"{"type":"mixed","tag":"system"}"#)
+            .await
+            .is_err());
+        fake.remove_inbound("system").await.unwrap();
+        assert_eq!(
+            fake.remove_inbound("system").await.unwrap_err().code,
+            "not_found"
+        );
+        assert_eq!(fake.inbounds(), ["local", "tun"]);
+        assert!(fake.calls().contains(&Call::AddInbound("system".into())));
+    }
 
     #[tokio::test]
     async fn network_changes_are_injected() {

@@ -32,15 +32,32 @@ pub(super) const DROP_LIMIT: Duration = Duration::from_secs(5);
 /// which names each step left (the steps keep the deadline themselves).
 const REPORT_GRACE: Duration = Duration::from_millis(200);
 
+/// Where sail writes down what an instance changes in the system (its TUN,
+/// routes, rules), so that the next start, or [`sweep`], undoes what a
+/// killed instance left: under the instance's own state directory.
+pub(super) fn run_dir(config: &EngineConfig) -> sail::embed::RunDir {
+    sail::embed::RunDir::Dir(config.state_dir.join("run"))
+}
+
 /// Idempotently removes what a previous instance on this host left (rules,
 /// routes, adapters it can tell are its own), before anything else at `new`.
 ///
-/// Linux Tun instances: the TUN routing rules and table a previous
-/// instance's sail left (tunrules: our own priority range and table only).
+/// - sail's ledger under [`run_dir`]: each change a killed instance's sail
+///   wrote down (Linux: its TUN, routes and rules). On macOS a kill leaves
+///   nothing (the kernel reclaims the utun and its routes); Windows writes
+///   no ledger yet (rust-parity).
+/// - Linux Tun instances, besides: our own rule priority range and table
+///   (tunrules), whatever wrote them.
+///
 /// A sweep that fails is logged and does not stop `new`: what it could not
 /// remove does not keep this instance from working, and the guard puts
-/// back what this instance needs. Other platforms come with their sweep.
+/// back what this instance needs.
 pub(super) fn sweep(config: &EngineConfig) -> Result<(), Error> {
+    if config.role == Role::Tun {
+        for undone in sail::embed::sweep(&run_dir(config)) {
+            tracing::info!(undone = %undone, "leftover of a killed instance removed");
+        }
+    }
     if config.role == Role::Tun && config.platform == Platform::Linux {
         let scope = tunrules::Scope::desktop(translate::interface_name(config.platform));
         if let Err(e) = tunrules::sweep(&scope) {
