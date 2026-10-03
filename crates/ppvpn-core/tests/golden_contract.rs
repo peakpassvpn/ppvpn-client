@@ -206,7 +206,7 @@ fn apply_patch(doc: &mut Value, op: &Value) {
 }
 
 /// The scenario files run step by step.
-const SCENARIOS: &[&str] = &["lifecycle", "apply_dedupe"];
+const SCENARIOS: &[&str] = &["lifecycle", "apply_dedupe", "selection", "pin_ingress"];
 
 /// (file, step, Rust's response, Rust's events): D1–D3. A response is the
 /// golden's envelope; events are listed by their golden fields.

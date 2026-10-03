@@ -27,7 +27,7 @@ Go core 冻结在 v0.5.21（#45）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`
 
 D3 的连带影响：同一文件里后面的 `status_r3` 和 `status_still_r3`，在 Rust 下 `revision` 仍是 `2026-09-29T00:00:00Z#2`，因为 r3 被拒绝了；这两步也按此判定。
 
-这几步由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
+这几步（D1、D2、D3）由 `tests/golden_contract.rs` 的 `scenarios_match_the_go_golden` 按"Rust 预期"判定（`scenario_departure`）。
 
 D3 改变的只是失效的 `default_node_id`：用合法的 `default_node_id` 更新 Profile 时，仍然沿用当前选择（`TestSameRevisionNoopAndMigrationKeepsSelection` 的行为不变）。
 
@@ -248,7 +248,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| `api` `TestPinIngressEndpoint` | Pin ingress endpoint |  | todo |  |
+| `api` `TestPinIngressEndpoint` | Pin ingress endpoint | `tests/golden_contract.rs` `scenarios_match_the_go_golden`（`pin_ingress`）、`ppvpn-core` `engine::selection_tests::pin_ingress_validates_then_pins_and_unpins` | done | `endpoint_key` 为 `None` 时恢复自动（选中节点 selector 里的 `<tag>-auto`） |
 | `internal/failover` `TestActiveTracksSwitchesAndNotifiesObserver` | Active tracks switches and notifies observer |  | todo |  |
 | `internal/failover` `TestCheckFallsBackToTheSecondURL` | checkAny passes when a later URL answers although the first does not. |  | todo |  |
 | `internal/failover` `TestDialTimeoutMovesToTheNextMember` | A member that hangs costs dialTimeout, then the next member serves the same dial. |  | todo |  |
@@ -357,7 +357,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/runtime` `TestSelectNodeChangesOnlyNewFlowSelection` | Select node changes only new flow selection |  | todo |  |
 | `internal/runtime` `TestSharedLocalProxyConnectAuthFailureChallenges` | runs the real core: a CONNECT without Proxy-Authorization, with a wrong password or for an unknown user reads back a 407 Basic challenge and then a clean EOF (browsers … |  | todo |  |
 | `internal/runtime` `TestSharedLocalProxyRoutesByUsername` | runs two nodes behind one loopback port: the username picks the node for HTTP and SOCKS5, traffic is counted and attributed per node, and bad credentials or removed … |  | todo |  |
-| `internal/runtime` `TestStandardCoreSelectNode` | drives select-node on a real non-TUN core, both before start (the selection must survive Start) and while running. |  | todo |  |
+| `internal/runtime` `TestStandardCoreSelectNode` | drives select-node on a real non-TUN core, both before start (the selection must survive Start) and while running. | `ppvpn-core` `engine::selection_tests::select_node_before_and_after_a_profile` | done | 在 FakeRuntime 上：start 前选择的节点作为 `selected` 的默认值，运行中调用 `select("selected", 节点 tag)`；真实 sail 的 selector 由 `runtime::sail` 的测试覆盖 |
 | `internal/runtime` `TestSystemProxyFollowsSelectedNodeAndRules` | runs the standard (non-TUN) core with the system proxy toggled at runtime: traffic follows the selected node and the profile's DIRECT rule, counts toward traffic, and … |  | todo |  |
 | `internal/runtime` `TestSystemProxyStartFallsBackWhenPortTaken` | System proxy start falls back when port taken |  | todo |  |
 | `internal/runtime` `TestSystemProxyUnavailableInTUNCore` | System proxy unavailable in tun core |  | todo |  |
