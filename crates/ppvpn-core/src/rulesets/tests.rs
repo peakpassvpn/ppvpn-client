@@ -741,3 +741,22 @@ fn backoff_doubles_up_to_its_bounds() {
         after(now, Duration::from_secs(3600))
     );
 }
+
+/// The public status carries the retry fields, as Go's get-status does.
+#[test]
+fn public_status_carries_failures_and_next_retry() {
+    let next = Utc::now();
+    let status = Status {
+        id: "cn-site".into(),
+        state: State::Unavailable,
+        updated_at: None,
+        error: "RULE_SET_DOWNLOAD_FAILED",
+        failures: 3,
+        next_retry_at: Some(next),
+    };
+    let public = status.public();
+    assert_eq!(public.state, "unavailable");
+    assert_eq!(public.error, "RULE_SET_DOWNLOAD_FAILED");
+    assert_eq!(public.failures, 3);
+    assert_eq!(public.next_retry_at, Some(next));
+}

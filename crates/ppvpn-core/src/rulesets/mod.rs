@@ -75,9 +75,8 @@ impl State {
     }
 }
 
-/// One rule set's state. `failures` and `next_retry_at` are Go's get-status
-/// fields the public [`RuleSetStatus`] does not carry (yet); the log has
-/// them.
+/// One rule set's state, as Go's get-status reports it (the public
+/// [`RuleSetStatus`] and the log).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Status {
     pub id: String,
@@ -101,6 +100,8 @@ impl Status {
             state: self.state.as_str().into(),
             updated_at: self.updated_at,
             error: self.error.into(),
+            failures: self.failures,
+            next_retry_at: self.next_retry_at,
         }
     }
 
