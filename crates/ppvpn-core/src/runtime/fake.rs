@@ -192,8 +192,10 @@ impl FakeRuntime {
     pub(crate) fn change_network(&self, new: NetworkSnapshot, reason: &str) {
         let old = std::mem::replace(&mut *self.network.lock().unwrap(), new.clone());
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let change = made_up_kind(&old, &new).into();
         self.network_changes.send_replace(Some(NetworkChange {
             generation,
+            change,
             reason: reason.into(),
             old,
             new,

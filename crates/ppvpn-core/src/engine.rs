@@ -119,7 +119,8 @@ impl Engine {
         tun::check(&config)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         cleanup::sweep(&config)?;
-        let runtime = SailRuntime::new(sail::embed::Options::new()).map_err(|e| e.to_error())?;
+        let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
+        let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
         let engine = Engine::with_runtime(config, Arc::new(runtime));
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
         Ok(engine)
@@ -298,8 +299,8 @@ impl Engine {
     pub fn version() -> VersionInfo {
         VersionInfo {
             core_version: env!("CARGO_PKG_VERSION").into(),
-            sail_version: sail::embed::VERSION.into(),
-            sail_commit: String::new(),
+            sail_version: sail::embed::BUILD.version.into(),
+            sail_commit: sail::embed::BUILD.commit.into(),
             profile_schema_version: crate::profile::CURRENT_SCHEMA_VERSION as u32,
             local_proxy_contract_version: LOCAL_PROXY_CONTRACT_VERSION,
         }
@@ -584,7 +585,16 @@ mod tests {
     fn version_names_the_sail_it_links() {
         let version = Engine::version();
         assert!(!version.sail_version.is_empty());
-        assert_eq!(version.sail_version, sail::embed::VERSION);
+        assert_eq!(version.sail_version, sail::embed::BUILD.version);
+        // sail by git rev: its build.rs takes the commit Cargo checked out.
+        assert!(!version.sail_commit.is_empty());
+        assert_ne!(version.sail_commit, "unknown");
+        assert!(
+            version.sail_commit.len() >= 7
+                && version.sail_commit.chars().all(|c| c.is_ascii_hexdigit()),
+            "{}",
+            version.sail_commit
+        );
         assert_eq!(
             version.sail_version.split('.').count(),
             3,
