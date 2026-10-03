@@ -85,7 +85,13 @@ impl Default for FakeRuntime {
             switches: (switch_tx, Mutex::new(Some(switch_rx))),
             logs: (log_tx, Mutex::new(Some(log_rx))),
             dropped: AtomicU64::new(0),
-            network: Mutex::default(),
+            // Known at the start, as sail's start returns with its first
+            // detection done; `set_network` makes it unknown for a test.
+            network: Mutex::new(NetworkSnapshot {
+                interface: Some("eth0".into()),
+                index: Some(2),
+                ..NetworkSnapshot::default()
+            }),
             network_changes: watch::channel(None).0,
             generation: AtomicU64::new(0),
         }
