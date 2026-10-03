@@ -3,7 +3,10 @@
 
 pub mod buildinfo;
 pub mod cli;
+pub mod client;
 pub mod commands;
+pub mod control;
+pub mod daemon;
 pub mod env;
 pub mod error;
 pub mod identity;

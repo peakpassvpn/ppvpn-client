@@ -243,13 +243,12 @@ fn doctor_reports_build_and_directories() {
 }
 
 #[test]
-fn engine_commands_are_not_implemented_yet() {
+fn account_commands_are_not_implemented_yet() {
     for args in [
-        &["status"][..],
-        &["start"],
-        &["use", "hk-1"],
+        &["use", "hk-1"][..],
         &["proxy", "credential"],
         &["login", "--no-browser"],
+        &["account"],
     ] {
         let out = run(&[&["--json"][..], args].concat());
         assert_eq!(out.code, 1, "{args:?}");

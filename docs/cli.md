@@ -4,9 +4,35 @@
 ppvpn-core's standard instance in its own process, exposing the authenticated local HTTP/SOCKS5 proxy. It
 does not create a TUN device or change system network settings.
 
-Status: the command-line contract, settings and directory layout are in place. Commands that need the core
-library (see [host integration](host-integration.md)) or the account crate report `NOT_IMPLEMENTED` until
-those are wired in; their arguments are already parsed and checked.
+Status: the command-line contract, settings, directory layout and the daemon (`start`, `stop`, `status`,
+`--foreground`) are in place. Commands that need the account crate (`login`, profile download, …) or whose
+daemon call is not wired yet report `NOT_IMPLEMENTED`; their arguments are already parsed and checked.
+
+## Daemon
+
+`ppvpn start` runs a per-user daemon in the background (`ppvpn daemon`, in its own session) that hosts
+ppvpn-core's standard instance: the local proxy only, no TUN and no system proxy. `start --foreground` runs
+the same daemon in the CLI's own process until Ctrl+C or SIGTERM. Other commands talk to it over a private
+control channel:
+
+- a Unix socket (`0600`, in the `0700` runtime directory) carrying one JSON request and one JSON response per
+  line; every request carries the session secret from `session.secret` (`0600`), created fresh by each daemon;
+- the protocol is private to one CLI version (client and daemon are the same binary);
+- `daemon.lock` (flock) allows one daemon per user; a second one exits with `DAEMON_ALREADY_RUNNING`;
+- `daemon.json` records PID, executable and start time; `status` and `stop` only trust a record whose process
+  still matches all three, so a record left by a crash or power loss is ignored and cleaned up;
+- `stop` asks the daemon to shut core down (at most 10 seconds) and waits for it to exit; if the control
+  channel is gone, it sends SIGTERM to the verified process;
+- if `start` launched a daemon and then failed to apply or start, it stops that daemon again.
+
+Errors from core keep their code; `--json` also includes core's `field` when there is one. Core's runtime codes
+map to exits 2 (`NODE_NOT_FOUND`, `INGRESS_NOT_FOUND`, `PINS_INVALID`, `ROUTING_MODE_INVALID`), 5
+(`PROFILE_NOT_APPLIED`, `CORE_*`, `ENGINE_*`, `NO_DEFAULT_INTERFACE`), 6 (proxy or TUN features unavailable)
+and 8 (`STATE_DIR_IN_USE`, `PERMISSION_DENIED`); every other core code is a profile or request validation
+failure (exit 7).
+
+Until `ppvpn-account` provides the profile download, a `dev` build can read a profile from the absolute path in
+`PPVPN_PROFILE_FILE`; release builds report `NOT_IMPLEMENTED` from `start`.
 
 ## Commands
 
@@ -61,7 +87,7 @@ between 1 ms and 2 minutes, and a concurrency between 1 and 32.
 | | macOS | Linux |
 | --- | --- | --- |
 | settings | `~/Library/Application Support/ppvpn-cli/settings.json` | `$XDG_CONFIG_HOME/ppvpn-cli/settings.json` |
-| runtime: control socket, process record, logs | `~/Library/Application Support/ppvpn-cli/runtime/` | `$XDG_STATE_HOME/ppvpn-cli/runtime/` |
+| runtime: control socket, session secret, process record, daemon lock and log | `~/Library/Application Support/ppvpn-cli/runtime/` | `$XDG_STATE_HOME/ppvpn-cli/runtime/` |
 | core `state_dir` | `~/Library/Application Support/ppvpn-cli/state/` | `$XDG_STATE_HOME/ppvpn-cli/state/` |
 
 Unset or relative XDG variables fall back to `~/.config` and `~/.local/state`. Directories are `0700` and

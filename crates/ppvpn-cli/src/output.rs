@@ -29,12 +29,15 @@ impl Printer<'_> {
 
     pub fn failure(&mut self, error: &CliError) -> std::io::Result<()> {
         if self.json {
-            let value = json!({
+            let mut value = json!({
                 "ok": false,
                 "code": error.code,
                 "message": error.message,
                 "retryable": error.retryable,
             });
+            if let Some(field) = &error.field {
+                value["field"] = Value::String(field.clone());
+            }
             writeln!(self.stdout, "{}", serde_json::to_string(&value)?)
         } else {
             writeln!(self.stderr, "Error: {}", error.message)

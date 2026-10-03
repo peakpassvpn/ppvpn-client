@@ -36,6 +36,10 @@ pub struct Paths {
     pub socket_dir: PathBuf,
     pub process_record: PathBuf,
     pub lock: PathBuf,
+    /// Shared secret every control request carries (0600).
+    pub secret: PathBuf,
+    /// The background daemon's stdout and stderr.
+    pub daemon_log: PathBuf,
     /// Core's `state_dir`.
     pub state_dir: PathBuf,
 }
@@ -95,6 +99,8 @@ impl Paths {
             config_dir,
             process_record: runtime_dir.join("daemon.json"),
             lock: runtime_dir.join("daemon.lock"),
+            secret: runtime_dir.join("session.secret"),
+            daemon_log: runtime_dir.join("daemon.log"),
             socket,
             socket_dir,
             runtime_dir,
