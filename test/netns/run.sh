@@ -17,7 +17,8 @@
 #   ppvpn-w: its "uplink"; veth pw0 10.243.0.2/24 (no way out of the machine)
 # The TUN, its rules, routes and DNS stay inside ppvpn-t. Before and after,
 # the host's own state is captured in the host's namespace: IPv4/IPv6 rules,
-# every routing table, links, nftables, /etc/resolv.conf and systemd-resolved's
+# every routing table, links, nftables, /etc/resolv.conf, the per-namespace
+# files under /etc/netns (a script's resolv.conf) and systemd-resolved's
 # per-link DNS (a process in a namespace can still reach the host's resolved
 # over D-Bus, with the namespace's interface numbers). Any difference fails.
 #
@@ -45,6 +46,7 @@ snapshot() { # file
 		echo "## links"; ip -o link show | awk -F': ' '{print $2}' | sed 's/@.*//' | sort
 		echo "## nft"; { nft -s list ruleset 2>/dev/null || echo "(nft unavailable)"; } | volatile
 		echo "## resolv.conf"; sha256sum /etc/resolv.conf 2>/dev/null || echo "(none)"
+		echo "## /etc/netns"; ls -A /etc/netns 2>/dev/null || true
 		echo "## resolvectl dns"; resolvectl dns 2>/dev/null || echo "(no systemd-resolved)"
 		echo "## resolvectl domain"; resolvectl domain 2>/dev/null || true
 	} > "$1"

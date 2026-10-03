@@ -1,11 +1,19 @@
 #!/bin/sh
 # Lab test of dns-local following network changes (docs/design-local-dns.md §4.2).
 #
-#   run.sh <lab ppvpn-core> <ldnslab> <profile.json> <out dir>
+#   [CORE_ENGINE=go|rust] run.sh <core> <ldnslab> <profile.json> <out dir>
 #
-# The core must be a lab build (make build-lab-linux: localdns_testsource),
-# which reads the default interface's resolvers from $PPVPN_LOCALDNS_TEST_FILE
-# instead of the system. Needs root, iproute2 (with netns), tcpdump and curl on Linux; no jq or GNU date. Everything runs
+# CORE_ENGINE=go (default): the core is the Go lab build (make
+# build-lab-linux: localdns_testsource), which reads the default interface's
+# resolvers from $PPVPN_LOCALDNS_TEST_FILE instead of the system; interface
+# changes are read from its log lines.
+# CORE_ENGINE=rust: the core is ppvpn-core-lab (the Rust engine), which has
+# no test source: on Linux its dns-local reads /etc/resolv.conf, as sing-box's
+# and sail's `local` do. Each step rewrites the client namespace's
+# /etc/netns/ldns-c/resolv.conf in place (ip netns exec bind-mounts that
+# file, so it is never replaced); interface changes are the engine's
+# NetworkChanged events (watch-events).
+# Needs root, iproute2 (with netns), tcpdump and curl on Linux; no jq or GNU date. Everything runs
 # in three network namespaces of its own (ldns-c client, ldns-a and ldns-b
 # networks); the host's network is not touched. Set CPUS (e.g. 12-15) to pin
 # the processes with taskset.
@@ -23,6 +31,10 @@ rm -rf "$OUT"/*
 PIN=""; [ -n "${CPUS:-}" ] && PIN="taskset -c $CPUS"
 R=$OUT/run; mkdir -p $R
 TESTFILE=$OUT/servers.json
+ENGINE=${CORE_ENGINE:-go}
+case $ENGINE in go|rust) ;; *) echo "CORE_ENGINE must be go or rust, not $ENGINE" >&2; exit 2 ;; esac
+NETNS_ETC=/etc/netns/ldns-c
+RESOLV=$NETNS_ETC/resolv.conf
 FAILED=0
 c() { ip netns exec ldns-c "$@"; }
 now() { "$LAB" now; }
@@ -34,13 +46,17 @@ check() { # description, condition
 cleanup() {
   [ -f $R/pid ] && kill $(cat $R/pid) 2>/dev/null || true
   [ -f $R/tcpdump.pid ] && kill $(cat $R/tcpdump.pid) 2>/dev/null || true
+  [ -f $R/events.pid ] && kill $(cat $R/events.pid) 2>/dev/null || true
   for pid in $(cat $R/servers.pid 2>/dev/null); do kill $pid 2>/dev/null || true; done
   sleep 0.5
   for ns in ldns-c ldns-a ldns-b; do ip netns del $ns 2>/dev/null || true; done
+  if [ "$ENGINE" = rust ]; then rm -rf "$NETNS_ETC"; fi
 }
 trap cleanup EXIT
 cleanup
-rm -f $R/pid $R/servers.pid $R/tcpdump.pid
+rm -f $R/pid $R/servers.pid $R/tcpdump.pid $R/events.pid
+# Before the first ip netns exec, which bind-mounts what is there then.
+if [ "$ENGINE" = rust ]; then mkdir -p "$NETNS_ETC"; : > "$RESOLV"; fi
 
 # Namespaces and links.
 for ns in ldns-c ldns-a ldns-b; do ip netns add $ns; ip -n $ns link set lo up; done
@@ -65,17 +81,30 @@ serve ldns-b 10.202.0.53:53 192.0.2.3 dns-b2
 serve ldns-c 127.0.0.1:53 192.0.2.99 dns-trap
 sleep 0.5
 
-echo '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' > $TESTFILE
+# resolvers <Go test file JSON> <the default interface's resolvers>: what
+# the system says now. resolv.conf is written in one go into the same file
+# (the bind mount keeps the inode).
+resolvers() {
+  if [ "$ENGINE" = go ]; then echo "$1" > $TESTFILE; return; fi
+  conf=""; for s in $2; do conf="${conf}nameserver $s
+"; done
+  printf '%s' "$conf" > "$RESOLV"
+}
+resolvers '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' 10.201.0.1
 
 # The core, TUN only, every domain routed direct (dns-local answers all).
 "$LAB" apply-body "$PROFILE" > $R/apply.json
-PPVPN_LOCALDNS_TEST_FILE=$TESTFILE ip netns exec ldns-c $PIN "$CORE" serve --socket $R/core.sock --session-secret-file $R/secret \
+TEST_SOURCE=""; [ "$ENGINE" = go ] && TEST_SOURCE="PPVPN_LOCALDNS_TEST_FILE=$TESTFILE"
+env $TEST_SOURCE ip netns exec ldns-c $PIN "$CORE" serve --socket $R/core.sock --session-secret-file $R/secret \
   --state-dir $R/state --log-file "$OUT/core.log" --log-level debug --tun --local-proxy=false > "$OUT/core.stdout" 2>&1 &
 echo $! > $R/pid
 for i in $(seq 50); do [ -S $R/core.sock ] && [ -s $R/secret ] && break; sleep 0.1; done
 c curl -s --unix-socket $R/core.sock -H "Authorization: Bearer $(cat $R/secret)" -X POST http://core/v1/apply-profile -d @$R/apply.json > $R/apply.out
 c curl -s --unix-socket $R/core.sock -H "Authorization: Bearer $(cat $R/secret)" -X POST http://core/v1/start -d '{}' > $R/start.out
 log "apply: $(cat $R/apply.out) start: $(cat $R/start.out)"
+# The engine's events: the Rust core's interface changes.
+c curl -s -N --unix-socket $R/core.sock -H "Authorization: Bearer $(cat $R/secret)" http://core/v1/watch-events > "$OUT/events.ndjson" 2>/dev/null &
+echo $! > $R/events.pid
 check "profile applied and started" 'grep -q "\"ok\":true" $R/apply.out && grep -q "\"ok\":true" $R/start.out'
 sleep 2
 
@@ -96,11 +125,15 @@ q() { # -> "ok <ip> <ms>" | "fail <why> <ms>"; a new name every time (no cache h
   c $PIN "$LAB" query -server 10.60.159.90:53 -name "q$n.lab.test" -timeout ${QTIMEOUT:-3s}
 }
 count() { grep -c . "$OUT/$1.log" 2>/dev/null || true; }
-changes() { grep -c "msg=\"default interface\" event=changed name=$1 " "$OUT/core.log" || true; } # changes to interface $1
+changes() { # changes of the default interface to $1 so far
+  if [ "$ENGINE" = go ]; then grep -c "msg=\"default interface\" event=changed name=$1 " "$OUT/core.log" || true
+  else grep '"type":"NetworkChanged"' "$OUT/events.ndjson" | grep -c "\"interface_name\":\"$1\"" || true; fi
+}
 # sing-tun reports a default interface change after a 1 s debounce
 # (monitor_shared.go delayCheckUpdate); dns-local follows from that event,
 # as direct sockets' binding does. Waits for the next one, logs its delay.
-# The Rust core must report within 2 s (the default). On the Go baseline
+# The Rust core must report within 2 s (the default): sail's monitor waits
+# for 100 ms of quiet, at most 1 s, and the engine sends NetworkChanged. On the Go baseline
 # (SWITCH_GRACE_MS > 0) the front's own monitor can be held back for
 # seconds too, as each netlink event restarts the debounce (5146 ms seen on
 # a CI runner): it gets 10 s, and the log keeps the time it took.
@@ -142,6 +175,7 @@ check "network A answered by A" '[ "$(echo $r | cut -d" " -f1,2)" = "ok 192.0.2.
 
 # 2. Switch the default route to network B (another interface): the first
 # query after the switch must already be answered by B.
+resolvers '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' 10.202.0.1
 k=$(changes cb)
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
 await_change cb $k "default route to cb"
@@ -152,8 +186,9 @@ check "first query after the change answered by B" '[ "$(echo $r | cut -d" " -f1
 check "no query reached A after the change" '[ "$(count dns-a)" = "$a_before" ]'
 
 # 3. Another network on the same interface (a Wi-Fi switch on en0): new
-# address on cb, new resolver in the file.
-echo '{"ca":["10.201.0.1"],"cb":["10.202.0.53"]}' > $TESTFILE
+# address on cb, new resolver in the file (each step writes the resolvers
+# first, as a DHCP client does before the route).
+resolvers '{"ca":["10.201.0.1"],"cb":["10.202.0.53"]}' 10.202.0.53
 k=$(changes cb)
 ip -n ldns-c addr add 10.202.0.3/24 dev cb; ip -n ldns-c addr del 10.202.0.2/24 dev cb
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
@@ -167,7 +202,7 @@ check "no query reached the old resolver after the change" '[ "$(count dns-b)" =
 # 4. DHCP has not handed out DNS yet: queries fail fast (no 3 s timeout),
 # then the servers appear without another interface change and are used
 # within RetryInterval.
-echo '{"ca":["10.201.0.1"],"cb":[]}' > $TESTFILE
+resolvers '{"ca":["10.201.0.1"],"cb":[]}' ""
 k=$(changes cb)
 ip -n ldns-c addr add 10.202.0.4/24 dev cb; ip -n ldns-c addr del 10.202.0.3/24 dev cb
 ip -n ldns-c route replace default via 10.202.0.1 dev cb
@@ -178,7 +213,7 @@ for i in 1 2 3; do
   check "no resolvers: query $i gets SERVFAIL" '[ "$(echo $r | cut -d" " -f1,2)" = "fail SERVFAIL" ]'
   check "no resolvers: query $i fails within 500 ms" '[ "$(echo $r | cut -d" " -f3)" -lt 500 ]'
 done
-echo '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' > $TESTFILE
+resolvers '{"ca":["10.201.0.1"],"cb":["10.202.0.1"]}' 10.202.0.1
 APPEAR=$(now); log "resolver appears in the file (no interface change)"
 recovered=""
 for i in $(seq 30); do

@@ -35,7 +35,7 @@ or the release file), a Sail for the nodes and as the subject, and sing-box
 cd test/lab/engine
 export LAB_WORK=$PWD/work
 ./lab.sh rules                                   # rs-a.srs, rs-b.srs (needs Go)
-./lab.sh up <sail> <ppvpn-core> <sing-box>       # build the image if missing, start the lab
+./lab.sh up <sail> <ppvpn-core> <sing-box> [<ppvpn-core-lab>]  # build the image if missing, start the lab
 ./lab.sh run-all 0.16.0 <sail>                   # every repro + t3/t4 on the Go core
 ./lab.sh compare 0.16.0=<sail> v0.15.0=<sail>    # b1, b2 against sing-box; b2-direct-ipv6
 ./lab.sh b7 0.16.0=<sail>                        # B7: DNS servers under a TUN, interface switch
@@ -60,7 +60,11 @@ written.
 and DNS, `t56` local proxy, `t9`): `CORE_ENGINES` (default `sing`, the Go
 core). A Sail engine (`sail`) needs a core that runs one behind the same
 control endpoints (`core.sh` passes `PPVPN_ENGINE`/`PPVPN_SAIL_*` through):
-the prototype did; the Rust ppvpn-core will through `ppvpn-core-lab`.
+the prototype did. `rust` is the Rust ppvpn-core through `ppvpn-core-lab`
+(same flags, log lines and Core API v1): pass a Linux build of it as the 4th
+argument of `lab.sh up` (it lands in `$LAB_WORK/ppvpn-core-lab`; the image
+has gcompat for a glibc build), then `CORE_ENGINES="sing rust"` or
+`lab.sh case <group> rust`.
 
 ## Files
 
