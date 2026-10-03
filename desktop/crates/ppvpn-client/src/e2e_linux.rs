@@ -41,6 +41,8 @@ const APP_DIR: &str = "/usr/lib/ppvpn";
 const SERVICE_DIR: &str = "/usr/lib/ppvpn-service";
 const SERVICE_SOCKET: &str = "/run/ppvpn/service.sock";
 const SERVICE_LOG_DIR: &str = "/var/log/ppvpn";
+/// A system bus address nothing listens on (see [`Service::start`]).
+const NO_SYSTEM_BUS: &str = "unix:path=/run/ppvpn-e2e-no-system-bus";
 
 /// run.sh's uplink namespace and its address: the node listens there.
 const UPLINK_NS: &str = "ppvpn-w";
@@ -375,8 +377,15 @@ struct Service(Child);
 
 impl Service {
     /// Starts `ppvpn-service` (in this namespace) and waits for its socket.
+    ///
+    /// Without a system bus: a network namespace does not separate D-Bus, so
+    /// the core's per-link DNS would reach the host's systemd-resolved with
+    /// this namespace's interface index, i.e. on whatever host link has that
+    /// number, and outlive a killed core there. On a real install the link
+    /// is the TUN and goes away with it.
     fn start() -> Self {
         let child = Command::new(Path::new(SERVICE_DIR).join("ppvpn-service"))
+            .env("DBUS_SYSTEM_BUS_ADDRESS", NO_SYSTEM_BUS)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
