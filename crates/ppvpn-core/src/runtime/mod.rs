@@ -11,7 +11,7 @@
 #![allow(dead_code)] // the Engine is wired to it with the sail implementation
 
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -153,6 +153,34 @@ pub(crate) struct RuntimeConnection {
     pub started: SystemTime,
 }
 
+/// The network as sail sees it: the default route's interface and what
+/// identifies the network on it. `offline` when sail knew a network and now
+/// sees none (no default interface, address or type).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NetworkSnapshot {
+    pub interface: Option<String>,
+    pub index: Option<u32>,
+    pub gateway: Option<IpAddr>,
+    /// With their prefixes (`192.168.1.2/24`).
+    pub addresses: Vec<String>,
+    pub offline: bool,
+}
+
+/// A change of network that sail acts on (its DNS cache cleared, the
+/// connections of the old network reset): the same publication sail's own
+/// reaction reads, so the Engine's NetworkChanged and sail's reset come
+/// from one decision (one monitor, #45).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NetworkChange {
+    /// From 1 for each start of the runtime; a reader that sees a gap
+    /// missed changes in between (the channel keeps the latest only).
+    pub generation: u64,
+    /// `default_interface`, `state`, `host` (pushed) or `wake`.
+    pub reason: String,
+    pub old: NetworkSnapshot,
+    pub new: NetworkSnapshot,
+}
+
 /// A running sail. Every method may be called from any task; the
 /// implementation serialises what sail needs serialised.
 #[async_trait]
@@ -216,11 +244,54 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     fn logs(&self) -> mpsc::Receiver<String>;
     /// Log lines dropped so far (`Status::dropped_log_lines`).
     fn dropped_log_lines(&self) -> u64;
+
+    /// The TUN device's actual name while a configuration with a TUN runs:
+    /// for the Engine's log and status, and tunrules' `iif` rules. None
+    /// without a TUN, and where the name is not known yet: on macOS the
+    /// kernel picks the utun and sail does not report it (until sail::embed
+    /// does, the configured name is all there is, and macOS sets none).
+    fn tun_name(&self) -> Option<String>;
+
+    /// The network now; None while the runtime does not run.
+    fn network(&self) -> Option<NetworkSnapshot>;
+    /// Each change of network, latest only (see `NetworkChange::generation`);
+    /// None until the first since the runtime started. The receiver lives
+    /// across starts and stops.
+    fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>>;
+}
+
+/// The `interface_name` of the configuration's tun inbound, if it has one.
+pub(crate) fn configured_tun_name(config: &str) -> Option<String> {
+    let config: serde_json::Value = serde_json::from_str(config).ok()?;
+    config["inbounds"]
+        .as_array()?
+        .iter()
+        .find(|inbound| inbound["type"] == "tun")?["interface_name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tun_name_is_the_tun_inbounds() {
+        let with = r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"tun","tag":"tun","interface_name":"ppvpn0"}]}"#;
+        assert_eq!(configured_tun_name(with).as_deref(), Some("ppvpn0"));
+        let unnamed = r#"{"inbounds":[{"type":"tun","tag":"tun"}]}"#;
+        assert_eq!(
+            configured_tun_name(unnamed),
+            None,
+            "macOS: the kernel names it"
+        );
+        assert_eq!(
+            configured_tun_name(r#"{"inbounds":[{"type":"mixed"}]}"#),
+            None
+        );
+        assert_eq!(configured_tun_name("not json"), None);
+    }
 
     #[test]
     fn sail_codes_map_to_engine_codes() {

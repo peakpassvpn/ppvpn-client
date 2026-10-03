@@ -14,6 +14,7 @@ pub mod identity;
 pub mod keystore;
 pub mod output;
 pub mod paths;
+pub mod queries;
 pub mod settings;
 
 use std::io::Write;

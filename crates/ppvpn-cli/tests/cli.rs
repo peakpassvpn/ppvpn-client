@@ -243,15 +243,32 @@ fn doctor_reports_build_and_directories() {
 }
 
 #[test]
-fn commands_not_wired_to_the_daemon_yet() {
+fn commands_for_the_running_instance_need_the_daemon() {
     for args in [
-        &["use", "hk-1"][..],
-        &["proxy", "credential"],
-        &["nodes"],
+        &["nodes"][..],
+        &["use", "hk-1"],
+        &["probe", "--all"],
+        &["probe", "hk-1", "--type", "availability"],
         &["traffic"],
+        &["connections"],
+        &["proxy"],
+        &["proxy", "credential"],
+        &["proxy", "credential", "hk-1"],
+        &["ingress"],
+        &["ingress", "hk-1"],
+        &["ingress", "pin", "hk-1", "9002"],
+        &["ingress", "auto", "hk-1"],
     ] {
         let out = run(&[&["--json"][..], args].concat());
-        assert_eq!(out.code, 1, "{args:?}");
-        assert_eq!(out.json()["code"], "NOT_IMPLEMENTED", "{args:?}");
+        assert_eq!(out.code, 5, "{args:?}");
+        assert_eq!(out.json()["code"], "CORE_NOT_RUNNING", "{args:?}");
+        assert_eq!(out.json()["retryable"], false, "{args:?}");
     }
+    let out = run(&["nodes"]);
+    assert_eq!(out.code, 5);
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+    assert_eq!(
+        out.stderr,
+        "Error: the local proxy is not running; run ppvpn start\n"
+    );
 }

@@ -2,7 +2,13 @@
 # process by Desktop and the CLI. The Go core (cmd/, internal/, ...) stays
 # frozen at v0.5.21 beside it until the hosts switch over.
 [workspace]
-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account"]
+members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "desktop/crates/ppvpn-client"]
+# What a bare cargo command at the root builds, and so what rust.yml's
+# required jobs cover; the desktop client has its own jobs (desktop.yml).
+default-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account"]
+# The privileged service keeps its own Cargo.lock and release profile (its
+# build id hashes that lock) until it links ppvpn-core.
+exclude = ["desktop/service"]
 resolver = "2"
 
 [workspace.package]

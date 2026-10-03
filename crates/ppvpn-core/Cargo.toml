@@ -21,9 +21,15 @@ serde_json.workspace = true
 sha2 = "0.10"
 # The versions sail resolves (Cargo.lock), so nothing is built twice.
 async-trait = "0.1"
+bytes = "1"
 futures-util = "0.3"
 getrandom = "0.4"
 hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
+# Rule set downloads (HTTP/1.1 on sail's TLS) and reading .srs files.
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+miniz_oxide = "0.8"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"
 url = "2"
@@ -45,12 +51,23 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Registry",
 ] }
 
+# The TUN routing guard (tunrules): crates sail already builds on Linux
+# (tun-rs's netconfig-rs), at the versions Cargo.lock has.
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-packet-core = "0.9"
+netlink-packet-route = "0.33"
+netlink-sys = "0.8"
+
 [features]
+# ppvpn-core-lab only: test hooks (dns-local's PPVPN_LOCALDNS_TEST_FILE).
+lab = []
 # Test support for tests/ (the in-memory runtime behind internal): turned on
 # by the dev-dependency on this crate below, so never in a host's build.
 testing = []
 
 [dev-dependencies]
+# The rule set tests' TLS server and its certificate (sail's BoringSSL).
+btls = "0.5.6"
 ppvpn-core = { path = ".", features = ["testing"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }

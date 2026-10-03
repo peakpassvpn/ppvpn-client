@@ -3,6 +3,7 @@
 //! dialling an echo server on loopback.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -151,6 +152,7 @@ async fn runs_sail_through_the_local_proxy() {
         .await
         .unwrap();
     wait_for(&mut states, RuntimeState::Running).await;
+    assert_eq!(runtime.tun_name(), None, "no tun inbound");
     let mut proxied = socks(port, "u1", &p1, echo)
         .await
         .expect("u1 through the proxy");
@@ -288,4 +290,97 @@ async fn a_configuration_that_does_not_build_does_not_start() {
         err.to_error().code,
         crate::error::codes::CORE_OPERATION_FAILED
     );
+}
+
+/// A resolver that answers every query with its own question (QR set).
+async fn mirror(addr: SocketAddr) -> Option<SocketAddr> {
+    let socket = tokio::net::UdpSocket::bind(addr).await.ok()?;
+    let bound = socket.local_addr().ok()?;
+    tokio::spawn(async move {
+        let mut buffer = [0u8; 1500];
+        while let Ok((n, peer)) = socket.recv_from(&mut buffer).await {
+            buffer[2] |= 0x80;
+            let _ = socket.send_to(&buffer[..n], peer).await;
+        }
+    });
+    Some(bound)
+}
+
+// dns-local's queries go through sail's direct outbound (its dialer binds
+// the default interface): IPv4, IPv6 and a mixed list, and a link-local
+// server by its scope where the host has one (macOS's lo0 has fe80::1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dns_local_dials_through_the_direct_outbound() {
+    use crate::localdns::exchange::{exchange, Dial, RuntimeDial};
+    use hickory_proto::op::{Message, MessageType, OpCode, Query};
+    use hickory_proto::rr::{Name, RecordType};
+
+    let runtime: Arc<SailRuntime> = Arc::new(SailRuntime::new(options("dial-dns")).unwrap());
+    runtime
+        .start(&config(free_port(), &[], false))
+        .await
+        .unwrap();
+    let dial: Arc<dyn Dial> = Arc::new(RuntimeDial {
+        runtime: runtime.clone(),
+        outbound: "direct".into(),
+    });
+    let mut query = Message::new(0x4b4b, MessageType::Query, OpCode::Query);
+    query.add_query(Query::query(
+        Name::from_ascii("dial.example.").unwrap(),
+        RecordType::A,
+    ));
+
+    let v4 = mirror("127.0.0.1:0".parse().unwrap())
+        .await
+        .expect("v4 loopback");
+    let (_, from) = exchange(&dial, &[v4], &query).await.unwrap();
+    assert_eq!(from, v4);
+    if let Some(v6) = mirror("[::1]:0".parse().unwrap()).await {
+        let (_, from) = exchange(&dial, &[v6], &query).await.unwrap();
+        assert_eq!(from, v6);
+        let (_, from) = exchange(&dial, &[v6, v4], &query).await.unwrap();
+        assert_eq!(from, v6, "in order");
+    }
+    // A link-local resolver by its scope id, where loopback has one.
+    #[cfg(target_os = "macos")]
+    if let Some(scoped) = mirror("[fe80::1%1]:0".parse().unwrap()).await {
+        let (_, from) = exchange(&dial, &[scoped], &query).await.unwrap();
+        assert_eq!(from, scoped);
+    }
+    runtime.stop().await.unwrap();
+}
+
+// The network as sail sees it, and its changes as sail publishes them to
+// its own reaction (here a wake, which sail announces whatever the state).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_changes_are_sails_own() {
+    use sail::net::network::ChangeReason;
+
+    let runtime = SailRuntime::new(options("network")).unwrap();
+    let mut changes = runtime.network_changes();
+    assert_eq!(runtime.network(), None, "not running");
+    runtime
+        .start(&config(free_port(), &[], false))
+        .await
+        .unwrap();
+    assert!(runtime.network().is_some());
+    assert_eq!(*changes.borrow_and_update(), None, "no change yet");
+
+    runtime
+        .instance
+        .manager()
+        .unwrap()
+        .network()
+        .announce(ChangeReason::Wake);
+    tokio::time::timeout(WAIT, changes.changed())
+        .await
+        .expect("a change")
+        .unwrap();
+    let change = changes.borrow_and_update().clone().expect("the change");
+    assert_eq!(change.reason, "wake");
+    assert!(change.generation >= 1);
+    assert_eq!(change.old, change.new, "announced: the state did not move");
+
+    runtime.stop().await.unwrap();
+    assert_eq!(runtime.network(), None);
 }

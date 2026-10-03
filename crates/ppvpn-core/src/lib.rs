@@ -19,10 +19,16 @@ mod logfmt;
 mod probe;
 pub(crate) mod profile;
 pub mod request;
+// Rule sets are wired up by the engine; until then only their tests use them.
+#[allow(dead_code, unused_imports)]
+mod rulesets;
 mod runtime;
 mod state_dir;
 pub mod status;
 mod translate;
+// The Engine starts it with the TUN; until then only its tests use it.
+#[allow(dead_code, unused_imports)]
+mod tunrules;
 pub mod types;
 
 pub use config::{
