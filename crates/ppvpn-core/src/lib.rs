@@ -58,7 +58,9 @@ pub mod internal {
     }
 
     /// An Engine on an in-memory runtime that runs nothing: the contract
-    /// golden drives lifecycle, selection and pins on it without sail.
+    /// golden drives lifecycle, selection and pins on it without sail. Only
+    /// with the `testing` feature (tests), never in a host's build.
+    #[cfg(feature = "testing")]
     pub fn engine_on_fake_runtime(config: crate::EngineConfig) -> crate::Engine {
         crate::Engine::with_runtime(
             config,
