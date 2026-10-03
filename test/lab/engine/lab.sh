@@ -5,16 +5,20 @@
 #
 #   lab.sh build                                image ($LAB_IMAGE)
 #   lab.sh rules                                $LAB_WORK/rs-a.srs, rs-b.srs (needs Go)
-#   lab.sh up <sail> <core> <sing-box>          start the lab; <sail> runs the nodes
+#   lab.sh up <sail> <core> <sing-box> [<ppvpn-core-lab>]
+#                                               start the lab; <sail> runs the nodes;
+#                                               the Rust core for engine "rust"
 #   lab.sh down                                 remove the containers and networks
 #   lab.sh run-all <name> <sail>                every repro on <sail> and sing-box,
-#                                               then t3/t4 on $CORE_ENGINES (default sing)
+#                                               then t3/t4 on $CORE_ENGINES (default sing;
+#                                               "sing rust" adds the Rust core)
 #   lab.sh compare <name>=<sail> ...            b1, b2-override (each build, sing-box)
 #                                               and b2-direct-ipv6 (with/without) per build
 #   lab.sh b7 <name>=<sail> ...                 B7: plain DNS servers under a TUN and an
 #                                               interface switch (adds a second network)
 #   lab.sh case <group> [engine]                cases/<group>.sh in the client (engine:
-#                                               sing = Go core, default; rust later)
+#                                               sing = Go core, default; rust =
+#                                               ppvpn-core-lab)
 # Logs: $LAB_WORK/repro-logs/<name>/.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -40,6 +44,9 @@ up)
 	mkdir -p "$LAB_WORK/nodes"
 	cp "$sail" "$LAB_WORK/nodes/sail"; chmod +x "$LAB_WORK/nodes/sail"
 	put core "$core"; put sing-box "$singbox"
+	# A Linux build of the same architecture; the image has gcompat for a
+	# glibc one (cargo build -p ppvpn-core-lab --release on Linux).
+	if [ -n "${4:-}" ]; then put ppvpn-core-lab "$4"; fi
 	for f in rs-a.srs rs-b.srs; do [ -s "$LAB_WORK/$f" ] || echo "warning: $LAB_WORK/$f missing (lab.sh rules, or copy them in)" >&2; done
 	docker image inspect "$LAB_IMAGE" >/dev/null 2>&1 || "$0" build
 	sh "$HERE/up.sh" "$LAB_WORK" "$LAB_WORK/nodes" "$LAB_WORK/core"

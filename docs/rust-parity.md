@@ -81,8 +81,8 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
 | tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 已有：`run.sh --libtest ppvpn_core.test tunrules::linux_tests::`（与 Go 并行） |
 | tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上（同一步，进程内关掉补回） |
-| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E6 | 被测二进制换成 `ppvpn-core-lab` |
-| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | 同上 |
+| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。**未通过**（continue-on-error），见下文 |
+| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | `network-change-rust`，内核切换看 `KernelSwitched` 事件。**未通过**（continue-on-error），见下文 |
 
 **Go 0.5.21 的已知滞后（Rust 必须修好）**：前端的网卡监视器报告默认网卡变化后，dns-local 和直连拨号用的是**内核自己的**监视器，网络事件连续不断时可能晚几秒才跟上。原因是 sing-tun 每收到一个 netlink 事件，就把 1 秒的检查重新计时；各个盒子的节奏不同，某一个就可能一直被推迟（#45；和 Desktop 在 Linux 实机上恢复慢 5.2 秒（#69）是同一个根源）。CI 里 network-change 对 Go 用 `SWITCH_GRACE_MS=6000`：在 6 秒内跟上才算通过，日志里记下实际滞后和第一次查询的结果。前端监视器自己也会被同样推迟（CI 上见过 5146 ms 才报告变化），所以有宽限时，等待"变化被报告"的上限是 10 秒（`CHANGE_REPORT_MS` 可改），日志里记下实际耗时。Rust 版的 ppvpn-core 必须在 `SWITCH_GRACE_MS=0`（默认）下通过：变化在 2 秒内被报告，变化后的第一次查询就用新网络。做法是全程只用一个监视器（同一个事件源同时用于日志、DNS 和拨号），并且防抖要有上限，不能被持续的事件无限推迟。
 
@@ -91,13 +91,28 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 - Docker 多节点 lab 的场景（G2：B1–B7、t3/t4/t56/t9），在移植到 runner 之前都在这里；
 - systemd-networkd 管理的链路抖动（`TestTUNRulesSurviveNetworkdLinkFlap`），runner 上没有 networkd 管理的链路。
 
-计划下一个 PR 接入 dns-local 的 E5（TUN 运行中切换默认网卡）和其余 D 组。
+**Rust 的 network-change（2026-10-03，在共享的 Linux 测试机上实跑，与 CI 的 `network-change-rust` 相同）**：apply 和 start 已通过；宿主无残留。其余未通过，缺的是 Engine 的这几块，补齐后去掉 continue-on-error：
+- Tun 实例还不打开 TUN（`tun interface: none`）：E1、E2、E3、E5 的查询和 updown 各模式的恢复都失败；D1 的抓包断言要求 TUN 存在，不会空过。
+- dns-local 还不是 core 自己的监听（#119）。在那之前翻译用的是 Sail 的 `local`，它走系统解析器：resolv.conf 为空时 glibc 退回 127.0.0.1，陷阱被查询（E6 失败）。
+- `NetworkChanged` 还没有事件源（Sail 的网络事件未接入）：三次"2 秒内报告变化"都失败。
+- `Engine::logs()` 还是空实现：没有 `local dns servers` 日志行。
+- updown 模式 2 需要 host IPv6 重探后切换一次内核（`KernelSwitched`）；其余模式切换次数为 0 是空过。
+
+D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给 lab 用的开关来构建不绑定的 core，Engine 里还没有，暂缺。D3（入口只给域名）需要节点，在 `test/lab/engine` 的 t4 里跑（`lab.sh up ... <ppvpn-core-lab>`，引擎 `rust`），同样等 TUN。
 
 ## 过渡实现
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
-sail 的网络事件（E1b）合入之前，`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）通过 `Instance::manager()?.network()` 读取 sail 的状态和 `changes()` 通道。它和 sail 自己处理网络移动时读的是同一个通道，所以已经是事件驱动、只有一个来源；但 `manager()` 不在 `sail::embed` 的稳定接口里，可能不经通知变动。E1b 合入后改用 `Event::Network` 和 `instance.network()`，这一节随之删除。
+`Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
+
+强杀后的残留清扫（host-integration 第 3 节，切换前必须关掉的缺口）：`Engine::new` 把 sail 的 run_dir 设在 `state_dir/run`，并在清扫时调用 `sail::embed::sweep`。
+
+| 平台 | 状态 | 依据 |
+| --- | --- | --- |
+| Linux | done | Sail 在 run_dir 的台账记下改动，强杀后由下一次 `new` 的 `sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表、fw4 drop-in；另有 tunrules 按我们的优先级段和表清扫 |
+| macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
+| Windows | todo（切换前缺口） | Sail 在 Windows 上还没有台账和 sweep；强杀后 Wintun 适配器及其路由、DNS 会不会残留还没测 |
 
 ## Lab 用例（`test/lab/engine/cases`）
 
@@ -164,6 +179,8 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 Sail 的 `local`（2026-10-03 决定）。Sail `local` 的缺口作为 Sail 的通用改进继续推进，**不阻塞切换**：忽略 macOS 手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败，以及 split DNS 和日志行。翻译层把 dns-local 渲染成指向监听的 tcp 服务器（`translate::tests::dns_local_listener_is_asked_over_tcp`）。下表的 Rust 用例指 `crate::localdns`。
 
 过渡期已知限制（macOS）：TUN 不写网卡名，由 Sail 分配。Sail 改为由内核分配编号并报告实际名字之前，它固定用 `utun233`，这个编号被别的程序占用时启动失败。排除隧道网段由 dns-local 自己的隧道地址过滤保证。
+
+已知行为（macOS，Sail `98a5cbf5`，见 Sail 的 routing 文档）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 会替换它并打一行警告；停止时**不恢复**被替换的路由。
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |

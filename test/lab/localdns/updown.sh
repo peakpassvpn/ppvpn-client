@@ -2,9 +2,13 @@
 # Link down/up through the core's TUN: how fast direct traffic comes back, and
 # that the host-IPv6 re-probe does not switch kernels while offline (#69).
 #
-#   updown.sh <lab ppvpn-core> <ldnslab> <profile.json> <mode> <out dir>
+#   [CORE_ENGINE=go|rust] updown.sh <core> <ldnslab> <profile.json> <mode> <out dir>
 #
-# The core must be a lab build (make build-lab-linux: localdns_testsource).
+# go (default): the Go lab build (make build-lab-linux: localdns_testsource),
+# resolvers from $PPVPN_LOCALDNS_TEST_FILE, kernel switches from its log.
+# rust: ppvpn-core-lab; resolvers from the namespace's resolv.conf
+# (/etc/netns/ud-c/resolv.conf), kernel switches from its KernelSwitched
+# events (watch-events). As run.sh.
 # Needs root, iproute2 (with netns) and curl; everything runs in two network
 # namespaces of its own (ud-c client, ud-a network), removed on exit.
 #
@@ -33,6 +37,9 @@ R=$OUT/run; mkdir -p "$R"
 # seen on a CI runner. It gets up to 6 s, and the log keeps the time taken.
 GRACE=${SWITCH_GRACE_MS:-0}
 if [ "$GRACE" -gt 0 ]; then LIMIT_MS=${LIMIT_MS:-6000}; else LIMIT_MS=${LIMIT_MS:-2500}; fi
+ENGINE=${CORE_ENGINE:-go}
+case $ENGINE in go|rust) ;; *) echo "CORE_ENGINE must be go or rust, not $ENGINE" >&2; exit 2 ;; esac
+NETNS_ETC=/etc/netns/ud-c
 now() { "$LAB" now; }
 log() { echo "$(now) $*" >> "$OUT/steps.log"; }
 c() { ip netns exec ud-c "$@"; }
@@ -44,16 +51,20 @@ check() { # description, condition
 cleanup() {
 	[ -f "$R/pid" ] && kill "$(cat "$R/pid")" 2>/dev/null || true
 	[ -f "$R/probe.pid" ] && kill "$(cat "$R/probe.pid")" 2>/dev/null || true
+	[ -f "$R/events.pid" ] && kill "$(cat "$R/events.pid")" 2>/dev/null || true
 	for pid in $(cat "$R/servers.pid" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
 	sleep 0.5
 	for ns in ud-c ud-a; do
 		ip netns pids $ns 2>/dev/null | xargs -r kill -9 2>/dev/null || true
 		ip netns del $ns 2>/dev/null || true
 	done
+	if [ "$ENGINE" = rust ]; then rm -rf "$NETNS_ETC"; fi
 }
 trap cleanup EXIT
 cleanup
-rm -f "$R/pid" "$R/probe.pid" "$R/servers.pid"
+rm -f "$R/pid" "$R/probe.pid" "$R/servers.pid" "$R/events.pid"
+# Before the first ip netns exec, which bind-mounts what is there then.
+if [ "$ENGINE" = rust ]; then mkdir -p "$NETNS_ETC"; echo "nameserver 10.201.0.1" > "$NETNS_ETC/resolv.conf"; fi
 
 for ns in ud-c ud-a; do ip netns add $ns; ip -n $ns link set lo up; done
 ip link add ca netns ud-c type veth peer name ac netns ud-a
@@ -72,7 +83,8 @@ echo $! >> "$R/servers.pid"
 echo '{"ca":["10.201.0.1"]}' > "$OUT/servers.json"
 sleep 0.5
 "$LAB" apply-body "$PROFILE" > "$R/apply.json"
-PPVPN_LOCALDNS_TEST_FILE=$OUT/servers.json ip netns exec ud-c "$CORE" serve --socket "$R/core.sock" --session-secret-file "$R/secret" \
+TEST_SOURCE=""; [ "$ENGINE" = go ] && TEST_SOURCE="PPVPN_LOCALDNS_TEST_FILE=$OUT/servers.json"
+env ${TEST_SOURCE:+"$TEST_SOURCE"} ip netns exec ud-c "$CORE" serve --socket "$R/core.sock" --session-secret-file "$R/secret" \
 	--state-dir "$R/state" --log-file "$OUT/core.log" --log-level debug --tun --local-proxy=false > "$OUT/core.stdout" 2>&1 &
 echo $! > "$R/pid"
 for i in $(seq 50); do [ -S "$R/core.sock" ] && [ -s "$R/secret" ] && break; sleep 0.1; done
@@ -80,11 +92,16 @@ api() { c curl -s --unix-socket "$R/core.sock" -H "Authorization: Bearer $(cat "
 api apply-profile "@$R/apply.json" > "$R/apply.out"
 api start '{}' > "$R/start.out"
 grep -q '"ok":true' "$R/start.out" || { echo "FAIL start: $(cat "$R/apply.out" "$R/start.out")"; exit 1; }
+c curl -s -N --unix-socket "$R/core.sock" -H "Authorization: Bearer $(cat "$R/secret")" http://core/v1/watch-events > "$OUT/events.ndjson" 2>/dev/null &
+echo $! > "$R/events.pid"
 probe() {
 	( n=0; while :; do n=$((n+1)); r=$(c "$LAB" query -server 10.60.159.90:53 -name "p$n.lab.test" -timeout 300ms); echo "$(now) $r" >> "$OUT/probe.log"; sleep 0.1; done ) &
 	echo $! > "$R/probe.pid"
 }
-switches() { grep -c 'msg="kernel switched"' "$OUT/core.log" || true; }
+switches() {
+	if [ "$ENGINE" = go ]; then grep -c 'msg="kernel switched"' "$OUT/core.log" || true
+	else grep -c '"type":"KernelSwitched"' "$OUT/events.ndjson" || true; fi
+}
 SW_OFF=0
 if [ "$MODE" = 3 ]; then
 	probe; sleep 5
@@ -108,11 +125,11 @@ first=$(awk -v up="$UP" '$1 > up && $2 == "ok" {print $1; exit}' "$OUT/probe.log
 RECOVERED=$(( ${first:-0} > 0 ? ${first:-0} - UP : -1 ))
 SW_ALL=$(switches)
 echo "mode=$MODE recovered_ms=$RECOVERED switches_before_up=$SW_OFF switches_total=$SW_ALL" | tee -a "$OUT/steps.log"
-check "recovered within ${LIMIT_MS} ms of the link coming up (got $RECOVERED)" '[ "$RECOVERED" -ge 0 ] && [ "$RECOVERED" -le "$LIMIT_MS" ]'
-check "no kernel switch while offline (got $SW_OFF)" '[ "$SW_OFF" = 0 ]'
+check "[E4] recovered within ${LIMIT_MS} ms of the link coming up (got $RECOVERED)" '[ "$RECOVERED" -ge 0 ] && [ "$RECOVERED" -le "$LIMIT_MS" ]'
+check "[E4] no kernel switch while offline (got $SW_OFF)" '[ "$SW_OFF" = 0 ]'
 case $MODE in
-2) check "one kernel switch, after the link came back (got $SW_ALL)" '[ "$SW_ALL" = 1 ]' ;;
-*) check "no kernel switch in all (got $SW_ALL)" '[ "$SW_ALL" = 0 ]' ;;
+2) check "[E4] one kernel switch, after the link came back (got $SW_ALL)" '[ "$SW_ALL" = 1 ]' ;;
+*) check "[E4] no kernel switch in all (got $SW_ALL)" '[ "$SW_ALL" = 0 ]' ;;
 esac
 grep -E 'msg="(default interface|host ipv6|host ipv6 changed|kernel switched)"' "$OUT/core.log" | sed -E 's/ (mtu|index)=[0-9]+//g' | cut -c12-200 >> "$OUT/steps.log"
 exit $FAILED

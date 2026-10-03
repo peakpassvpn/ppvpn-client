@@ -1,6 +1,6 @@
 # Sourced by the case scripts (cases/<group>.sh), inside $LAB-client. A case
 # script starts the engine through core.sh (ENGINE: sing = Go core; rust =
-# ppvpn-core-lab once it exists), runs its checks and prints one line per
+# ppvpn-core-lab), runs its checks and prints one line per
 # check; the same script and expectations run on every engine.
 #
 #   check <id> <what> <got> <want-ERE>     PASS when got matches ^(want)$
