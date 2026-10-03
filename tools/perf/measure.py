@@ -46,8 +46,12 @@ name ("engine"):
     <proto>.tput1_mbit             one connection, unpaced, 20 s: Mbit/s
                                    echoed back
     <proto>.tput8_mbit             the same with 8 connections
-    <proto>.tput<n>_engine_cpu_pct the engine's CPU meanwhile (recorded:
-                                   whether the engine was the bottleneck)
+    <proto>.tput<n>_engine_cpu_pct the CPU meanwhile of the engine, loadgen
+    <proto>.tput<n>_load_cpu_pct   and fakenode (100 = one core each)
+    <proto>.tput<n>_node_cpu_pct
+    <proto>.tput<n>_load_limited   1 when the engine had CPU to spare while
+                                   loadgen or fakenode was at its limit: the
+                                   number is the load side's, not judged
     <proto>.cpu100_pct             the engine's CPU at 100 Mbit/s (8
                                    connections, paced), 20 s
     <proto>.rtt_p50_us / _p99_us   64-byte round trips through the proxy
@@ -73,6 +77,7 @@ import http.client
 import json
 import os
 import re
+import resource
 import shutil
 import socket
 import subprocess
@@ -245,7 +250,32 @@ def busy(engine, run):
     return result, round(100 * used / (time.monotonic() - started), 2)
 
 
-def measure_tier_b(args, work, ports, env, name, binary):
+def three_busy(engine, node_pid, run):
+    """run() (a loadgen run), and the CPU meanwhile of the engine, of
+    loadgen (the child run waited for) and of fakenode, in percent of one
+    core each."""
+    hz = os.sysconf("SC_CLK_TCK")
+    engine_ticks, node_ticks = cpu_ticks(engine.process.pid), cpu_ticks(node_pid)
+    children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    started = time.monotonic()
+    result = run()
+    elapsed = time.monotonic() - started
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    load = (after.ru_utime + after.ru_stime) - (children.ru_utime + children.ru_stime)
+    pct = lambda seconds: round(100 * seconds / elapsed, 1)
+    return result, (pct((cpu_ticks(engine.process.pid) - engine_ticks) / hz), pct(load),
+                    pct((cpu_ticks(node_pid) - node_ticks) / hz))
+
+
+# Throughput is the engine's only while the engine is what is busy: below
+# this much of one core for the engine, with loadgen or fakenode at least at
+# LOAD_BUSY of their one hyper-thread, the number is the load side's and is
+# not judged (report.py), but measured again in a whole-host window.
+ENGINE_SPARE = 80
+LOAD_BUSY = 90
+
+
+def measure_tier_b(args, work, ports, env, name, binary, node_pid):
     """One engine's tier B row."""
     seconds = f"{args.b_load_seconds}s"
     engine = Engine(binary, work, f"b-{name}", ["--tun=false", "--local-proxy=true"], env=env,
@@ -268,9 +298,13 @@ def measure_tier_b(args, work, ports, env, name, binary):
                 # With the engine's CPU meanwhile: near its cores' 100 per
                 # core, the engine is the bottleneck; well below, the load
                 # or the fake node is, and the number says less.
-                result, row[f"{node}.tput{conns}_engine_cpu_pct"] = busy(engine, lambda: loadgen(
+                result, (engine_pct, load_pct, node_pct) = three_busy(engine, node_pid, lambda: loadgen(
                     args, credential, ports, "stream", "-conns", str(conns), "-rate-mbit", "0", "-duration", seconds))
-                row[f"{node}.tput{conns}_mbit"] = round(result["bytes_received"] * 8 / result["elapsed_ms"] / 1000, 1)
+                key = f"{node}.tput{conns}"
+                row[f"{key}_mbit"] = round(result["bytes_received"] * 8 / result["elapsed_ms"] / 1000, 1)
+                row[f"{key}_engine_cpu_pct"], row[f"{key}_load_cpu_pct"], row[f"{key}_node_cpu_pct"] = \
+                    engine_pct, load_pct, node_pct
+                row[f"{key}_load_limited"] = int(engine_pct < ENGINE_SPARE and max(load_pct, node_pct) >= LOAD_BUSY)
             if not light:
                 continue
             _, row[f"{node}.cpu100_pct"] = busy(engine, lambda: loadgen(
@@ -422,7 +456,8 @@ def main():
             # the system store's override.
             env = dict(os.environ, SSL_CERT_FILE=ports["certificate"])
             if args.tier == "b":
-                rows = [measure_tier_b(args, work, ports, env, name, binary) for name, binary in engines]
+                rows = [measure_tier_b(args, work, ports, env, name, binary, fakenode.pid)
+                        for name, binary in engines]
             else:
                 rows = [measure_standard(args, work, ports, env)]
             if args.tier == "a" and not args.skip_tun:
