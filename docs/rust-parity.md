@@ -77,9 +77,9 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | --- | --- | --- | --- |
 | R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：tun + auto_route，以及 `strict_route` 加排除段（6 个 WFP 过滤器和 sail 子层，强杀后约 0.5 秒内全部消失），都是 windows-gnu 构建；唯一的局限是没有用 MSVC 构建测（见下文"过渡实现"里的清扫表） | 等 Engine 在 Windows 上能打开 TUN 后，在 windows-latest（管理员）上加一个 CI 用例：用我们的 MSVC 构建和配置（开 `strict_route`）起 Tun 实例，强杀，再检查 Wintun 适配器、它的路由、DNS 和 WFP 过滤器都不在 |
 
-待确认（已问 Sail，等答复再写结论）：
+已知缺口：
 
-- Q1：WFP 动态会话和 Wintun 适配器的存活期跟着打开它们的进程。嵌入时这个进程是宿主。实例进入 `Failed`、宿主进程还在时，这些资源由谁撤、什么时候撤：是 sail 的 stop 或 drop、Engine 的清理步骤，还是要等宿主退出。答复之前，不能假定实例失败后宿主的网络已经恢复。
+- Q1：WFP 动态会话和 Wintun 适配器的存活期跟着打开它们的进程，嵌入时这个进程是宿主。实例进入 `Failed`、宿主进程还在时，这些资源要由实例自己撤掉；Sail 确认这是 E2 的缺口，正在做。在它合入之前，不能假定实例失败后宿主的网络已经恢复。
 
 ## 测试宿主的约定
 
