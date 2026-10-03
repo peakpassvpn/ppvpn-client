@@ -192,6 +192,7 @@ impl LocalProxyState {
     /// What the translation needs for the `mixed` inbound and its users.
     pub(crate) fn translate_options(&self) -> translate::LocalProxy {
         translate::LocalProxy {
+            listen: self.listen(),
             port: self.state.port,
             prefix: self.state.prefix.clone(),
             password: self.state.password.clone(),
