@@ -107,7 +107,17 @@ impl Inner {
         }
 
         self.probe_host_ipv6();
-        let options = self.options(request.routing_mode, &selected, &pins);
+        // Rule sets never fail an apply: a set that cannot be had degrades
+        // its rules.
+        let rule_sets = self
+            .prepare_rule_sets(
+                &profile,
+                request.routing_mode,
+                &request.allowed_rule_set_hosts,
+            )
+            .await;
+        let mut options = self.options(request.routing_mode, &selected, &pins);
+        options.rule_sets = rule_sets.files();
         let translation = translate::translate(&profile, &options)
             .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
         let switch = if let Some(running) = &running {
@@ -156,6 +166,7 @@ impl Inner {
                 });
             }
         }
+        self.activate_rule_sets(rule_sets, request.allowed_rule_set_hosts);
         if running.is_some() {
             self.refresh().await;
         }
