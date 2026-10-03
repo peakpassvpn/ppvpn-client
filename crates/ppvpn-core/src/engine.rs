@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::config::{EngineConfig, LogLevel, Role};
@@ -34,6 +33,8 @@ mod cleanup;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+mod logs;
+mod network;
 mod probes;
 #[cfg(test)]
 mod probes_tests;
@@ -48,6 +49,8 @@ mod tun;
 
 use bus::Bus;
 pub(crate) use bus::Subscription;
+pub use logs::tracing_layer;
+use logs::Logs;
 use state::Live;
 pub(crate) use state::TunRoutingSignal;
 
@@ -75,7 +78,10 @@ struct Inner {
     state_dir: Mutex<Option<StateDirLock>>,
     /// The local proxy's state and the system proxy listener (Standard).
     proxies: Option<Mutex<proxy::Proxies>>,
+    /// The instance's log lines, to its sink (section 10).
+    log: Logs,
     tun: tun::TunState,
+    network: network::NetworkState,
 }
 
 impl Drop for Inner {
@@ -123,11 +129,13 @@ impl Engine {
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
         tun::check(&config)?;
+        logs::install();
+        let log = Logs::new(&config.log)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
-        cleanup::sweep(&config)?;
+        log.span().in_scope(|| cleanup::sweep(&config))?;
         let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
-        let engine = Engine::assemble(config, Arc::new(runtime))?;
+        let engine = Engine::assemble(config, Arc::new(runtime), log)?;
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
         Ok(engine)
     }
@@ -136,13 +144,20 @@ impl Engine {
     /// lock. Panics when the local proxy state cannot be opened.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_runtime(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Engine {
-        Engine::assemble(config, runtime).expect("local proxy state")
+        let log = Logs::new(&config.log).unwrap_or_else(|_| Logs::discard());
+        Engine::assemble(config, runtime, log).expect("local proxy state")
     }
 
-    fn assemble(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Result<Engine, Error> {
+    fn assemble(
+        config: EngineConfig,
+        runtime: Arc<dyn Runtime>,
+        log: Logs,
+    ) -> Result<Engine, Error> {
         let proxies = proxy::Proxies::open(&config)?;
+        log.attach(&runtime);
         let inner = Arc::new(Inner {
             tun: tun::TunState::new(&config),
+            network: network::NetworkState::default(),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),
@@ -151,6 +166,7 @@ impl Engine {
             watcher: Mutex::new(None),
             state_dir: Mutex::new(None),
             proxies,
+            log,
         });
         *inner.watcher.lock().expect("watcher") = lifecycle::spawn_watcher(&inner);
         Ok(Engine { inner })
@@ -179,8 +195,11 @@ impl Engine {
             // may take the directory once it is free.
             state_dir: inner.state_dir.lock().expect("state dir lock").take(),
         };
+        // A sleeping re-probe goes first; one under way held `op` and is done.
+        inner.network_stopped();
         let report = cleanup::cleanup(parts, left).await;
-        drop(op);
+        // Shut down before the operation lock goes, so nothing queued on it
+        // (a re-probe, a lifecycle call) acts on the torn-down runtime.
         {
             let mut live = inner.live();
             if !live.shut_down {
@@ -190,6 +209,7 @@ impl Engine {
                 inner.settle(&mut live);
             }
         }
+        drop(op);
         inner.bus.close();
         Ok(report)
     }
@@ -250,7 +270,7 @@ impl Engine {
             local_proxy,
             tun_routing: (config.role == Role::Tun)
                 .then_some(live.tun_routing.unwrap_or(TunRouting::Ok)),
-            dropped_log_lines: self.inner.runtime.dropped_log_lines(),
+            dropped_log_lines: self.inner.log.dropped(),
             ..Status::default()
         }
     }
@@ -382,10 +402,10 @@ impl Engine {
         }
     }
 
-    /// The log lines, with `LogSink::Channel` (section 10).
+    /// The log lines, with `LogSink::Channel` (section 10): bounded, taken
+    /// once; a second call, or another sink, gets a closed receiver.
     pub fn logs(&self) -> LogReceiver {
-        let (_sender, receiver) = mpsc::channel(1);
-        LogReceiver { receiver }
+        self.inner.log.receiver()
     }
 
     /// The default interface changed (`None`: offline). Its source is

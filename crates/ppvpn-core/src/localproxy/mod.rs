@@ -404,7 +404,7 @@ fn decode(data: &[u8]) -> Loaded {
     let corrupt = |reason: &str| Loaded::Corrupt(reason.to_owned());
     let header: Header = match serde_json::from_slice(data) {
         Ok(header) => header,
-        Err(e) => return Loaded::Corrupt(format!("decode: {e}")),
+        Err(e) => return decode_error(&e),
     };
     match header.version {
         1 => match serde_json::from_slice::<Legacy>(data) {
@@ -412,7 +412,7 @@ fn decode(data: &[u8]) -> Loaded {
             _ => corrupt("version 1 without endpoints"),
         },
         STATE_VERSION => match serde_json::from_slice::<DiskState>(data) {
-            Err(e) => Loaded::Corrupt(format!("decode: {e}")),
+            Err(e) => decode_error(&e),
             Ok(state) if !state.prefix.is_empty() && !valid_prefix(&state.prefix) => {
                 corrupt("invalid prefix")
             }
@@ -423,6 +423,17 @@ fn decode(data: &[u8]) -> Loaded {
         },
         version => Loaded::Corrupt(format!("unsupported version {version}")),
     }
+}
+
+/// Where the file did not decode, without what serde quotes of its values
+/// (a password among them): the reason is logged.
+fn decode_error(e: &serde_json::Error) -> Loaded {
+    Loaded::Corrupt(format!(
+        "decode: {:?} error at line {} column {}",
+        e.classify(),
+        e.line(),
+        e.column()
+    ))
 }
 
 /// Creates `dir` and, on Unix, makes it 0700. On Windows the host's
