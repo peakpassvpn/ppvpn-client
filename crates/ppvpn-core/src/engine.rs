@@ -1,26 +1,45 @@
 //! The instance handle (docs/host-integration.md, sections 3 and 4).
 //!
-//! This is the public API's skeleton: the signatures are the contract hosts
-//! write against; the bodies come module by module. Unimplemented calls
-//! return `CORE_OPERATION_FAILED` ("not implemented"); queries return an
-//! empty snapshot.
+//! The signatures are the contract hosts write against. Lifecycle calls
+//! (apply, start, stop) run one at a time under `op`; what they leave is in
+//! [`state::Live`], read by the queries under a short std lock, so a query
+//! never waits on a lifecycle call. The runtime (sail, or the fake in tests)
+//! sits behind [`Runtime`]. Calls not wired yet return
+//! `CORE_OPERATION_FAILED` ("not implemented").
 
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::config::{EngineConfig, Role};
+use crate::config::{EngineConfig, LogLevel, Role};
 use crate::error::{codes, Error};
-use crate::event::{EventItem, EventKind, EventReceiver, LogReceiver};
-use crate::request::{validate_request, ApplyRequest, ApplyResult};
+use crate::event::{Event, EventKind, EventReceiver, LogReceiver};
+use crate::request::{validate_request, ApplyRequest, ApplyResult, RoutingMode};
+use crate::runtime::sail::SailRuntime;
+use crate::runtime::{Runtime, RuntimeError};
 use crate::state_dir::StateDirLock;
-use crate::status::{EngineState, Status, SystemProxyStatus};
+use crate::status::{FatalReason, Status, SystemProxyStatus, TunRouting};
+use crate::translate;
 use crate::types::{
     AvailabilityResult, Connection, EntranceResult, LocalProxyCredential, LocalProxyMetadata,
     NodeInfo, ProbeAvailabilityRequest, ProbeEntrancesRequest, ShutdownReport, Traffic,
     VersionInfo,
 };
+
+mod bus;
+mod cleanup;
+mod lifecycle;
+#[cfg(test)]
+mod lifecycle_tests;
+mod state;
+
+use bus::Bus;
+pub(crate) use bus::Subscription;
+use state::Live;
+pub(crate) use state::TunRoutingSignal;
 
 /// The version of the local proxy contract (users, ports, metadata).
 pub const LOCAL_PROXY_CONTRACT_VERSION: u32 = 1;
@@ -35,14 +54,33 @@ pub struct Engine {
 
 struct Inner {
     config: EngineConfig,
-    state: Mutex<Lifecycle>,
+    runtime: Arc<dyn Runtime>,
+    /// Serialises the lifecycle calls.
+    op: tokio::sync::Mutex<()>,
+    live: Mutex<Live>,
+    bus: Bus,
+    /// Follows the runtime: group switches, its state, health.
+    watcher: Mutex<Option<JoinHandle<()>>>,
     /// Held from `new` to `shutdown` (or the last handle's drop).
     state_dir: Mutex<Option<StateDirLock>>,
 }
 
-#[derive(Default)]
-struct Lifecycle {
-    shut_down: bool,
+impl Drop for Inner {
+    /// The last handle went: what `shutdown` would do, bounded and off the
+    /// caller's runtime; the state_dir lock goes after it.
+    fn drop(&mut self) {
+        if let Some(watcher) = self.watcher.get_mut().ok().and_then(Option::take) {
+            watcher.abort();
+        }
+        let running = self
+            .live
+            .get_mut()
+            .map(|live| live.running && !live.shut_down)
+            .unwrap_or(false);
+        if running {
+            cleanup::cleanup_on_drop(self.runtime.clone(), running);
+        }
+    }
 }
 
 impl std::fmt::Debug for Engine {
@@ -61,13 +99,27 @@ impl Engine {
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
-        Ok(Engine {
-            inner: Arc::new(Inner {
-                config,
-                state: Mutex::new(Lifecycle::default()),
-                state_dir: Mutex::new(Some(state_dir)),
-            }),
-        })
+        cleanup::sweep(&config)?;
+        let runtime = SailRuntime::new(sail::embed::Options::new()).map_err(|e| e.to_error())?;
+        let engine = Engine::with_runtime(config, Arc::new(runtime));
+        *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
+        Ok(engine)
+    }
+
+    /// An instance on `runtime` (tests: the fake), without the state_dir
+    /// lock.
+    pub(crate) fn with_runtime(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Engine {
+        let inner = Arc::new(Inner {
+            config,
+            runtime,
+            op: tokio::sync::Mutex::new(()),
+            live: Mutex::default(),
+            bus: Bus::default(),
+            watcher: Mutex::new(None),
+            state_dir: Mutex::new(None),
+        });
+        *inner.watcher.lock().expect("watcher") = lifecycle::spawn_watcher(&inner);
+        Engine { inner }
     }
 
     /// Stops the whole instance (any handle may call it; idempotent): stops
@@ -75,10 +127,32 @@ impl Engine {
     /// At most 10 s; what could not be cleaned up in time is returned and
     /// logged. Afterwards lifecycle calls return `ENGINE_SHUT_DOWN`.
     pub async fn shutdown(&self) -> Result<ShutdownReport, Error> {
-        self.inner.state.lock().expect("lifecycle lock").shut_down = true;
+        let inner = &self.inner;
+        if let Some(watcher) = inner.watcher.lock().expect("watcher").take() {
+            watcher.abort();
+        }
+        // An apply or start in flight finishes first, within the limit.
+        let deadline = tokio::time::Instant::now() + cleanup::SHUTDOWN_LIMIT;
+        let op = tokio::time::timeout_at(deadline, inner.op.lock())
+            .await
+            .ok();
+        let running = inner.live().running;
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let report = cleanup::cleanup(inner.runtime.clone(), running, left).await;
+        drop(op);
+        {
+            let mut live = inner.live();
+            if !live.shut_down {
+                live.shut_down = true;
+                live.running = false;
+                live.clear_runtime();
+                inner.settle(&mut live);
+            }
+        }
+        inner.bus.close();
         // Last: another instance may take the directory once it is free.
-        self.inner.state_dir.lock().expect("state dir lock").take();
-        Ok(ShutdownReport::default())
+        inner.state_dir.lock().expect("state dir lock").take();
+        Ok(report)
     }
 
     /// Validates a request as `apply` would, without an instance (4.1).
@@ -89,36 +163,25 @@ impl Engine {
     /// Applies a profile with the host's routing mode, selection and pins,
     /// atomically (4.1).
     pub async fn apply(&self, request: ApplyRequest) -> Result<ApplyResult, Error> {
-        self.lifecycle()?;
-        validate_request(&request, Utc::now())?;
-        Err(Error::not_implemented("apply"))
+        self.inner.apply(request).await
     }
 
     /// Starts the applied profile; `PROFILE_NOT_APPLIED` without one (D1).
     pub async fn start(&self) -> Result<(), Error> {
-        self.lifecycle()?;
-        Err(Error::new(
-            codes::PROFILE_NOT_APPLIED,
-            false,
-            "no profile has been applied",
-        ))
+        self.inner.start().await
     }
 
     /// Stops; the profile stays applied (`Configured`). Idempotent.
     pub async fn stop(&self) -> Result<(), Error> {
-        self.lifecycle()?;
-        Ok(())
+        self.inner.stop().await
     }
 
     /// Selects the node of new connections; the host persists it (4.3).
     pub async fn select_node(&self, node_id: &str) -> Result<(), Error> {
-        self.lifecycle()?;
+        self.inner.admit()?;
+        self.inner.require_applied()?;
         let _ = node_id;
-        Err(Error::new(
-            codes::PROFILE_NOT_APPLIED,
-            false,
-            "no profile has been applied",
-        ))
+        Err(Error::not_implemented("select_node"))
     }
 
     /// Pins a node to one ingress, or back to automatic with `None` (4.3).
@@ -127,20 +190,32 @@ impl Engine {
         node_id: &str,
         endpoint_key: Option<&str>,
     ) -> Result<(), Error> {
-        self.lifecycle()?;
+        self.inner.admit()?;
+        self.inner.require_applied()?;
         let _ = (node_id, endpoint_key);
-        Err(Error::new(
-            codes::PROFILE_NOT_APPLIED,
-            false,
-            "no profile has been applied",
-        ))
+        Err(Error::not_implemented("pin_ingress"))
     }
 
     /// The authoritative snapshot (section 5).
     pub fn status(&self) -> Status {
+        let config = &self.inner.config;
+        let live = self.inner.live();
+        let applied = live.applied.as_ref();
         Status {
-            state: EngineState::Stopped,
-            system_proxy: SystemProxyStatus::default(),
+            state: live.state.clone(),
+            revision: applied.map(|a| a.profile.revision.clone()),
+            routing_mode: applied.map(|a| a.mode),
+            selected_node_id: applied.map(|a| a.selected.clone()),
+            node_count: applied.map_or(0, |a| a.profile.nodes.len() as u32),
+            selected_ingress: live.selected_ingress(),
+            nodes: live.node_statuses(),
+            system_proxy: SystemProxyStatus {
+                available: config.role == Role::Standard && config.system_proxy,
+                ..SystemProxyStatus::default()
+            },
+            tun_routing: (config.role == Role::Tun)
+                .then_some(live.tun_routing.unwrap_or(TunRouting::Ok)),
+            dropped_log_lines: self.inner.runtime.dropped_log_lines(),
             ..Status::default()
         }
     }
@@ -181,15 +256,20 @@ impl Engine {
         &self,
         request: ProbeEntrancesRequest,
     ) -> Result<Vec<EntranceResult>, Error> {
+        self.inner.admit()?;
         let _ = request;
         Err(Error::not_implemented("probe_entrances"))
     }
 
-    /// An availability probe through the node's local proxy user (4.5).
+    /// An availability probe through the node's local proxy user (4.5):
+    /// `LOCAL_PROXY_DISABLED` on an instance without one (a TUN instance
+    /// too, as Go).
     pub async fn probe_availability(
         &self,
         request: ProbeAvailabilityRequest,
     ) -> Result<AvailabilityResult, Error> {
+        self.inner.admit()?;
+        self.standard()?;
         let _ = request;
         Err(Error::not_implemented("probe_availability"))
     }
@@ -219,7 +299,7 @@ impl Engine {
         &self,
         enabled: bool,
     ) -> Result<SystemProxyStatus, Error> {
-        self.lifecycle()?;
+        self.inner.admit()?;
         if self.inner.config.role != Role::Standard || !self.inner.config.system_proxy {
             return Err(Error::new(
                 codes::SYSTEM_PROXY_UNAVAILABLE,
@@ -234,9 +314,9 @@ impl Engine {
     /// Subscribes to `kinds` (section 6): one bounded buffer per kind, a
     /// `Lagged` item when this receiver fell behind on one.
     pub fn subscribe(&self, kinds: &[EventKind]) -> EventReceiver {
-        let _ = kinds;
-        let (_sender, receiver) = mpsc::channel::<EventItem>(1);
-        EventReceiver { receiver }
+        EventReceiver {
+            subscription: self.inner.bus.subscribe(kinds),
+        }
     }
 
     /// The log lines, with `LogSink::Channel` (section 10).
@@ -245,15 +325,18 @@ impl Engine {
         LogReceiver { receiver }
     }
 
-    fn lifecycle(&self) -> Result<(), Error> {
-        if self.inner.state.lock().expect("lifecycle lock").shut_down {
-            return Err(Error::new(
-                codes::ENGINE_SHUT_DOWN,
-                false,
-                "the instance was shut down",
-            ));
-        }
-        Ok(())
+    /// The default interface changed (`None`: offline). Its source is
+    /// sail's network events (E1b), not wired yet: no monitor of our own.
+    #[allow(dead_code)]
+    pub(crate) fn on_network(&self, interface: Option<(&str, u32)>) {
+        self.inner.on_network(interface);
+    }
+
+    /// The TUN routing guard's report. Its source is the guard module
+    /// (Linux tunrules, separate PR), not wired yet.
+    #[allow(dead_code)]
+    pub(crate) fn on_tun_routing(&self, signal: TunRoutingSignal) {
+        self.inner.on_tun_routing(signal);
     }
 
     fn standard(&self) -> Result<(), Error> {
@@ -268,6 +351,100 @@ impl Engine {
     }
 }
 
+impl Inner {
+    fn live(&self) -> MutexGuard<'_, Live> {
+        self.live.lock().expect("live")
+    }
+
+    fn publish(&self, event: Event) {
+        self.bus.publish(event);
+    }
+
+    /// Reports the state `live` now makes, if it changed (StateChanged).
+    fn settle(&self, live: &mut Live) {
+        let state = live.state_now();
+        if state != live.state {
+            let previous = std::mem::replace(&mut live.state, state.clone());
+            self.publish(Event::StateChanged {
+                at: now(),
+                state,
+                previous,
+            });
+        }
+    }
+
+    /// Whether a lifecycle call may run.
+    fn admit(&self) -> Result<(), Error> {
+        let live = self.live();
+        if live.shut_down {
+            return Err(Error::new(
+                codes::ENGINE_SHUT_DOWN,
+                false,
+                "the instance was shut down",
+            ));
+        }
+        if live.fatal.is_some() {
+            return Err(Error::new(
+                codes::ENGINE_FATAL,
+                false,
+                "the instance is fatal: drop it and create another",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_applied(&self) -> Result<(), Error> {
+        if self.live().applied.is_none() {
+            return Err(not_applied());
+        }
+        Ok(())
+    }
+
+    /// The Engine's error for a runtime's; a panic in sail makes the
+    /// instance Fatal.
+    fn runtime_error(&self, error: &RuntimeError) -> Error {
+        if error.code == "panicked" {
+            let mut live = self.live();
+            live.running = false;
+            live.run += 1;
+            live.clear_runtime();
+            live.fatal = Some(FatalReason::Panic);
+            self.settle(&mut live);
+        }
+        error.to_error()
+    }
+
+    /// The translation inputs of this instance. The local proxy, the system
+    /// proxy listener, rule sets and the TUN are wired by their own modules;
+    /// until then they are left out.
+    fn options(
+        &self,
+        mode: RoutingMode,
+        selected: &str,
+        pins: &BTreeMap<String, String>,
+    ) -> translate::Options {
+        translate::Options {
+            mode,
+            selected_node_id: Some(selected.to_owned()),
+            pins: pins.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            log_level: match self.config.log.level {
+                LogLevel::Info => "info",
+                LogLevel::Debug => "debug",
+            }
+            .into(),
+            ..translate::Options::default()
+        }
+    }
+}
+
+fn not_applied() -> Error {
+    Error::new(
+        codes::PROFILE_NOT_APPLIED,
+        false,
+        "no profile has been applied",
+    )
+}
+
 fn now() -> DateTime<Utc> {
     Utc::now()
 }
@@ -276,6 +453,7 @@ fn now() -> DateTime<Utc> {
 mod tests {
     use super::*;
     use crate::config::{LocalProxyConfig, Platform};
+    use crate::status::EngineState;
 
     fn assert_send_sync_clone<T: Send + Sync + Clone + 'static>() {}
 

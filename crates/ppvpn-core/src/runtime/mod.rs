@@ -20,7 +20,8 @@ use tokio::sync::{mpsc, watch};
 
 use crate::error::{codes, Error};
 
-#[cfg(test)]
+/// Built outside tests too: the golden contract tests (tests/) drive an
+/// Engine on it through `internal`.
 pub(crate) mod fake;
 pub(crate) mod sail;
 

@@ -236,12 +236,12 @@ pub enum EventItem {
 /// Closed (`recv` returns `None`) after `shutdown`.
 #[derive(Debug)]
 pub struct EventReceiver {
-    pub(crate) receiver: mpsc::Receiver<EventItem>,
+    pub(crate) subscription: crate::engine::Subscription,
 }
 
 impl EventReceiver {
     pub async fn recv(&mut self) -> Option<EventItem> {
-        self.receiver.recv().await
+        self.subscription.recv().await
     }
 }
 
