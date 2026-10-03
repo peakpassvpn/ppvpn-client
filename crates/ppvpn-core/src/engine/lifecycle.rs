@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
-use super::{not_applied, now, Error, Inner};
+use super::{not_applied, now, shut_down, Error, Inner};
 use crate::error::codes;
 use crate::event::Event;
 use crate::request::{
