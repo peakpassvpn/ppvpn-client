@@ -54,13 +54,23 @@ impl NetworkState {
 /// offline. Offline is sail's word only: before sail knows a network the
 /// snapshot names no interface yet and is not offline.
 fn interface(snapshot: &NetworkSnapshot) -> Option<(&str, u32)> {
-    if snapshot.offline {
+    interface_if(snapshot, snapshot.offline)
+}
+
+fn interface_if(snapshot: &NetworkSnapshot, offline: bool) -> Option<(&str, u32)> {
+    if offline {
         return None;
     }
     Some((
         snapshot.interface.as_deref().unwrap_or(""),
         snapshot.index.unwrap_or(0),
     ))
+}
+
+/// What says where the network is: offline, and which interface. Addresses
+/// and the gateway may differ in a way that is no step of its own.
+fn same_place(s: &NetworkSnapshot) -> (bool, Option<&str>, Option<u32>) {
+    (s.offline, s.interface.as_deref(), s.index)
 }
 
 /// Go's `default interface` line: `event=start|changed`, then the
@@ -129,7 +139,8 @@ impl Inner {
         let missed = {
             let mut track = self.network.track();
             let jumped = change.generation > track.generation + 1;
-            let missed = jumped && track.last.as_ref() != Some(&change.old);
+            let missed =
+                jumped && track.last.as_ref().map(same_place) != Some(same_place(&change.old));
             track.generation = change.generation;
             track.last = Some(change.new.clone());
             missed
@@ -140,8 +151,10 @@ impl Inner {
             log_default_interface("changed", &change.old);
             self.on_network(interface(&change.old));
         }
+        // The change's kind decides offline (sail's one definition).
+        let offline = change.change == "offline";
         log_default_interface("changed", &change.new);
-        self.on_network(interface(&change.new));
+        self.on_network(interface_if(&change.new, offline));
         self.arm_reprobe();
     }
 

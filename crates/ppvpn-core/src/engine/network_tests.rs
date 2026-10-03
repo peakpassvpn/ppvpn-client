@@ -114,6 +114,7 @@ async fn a_missed_step_is_replayed_from_the_changes_old() {
     let mut rx = engine.subscribe(&[EventKind::NetworkChanged]);
     engine.inner.on_network_change(NetworkChange {
         generation: 1,
+        change: "interface_changed".into(),
         reason: "default_interface".into(),
         old: NetworkSnapshot::default(),
         new: wifi(),
@@ -121,6 +122,7 @@ async fn a_missed_step_is_replayed_from_the_changes_old() {
     // Generation 2 (wifi → offline) was not seen; 3 is offline → wired.
     engine.inner.on_network_change(NetworkChange {
         generation: 3,
+        change: "restored".into(),
         reason: "default_interface".into(),
         old: offline(),
         new: wired(),
@@ -132,6 +134,7 @@ async fn a_missed_step_is_replayed_from_the_changes_old() {
     // A jump whose `old` is what was last seen replays nothing.
     engine.inner.on_network_change(NetworkChange {
         generation: 7,
+        change: "interface_changed".into(),
         reason: "state".into(),
         old: wired(),
         new: wifi(),
@@ -231,6 +234,7 @@ async fn stop_forgets_offline() {
     // A change from the stopped run that arrives late changes nothing.
     engine.inner.on_network_change(NetworkChange {
         generation: 9,
+        change: "offline".into(),
         reason: "state".into(),
         old: wifi(),
         new: offline(),
