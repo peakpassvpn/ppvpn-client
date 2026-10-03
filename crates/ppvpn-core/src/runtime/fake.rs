@@ -54,6 +54,9 @@ pub(crate) struct FakeRuntime {
     ),
     logs: (mpsc::Sender<String>, Mutex<Option<mpsc::Receiver<String>>>),
     dropped: AtomicU64,
+    network: Mutex<NetworkSnapshot>,
+    network_changes: watch::Sender<Option<NetworkChange>>,
+    generation: AtomicU64,
 }
 
 impl Default for FakeRuntime {
@@ -73,6 +76,9 @@ impl Default for FakeRuntime {
             switches: (switch_tx, Mutex::new(Some(switch_rx))),
             logs: (log_tx, Mutex::new(Some(log_rx))),
             dropped: AtomicU64::new(0),
+            network: Mutex::default(),
+            network_changes: watch::channel(None).0,
+            generation: AtomicU64::new(0),
         }
     }
 }
@@ -181,6 +187,19 @@ impl FakeRuntime {
     }
 
     /// A log line from sail; dropped and counted when the reader is behind.
+    /// The network becomes `new`, as sail would publish it (`reason`:
+    /// default_interface, state, host or wake).
+    pub(crate) fn change_network(&self, new: NetworkSnapshot, reason: &str) {
+        let old = std::mem::replace(&mut *self.network.lock().unwrap(), new.clone());
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.network_changes.send_replace(Some(NetworkChange {
+            generation,
+            reason: reason.into(),
+            old,
+            new,
+        }));
+    }
+
     pub(crate) fn log(&self, line: &str) {
         if self.logs.0.try_send(line.to_owned()).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -366,6 +385,15 @@ impl Runtime for FakeRuntime {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    fn network(&self) -> Option<NetworkSnapshot> {
+        (*self.state.borrow() == RuntimeState::Running)
+            .then(|| self.network.lock().unwrap().clone())
+    }
+
+    fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {
+        self.network_changes.subscribe()
+    }
+
     fn tun_name(&self) -> Option<String> {
         if *self.state.borrow() != RuntimeState::Running {
             return None;
@@ -400,6 +428,36 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[tokio::test]
+    async fn network_changes_are_injected() {
+        let fake = FakeRuntime::default();
+        let mut changes = fake.network_changes();
+        assert_eq!(fake.network(), None, "not running");
+        fake.start("{}").await.unwrap();
+        let wifi = NetworkSnapshot {
+            interface: Some("en0".into()),
+            index: Some(6),
+            ..Default::default()
+        };
+        fake.change_network(wifi.clone(), "default_interface");
+        changes.changed().await.unwrap();
+        let change = changes.borrow_and_update().clone().unwrap();
+        assert_eq!(
+            (change.generation, change.reason.as_str(), &change.new),
+            (1, "default_interface", &wifi)
+        );
+        assert_eq!(fake.network(), Some(wifi.clone()));
+        fake.change_network(
+            NetworkSnapshot {
+                offline: true,
+                ..Default::default()
+            },
+            "state",
+        );
+        let change = changes.borrow_and_update().clone().unwrap();
+        assert_eq!((change.generation, change.old), (2, wifi));
+    }
 
     fn group(tag: &str, members: &[&str]) -> GroupInfo {
         GroupInfo {

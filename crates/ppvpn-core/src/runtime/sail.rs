@@ -22,9 +22,11 @@ use sail::embed::{self, Address, Config, Instance, LogFilter, Options};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
+use sail::net::network::{ChangeReason, NetworkState};
+
 use super::{
-    AsyncReadWrite, Datagram, GroupInfo, GroupSwitch, MemberInfo, Runtime, RuntimeConnection,
-    RuntimeError, RuntimeState, RuntimeTraffic, Target,
+    AsyncReadWrite, Datagram, GroupInfo, GroupSwitch, MemberInfo, NetworkChange, NetworkSnapshot,
+    Runtime, RuntimeConnection, RuntimeError, RuntimeState, RuntimeTraffic, Target,
 };
 use crate::logfmt;
 
@@ -43,6 +45,10 @@ pub(crate) struct SailRuntime {
     dropped: Arc<AtomicU64>,
     /// The tun inbound's name in what runs (`tun_name`).
     tun: Mutex<Option<String>>,
+    /// sail's network changes, as ours (`network_changes`).
+    network: Arc<watch::Sender<Option<NetworkChange>>>,
+    /// Follows sail's changes while the runtime runs.
+    follow: Mutex<Option<JoinHandle<()>>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -123,8 +129,62 @@ impl SailRuntime {
             logs: Mutex::new(Some(log_rx)),
             dropped,
             tun: Mutex::new(None),
+            network: Arc::new(watch::channel(None).0),
+            follow: Mutex::new(None),
             tasks,
         })
+    }
+}
+
+impl SailRuntime {
+    /// Forwards sail's network changes to `network` while this run lasts.
+    /// Until sail::embed has network events (E1b), this reads them through
+    /// the runtime manager, which is outside embed's stable API: the same
+    /// channel sail's own reaction to a move reads (one monitor).
+    fn follow_network(&self) {
+        let Ok(manager) = self.instance.manager() else {
+            return;
+        };
+        let mut changes = manager.network().changes();
+        // What was published before this start is the previous run's.
+        changes.borrow_and_update();
+        let network = self.network.clone();
+        let task = tokio::spawn(async move {
+            while changes.changed().await.is_ok() {
+                let change = changes.borrow_and_update().clone();
+                if let Some(change) = change {
+                    network.send_replace(Some(NetworkChange {
+                        generation: change.generation,
+                        reason: reason(change.reason).into(),
+                        old: snapshot(&change.old),
+                        new: snapshot(&change.new),
+                    }));
+                }
+            }
+        });
+        if let Some(previous) = self.follow.lock().expect("follow").replace(task) {
+            previous.abort();
+        }
+    }
+}
+
+fn reason(reason: ChangeReason) -> &'static str {
+    match reason {
+        ChangeReason::DefaultInterface => "default_interface",
+        ChangeReason::State => "state",
+        ChangeReason::HostPush => "host",
+        ChangeReason::Wake => "wake",
+    }
+}
+
+/// A state with nothing known is no network.
+fn snapshot(state: &NetworkState) -> NetworkSnapshot {
+    NetworkSnapshot {
+        interface: state.interface.clone(),
+        index: state.index,
+        gateway: state.gateway,
+        addresses: state.addresses.iter().map(|a| a.to_string()).collect(),
+        offline: *state == NetworkState::default(),
     }
 }
 
@@ -132,6 +192,9 @@ impl Drop for SailRuntime {
     fn drop(&mut self) {
         for task in &self.tasks {
             task.abort();
+        }
+        if let Some(follow) = self.follow.get_mut().ok().and_then(Option::take) {
+            follow.abort();
         }
     }
 }
@@ -224,6 +287,7 @@ impl Runtime for SailRuntime {
             .await
             .map_err(error)?;
         *self.tun.lock().expect("tun") = super::configured_tun_name(config);
+        self.follow_network();
         Ok(())
     }
 
@@ -239,6 +303,9 @@ impl Runtime for SailRuntime {
     async fn stop(&self) -> Result<(), RuntimeError> {
         self.instance.stop().await.map_err(error)?;
         *self.tun.lock().expect("tun") = None;
+        if let Some(follow) = self.follow.lock().expect("follow").take() {
+            follow.abort();
+        }
         Ok(())
     }
 
@@ -412,6 +479,18 @@ impl Runtime for SailRuntime {
 
     fn tun_name(&self) -> Option<String> {
         self.tun.lock().expect("tun").clone()
+    }
+
+    fn network(&self) -> Option<NetworkSnapshot> {
+        let manager = self.instance.manager().ok()?;
+        let network = manager.network();
+        let mut now = snapshot(&network.snapshot());
+        now.offline = network.is_down();
+        Some(now)
+    }
+
+    fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {
+        self.network.subscribe()
     }
 }
 

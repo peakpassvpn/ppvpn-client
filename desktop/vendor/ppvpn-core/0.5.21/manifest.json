@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "core_version": "0.5.21",
+  "source": {
+    "repository": "peakpassvpn/ppvpn-core",
+    "commit": "245f7942bae9264fec6ec24bf14d0a9fb0e81961",
+    "tag": "v0.5.21",
+    "release_url": "https://github.com/peakpassvpn/ppvpn-core/releases/tag/v0.5.21"
+  },
+  "artifacts": {
+    "windows-x86_64": {
+      "path": "build/ppvpn-core-windows-amd64.exe",
+      "sha256": "9541bc51b28134c1543e2407b908e8ee7d913c8fbacb62c4ad5e9f03932e10b8",
+      "size": 34937856
+    },
+    "macos-cli-arm64": {
+      "path": "build/ppvpn-core-darwin-arm64",
+      "sha256": "851ba505eebf137f953111785d06f83c1b3c65f40fa726dc149d53b63bdfba2b",
+      "size": 32829506
+    },
+    "macos-cli-x86_64": {
+      "path": "build/ppvpn-core-darwin-amd64",
+      "sha256": "6eaee9cb08ef2881b889e3f2d5a8efe90d0b30290e2f509794a535afe44be96e",
+      "size": 34813248
+    },
+    "linux-x86_64": {
+      "path": "build/ppvpn-core-linux-amd64",
+      "sha256": "04e00bbb526d85350814413432acf2bc6bd5efe2abc00de56cfa2da05da7896a",
+      "size": 42592199
+    }
+  }
+}
