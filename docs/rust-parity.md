@@ -110,7 +110,13 @@ D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
+`KernelSwitched` 的连接数和 `draining_kernels`（以及 `kernel switched` 日志行的同名字段）暂时都是 0：要等第 1 组的排空接上。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
+
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
+
+组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。
+
+连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（路由选中的出站；sail 只在成员连上之后才把它加进链，所以经组失败时链里只有组名）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
 
 Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每次变化转成 `on_network`（NetworkChanged、`Degraded{NoDefaultInterface}`、探测的离线状态）；TUN 实例在最后一次变化 2 s 后重新探测主机 IPv6 出口；start 时读一次 `network()` 快照，只设离线状态，不报变化；`default interface` 日志行同 Go 的格式，但没有 `mtu`（sail 的快照不带）。
 
@@ -124,7 +130,7 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 | macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
 | Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录。未覆盖 MSVC 构建和 `strict_route`（WFP 过滤器），见"切换前要复测的项目" |
 
-运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。已知缺口（Sail）：多路复用入站上，sail 断开其中的各条流，但暂时不断开承载它们的连接；系统代理监听是 mixed，没有多路复用，不受影响。
+运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。sail 76d1cafd 起，握手中的连接和多路复用的承载连接也一并断开。
 
 ## Lab 用例（`test/lab/engine/cases`）
 
@@ -372,7 +378,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/rulesets` `TestFailedUpdateKeepsLastGoodCopy` | A new profile version that cannot be fetched keeps the last good copy. | `ppvpn-core` `rulesets::tests::failed_update_keeps_last_good_copy` | done |  |
 | `internal/rulesets` `TestInspectClassifiesDNSMirroring` | Inspect classifies dns mirroring | `ppvpn-core` `rulesets::tests::inspect_classifies_dns_mirroring` | done | 有意偏离：Rust 只接受 sail 能读的 .srs（版本到 5；AdGuard、`network_interface_address`、`default_interface_address` 判为 `RULE_SET_INVALID`），Go 1.13 读到版本 4 且接受这些条目。sail 读不了的集合不能交给内核（`rulesets::srs::tests`） |
 | `internal/rulesets` `TestPathStaysInsideDir` | Path stays inside dir | `ppvpn-core` `rulesets::tests::path_stays_inside_dir` | done |  |
-| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done |  |
+| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done | 与 Go 一致：apply 的准备阶段一下载成功就覆盖缓存文件 `<id>.srs`（Go 在 `Prepare` 的 `fetchInto` 里 install），早于翻译和切换；随后 apply 失败时，运行中的配置读到的是新文件（sail 监视它）。跟进见 #182 |
 | `internal/rulesets` `TestPrepareRejectsDigestMismatchAndForeignHosts` | Prepare rejects digest mismatch and foreign hosts | `ppvpn-core` `rulesets::tests::prepare_rejects_digest_mismatch_and_foreign_hosts` | done |  |
 | `internal/rulesets` `TestPrepareRejectsInvalidRuleSet` | Prepare rejects invalid rule set | `ppvpn-core` `rulesets::tests::prepare_rejects_invalid_rule_set` | done |  |
 | `internal/rulesets` `TestRecoverySweepsAllSetsAndRebuildsOnce` | When one set recovers, every other set that is not ready is retried at once (not on its own, possibly long, backoff), the downloads run concurrently, and the … | `ppvpn-core` `rulesets::tests::recovery_sweeps_all_sets_and_rebuilds_once` | done |  |

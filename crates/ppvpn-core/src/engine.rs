@@ -86,6 +86,9 @@ struct Inner {
     log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
+    /// Counts the kernels of this instance (Go's `gen`): one per start or
+    /// restart, one per reload switch.
+    kernel_gen: std::sync::atomic::AtomicU64,
     /// The Linux desktop TUN's routing guard while it runs.
     routing: routing::RoutingGuard,
     /// The profile's rule sets: cache, downloads, refresh.
@@ -175,6 +178,7 @@ impl Engine {
             closing: rule_sets::Closing::default(),
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
+            kernel_gen: std::sync::atomic::AtomicU64::new(0),
             routing: routing::RoutingGuard::default(),
             config,
             runtime,

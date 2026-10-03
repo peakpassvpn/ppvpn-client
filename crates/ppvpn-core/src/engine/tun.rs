@@ -10,10 +10,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{now, Engine, Error, Inner};
+use super::{Engine, Error, Inner};
 use crate::config::{EngineConfig, Platform, Role};
 use crate::error::codes;
-use crate::event::Event;
 use crate::hostipv6;
 use crate::localdns::{self, listener, Cache, Change, Hosts, Interface, Server};
 use crate::runtime::NetworkSnapshot;
@@ -313,26 +312,29 @@ impl Inner {
             ipv6: true,
             no_host_ipv6_route: handed_off,
         };
-        let translation =
-            match translate::translate(&profile, &self.options(mode, &selected, &pins)) {
-                Ok(translation) => translation,
-                Err(e) => {
-                    tracing::error!(previous_policy = policy(previous), policy = policy(state),
+        let build = || translate::translate(&profile, &self.options(mode, &selected, &pins));
+        let translation = match build() {
+            Ok(translation) => translation,
+            Err(e) => {
+                tracing::error!(previous_policy = policy(previous), policy = policy(state),
                         rebuilt = false, error = %e, "host ipv6 changed");
-                    return;
-                }
-            };
+                return;
+            }
+        };
         // The selection and the pins are as applied: sail keeps them across
         // a reload. The TUN itself does not change here, so this is a
         // reload; should it ever change, the switch restarts instead.
         let Some(running) = self.live().applied.as_ref().map(|a| a.translation.clone()) else {
             return;
         };
-        if let Err(error) = self.switch_to(&running, &translation).await {
-            tracing::error!(previous_policy = policy(previous), policy = policy(state),
-                rebuilt = false, error = %error, "host ipv6 changed");
-            return;
-        }
+        let (switch, translation) = match self.switch_to(&running, translation, &build).await {
+            Ok(switched) => switched,
+            Err(error) => {
+                tracing::error!(previous_policy = policy(previous), policy = policy(state),
+                    rebuilt = false, error = %error, "host ipv6 changed");
+                return;
+            }
+        };
         tracing::info!(
             previous_policy = policy(previous),
             policy = policy(state),
@@ -346,14 +348,10 @@ impl Inner {
             };
             applied.translation = translation;
             let revision = applied.profile.revision.clone();
-            // The connection counts come with the drain (group 1).
-            self.publish(Event::KernelSwitched {
-                at: now(),
-                revision,
-                closed_connections: 0,
-                kept_connections: 0,
-                draining_kernels: 0,
-            });
+            drop(live);
+            if switch == crate::request::SwitchKind::KernelSwitch {
+                self.kernel_switched(&revision);
+            }
         }
         self.refresh().await;
     }
@@ -374,7 +372,7 @@ mod tests {
     use super::super::lifecycle_tests::{drain, kinds, running, R1};
     use super::*;
     use crate::config::TunConfig;
-    use crate::event::EventKind;
+    use crate::event::{Event, EventKind};
     use crate::runtime::fake::{Call, FakeRuntime};
 
     /// What the injected probe answers, and how often it was asked.
