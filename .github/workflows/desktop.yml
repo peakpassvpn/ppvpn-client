@@ -30,6 +30,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its runs still going (the macOS and
+# Windows runners queue); runs on main are never cancelled.
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -131,3 +137,56 @@ jobs:
         run: |
           cargo clippy --locked --features rust-core --all-targets -- -D warnings
           cargo test --locked --features rust-core --lib rust_core
+
+  # The macOS app's logic (desktop/apps/macos/AppLogic: no AppKit/SwiftUI),
+  # tested on Linux against the Linux build of the client crate. Pinned to
+  # the Swift the macOS app is developed with.
+  desktop-swift:
+    runs-on: ubuntu-latest
+    container: swift:6.4.0-noble
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends curl ca-certificates python3 gcc libc6-dev
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-swift
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the client crate and its Swift bindings
+        run: desktop/apps/macos/scripts/build-swift-linux.sh
+      - name: Test AppLogic
+        run: swift test --package-path desktop/apps/macos/AppLogic
+
+  # The client crate's tests on macOS and a Debug build of the app against
+  # it (ad-hoc signed; without the staged core and service, which a Debug
+  # build does not need).
+  desktop-macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test the client crate
+        working-directory: desktop/crates/ppvpn-client
+        run: cargo test --locked
+      - name: Build the Debug app against the client
+        run: |
+          brew install xcodegen
+          desktop/apps/macos/scripts/bootstrap.sh
+          xcodebuild -project desktop/apps/macos/PPVPN.xcodeproj -scheme PPVPN -configuration Debug \
+            -derivedDataPath desktop/apps/macos/build -destination 'platform=macOS' build
