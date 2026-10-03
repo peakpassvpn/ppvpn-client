@@ -17,7 +17,7 @@ repository = "https://github.com/peakpassvpn/ppvpn-core"
 # below as of that commit (CI runs sail's tools/embed-patch-check.py).
 # auto-reload is not among sail's defaults and must stay on: without it the
 # runtime does not follow certificate files that change on disk.
-sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "d83b985c11407bdf95b5f026d23fc211859a07fc", features = ["auto-reload"] }
+sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "235d12a9b5e1bfc3b8076409be21f80cf8e60029", features = ["auto-reload"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 idna = "1"

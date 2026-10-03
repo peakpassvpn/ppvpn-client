@@ -169,7 +169,7 @@ impl Engine {
     pub fn version() -> VersionInfo {
         VersionInfo {
             core_version: env!("CARGO_PKG_VERSION").into(),
-            sail_version: String::new(),
+            sail_version: sail::embed::VERSION.into(),
             sail_commit: String::new(),
             profile_schema_version: crate::profile::CURRENT_SCHEMA_VERSION as u32,
             local_proxy_contract_version: LOCAL_PROXY_CONTRACT_VERSION,
@@ -352,6 +352,19 @@ mod tests {
         Engine::new(config())
             .await
             .expect("free after the last handle's drop");
+    }
+
+    #[test]
+    fn version_names_the_sail_it_links() {
+        let version = Engine::version();
+        assert!(!version.sail_version.is_empty());
+        assert_eq!(version.sail_version, sail::embed::VERSION);
+        assert_eq!(
+            version.sail_version.split('.').count(),
+            3,
+            "{}",
+            version.sail_version
+        );
     }
 
     #[test]
