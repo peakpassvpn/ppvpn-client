@@ -8,7 +8,8 @@
 #                          musl ($LAB_SAIL_TARGET, default <arch>-unknown-
 #                          linux-musl): the nodes run on Alpine, whose gcompat
 #                          lacks glibc symbols sail uses (__res_init)
-#   <out>/ppvpn-core-lab   the Rust core behind Core API v1
+#   <out>/ppvpn-core-lab   the Rust core behind Core API v1, for musl like
+#                          sail-cli: it runs in the Alpine client
 #   $LAB_WORK/rs-a.srs, rs-b.srs   the rule sets (lab.sh rules)
 # The Go binaries are static (CGO_ENABLED=0). BoringSSL is linked as btls
 # publishes it when BORING_BSSL_PATH_<target> is set (lab.yml's prebuilt
@@ -29,18 +30,21 @@ CGO_ENABLED=0 GOBIN="$OUT" go install -trimpath -tags with_gvisor,with_utls "git
 rev=$(awk '/^name = "sail"$/ {f=1; next} f && /^source = / {sub(/.*#/, ""); sub(/"$/, ""); print; exit}' Cargo.lock)
 [ ${#rev} -eq 40 ] || { echo "ci-build: no sail commit in Cargo.lock" >&2; exit 1; }
 target=${LAB_SAIL_TARGET:-$(uname -m)-unknown-linux-musl}
+# sail's scripts at that commit: its pinned musl toolchain, for both builds.
+src=$(mktemp -d)
+git clone --quiet --filter=blob:none --no-checkout https://github.com/peakpassvpn/sail.git "$src"
+git -C "$src" checkout --quiet "$rev"
+git -C "$src" submodule update --quiet --init --recursive
+(cd "$src" && bash scripts/install_cross_toolchain.sh "$target" >/dev/null)
 if [ ! -x "$OUT/sail-$rev/bin/sail" ]; then
-	src=$(mktemp -d)
-	git clone --quiet --filter=blob:none --no-checkout https://github.com/peakpassvpn/sail.git "$src"
-	git -C "$src" checkout --quiet "$rev"
-	git -C "$src" submodule update --quiet --init --recursive
-	(cd "$src" && bash scripts/install_cross_toolchain.sh "$target" >/dev/null &&
-		bash scripts/cross.sh "$target" build --release --locked --quiet -p sail-cli)
+	(cd "$src" && bash scripts/cross.sh "$target" build --release --locked --quiet -p sail-cli)
 	mkdir -p "$OUT/sail-$rev/bin" && cp "$src/target/$target/release/sail" "$OUT/sail-$rev/bin/sail"
-	rm -rf "$src"
 fi
 cp "$OUT/sail-$rev/bin/sail" "$OUT/sail"
-cargo build --release --locked --quiet -p ppvpn-core-lab && cp target/release/ppvpn-core-lab "$OUT/ppvpn-core-lab"
+# A glibc build fails in Alpine the same way (gcompat lacks __res_init).
+bash "$src/scripts/cross.sh" "$target" build --release --locked --quiet -p ppvpn-core-lab
+cp "target/$target/release/ppvpn-core-lab" "$OUT/ppvpn-core-lab"
+rm -rf "$src"
 sh test/lab/engine/lab.sh rules
 "$OUT/sail" --version 2>/dev/null | head -1 || true
 "$OUT/sing-box" version | head -1

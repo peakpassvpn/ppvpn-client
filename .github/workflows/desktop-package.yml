@@ -164,6 +164,9 @@ jobs:
         with:
           name: desktop-linux
           if-no-files-found: error
+          # A release run's packages are not kept long: a stable build's are in the
+          # release, a dev build's are for testing. Other builds: the default.
+          retention-days: ${{ inputs.environment && 3 || 0 }}
           path: |
             desktop/dist/linux/*.deb
             desktop/dist/linux/*.rpm
@@ -653,6 +656,9 @@ jobs:
         with:
           name: desktop-windows-x64
           if-no-files-found: error
+          # A release run's packages are not kept long: a stable build's are in the
+          # release, a dev build's are for testing. Other builds: the default.
+          retention-days: ${{ inputs.environment && 3 || 0 }}
           path: |
             desktop/dist/windows/*-setup.exe
             desktop/dist/windows/release-meta-windows-x64.json
@@ -682,4 +688,7 @@ jobs:
         with:
           name: desktop-macos
           if-no-files-found: error
+          # A release run's packages are not kept long: a stable build's are in the
+          # release, a dev build's are for testing. Other builds: the default.
+          retention-days: ${{ inputs.environment && 3 || 0 }}
           path: desktop/staging/macos-native

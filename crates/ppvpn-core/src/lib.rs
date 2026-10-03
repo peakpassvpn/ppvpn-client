@@ -46,9 +46,10 @@ pub use status::{
     LocalProxyStatus, NodeStatus, RuleSetStatus, Status, SystemProxyStatus, TunRouting,
 };
 pub use types::{
-    AvailabilityResult, Connection, EntranceResult, IngressInfo, IngressProbeResult,
-    LocalProxyCredential, LocalProxyKind, LocalProxyMetadata, NodeInfo, ProbeAvailabilityRequest,
-    ProbeEntrancesRequest, ProbeMethod, ShutdownReport, Traffic, VersionInfo,
+    AvailabilityResult, Connection, EntranceResult, IngressInfo, IngressProbeResult, Leftover,
+    LeftoverKind, LocalProxyCredential, LocalProxyKind, LocalProxyMetadata, NodeInfo,
+    ProbeAvailabilityRequest, ProbeEntrancesRequest, ProbeMethod, ShutdownReport, Traffic,
+    VersionInfo,
 };
 
 /// Unstable: for this crate's own tests and `ppvpn-core-lab` only. Hosts

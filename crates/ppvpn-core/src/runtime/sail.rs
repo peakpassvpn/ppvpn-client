@@ -3,11 +3,18 @@
 //! translation's sing-box JSON. sail's error codes pass through as they are
 //! (`RuntimeError::to_error` maps them).
 //!
-//! Four tasks run beside the instance, from `new` until it is dropped:
+//! Five tasks run beside the instance, from `new` until it is dropped:
 //! - states: sail's `State` as a [`RuntimeState`];
-//! - groups: sail has no typed group events yet (#45, Sail to-dos), so the
-//!   groups are polled every [`GROUP_POLL`] while running and a member that
-//!   changed becomes a [`GroupSwitch`];
+//! - groups: sail's group events (`events(Kinds::GROUP)`: fallback and
+//!   url-test switches) as [`GroupSwitch`]es; a subscriber that fell behind
+//!   reads the groups again. sail tells no selector's switch by hand, so
+//!   `select` tells those itself;
+//! - dial failures: sail's `events(Kinds::DIAL)` as [`DialFailed`];
+//! - routes, only once `routes()` is taken (the Engine logs at debug):
+//!   sail's `events(Kinds::ROUTE)` as [`Routed`], built by sail only while
+//!   someone subscribes;
+//! - DNS exchanges, likewise once `dns_exchanges()` is taken:
+//!   `events(Kinds::DNS)` as [`DnsExchange`];
 //! - logs: the instance's lines as logfmt, into a bounded channel; lines
 //!   that do not fit are dropped and counted, never waited for;
 //! - network: sail's network events (`instance.events(Kinds::NETWORK)`,
@@ -26,22 +33,41 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use super::{
-    AsyncReadWrite, Datagram, GroupInfo, GroupSwitch, MemberInfo, NetworkChange, NetworkSnapshot,
-    Runtime, RuntimeConnection, RuntimeError, RuntimeState, RuntimeTraffic, Target,
+    AsyncReadWrite, Datagram, DialFailed, DnsExchange, GroupInfo, GroupSwitch, MemberInfo,
+    NetworkChange, NetworkSnapshot, Routed, Runtime, RuntimeConnection, RuntimeError, RuntimeState,
+    RuntimeTraffic, Target,
 };
 use crate::logfmt;
 
-/// How often the groups are read for switches while running.
-pub(crate) const GROUP_POLL: Duration = Duration::from_secs(1);
 /// Log lines that wait for the Engine before new ones are dropped.
 const LOG_BUFFER: usize = 1024;
 /// Group switches that wait for the Engine before new ones are dropped.
 const SWITCH_BUFFER: usize = 256;
+/// Dial failures that wait for the Engine before new ones are dropped
+/// (sail already folds a chain's failures into one with a count).
+const DIAL_BUFFER: usize = 256;
+/// Routed connections that wait for the Engine before new ones are dropped.
+const ROUTE_BUFFER: usize = 1024;
+/// DNS exchanges that wait for the Engine before new ones are dropped
+/// (queries come in bursts at start).
+const DNS_BUFFER: usize = 256;
+
+/// Each group's member as last told, by tag: what a switch is from, and
+/// what the groups are compared with after falling behind.
+type Members = Arc<Mutex<HashMap<String, String>>>;
 
 pub(crate) struct SailRuntime {
     instance: Instance,
     states: watch::Receiver<RuntimeState>,
     switches: Mutex<Option<mpsc::Receiver<GroupSwitch>>>,
+    /// For the switches `select` tells.
+    switch_tx: mpsc::Sender<GroupSwitch>,
+    members: Members,
+    failures: Mutex<Option<mpsc::Receiver<DialFailed>>>,
+    /// The routes' follower, started by the first `routes()`.
+    route_task: Mutex<Option<JoinHandle<()>>>,
+    /// The DNS exchanges' follower, started by the first `dns_exchanges()`.
+    dns_task: Mutex<Option<JoinHandle<()>>>,
     logs: Mutex<Option<mpsc::Receiver<String>>>,
     dropped: Arc<AtomicU64>,
     /// sail's network changes, as ours (`network_changes`).
@@ -96,11 +122,15 @@ impl SailRuntime {
         }));
 
         let (switch_tx, switch_rx) = mpsc::channel(SWITCH_BUFFER);
-        tasks.push(tokio::spawn(poll_groups(
+        let members = Members::default();
+        tasks.push(tokio::spawn(follow_groups(
             instance.clone(),
-            states.clone(),
-            switch_tx,
+            members.clone(),
+            switch_tx.clone(),
         )));
+
+        let (dial_tx, dial_rx) = mpsc::channel(DIAL_BUFFER);
+        tasks.push(tokio::spawn(follow_dials(instance.clone(), dial_tx)));
 
         let (log_tx, log_rx) = mpsc::channel(LOG_BUFFER);
         let dropped = Arc::new(AtomicU64::new(0));
@@ -130,6 +160,11 @@ impl SailRuntime {
             instance,
             states,
             switches: Mutex::new(Some(switch_rx)),
+            switch_tx,
+            members,
+            failures: Mutex::new(Some(dial_rx)),
+            route_task: Mutex::new(None),
+            dns_task: Mutex::new(None),
             logs: Mutex::new(Some(log_rx)),
             dropped,
             network,
@@ -213,53 +248,215 @@ impl Drop for SailRuntime {
         for task in &self.tasks {
             task.abort();
         }
+        if let Some(task) = self.route_task.lock().expect("route task").take() {
+            task.abort();
+        }
+        if let Some(task) = self.dns_task.lock().expect("dns task").take() {
+            task.abort();
+        }
     }
 }
 
-/// Reads the groups every GROUP_POLL while running; a group whose member in
-/// use changed is a switch: `selected` for a selector (only `select` moves
-/// one) or a fallback fixed by `select`, else `failover`.
-async fn poll_groups(
-    instance: Instance,
-    mut states: watch::Receiver<RuntimeState>,
-    tx: mpsc::Sender<GroupSwitch>,
-) {
-    let mut last: HashMap<String, String> = HashMap::new();
-    loop {
-        if *states.borrow_and_update() != RuntimeState::Running {
-            last.clear();
-            if states.changed().await.is_err() {
-                return;
+/// A group's own tag: sail names a group inside others after them
+/// (`outer>inner`).
+fn group_tag(path: &str) -> &str {
+    path.rsplit('>').next().unwrap_or(path)
+}
+
+fn switch_reason(reason: embed::SwitchReason) -> &'static str {
+    use embed::SwitchReason as R;
+    match reason {
+        R::MemberDown => "member_down",
+        R::TestFailed => "test_failed",
+        R::Recovered => "recovered",
+        R::AllDown => "all_down",
+        R::Pinned => "pinned",
+        R::Unpinned => "unpinned",
+        R::Selected => "selected",
+        R::Faster => "faster",
+        R::MembersChanged => "members_changed",
+        _ => "other",
+    }
+}
+
+/// sail's group switches, through every run. One with no `from` (a
+/// group's first choice) is only noted. Behind (`Lagged`): the groups are
+/// read again, and each that differs from what was told is a switch with
+/// reason `lagged`.
+async fn follow_groups(instance: Instance, members: Members, tx: mpsc::Sender<GroupSwitch>) {
+    let mut events = Box::pin(instance.events(embed::Kinds::GROUP));
+    while let Some(event) = events.next().await {
+        match event {
+            embed::Event::GroupSwitched(s) => {
+                let group = group_tag(&s.group).to_owned();
+                members
+                    .lock()
+                    .expect("members")
+                    .insert(group.clone(), s.to.clone());
+                if let Some(from) = s.from {
+                    let _ = tx.try_send(GroupSwitch {
+                        group,
+                        from,
+                        to: s.to,
+                        reason: switch_reason(s.reason).into(),
+                    });
+                }
             }
-            continue;
-        }
-        if let Ok(groups) = instance.groups().await {
-            let mut now = HashMap::new();
-            for g in groups {
-                let Some(group) = g.group else { continue };
-                if let Some(from) = last.get(&g.tag) {
-                    if *from != group.selected {
-                        let reason = if group.selectable || group.fixed.is_some() {
-                            "selected"
-                        } else {
-                            "failover"
-                        };
-                        let switch = GroupSwitch {
-                            group: g.tag.clone(),
-                            from: from.clone(),
-                            to: group.selected.clone(),
-                            reason: reason.into(),
-                        };
-                        let _ = tx.try_send(switch);
+            embed::Event::Lagged { kind, .. } if kind.contains(embed::Kinds::GROUP) => {
+                let Ok(groups) = instance.groups().await else {
+                    continue;
+                };
+                let mut members = members.lock().expect("members");
+                for g in groups {
+                    let Some(group) = g.group else { continue };
+                    let from = members.insert(g.tag.clone(), group.selected.clone());
+                    if let Some(from) = from.filter(|from| *from != group.selected) {
+                        let _ = tx.try_send(GroupSwitch {
+                            group: g.tag,
+                            from,
+                            to: group.selected,
+                            reason: "lagged".into(),
+                        });
                     }
                 }
-                now.insert(g.tag, group.selected);
             }
-            last = now;
+            _ => {}
         }
-        tokio::select! {
-            _ = tokio::time::sleep(GROUP_POLL) => {}
-            changed = states.changed() => if changed.is_err() { return },
+    }
+}
+
+fn routed(r: &embed::RoutedConnection) -> Routed {
+    use embed::{DomainSource as S, RouteAction as A};
+    Routed {
+        id: r.id,
+        network: r.network.to_string(),
+        inbound: r.inbound.clone(),
+        source: r.source.to_string(),
+        destination: r.destination.to_string(),
+        domain: r.domain.clone(),
+        domain_source: r.domain_source.map(|s| {
+            match s {
+                S::Request => "request",
+                S::FakeIp => "fake_ip",
+                S::Sniffed => "sniffed",
+                S::ReverseMapping => "reverse_mapping",
+                _ => "other",
+            }
+            .to_owned()
+        }),
+        protocol: r.sniffed_protocol.map(str::to_owned),
+        rule: r.rule.map(|i| i as usize),
+        action: match r.action {
+            A::Outbound => "outbound",
+            A::Reject => "reject",
+            A::Drop => "drop",
+            A::HijackDns => "hijack_dns",
+            _ => "other",
+        }
+        .to_owned(),
+        chain: r.chain.clone(),
+        request_destination: r.request_destination.as_ref().map(ToString::to_string),
+        target: r.target.map(|t| t.to_string()),
+        error: match &r.connect {
+            Some(Err(kind)) => Some(format!("{kind:?}")),
+            _ => None,
+        },
+        connect_ms: match &r.connect {
+            Some(Ok(took)) => Some(took.as_millis() as u64),
+            _ => None,
+        },
+    }
+}
+
+/// sail's routed connections, through every run. Behind (`Lagged`): those
+/// missed are gone, and how many is logged.
+async fn follow_routes(instance: Instance, tx: mpsc::Sender<Routed>) {
+    let mut events = Box::pin(instance.events(embed::Kinds::ROUTE));
+    while let Some(event) = events.next().await {
+        match event {
+            embed::Event::Routed(r) => {
+                let _ = tx.try_send(routed(&r));
+            }
+            embed::Event::Lagged { kind, missed } if kind.contains(embed::Kinds::ROUTE) => {
+                tracing::debug!(missed, "routed connections dropped: the reader fell behind");
+            }
+            _ => {}
+        }
+    }
+}
+
+fn dns_exchange(e: &embed::DnsExchange) -> DnsExchange {
+    use embed::{DnsOutcome as O, DnsSource as S};
+    let (rcode, rcode_name, error) = match &e.outcome {
+        O::Answered { rcode, rcode_code } => (Some(*rcode_code), Some(rcode.clone()), None),
+        O::Failed { error } => (None, None, Some(error.clone())),
+        _ => (None, None, Some("unknown outcome".into())),
+    };
+    DnsExchange {
+        name: e.name.clone(),
+        qtype: e.qtype.clone(),
+        qtype_code: e.qtype_code,
+        server: e.server.clone(),
+        source: match e.source {
+            S::Exchanged => "exchanged",
+            S::Cached => "cached",
+            S::Optimistic => "optimistic",
+            S::Rule => "rule",
+            _ => "other",
+        }
+        .to_owned(),
+        attempt: e.attempt,
+        rcode,
+        rcode_name,
+        error,
+        answers: e.answers.clone(),
+        answers_total: e.answers_total,
+        ttl: e.ttl,
+        duration_ms: e.duration.map(|d| d.as_millis() as u64),
+        for_instance: e.for_instance,
+    }
+}
+
+/// sail's DNS exchanges, through every run. Behind (`Lagged`): those
+/// missed are gone, and how many is logged.
+async fn follow_dns(instance: Instance, tx: mpsc::Sender<DnsExchange>) {
+    let mut events = Box::pin(instance.events(embed::Kinds::DNS));
+    while let Some(event) = events.next().await {
+        match event {
+            embed::Event::DnsExchange(e) => {
+                let _ = tx.try_send(dns_exchange(&e));
+            }
+            embed::Event::Lagged { kind, missed } if kind.contains(embed::Kinds::DNS) => {
+                tracing::debug!(missed, "dns exchanges dropped: the reader fell behind");
+            }
+            _ => {}
+        }
+    }
+}
+
+fn dial_stage(stage: embed::DialStage) -> &'static str {
+    match stage {
+        embed::DialStage::Dial => "dial",
+        embed::DialStage::Handshake => "handshake",
+        embed::DialStage::Transfer => "transfer",
+        _ => "other",
+    }
+}
+
+/// sail's failed connections, through every run. Those missed while
+/// behind are gone (sail's next event for a chain counts from its last).
+async fn follow_dials(instance: Instance, tx: mpsc::Sender<DialFailed>) {
+    let mut events = Box::pin(instance.events(embed::Kinds::DIAL));
+    while let Some(event) = events.next().await {
+        if let embed::Event::DialFailed { failure, count } = event {
+            let _ = tx.try_send(DialFailed {
+                chain: failure.chain,
+                destination: failure.destination,
+                stage: dial_stage(failure.stage).into(),
+                error: format!("{:?}", failure.kind),
+                count,
+                more_to_try: failure.more_to_try,
+            });
         }
     }
 }
@@ -299,6 +496,8 @@ impl Datagram for SailDatagram {
 #[async_trait]
 impl Runtime for SailRuntime {
     async fn start(&self, config: &str) -> Result<(), RuntimeError> {
+        // A new run's groups start over.
+        self.members.lock().expect("members").clear();
         self.instance
             .start(Config::Json(config.into()))
             .await
@@ -312,8 +511,33 @@ impl Runtime for SailRuntime {
             .map_err(error)
     }
 
+    /// A stop that ended with tasks still running is a stop: sail's
+    /// report of them is `stop_leftovers`, and a warn line.
     async fn stop(&self) -> Result<(), RuntimeError> {
-        self.instance.stop().await.map_err(error)
+        match self.instance.stop().await {
+            Ok(()) => Ok(()),
+            Err(_) if !self.stop_leftovers().is_empty() => {
+                tracing::warn!(left = ?self.stop_leftovers(), "sail stopped with tasks still running");
+                Ok(())
+            }
+            Err(e) => Err(error(e)),
+        }
+    }
+
+    fn stop_leftovers(&self) -> Vec<String> {
+        match self.instance.stop_report() {
+            Some(report) if !report.clean() => report
+                .tasks
+                .iter()
+                .map(|(task, n)| {
+                    format!(
+                        "sail task {task} ({n}) still running after {} ms",
+                        report.waited.as_millis()
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn states(&self) -> watch::Receiver<RuntimeState> {
@@ -352,8 +576,27 @@ impl Runtime for SailRuntime {
             .collect())
     }
 
+    /// sail tells a fallback's pin as a switch, not a selector's choice:
+    /// that one is told here.
     async fn select(&self, group: &str, member: &str) -> Result<(), RuntimeError> {
-        self.instance.select(group, member).await.map_err(error)
+        let before = self.instance.outbound(group).await.map_err(error)?;
+        self.instance.select(group, member).await.map_err(error)?;
+        let Some(info) = before.and_then(|o| o.group) else {
+            return Ok(());
+        };
+        if info.selectable && info.selected != member {
+            self.members
+                .lock()
+                .expect("members")
+                .insert(group.to_owned(), member.to_owned());
+            let _ = self.switch_tx.try_send(GroupSwitch {
+                group: group.to_owned(),
+                from: info.selected,
+                to: member.to_owned(),
+                reason: "selected".into(),
+            });
+        }
+        Ok(())
     }
 
     async fn unfix(&self, group: &str) -> Result<(), RuntimeError> {
@@ -366,6 +609,30 @@ impl Runtime for SailRuntime {
             .expect("switches")
             .take()
             .expect("group_switches is taken once")
+    }
+
+    fn routes(&self) -> mpsc::Receiver<Routed> {
+        let (tx, rx) = mpsc::channel(ROUTE_BUFFER);
+        let mut task = self.route_task.lock().expect("route task");
+        assert!(task.is_none(), "routes is taken once");
+        *task = Some(tokio::spawn(follow_routes(self.instance.clone(), tx)));
+        rx
+    }
+
+    fn dns_exchanges(&self) -> mpsc::Receiver<DnsExchange> {
+        let (tx, rx) = mpsc::channel(DNS_BUFFER);
+        let mut task = self.dns_task.lock().expect("dns task");
+        assert!(task.is_none(), "dns_exchanges is taken once");
+        *task = Some(tokio::spawn(follow_dns(self.instance.clone(), tx)));
+        rx
+    }
+
+    fn dial_failures(&self) -> mpsc::Receiver<DialFailed> {
+        self.failures
+            .lock()
+            .expect("failures")
+            .take()
+            .expect("dial_failures is taken once")
     }
 
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError> {
@@ -383,7 +650,9 @@ impl Runtime for SailRuntime {
             .map(|c| RuntimeConnection {
                 id: c.id,
                 inbound: c.inbound_tag,
-                chain: c.chains,
+                // Clash's order (members first), turned outermost first as
+                // Routed's and DialFailed's.
+                chain: c.chains.into_iter().rev().collect(),
                 network: match c.network {
                     embed::Network::Tcp => "tcp".into(),
                     embed::Network::Udp => "udp".into(),

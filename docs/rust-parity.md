@@ -40,6 +40,7 @@ Profile 本身的解码错误也有一项偏离（#45 待定项 D5，2026-10-03 
 | # | golden 步骤 | Go 0.5.21（golden） | Rust 预期 |
 | --- | --- | --- | --- |
 | D5 | `validation.json` `profile_missing`（空 Profile） | `CORE_OPERATION_FAILED` | `PROFILE_REQUIRED`（retryable=false） |
+| D6 | （golden 没有对应步骤）多入口节点的成员拨号失败后，`status.nodes[].ingresses[].consecutive_failures` 的值 | 立即标为不健康，计数抬到 `UnhealthyAfter`（`failover.markUnhealthy`） | 立即标为不健康（sail 0.16 起），计数只加 1：计数取自 sail 组的成员状态，引擎不另算一套（#179） |
 | D5 | （golden 没有对应步骤）Profile 不是合法 JSON，或者字段类型不对（例如 `port` 大于 65535） | `CORE_OPERATION_FAILED` | `PROFILE_MALFORMED`（retryable=false） |
 
 `validation.json` 的 `request_invalid_unknown_field`（请求体里有未知字段）只在 IPC 下存在，库里没有对应的情形，标为 n-a。
@@ -57,7 +58,7 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | # | 行为 | 来源 | Rust 用例 | 状态 |
 | --- | --- | --- | --- | --- |
 | N1 | 越过 `expires_at` 时进入 `Degraded{ProfileExpired}`，由定时器触发；转发照常，apply 一份未过期的 Profile 后清除 | #86（Core 定） | | todo |
-| N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护 | #86（Desktop B） | | todo（G5 实机验收） |
+| N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护。验收项：路由丢了补不回来、而 strict_route 的拦截还在（流量被挡住，不是绕过）时，进入 `Fatal` 的同时立即停止运行时，不等宿主（#208） | #86（Desktop B） | | todo（G5 实机验收） |
 | N3 | 本地代理监听打不开时，本次运行先不带它：start 照常成功，进入 `Degraded{LocalProxyUnavailable}`；之后按退避（1 s 起翻倍，最长 30 s）原地加回这个监听（`add_inbound`，不 reload），成功后恢复。sail 启动时因为这个监听失败（检查端口之后又被占用），就不带它再启动一次。stop 和 shutdown 取消重试 | host-integration 4.6、Desktop C；#148 | `ppvpn-core` `engine::proxy_tests::an_unavailable_local_proxy_degrades_and_is_retried`、`ppvpn-core` `engine::proxy_tests::a_start_failing_with_the_local_proxy_goes_on_without_it`、`ppvpn-core` `engine::proxy_tests::stop_cancels_the_local_proxy_retry` | done（运行中监听自己断掉的情况，sail 目前不报告，不在其中） |
 
 ## 硬切换前的阻塞项
@@ -74,7 +75,11 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 
 | # | 行为 | 已有依据 | 复测方法 |
 | --- | --- | --- | --- |
-| R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：windows-gnu 构建，没有开 `strict_route`（见下文"过渡实现"里的清扫表） | 等 Engine 在 Windows 上能打开 TUN 后，在 windows-latest（管理员）上加一个 CI 用例：用我们的 MSVC 构建和配置（开 `strict_route`）起 Tun 实例，强杀，再检查 Wintun 适配器、它的路由、DNS 和 WFP 过滤器都不在 |
+| R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：tun + auto_route，以及 `strict_route` 加排除段（6 个 WFP 过滤器和 sail 子层，强杀后约 0.5 秒内全部消失），都是 windows-gnu 构建；唯一的局限是没有用 MSVC 构建测（见下文"过渡实现"里的清扫表） | 等 Engine 在 Windows 上能打开 TUN 后，在 windows-latest（管理员）上加一个 CI 用例：用我们的 MSVC 构建和配置（开 `strict_route`）起 Tun 实例，强杀，再检查 Wintun 适配器、它的路由、DNS 和 WFP 过滤器都不在 |
+
+已知缺口：
+
+- Q1：WFP 动态会话和 Wintun 适配器的存活期跟着打开它们的进程，嵌入时这个进程是宿主。实例进入 `Failed`、宿主进程还在时，这些资源要由实例自己撤掉；Sail 确认这是 E2 的缺口，正在做。在它合入之前，不能假定实例失败后宿主的网络已经恢复。
 
 ## 测试宿主的约定
 
@@ -90,8 +95,8 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
 | tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 已有：`run.sh --libtest ppvpn_core.test tunrules::linux_tests::`（与 Go 并行） |
 | tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上（同一步，进程内关掉补回） |
-| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。**未通过**（continue-on-error），见下文 |
-| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | `network-change-rust`，内核切换看 `KernelSwitched` 事件。**未通过**（continue-on-error），见下文 |
+| network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E5、E6（检查项带用例编号） | `network-change-rust`：`CORE_ENGINE=rust`，严格模式；服务器从命名空间的 resolv.conf 读，网卡变化看 `NetworkChanged` 事件。通过（严格），见下文 |
+| network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | `network-change-rust`，内核切换看 `KernelSwitched` 事件。通过（严格），见下文 |
 
 **Go 0.5.21 的已知滞后（Rust 必须修好）**：前端的网卡监视器报告默认网卡变化后，dns-local 和直连拨号用的是**内核自己的**监视器，网络事件连续不断时可能晚几秒才跟上。原因是 sing-tun 每收到一个 netlink 事件，就把 1 秒的检查重新计时；各个盒子的节奏不同，某一个就可能一直被推迟（#45；和 Desktop 在 Linux 实机上恢复慢 5.2 秒（#69）是同一个根源）。CI 里 network-change 对 Go 用 `SWITCH_GRACE_MS=6000`：在 6 秒内跟上才算通过，日志里记下实际滞后和第一次查询的结果。前端监视器自己也会被同样推迟（CI 上见过 5146 ms 才报告变化），所以有宽限时，等待"变化被报告"的上限是 10 秒（`CHANGE_REPORT_MS` 可改），日志里记下实际耗时。Rust 版的 ppvpn-core 必须在 `SWITCH_GRACE_MS=0`（默认）下通过：变化在 2 秒内被报告，变化后的第一次查询就用新网络。做法是全程只用一个监视器（同一个事件源同时用于日志、DNS 和拨号），并且防抖要有上限，不能被持续的事件无限推迟。
 
@@ -100,12 +105,7 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 - Docker 多节点 lab 的场景（G2：B1–B7、t3/t4/t56/t9），在移植到 runner 之前都在这里；
 - systemd-networkd 管理的链路抖动（`TestTUNRulesSurviveNetworkdLinkFlap`），runner 上没有 networkd 管理的链路。
 
-**Rust 的 network-change（2026-10-03，在共享的 Linux 测试机上实跑，与 CI 的 `network-change-rust` 相同）**：apply 和 start 已通过；宿主无残留。其余未通过，缺的是 Engine 的这几块，补齐后去掉 continue-on-error：
-- Tun 实例还不打开 TUN（`tun interface: none`）：E1、E2、E3、E5 的查询和 updown 各模式的恢复都失败；D1 的抓包断言要求 TUN 存在，不会空过。
-- dns-local 还不是 core 自己的监听（#119）。在那之前翻译用的是 Sail 的 `local`，它走系统解析器：resolv.conf 为空时 glibc 退回 127.0.0.1，陷阱被查询（E6 失败）。
-- `NetworkChanged` 还没有事件源（Sail 的网络事件未接入）：三次"2 秒内报告变化"都失败。
-- `Engine::logs()` 还是空实现：没有 `local dns servers` 日志行。
-- updown 模式 2 需要 host IPv6 重探后切换一次内核（`KernelSwitched`）；其余模式切换次数为 0 是空过。
+**Rust 的 network-change（CI 的 `network-change-rust`）**：严格模式，必须通过（不再是 continue-on-error）。E1–E6、D1、updown 五个模式（模式 2 切换一次内核）、`local dns servers` 日志行都通过；宿主无残留。最后两项是 sail b3533615（启动时网络快照已就绪）和 D1 按地址识别 sail 的点对点 TUN 地址。
 
 D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给 lab 用的开关来构建不绑定的 core，Engine 里还没有，暂缺。D3（入口只给域名）需要节点，在 `test/lab/engine` 的 t4 里跑（`lab.sh up ... <ppvpn-core-lab>`，引擎 `rust`），同样等 TUN。
 
@@ -113,7 +113,15 @@ D2（关掉 socket 绑定的变异构建必须让 D1 失败）需要一个只给
 
 Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，Engine 不自己监视网卡，也不调用 `network_changed`。所有依赖网络变化的逻辑都由 sail 的网络事件驱动（`Event::Network`：InterfaceChanged、Moved、Offline、Restored，加上 `instance.network()` 快照），包括：NetworkChanged 事件；`Degraded{NoDefaultInterface}` 的进入和退出；探测在离线时立即返回 `NO_DEFAULT_INTERFACE`；主机 IPv6 出口的重新探测（`hostipv6::route`，在 Restored、InterfaceChanged、Moved 时触发）；离线期间不做重新探测（#69）。
 
+`KernelSwitched` 的连接数和 `draining_kernels`（以及 `kernel switched` 日志行的同名字段）暂时都是 0：要等第 1 组的排空接上。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
+
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
+
+组的切换（`Runtime::group_switches`）也来自 sail 的事件（`instance.events(Kinds::GROUP)`），不再每秒轮询组状态：fallback 和 url-test 的切换都由 sail 报告（reason 为 sail 的原因，如 `member_down`、`test_failed`、`recovered`、`pinned`、`faster`）。落后时收到 `Lagged`，就读一次当前的组，和上次报告的成员比较，不同的补报一条（reason=`lagged`）。selector 手动切换 sail 还不报告，由 `Runtime::select` 自己报告（reason=`selected`）。sail 用 `外层>内层` 命名嵌套组，Runtime 只取最后一段。
+
+连接失败（#45 的 DialFailed）：`Runtime::dial_failures` 来自 `instance.events(Kinds::DIAL)`，每条带出站链（最外层在前：路由选中的出站，再是沿途各组选的成员，直到所试的成员，如 `F>G>m`；sail 2eb3fe47 起成员在拨号前就进链）、是否还有成员可试（`more_to_try`：组内每个成员的失败各报一条，只有这条连接最后一次失败为 false）、目标、阶段（`dial`/`handshake`）、错误类型和 sail 合并的次数。Engine 还没有接（入口健康、连续失败计数和事件的形状待定）。
+
+sail 2eb3fe47 的两个已知缺口不涉及我们：嵌套在 tryall 里的组最后一次失败可能仍报 `more_to_try=true`，smart 组传输中途的重连不上报；翻译只生成 selector 和 fallback 组，没有 tryall、smart（也没有 url-test）。
 
 Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每次变化转成 `on_network`（NetworkChanged、`Degraded{NoDefaultInterface}`、探测的离线状态）；TUN 实例在最后一次变化 2 s 后重新探测主机 IPv6 出口；start 时读一次 `network()` 快照，只设离线状态，不报变化；`default interface` 日志行同 Go 的格式，但没有 `mtu`（sail 的快照不带）。
 
@@ -125,22 +133,28 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 | --- | --- | --- |
 | Linux | done | Sail 在 run_dir 的台账记下改动，强杀后由下一次 `new` 的 `sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表、fw4 drop-in；另有 tunrules 按我们的优先级段和表清扫 |
 | macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
-| Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录。未覆盖 MSVC 构建和 `strict_route`（WFP 过滤器），见"切换前要复测的项目" |
+| Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：tun + auto_route 时，强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录；`strict_route` 加排除段时，适配器、路由、DNS、6 个 WFP 过滤器和 sail 子层在强杀后约 0.5 秒内全部消失，物理默认路由不受影响。未覆盖 MSVC 构建，见"切换前要复测的项目"；实例 Failed 而宿主还在时由谁撤，见 Q1 |
 
-运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。已知缺口（Sail）：多路复用入站上，sail 断开其中的各条流，但暂时不断开承载它们的连接；系统代理监听是 mixed，没有多路复用，不受影响。
+Sail E2（实例的任务都放进作用域）进行中，sail bfe72d36 是第一步：`sail::embed::PANICS_ARE_CAUGHT` 可用，`Engine::new` 断言它为真（以 `panic = "unwind"` 构建，sail 的 panic 只让实例失败，宿主照常运行）；停止时还没结束的任务由 sail 的停止报告列出，进入 `ShutdownReport.leftovers`（`runtime: sail task <名> (<数>) still running after <ms> ms`），这样的停止不算失败，另记一行 warn。协议、TUN、DNS、入站各模块的任务还在分批移入作用域，保证尚不完整。
+
+连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`（出站链外层在前，最后一个是承载连接的出站；这是 sail 2eb3fe47 代码的实际顺序，它的文档注释写的是相反的顺序，已请 Sail 确认），地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。 Engine 用它记 Go 的 `connection` 行（debug，键名同 Go 的 `logRouted`：id、inbound、network、destination、route_domain、protocol、rule、outbound、target、target_kind，另加 action 和 error）：rule 由 `Translation::rule_ids` 还原成 profile 的规则 id，没有规则时为 `final`；outbound 同 Go，是规则选中的出站，即出站链的第一个，也就是最外层；承载连接的成员是最后一个；target 是出站被要求去的地址（`request_destination`）。和 Go 的差异：UDP 会话的 FakeIP 域名，以及 sniff 规则 override 的域名，sail 目前都标为 `request`。
+
+DNS 交换（`Runtime::dns_exchanges`）来自 sail 的 `events(Kinds::DNS)`，和路由结果一样只在 debug 时取：每个应答或失败的查询一条，客户端的和实例自己拨号用的都有（`for_instance`），sequential 服务器的每个成员各一条（`attempt`）；名字不带末尾的点，记录最多 16 条另有总数。启动时查询集中，通道容量 256，落后时丢弃并记一行丢了多少。Engine 侧的 `msg=dns` 行（远端的部分）由它生成。
+
+运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。sail 76d1cafd 起，握手中的连接和多路复用的承载连接也一并断开。
 
 ## Lab 用例（`test/lab/engine/cases`）
 
-UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golden/routing`）里没有覆盖。它们写成 lab 的用例，在有特权容器的 Linux 主机上跑：`lab.sh case <组> sing|rust`。Go 0.5.21 的输出存为 `cases/<组>.baseline.txt`。Rust 版跑同一个脚本，结论按 id 记在这里。
+UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golden/routing`）里没有覆盖。它们写成 lab 的用例，在有特权容器的 Linux 主机上跑：`lab.sh case <组> sing|rust`。Go 0.5.21 的输出存为 `cases/<组>.baseline.txt`。Rust 版跑同一个脚本，结论按 id 记在这里。每组先确认 core 在运行、`get-status` 有应答，否则整组判失败、不逐条跑：没有 core 时，“直连”“没有某行日志”这类判据也会成立。这类判据都配了正向信号：`udp.2` 要求 core 的连接日志里这条 UDP 经 `direct`；`dns-hijack.7` 要求 DoT 服务器确实应答了。
 
 | id | 行为 | Go 0.5.21 | Rust | 备注 |
 | --- | --- | --- | --- | --- |
-| `dns-hijack.1`–`.4` | 发往任意 IPv4、IPv6 地址，以及隧道自身 DNS 地址（`10.60.159.90`、`fde2:…::2`）的 53 端口查询都被劫持 | PASS | todo | |
-| `dns-hijack.5`–`.6` | 代理路由的域名由 dns-remote 解析，直连路由的域名由 dns-local 解析 | PASS | todo | |
-| `dns-hijack.7`–`.8` | 发往服务器 853 端口的 DoT 不被劫持，按普通连接路由 | PASS | todo | |
-| `udp.1`–`.2` | UDP 经选中节点；direct 规则下的 UDP 直连 | PASS | todo | |
-| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | todo | Rust 有意偏离（D4）：拒绝，见上文 |
-| `reverse-map.1`–`.4` | 不带 Host 的连接按 DNS 应答的域名交给节点；内核热切换、改选节点后仍然有效 | PASS | todo | 对应 `TestKernelSwitchKeepsReverseMapping` |
+| `dns-hijack.1`–`.4` | 发往任意 IPv4、IPv6 地址，以及隧道自身 DNS 地址（`10.60.159.90`、`fde2:…::2`）的 53 端口查询都被劫持 | PASS | PASS | |
+| `dns-hijack.5`–`.6` | 代理路由的域名由 dns-remote 解析，直连路由的域名由 dns-local 解析 | PASS | PASS | |
+| `dns-hijack.7`–`.8` | 发往服务器 853 端口的 DoT 不被劫持，按普通连接路由 | PASS | PASS | |
+| `udp.1`–`.2` | UDP 经选中节点；direct 规则下的 UDP 直连 | PASS | PASS | |
+| `udp.3` | UDP 被规则路由到 `capabilities.udp=false` 的节点（AnyTLS），仍经该节点发出 | PASS | PASS（拒绝） | Rust 有意偏离（D4）：拒绝，用例按引擎区分期望，Rust 下判“没有应答” |
+| `reverse-map.1`–`.4` | 不带 Host 的连接按 DNS 应答的域名交给节点；内核热切换、改选节点后仍然有效 | PASS | PASS | 对应 `TestKernelSwitchKeepsReverseMapping` |
 
 未覆盖：QUIC 嗅探（lab 镜像里没有 QUIC 客户端）。
 
@@ -305,11 +319,11 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| `internal/outboundlog` `TestLimiterForgetsOldDestinationsWhenFull` | Limiter forgets old destinations when full |  | todo |  |
-| `internal/outboundlog` `TestLimiterLogsOncePerWindowWithSuppressedCount` | Limiter logs once per window with suppressed count |  | todo |  |
+| `internal/outboundlog` `TestLimiterForgetsOldDestinationsWhenFull` | Limiter forgets old destinations when full | `ppvpn-core` `engine::outbound_log::tests::limiter_forgets_old_destinations_when_full` | done |  |
+| `internal/outboundlog` `TestLimiterLogsOncePerWindowWithSuppressedCount` | Limiter logs once per window with suppressed count | `ppvpn-core` `engine::outbound_log::tests::limiter_logs_once_per_window_with_suppressed_count` | done | sail 会把多次失败合成一个 `DialFailed{count}`：记一行，其余算进下一行的 `suppressed`（`a_batch_logs_one_line`） |
 | `internal/runtime` `TestApplyLogsRealityFingerprintsAtDebug` | At debug level an apply logs fingerprints of each REALITY ingress's parameters, never the values themselves. |  | todo |  |
-| `internal/runtime` `TestDirectOutboundFailuresAreLoggedAndLimited` | A failed direct connection logs the same "outbound failed" line as a node (no node_id or endpoint_key), once per destination per DirectLimit; the next line after the … |  | todo |  |
-| `internal/runtime` `TestOutboundFailuresAreLoggedAtDebug` | At debug level a failed node connection names the node, the ingress, the protocol, the stage and the error, and never the credentials: a dead port fails at dial; a … |  | todo |  |
+| `internal/runtime` `TestDirectOutboundFailuresAreLoggedAndLimited` | A failed direct connection logs the same "outbound failed" line as a node (no node_id or endpoint_key), once per destination per DirectLimit; the next line after the … | `ppvpn-core` `engine::outbound_log::tests::chains_name_their_node_and_ingress` | done | 来源是 sail 的 `DialFailed`（#179）。按目的地限流，同 Go 的 DirectLimit 10 s。和 Go 的差异：没有 `network` 和 `ms`，sail 不给；`error` 是 I/O 错误的类别，不是完整文本；多一个 `count` |
+| `internal/runtime` `TestOutboundFailuresAreLoggedAtDebug` | At debug level a failed node connection names the node, the ingress, the protocol, the stage and the error, and never the credentials: a dead port fails at dial; a … | `ppvpn-core` `engine::outbound_log::tests::each_failed_member_names_its_ingress` | done | 来源是 sail 的 `DialFailed`（2eb3fe47 起，chain 在拨号前就含成员，组内每个成员失败各发一个，带 `more_to_try`）：每个入口失败各记一行 `outbound failed`，带 node_id、endpoint_key 和 outbound。和 Go 的差异：没有 `protocol`、`network` 和 `ms`；`error` 是 I/O 错误的类别；另外多了 `count` 和 `more_to_try` |
 
 ## 8. 其他契约
 
@@ -375,7 +389,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/rulesets` `TestFailedUpdateKeepsLastGoodCopy` | A new profile version that cannot be fetched keeps the last good copy. | `ppvpn-core` `rulesets::tests::failed_update_keeps_last_good_copy` | done |  |
 | `internal/rulesets` `TestInspectClassifiesDNSMirroring` | Inspect classifies dns mirroring | `ppvpn-core` `rulesets::tests::inspect_classifies_dns_mirroring` | done | 有意偏离：Rust 只接受 sail 能读的 .srs（版本到 5；AdGuard、`network_interface_address`、`default_interface_address` 判为 `RULE_SET_INVALID`），Go 1.13 读到版本 4 且接受这些条目。sail 读不了的集合不能交给内核（`rulesets::srs::tests`） |
 | `internal/rulesets` `TestPathStaysInsideDir` | Path stays inside dir | `ppvpn-core` `rulesets::tests::path_stays_inside_dir` | done |  |
-| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done |  |
+| `internal/rulesets` `TestPrepareDownloadsVerifiesAndReusesCache` | Prepare downloads verifies and reuses cache | `ppvpn-core` `rulesets::tests::prepare_downloads_verifies_and_reuses_cache` | done | 与 Go 一致：apply 的准备阶段一下载成功就覆盖缓存文件 `<id>.srs`（Go 在 `Prepare` 的 `fetchInto` 里 install），早于翻译和切换；随后 apply 失败时，运行中的配置读到的是新文件（sail 监视它）。跟进见 #182 |
 | `internal/rulesets` `TestPrepareRejectsDigestMismatchAndForeignHosts` | Prepare rejects digest mismatch and foreign hosts | `ppvpn-core` `rulesets::tests::prepare_rejects_digest_mismatch_and_foreign_hosts` | done |  |
 | `internal/rulesets` `TestPrepareRejectsInvalidRuleSet` | Prepare rejects invalid rule set | `ppvpn-core` `rulesets::tests::prepare_rejects_invalid_rule_set` | done |  |
 | `internal/rulesets` `TestRecoverySweepsAllSetsAndRebuildsOnce` | When one set recovers, every other set that is not ready is retried at once (not on its own, possibly long, backoff), the downloads run concurrently, and the … | `ppvpn-core` `rulesets::tests::recovery_sweeps_all_sets_and_rebuilds_once` | done |  |

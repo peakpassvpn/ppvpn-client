@@ -53,8 +53,8 @@ control channel:
 Errors from core keep their code; `--json` also includes core's `field` when there is one. Core's runtime codes
 map to exits 2 (`NODE_NOT_FOUND`, `INGRESS_NOT_FOUND`, `PINS_INVALID`, `ROUTING_MODE_INVALID`), 5
 (`PROFILE_NOT_APPLIED`, `CORE_*`, `ENGINE_*`, `NO_DEFAULT_INTERFACE`), 6 (proxy or TUN features unavailable)
-and 8 (`STATE_DIR_IN_USE`, `PERMISSION_DENIED`); every other core code is a profile or request validation
-failure (exit 7).
+and 8 (`STATE_DIR_IN_USE`, `PERMISSION_DENIED`, `TUN_NAME_TAKEN`); every other core code is a profile or
+request validation failure (exit 7).
 
 A `dev` build reads the profile from the absolute path in `PPVPN_PROFILE_FILE` when that variable is set,
 instead of downloading it; release builds ignore the variable.
@@ -90,6 +90,11 @@ report core's `PROFILE_NOT_APPLIED`.
   that node. Both print the username, the password and ready-made `http://` and `socks5h://` URLs
   (`http_url` and `socks5_url` with `--json`); these are the only commands whose output contains a secret.
 - `ingress [node-id]` shows each node's pin and its ingresses' health; `*` marks the ingress in use.
+
+Core reads ingress health, traffic and connections from the running proxy only while someone asks, about once
+a second. A command asks once, so for `status`, `ingress`, `traffic` and `connections` the daemon waits for
+core's next reading (up to 1.5 seconds after a quiet period) instead of answering with the values from before
+it; `traffic` has `measured_at`, the time of the reading.
 
 With `--json`, the fields are core's (`docs/host-integration.md`, sections 4 and 5) under `"ok": true`:
 `nodes` gives `selected_node_id` and `nodes`; `traffic` gives `upload_bytes`, `download_bytes` and

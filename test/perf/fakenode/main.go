@@ -1,6 +1,7 @@
 // Command fakenode is the performance checks' stand-in node, on loopback
 // only: a Shadowsocks 2022 and an AnyTLS server (sing-box, leaving
-// directly) and an echo sink they connect to. The AnyTLS certificate is
+// directly) and the sinks they connect to: an echo, a discard (reads only:
+// upload alone) and a source (writes only: download alone). The AnyTLS certificate is
 // generated at start for "localhost" and written to -dir; the engine under
 // test trusts it through SSL_CERT_FILE. No key is ever committed.
 //
@@ -58,6 +59,23 @@ func main() {
 		log.Fatal(err)
 	}
 	go serveEcho(sink)
+	discard, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	go serve(discard, func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
+	source, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	go serve(source, func(conn net.Conn) {
+		buf := make([]byte, 32<<10)
+		for {
+			if _, err := conn.Write(buf); err != nil {
+				return
+			}
+		}
+	})
 	ssPort, anytlsPort := freePort(), freePort()
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,12 +100,28 @@ func main() {
 	}
 	defer instance.Close()
 	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
-		"ss_port": ssPort, "anytls_port": anytlsPort, "sink_port": sink.Addr().(*net.TCPAddr).Port, "certificate": certPath,
+		"ss_port": ssPort, "anytls_port": anytlsPort, "sink_port": sink.Addr().(*net.TCPAddr).Port,
+		"discard_port": discard.Addr().(*net.TCPAddr).Port, "source_port": source.Addr().(*net.TCPAddr).Port,
+		"certificate": certPath,
 	})
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 	go func() { _, _ = io.Copy(io.Discard, os.Stdin); done <- syscall.SIGTERM }()
 	<-done
+}
+
+// serve runs handle on each connection listener accepts, then closes it.
+func serve(listener net.Listener, handle func(net.Conn)) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			handle(conn)
+		}()
+	}
 }
 
 // serveEcho returns every byte it receives: upload and download of the

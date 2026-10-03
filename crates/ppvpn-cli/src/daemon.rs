@@ -8,6 +8,7 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -272,7 +273,10 @@ impl Daemon {
                 "pid": self.record.pid,
                 "core": ppvpn_core::Engine::version(),
             })),
-            Call::Status => encode(&self.engine.status()),
+            Call::Status => {
+                self.refresh().await;
+                encode(&self.engine.status())
+            }
             Call::Apply(request) => self.apply(request).await,
             Call::Start => self
                 .engine
@@ -325,8 +329,14 @@ impl Daemon {
                     }),
                 }
             }
-            Call::Traffic => encode(&self.engine.traffic()),
-            Call::Connections => encode(&self.engine.connections()),
+            Call::Traffic => {
+                self.refresh().await;
+                encode(&self.engine.traffic())
+            }
+            Call::Connections => {
+                self.refresh().await;
+                encode(&self.engine.connections())
+            }
             Call::ProbeEntrances(request) => match self.engine.probe_entrances(request).await {
                 Ok(results) => encode(&results),
                 Err(err) => Err(core(err)),
@@ -380,6 +390,43 @@ impl Daemon {
             }
             Err(err) => Err(WireError::from(&err)),
         }
+    }
+
+    /// Core reads the runtime only while a host reads (host-integration.md,
+    /// 4.4): the first read after a pause returns what was read before the
+    /// pause and makes core read again, about once a second. The CLI asks
+    /// once and exits, so the daemon waits for that next reading before it
+    /// answers with ingress health, traffic or connections.
+    async fn refresh(&self) {
+        use ppvpn_core::EngineState;
+        /// As fresh as core's own pace gives.
+        const FRESH_MS: i64 = 2_000;
+        /// Core reads again within about a second of the first read.
+        const WAIT: Duration = Duration::from_millis(1_500);
+
+        // Nothing is read from a runtime that does not run.
+        if !matches!(
+            self.engine.status().state,
+            EngineState::Running | EngineState::Degraded { .. }
+        ) {
+            return;
+        }
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let before = self.engine.traffic().measured_at.timestamp_millis();
+        if now_ms - before <= FRESH_MS {
+            return;
+        }
+        let deadline = Instant::now() + WAIT;
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if self.engine.traffic().measured_at.timestamp_millis() != before {
+                return;
+            }
+        }
+        // Core did not read in time: answer with what it has, which
+        // `measured_at` dates.
     }
 
     fn remember(&self, change: impl FnOnce(&mut ppvpn_core::ApplyRequest)) {

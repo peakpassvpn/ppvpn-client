@@ -35,8 +35,8 @@ use crate::request::RoutingMode;
 mod tun;
 #[allow(unused_imports)] // the Engine's, once it is wired to the runtime
 pub(crate) use tun::{
-    interface_name, local_dns_servers, LocalDns, Tun, IPROUTE2_RULE_INDEX, IPROUTE2_TABLE_INDEX,
-    TUN_INBOUND_TAG,
+    interface_name, local_dns_servers, LocalDns, Tun, DNS_LOCAL_TAG, IPROUTE2_RULE_INDEX,
+    IPROUTE2_TABLE_INDEX, TUN_INBOUND_TAG,
 };
 
 /// The selector over every node, in profile order.
@@ -169,6 +169,15 @@ pub(crate) struct Translation {
     /// Direct hands a global IPv6 destination its domain and resolves to
     /// IPv4 only (a host without an IPv6 path; see [`tun`]).
     pub direct_ipv6_hand_off: bool,
+    /// What made each of `route.rules`, by index: the profile rule's id, or
+    /// the engine's own (`tun`, `local-proxy`, `final`). sail names a
+    /// connection's rule by this index.
+    pub rule_ids: Vec<String>,
+    /// A sequential DNS server's member tag → the server it is a member of
+    /// and the resolver it asks: sail names the member that answered.
+    pub dns_members: BTreeMap<String, (String, String)>,
+    /// dns-local is the engine's own listener (which logs its exchanges).
+    pub dns_local_listener: bool,
 }
 
 impl std::fmt::Debug for Translation {
@@ -181,6 +190,9 @@ impl std::fmt::Debug for Translation {
             .field("groups", &self.groups)
             .field("members", &self.members)
             .field("direct_ipv6_hand_off", &self.direct_ipv6_hand_off)
+            .field("rule_ids", &self.rule_ids)
+            .field("dns_members", &self.dns_members)
+            .field("dns_local_listener", &self.dns_local_listener)
             .finish()
     }
 }
@@ -197,10 +209,14 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
             groups: BTreeMap::new(),
             members: BTreeMap::new(),
             direct_ipv6_hand_off: false,
+            rule_ids: Vec::new(),
+            dns_members: BTreeMap::new(),
+            dns_local_listener: false,
         },
         outbounds: Vec::new(),
         inbounds: Vec::new(),
         rules: Vec::new(),
+        rule_ids: Vec::new(),
         rule_sets: Vec::new(),
         has_direct: false,
         direct_resolver: None,
@@ -247,9 +263,11 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
 
     if let Some(tun) = &options.tun {
         b.tun_rules(profile, tun);
+        b.label_rules("tun");
     }
     if let Some(local_proxy) = &options.local_proxy {
         b.local_proxy(profile, local_proxy)?;
+        b.label_rules("local-proxy");
     }
     if let Some(port) = options.system_proxy_port {
         b.inbounds.push(json!({
@@ -261,6 +279,7 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }
     if let Some(tun) = &options.tun {
         b.tun_inbound(profile, tun);
+        b.label_rules("tun");
     }
     let routing = effective_routing(profile, options.mode);
     let final_tag = b.routing(&routing, &options.rule_sets)?;
@@ -305,6 +324,8 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         "outbounds".into(),
         Value::Array(std::mem::take(&mut b.outbounds)),
     );
+    b.label_rules("engine");
+    b.translation.rule_ids = std::mem::take(&mut b.rule_ids);
     let mut route = Map::new();
     if !b.rules.is_empty() {
         route.insert("rules".into(), Value::Array(std::mem::take(&mut b.rules)));
@@ -334,6 +355,38 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     translation.json =
         serde_json::to_string_pretty(&Value::Object(root)).map_err(|e| failed(e.to_string()))?;
     Ok(translation)
+}
+
+/// The credentials a translation carries (the nodes', the local proxy's):
+/// what no log line or leftover may show (contract sections 3 and 10).
+pub(crate) fn secrets(json: &str) -> Vec<String> {
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    match (key.as_str(), value) {
+                        ("password" | "uuid" | "short_id", Value::String(s)) => {
+                            // A Shadowsocks 2022 password is keys joined by ':'.
+                            out.extend(s.split(':').map(str::to_owned));
+                            out.push(s.clone());
+                        }
+                        _ => walk(value, out),
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(value) = serde_json::from_str::<Value>(json) {
+        walk(&value, &mut out);
+    }
+    // Short values would redact ordinary words.
+    out.retain(|s| s.len() >= 6);
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Runs sail's own check on a translation: it must load with no error and
@@ -392,6 +445,8 @@ struct Builder {
     outbounds: Vec<Value>,
     inbounds: Vec<Value>,
     rules: Vec<Value>,
+    /// `Translation::rule_ids` as the rules are made.
+    rule_ids: Vec<String>,
     rule_sets: Vec<Value>,
     has_direct: bool,
     /// direct's own resolver (the IPv6 hand-off).
@@ -404,6 +459,13 @@ struct Builder {
 }
 
 impl Builder {
+    /// The rules made since the last label are `label`'s.
+    fn label_rules(&mut self, label: &str) {
+        let made = self.rules.len().saturating_sub(self.rule_ids.len());
+        self.rule_ids
+            .extend(std::iter::repeat_n(label.to_owned(), made));
+    }
+
     /// One node: a single ingress is the node's outbound; several are a
     /// selector over a fallback group and the ingresses.
     fn node(
@@ -548,6 +610,8 @@ impl Builder {
                 self.reject_udp_before(&matcher, &target);
             }
             self.rules.push(Value::Object(out));
+            // Its D4 UDP rejection included.
+            self.label_rules(&rule.id);
         }
         for set in &routing.rule_sets {
             if used.contains(set.id.as_str()) {
@@ -579,6 +643,7 @@ impl Builder {
                     "action": "reject",
                     "method": "default",
                 }));
+                self.label_rules("final");
                 Ok(None)
             }
             other => Err(failed(format!("unsupported final action {other:?}"))),

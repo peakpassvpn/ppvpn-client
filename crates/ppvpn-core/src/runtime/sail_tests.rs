@@ -107,6 +107,33 @@ async fn socks(port: u16, user: &str, password: &str, to: SocketAddr) -> Option<
     (head[1] == 0).then_some(s)
 }
 
+/// A SOCKS5 CONNECT through the local proxy to `name`:`port`, as `user`:
+/// the proxy resolves the name. Whether it connected.
+async fn socks_to_domain(port: u16, user: &str, password: &str, name: &str, to: u16) -> bool {
+    let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)).await else {
+        return false;
+    };
+    let mut reply = [0u8; 2];
+    let mut auth = vec![1, user.len() as u8];
+    auth.extend_from_slice(user.as_bytes());
+    auth.push(password.len() as u8);
+    auth.extend_from_slice(password.as_bytes());
+    let mut connect = vec![5, 1, 0, 3, name.len() as u8];
+    connect.extend_from_slice(name.as_bytes());
+    connect.extend_from_slice(&to.to_be_bytes());
+    let mut head = [0u8; 10];
+    s.write_all(&[5, 1, 2]).await.is_ok()
+        && s.read_exact(&mut reply).await.is_ok()
+        && s.write_all(&auth).await.is_ok()
+        && s.read_exact(&mut reply).await.is_ok()
+        && reply == [1, 0]
+        && s.write_all(&connect).await.is_ok()
+        && tokio::time::timeout(WAIT, s.read_exact(&mut head))
+            .await
+            .is_ok_and(|r| r.is_ok())
+        && head[1] == 0
+}
+
 async fn round_trip(s: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin), text: &[u8]) {
     s.write_all(text).await.unwrap();
     let mut got = vec![0u8; text.len()];
@@ -196,7 +223,8 @@ async fn runs_sail_through_the_local_proxy() {
     );
     assert!(now_secs() + 1 >= local.started.duration_since(UNIX_EPOCH).unwrap().as_secs());
 
-    // Groups: select moves a selector and the poll reports the switch.
+    // Groups: select moves a selector and tells the switch (sail tells
+    // only fallback and url-test switches).
     // (Fixing a fallback and unfix come with the Engine's pin, on the
     // translation's fallback groups.)
     let pick = runtime
@@ -211,7 +239,7 @@ async fn runs_sail_through_the_local_proxy() {
         ("direct", false, 2)
     );
     runtime.select("pick", "direct-b").await.unwrap();
-    let switch = tokio::time::timeout(GROUP_POLL * 3, switches.recv())
+    let switch = tokio::time::timeout(WAIT, switches.recv())
         .await
         .expect("a switch")
         .unwrap();
@@ -274,6 +302,13 @@ async fn runs_sail_through_the_local_proxy() {
         "the listener is closed"
     );
     let err = runtime.traffic().await.unwrap_err();
+    assert_eq!(err.code, "not_running");
+    // Dials are taken while it starts (sail 47a1cc34), never once stopped.
+    let err = runtime
+        .dial_tcp("direct", Target::Addr(echo), WAIT)
+        .await
+        .err()
+        .expect("stopped");
     assert_eq!(err.code, "not_running");
 }
 
@@ -364,6 +399,8 @@ async fn network_changes_are_sails_own() {
         .start(&config(free_port(), &[], false))
         .await
         .unwrap();
+    // Settled at start (sail b3533615): the default interface, or offline,
+    // at generation 1, told by no event.
     assert!(runtime.network().is_some());
     assert_eq!(*changes.borrow_and_update(), None, "no change yet");
 
@@ -392,7 +429,7 @@ async fn network_changes_are_sails_own() {
         (change.change.as_str(), change.reason.as_str()),
         ("moved", "wake")
     );
-    assert!(change.generation >= 1);
+    assert!(change.generation >= 2, "after the start's: {change:?}");
     assert_eq!(change.old, change.new, "announced: the state did not move");
 
     runtime.stop().await.unwrap();
@@ -459,5 +496,243 @@ async fn inbounds_added_and_removed_while_running() {
         runtime.remove_inbound("extra").await.is_err(),
         "gone already"
     );
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_connection_is_told() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("dial-failed")).unwrap();
+    let mut failures = runtime.dial_failures();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+
+    // Nothing listens there: the direct outbound's connect is refused.
+    let closed: SocketAddr = ([127, 0, 0, 1], free_port()).into();
+    let _ = socks(port, "u1", &p1, closed).await;
+    let failed = tokio::time::timeout(WAIT, failures.recv())
+        .await
+        .expect("a failure in time")
+        .unwrap();
+    assert_eq!(
+        (failed.stage.as_str(), failed.error.as_str()),
+        ("dial", "ConnectionRefused"),
+        "{failed:?}"
+    );
+    // The route's outbound, then the member the selector took (2eb3fe47);
+    // a selector has no other member to try.
+    assert_eq!(
+        (failed.chain.as_str(), failed.more_to_try),
+        ("pick>direct", false),
+        "{failed:?}"
+    );
+    assert!(failed.count >= 1, "{failed:?}");
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_routed_connection_is_told_once_taken() {
+    let echo = echo().await;
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("routed")).unwrap();
+    let mut routes = runtime.routes();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    let mut proxied = socks(port, "u1", &p1, echo)
+        .await
+        .expect("through the proxy");
+    round_trip(&mut proxied, b"routed").await;
+    let routed = tokio::time::timeout(WAIT, async {
+        loop {
+            let r = routes.recv().await.expect("the channel");
+            if r.destination == echo.to_string() {
+                return r;
+            }
+        }
+    })
+    .await
+    .expect("routed in time");
+    // route.final is the selector pick, on direct: outermost first, the
+    // last the outbound that carried it.
+    assert_eq!(
+        (
+            routed.network.as_str(),
+            routed.inbound.as_str(),
+            routed.action.as_str(),
+            routed.rule,
+            routed.chain.clone(),
+            routed.error.as_deref(),
+        ),
+        (
+            "tcp",
+            "local",
+            "outbound",
+            None,
+            vec!["pick".to_owned(), "direct".to_owned()],
+            None
+        ),
+        "{routed:?}"
+    );
+    assert!(routed.connect_ms.is_some(), "{routed:?}");
+    runtime.stop().await.unwrap();
+    assert!(runtime.stop_leftovers().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_instance_s_own_dns_query_is_told_once_taken() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("dns-exchange")).unwrap();
+    let mut exchanges = runtime.dns_exchanges();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    // A name the proxy dials goes through sail's DNS (the system's
+    // resolver, as the configuration has no dns section); .invalid never
+    // resolves, so the exchange is told whatever the network.
+    let _ = socks_to_domain(port, "u1", &p1, "dns-exchange.invalid", 80).await;
+    let exchange = tokio::time::timeout(WAIT, async {
+        loop {
+            let e = exchanges.recv().await.expect("the channel");
+            if e.name == "dns-exchange.invalid" {
+                return e;
+            }
+        }
+    })
+    .await
+    .expect("told in time");
+    assert!(exchange.for_instance, "{exchange:?}");
+    assert!(
+        exchange.rcode.is_some() || exchange.error.is_some(),
+        "answered or failed: {exchange:?}"
+    );
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chains_are_outermost_first_through_nested_groups() {
+    let echo = echo().await;
+    let port = free_port();
+    let p1 = password();
+    // A selector in a selector: outer takes pick, pick takes direct.
+    let config = serde_json::json!({
+        "log": { "level": "info" },
+        "inbounds": [{ "type": "mixed", "tag": "local", "listen": "127.0.0.1", "listen_port": port,
+                       "users": [{ "username": "u1", "password": p1 }] }],
+        "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            { "type": "selector", "tag": "pick", "outbounds": ["direct"], "default": "direct" },
+            { "type": "selector", "tag": "outer", "outbounds": ["pick"], "default": "pick" }
+        ],
+        "route": { "final": "outer" }
+    })
+    .to_string();
+    let runtime = SailRuntime::new(options("nested")).unwrap();
+    let mut routes = runtime.routes();
+    runtime.start(&config).await.unwrap();
+    let mut proxied = socks(port, "u1", &p1, echo)
+        .await
+        .expect("through the proxy");
+    round_trip(&mut proxied, b"nested").await;
+    let want = ["outer", "pick", "direct"].map(String::from).to_vec();
+
+    // connections(): sail's Clash-shaped chains, turned.
+    let open = runtime.connections().await.unwrap();
+    let c = open
+        .iter()
+        .find(|c| c.destination == echo.to_string())
+        .expect("the proxied connection");
+    assert_eq!(c.chain, want, "connections()");
+
+    // Routed: the same order.
+    let routed = tokio::time::timeout(WAIT, async {
+        loop {
+            let r = routes.recv().await.expect("the channel");
+            if r.destination == echo.to_string() {
+                return r;
+            }
+        }
+    })
+    .await
+    .expect("routed in time");
+    assert_eq!(routed.chain, want, "routed");
+    runtime.stop().await.unwrap();
+}
+
+/// `config` with one more mixed inbound, `extra` on `port`.
+fn with_extra(config: &str, port: u16) -> String {
+    let mut config: serde_json::Value = serde_json::from_str(config).unwrap();
+    config["inbounds"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": port }));
+    config.to_string()
+}
+
+// sail's reload keeps the inbounds a run has: one that adds or removes an
+// inbound (by tag) is refused whole, an inbound added at run time
+// (add_inbound) among them. The Engine's reloads carry what it added (the
+// local and system proxy listeners are in its translation while open).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reload_keeps_the_inbounds_add_inbound_made() {
+    let (port, extra_port) = (free_port(), free_port());
+    let p1 = password();
+    let base = config(port, &[("u1", &p1)], false);
+    let extra = serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": extra_port });
+
+    // 1. The reload names the added inbound: it goes through, the listener
+    // stays.
+    let runtime = SailRuntime::new(options("reload-with")).unwrap();
+    runtime.start(&base).await.unwrap();
+    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    runtime
+        .reload(&with_extra(&base, extra_port))
+        .await
+        .expect("a reload that names the added inbound");
+    assert!(
+        TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok(),
+        "the added listener stays"
+    );
+    runtime.stop().await.unwrap();
+
+    // 2. The reload leaves it out: refused whole, and so is every such
+    // reload, while one that names it goes through. (Sail plans to diff
+    // inbounds by tag on reload; ours is the configuration's view.)
+    let runtime = SailRuntime::new(options("reload-without")).unwrap();
+    runtime.start(&base).await.unwrap();
+    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    for attempt in 1..=2 {
+        let refused = runtime.reload(&base).await;
+        assert!(
+            refused.is_err(),
+            "attempt {attempt}: a reload without the added inbound is refused"
+        );
+    }
+    assert!(
+        TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok(),
+        "the refused reloads changed nothing"
+    );
+    runtime
+        .reload(&with_extra(&base, extra_port))
+        .await
+        .expect("one that names it still goes through");
+    runtime.stop().await.unwrap();
+
+    // 3. Removed first: the reload without it goes through.
+    let runtime = SailRuntime::new(options("reload-removed")).unwrap();
+    runtime.start(&base).await.unwrap();
+    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    runtime.remove_inbound("extra").await.unwrap();
+    runtime
+        .reload(&base)
+        .await
+        .expect("a reload after remove_inbound, without it");
     runtime.stop().await.unwrap();
 }

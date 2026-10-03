@@ -406,3 +406,12 @@ async fn the_listener_answers_over_udp_and_tcp() {
         "read again after invalidate"
     );
 }
+
+#[test]
+fn response_codes_are_gos_words() {
+    use hickory_proto::op::ResponseCode;
+    assert_eq!(super::rcode(ResponseCode::NoError), "NOERROR");
+    assert_eq!(super::rcode(ResponseCode::ServFail), "SERVFAIL");
+    assert_eq!(super::rcode(ResponseCode::NXDomain), "NXDOMAIN");
+    assert_eq!(super::rcode(ResponseCode::Refused), "REFUSED");
+}
