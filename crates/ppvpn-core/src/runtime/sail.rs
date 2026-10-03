@@ -498,6 +498,34 @@ impl Runtime for SailRuntime {
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {
         self.network.subscribe()
     }
+
+    /// Through the runtime manager: sail::embed has no call for it yet; the
+    /// inbound is sail's configuration type, as sail's own API takes it.
+    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError> {
+        let inbound: sail::config::Inbound = serde_json::from_str(inbound)
+            .map_err(|e| RuntimeError::new("config", format!("inbound: {e}")))?;
+        let manager = self.instance.manager().map_err(error)?;
+        manager
+            .add_inbound(inbound)
+            .await
+            .map_err(|e| RuntimeError::new("config", e.to_string()))
+    }
+
+    /// sail stops the listener; the connections it accepted are closed
+    /// here, by their inbound, so that only this inbound's go.
+    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError> {
+        let manager = self.instance.manager().map_err(error)?;
+        manager
+            .remove_inbound(tag)
+            .await
+            .map_err(|e| RuntimeError::new("not_found", e.to_string()))?;
+        for connection in self.connections().await? {
+            if connection.inbound == tag {
+                self.close_connection(connection.id).await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Seconds since the epoch, for tests that compare `started`.
