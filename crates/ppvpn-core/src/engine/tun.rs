@@ -303,6 +303,11 @@ impl Inner {
             // is left to the next apply or start.
             return;
         }
+        // An expired profile is not built again (contract 4.1).
+        if let Some(error) = super::rule_sets::expired(&profile) {
+            self.rebuild_failed(error, "host ipv6 rebuild failed");
+            return;
+        }
         *self.tun.host.lock().expect("host ipv6") = state;
         let previous = Ipv6State {
             ipv6: true,

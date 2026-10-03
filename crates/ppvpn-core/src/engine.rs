@@ -90,6 +90,8 @@ struct Inner {
     routing: routing::RoutingGuard,
     /// The profile's rule sets: cache, downloads, refresh.
     rule_sets: crate::rulesets::Manager,
+    /// Set when `shutdown` begins: rule set downloads under way give up.
+    closing: rule_sets::Closing,
     rule_set_inputs: Mutex<rule_sets::RuleSetInputs>,
 }
 
@@ -170,6 +172,7 @@ impl Engine {
         let inner = Arc::new_cyclic(|weak| Inner {
             rule_sets: rule_sets::manager(&config, weak.clone()),
             rule_set_inputs: Mutex::default(),
+            closing: rule_sets::Closing::default(),
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
             routing: routing::RoutingGuard::default(),
@@ -193,6 +196,7 @@ impl Engine {
     /// logged. Afterwards lifecycle calls return `ENGINE_SHUT_DOWN`.
     pub async fn shutdown(&self) -> Result<ShutdownReport, Error> {
         let inner = &self.inner;
+        inner.closing.close();
         if let Some(watcher) = inner.watcher.lock().expect("watcher").take() {
             watcher.abort();
         }
@@ -477,11 +481,7 @@ impl Inner {
     fn admit(&self) -> Result<(), Error> {
         let live = self.live();
         if live.shut_down {
-            return Err(Error::new(
-                codes::ENGINE_SHUT_DOWN,
-                false,
-                "the instance was shut down",
-            ));
+            return Err(shut_down());
         }
         if live.fatal.is_some() {
             return Err(Error::new(
@@ -534,6 +534,10 @@ impl Inner {
             ..translate::Options::default()
         }
     }
+}
+
+fn shut_down() -> Error {
+    Error::new(codes::ENGINE_SHUT_DOWN, false, "the instance was shut down")
 }
 
 fn not_applied() -> Error {

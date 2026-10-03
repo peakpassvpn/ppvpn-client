@@ -7,13 +7,17 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::Utc;
+use tokio::sync::Notify;
 
-use super::{now, Inner};
+use super::{now, Error, Inner};
 use crate::config::{EngineConfig, Role};
+use crate::error::codes;
 use crate::event::Event;
 use crate::profile::{Profile, RuleSet};
 use crate::request::RoutingMode;
@@ -24,6 +28,24 @@ use crate::translate::{self, RuleSetFile, DIRECT_TAG};
 
 /// Bounds a download's connection through the runtime (as a plain one).
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The start of `shutdown`, for the waits that must give way to it.
+#[derive(Default)]
+pub(super) struct Closing {
+    closed: AtomicBool,
+    notify: Notify,
+}
+
+impl Closing {
+    pub(super) fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+}
 
 /// What the configuration uses of the rule sets: the local copies of the
 /// last snapshot made current, and the hosts their URLs are pinned to.
@@ -99,7 +121,30 @@ pub(super) fn sets_of(profile: &Profile, mode: RoutingMode) -> Vec<RuleSet> {
     translate::effective_routing(profile, mode).rule_sets
 }
 
+/// A rebuild of an expired profile fails (contract 4.1): the configuration
+/// in use stays, and the host learns it from `ReloadFailed`.
+pub(super) fn expired(profile: &Profile) -> Option<Error> {
+    let expires = profile.expires_at?;
+    (Utc::now() >= expires).then(|| {
+        Error::new(
+            codes::PROFILE_EXPIRED,
+            false,
+            "the applied profile has expired",
+        )
+    })
+}
+
 impl Inner {
+    /// A rebuild the Engine started itself failed: logged, `ReloadFailed`.
+    pub(super) fn rebuild_failed(&self, error: Error, message: &str) {
+        tracing::warn!(error = %error, "{message}");
+        self.publish(Event::ReloadFailed {
+            at: now(),
+            code: error.code.into(),
+            message: message.into(),
+        });
+    }
+
     fn rule_set_inputs(&self) -> std::sync::MutexGuard<'_, RuleSetInputs> {
         self.rule_set_inputs
             .lock()
@@ -111,13 +156,23 @@ impl Inner {
         self.rule_set_inputs().files.clone()
     }
 
-    /// The snapshot an apply translates with (downloads included).
+    /// The hosts of the snapshot in use (`ApplyRequest::allowed_rule_set_hosts`).
+    pub(super) fn rule_set_hosts(&self) -> Vec<String> {
+        self.rule_set_inputs().allowed_hosts.clone()
+    }
+
+    /// The snapshot an apply translates with (downloads included); None
+    /// when `shutdown` began meanwhile (the downloads are dropped).
     pub(super) async fn prepare_rule_sets(
         &self,
         profile: &Profile,
         mode: RoutingMode,
         allowed_hosts: &[String],
-    ) -> Snapshot {
+    ) -> Option<Snapshot> {
+        let closed = self.closing.notify.notified();
+        if self.closing.is_closed() {
+            return None;
+        }
         let sets = sets_of(profile, mode);
         if !sets.is_empty() {
             // The cache's directory, made on first use; a failure shows as
@@ -127,9 +182,13 @@ impl Inner {
                 tracing::warn!(error = %e, "rule set cache directory");
             }
         }
-        self.rule_sets
-            .prepare(&sets, allowed_hosts, Some(rulesets::PREPARE_TIMEOUT))
-            .await
+        let prepare = self
+            .rule_sets
+            .prepare(&sets, allowed_hosts, Some(rulesets::PREPARE_TIMEOUT));
+        tokio::select! {
+            snapshot = prepare => Some(snapshot),
+            () = closed => None,
+        }
     }
 
     /// After the translation made from `snapshot` took effect: it is what
@@ -203,6 +262,10 @@ impl Inner {
                 live.running.then(|| a.translation.clone()),
             )
         };
+        if let Some(error) = expired(&profile) {
+            self.rebuild_failed(error, "rule set rebuild failed");
+            return;
+        }
         let allowed_hosts = self.rule_set_inputs().allowed_hosts.clone();
         let snapshot = self
             .rule_sets
@@ -223,12 +286,7 @@ impl Inner {
         let translation = match result {
             Ok(translation) => translation,
             Err(error) => {
-                tracing::warn!(error = %error, "rule set rebuild failed");
-                self.publish(Event::ReloadFailed {
-                    at: now(),
-                    code: error.code.into(),
-                    message: "rule set rebuild failed".into(),
-                });
+                self.rebuild_failed(error, "rule set rebuild failed");
                 return;
             }
         };
