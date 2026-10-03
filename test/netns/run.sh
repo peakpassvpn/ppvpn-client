@@ -38,6 +38,7 @@ HOST_MODE=0; [ "${1:-}" = --host ] && { HOST_MODE=1; shift; }
 LIBTEST=0; [ "${1:-}" = --libtest ] && { LIBTEST=1; shift; }
 BIN=$(realpath "${1:?usage: run.sh [--host|--libtest] <test binary or script> [args]}"); shift
 T=ppvpn-t; W=ppvpn-w
+HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=${NETNS_OUT:-$(mktemp -d)}
 
 # Only what a test could leave behind is compared; values the host changes by
@@ -54,7 +55,7 @@ HOST_NIC='enP[0-9]+s[0-9]+'
 hostnic() { grep -vE "^${HOST_NIC}\$|\(${HOST_NIC}\)" || true; }
 # resolvectl status without the runner's VFs' blocks and the servers resolved
 # picks among the configured ones at the moment (Current DNS Server).
-hostlinks() { awk -v nic="\\(${HOST_NIC}\\)" '/^Link [0-9]+ / { skip = ($0 ~ nic) } !skip && !/Current DNS Server/ && NF'; }
+hostlinks() { awk -v nic="[(]${HOST_NIC}[)]" '/^Link [0-9]+ / { skip = ($0 ~ nic) } !skip && !/Current DNS Server/ && NF'; }
 snapshot() { # file
 	{
 		echo "## ip -4 rule"; ip -4 rule show
