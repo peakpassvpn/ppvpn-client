@@ -5,6 +5,7 @@
 //! `fullRestartReasons`, whose whitelist and words this keeps.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -87,7 +88,7 @@ impl Inner {
     /// `running` back; if that fails too, the instance is stopped. Called
     /// under the operation lock.
     pub(super) async fn switch_to(
-        &self,
+        self: &Arc<Self>,
         running: &Translation,
         next: &Translation,
     ) -> Result<SwitchKind, Error> {
@@ -96,6 +97,7 @@ impl Inner {
             if let Err(e) = self.runtime.reload(&next.json).await {
                 return Err(self.runtime_error(&e));
             }
+            self.guard_check("kernel switch");
             return Ok(SwitchKind::KernelSwitch);
         }
         tracing::info!(reasons = reasons.join("; "), "full restart");
@@ -105,7 +107,13 @@ impl Inner {
         result.map(|()| SwitchKind::FullRestart { reasons })
     }
 
-    async fn restart(&self, running: &Translation, next: &Translation) -> Result<(), Error> {
+    async fn restart(
+        self: &Arc<Self>,
+        running: &Translation,
+        next: &Translation,
+    ) -> Result<(), Error> {
+        // Before the TUN closes: sail's cleanup must not be undone.
+        self.guard_stopped();
         if let Err(e) = self.runtime.stop().await {
             return Err(self.runtime_error(&e));
         }
@@ -139,6 +147,8 @@ impl Inner {
             self.settle(&mut live);
         }
         self.network_started();
+        // What sail installed for the new TUN.
+        self.guard_started();
         match error {
             None => Ok(()),
             Some(error) => Err(error),

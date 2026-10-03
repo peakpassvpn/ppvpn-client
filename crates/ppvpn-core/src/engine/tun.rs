@@ -175,7 +175,7 @@ impl Inner {
         state
     }
 
-    pub(super) async fn reprobe_host_ipv6(&self) {
+    pub(super) async fn reprobe_host_ipv6(self: &Arc<Self>) {
         if self.config.role != Role::Tun || !desktop(self.config.platform) {
             return;
         }

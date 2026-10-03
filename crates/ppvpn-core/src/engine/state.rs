@@ -37,8 +37,7 @@ impl Applied {
 }
 
 /// What the TUN routing guard reports (Linux tunrules; macOS and Windows
-/// later). Its source is the guard module (separate PR).
-#[allow(dead_code)] // sent by the guard, not wired yet
+/// later). Its source is the guard (engine/routing.rs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TunRoutingSignal {
     /// Routing was deleted and is being put back: Degraded.
