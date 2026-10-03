@@ -14,7 +14,7 @@ use crate::config::{LocalProxyConfig, Platform};
 use crate::localproxy::STATE_FILE;
 use crate::runtime::fake::{Call, FakeRuntime, Op};
 use crate::runtime::RuntimeError;
-use crate::status::{CredentialsResetReason, EngineState};
+use crate::status::{CredentialsResetReason, DegradedReason, EngineState};
 use crate::translate::{LOCAL_PROXY_INBOUND_TAG, SYSTEM_PROXY_INBOUND_TAG};
 use crate::types::LocalProxyKind;
 
@@ -418,4 +418,101 @@ async fn system_proxy_start_falls_back_when_port_taken() {
         inbound(&fake, SYSTEM_PROXY_INBOUND_TAG).unwrap()["listen_port"],
         got.port
     );
+}
+
+fn adds(fake: &FakeRuntime) -> usize {
+    fake.calls()
+        .iter()
+        .filter(|c| matches!(c, Call::AddInbound(_)))
+        .count()
+}
+
+fn local_proxy_open(fake: &FakeRuntime) -> bool {
+    fake.inbounds().iter().any(|t| t == LOCAL_PROXY_INBOUND_TAG)
+}
+
+fn local_proxy_unavailable() -> EngineState {
+    EngineState::Degraded {
+        reasons: vec![DegradedReason::LocalProxyUnavailable],
+    }
+}
+
+/// Contract 4.6: a shared listener that cannot be opened leaves the run
+/// without it, `Degraded{LocalProxyUnavailable}`, and is retried with
+/// backoff (1 s, then 2 s, …) until it opens in place.
+#[tokio::test(start_paused = true)]
+async fn an_unavailable_local_proxy_degrades_and_is_retried() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (engine, fake) = standard(tmp.path(), false);
+    engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
+    // The start's check, then the first retry.
+    engine.inner.refuse_local_proxy(2);
+    engine.start().await.unwrap();
+    assert!(!local_proxy_open(&fake));
+    assert!(inbound(&fake, LOCAL_PROXY_INBOUND_TAG).is_none());
+    assert_eq!(engine.status().state, local_proxy_unavailable());
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(!local_proxy_open(&fake), "the first retry was refused");
+    assert_eq!(engine.status().state, local_proxy_unavailable());
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(local_proxy_open(&fake), "the second retry opens it");
+    assert_eq!(engine.status().state, EngineState::Running);
+    assert_eq!(reloads(&fake), 0, "opened in place");
+    assert!(fake
+        .calls()
+        .contains(&Call::AddInbound(LOCAL_PROXY_INBOUND_TAG.into())));
+
+    // Opened: no further retries.
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(adds(&fake), 1);
+}
+
+/// A start that fails with the shared listener in it (its port taken
+/// since it was checked) starts again without it, degraded, and retries.
+#[tokio::test(start_paused = true)]
+async fn a_start_failing_with_the_local_proxy_goes_on_without_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (engine, fake) = standard(tmp.path(), false);
+    engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
+    fake.fail_next(Op::Start, RuntimeError::new("config", "address in use"));
+    engine.start().await.unwrap();
+    let starts: Vec<_> = fake
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            Call::Start(config) => Some(config),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), 2);
+    assert!(starts[0].contains(LOCAL_PROXY_INBOUND_TAG));
+    assert!(!starts[1].contains(LOCAL_PROXY_INBOUND_TAG));
+    assert_eq!(engine.status().state, local_proxy_unavailable());
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(local_proxy_open(&fake));
+    assert_eq!(engine.status().state, EngineState::Running);
+}
+
+/// A stop ends the retries with the run; the next start tries the
+/// listener afresh.
+#[tokio::test(start_paused = true)]
+async fn stop_cancels_the_local_proxy_retry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (engine, fake) = standard(tmp.path(), false);
+    engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
+    engine.inner.refuse_local_proxy(1);
+    engine.start().await.unwrap();
+    assert_eq!(engine.status().state, local_proxy_unavailable());
+    engine.stop().await.unwrap();
+    assert_eq!(engine.status().state, EngineState::Configured);
+
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(adds(&fake), 0);
+
+    engine.start().await.unwrap();
+    assert!(local_proxy_open(&fake));
+    assert_eq!(engine.status().state, EngineState::Running);
 }
