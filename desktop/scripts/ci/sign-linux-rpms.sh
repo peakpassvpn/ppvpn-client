@@ -17,7 +17,8 @@
 # Environment:
 #   PKG_GPG_PRIVATE_KEY   ASCII-armored secret signing key (imported into a throwaway
 #                         GNUPGHOME removed on exit; never printed)
-#   PKG_GPG_PASSPHRASE    its passphrase, if any
+#   PKG_GPG_PASSPHRASE    its passphrase, if any. A key that has one cannot be used without
+#                         it: refused before any file is touched, never asked for
 #   PKG_GPG_FINGERPRINT   the key expected in PKG_GPG_PRIVATE_KEY (required: the production
 #                         fingerprint, or a test key's)
 #
@@ -102,16 +103,26 @@ RPM="$DIR/$RPM_FILE"
 [[ -f "$RPM" ]] || die "$META: $RPM_FILE not found"
 
 # --- the signing key ----------------------------------------------------------------------
-printf '%s\n' "$PKG_GPG_PRIVATE_KEY" | gpg --batch --quiet --import 2>/dev/null \
+# Every gpg that may use the secret key reads its passphrase from this file (empty when there
+# is none) through a loopback pinentry, and so never falls back to an interactive one.
+PASSFILE="$GNUPGHOME/passphrase"
+(umask 077 && printf '%s' "${PKG_GPG_PASSPHRASE:-}" >"$PASSFILE")
+GPG_SECRET=(--batch --pinentry-mode loopback --passphrase-file "$PASSFILE")
+printf '%s\n' "$PKG_GPG_PRIVATE_KEY" | gpg "${GPG_SECRET[@]}" --quiet --import 2>/dev/null \
   || die "could not import PKG_GPG_PRIVATE_KEY"
 SECRET_KEYS="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10}')"
 grep -qx "$FINGERPRINT" <<<"$SECRET_KEYS" || die "the signing key is not $FINGERPRINT"
-RPM_SIGN_EXTRA=""
-if [[ -n "${PKG_GPG_PASSPHRASE:-}" ]]; then
-  printf '%s' "$PKG_GPG_PASSPHRASE" >"$GNUPGHOME/passphrase"
-  chmod 600 "$GNUPGHOME/passphrase"
-  RPM_SIGN_EXTRA="--pinentry-mode loopback --passphrase-file $GNUPGHOME/passphrase"
+SIGN=(gpg "${GPG_SECRET[@]}" --yes --local-user "$FINGERPRINT")
+# The key must be usable before anything is touched. gpg never gets to ask for a passphrase
+# (there is nobody to answer on a runner): it reads the file, or fails.
+printf 'ppvpn\n' >"$WORK/probe"
+if ! "${SIGN[@]}" --armor --detach-sign -o "$WORK/probe.asc" "$WORK/probe" 2>"$WORK/probe.err"; then
+  [[ -n "${PKG_GPG_PASSPHRASE:-}" ]] \
+    || die "the signing key cannot be used: PKG_GPG_PASSPHRASE is missing (the key has a passphrase)"
+  cat "$WORK/probe.err" >&2
+  die "the signing key cannot be used: PKG_GPG_PASSPHRASE is wrong (or the key cannot sign)"
 fi
+RPM_SIGN_EXTRA="--batch --pinentry-mode loopback --passphrase-file $PASSFILE"
 gpg --batch --armor --export "$FINGERPRINT" >"$WORK/ppvpn.asc"
 # rpm names the key that made a signature by its 64-bit ID: the primary key's or a subkey's.
 KEY_IDS="$(gpg --batch --list-keys --with-colons "$FINGERPRINT" \
@@ -147,7 +158,7 @@ check_rpm() {
 sign_rpm() {
   # %__gpg differs between distributions (Ubuntu's rpm expects gpg2): name ours.
   rpmsign --define "__gpg $(command -v gpg)" --define "_gpg_name $FINGERPRINT" --define "_gpg_path $GNUPGHOME" \
-    ${RPM_SIGN_EXTRA:+--define "_gpg_sign_cmd_extra_args $RPM_SIGN_EXTRA"} --addsign "$1" >/dev/null
+    --define "_gpg_sign_cmd_extra_args $RPM_SIGN_EXTRA" --addsign "$1" >/dev/null
 }
 
 # --- the app's rpm ------------------------------------------------------------------------

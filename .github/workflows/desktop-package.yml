@@ -386,7 +386,9 @@ jobs:
       # What a release does: the production key has a passphrase, handed to
       # gpg and to rpmsign through a loopback pinentry. A second key made
       # here, with a random passphrase, signs a fresh copy of the unsigned
-      # packages and a site of its own; the wrong passphrase must sign nothing.
+      # packages and a site of its own. Without the passphrase, or with a
+      # wrong one, the scripts must refuse before touching anything, and at
+      # once: a script that waited to be given one would hang a release.
       - name: Sign and build with a passphrase-protected key
         run: |
           P="$T/passphrase"
@@ -448,12 +450,41 @@ jobs:
               --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$2"
           }
 
-          # The wrong passphrase: nothing is signed, the rpm and its metadata stay as built.
-          if with_key "$wrong" desktop/scripts/ci/sign-linux-rpms.sh "$release"; then
-            echo "signed with the wrong passphrase" >&2; exit 1
-          fi
-          test "$(digest "$release/$RPM_FILE")" = "$unsigned"
-          test "$(jq -er .sha256 "$rpm_meta")" = "$unsigned"
+          # A refusal: not a success, not the timeout (124, or 137 once killed), and
+          # the script's own message about the passphrase.
+          refused() {   # exit status, what the message says about the passphrase
+            cat "$P/refusal" >&2
+            case "$1" in
+              0|124|137) echo "expected a prompt refusal, got exit status $1" >&2; exit 1 ;;
+            esac
+            if ! grep -q "the signing key cannot be used: PKG_GPG_PASSPHRASE is $2" "$P/refusal"; then
+              echo "the refusal does not say the passphrase is $2" >&2; exit 1
+            fi
+          }
+          as_built() {
+            test "$(digest "$release/$RPM_FILE")" = "$unsigned"
+            test "$(jq -er .sha256 "$rpm_meta")" = "$unsigned"
+            test "$(jq -er .length "$rpm_meta")" = "$(jq -er .length dist/release-meta-linux-x64-rpm.json)"
+          }
+
+          # No passphrase, unset and then empty: nothing is signed, the rpm and its
+          # metadata stay as built.
+          status=0
+          PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" timeout -k 5 60 \
+            env -u PKG_GPG_PASSPHRASE desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+          refused "$status" missing
+          as_built
+          status=0
+          PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" PKG_GPG_PASSPHRASE='' timeout -k 5 60 \
+            desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+          refused "$status" missing
+          as_built
+
+          # The wrong passphrase: the same.
+          status=0
+          with_key "$wrong" timeout -k 5 60 desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+          refused "$status" wrong
+          as_built
 
           # The right one: signed, verifiable with the key's public half, metadata rewritten.
           with_key "$passphrase" desktop/scripts/ci/sign-linux-rpms.sh "$release"
@@ -469,10 +500,17 @@ jobs:
             grep -q 'digests signatures OK' <<<"$verdict"
           done
 
-          # The repositories: the wrong passphrase leaves no output directory.
-          if build "$wrong" "$P/refused"; then
-            echo "built with the wrong passphrase" >&2; exit 1
-          fi
+          # The repositories: no passphrase, or the wrong one, leaves no output directory.
+          status=0
+          PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" timeout -k 5 60 \
+            env -u PKG_GPG_PASSPHRASE desktop/scripts/ci/build-linux-repo.sh --channel stable \
+            --releases "$P/releases" --download-base "$REPO_URL/download" --site-base "$REPO_URL" \
+            --out "$P/refused" 2>"$P/refusal" || status=$?
+          refused "$status" missing
+          test ! -e "$P/refused"
+          status=0
+          build "$wrong" "$P/refused" 2>"$P/refusal" || status=$?
+          refused "$status" wrong
           test ! -e "$P/refused"
           build "$passphrase" "$P/site"
           dist_dir="$P/site/linux/apt/dists/stable"

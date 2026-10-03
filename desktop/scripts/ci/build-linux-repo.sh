@@ -43,7 +43,8 @@
 # Environment:
 #   PKG_GPG_PRIVATE_KEY   ASCII-armored secret signing key (imported into a throwaway
 #                         GNUPGHOME removed on exit; never printed)
-#   PKG_GPG_PASSPHRASE    its passphrase, if any
+#   PKG_GPG_PASSPHRASE    its passphrase, if any. A key that has one cannot be used without
+#                         it: refused before anything is built, never asked for
 #   PKG_GPG_FINGERPRINT   expected signing key (default: the production key)
 #   PKG_ALLOW_HTTP=1      accept http:// bases. For the CI self-test only, which serves the
 #                         site from the runner itself; a published site is https.
@@ -198,15 +199,24 @@ done <"$PLAN"
 [[ ${#TAGS[@]} -gt 0 ]] || die "$RELEASES has no release"
 
 # --- 2. the signing key ---------------------------------------------------------------------
-printf '%s\n' "$PKG_GPG_PRIVATE_KEY" | gpg --batch --quiet --import 2>/dev/null \
+# Every gpg that may use the secret key reads its passphrase from this file (empty when there
+# is none) through a loopback pinentry, and so never falls back to an interactive one.
+PASSFILE="$GNUPGHOME/passphrase"
+(umask 077 && printf '%s' "${PKG_GPG_PASSPHRASE:-}" >"$PASSFILE")
+GPG_SECRET=(--batch --pinentry-mode loopback --passphrase-file "$PASSFILE")
+printf '%s\n' "$PKG_GPG_PRIVATE_KEY" | gpg "${GPG_SECRET[@]}" --quiet --import 2>/dev/null \
   || die "could not import PKG_GPG_PRIVATE_KEY"
 SECRET_KEYS="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10}')"
 grep -qx "$FINGERPRINT" <<<"$SECRET_KEYS" || die "the signing key is not $FINGERPRINT"
-SIGN=(gpg --batch --yes --local-user "$FINGERPRINT")
-if [[ -n "${PKG_GPG_PASSPHRASE:-}" ]]; then
-  printf '%s' "$PKG_GPG_PASSPHRASE" >"$GNUPGHOME/passphrase"
-  chmod 600 "$GNUPGHOME/passphrase"
-  SIGN+=(--pinentry-mode loopback --passphrase-file "$GNUPGHOME/passphrase")
+SIGN=(gpg "${GPG_SECRET[@]}" --yes --local-user "$FINGERPRINT")
+# The key must be usable before anything is touched. gpg never gets to ask for a passphrase
+# (there is nobody to answer on a runner): it reads the file, or fails.
+printf 'ppvpn\n' >"$WORK/probe"
+if ! "${SIGN[@]}" --armor --detach-sign -o "$WORK/probe.asc" "$WORK/probe" 2>"$WORK/probe.err"; then
+  [[ -n "${PKG_GPG_PASSPHRASE:-}" ]] \
+    || die "the signing key cannot be used: PKG_GPG_PASSPHRASE is missing (the key has a passphrase)"
+  cat "$WORK/probe.err" >&2
+  die "the signing key cannot be used: PKG_GPG_PASSPHRASE is wrong (or the key cannot sign)"
 fi
 gpg --batch --armor --export "$FINGERPRINT" >"$WORK/ppvpn.asc"
 gpg --batch --export "$FINGERPRINT" >"$WORK/keyring.gpg"
