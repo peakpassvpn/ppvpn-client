@@ -232,10 +232,12 @@ async fn a_full_restart_retries_a_left_out_local_proxy() {
         .clone();
     let mut next = running.clone();
     let mut config: Value = serde_json::from_str(&next.json).unwrap();
-    config["inbounds"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": 1 }));
+    // Left out, the local proxy was the only listener: none is left.
+    let extra = json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": 1 });
+    match config["inbounds"].as_array_mut() {
+        Some(inbounds) => inbounds.push(extra),
+        None => config["inbounds"] = json!([extra]),
+    }
     next.json = config.to_string();
     let switch = engine.inner.switch_to(&running, &next).await.unwrap();
     assert!(matches!(switch, SwitchKind::FullRestart { .. }));
