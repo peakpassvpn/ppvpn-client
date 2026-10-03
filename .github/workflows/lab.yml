@@ -48,6 +48,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
+          targets: x86_64-unknown-linux-musl
+      # sail-cli runs in the Alpine nodes: a musl build (ci-build.sh).
+      - name: musl-gcc
+        run: sudo apt-get install -y --no-install-recommends musl-tools >/dev/null
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: lab
@@ -59,15 +63,18 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.LAB_BIN }}/sail-${{ steps.sail.outputs.rev }}
-          key: lab-sail-cli-${{ steps.sail.outputs.rev }}-${{ runner.os }}
-      # BoringSSL as btls publishes it (verified), as in rust.yml.
+          key: lab-sail-cli-${{ steps.sail.outputs.rev }}-x86_64-unknown-linux-musl
+      # BoringSSL as btls publishes it (verified), as in rust.yml; the musl
+      # one for sail-cli.
       - name: prebuilt BoringSSL
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
             https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
-          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+          for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
+            bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock $target | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+          done
       - name: build the lab's binaries
         run: test/lab/engine/ci-build.sh "$LAB_BIN"
       - name: up
@@ -116,6 +123,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
+          targets: x86_64-unknown-linux-musl
+      # sail-cli runs in the Alpine nodes: a musl build (ci-build.sh).
+      - name: musl-gcc
+        run: sudo apt-get install -y --no-install-recommends musl-tools >/dev/null
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: lab
@@ -126,14 +137,16 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.LAB_BIN }}/sail-${{ steps.sail.outputs.rev }}
-          key: lab-sail-cli-${{ steps.sail.outputs.rev }}-${{ runner.os }}
+          key: lab-sail-cli-${{ steps.sail.outputs.rev }}-x86_64-unknown-linux-musl
       - name: prebuilt BoringSSL
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
             https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
-          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+          for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
+            bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock $target | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+          done
       - name: build the lab's binaries
         run: test/lab/engine/ci-build.sh "$LAB_BIN"
       - name: up
