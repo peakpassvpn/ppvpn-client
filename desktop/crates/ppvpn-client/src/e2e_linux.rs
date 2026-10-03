@@ -453,7 +453,7 @@ impl FakeNode {
 
     fn routed(&self, destination: &str) -> bool {
         let wanted = format!("conn {destination}");
-        self.seen.lock().unwrap().iter().any(|line| *line == wanted)
+        self.seen.lock().unwrap().contains(&wanted)
     }
 
     fn stop(mut self) {
