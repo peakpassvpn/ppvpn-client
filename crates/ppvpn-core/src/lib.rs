@@ -54,6 +54,15 @@ pub mod internal {
     pub fn validate_request(request: &ApplyRequest, now: DateTime<Utc>) -> Result<Profile, Error> {
         crate::request::validate_request(request, now)
     }
+
+    /// An Engine on an in-memory runtime that runs nothing: the contract
+    /// golden drives lifecycle, selection and pins on it without sail.
+    pub fn engine_on_fake_runtime(config: crate::EngineConfig) -> crate::Engine {
+        crate::Engine::with_runtime(
+            config,
+            std::sync::Arc::new(crate::runtime::fake::FakeRuntime::default()),
+        )
+    }
 }
 
 /// Whether a sail runtime with this id runs in this process. Here so that

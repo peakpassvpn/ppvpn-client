@@ -1,8 +1,10 @@
 //! An in-memory [`Runtime`] for the Engine's tests: it runs nothing, keeps
-//! the config it was given, records every call and fails on request.
+//! the config it was given, records every call and fails on request. Its
+//! groups are the config's selectors and fallbacks (selection kept across a
+//! reload for the same tag, as sail does) unless a test sets them.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use super::*;
@@ -40,6 +42,8 @@ pub(crate) struct FakeRuntime {
     config: Mutex<Option<String>>,
     failures: Mutex<HashMap<Op, RuntimeError>>,
     groups: Mutex<Vec<GroupInfo>>,
+    /// Set by `set_groups`: the config no longer decides them.
+    explicit_groups: AtomicBool,
     connections: Mutex<Vec<RuntimeConnection>>,
     traffic: Mutex<RuntimeTraffic>,
     state: watch::Sender<RuntimeState>,
@@ -60,6 +64,7 @@ impl Default for FakeRuntime {
             config: Mutex::default(),
             failures: Mutex::default(),
             groups: Mutex::default(),
+            explicit_groups: AtomicBool::new(false),
             connections: Mutex::default(),
             traffic: Mutex::default(),
             state: watch::channel(RuntimeState::Idle).0,
@@ -86,7 +91,56 @@ impl FakeRuntime {
     }
 
     pub(crate) fn set_groups(&self, groups: Vec<GroupInfo>) {
+        self.explicit_groups.store(true, Ordering::Relaxed);
         *self.groups.lock().unwrap() = groups;
+    }
+
+    /// The groups of `config` as sail would run them: a selector on its
+    /// default, a fallback on its first member, never checked.
+    fn take_groups_of(&self, config: &str) {
+        if self.explicit_groups.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(config) else {
+            return;
+        };
+        let mut groups = self.groups.lock().unwrap();
+        let previous = std::mem::take(&mut *groups);
+        for outbound in value["outbounds"].as_array().into_iter().flatten() {
+            let kind = outbound["type"].as_str().unwrap_or("");
+            if kind != "selector" && kind != "fallback" {
+                continue;
+            }
+            let tag = outbound["tag"].as_str().unwrap_or("").to_owned();
+            let members: Vec<String> = outbound["outbounds"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m.as_str().map(str::to_owned))
+                .collect();
+            let kept = previous
+                .iter()
+                .find(|g| g.tag == tag && members.contains(&g.now));
+            let now = match (kept, outbound["default"].as_str()) {
+                (Some(g), _) => g.now.clone(),
+                (None, Some(default)) => default.to_owned(),
+                (None, None) => members.first().cloned().unwrap_or_default(),
+            };
+            groups.push(GroupInfo {
+                tag,
+                now,
+                members: members
+                    .into_iter()
+                    .map(|tag| MemberInfo {
+                        tag,
+                        alive: None,
+                        last_check: None,
+                        consecutive_failures: 0,
+                    })
+                    .collect(),
+                fixed: kept.is_some_and(|g| g.fixed),
+            });
+        }
     }
 
     pub(crate) fn set_connections(&self, connections: Vec<RuntimeConnection>) {
@@ -161,6 +215,7 @@ impl Runtime for FakeRuntime {
             return Err(error);
         }
         *self.config.lock().unwrap() = Some(config.to_owned());
+        self.take_groups_of(config);
         self.state.send_replace(RuntimeState::Running);
         Ok(())
     }
@@ -170,6 +225,7 @@ impl Runtime for FakeRuntime {
         self.running()?;
         self.check(Op::Reload)?;
         *self.config.lock().unwrap() = Some(config.to_owned());
+        self.take_groups_of(config);
         Ok(())
     }
 
@@ -390,6 +446,33 @@ mod tests {
             "not_running",
             "a runtime is usable as a trait object"
         );
+    }
+
+    #[tokio::test]
+    async fn groups_follow_the_config_and_keep_their_selection() {
+        let runtime = FakeRuntime::default();
+        let config = |default: &str| {
+            serde_json::json!({ "outbounds": [
+                { "type": "direct", "tag": "a" },
+                { "type": "direct", "tag": "b" },
+                { "type": "selector", "tag": "pick", "outbounds": ["a", "b"], "default": default },
+                { "type": "fallback", "tag": "auto", "outbounds": ["b", "a"] },
+            ]})
+            .to_string()
+        };
+        runtime.start(&config("a")).await.unwrap();
+        let groups = runtime.groups().await.unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.tag.as_str(), g.now.as_str()))
+                .collect::<Vec<_>>(),
+            [("pick", "a"), ("auto", "b")]
+        );
+        runtime.select("pick", "b").await.unwrap();
+        runtime.reload(&config("a")).await.unwrap();
+        let groups = runtime.groups().await.unwrap();
+        assert_eq!((groups[0].now.as_str(), groups[0].fixed), ("b", true));
     }
 
     #[tokio::test]
