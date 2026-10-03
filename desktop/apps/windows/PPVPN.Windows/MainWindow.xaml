@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="PPVPN.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:PPVPN.Windows"
+    xmlns:loc="using:PPVPN.Windows.Strings"
+    xmlns:views="using:PPVPN.Windows.Views">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="Root">
+        <Grid.Resources>
+            <!-- Account menu header: avatar initial (Tag), email (Text), subtitle (KeyboardAcceleratorTextOverride). -->
+            <Style x:Key="AccountHeaderItemStyle" TargetType="MenuFlyoutItem">
+                <Setter Property="IsHitTestVisible" Value="False" />
+                <Setter Property="IsTabStop" Value="False" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="MenuFlyoutItem">
+                            <Grid Padding="12,8,12,8" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border
+                                    Width="32"
+                                    Height="32"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                    CornerRadius="16">
+                                    <TextBlock
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                                        Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" />
+                                </Border>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock FontWeight="SemiBold" Text="{TemplateBinding Text}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{TemplateBinding KeyboardAcceleratorTextOverride}" />
+                                </StackPanel>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Grid.Resources>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Title bar (40): icon 16, "PPVPN", status line (dot + text). Caption buttons are the system's (46×32). -->
+        <Grid x:Name="AppTitleBar" Height="40">
+            <StackPanel
+                Margin="16,0,0,0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="8">
+                <Image
+                    Width="16"
+                    Height="16"
+                    VerticalAlignment="Center"
+                    Source="ms-appx:///Assets/AppLogo.png" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontSize="12"
+                    Text="PPVPN" />
+                <Ellipse
+                    Width="7"
+                    Height="7"
+                    Margin="6,1,0,0"
+                    VerticalAlignment="Center"
+                    Fill="{x:Bind local:Ui.ToneBrush(ViewModel.StatusDotTone), Mode=OneWay}" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontSize="12"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{x:Bind ViewModel.StatusLine, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Restoring the saved session. -->
+        <ProgressRing
+            Grid.Row="1"
+            Width="32"
+            Height="32"
+            IsActive="{x:Bind ViewModel.IsRestoring, Mode=OneWay}"
+            Visibility="{x:Bind ViewModel.IsRestoring, Mode=OneWay}" />
+
+        <NavigationView
+            x:Name="Nav"
+            Grid.Row="1"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="False"
+            IsTitleBarAutoPaddingEnabled="False"
+            PaneDisplayMode="Top"
+            SelectionChanged="OnNavigationSelectionChanged"
+            Visibility="{x:Bind local:Ui.Collapsed(ViewModel.IsRestoring), Mode=OneWay}">
+            <NavigationView.MenuItems>
+                <NavigationViewItem
+                    Content="{loc:S Key=overview}"
+                    Tag="overview"
+                    Visibility="{x:Bind ViewModel.IsSignedIn, Mode=OneWay}">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE80F;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem
+                    Content="{loc:S Key=nodes}"
+                    Tag="nodes"
+                    Visibility="{x:Bind ViewModel.IsSignedIn, Mode=OneWay}">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE909;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem
+                    Content="{loc:S Key=logs}"
+                    Tag="logs"
+                    Visibility="{x:Bind ViewModel.IsSignedIn, Mode=OneWay}">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8A5;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <!-- Right end of the navigation row: messages, account, settings. -->
+            <NavigationView.PaneFooter>
+                <StackPanel
+                    Margin="0,0,8,0"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="4">
+                    <Button
+                        x:Name="BellButton"
+                        Width="40"
+                        Height="36"
+                        Padding="0"
+                        AutomationProperties.Name="{loc:S Key=messages}"
+                        Click="OnBellClick"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="{loc:S Key=msgCenter}"
+                        Visibility="{x:Bind ViewModel.IsSignedIn, Mode=OneWay}">
+                        <Grid Width="40" Height="36">
+                            <FontIcon FontSize="16" Glyph="&#xEA8F;" />
+                            <InfoBadge
+                                Margin="0,2,2,0"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Top"
+                                Style="{StaticResource TextInfoBadgeStyle}"
+                                Tag="{x:Bind ViewModel.UnreadBadgeText, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.HasUnreadNotifications, Mode=OneWay}" />
+                        </Grid>
+                    </Button>
+                    <DropDownButton
+                        x:Name="AccountButton"
+                        Height="36"
+                        Padding="6,0,8,0"
+                        AutomationProperties.Name="{loc:S Key=account}"
+                        Background="Transparent"
+                        BorderBrush="Transparent"
+                        Visibility="{x:Bind ViewModel.IsSignedIn, Mode=OneWay}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Border
+                                Width="24"
+                                Height="24"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                CornerRadius="12">
+                                <TextBlock
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    FontSize="12"
+                                    FontWeight="SemiBold"
+                                    Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                                    Text="{x:Bind ViewModel.AvatarInitial, Mode=OneWay}" />
+                            </Border>
+                            <TextBlock
+                                MaxWidth="160"
+                                VerticalAlignment="Center"
+                                Text="{x:Bind ViewModel.TeamName, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <DropDownButton.Flyout>
+                            <MenuFlyout x:Name="AccountMenu" Opening="OnAccountMenuOpening" Placement="BottomEdgeAlignedRight" />
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
+                    <Grid>
+                        <Button
+                            Width="40"
+                            Height="36"
+                            Padding="0"
+                            AutomationProperties.Name="{loc:S Key=settings}"
+                            Click="OnSettingsClick"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            ToolTipService.ToolTip="{loc:S Key=settings}">
+                            <FontIcon FontSize="16" Glyph="&#xE713;" />
+                        </Button>
+                        <Border
+                            x:Name="SettingsPill"
+                            Width="16"
+                            Height="3"
+                            Margin="0,0,0,1"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Bottom"
+                            Background="{ThemeResource AccentFillColorDefaultBrush}"
+                            CornerRadius="1.5"
+                            IsHitTestVisible="False"
+                            Visibility="Collapsed" />
+                    </Grid>
+                </StackPanel>
+            </NavigationView.PaneFooter>
+
+            <Grid>
+                <Frame x:Name="ContentFrame" />
+                <views:LoginView x:Name="Login" Visibility="Collapsed" />
+            </Grid>
+        </NavigationView>
+    </Grid>
+</Window>

@@ -1,0 +1,371 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="PPVPN.Windows.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:PPVPN.Windows.Controls"
+    xmlns:local="using:PPVPN.Windows"
+    xmlns:loc="using:PPVPN.Windows.Strings"
+    xmlns:views="using:PPVPN.Windows.Views"
+    NavigationCacheMode="Required">
+
+    <Page.Resources>
+        <Style x:Key="RowGrid" TargetType="Grid">
+            <Setter Property="Padding" Value="20,14,20,14" />
+            <Setter Property="ColumnSpacing" Value="16" />
+            <Setter Property="MinHeight" Value="48" />
+        </Style>
+        <Style x:Key="RowIcon" TargetType="FontIcon">
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="SettingsToggle" TargetType="ToggleSwitch">
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+        </Style>
+    </Page.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <!-- The Grid centres the capped column by its real width; directly in the ScrollViewer it was
+             centred by its desired width and overflowed the window above ~1008 px. -->
+        <Grid>
+            <StackPanel MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PageContentPadding}">
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <!-- Signed out, Settings is reached from the gear, the tray or Ctrl+,: a way back to sign-in. -->
+                    <Button
+                        Width="36"
+                        Height="36"
+                        Padding="0"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="{loc:S Key=backToLogin}"
+                        Click="OnBack"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        ToolTipService.ToolTip="{loc:S Key=backToLogin}"
+                        Visibility="{x:Bind local:Ui.Collapsed(ViewModel.ShowAccountSection), Mode=OneWay}">
+                        <FontIcon FontSize="16" Glyph="&#xE72B;" />
+                    </Button>
+                    <TextBlock Grid.Column="1" Style="{StaticResource PageTitleStyle}" Text="{loc:S Key=settings}" />
+                </Grid>
+
+                <!-- General -->
+                <TextBlock Style="{StaticResource GroupHeaderStyle}" Text="{loc:S Key=general}" />
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel>
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE790;" Style="{StaticResource RowIcon}" />
+                            <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{loc:S Key=appearance}" />
+                            <ComboBox
+                                Grid.Column="2"
+                                MinWidth="160"
+                                AutomationProperties.Name="{loc:S Key=appearance}"
+                                SelectedIndex="{x:Bind ViewModel.AppearanceIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="{loc:S Key=sys}" />
+                                <ComboBoxItem Content="{loc:S Key=light}" />
+                                <ComboBoxItem Content="{loc:S Key=dark}" />
+                            </ComboBox>
+                        </Grid>
+                        <Border Style="{StaticResource RowDividerStyle}" />
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE7E8;" Style="{StaticResource RowIcon}" />
+                            <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{loc:S Key=launchAtLogin}" />
+                            <ToggleSwitch
+                                Grid.Column="2"
+                                AutomationProperties.Name="{loc:S Key=launchAtLogin}"
+                                IsOn="{x:Bind ViewModel.LaunchAtLogin, Mode=TwoWay}"
+                                OffContent="{loc:S Key=off}"
+                                OnContent="{loc:S Key=on}"
+                                Style="{StaticResource SettingsToggle}" />
+                        </Grid>
+                        <!-- Turned off in Settings › Apps › Startup: only Windows can turn it back on. -->
+                        <Grid
+                            Margin="56,-6,20,14"
+                            ColumnSpacing="8"
+                            Visibility="{x:Bind ViewModel.LaunchAtLoginNeedsApproval, Mode=OneWay}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon
+                                VerticalAlignment="Center"
+                                FontSize="14"
+                                Foreground="{ThemeResource WarningBrush}"
+                                Glyph="&#xE7BA;" />
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{loc:S Key=winLaunchApprove}"
+                                TextWrapping="Wrap" />
+                            <HyperlinkButton Grid.Column="2" Command="{x:Bind ViewModel.OpenLaunchAtLoginSettingsCommand}" Content="{loc:S Key=openWinStartup}" />
+                        </Grid>
+                        <Border Style="{StaticResource RowDividerStyle}" />
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE895;" Style="{StaticResource RowIcon}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{loc:S Key=autoUpdate}" />
+                                <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{x:Bind ViewModel.VersionText}" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                Grid.Column="2"
+                                AutomationProperties.Name="{loc:S Key=autoUpdate}"
+                                IsEnabled="{x:Bind ViewModel.ShowUpdates}"
+                                IsOn="{x:Bind ViewModel.AutoCheckUpdates, Mode=TwoWay}"
+                                OffContent="{loc:S Key=off}"
+                                OnContent="{loc:S Key=on}"
+                                Style="{StaticResource SettingsToggle}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Account (signed in only) -->
+                <StackPanel Visibility="{x:Bind ViewModel.ShowAccountSection, Mode=OneWay}">
+                    <TextBlock Style="{StaticResource GroupHeaderStyle}" Text="{loc:S Key=account}" />
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <Grid Style="{StaticResource RowGrid}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xE77B;" Style="{StaticResource RowIcon}" />
+                                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{loc:S Key=user}" />
+                                <TextBlock
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    IsTextSelectionEnabled="True"
+                                    Text="{x:Bind Main.AccountEmail, Mode=OneWay}" />
+                            </Grid>
+                            <Border Style="{StaticResource RowDividerStyle}" />
+                            <Grid Style="{StaticResource RowGrid}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xE716;" Style="{StaticResource RowIcon}" />
+                                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{loc:S Key=team}" />
+                                <Grid Grid.Column="2">
+                                    <controls:TeamComboBox
+                                        MinWidth="180"
+                                        AutomationProperties.Name="{loc:S Key=team}"
+                                        DisplayMemberPath="Title"
+                                        ItemsSource="{x:Bind Main.Teams}"
+                                        SelectedItem="{x:Bind Main.SelectedTeam, Mode=TwoWay}"
+                                        Visibility="{x:Bind Main.HasTeamChoice, Mode=OneWay}" />
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{x:Bind Main.TeamName, Mode=OneWay}"
+                                        Visibility="{x:Bind local:Ui.Collapsed(Main.HasTeamChoice), Mode=OneWay}" />
+                                </Grid>
+                            </Grid>
+                            <Border Style="{StaticResource RowDividerStyle}" />
+                            <Grid Style="{StaticResource RowGrid}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xE787;" Style="{StaticResource RowIcon}" />
+                                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{loc:S Key=expires}" />
+                                <TextBlock
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Foreground="{x:Bind views:SettingsPage.ExpiresBrush(Main.IsExpired), Mode=OneWay}"
+                                    Text="{x:Bind Main.ExpiresText, Mode=OneWay}" />
+                            </Grid>
+                            <Border Style="{StaticResource RowDividerStyle}" />
+                            <Grid Style="{StaticResource RowGrid}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xF3B1;" Style="{StaticResource RowIcon}" />
+                                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{loc:S Key=signOut}" />
+                                <Button Grid.Column="2" Command="{x:Bind Main.SignOutCommand}" Content="{loc:S Key=signOut, Suffix=…}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- Advanced: connection method (§G), system service, API endpoint override. -->
+                <TextBlock Style="{StaticResource GroupHeaderStyle}" Text="{loc:S Key=advanced}" />
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel>
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <FontIcon Glyph="&#xE71B;" Style="{StaticResource RowIcon}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{loc:S Key=connMethod}" />
+                                <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{loc:S Key=connMethodHint}" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0" Spacing="4">
+                                <RadioButton x:Name="ModeEnhanced" Checked="OnModeChecked" GroupName="ConnectionMode" Tag="Enhanced">
+                                    <StackPanel>
+                                        <TextBlock x:Name="ModeEnhancedTitle" />
+                                        <TextBlock x:Name="ModeEnhancedDescription" Style="{StaticResource RowDescriptionStyle}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </RadioButton>
+                                <RadioButton x:Name="ModeCompat" Checked="OnModeChecked" GroupName="ConnectionMode" Tag="Compatible">
+                                    <StackPanel>
+                                        <TextBlock x:Name="ModeCompatTitle" />
+                                        <TextBlock x:Name="ModeCompatDescription" Style="{StaticResource RowDescriptionStyle}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </RadioButton>
+                            </StackPanel>
+                        </Grid>
+                        <Border Style="{StaticResource RowDividerStyle}" />
+                        <!-- Routing mode: rules (default) or global; switching applies without a reconnect. -->
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <FontIcon Glyph="&#xE8AB;" Style="{StaticResource RowIcon}" />
+                            <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{loc:S Key=routingMode}" />
+                            <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0" Spacing="4">
+                                <RadioButton x:Name="RoutingRules" Checked="OnRoutingChecked" GroupName="RoutingMode" Tag="Rules">
+                                    <StackPanel>
+                                        <TextBlock x:Name="RoutingRulesTitle" />
+                                        <TextBlock x:Name="RoutingRulesDescription" Style="{StaticResource RowDescriptionStyle}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </RadioButton>
+                                <RadioButton x:Name="RoutingGlobal" Checked="OnRoutingChecked" GroupName="RoutingMode" Tag="Global">
+                                    <StackPanel>
+                                        <TextBlock x:Name="RoutingGlobalTitle" />
+                                        <TextBlock x:Name="RoutingGlobalDescription" Style="{StaticResource RowDescriptionStyle}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </RadioButton>
+                                <!-- The team's routing rules on the web (Settings › editRoutingRules). -->
+                                <HyperlinkButton
+                                    Margin="0,4,0,0"
+                                    Padding="0"
+                                    Command="{x:Bind ViewModel.OpenRoutingRulesCommand}"
+                                    Content="{loc:S Key=editRoutingRules}" />
+                                <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{loc:S Key=editRoutingRulesD}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+                        <Border Style="{StaticResource RowDividerStyle}" />
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xEA18;" Style="{StaticResource RowIcon}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{loc:S Key=service}" />
+                                <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{loc:S Key=uninstallD}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
+                                <StackPanel VerticalAlignment="Center" Orientation="Horizontal" Spacing="6">
+                                    <Ellipse
+                                        Width="7"
+                                        Height="7"
+                                        VerticalAlignment="Center"
+                                        Fill="{x:Bind views:SettingsPage.ServiceDot(Main.ServiceInstalled), Mode=OneWay}" />
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{x:Bind Main.ServiceStatusText, Mode=OneWay}" />
+                                </StackPanel>
+                                <Button Command="{x:Bind Main.InstallServiceCommand}" Visibility="{x:Bind local:Ui.Collapsed(Main.ServiceInstalled), Mode=OneWay}">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon FontSize="14" Glyph="&#xEA18;" />
+                                        <TextBlock Text="{loc:S Key=installBtn}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button
+                                    Command="{x:Bind Main.UninstallServiceCommand}"
+                                    Content="{loc:S Key=uninstallBtn}"
+                                    Visibility="{x:Bind Main.ServiceInstalled, Mode=OneWay}" />
+                            </StackPanel>
+                        </Grid>
+                        <Border Style="{StaticResource RowDividerStyle}" />
+                        <Grid Style="{StaticResource RowGrid}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xEC7A;" Style="{StaticResource RowIcon}" />
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{loc:S Key=apiOverride}" />
+                                <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{loc:S Key=apiHint}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <TextBox
+                                Grid.Column="2"
+                                Width="240"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="{loc:S Key=apiOverride}"
+                                FontFamily="{StaticResource MonoFontFamily}"
+                                PlaceholderText="{x:Bind ViewModel.ApiPlaceholder}"
+                                Text="{x:Bind ViewModel.ApiBaseOverride, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- About -->
+                <TextBlock Style="{StaticResource GroupHeaderStyle}" Text="{loc:S Key=about}" />
+                <Border Style="{StaticResource CardStyle}">
+                    <Grid Style="{StaticResource RowGrid}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Image
+                            Width="20"
+                            Height="20"
+                            VerticalAlignment="Center"
+                            Source="ms-appx:///Assets/AppLogo.png" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="PPVPN" />
+                            <TextBlock Style="{StaticResource RowDescriptionStyle}" Text="{x:Bind ViewModel.VersionText}" />
+                        </StackPanel>
+                        <Button
+                            Grid.Column="2"
+                            Command="{x:Bind ViewModel.CheckForUpdatesCommand}"
+                            Content="{loc:S Key=checkNow}"
+                            IsEnabled="{x:Bind ViewModel.ShowUpdates}" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

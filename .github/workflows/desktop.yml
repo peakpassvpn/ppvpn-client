@@ -190,3 +190,66 @@ jobs:
           desktop/apps/macos/scripts/bootstrap.sh
           xcodebuild -project desktop/apps/macos/PPVPN.xcodeproj -scheme PPVPN -configuration Debug \
             -derivedDataPath desktop/apps/macos/build -destination 'platform=macOS' build
+
+  # The Windows app (desktop/apps/windows): the client crate's tests with
+  # MSVC, its C# bindings, the shared view models, then warning-free builds
+  # of the WinUI app and of the push agent (NativeAOT). No installer and no
+  # signing here. The default client build does not link the Rust engine, so
+  # this needs neither libclang nor NASM.
+  desktop-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      # The runner's git checks text out with CRLF; keep files as committed.
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test the client crate
+        working-directory: desktop/crates/ppvpn-client
+        run: cargo test --locked
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+      - name: Cache uniffi-bindgen-cs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
+      # build-dotnet.ps1 refuses any other version of the generator.
+      - name: Install uniffi-bindgen-cs
+        shell: bash
+        run: |
+          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
+            cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
+          fi
+      - name: Generate C# bindings
+        shell: powershell
+        run: desktop/crates/ppvpn-client/scripts/build-dotnet.ps1 -Release
+      - name: Test App.Core
+        shell: powershell
+        run: |
+          dotnet test desktop/apps/shared/PPVPN.App.Core.Tests
+          if ($LASTEXITCODE -ne 0) { throw "dotnet test failed" }
+      - name: Build the app
+        shell: powershell
+        run: |
+          dotnet build desktop/apps/windows/PPVPN.Windows/PPVPN.Windows.csproj -c Release -p:Platform=x64 -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw "dotnet build failed" }
+      - name: Build the push agent (NativeAOT)
+        shell: powershell
+        run: |
+          dotnet publish desktop/apps/windows/PPVPN.PushAgent/PPVPN.PushAgent.csproj -c Release -r win-x64 -warnaserror -o "$env:RUNNER_TEMP\push-agent"
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }

@@ -10,3 +10,7 @@
 /desktop/service/target/
 /desktop/build/
 /desktop/vendor/ppvpn-core/*/build/
+# Desktop, Windows packaging (desktop/apps/windows/scripts/package.ps1): the
+# staging directory and the installer with its release metadata.
+/desktop/staging/
+/desktop/dist/

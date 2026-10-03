@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sign-in (design §1): signed out, waiting for the browser, errors (expired / denied / network). -->
+<UserControl
+    x:Class="PPVPN.Windows.Views.LoginView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:PPVPN.Windows.Controls"
+    xmlns:local="using:PPVPN.Windows"
+    xmlns:loc="using:PPVPN.Windows.Strings"
+    xmlns:views="using:PPVPN.Windows.Views">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel
+            MaxWidth="440"
+            Margin="24,0,24,48"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="24">
+
+            <!-- Signed out / error -->
+            <StackPanel Spacing="12" Visibility="{x:Bind ViewModel.IsLoginIdle, Mode=OneWay}">
+                <Border
+                    Width="72"
+                    Height="72"
+                    HorizontalAlignment="Center"
+                    CornerRadius="16">
+                    <Image Source="ms-appx:///Assets/AppLogo.png" />
+                </Border>
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    FontSize="28"
+                    FontWeight="SemiBold"
+                    Text="{loc:S Key=loginTitle}" />
+                <TextBlock
+                    MaxWidth="360"
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{loc:S Key=loginSub}"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap" />
+                <InfoBar
+                    Title="{x:Bind ViewModel.LoginErrorTitle, Mode=OneWay}"
+                    Margin="0,12,0,0"
+                    IsClosable="False"
+                    IsOpen="{x:Bind ViewModel.HasLoginError, Mode=OneWay}"
+                    Message="{x:Bind ViewModel.LoginErrorMessage, Mode=OneWay}"
+                    Severity="Error" />
+                <Button
+                    Height="36"
+                    Margin="0,12,0,0"
+                    Padding="20,0,20,0"
+                    HorizontalAlignment="Center"
+                    AutomationProperties.Name="{x:Bind views:LoginView.ButtonText(ViewModel.HasLoginError, ViewModel.LoginRetryText), Mode=OneWay}"
+                    Command="{x:Bind ViewModel.SignInCommand}"
+                    IsEnabled="{x:Bind local:Ui.Not(ViewModel.IsStartingLogin), Mode=OneWay}"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ProgressRing
+                            Width="16"
+                            Height="16"
+                            MinWidth="0"
+                            MinHeight="0"
+                            Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                            IsActive="{x:Bind ViewModel.IsStartingLogin, Mode=OneWay}"
+                            Visibility="{x:Bind ViewModel.IsStartingLogin, Mode=OneWay}" />
+                        <TextBlock Text="{x:Bind views:LoginView.ButtonText(ViewModel.HasLoginError, ViewModel.LoginRetryText), Mode=OneWay}" />
+                        <FontIcon FontSize="12" Glyph="&#xE8A7;" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- Waiting for the browser -->
+            <StackPanel Spacing="16" Visibility="{x:Bind ViewModel.IsAwaiting, Mode=OneWay}">
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    FontSize="28"
+                    FontWeight="SemiBold"
+                    Text="{loc:S Key=waitTitle}"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    MaxWidth="420"
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{loc:S Key=waitSub}"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap" />
+                <Border
+                    Padding="28,18,18,18"
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource CardStyle}">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            CharacterSpacing="100"
+                            FontFamily="{StaticResource MonoFontFamily}"
+                            FontSize="40"
+                            FontWeight="SemiBold"
+                            IsTextSelectionEnabled="True"
+                            Text="{x:Bind ViewModel.UserCode, Mode=OneWay}" />
+                        <controls:CopyButton
+                            Grid.Column="1"
+                            Width="36"
+                            Height="36"
+                            Padding="0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="{loc:S Key=copy}"
+                            CopyCommand="{x:Bind ViewModel.CopyCodeCommand}"
+                            IconOnly="True"
+                            ToolTipService.ToolTip="{loc:S Key=copy}" />
+                    </Grid>
+                </Border>
+                <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="6">
+                    <FontIcon FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE916;" />
+                    <TextBlock
+                        FontSize="13"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.CountdownText, Mode=OneWay}" />
+                </StackPanel>
+
+                <InfoBar
+                    Title="{loc:S Key=browserFailT}"
+                    IsClosable="False"
+                    IsOpen="{x:Bind ViewModel.BrowserNotOpened, Mode=OneWay}"
+                    Message="{loc:S Key=browserFailD}"
+                    Severity="Warning">
+                    <InfoBar.Content>
+                        <Grid Margin="0,-8,0,12" ColumnSpacing="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                FontFamily="{StaticResource MonoFontFamily}"
+                                IsTextSelectionEnabled="True"
+                                Text="{x:Bind ViewModel.VerificationUrl, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis" />
+                            <Button
+                                Grid.Column="1"
+                                AutomationProperties.Name="{loc:S Key=copyUrl}"
+                                Command="{x:Bind ViewModel.CopyVerificationUrlCommand}"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                ToolTipService.ToolTip="{loc:S Key=copyUrl}">
+                                <FontIcon FontSize="14" Glyph="&#xE8C8;" />
+                            </Button>
+                        </Grid>
+                    </InfoBar.Content>
+                </InfoBar>
+
+                <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                    <Button Height="32" Command="{x:Bind ViewModel.ReopenBrowserCommand}" Style="{StaticResource AccentButtonStyle}">
+                        <Grid>
+                            <TextBlock Text="{loc:S Key=reopen}" Visibility="{x:Bind local:Ui.Collapsed(ViewModel.BrowserNotOpened), Mode=OneWay}" />
+                            <TextBlock Text="{loc:S Key=openBrowser}" Visibility="{x:Bind ViewModel.BrowserNotOpened, Mode=OneWay}" />
+                        </Grid>
+                    </Button>
+                    <Button Height="32" Command="{x:Bind ViewModel.CancelSignInCommand}" Content="{loc:S Key=cancel}" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
