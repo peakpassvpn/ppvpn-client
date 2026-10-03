@@ -187,3 +187,63 @@ jobs:
         run: |
           bin="$(ls -t target/debug/deps/keystore-* | grep -v '\.d$' | head -n 1)"
           PPVPN_TEST_KEYSTORE=1 "$bin" --nocapture
+
+  # Intel Macs: Desktop ships a macOS x64 package, which links btls's
+  # prebuilt BoringSSL for x86_64-apple-darwin, the one target btls's own
+  # CI does not use (its macOS runners are Apple Silicon). Built here on an
+  # Apple Silicon runner and run under Rosetta when the runner has it. Not
+  # a required check.
+  macos-x86_64:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      TARGET: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: x86_64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock "$TARGET" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+      - name: build the tests
+        run: cargo test --locked --target "$TARGET" -p ppvpn-core -p ppvpn-account --no-run
+      # btls-sys linked the downloaded library, not one it compiled: its
+      # build script points the linker at BORING_BSSL_PATH_<target>/lib, and
+      # no BoringSSL build tree exists.
+      - name: the prebuilt library is the one linked
+        run: |
+          prebuilt="$BORING_BSSL_PATH_x86_64_apple_darwin"
+          test -n "$prebuilt" && test -f "$prebuilt/lib/libssl.a"
+          out=$(ls target/$TARGET/debug/build/btls-sys-*/output)
+          grep -H "rustc-link-search=native=$prebuilt/lib" $out
+          if find target/$TARGET/debug/build -path '*btls-sys-*/out/build' -maxdepth 4 | grep -q .; then
+            echo "::error::btls-sys compiled BoringSSL instead of linking the prebuilt one"; exit 1
+          fi
+          bin=$(ls -t target/$TARGET/debug/deps/ppvpn_core-* | grep -v '\.d$' | head -n 1)
+          for f in "$prebuilt/lib/libssl.a" "$prebuilt/lib/libcrypto.a" "$bin"; do
+            echo "$f: $(lipo -archs "$f")"
+            lipo "$f" -verify_arch x86_64
+          done
+      - name: Rosetta
+        id: rosetta
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Rosetta is not available on this runner: the x86_64 tests were built and linked, not run"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: test under Rosetta
+        if: steps.rosetta.outputs.available == 'true'
+        run: cargo test --locked --target "$TARGET" -p ppvpn-core -p ppvpn-account
