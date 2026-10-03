@@ -409,6 +409,7 @@ pub struct Error {
   - Engine 在 `new` 时（仅 Tun 实例）在 127.0.0.1 的随机端口上起 UDP 和 TCP 监听。监听自己读默认网卡的 DNS 服务器（Windows 读适配器，macOS 读 scutil，Linux 读 resolv.conf 或 systemd-resolved 里该网卡的 DNS）；宿主给了 `local_dns_servers` 时改用这些静态服务器。查询按顺序发出，每个服务器有超时，TC 时改用 TCP，没有服务器时立即回 SERVFAIL。
   - Sail 的 dns-local 服务器渲染成指向这个监听的 **tcp** 服务器。Sail 的 udp 客户端遇到截断应答不会改走 TCP，用 tcp 能拿到完整应答。
   - 服务器列表变化不需要 reload Sail；网卡变化的触发来自 Sail 的网络事件（只用 Sail 一个网卡监视器），监听收到后让缓存失效。
+  - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#45）。
   - 上游查询优先经 Runtime 的 `dial_udp`/`dial_tcp` 走 direct 出站，由 Sail 的默认拨号器绑定物理网卡，不进 TUN。
 - **TUN 网卡名**：Linux 固定为 `ppvpn0`，Windows 固定为 `PPVPN`（Wintun 适配器名，按名字复用；适配器 GUID 由名字确定生成，不会每次变化）。名字要显式交给 Sail，原因是 Sail 只有在名字显式给出时，才会把这块网卡当作自己的：选默认网卡和过滤 DNS 服务器时都要排除它；名字也便于日志和抓包。
   - macOS 不写名字。Sail 按编号打开 utun，编号被占用时启动直接失败，不会自己换。Sail 会改为不写名字时由内核分配编号，并通过 embed 报告实际拿到的名字，Runtime 再读出来用于日志和状态。排除隧道网段这件事，由 Sail 改动后的行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。
