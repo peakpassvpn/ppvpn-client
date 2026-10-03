@@ -4,9 +4,34 @@
 ppvpn-core's standard instance in its own process, exposing the authenticated local HTTP/SOCKS5 proxy. It
 does not create a TUN device or change system network settings.
 
-Status: the command-line contract, settings, directory layout and the daemon (`start`, `stop`, `status`,
-`--foreground`) are in place. Commands that need the account crate (`login`, profile download, …) or whose
-daemon call is not wired yet report `NOT_IMPLEMENTED`; their arguments are already parsed and checked.
+Status: the command-line contract, settings, directory layout, the account commands (`login`, `account`,
+`logout`), the profile download and the daemon (`start`, `stop`, `status`, `--foreground`) are in place.
+Commands whose daemon call is not wired yet (`nodes`, `use`, `probe`, `traffic`, `connections`, `proxy`,
+`ingress`) report `NOT_IMPLEMENTED`; their arguments are already parsed and checked.
+
+## Account
+
+`ppvpn login` starts a device authorization, prints the authorization URL and the confirmation code to
+stderr, opens the URL in the default browser unless `--no-browser` is given, and waits until the
+authorization is confirmed, denied or expired. A CLI login is its own device session, separate from the
+desktop app's: the CLI sends no product header and only accepts access tokens whose audience is `cli`.
+
+The device credential is kept in the platform secret store and nowhere else:
+
+- macOS: a generic password in the login Keychain (service `com.peakpassvpn.ppvpn.cli`);
+- Linux: an item in the Secret Service default collection (GNOME Keyring, KWallet, …), written over an
+  encrypted session.
+
+There is no plain-file fallback. Where no secret store is available (for example a server without a Secret
+Service) or the keyring stays locked, the CLI reports `CREDENTIAL_STORE_UNAVAILABLE` or
+`CREDENTIAL_STORE_LOCKED` (exit 8) and does not log in. Access tokens are never written to disk.
+
+`ppvpn account` prints the authorized account. `ppvpn logout` revokes the device session and removes the
+local credential. Without a saved login, commands that need one report `NOT_LOGGED_IN` (exit 3) before any
+request is made.
+
+`ppvpn start` downloads the account's proxy profile before it touches the daemon; a rejected access token is
+refreshed once. The profile is passed to core as received and is never written to disk.
 
 ## Daemon
 
@@ -31,8 +56,8 @@ map to exits 2 (`NODE_NOT_FOUND`, `INGRESS_NOT_FOUND`, `PINS_INVALID`, `ROUTING_
 and 8 (`STATE_DIR_IN_USE`, `PERMISSION_DENIED`); every other core code is a profile or request validation
 failure (exit 7).
 
-Until `ppvpn-account` provides the profile download, a `dev` build can read a profile from the absolute path in
-`PPVPN_PROFILE_FILE`; release builds report `NOT_IMPLEMENTED` from `start`.
+A `dev` build reads the profile from the absolute path in `PPVPN_PROFILE_FILE` when that variable is set,
+instead of downloading it; release builds ignore the variable.
 
 ## Commands
 
@@ -76,7 +101,7 @@ between 1 ms and 2 minutes, and a concurrency between 1 and 32.
 | 1 | other or internal error (including `NOT_IMPLEMENTED`) |
 | 2 | invalid argument or build configuration |
 | 3 | login missing, expired or not permitted |
-| 4 | backend unavailable |
+| 4 | backend unavailable, untrusted, or nothing to serve for the account |
 | 5 | core not running or a core operation failed |
 | 6 | incompatible core or feature unavailable |
 | 7 | the backend's profile could not be applied |
