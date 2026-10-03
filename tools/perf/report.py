@@ -207,10 +207,12 @@ def compare(args):
             if limits and limits[2] and base["engine"] != new["engine"]:
                 cells.append("(same engine only)")
                 continue
-            # A throughput the load side capped, here or there, is not judged.
+            # A throughput the load side capped, here or there, is not judged,
+            # unless the new one is capped and still not lower: a lower
+            # bound that passes.
             limited = metric.removesuffix("_mbit") + "_load_limited"
-            if metric.endswith("_mbit") and any(
-                    (f["metrics"].get(limited) or {}).get("median", 0) >= 0.5 for f in (new, base)):
+            capped = lambda f: (f["metrics"].get(limited) or {}).get("median", 0) >= 0.5
+            if metric.endswith("_mbit") and (capped(base) or (capped(new) and now["median"] < old["median"])):
                 cells.append(f"{change_of(now['median'], old['median'])} (load-limited, not judged)")
                 continue
             limit = limits and (limits[0] if which == "main" else limits[1])

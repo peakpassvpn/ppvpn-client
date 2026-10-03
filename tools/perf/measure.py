@@ -49,8 +49,9 @@ name ("engine"):
     <proto>.tput<n>_engine_cpu_pct the CPU meanwhile of the engine, loadgen
     <proto>.tput<n>_load_cpu_pct   and fakenode (100 = one core each)
     <proto>.tput<n>_node_cpu_pct
-    <proto>.tput<n>_load_limited   1 when the engine had CPU to spare while
-                                   loadgen or fakenode was at its limit: the
+    <proto>.tput<n>_load_limited   1 when the engine had CPU to spare (under
+                                   80% of its CPUs) while loadgen or fakenode
+                                   was near its limit (85% of theirs): the
                                    number is the load side's, not judged
     <proto>.cpu100_pct             the engine's CPU at 100 Mbit/s (8
                                    connections, paced), 20 s
@@ -268,11 +269,19 @@ def three_busy(engine, node_pid, run):
 
 
 # Throughput is the engine's only while the engine is what is busy: below
-# this much of one core for the engine, with loadgen or fakenode at least at
-# LOAD_BUSY of their one hyper-thread, the number is the load side's and is
-# not judged (report.py), but measured again in a whole-host window.
+# ENGINE_SPARE percent of the CPUs it was given, with loadgen or fakenode at
+# least at LOAD_BUSY percent of theirs, the number is the load side's and is
+# not judged (report.py). Each share is of the process's own CPUs (one
+# hyper-thread is 100, a whole core 200).
 ENGINE_SPARE = 80
-LOAD_BUSY = 90
+LOAD_BUSY = 85
+
+
+def share(pct, cpus):
+    """pct (100 = one CPU) as a percentage of the CPUs given (a taskset
+    list), or of one CPU when none was given."""
+    n = len(cpus.split(",")) if cpus else 1
+    return 100 * pct / (100 * n)
 
 
 def measure_tier_b(args, work, ports, env, name, binary, node_pid):
@@ -304,7 +313,9 @@ def measure_tier_b(args, work, ports, env, name, binary, node_pid):
                 row[f"{key}_mbit"] = round(result["bytes_received"] * 8 / result["elapsed_ms"] / 1000, 1)
                 row[f"{key}_engine_cpu_pct"], row[f"{key}_load_cpu_pct"], row[f"{key}_node_cpu_pct"] = \
                     engine_pct, load_pct, node_pct
-                row[f"{key}_load_limited"] = int(engine_pct < ENGINE_SPARE and max(load_pct, node_pct) >= LOAD_BUSY)
+                row[f"{key}_load_limited"] = int(
+                    share(engine_pct, args.engine_cpus) < ENGINE_SPARE
+                    and max(share(load_pct, args.load_cpus), share(node_pct, args.node_cpus)) >= LOAD_BUSY)
             if not light:
                 continue
             _, row[f"{node}.cpu100_pct"] = busy(engine, lambda: loadgen(
