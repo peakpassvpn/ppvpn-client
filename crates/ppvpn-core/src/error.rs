@@ -194,6 +194,7 @@ impl Error {
     }
 
     /// What the skeleton's unimplemented calls return.
+    #[allow(dead_code)] // every public call is wired at the moment
     pub(crate) fn not_implemented(call: &str) -> Self {
         Self::new(
             codes::CORE_OPERATION_FAILED,

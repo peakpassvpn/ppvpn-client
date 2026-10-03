@@ -179,6 +179,8 @@ impl Inner {
                 a.pins.clone(),
             )
         };
+        // The listeners' ports may have been taken while stopped.
+        self.prepare_listeners()?;
         self.probe_host_ipv6();
         // Translated again: select and pin may have moved since the apply.
         let translation = translate::translate(&profile, &self.options(mode, &selected, &pins))?;

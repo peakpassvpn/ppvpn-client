@@ -15,6 +15,8 @@
 //!   would fail `Engine::new` until someone deletes the file by hand.
 //! - A state file other users may read (Unix) keeps its ports but gets a
 //!   new prefix and password, written 0600: its secret is no longer one.
+//! - Either rebuild is reported ([`LocalProxyState::credentials_reset`]):
+//!   the Engine shows it in `status.local_proxy.credentials_reset`.
 //! - The routed user exists without a profile: its credential is readable
 //!   right after `new` (contract, section 3).
 
@@ -33,7 +35,7 @@ use crate::config::LocalProxyConfig;
 use crate::error::{codes, Error};
 use crate::event::Event;
 use crate::profile::Profile;
-use crate::status::LocalProxyStatus;
+use crate::status::{CredentialsResetReason, LocalProxyStatus};
 use crate::translate;
 use crate::types::{LocalProxyCredential, LocalProxyKind, LocalProxyMetadata};
 
@@ -103,6 +105,8 @@ pub(crate) struct LocalProxyState {
     preferred_port: u16,
     system_preferred_port: u16,
     state: DiskState,
+    /// Why `open` replaced the prefix and password, if it did.
+    reset: Option<CredentialsResetReason>,
 }
 
 impl LocalProxyState {
@@ -135,7 +139,10 @@ impl LocalProxyState {
         let path = state_dir.join(STATE_FILE);
         prepare_directory(state_dir).map_err(|e| io_error("create the state directory", &e))?;
         let mut changed = false;
-        let mut state = match load(&path).map_err(|e| io_error("read the state", &e))? {
+        let mut reset = None;
+        let loaded = load(&path).map_err(|e| io_error("read the state", &e))?;
+        let existed = !matches!(loaded, Loaded::Missing);
+        let mut state = match loaded {
             Loaded::Missing => DiskState::default(),
             Loaded::Current(state) => state,
             Loaded::Legacy => {
@@ -144,6 +151,7 @@ impl LocalProxyState {
             }
             Loaded::Corrupt(reason) => {
                 tracing::warn!(reason = %reason, "local proxy: state unusable, rebuilt");
+                reset = Some(CredentialsResetReason::Corrupt);
                 changed = true;
                 DiskState::default()
             }
@@ -152,8 +160,9 @@ impl LocalProxyState {
             state.version = STATE_VERSION;
             changed = true;
         }
-        if !private(&path) {
+        if existed && !private(&path) {
             tracing::warn!("local proxy: state readable by other users, new credentials");
+            reset.get_or_insert(CredentialsResetReason::InsecurePermissions);
             state.prefix.clear();
             state.password.clear();
         }
@@ -168,6 +177,7 @@ impl LocalProxyState {
             preferred_port: config.preferred_port,
             system_preferred_port,
             state,
+            reset,
         };
         let port = this.choose_local_port()?;
         if port != this.state.port {
@@ -178,6 +188,12 @@ impl LocalProxyState {
             this.save()?;
         }
         Ok(this)
+    }
+
+    /// Why `open` replaced the prefix and password (the file is rewritten
+    /// 0600 either way); None when it kept them or created the first ones.
+    pub(crate) fn credentials_reset(&self) -> Option<CredentialsResetReason> {
+        self.reset
     }
 
     pub(crate) fn listen(&self) -> String {
@@ -204,6 +220,7 @@ impl LocalProxyState {
             listen: self.listen(),
             port: self.state.port,
             listening,
+            credentials_reset: self.reset,
         }
     }
 

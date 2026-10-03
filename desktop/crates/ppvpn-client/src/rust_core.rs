@@ -595,38 +595,33 @@ mod tests {
         let unpin = core_ipc::pin_ingress(core, "n1", None).await.unwrap_err();
         assert_eq!(unpin.code(), Some("PROFILE_NOT_APPLIED"));
 
-        // Calls the engine does not implement yet answer like a failed Go
-        // call, not a transport error.
-        let not_implemented = |result: Result<Value, CoreCallError>| {
-            assert_eq!(code(&result), Some("CORE_OPERATION_FAILED"), "{result:?}");
+        // Probes and local proxy calls before a profile: the routed user
+        // and the system proxy listener exist from `new`, nodes do not.
+        let not_applied = |result: Result<Value, CoreCallError>| {
+            assert_eq!(code(&result), Some("PROFILE_NOT_APPLIED"), "{result:?}");
         };
-        not_implemented(
+        not_applied(
             core_ipc::probe_entrances(core, "tcp", &["n1".to_string()], 1_000, 4)
                 .await
                 .map(Value::from),
         );
-        not_implemented(
-            core_ipc::probe_availability(core, "n1", "http://example.test", 1_000).await,
+        not_applied(core_ipc::probe_availability(core, "n1", "http://example.test", 1_000).await);
+        assert!(core_ipc::local_proxies(core).await.unwrap().is_empty());
+        let routed = core_ipc::routed_local_proxy(core).await.unwrap();
+        assert!(
+            routed.is_some_and(|p| p.node_id.is_empty() && p.port != 0),
+            "no routed user before a profile"
         );
-        not_implemented(core_ipc::local_proxies(core).await.map(|_| Value::Null));
-        not_implemented(
-            core_ipc::routed_local_proxy(core)
-                .await
-                .map(|_| Value::Null),
-        );
-        not_implemented(
-            call(
-                &launched,
-                "/v1/get-local-proxy-credential",
-                json!({ "node_id": "n1" }),
-            )
-            .await,
-        );
-        not_implemented(
-            core_ipc::set_system_proxy(core, true)
-                .await
-                .map(|_| Value::Null),
-        );
+        let node = call(
+            &launched,
+            "/v1/get-local-proxy-credential",
+            json!({ "node_id": "n1" }),
+        )
+        .await;
+        assert_eq!(code(&node), Some("NODE_NOT_FOUND"));
+        let system = core_ipc::set_system_proxy(core, true).await.unwrap();
+        assert!(system.available && system.enabled && !system.listening);
+        assert!(system.port.is_some_and(|port| port != 0));
 
         // Malformed bodies and unknown paths.
         let bad = call(&launched, "/v1/select-node", json!({})).await;

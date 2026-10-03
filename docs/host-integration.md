@@ -194,11 +194,15 @@ pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日�
 pub async fn probe_entrances(&self, request: ProbeEntrancesRequest) -> Result<Vec<EntranceResult>, Error>;
 // { node_ids, method: Tcp | Icmp, timeout_ms, concurrency }
 pub async fn probe_availability(&self, request: ProbeAvailabilityRequest) -> Result<AvailabilityResult, Error>;
-// { node_id, target: URL, timeout_ms }；经该节点的本地代理用户发出
+// { node_id, target: URL, timeout_ms }；经该节点的出口（outbound）发出
 ```
 
 - **语义**：和 Core API v1 相同（`docs/architecture.md` 的"探测语义"一节）。
-- **离线时**：没有默认网卡时立即返回 `NO_DEFAULT_INTERFACE`（retryable=true），不等超时。
+- **入口探测**：直连测每个入口，不经隧道的规则。需要已 apply 的 Profile（否则 `PROFILE_NOT_APPLIED`），不需要已 start；每个节点发一个 `EntranceProbed`。
+- **可用性探测**：请求经该节点的出口发出，也就是该节点的本地代理用户所去的地方，但不经本地代理的监听，所以不受本地代理端口的影响（Go 版经本地代理用户发出）。每次探测发一个 `AvailabilityProbed`。
+  - **前置检查的顺序同 Go**：实例没有本地代理 → `LOCAL_PROXY_DISABLED`（retryable=false）；没有 apply → `PROFILE_NOT_APPLIED`（retryable=false）；没有 start → `CORE_NOT_RUNNING`（retryable=true）；之后才检查离线和节点（`NODE_NOT_FOUND`）。
+  - **TUN 实例**：始终返回 `LOCAL_PROXY_DISABLED`，不论是否在运行（Core 组决定，同 Go）。
+- **离线时**：没有默认网卡时立即返回 `NO_DEFAULT_INTERFACE`（retryable=true），不等超时，也不拨号。默认网卡的状态来自 Sail 的网络事件；在那之前，引擎当作"不确定"，照常探测。
 
 ### 4.6 本地代理凭据（仅 Standard）
 
@@ -217,7 +221,23 @@ pub async fn set_system_proxy_listener(&self, enabled: bool) -> Result<SystemPro
   - 实际端口有变化时，持久化新端口，发出 `LocalProxyEndpointChanged` 事件，`status` 里也能看到。
   - 监听失败时，例如端口被占用而且换不了，进入 `Degraded{LocalProxyUnavailable}`，并按退避重试。
 - **系统代理监听**：`set_system_proxy_listener` 只开关 7891 的无认证监听。操作系统的代理设置（指向这个端口）由宿主负责。
+  - 幂等；开关状态不持久化，`new` 之后是关的。端口优先级：持久化的端口、7891、任意空闲端口，不会和本地代理端口相同。
+  - 未 start 时只改状态，`start` 时生效（届时端口被占用就换一个）。运行中开关是原地增删这一个监听（和 Go 版一样），不 reload 配置。都发出 `SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。
+  - 运行中开关的保证：
+    - 打开时，任何已有连接都不受影响；
+    - 按节点的本地代理和 routed 用户的监听始终可用，地址和端口不变；
+    - 关闭时停止系统代理的监听，并断开它上面已经建立的连接；其他监听和它们上面的连接不受影响。`stop()` 时所有连接都会断开。
+  - 拿不到端口或运行时拒绝时返回 `SYSTEM_PROXY_START_FAILED`（retryable=true），开关保持原样。
 - **TUN 实例**：本组方法返回 `LOCAL_PROXY_DISABLED`；`set_system_proxy_listener` 返回 `SYSTEM_PROXY_UNAVAILABLE`。
+- **与 Go 版有意不同的三处**（Core 组和 Desktop 已定）：
+  1. **状态文件损坏时重建**：不是 JSON、版本未知、prefix 非法、prefix 和密码不成对时，Go 版拒绝启动；Rust 版重建（新的 prefix 和密码），否则 `new` 会一直失败，直到有人手动删掉文件。读文件本身的 I/O 错误仍然返回错误。
+  2. **权限不安全时重建凭据**：状态文件其他用户可读时（Unix），Go 版拒绝；Rust 版保留端口，重新生成 prefix 和密码。
+  3. **apply 之前就能读 routed 凭据**：routed 用户不依赖 Profile，`new` 之后就能读（第 3 节）；Go 版在没有节点时没有 routed 用户。按节点的凭据仍然只对已 apply 的 Profile 里的节点有效。
+
+  前两处重建的文件都只有本用户可读（Unix 上为 0600）。重建时 `new` 照常成功，`status().local_proxy.credentials_reset` 给出原因：`corrupt` 或 `insecure_permissions`。持有旧凭据的客户端（例如浏览器扩展）需要重新读取凭据。
+
+  - **重置只在 `new` 打开状态文件时发生**，之后不会再有，所以没有对应的事件：宿主在 `new` 之后读一次 `status().local_proxy.credentials_reset` 即可。
+  - 这个字段在本实例存活期间一直存在，core 不提供清除；是否重复提示由宿主决定。
 
 ## 5. 状态
 
@@ -232,7 +252,9 @@ pub struct Status {
     pub nodes: Vec<NodeStatus>,             // 每个节点：node_id、pinned_endpoint_key、各入口（endpoint_key、role、label、
                                             // healthy、last_check_at、consecutive_failures、active），同 get-status
                                             // 名称、entry_label、region 等节点资料见 nodes() / selected_node()（同 list-nodes）
-    pub local_proxy: Option<LocalProxyStatus>, // listen、port、listening（不含凭据）
+    pub local_proxy: Option<LocalProxyStatus>, // listen、port、listening（不含凭据）；credentials_reset：本实例 new 时
+                                            // 重建过凭据的原因（corrupt | insecure_permissions），没有重建时省略；
+                                            // 重置只在 new 时发生，没有对应事件，实例存活期间一直保留（第 4.6 节）
     pub rule_sets: Vec<RuleSetStatus>,     // id、state（ready | stale | unavailable）、updated_at、error、
                                             // failures（非 ready 时连续下载失败次数，0 时省略）、
                                             // next_retry_at（非 ready 时下次重试时间；主机未固定或没有存储时省略），同 get-status

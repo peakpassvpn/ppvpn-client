@@ -41,8 +41,8 @@ pub use request::{
     ApplyRequest, ApplyResult, ClearedPin, Pin, PinClearReason, RoutingMode, SwitchKind,
 };
 pub use status::{
-    DegradedReason, EngineState, FatalReason, IngressHealth, IngressStatus, LocalProxyStatus,
-    NodeStatus, RuleSetStatus, Status, SystemProxyStatus, TunRouting,
+    CredentialsResetReason, DegradedReason, EngineState, FatalReason, IngressHealth, IngressStatus,
+    LocalProxyStatus, NodeStatus, RuleSetStatus, Status, SystemProxyStatus, TunRouting,
 };
 pub use types::{
     AvailabilityResult, Connection, EntranceResult, IngressInfo, IngressProbeResult,
