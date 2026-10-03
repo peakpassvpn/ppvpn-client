@@ -2095,6 +2095,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppvpn-core-lab"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "futures-core",
+ "getrandom 0.2.17",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "ppvpn-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
