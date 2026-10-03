@@ -35,6 +35,8 @@ pub(crate) enum Op {
     Select,
     Dial,
     ReplaceInboundUsers,
+    AddInbound,
+    RemoveInbound,
 }
 
 const LOG_CAPACITY: usize = 64;
@@ -433,6 +435,7 @@ impl Runtime for FakeRuntime {
             inbound_tag(&value).ok_or_else(|| RuntimeError::new("config", "inbound: no type"))?;
         self.record(Call::AddInbound(tag.clone()));
         self.running()?;
+        self.check(Op::AddInbound)?;
         let mut inbounds = self.inbounds.lock().unwrap();
         if inbounds.contains(&tag) {
             return Err(RuntimeError::new(
@@ -447,6 +450,7 @@ impl Runtime for FakeRuntime {
     async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError> {
         self.record(Call::RemoveInbound(tag.into()));
         self.running()?;
+        self.check(Op::RemoveInbound)?;
         let mut inbounds = self.inbounds.lock().unwrap();
         let before = inbounds.len();
         inbounds.retain(|t| t != tag);

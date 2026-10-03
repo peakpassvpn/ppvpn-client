@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::config::{EngineConfig, LogLevel, Role};
@@ -34,7 +33,14 @@ mod cleanup;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+mod logs;
 mod network;
+mod probes;
+#[cfg(test)]
+mod probes_tests;
+mod proxy;
+#[cfg(test)]
+mod proxy_tests;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
@@ -43,6 +49,8 @@ mod tun;
 
 use bus::Bus;
 pub(crate) use bus::Subscription;
+pub use logs::tracing_layer;
+use logs::Logs;
 use state::Live;
 pub(crate) use state::TunRoutingSignal;
 
@@ -68,6 +76,10 @@ struct Inner {
     watcher: Mutex<Option<JoinHandle<()>>>,
     /// Held from `new` to `shutdown` (or the last handle's drop).
     state_dir: Mutex<Option<StateDirLock>>,
+    /// The local proxy's state and the system proxy listener (Standard).
+    proxies: Option<Mutex<proxy::Proxies>>,
+    /// The instance's log lines, to its sink (section 10).
+    log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
 }
@@ -117,19 +129,33 @@ impl Engine {
     /// `TUN_INSTANCE_EXISTS`), never as `Fatal` later.
     pub async fn new(config: EngineConfig) -> Result<Engine, Error> {
         tun::check(&config)?;
+        logs::install();
+        let log = Logs::new(&config.log)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
-        cleanup::sweep(&config)?;
+        log.span().in_scope(|| cleanup::sweep(&config))?;
         let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
-        let engine = Engine::with_runtime(config, Arc::new(runtime));
+        let engine = Engine::assemble(config, Arc::new(runtime), log)?;
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
         engine.inner.start_local_dns().await?;
         Ok(engine)
     }
 
     /// An instance on `runtime` (tests: the fake), without the state_dir
-    /// lock.
+    /// lock. Panics when the local proxy state cannot be opened.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_runtime(config: EngineConfig, runtime: Arc<dyn Runtime>) -> Engine {
+        let log = Logs::new(&config.log).unwrap_or_else(|_| Logs::discard());
+        Engine::assemble(config, runtime, log).expect("local proxy state")
+    }
+
+    fn assemble(
+        config: EngineConfig,
+        runtime: Arc<dyn Runtime>,
+        log: Logs,
+    ) -> Result<Engine, Error> {
+        let proxies = proxy::Proxies::open(&config)?;
+        log.attach(&runtime);
         let inner = Arc::new(Inner {
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
@@ -140,9 +166,11 @@ impl Engine {
             bus: Bus::default(),
             watcher: Mutex::new(None),
             state_dir: Mutex::new(None),
+            proxies,
+            log,
         });
         *inner.watcher.lock().expect("watcher") = lifecycle::spawn_watcher(&inner);
-        Engine { inner }
+        Ok(Engine { inner })
     }
 
     /// Stops the whole instance (any handle may call it; idempotent): stops
@@ -226,6 +254,10 @@ impl Engine {
     pub fn status(&self) -> Status {
         let config = &self.inner.config;
         let live = self.inner.live();
+        let (local_proxy, system_proxy) = (
+            self.inner.local_proxy_status(live.running),
+            self.inner.system_proxy_status(live.running),
+        );
         let applied = live.applied.as_ref();
         Status {
             state: live.state.clone(),
@@ -235,13 +267,11 @@ impl Engine {
             node_count: applied.map_or(0, |a| a.profile.nodes.len() as u32),
             selected_ingress: live.selected_ingress(),
             nodes: live.node_statuses(),
-            system_proxy: SystemProxyStatus {
-                available: config.role == Role::Standard && config.system_proxy,
-                ..SystemProxyStatus::default()
-            },
+            system_proxy,
+            local_proxy,
             tun_routing: (config.role == Role::Tun)
                 .then_some(live.tun_routing.unwrap_or(TunRouting::Ok)),
-            dropped_log_lines: self.inner.runtime.dropped_log_lines(),
+            dropped_log_lines: self.inner.log.dropped(),
             ..Status::default()
         }
     }
@@ -307,46 +337,49 @@ impl Engine {
         }
     }
 
-    /// Entrance probes (4.5); `NO_DEFAULT_INTERFACE` (retryable) offline.
+    /// Entrance probes (4.5), directly, of the applied profile's ingresses;
+    /// `NO_DEFAULT_INTERFACE` (retryable) offline.
     pub async fn probe_entrances(
         &self,
         request: ProbeEntrancesRequest,
     ) -> Result<Vec<EntranceResult>, Error> {
         self.inner.admit()?;
-        let _ = request;
-        Err(Error::not_implemented("probe_entrances"))
+        self.inner
+            .probe_entrances(request, &crate::probe::SystemNet)
+            .await
     }
 
-    /// An availability probe through the node's local proxy user (4.5):
-    /// `LOCAL_PROXY_DISABLED` on an instance without one (a TUN instance
-    /// too, as Go).
+    /// An availability probe through the node's outbound (4.5):
+    /// `LOCAL_PROXY_DISABLED` on an instance without a local proxy (a TUN
+    /// instance too, as Go), then `PROFILE_NOT_APPLIED`, `CORE_NOT_RUNNING`.
     pub async fn probe_availability(
         &self,
         request: ProbeAvailabilityRequest,
     ) -> Result<AvailabilityResult, Error> {
         self.inner.admit()?;
         self.standard()?;
-        let _ = request;
-        Err(Error::not_implemented("probe_availability"))
+        self.inner.probe_availability(request).await
     }
 
-    /// Local proxy endpoints without secrets (4.6).
+    /// Local proxy endpoints without secrets (4.6): one per node of the
+    /// applied profile, then the routed user.
     pub fn local_proxy_metadata(&self) -> Result<Vec<LocalProxyMetadata>, Error> {
         self.standard()?;
-        Err(Error::not_implemented("local_proxy_metadata"))
+        self.inner.local_proxy_metadata()
     }
 
-    /// A per-node credential (4.6).
+    /// A per-node credential (4.6); `NODE_NOT_FOUND` for a node the applied
+    /// profile does not have (any before the first apply).
     pub fn local_proxy_credential(&self, node_id: &str) -> Result<LocalProxyCredential, Error> {
         self.standard()?;
-        let _ = node_id;
-        Err(Error::not_implemented("local_proxy_credential"))
+        self.inner.local_proxy_credential(node_id)
     }
 
     /// The routed user's credential; its username is the bare prefix (4.6).
+    /// Readable right after `new`.
     pub fn local_proxy_routed_credential(&self) -> Result<LocalProxyCredential, Error> {
         self.standard()?;
-        Err(Error::not_implemented("local_proxy_routed_credential"))
+        self.inner.local_proxy_routed_credential()
     }
 
     /// Opens or closes the unauthenticated loopback listener for OS proxy
@@ -357,14 +390,9 @@ impl Engine {
     ) -> Result<SystemProxyStatus, Error> {
         self.inner.admit()?;
         if self.inner.config.role != Role::Standard || !self.inner.config.system_proxy {
-            return Err(Error::new(
-                codes::SYSTEM_PROXY_UNAVAILABLE,
-                false,
-                "this instance cannot host the system proxy listener",
-            ));
+            return Err(proxy::system_proxy_unavailable());
         }
-        let _ = enabled;
-        Err(Error::not_implemented("set_system_proxy_listener"))
+        self.inner.set_system_proxy_listener(enabled).await
     }
 
     /// Subscribes to `kinds` (section 6): one bounded buffer per kind, a
@@ -375,10 +403,10 @@ impl Engine {
         }
     }
 
-    /// The log lines, with `LogSink::Channel` (section 10).
+    /// The log lines, with `LogSink::Channel` (section 10): bounded, taken
+    /// once; a second call, or another sink, gets a closed receiver.
     pub fn logs(&self) -> LogReceiver {
-        let (_sender, receiver) = mpsc::channel(1);
-        LogReceiver { receiver }
+        self.inner.log.receiver()
     }
 
     /// The default interface changed (`None`: offline). Its source is
@@ -397,11 +425,7 @@ impl Engine {
 
     fn standard(&self) -> Result<(), Error> {
         if self.inner.config.role != Role::Standard || self.inner.config.local_proxy.is_none() {
-            return Err(Error::new(
-                codes::LOCAL_PROXY_DISABLED,
-                false,
-                "this instance has no local proxy",
-            ));
+            return Err(proxy::local_proxy_disabled());
         }
         Ok(())
     }
@@ -476,6 +500,8 @@ impl Inner {
             mode,
             selected_node_id: Some(selected.to_owned()),
             pins: pins.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            local_proxy: self.local_proxy_options(),
+            system_proxy_port: self.system_proxy_options(),
             log_level: match self.config.log.level {
                 LogLevel::Info => "info",
                 LogLevel::Debug => "debug",
