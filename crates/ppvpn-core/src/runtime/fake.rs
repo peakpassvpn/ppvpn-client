@@ -91,7 +91,13 @@ impl Default for FakeRuntime {
             logs: (log_tx, Mutex::new(Some(log_rx))),
             failures_seen: (dial_tx, Mutex::new(Some(dial_rx))),
             dropped: AtomicU64::new(0),
-            network: Mutex::default(),
+            // Known at the start, as sail's start returns with its first
+            // detection done; `set_network` makes it unknown for a test.
+            network: Mutex::new(NetworkSnapshot {
+                interface: Some("eth0".into()),
+                index: Some(2),
+                ..NetworkSnapshot::default()
+            }),
             network_changes: watch::channel(None).0,
             generation: AtomicU64::new(0),
         }
@@ -224,6 +230,12 @@ impl FakeRuntime {
     /// A log line from sail; dropped and counted when the reader is behind.
     /// The network becomes `new`, as sail would publish it (`reason`:
     /// default_interface, state, host or wake).
+    /// The network becomes `new` without a change being reported (sail
+    /// learning its first default interface).
+    pub(crate) fn set_network(&self, new: NetworkSnapshot) {
+        *self.network.lock().unwrap() = new;
+    }
+
     pub(crate) fn change_network(&self, new: NetworkSnapshot, reason: &str) {
         let old = std::mem::replace(&mut *self.network.lock().unwrap(), new.clone());
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;

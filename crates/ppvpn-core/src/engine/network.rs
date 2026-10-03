@@ -99,14 +99,18 @@ impl Inner {
         }
         let snapshot = self.runtime.network();
         track.last = snapshot.clone();
-        // A snapshot that knows no network yet (no interface, not offline)
-        // says nothing.
-        if let Some(snapshot) = snapshot.filter(|s| s.offline || s.interface.is_some()) {
-            log_default_interface("start", &snapshot);
-            self.local_dns_network(&snapshot);
-            let mut live = self.live();
-            live.offline = snapshot.offline;
-            self.settle(&mut live);
+        // sail's start returns with its first detection done: a known
+        // interface, or offline (then `Restored`). A snapshot that knows
+        // neither says nothing; it should not happen.
+        match snapshot.filter(|s| s.offline || s.interface.is_some()) {
+            Some(snapshot) => {
+                log_default_interface("start", &snapshot);
+                self.local_dns_network(&snapshot);
+                let mut live = self.live();
+                live.offline = snapshot.offline;
+                self.settle(&mut live);
+            }
+            None => tracing::warn!("sail started without knowing the network"),
         }
     }
 

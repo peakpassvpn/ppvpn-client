@@ -241,3 +241,13 @@ async fn stop_forgets_offline() {
     });
     assert!(!engine.inner.live().offline);
 }
+
+/// A start whose snapshot knows neither an interface nor offline (sail no
+/// longer starts so) changes nothing: not offline.
+#[tokio::test]
+async fn a_start_that_knows_no_network_changes_nothing() {
+    let (engine, fake, _) = instance(Role::Tun);
+    fake.set_network(NetworkSnapshot::default());
+    running(&engine).await;
+    assert!(!no_default_interface(&engine));
+}
