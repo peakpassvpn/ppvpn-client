@@ -166,7 +166,7 @@ impl Inner {
         })
     }
 
-    pub(super) async fn start(&self) -> Result<(), Error> {
+    pub(super) async fn start(self: &Arc<Self>) -> Result<(), Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
@@ -189,19 +189,36 @@ impl Inner {
         self.prepare_listeners()?;
         self.probe_host_ipv6();
         // Translated again: select and pin may have moved since the apply.
-        let translation = translate::translate(&profile, &self.options(mode, &selected, &pins))?;
-        if let Err(e) = self.runtime.start(&translation.json).await {
+        let mut translation =
+            translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+        let mut started = self.runtime.start(&translation.json).await;
+        if let Err(e) = &started {
+            // The shared listener may have been taken since its port was
+            // checked: the run goes without it (section 4.6).
+            if e.code != "panicked" && self.leave_out_local_proxy() {
+                tracing::warn!(error = %e, "start failed with the local proxy listener, starting without it");
+                translation =
+                    translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+                started = self.runtime.start(&translation.json).await;
+            }
+        }
+        if let Err(e) = started {
             return Err(self.runtime_error(&e));
         }
-        {
+        let run = {
             let mut live = self.live();
             live.running = true;
             live.run += 1;
+            live.local_proxy_unavailable = self.local_proxy_left_out();
             if let Some(applied) = live.applied.as_mut() {
                 applied.translation = translation;
             }
             self.settle(&mut live);
             self.publish(Event::CoreStarted { at: now() });
+            live.local_proxy_unavailable.then_some(live.run)
+        };
+        if let Some(run) = run {
+            self.retry_local_proxy(run);
         }
         self.network_started();
         self.refresh().await;
@@ -220,6 +237,7 @@ impl Inner {
             return Err(self.runtime_error(&e));
         }
         self.network_stopped();
+        self.local_proxy_stopped();
         let mut live = self.live();
         live.running = false;
         live.run += 1;

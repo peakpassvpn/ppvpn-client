@@ -48,7 +48,9 @@ UPDATE_FEED="${PPVPN_UPDATE_FEED:-https://pkg.peakpassvpn.com/linux/${CHANNEL:-s
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must be x.y.z, got '$VERSION'" >&2; exit 2; }
 [[ "$BUILD" =~ ^[0-9]+$ ]] || { echo "error: build number must be an integer, got '$BUILD'" >&2; exit 2; }
 case "$CHANNEL" in ''|dev|stable) ;; *) echo "error: channel must be dev or stable" >&2; exit 2 ;; esac
-echo "PPVPN $VERSION (build $BUILD) for $RID, channel ${CHANNEL:-none}, api $API_BASE"
+# The backend may be a secret of the release environment: say which kind, not its value.
+API_KIND=custom; [[ "$API_BASE" == "https://www.peakpassvpn.com" ]] && API_KIND=production
+echo "PPVPN $VERSION (build $BUILD) for $RID, channel ${CHANNEL:-none}, api $API_KIND"
 
 # --- 1. ppvpn-client: native library + C# bindings -----------------------------------
 # With zigbuild, build-dotnet.sh generates the bindings from a native host build (zig's
@@ -118,6 +120,8 @@ install -m 0755 "$AGENT/ppvpn-push-agent" "$STAGE/app/ppvpn-push-agent"
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   install -m 0755 "$SERVICE_OUT/$bin" "$STAGE/app/$bin"
 done
+# GPL-3.0-or-later: the license text, installed where each package format keeps it (nfpm.yaml).
+install -m 0644 "$REPO_DIR/../LICENSE" "$STAGE/LICENSE"
 printf 'deb\n' > "$STAGE/package-format.deb"
 printf 'rpm\n' > "$STAGE/package-format.rpm"
 # The development copy of the app icon is not needed: the package installs it into hicolor.

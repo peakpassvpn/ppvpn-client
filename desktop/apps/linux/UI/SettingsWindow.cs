@@ -67,7 +67,29 @@ public static class SettingsWindow
         autoRow.SetVisible(vm.ShowUpdates);
         check.SetVisible(vm.ShowUpdates);
         page.Add(updates);
+        page.Add(License(vm));
         return page;
+    }
+
+    /// <summary>
+    /// Under About: the GPL notice (aboutLicense, the same wording on every platform; GPL-3.0
+    /// section 5 asks for it, and for the absence of a warranty, in an interactive program), the
+    /// copyright line and links to the source code and the license text.
+    /// </summary>
+    private static Adw.PreferencesGroup License(SettingsViewModel vm)
+    {
+        var notice = Label(T("aboutLicense"), "dim-label");
+        notice.SetWrap(true);
+        var links = Gtk.Box.New(Gtk.Orientation.Horizontal, 4);
+        links.Append(TextButton(T("aboutSource"), () => vm.OpenSourceCommand.Execute(), "flat"));
+        links.Append(TextButton(T("aboutViewLicense"), () => vm.OpenLicenseCommand.Execute(), "flat"));
+        var box = Gtk.Box.New(Gtk.Orientation.Vertical, 4);
+        box.Append(notice);
+        box.Append(Label(SettingsViewModel.Copyright, "dim-label"));
+        box.Append(links);
+        var group = Group();
+        group.Add(box);
+        return group;
     }
 
     private static Adw.PreferencesPage Account(SettingsViewModel vm)

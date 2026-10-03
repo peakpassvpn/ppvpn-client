@@ -15,6 +15,8 @@ use crate::config::{EngineConfig, Platform, Role};
 use crate::error::codes;
 use crate::event::Event;
 use crate::hostipv6;
+use crate::localdns::{self, listener, Cache, Change, Hosts, Interface, Server};
+use crate::runtime::NetworkSnapshot;
 use crate::translate::{self, LocalDns, Tun};
 
 /// What the host says about its IPv6.
@@ -43,6 +45,12 @@ pub(super) struct TunState {
     probe: Mutex<Probe>,
     /// The last probe's result, which the next translation uses.
     host: Mutex<Ipv6State>,
+    /// The core's own dns-local, serving sail on loopback (desktop TUN
+    /// instances, from `Engine::new`): sail's dns-local server points here.
+    listener: Mutex<Option<listener::Listener>>,
+    /// The default interface as sail last reported it: what dns-local reads
+    /// the resolvers of.
+    interface: Arc<Mutex<Option<Interface>>>,
 }
 
 impl TunState {
@@ -52,6 +60,8 @@ impl TunState {
             local_dns: local_dns(config).unwrap_or(LocalDns::System),
             probe: Mutex::new(Arc::new(system_probe)),
             host: Mutex::default(),
+            listener: Mutex::new(None),
+            interface: Arc::default(),
         }
     }
 }
@@ -138,8 +148,87 @@ impl Inner {
             ipv6: host.ipv6,
             no_host_ipv6_route: host.no_host_ipv6_route,
             interface_name: translate::interface_name(self.config.platform).into(),
-            local_dns: self.tun.local_dns.clone(),
+            local_dns: match self.tun.listener.lock().expect("dns-local").as_ref() {
+                Some(listener) => LocalDns::Listener(listener.addr()),
+                None => self.tun.local_dns.clone(),
+            },
         })
+    }
+
+    /// Starts the core's own dns-local (Go: internal/localdns) on a desktop
+    /// TUN instance: a loopback listener sail's dns-local server points to.
+    /// It reads the default interface's resolvers (or the host's override)
+    /// and asks them through sail's direct outbound, which binds the
+    /// physical interface; sail's network events make it read them again.
+    pub(super) async fn start_local_dns(&self) -> Result<(), Error> {
+        if self.config.role != Role::Tun || !desktop(self.config.platform) {
+            return Ok(());
+        }
+        let overridden: Vec<Server> = match &self.tun.local_dns {
+            LocalDns::Servers(servers) => servers
+                .iter()
+                .map(|s| Server::new(s.ip(), s.port()))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let current = self.tun.interface.clone();
+        let started = std::time::Instant::now();
+        let cache = Cache::new(
+            move |iface: &Interface| {
+                if overridden.is_empty() {
+                    localdns::source::system(iface)
+                } else {
+                    localdns::source::overridden(&overridden)
+                }
+            },
+            move || current.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            localdns::servers::tunnel_prefixes(),
+            move || started.elapsed(),
+            |change: &Change| {
+                tracing::info!(
+                    interface = change.interface.as_str(),
+                    source = change.source.as_str(),
+                    servers = change.servers_field(),
+                    error = change.error.as_deref(),
+                    "local dns servers"
+                );
+            },
+        );
+        let dns = localdns::LocalDns::new(
+            Arc::new(cache),
+            Arc::new(Hosts::system()),
+            Arc::new(localdns::RuntimeDial {
+                runtime: self.runtime.clone(),
+                outbound: translate::DIRECT_TAG.into(),
+            }),
+        );
+        let listener = listener::start(Arc::new(dns)).await.map_err(|e| {
+            Error::new(
+                codes::CORE_OPERATION_FAILED,
+                false,
+                format!("dns-local: {e}"),
+            )
+        })?;
+        tracing::info!(addr = %listener.addr(), "dns-local listening");
+        *self.tun.listener.lock().expect("dns-local") = Some(listener);
+        Ok(())
+    }
+
+    /// sail reported the network: dns-local follows the default interface
+    /// and reads its resolvers again at the next query.
+    pub(super) fn local_dns_network(&self, snapshot: &NetworkSnapshot) {
+        let interface = (!snapshot.offline)
+            .then(|| {
+                snapshot.interface.as_ref().map(|name| Interface {
+                    index: snapshot.index.unwrap_or(0),
+                    name: name.clone(),
+                })
+            })
+            .flatten();
+        *self.tun.interface.lock().unwrap_or_else(|e| e.into_inner()) = interface;
+        if let Some(listener) = self.tun.listener.lock().expect("dns-local").as_ref() {
+            listener.invalidate();
+        }
     }
 
     /// Probes the host's IPv6 for the next translation (apply and start).
@@ -481,5 +570,48 @@ mod tests {
         engine.reprobe_host_ipv6().await;
         assert_eq!(host.asked(), 2, "not probed while stopped");
         assert_eq!(reloads(&fake), 0);
+    }
+
+    #[tokio::test]
+    async fn a_desktop_tun_instance_serves_dns_local_on_loopback() {
+        let (engine, _fake, _) = instance(Role::Tun, Platform::Linux);
+        engine.inner.start_local_dns().await.unwrap();
+        match engine.inner.tun_options().unwrap().local_dns {
+            LocalDns::Listener(addr) => {
+                assert!(addr.ip().is_loopback());
+                assert_ne!(addr.port(), 0);
+            }
+            other => panic!("{other:?}"),
+        }
+        // sail's network becomes dns-local's interface; offline, none.
+        engine.inner.local_dns_network(&NetworkSnapshot {
+            interface: Some("eth0".into()),
+            index: Some(2),
+            ..NetworkSnapshot::default()
+        });
+        assert_eq!(
+            *engine.inner.tun.interface.lock().unwrap(),
+            Some(Interface {
+                index: 2,
+                name: "eth0".into()
+            })
+        );
+        engine.inner.local_dns_network(&NetworkSnapshot {
+            offline: true,
+            ..NetworkSnapshot::default()
+        });
+        assert_eq!(*engine.inner.tun.interface.lock().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn only_desktop_tun_instances_run_dns_local() {
+        for (role, platform) in [
+            (Role::Standard, Platform::Linux),
+            (Role::Tun, Platform::Ios),
+        ] {
+            let (engine, _fake, _) = instance(role, platform);
+            engine.inner.start_local_dns().await.unwrap();
+            assert!(engine.inner.tun.listener.lock().unwrap().is_none());
+        }
     }
 }

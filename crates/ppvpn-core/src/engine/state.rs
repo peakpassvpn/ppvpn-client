@@ -74,6 +74,8 @@ pub(crate) struct Live {
     pub restarting: bool,
     /// The TUN's routing when not in place (None: ok).
     pub tun_routing: Option<TunRouting>,
+    /// This run goes without the shared local proxy listener.
+    pub local_proxy_unavailable: bool,
     /// The state last reported (StateChanged).
     pub state: EngineState,
     /// While running: sail's groups by tag, as last read.
@@ -113,6 +115,9 @@ impl Live {
             Some(TunRouting::Unguarded) => reasons.push(DegradedReason::TunRoutingUnguarded),
             _ => {}
         }
+        if self.local_proxy_unavailable {
+            reasons.push(DegradedReason::LocalProxyUnavailable);
+        }
         if reasons.is_empty() {
             EngineState::Running
         } else {
@@ -125,6 +130,7 @@ impl Live {
         self.groups.clear();
         self.connections.clear();
         self.tun_routing = None;
+        self.local_proxy_unavailable = false;
         self.switched.clear();
     }
 
