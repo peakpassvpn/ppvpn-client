@@ -152,11 +152,7 @@ async fn get(
     if !tls {
         return exchange(stream, url, deadline).await;
     }
-    use sail::config::model::CertificateStore;
-    use sail::transport::tls::{roots::Roots, TlsClient};
-    let roots = Roots::of(CertificateStore::System).map_err(|_| rc::PROXY_REQUEST_FAILED)?;
-    let client = TlsClient::new(&["http/1.1".to_owned()], None, false, None, &roots)
-        .map_err(|_| rc::PROXY_REQUEST_FAILED)?;
+    let client = crate::tls::client(&["http/1.1"], None).map_err(|_| rc::PROXY_REQUEST_FAILED)?;
     let stream = client
         .connect(&server_name, stream, None, None)
         .await

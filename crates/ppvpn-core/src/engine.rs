@@ -42,6 +42,7 @@ mod proxy;
 #[cfg(test)]
 mod proxy_tests;
 mod routing;
+mod rule_sets;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
@@ -87,6 +88,11 @@ struct Inner {
     network: network::NetworkState,
     /// The Linux desktop TUN's routing guard while it runs.
     routing: routing::RoutingGuard,
+    /// The profile's rule sets: cache, downloads, refresh.
+    rule_sets: crate::rulesets::Manager,
+    /// Set when `shutdown` begins: rule set downloads under way give up.
+    closing: rule_sets::Closing,
+    rule_set_inputs: Mutex<rule_sets::RuleSetInputs>,
 }
 
 impl Drop for Inner {
@@ -163,7 +169,10 @@ impl Engine {
     ) -> Result<Engine, Error> {
         let proxies = proxy::Proxies::open(&config)?;
         log.attach(&runtime);
-        let inner = Arc::new(Inner {
+        let inner = Arc::new_cyclic(|weak| Inner {
+            rule_sets: rule_sets::manager(&config, weak.clone()),
+            rule_set_inputs: Mutex::default(),
+            closing: rule_sets::Closing::default(),
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
             routing: routing::RoutingGuard::default(),
@@ -187,6 +196,7 @@ impl Engine {
     /// logged. Afterwards lifecycle calls return `ENGINE_SHUT_DOWN`.
     pub async fn shutdown(&self) -> Result<ShutdownReport, Error> {
         let inner = &self.inner;
+        inner.closing.close();
         if let Some(watcher) = inner.watcher.lock().expect("watcher").take() {
             watcher.abort();
         }
@@ -210,6 +220,7 @@ impl Engine {
         inner.local_proxy_stopped();
         // Before the TUN closes: sail's cleanup must not be undone.
         inner.guard_stopped();
+        inner.rule_sets.close();
         let report = cleanup::cleanup(parts, left).await;
         // Shut down before the operation lock goes, so nothing queued on it
         // (a re-probe, a lifecycle call) acts on the torn-down runtime.
@@ -265,6 +276,7 @@ impl Engine {
     /// The authoritative snapshot (section 5).
     pub fn status(&self) -> Status {
         let config = &self.inner.config;
+        let rule_sets = self.inner.rule_set_statuses();
         let live = self.inner.live();
         let (local_proxy, system_proxy) = (
             self.inner.local_proxy_status(live.running),
@@ -284,6 +296,7 @@ impl Engine {
             tun_routing: (config.role == Role::Tun)
                 .then_some(live.tun_routing.unwrap_or(TunRouting::Ok)),
             dropped_log_lines: self.inner.log.dropped(),
+            rule_sets,
             ..Status::default()
         }
     }
@@ -468,11 +481,7 @@ impl Inner {
     fn admit(&self) -> Result<(), Error> {
         let live = self.live();
         if live.shut_down {
-            return Err(Error::new(
-                codes::ENGINE_SHUT_DOWN,
-                false,
-                "the instance was shut down",
-            ));
+            return Err(shut_down());
         }
         if live.fatal.is_some() {
             return Err(Error::new(
@@ -521,9 +530,14 @@ impl Inner {
             }
             .into(),
             tun: self.tun_options(),
+            rule_sets: self.rule_set_files(),
             ..translate::Options::default()
         }
     }
+}
+
+fn shut_down() -> Error {
+    Error::new(codes::ENGINE_SHUT_DOWN, false, "the instance was shut down")
 }
 
 fn not_applied() -> Error {

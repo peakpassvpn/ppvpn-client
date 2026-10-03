@@ -68,6 +68,8 @@ pub(crate) struct Live {
     pub run: u64,
     /// No default interface (sail's network events, E1b).
     pub offline: bool,
+    /// The rule sets without a copy (ids, profile order).
+    pub rule_sets_unavailable: Vec<String>,
     /// A full restart is under way: sail's states in between (a start that
     /// fails and is put back) are not the instance's.
     pub restarting: bool,
@@ -116,6 +118,11 @@ impl Live {
         }
         if self.local_proxy_unavailable {
             reasons.push(DegradedReason::LocalProxyUnavailable);
+        }
+        for id in &self.rule_sets_unavailable {
+            reasons.push(DegradedReason::RuleSetUnavailable {
+                rule_set_id: id.clone(),
+            });
         }
         if reasons.is_empty() {
             EngineState::Running

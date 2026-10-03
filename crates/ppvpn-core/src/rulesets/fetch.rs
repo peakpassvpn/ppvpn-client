@@ -13,8 +13,6 @@ use http_body_util::{BodyExt, Empty};
 use hyper::header::{ACCEPT, CONNECTION, HOST, IF_NONE_MATCH, USER_AGENT};
 use hyper::{Request, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
-use sail::config::model::CertificateStore;
-use sail::transport::tls::roots::Roots;
 use sail::transport::tls::TlsClient;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -69,14 +67,8 @@ pub(super) struct Client {
 impl Client {
     /// `trust_pem` replaces the system's roots (tests).
     pub(super) fn new(dial: Arc<dyn Dial>, trust_pem: Option<&str>) -> Self {
-        let store = if trust_pem.is_some() {
-            CertificateStore::None
-        } else {
-            CertificateStore::System
-        };
-        let tls = Roots::of(store)
-            .and_then(|roots| TlsClient::new(&[], trust_pem, false, None, &roots))
-            .inspect_err(|e| tracing::warn!("rule set downloads have no TLS client: {e:#}"))
+        let tls = crate::tls::client(&[], trust_pem)
+            .inspect_err(|e| tracing::warn!("rule set downloads have no TLS client: {e}"))
             .ok();
         Client { dial, tls }
     }

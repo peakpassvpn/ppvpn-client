@@ -362,7 +362,7 @@ fn failed(message: impl Into<String>) -> Error {
 
 /// The routing the configuration is built from: in the global mode only the
 /// baseline rules (and their rule sets), then the selected node.
-fn effective_routing(profile: &Profile, mode: RoutingMode) -> crate::profile::Routing {
+pub(crate) fn effective_routing(profile: &Profile, mode: RoutingMode) -> crate::profile::Routing {
     let mut routing = profile.routing.clone();
     if mode == RoutingMode::Global {
         routing.rules.retain(|rule| rule.baseline);

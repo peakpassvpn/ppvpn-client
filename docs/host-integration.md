@@ -110,7 +110,7 @@ pub struct ApplyRequest {
     pub routing_mode: RoutingMode,        // Rules | Global；默认 Rules
     pub selected_node_id: Option<String>, // 宿主持久化的选中节点；默认 None = 用 default_node_id
     pub pins: Vec<Pin>,                   // 宿主持久化的 ingress pin：{ node_id, endpoint_key }；默认空
-    pub allowed_rule_set_hosts: Vec<String>, // 默认空 = 不限制 Profile 里的 rule-set 主机
+    pub allowed_rule_set_hosts: Vec<String>, // 默认空 = 不允许从任何主机下载规则集；宿主必须显式给出
 }
 // 用 JSON 反序列化 ApplyRequest 时（例如将来的 FFI），只有 profile 是必需的；
 // 其余字段缺省时取上面注明的默认值。
@@ -141,7 +141,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
   - 同时，引擎在越过 `expires_at` 的那一刻进入 `Degraded{ProfileExpired}`。这由定时器触发，不必等到下一次重建才发现。这个原因只用于上报，不触发 `Fatal`，也不影响转发。apply 一份未过期的新 Profile 后清除。这是 Rust 版新增的行为，Go 0.5.21 只有日志。
   - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
   - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
-- **规则集**：apply 前会准备规则集，总共最多等 10 秒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
+- **规则集**：apply 前会准备规则集，总共最多等 10 秒。只从 `allowed_rule_set_hosts` 列出的主机下载（宿主传拉取 Profile 的 API 主机）；为空时一个也不下载，只用本地已有的、sha256 相符的缓存，其余规则集报 `RULE_SET_HOST_NOT_PINNED`（和 Go 一致，默认拒绝）。不为空时，Profile 里的规则集 URL 必须都在这些主机上，否则 apply 被拒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
 - **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`（停止再启动，`reasons` 说明是哪个监听变了，例如 `tun options changed`）。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
 ### 4.2 start / stop

@@ -347,7 +347,10 @@ impl Manager {
                         e.updated_at = Some(mod_time(&local.path).unwrap_or(now));
                     }
                     local => {
-                        if local.is_some() {
+                        // An older copy stands in only for a set this
+                        // profile may fetch: with no host allowed, only a
+                        // copy of the profile's own version is used.
+                        if local.is_some() && snapshot.host_pinned(set) {
                             e.state = State::Stale;
                         }
                         if !snapshot.host_pinned(set) {

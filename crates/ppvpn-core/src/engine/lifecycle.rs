@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
-use super::{not_applied, now, Error, Inner};
+use super::{not_applied, now, shut_down, Error, Inner};
 use crate::error::codes;
 use crate::event::Event;
 use crate::request::{
@@ -35,8 +35,6 @@ impl Inner {
         self: &Arc<Self>,
         request: ApplyRequest,
     ) -> Result<ApplyResult, Error> {
-        self.admit()?;
-        let _op = self.op.lock().await;
         self.admit()?;
         // D3: the profile as given, before any selection is carried over.
         let profile = validate_request(&request, Utc::now())
@@ -78,21 +76,17 @@ impl Inner {
             }
         }
 
-        // The dedupe key against the live values, select and pin included.
-        let (running, unchanged) = {
-            let live = self.live();
-            let running = live
-                .running
-                .then(|| live.applied.as_ref().map(|a| a.translation.clone()))
-                .flatten();
-            let unchanged = live.applied.as_ref().is_some_and(|a| {
+        // The dedupe key against the live values, select and pin included,
+        // and the hosts rule sets may come from (a new list may let a set be
+        // fetched).
+        let same_hosts = self.rule_set_hosts() == request.allowed_rule_set_hosts;
+        let unchanged = same_hosts
+            && self.live().applied.as_ref().is_some_and(|a| {
                 a.profile.revision == profile.revision
                     && a.mode == request.routing_mode
                     && a.selected == selected
                     && a.pins == pins
             });
-            (running, unchanged)
-        };
         if unchanged {
             // Nothing done, nothing sent; the result still tells the host
             // what its persisted selection and pins should be.
@@ -106,8 +100,31 @@ impl Inner {
             });
         }
 
+        // Rule sets never fail an apply: a set that cannot be had degrades
+        // its rules. Their downloads (up to PREPARE_TIMEOUT) run before the
+        // operation lock, so that a shutdown neither waits for them nor
+        // loses its budget to them; it cancels them.
+        let Some(rule_sets) = self
+            .prepare_rule_sets(
+                &profile,
+                request.routing_mode,
+                &request.allowed_rule_set_hosts,
+            )
+            .await
+        else {
+            return Err(shut_down());
+        };
+        let _op = self.op.lock().await;
+        self.admit()?;
+        let running = {
+            let live = self.live();
+            live.running
+                .then(|| live.applied.as_ref().map(|a| a.translation.clone()))
+                .flatten()
+        };
         self.probe_host_ipv6();
-        let options = self.options(request.routing_mode, &selected, &pins);
+        let mut options = self.options(request.routing_mode, &selected, &pins);
+        options.rule_sets = rule_sets.files();
         let translation = translate::translate(&profile, &options)
             .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
         let switch = if let Some(running) = &running {
@@ -156,6 +173,7 @@ impl Inner {
                 });
             }
         }
+        self.activate_rule_sets(rule_sets, request.allowed_rule_set_hosts);
         if running.is_some() {
             self.refresh().await;
         }
