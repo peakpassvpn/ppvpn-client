@@ -211,6 +211,7 @@ impl Inner {
         // Translated again: select and pin may have moved since the apply.
         let mut translation =
             translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+        self.live().needs_stop = true;
         let mut started = self.runtime.start(&translation.json).await;
         if let Err(e) = &started {
             // The shared listener may have been taken since its port was
@@ -267,6 +268,7 @@ impl Inner {
         self.local_proxy_stopped();
         let mut live = self.live();
         live.running = false;
+        live.needs_stop = false;
         live.run += 1;
         live.clear_runtime();
         self.settle(&mut live);

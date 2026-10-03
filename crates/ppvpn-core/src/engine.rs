@@ -116,7 +116,7 @@ impl Drop for Inner {
         let running = self
             .live
             .get_mut()
-            .map(|live| live.running && !live.shut_down)
+            .map(|live| (live.running || live.needs_stop) && !live.shut_down)
             .unwrap_or(false);
         let shut_down = self
             .live
@@ -223,7 +223,12 @@ impl Engine {
         let op = tokio::time::timeout_at(deadline, inner.op.lock())
             .await
             .ok();
-        let running = inner.live().running;
+        // Also a runtime that failed or panicked: stopping it takes down
+        // what it opened (the TUN, its filters).
+        let running = {
+            let live = inner.live();
+            live.running || live.needs_stop
+        };
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         let parts = cleanup::Parts {
             runtime: running.then(|| inner.runtime.clone()),
