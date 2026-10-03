@@ -2079,6 +2079,7 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "futures-util",
  "hickory-proto",
  "idna",
  "sail",

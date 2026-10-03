@@ -12,6 +12,7 @@ pub mod event;
 // dns-local is wired up by the runtime; until then only its tests use it.
 #[allow(dead_code, unused_imports)]
 pub(crate) mod localdns;
+mod logfmt;
 pub(crate) mod profile;
 pub mod request;
 mod runtime;
