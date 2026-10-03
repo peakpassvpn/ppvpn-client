@@ -349,3 +349,38 @@ async fn dns_local_dials_through_the_direct_outbound() {
     }
     runtime.stop().await.unwrap();
 }
+
+// The network as sail sees it, and its changes as sail publishes them to
+// its own reaction (here a wake, which sail announces whatever the state).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_changes_are_sails_own() {
+    use sail::net::network::ChangeReason;
+
+    let runtime = SailRuntime::new(options("network")).unwrap();
+    let mut changes = runtime.network_changes();
+    assert_eq!(runtime.network(), None, "not running");
+    runtime
+        .start(&config(free_port(), &[], false))
+        .await
+        .unwrap();
+    assert!(runtime.network().is_some());
+    assert_eq!(*changes.borrow_and_update(), None, "no change yet");
+
+    runtime
+        .instance
+        .manager()
+        .unwrap()
+        .network()
+        .announce(ChangeReason::Wake);
+    tokio::time::timeout(WAIT, changes.changed())
+        .await
+        .expect("a change")
+        .unwrap();
+    let change = changes.borrow_and_update().clone().expect("the change");
+    assert_eq!(change.reason, "wake");
+    assert!(change.generation >= 1);
+    assert_eq!(change.old, change.new, "announced: the state did not move");
+
+    runtime.stop().await.unwrap();
+    assert_eq!(runtime.network(), None);
+}
