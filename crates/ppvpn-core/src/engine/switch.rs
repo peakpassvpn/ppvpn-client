@@ -97,6 +97,7 @@ impl Inner {
             if let Err(e) = self.runtime.reload(&next.json).await {
                 return Err(self.runtime_error(&e));
             }
+            self.guard_check("kernel switch");
             return Ok(SwitchKind::KernelSwitch);
         }
         tracing::info!(reasons = reasons.join("; "), "full restart");
@@ -111,8 +112,13 @@ impl Inner {
         running: &Translation,
         next: &Translation,
     ) -> Result<(), Error> {
+        // Before the TUN closes: sail's cleanup must not be undone.
+        self.guard_stopped();
         if let Err(e) = self.runtime.stop().await {
-            return Err(self.runtime_error(&e));
+            let error = self.runtime_error(&e);
+            // Still running: the TUN stays, and so does its guard.
+            self.guard_restarted();
+            return Err(error);
         }
         self.network_stopped();
         let started = self.runtime.start(&next.json).await;
@@ -147,6 +153,8 @@ impl Inner {
             live.local_proxy_unavailable.then_some(live.run)
         };
         self.network_started();
+        // What sail installed for the new TUN.
+        self.guard_started();
         if let Some(run) = retry {
             self.retry_local_proxy(run);
         }

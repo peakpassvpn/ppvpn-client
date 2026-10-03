@@ -224,11 +224,12 @@ impl Inner {
             self.retry_local_proxy(run);
         }
         self.network_started();
+        self.guard_started();
         self.refresh().await;
         Ok(())
     }
 
-    pub(super) async fn stop(&self) -> Result<(), Error> {
+    pub(super) async fn stop(self: &Arc<Self>) -> Result<(), Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
@@ -236,8 +237,13 @@ impl Inner {
         if !running {
             return Ok(());
         }
+        // Before the TUN closes: sail's cleanup must not be undone.
+        self.guard_stopped();
         if let Err(e) = self.runtime.stop().await {
-            return Err(self.runtime_error(&e));
+            let error = self.runtime_error(&e);
+            // Still running: the TUN stays, and so does its guard.
+            self.guard_restarted();
+            return Err(error);
         }
         self.network_stopped();
         self.local_proxy_stopped();
@@ -381,6 +387,9 @@ impl Inner {
             FatalReason::KernelUnrecoverable
         });
         self.settle(&mut live);
+        drop(live);
+        // The TUN is gone with the runtime.
+        self.guard_stopped();
     }
 
     /// The default interface changed (`None`: none). Offline while running
@@ -406,7 +415,6 @@ impl Inner {
     /// The TUN routing guard's report: Restoring and Unguarded degrade,
     /// Restored ends both (`TunRoutingRestored`), Broken is Fatal
     /// (`TunRoutingBroken`).
-    #[allow(dead_code)] // its source is not wired yet
     pub(super) fn on_tun_routing(&self, signal: TunRoutingSignal) {
         let mut live = self.live();
         match signal {

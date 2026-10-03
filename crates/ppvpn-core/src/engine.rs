@@ -41,6 +41,7 @@ mod probes_tests;
 mod proxy;
 #[cfg(test)]
 mod proxy_tests;
+mod routing;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
@@ -53,6 +54,7 @@ pub(crate) use bus::Subscription;
 pub use logs::tracing_layer;
 use logs::Logs;
 use state::Live;
+#[cfg(test)]
 pub(crate) use state::TunRoutingSignal;
 
 /// The version of the local proxy contract (users, ports, metadata).
@@ -83,6 +85,8 @@ struct Inner {
     log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
+    /// The Linux desktop TUN's routing guard while it runs.
+    routing: routing::RoutingGuard,
 }
 
 impl Drop for Inner {
@@ -92,6 +96,8 @@ impl Drop for Inner {
         if let Some(watcher) = self.watcher.get_mut().ok().and_then(Option::take) {
             watcher.abort();
         }
+        // Before the TUN's cleanup.
+        self.routing.stop();
         let running = self
             .live
             .get_mut()
@@ -160,6 +166,7 @@ impl Engine {
         let inner = Arc::new(Inner {
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
+            routing: routing::RoutingGuard::default(),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),
@@ -201,6 +208,8 @@ impl Engine {
         // way held `op` and is done.
         inner.network_stopped();
         inner.local_proxy_stopped();
+        // Before the TUN closes: sail's cleanup must not be undone.
+        inner.guard_stopped();
         let report = cleanup::cleanup(parts, left).await;
         // Shut down before the operation lock goes, so nothing queued on it
         // (a re-probe, a lifecycle call) acts on the torn-down runtime.
@@ -419,9 +428,8 @@ impl Engine {
         self.inner.on_network(interface);
     }
 
-    /// The TUN routing guard's report. Its source is the guard module
-    /// (Linux tunrules, separate PR), not wired yet.
-    #[allow(dead_code)]
+    /// The TUN routing guard's report, as the guard sends it (tests).
+    #[cfg(test)]
     pub(crate) fn on_tun_routing(&self, signal: TunRoutingSignal) {
         self.inner.on_tun_routing(signal);
     }
@@ -486,6 +494,8 @@ impl Inner {
             live.clear_runtime();
             live.fatal = Some(FatalReason::Panic);
             self.settle(&mut live);
+            drop(live);
+            self.guard_stopped();
         }
         error.to_error_on(self.config.platform)
     }
