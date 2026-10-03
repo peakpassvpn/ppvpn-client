@@ -3,9 +3,9 @@ name: netns
 # Tests that need a real TUN, each in a network namespace of its own on the
 # runner (test/netns/run.sh), with a check that the runner's own routes,
 # rules, links, nftables and DNS are as they were afterwards (gates G3 and
-# G7 of #45). Engine-independent by design: the same scripts are to run on
-# the Rust engine later. No internet: documentation addresses and local
-# fake nodes only.
+# G7 of #45). Engine-independent by design: network-change-rust runs the
+# same scripts on the Rust engine (ppvpn-core-lab). No internet:
+# documentation addresses and local fake nodes only.
 
 on:
   pull_request:
@@ -80,6 +80,59 @@ jobs:
           for mode in 0 1 2 3 4; do
             echo "::group::mode $mode"
             sudo NETNS_TIMEOUT=90 test/netns/run.sh --host test/lab/localdns/updown.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json $mode "$RUNNER_TEMP/updown-$mode" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  network-change-rust:
+    # The same scripts on the Rust engine (ppvpn-core-lab), strictly:
+    # SWITCH_GRACE_MS=0, the change reported within 2 s and the first query
+    # after it on the new network (docs/rust-parity.md, "Go 0.5.21 的已知
+    # 滞后"). Resolvers come from the namespace's resolv.conf (no test
+    # source), interface changes and kernel switches from watch-events.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The version is rust-toolchain.toml's; keep it in step with rust.yml.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build ppvpn-core-lab and the helper (as the runner user)
+        run: |
+          cargo build -p ppvpn-core-lab --locked
+          go build -o "$RUNNER_TEMP/ldnslab" ./test/lab/localdns/ldnslab
+          command -v tcpdump || { sudo apt-get update -qq && sudo apt-get install -y -qq tcpdump; }
+      - name: dns-local follows network changes (#61), strict
+        # Blocked on the engine (apply and start pass): a Tun instance opens
+        # no TUN yet; dns-local is not the core's listener yet (#119), and
+        # until then sail's `local` asks the system resolver (127.0.0.1 when
+        # resolv.conf is empty: the trap); NetworkChanged has no source yet
+        # (sail's network events); Engine::logs() is a stub, so no "local
+        # dns servers" line. Drop continue-on-error once they are on main.
+        continue-on-error: true
+        run: sudo NETNS_TIMEOUT=180 NETNS_ENV="CORE_ENGINE=rust SWITCH_GRACE_MS=0" test/netns/run.sh --host test/lab/localdns/run.sh target/debug/ppvpn-core-lab "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json "$RUNNER_TEMP/localdns"
+      - name: link down/up, no kernel switch while offline (#69), modes 0-4
+        # Blocked on the engine as above: no TUN, so the probe through it
+        # never recovers; mode 2 also needs the host-IPv6 re-probe to switch
+        # kernels (KernelSwitched). The switch counts of 0 pass vacuously
+        # until then.
+        continue-on-error: true
+        run: |
+          status=0
+          for mode in 0 1 2 3 4; do
+            echo "::group::mode $mode"
+            sudo NETNS_TIMEOUT=90 NETNS_ENV="CORE_ENGINE=rust" test/netns/run.sh --host test/lab/localdns/updown.sh target/debug/ppvpn-core-lab "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json $mode "$RUNNER_TEMP/updown-$mode" || status=1
             echo "::endgroup::"
           done
           exit $status
