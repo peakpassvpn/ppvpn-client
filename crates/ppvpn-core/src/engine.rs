@@ -35,6 +35,7 @@ mod lifecycle;
 mod lifecycle_tests;
 mod logs;
 mod network;
+mod outbound_log;
 mod probes;
 #[cfg(test)]
 mod probes_tests;
@@ -86,6 +87,8 @@ struct Inner {
     log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
+    /// Direct failures logged at most once per destination per window.
+    outbound_log: outbound_log::Limiter,
     /// Counts the kernels of this instance (Go's `gen`): one per start or
     /// restart, one per reload switch.
     kernel_gen: std::sync::atomic::AtomicU64,
@@ -178,6 +181,7 @@ impl Engine {
             closing: rule_sets::Closing::default(),
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
+            outbound_log: outbound_log::Limiter::default(),
             kernel_gen: std::sync::atomic::AtomicU64::new(0),
             routing: routing::RoutingGuard::default(),
             config,
