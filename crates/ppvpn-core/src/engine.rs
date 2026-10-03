@@ -42,6 +42,7 @@ mod probes_tests;
 mod proxy;
 #[cfg(test)]
 mod proxy_tests;
+mod reads;
 mod routing;
 mod rule_sets;
 mod selection;
@@ -87,6 +88,8 @@ struct Inner {
     log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
+    /// The host's reads, which keep the runtime's figures fresh.
+    reads: reads::Reads,
     /// Direct failures logged at most once per destination per window.
     outbound_log: outbound_log::Limiter,
     /// Counts the kernels of this instance (Go's `gen`): one per start or
@@ -188,6 +191,7 @@ impl Engine {
             tun: tun::TunState::new(&config),
             network: network::NetworkState::default(),
             outbound_log: outbound_log::Limiter::default(),
+            reads: reads::Reads::new(),
             kernel_gen: std::sync::atomic::AtomicU64::new(0),
             routing: routing::RoutingGuard::default(),
             config,
@@ -289,6 +293,7 @@ impl Engine {
 
     /// The authoritative snapshot (section 5).
     pub fn status(&self) -> Status {
+        self.inner.host_read();
         let config = &self.inner.config;
         let rule_sets = self.inner.rule_set_statuses();
         let live = self.inner.live();
@@ -334,6 +339,7 @@ impl Engine {
     /// Cumulative bytes as last read from the runtime (every second while
     /// running); `measured_at` is when.
     pub fn traffic(&self) -> Traffic {
+        self.inner.host_read();
         let live = self.inner.live();
         Traffic {
             upload_bytes: live.traffic.upload_bytes,
@@ -346,6 +352,7 @@ impl Engine {
     /// while running), each with the node its outbound chain goes through
     /// (empty: direct).
     pub fn connections(&self) -> Vec<Connection> {
+        self.inner.host_read();
         let live = self.inner.live();
         let nodes = live.applied.as_ref().map(|a| &a.translation.outbound_nodes);
         live.connections

@@ -3,11 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
 use chrono::Utc;
 use tokio::task::JoinHandle;
-use tokio::time::MissedTickBehavior;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
 use super::{not_applied, now, shut_down, Error, Inner};
@@ -25,10 +23,6 @@ use crate::translate::{self, Translation, SELECTED_TAG};
 const CANDIDATE_FAILED: &str = "candidate validation or build failed";
 /// What it says when the runtime refused the new configuration.
 const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
-
-/// How often the watcher reads the runtime's groups (health), traffic and
-/// connections while running.
-const REFRESH: Duration = Duration::from_secs(1);
 
 impl Inner {
     pub(super) async fn apply(
@@ -464,7 +458,8 @@ impl Inner {
 }
 
 /// Follows the runtime from `new` until the instance goes: group switches,
-/// its state, and the groups' health every REFRESH while running. Needs a
+/// failed dials, its state and the network, as they happen; no timer of its
+/// own (the figures are read while the host reads them, reads.rs). Needs a
 /// tokio runtime; without one (no current handle) nothing is followed.
 pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     let handle = tokio::runtime::Handle::try_current().ok()?;
@@ -478,8 +473,6 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
         (inner.config.log.level == crate::config::LogLevel::Debug).then(|| inner.runtime.routes());
     let weak: Weak<Inner> = Arc::downgrade(inner);
     Some(handle.spawn(async move {
-        let mut tick = tokio::time::interval(REFRESH);
-        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut switches_open = true;
         let mut failures_open = true;
         loop {
@@ -527,10 +520,6 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                     let state = states.borrow_and_update().clone();
                     let Some(inner) = weak.upgrade() else { return };
                     inner.on_runtime_state(state);
-                }
-                _ = tick.tick() => {
-                    let Some(inner) = weak.upgrade() else { return };
-                    inner.refresh().await;
                 }
             }
         }
