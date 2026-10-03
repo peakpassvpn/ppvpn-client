@@ -32,7 +32,8 @@ jq '.revision = "udp-to-tcp-only" | .routing.rules = [{"id":"udp-us","match":{"i
   /work/profile.json > /run/udp-us.json
 PROFILE=/run/udp-us.json apply >/dev/null && api start >/dev/null; sleep 1
 case $ENGINE in
-rust) check udp.3 "UDP routed to a node with udp=false is refused (D4)" "$(udp)" '' ;;
+# No answer is "none"; with no core the echo would answer directly (.100).
+rust) check udp.3 "UDP routed to a node with udp=false is refused (D4)" "$(r=$(udp); echo "${r:-none}")" 'none' ;;
 *) check udp.3 "UDP routed to a node with udp=false still goes through it" "$(udp)" '198\.51\.100\.13' ;;
 esac
 stop_core; summary
