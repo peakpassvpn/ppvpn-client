@@ -41,6 +41,8 @@ pub(crate) struct SailRuntime {
     switches: Mutex<Option<mpsc::Receiver<GroupSwitch>>>,
     logs: Mutex<Option<mpsc::Receiver<String>>>,
     dropped: Arc<AtomicU64>,
+    /// The tun inbound's name in what runs (`tun_name`).
+    tun: Mutex<Option<String>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -120,6 +122,7 @@ impl SailRuntime {
             switches: Mutex::new(Some(switch_rx)),
             logs: Mutex::new(Some(log_rx)),
             dropped,
+            tun: Mutex::new(None),
             tasks,
         })
     }
@@ -219,18 +222,24 @@ impl Runtime for SailRuntime {
         self.instance
             .start(Config::Json(config.into()))
             .await
-            .map_err(error)
+            .map_err(error)?;
+        *self.tun.lock().expect("tun") = super::configured_tun_name(config);
+        Ok(())
     }
 
     async fn reload(&self, config: &str) -> Result<(), RuntimeError> {
         self.instance
             .reload(Some(Config::Json(config.into())))
             .await
-            .map_err(error)
+            .map_err(error)?;
+        *self.tun.lock().expect("tun") = super::configured_tun_name(config);
+        Ok(())
     }
 
     async fn stop(&self) -> Result<(), RuntimeError> {
-        self.instance.stop().await.map_err(error)
+        self.instance.stop().await.map_err(error)?;
+        *self.tun.lock().expect("tun") = None;
+        Ok(())
     }
 
     fn states(&self) -> watch::Receiver<RuntimeState> {
@@ -399,6 +408,10 @@ impl Runtime for SailRuntime {
 
     fn dropped_log_lines(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
+    }
+
+    fn tun_name(&self) -> Option<String> {
+        self.tun.lock().expect("tun").clone()
     }
 }
 

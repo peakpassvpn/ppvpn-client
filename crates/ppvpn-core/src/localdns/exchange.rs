@@ -10,24 +10,68 @@ use hickory_proto::op::{Message, MessageType, ResponseCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 
+use crate::runtime::{AsyncReadWrite, Datagram, Runtime, Target};
+
 /// How long one server has for one exchange.
 pub const SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Opens sockets to a resolver. The runtime's binds them to the default
-/// interface, so that a query to a physical resolver never enters the TUN
-/// (#45 dns-local case D1); [`PlainDial`] does not bind (tests).
+/// Opens a datagram or stream to a resolver. [`RuntimeDial`] goes through
+/// sail's direct outbound, whose dialer is bound to the default interface,
+/// so that a query to a physical resolver never enters the TUN (#45
+/// dns-local case D1); [`PlainDial`] does not bind (tests).
 #[async_trait]
-pub trait Dial: Send + Sync {
-    async fn udp(&self, server: SocketAddr) -> io::Result<UdpSocket>;
-    async fn tcp(&self, server: SocketAddr) -> io::Result<TcpStream>;
+pub(crate) trait Dial: Send + Sync {
+    async fn udp(&self, server: SocketAddr) -> io::Result<Box<dyn Datagram>>;
+    async fn tcp(&self, server: SocketAddr) -> io::Result<Box<dyn AsyncReadWrite>>;
+}
+
+/// Through one outbound of the running sail (the direct one): sail binds the
+/// socket to the default interface and follows it across changes. A
+/// link-local server's zone is its `scope_id` (the interface index), which
+/// sail passes to the kernel as it is.
+pub(crate) struct RuntimeDial {
+    pub runtime: Arc<dyn Runtime>,
+    pub outbound: String,
+}
+
+fn io_error(e: crate::runtime::RuntimeError) -> io::Error {
+    io::Error::other(e.to_string())
+}
+
+#[async_trait]
+impl Dial for RuntimeDial {
+    async fn udp(&self, server: SocketAddr) -> io::Result<Box<dyn Datagram>> {
+        self.runtime
+            .dial_udp(&self.outbound, Target::Addr(server), SERVER_TIMEOUT)
+            .await
+            .map_err(io_error)
+    }
+    async fn tcp(&self, server: SocketAddr) -> io::Result<Box<dyn AsyncReadWrite>> {
+        self.runtime
+            .dial_tcp(&self.outbound, Target::Addr(server), SERVER_TIMEOUT)
+            .await
+            .map_err(io_error)
+    }
 }
 
 /// Unbound sockets.
-pub struct PlainDial;
+pub(crate) struct PlainDial;
+
+struct Connected(UdpSocket);
+
+#[async_trait]
+impl Datagram for Connected {
+    async fn send(&self, data: &[u8]) -> io::Result<()> {
+        self.0.send(data).await.map(|_| ())
+    }
+    async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.recv(buf).await
+    }
+}
 
 #[async_trait]
 impl Dial for PlainDial {
-    async fn udp(&self, server: SocketAddr) -> io::Result<UdpSocket> {
+    async fn udp(&self, server: SocketAddr) -> io::Result<Box<dyn Datagram>> {
         let bind: SocketAddr = if server.is_ipv4() {
             "0.0.0.0:0".parse().unwrap()
         } else {
@@ -35,17 +79,17 @@ impl Dial for PlainDial {
         };
         let socket = UdpSocket::bind(bind).await?;
         socket.connect(server).await?;
-        Ok(socket)
+        Ok(Box::new(Connected(socket)))
     }
-    async fn tcp(&self, server: SocketAddr) -> io::Result<TcpStream> {
-        TcpStream::connect(server).await
+    async fn tcp(&self, server: SocketAddr) -> io::Result<Box<dyn AsyncReadWrite>> {
+        Ok(Box::new(TcpStream::connect(server).await?))
     }
 }
 
 /// Asks `servers` in order, each within [`SERVER_TIMEOUT`]: UDP, and TCP
 /// again when the answer is truncated. The first answer is returned with
 /// the server that gave it; otherwise the errors, one per server.
-pub async fn exchange(
+pub(crate) async fn exchange(
     dial: &Arc<dyn Dial>,
     servers: &[SocketAddr],
     query: &Message,

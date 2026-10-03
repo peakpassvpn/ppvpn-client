@@ -51,7 +51,16 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Registry",
 ] }
 
+# The TUN routing guard (tunrules): crates sail already builds on Linux
+# (tun-rs's netconfig-rs), at the versions Cargo.lock has.
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-packet-core = "0.9"
+netlink-packet-route = "0.33"
+netlink-sys = "0.8"
+
 [features]
+# ppvpn-core-lab only: test hooks (dns-local's PPVPN_LOCALDNS_TEST_FILE).
+lab = []
 # Test support for tests/ (the in-memory runtime behind internal): turned on
 # by the dev-dependency on this crate below, so never in a host's build.
 testing = []

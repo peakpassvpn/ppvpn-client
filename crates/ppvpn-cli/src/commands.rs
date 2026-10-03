@@ -1,16 +1,13 @@
-//! Command implementations.
-//!
-//! Commands that need the account crate (`ppvpn-account`) or a daemon call
-//! that is not wired yet report `NOT_IMPLEMENTED` (see `docs/cli.md`).
-//! Their arguments are still parsed and checked, so the syntax and exit
-//! codes are fixed now.
+//! Command implementations: the account, the daemon's lifecycle and the
+//! local ones. Commands that read from or change the running instance are
+//! in [`crate::queries`].
 
 use clap::CommandFactory;
 use serde_json::{json, Value};
 
 use crate::account;
 use crate::buildinfo::{self, BuildConfig, Profile};
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, IngressCommand, ProxyCommand};
 use crate::client::{self, Client};
 use crate::control::Call;
 use crate::daemon::Daemon;
@@ -18,6 +15,7 @@ use crate::env::{Env, Os};
 use crate::error::{CliError, Exit, Result};
 use crate::output::Printer;
 use crate::paths::Paths;
+use crate::queries;
 use crate::settings::{RoutingMode, Settings};
 use crate::Hooks;
 
@@ -49,7 +47,7 @@ pub fn run(cli: &Cli, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()>
             .map_err(io)
         }
         Command::Completion { shell } => completion(shell, out).map_err(io),
-        Command::Mode { mode } => mode_command(mode.as_deref(), env, out),
+        Command::Mode { mode } => mode_command(mode.as_deref(), env, hooks, out),
         Command::Doctor => doctor(env, hooks, out),
         Command::Login { no_browser } => login(env, hooks, out, *no_browser),
         Command::Account => account_command(env, hooks, out),
@@ -59,22 +57,45 @@ pub fn run(cli: &Cli, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()>
         Command::Stop => stop(env, out),
         Command::Status => status(env, out),
         Command::Daemon => daemon(env),
-        other => Err(not_implemented(other)),
+        Command::Nodes => queries::nodes(env, out),
+        Command::Use { node_id } => queries::use_node(env, out, node_id),
+        Command::Probe {
+            node_id, target, ..
+        } => {
+            let (probe, timeout, concurrency) = cli.command.probe_settings()?;
+            queries::probe(
+                env,
+                out,
+                probe,
+                node_id.as_deref(),
+                target,
+                timeout,
+                concurrency,
+            )
+        }
+        Command::Traffic => queries::traffic(env, out),
+        Command::Connections => queries::connections(env, out),
+        Command::Proxy { command: None } => queries::proxy(env, out),
+        Command::Proxy {
+            command: Some(ProxyCommand::Credential { node_id }),
+        } => queries::proxy_credential(env, out, node_id.as_deref()),
+        Command::Ingress {
+            command:
+                Some(IngressCommand::Pin {
+                    node_id,
+                    endpoint_key,
+                }),
+            ..
+        } => queries::pin(env, out, node_id, Some(endpoint_key)),
+        Command::Ingress {
+            command: Some(IngressCommand::Auto { node_id }),
+            ..
+        } => queries::pin(env, out, node_id, None),
+        Command::Ingress {
+            node_id,
+            command: None,
+        } => queries::ingress(env, out, node_id.as_deref()),
     }
-}
-
-fn not_implemented(command: &Command) -> CliError {
-    let name = format!("{command:?}");
-    let name = name
-        .split([' ', '{', '('])
-        .next()
-        .unwrap_or("command")
-        .to_ascii_lowercase();
-    CliError::new(
-        Exit::Other,
-        "NOT_IMPLEMENTED",
-        format!("ppvpn {name} is not implemented yet"),
-    )
 }
 
 fn completion(shell: &str, out: &mut Printer) -> std::io::Result<()> {
@@ -87,9 +108,9 @@ fn completion(shell: &str, out: &mut Printer) -> std::io::Result<()> {
     Ok(())
 }
 
-fn mode_command(mode: Option<&str>, env: &Env, out: &mut Printer) -> Result<()> {
+fn mode_command(mode: Option<&str>, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
     let paths = Paths::resolve(env)?;
-    let mut settings = Settings::load(&paths.settings)?;
+    let settings = Settings::load(&paths.settings)?;
     let io = |err: std::io::Error| CliError::new(Exit::Other, "OUTPUT_FAILED", err.to_string());
     let Some(mode) = mode.and_then(RoutingMode::parse) else {
         let mode = settings.routing_mode.as_str();
@@ -100,11 +121,30 @@ fn mode_command(mode: Option<&str>, env: &Env, out: &mut Printer) -> Result<()> 
             )
             .map_err(io);
     };
+    // A running instance takes the mode first; when it refuses, the saved
+    // mode stays what is live.
+    let applied = match queries::set_routing_mode(&paths, mode) {
+        // The profile the daemon holds is past its expiry: fetch a new one
+        // and apply that with the new mode.
+        Err(err) if err.code == "PROFILE_EXPIRED" => {
+            let config = build_config(env, hooks)?;
+            let mut wanted = settings;
+            wanted.routing_mode = mode;
+            runtime()?.block_on(async {
+                let profile = load_profile(env, hooks, &config).await?;
+                let request = apply_request(profile, &wanted, &config);
+                apply_and_start(&Client::new(&paths)?, request, &paths, out).await
+            })?;
+            true
+        }
+        other => other?,
+    };
+    // Applying may have rewritten the settings (cleared pins, a reset selection).
+    let mut settings = Settings::load(&paths.settings)?;
     settings.routing_mode = mode;
     settings.save(&paths.settings)?;
-    // Applying the new mode to a running instance comes with the daemon.
     out.success(
-        &json!({"ok": true, "routing_mode": mode.as_str(), "applied": false}),
+        &json!({"ok": true, "routing_mode": mode.as_str(), "applied": applied}),
         &format!("Routing mode: {}", mode.as_str()),
     )
     .map_err(io)
@@ -154,14 +194,14 @@ fn platform(os: Os) -> String {
     format!("{os}/{arch}")
 }
 
-fn runtime() -> Result<tokio::runtime::Runtime> {
+pub(crate) fn runtime() -> Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| CliError::new(Exit::Other, "RUNTIME_FAILED", e.to_string()))
 }
 
-fn output_error(err: std::io::Error) -> CliError {
+pub(crate) fn output_error(err: std::io::Error) -> CliError {
     CliError::new(Exit::Other, "OUTPUT_FAILED", err.to_string())
 }
 
