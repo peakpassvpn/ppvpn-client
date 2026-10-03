@@ -15,6 +15,8 @@ mod hostipv6;
 pub(crate) mod localdns;
 mod localproxy;
 mod logfmt;
+#[allow(dead_code, unused_imports)] // until the Engine calls it (engine.rs)
+mod probe;
 pub(crate) mod profile;
 pub mod request;
 mod runtime;
@@ -58,7 +60,9 @@ pub mod internal {
     }
 
     /// An Engine on an in-memory runtime that runs nothing: the contract
-    /// golden drives lifecycle, selection and pins on it without sail.
+    /// golden drives lifecycle, selection and pins on it without sail. Only
+    /// with the `testing` feature (tests), never in a host's build.
+    #[cfg(feature = "testing")]
     pub fn engine_on_fake_runtime(config: crate::EngineConfig) -> crate::Engine {
         crate::Engine::with_runtime(
             config,
