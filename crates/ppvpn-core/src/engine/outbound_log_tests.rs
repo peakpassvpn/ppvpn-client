@@ -146,3 +146,37 @@ fn connection_lines_name_the_profile_rule_and_the_target() {
         ("tun".into(), "[2001:db8::1]:443", "ip")
     );
 }
+
+fn exchange(server: Option<&str>, source: &str) -> crate::runtime::DnsExchange {
+    crate::runtime::DnsExchange {
+        name: "example.com".into(),
+        qtype: "A".into(),
+        qtype_code: 1,
+        server: server.map(Into::into),
+        source: source.into(),
+        attempt: None,
+        rcode: Some(0),
+        rcode_name: Some("NOERROR".into()),
+        error: None,
+        answers: Vec::new(),
+        answers_total: 1,
+        ttl: Some(60),
+        duration_ms: Some(3),
+        for_instance: false,
+    }
+}
+
+/// As Go: only exchanges sent upstream get a line; dns-local's own lines
+/// (with the resolver it asked) stand for its exchanges.
+#[test]
+fn only_upstream_exchanges_of_sails_servers_are_logged() {
+    assert!(logs_dns(&exchange(Some("dns-remote"), "exchanged")));
+    assert!(!logs_dns(&exchange(Some("dns-remote"), "cached")));
+    assert!(!logs_dns(&exchange(Some("dns-remote"), "optimistic")));
+    assert!(!logs_dns(&exchange(None, "rule")));
+    assert!(!logs_dns(&exchange(
+        Some(crate::translate::DNS_LOCAL_TAG),
+        "exchanged"
+    )));
+    assert_eq!(crate::localdns::rcode_name(3), "NXDOMAIN");
+}

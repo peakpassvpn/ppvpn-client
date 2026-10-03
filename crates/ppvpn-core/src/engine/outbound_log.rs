@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::Inner;
-use crate::runtime::{DialFailed, Routed};
+use crate::runtime::{DialFailed, DnsExchange, Routed};
 use crate::translate::{Translation, DIRECT_TAG};
 
 /// How often a direct outbound logs a failure to the same destination
@@ -218,6 +218,48 @@ pub(super) fn connection_line(t: Option<&Translation>, r: &Routed) {
         error = %r.error.as_deref().unwrap_or(""),
         "connection"
     );
+}
+
+/// Whether an exchange of sail's gets a `dns` line: sent upstream, and not
+/// dns-local's (it logs its own).
+fn logs_dns(e: &DnsExchange) -> bool {
+    e.source == "exchanged" && e.server.as_deref() != Some(crate::translate::DNS_LOCAL_TAG)
+}
+
+/// Go's dnstransport `dns` line for one of sail's exchanges (at debug):
+/// those sent upstream only, as Go (answers from the cache or a rule have
+/// none); dns-local's are its own lines (localdns), with the resolver it
+/// asked. `name` with its final dot, `rcode` in miekg's words, `attempt`
+/// for a sequential server.
+pub(super) fn dns_line(e: &DnsExchange) {
+    if !logs_dns(e) {
+        return;
+    }
+    let name = format!("{}.", e.name);
+    let server = e.server.as_deref().unwrap_or("");
+    let ms = e.duration_ms.unwrap_or(0);
+    // `attempt` only for a sequential server (absent when None, as Go's).
+    match e.rcode.filter(|_| e.error.is_none()) {
+        Some(rcode) => tracing::debug!(
+            name = %name,
+            "type" = %e.qtype,
+            server,
+            attempt = e.attempt,
+            rcode = %crate::localdns::rcode_name(rcode),
+            answers = e.answers_total,
+            ms,
+            "dns"
+        ),
+        None => tracing::debug!(
+            name = %name,
+            "type" = %e.qtype,
+            server,
+            attempt = e.attempt,
+            error = %e.error.as_deref().unwrap_or("no answer"),
+            ms,
+            "dns"
+        ),
+    }
 }
 
 impl Inner {

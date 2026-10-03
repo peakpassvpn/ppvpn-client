@@ -256,14 +256,20 @@ fn log_exchange(
 
 /// A response code in Go's (miekg/dns) words.
 fn rcode(code: ResponseCode) -> String {
+    rcode_name(u16::from(code))
+}
+
+/// A response code number in Go's (miekg/dns) words: the `dns` lines of
+/// dns-local and of sail's servers alike.
+pub(crate) fn rcode_name(code: u16) -> String {
     match code {
-        ResponseCode::NoError => "NOERROR".into(),
-        ResponseCode::FormErr => "FORMERR".into(),
-        ResponseCode::ServFail => "SERVFAIL".into(),
-        ResponseCode::NXDomain => "NXDOMAIN".into(),
-        ResponseCode::NotImp => "NOTIMP".into(),
-        ResponseCode::Refused => "REFUSED".into(),
-        other => u16::from(other).to_string(),
+        0 => "NOERROR".into(),
+        1 => "FORMERR".into(),
+        2 => "SERVFAIL".into(),
+        3 => "NXDOMAIN".into(),
+        4 => "NOTIMP".into(),
+        5 => "REFUSED".into(),
+        other => other.to_string(),
     }
 }
 
