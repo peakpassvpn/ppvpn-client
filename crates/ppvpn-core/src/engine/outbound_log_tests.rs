@@ -106,3 +106,77 @@ fn a_full_limiter_stays_bounded() {
     assert_eq!(l.allow("new:1", start + Duration::from_secs(1), 1), Some(0));
     assert_eq!(l.remembered(), LIMITER_SIZE);
 }
+
+fn routed(rule: Option<usize>, request: Option<&str>) -> crate::runtime::Routed {
+    crate::runtime::Routed {
+        id: Some(7),
+        network: "udp".into(),
+        inbound: "tun".into(),
+        source: "172.19.0.1:5000".into(),
+        destination: "198.51.100.50:9999".into(),
+        domain: None,
+        domain_source: None,
+        protocol: None,
+        rule,
+        action: "outbound".into(),
+        chain: vec!["direct".into()],
+        request_destination: request.map(Into::into),
+        target: None,
+        error: None,
+        connect_ms: Some(1),
+    }
+}
+
+/// The rule is the profile's id (by its index), `final` without one; the
+/// target is what the outbound was asked to reach, and its kind.
+#[test]
+fn connection_lines_name_the_profile_rule_and_the_target() {
+    let mut t = translation();
+    t.rule_ids = vec!["tun".into(), "video".into()];
+    assert_eq!(
+        rule_and_target(Some(&t), &routed(Some(1), Some("video.example:443"))),
+        ("video".into(), "video.example:443", "domain")
+    );
+    assert_eq!(
+        rule_and_target(Some(&t), &routed(None, None)),
+        ("final".into(), "198.51.100.50:9999", "ip")
+    );
+    assert_eq!(
+        rule_and_target(Some(&t), &routed(Some(0), Some("[2001:db8::1]:443"))),
+        ("tun".into(), "[2001:db8::1]:443", "ip")
+    );
+}
+
+fn exchange(server: Option<&str>, source: &str) -> crate::runtime::DnsExchange {
+    crate::runtime::DnsExchange {
+        name: "example.com".into(),
+        qtype: "A".into(),
+        qtype_code: 1,
+        server: server.map(Into::into),
+        source: source.into(),
+        attempt: None,
+        rcode: Some(0),
+        rcode_name: Some("NOERROR".into()),
+        error: None,
+        answers: Vec::new(),
+        answers_total: 1,
+        ttl: Some(60),
+        duration_ms: Some(3),
+        for_instance: false,
+    }
+}
+
+/// As Go: only exchanges sent upstream get a line; dns-local's own lines
+/// (with the resolver it asked) stand for its exchanges.
+#[test]
+fn only_upstream_exchanges_of_sails_servers_are_logged() {
+    assert!(logs_dns(&exchange(Some("dns-remote"), "exchanged")));
+    assert!(!logs_dns(&exchange(Some("dns-remote"), "cached")));
+    assert!(!logs_dns(&exchange(Some("dns-remote"), "optimistic")));
+    assert!(!logs_dns(&exchange(None, "rule")));
+    assert!(!logs_dns(&exchange(
+        Some(crate::translate::DNS_LOCAL_TAG),
+        "exchanged"
+    )));
+    assert_eq!(crate::localdns::rcode_name(3), "NXDOMAIN");
+}

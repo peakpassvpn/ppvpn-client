@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::Inner;
-use crate::runtime::DialFailed;
+use crate::runtime::{DialFailed, DnsExchange, Routed};
 use crate::translate::{Translation, DIRECT_TAG};
 
 /// How often a direct outbound logs a failure to the same destination
@@ -172,6 +172,104 @@ impl Inner {
         if matches!(through, Through::Node { group: true, .. }) {
             self.refresh().await;
         }
+    }
+}
+
+/// The `rule`, `target` and `target_kind` of a connection line.
+fn rule_and_target<'a>(t: Option<&Translation>, r: &'a Routed) -> (String, &'a str, &'static str) {
+    let rule = match r.rule {
+        None => "final".to_owned(),
+        Some(i) => t
+            .and_then(|t| t.rule_ids.get(i).cloned())
+            .unwrap_or_else(|| i.to_string()),
+    };
+    let target = r.request_destination.as_deref().unwrap_or(&r.destination);
+    let host = target.rsplit_once(':').map_or(target, |(host, _)| host);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let kind = if host.parse::<std::net::IpAddr>().is_ok() {
+        "ip"
+    } else {
+        "domain"
+    };
+    (rule, target, kind)
+}
+
+/// Go's `connection` line (telemetry.go `logRouted`): one per routed
+/// connection, at debug level, with Go's keys. `rule` is the profile rule's
+/// id (or the engine's own rule, or `final`); `target` is what the outbound
+/// was asked to reach, `target_kind` whether that is a domain. The domain
+/// is logged (contract section 10: debug logs names), credentials never.
+pub(super) fn connection_line(t: Option<&Translation>, r: &Routed) {
+    let (rule, target, target_kind) = rule_and_target(t, r);
+    let id = r.id.map(|id| id.to_string()).unwrap_or_default();
+    // Go logs the outbound the rules named (its tag; a node's selector or
+    // group, or direct): the chain's first, outermost hop. The member that
+    // carried it is the chain's last.
+    let outbound = r.chain.first().map(String::as_str).unwrap_or("");
+    tracing::debug!(
+        id = %id,
+        inbound = %r.inbound,
+        network = %r.network,
+        destination = %r.destination,
+        route_domain = %r.domain.as_deref().unwrap_or(""),
+        protocol = %r.protocol.as_deref().unwrap_or(""),
+        rule = %rule,
+        outbound,
+        target,
+        target_kind,
+        action = %r.action,
+        error = %r.error.as_deref().unwrap_or(""),
+        "connection"
+    );
+}
+
+/// Whether an exchange of sail's gets a `dns` line: sent upstream, and not
+/// dns-local's (it logs its own).
+fn logs_dns(e: &DnsExchange) -> bool {
+    e.source == "exchanged" && e.server.as_deref() != Some(crate::translate::DNS_LOCAL_TAG)
+}
+
+/// Go's dnstransport `dns` line for one of sail's exchanges (at debug):
+/// those sent upstream only, as Go (answers from the cache or a rule have
+/// none); dns-local's are its own lines (localdns), with the resolver it
+/// asked. `name` with its final dot, `rcode` in miekg's words, `attempt`
+/// for a sequential server.
+pub(super) fn dns_line(e: &DnsExchange) {
+    if !logs_dns(e) {
+        return;
+    }
+    let name = format!("{}.", e.name);
+    let server = e.server.as_deref().unwrap_or("");
+    let ms = e.duration_ms.unwrap_or(0);
+    // `attempt` only for a sequential server (absent when None, as Go's).
+    match e.rcode.filter(|_| e.error.is_none()) {
+        Some(rcode) => tracing::debug!(
+            name = %name,
+            "type" = %e.qtype,
+            server,
+            attempt = e.attempt,
+            rcode = %crate::localdns::rcode_name(rcode),
+            answers = e.answers_total,
+            ms,
+            "dns"
+        ),
+        None => tracing::debug!(
+            name = %name,
+            "type" = %e.qtype,
+            server,
+            attempt = e.attempt,
+            error = %e.error.as_deref().unwrap_or("no answer"),
+            ms,
+            "dns"
+        ),
+    }
+}
+
+impl Inner {
+    /// One routed connection (from the watcher, at debug only).
+    pub(super) fn on_routed(&self, routed: &Routed) {
+        let live = self.live();
+        connection_line(live.applied.as_ref().map(|a| &a.translation), routed);
     }
 }
 

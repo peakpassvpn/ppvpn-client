@@ -467,6 +467,11 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     let mut states = inner.runtime.states();
     let mut networks = inner.runtime.network_changes();
     let mut failures = inner.runtime.dial_failures();
+    // Routed connections and DNS exchanges only at debug: sail builds them
+    // only for a subscriber, and only the debug lines use them.
+    let debug = inner.config.log.level == crate::config::LogLevel::Debug;
+    let mut routes = debug.then(|| inner.runtime.routes());
+    let mut exchanges = debug.then(|| inner.runtime.dns_exchanges());
     let weak: Weak<Inner> = Arc::downgrade(inner);
     Some(handle.spawn(async move {
         let mut switches_open = true;
@@ -486,6 +491,27 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                         inner.on_dial_failed(failed).await;
                     }
                     None => failures_open = false,
+                },
+                routed = async {
+                    match routes.as_mut() {
+                        Some(routes) => routes.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match routed {
+                    Some(routed) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_routed(&routed);
+                    }
+                    None => routes = None,
+                },
+                exchanged = async {
+                    match exchanges.as_mut() {
+                        Some(exchanges) => exchanges.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match exchanged {
+                    Some(exchanged) => super::outbound_log::dns_line(&exchanged),
+                    None => exchanges = None,
                 },
                 changed = networks.changed() => {
                     if changed.is_err() {
