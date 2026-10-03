@@ -33,6 +33,7 @@ use crate::profile::{
 use crate::request::RoutingMode;
 
 mod tun;
+#[allow(unused_imports)] // the Engine's, once it is wired to the runtime
 pub(crate) use tun::{local_dns_servers, LocalDns, Tun};
 
 /// The selector over every node, in profile order.

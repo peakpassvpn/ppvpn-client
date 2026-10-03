@@ -33,8 +33,11 @@ pub(crate) const DNS_REMOTE_TAG: &str = "dns-remote";
 /// Public resolvers outside mainland China only: they resolve the domains
 /// routed to a proxy.
 pub(crate) const REMOTE_DNS_SERVERS: &[&str] = &["1.1.1.1", "8.8.8.8", "9.9.9.9"];
-/// The whole query budget (Go's DNS guard).
+/// The whole query budget (Go's DNS guard): past it the client gets SERVFAIL.
 const DNS_TIMEOUT: &str = "8s";
+/// A sequential server's budget for all of its members; sail wants it under
+/// dns.timeout, so the server fails before the query does.
+const SEQUENTIAL_BUDGET: &str = "7s";
 /// The benchmark range fake-ip resolvers answer from.
 const FAKE_IP_RANGE: &str = "198.18.0.0/15";
 /// A domain name but not an IP literal (the HTTP sniffer copies a Host
@@ -248,21 +251,19 @@ impl Builder {
             LocalDns::Servers(list) if list.is_empty() => {
                 return Err(failed("no local DNS server outside the tunnel"))
             }
+            // One server is dns-local itself (sail's sequential takes two or
+            // more).
+            LocalDns::Servers(list) if list.len() == 1 => {
+                servers.push(udp_server(DNS_LOCAL_TAG, &list[0]));
+            }
             LocalDns::Servers(list) => {
                 let mut members = Vec::new();
                 for (i, server) in list.iter().enumerate() {
                     let tag = format!("{DNS_LOCAL_TAG}-{i}");
-                    servers.push(json!({
-                        "type": "udp",
-                        "tag": tag,
-                        "server": server.ip().to_string(),
-                        "server_port": server.port(),
-                    }));
+                    servers.push(udp_server(&tag, server));
                     members.push(tag);
                 }
-                servers.push(
-                    json!({ "type": "sequential", "tag": DNS_LOCAL_TAG, "servers": members }),
-                );
+                servers.push(sequential(DNS_LOCAL_TAG, members));
             }
         }
         let mut members = Vec::new();
@@ -273,7 +274,7 @@ impl Builder {
             );
             members.push(tag);
         }
-        servers.push(json!({ "type": "sequential", "tag": DNS_REMOTE_TAG, "servers": members }));
+        servers.push(sequential(DNS_REMOTE_TAG, members));
         Ok(json!({
             "servers": servers,
             "rules": self.mirror_dns_rules(dns_rule_sets),
@@ -349,4 +350,19 @@ fn ingress_ip(value: &str) -> Option<IpAddr> {
         IpAddr::V6(v6) => Some(v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4)),
         ip => Some(ip),
     }
+}
+
+fn udp_server(tag: &str, server: &SocketAddr) -> Value {
+    json!({
+        "type": "udp",
+        "tag": tag,
+        "server": server.ip().to_string(),
+        "server_port": server.port(),
+    })
+}
+
+/// Asks `members` one after another, the next only when one does not
+/// answer, all within [`SEQUENTIAL_BUDGET`].
+fn sequential(tag: &str, members: Vec<String>) -> Value {
+    json!({ "type": "sequential", "tag": tag, "servers": members, "budget": SEQUENTIAL_BUDGET })
 }

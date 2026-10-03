@@ -135,11 +135,19 @@ fn every_fixture_passes_sail_check() {
             },
         ),
     ];
+    // All of them, so one run shows every failure.
+    let mut failures = Vec::new();
     for (name, profile, options) in fixtures {
-        let translation = translate(&profile, &options).unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        check(&translation.json)
-            .unwrap_or_else(|e| panic!("{name}: {}\n{}", e.message, translation.json));
+        match translate(&profile, &options) {
+            Err(e) => failures.push(format!("{name}: {e:?}")),
+            Ok(t) => {
+                if let Err(e) = check(&t.json) {
+                    failures.push(format!("{name}: {}\n{}", e.message, t.json));
+                }
+            }
+        }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     // With its local copy (the file itself is read at start, not checked).
     let translation = translate(
         &routing(),
@@ -540,12 +548,11 @@ fn dns_servers_local_then_remote_in_order() {
     assert_eq!(
         dns["servers"],
         json!([
-            {"type": "udp", "tag": "dns-local-0", "server": "192.168.50.1", "server_port": 53},
-            {"type": "sequential", "tag": "dns-local", "servers": ["dns-local-0"]},
+            {"type": "udp", "tag": "dns-local", "server": "192.168.50.1", "server_port": 53},
             {"type": "tls", "tag": "dns-remote-1.1.1.1", "server": "1.1.1.1", "detour": "selected"},
             {"type": "tls", "tag": "dns-remote-8.8.8.8", "server": "8.8.8.8", "detour": "selected"},
             {"type": "tls", "tag": "dns-remote-9.9.9.9", "server": "9.9.9.9", "detour": "selected"},
-            {"type": "sequential", "tag": "dns-remote", "servers": ["dns-remote-1.1.1.1", "dns-remote-8.8.8.8", "dns-remote-9.9.9.9"]},
+            {"type": "sequential", "tag": "dns-remote", "servers": ["dns-remote-1.1.1.1", "dns-remote-8.8.8.8", "dns-remote-9.9.9.9"], "budget": "7s"},
         ])
     );
     let empty = Options {
