@@ -39,6 +39,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Registry",
 ] }
 
+[features]
+# ppvpn-core-lab only: test hooks (dns-local's PPVPN_LOCALDNS_TEST_FILE).
+lab = []
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
