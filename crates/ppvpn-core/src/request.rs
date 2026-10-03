@@ -61,10 +61,17 @@ pub struct ApplyRequest {
     /// The profile JSON as fetched; unknown fields are ignored.
     #[serde(with = "serde_bytes_as_json")]
     pub profile: Vec<u8>,
+    /// Default `rules`.
+    #[serde(default)]
     pub routing_mode: RoutingMode,
-    /// `None`: the profile's `default_node_id`.
+    /// `None` (the default): the profile's `default_node_id`.
+    #[serde(default)]
     pub selected_node_id: Option<String>,
+    /// Default none.
+    #[serde(default)]
     pub pins: Vec<Pin>,
+    /// Default none: any host the profile names.
+    #[serde(default)]
     pub allowed_rule_set_hosts: Vec<String>,
 }
 
@@ -182,5 +189,27 @@ mod serde_bytes_as_json {
             return Ok(Vec::new());
         }
         serde_json::to_vec(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host (or the FFI) decoding a request from JSON may leave out every
+    /// field but the profile.
+    #[test]
+    fn only_the_profile_is_required_in_json() {
+        let request: ApplyRequest =
+            serde_json::from_str(r#"{"profile": {"schema_version": 1}}"#).unwrap();
+        assert_eq!(request.routing_mode, RoutingMode::Rules);
+        assert_eq!(request.selected_node_id, None);
+        assert!(request.pins.is_empty());
+        assert!(request.allowed_rule_set_hosts.is_empty());
+        assert_eq!(request.profile, br#"{"schema_version":1}"#.to_vec());
+        // And it round-trips.
+        let again: ApplyRequest =
+            serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+        assert_eq!(again, request);
     }
 }

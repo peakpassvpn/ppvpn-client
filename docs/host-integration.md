@@ -106,11 +106,13 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
 ```rust
 pub struct ApplyRequest {
     pub profile: Vec<u8>,                 // 原始 JSON；未知字段忽略；schema 由引擎判定
-    pub routing_mode: RoutingMode,        // Rules | Global
-    pub selected_node_id: Option<String>, // 宿主持久化的选中节点；None = 用 default_node_id
-    pub pins: Vec<Pin>,                   // 宿主持久化的 ingress pin：{ node_id, endpoint_key }
-    pub allowed_rule_set_hosts: Vec<String>,
+    pub routing_mode: RoutingMode,        // Rules | Global；默认 Rules
+    pub selected_node_id: Option<String>, // 宿主持久化的选中节点；默认 None = 用 default_node_id
+    pub pins: Vec<Pin>,                   // 宿主持久化的 ingress pin：{ node_id, endpoint_key }；默认空
+    pub allowed_rule_set_hosts: Vec<String>, // 默认空 = 不限制 Profile 里的 rule-set 主机
 }
+// 用 JSON 反序列化 ApplyRequest 时（例如将来的 FFI），只有 profile 是必需的；
+// 其余字段缺省时取上面注明的默认值。
 pub struct ApplyResult {
     pub applied: bool,                    // false：(revision, routing_mode, selected_node_id, pins) 与当前完全相同，什么也没做
     pub revision: String,
@@ -325,14 +327,15 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 ```rust
 #[non_exhaustive]
 pub struct Error {
-    pub code: String,            // 稳定的字符串错误码
+    pub code: &'static str,      // 稳定的字符串错误码，见 ppvpn_core::codes
     pub field: Option<String>,   // 出错的字段路径，例如 nodes[0].ingresses[1].endpoint.ip、routing_mode
     pub retryable: bool,
     pub message: String,         // 给开发者看的英文说明，不属于契约，不含上游原文和凭据
 }
 ```
 
-- **错误码沿用 Core API v1**：Profile 校验类（`PROFILE_*`、`SCHEMA_UNSUPPORTED`、`RULE_SET_*`、`ROUTING_*` 等，完整列表和每个码对应的 field 见 `testdata/golden/contract/validation.json`）、`ROUTING_MODE_INVALID`（field=`routing_mode`）、`NODE_NOT_FOUND`、`INGRESS_NOT_FOUND`、`PROFILE_NOT_APPLIED`、`CORE_NOT_RUNNING`、`LOCAL_PROXY_DISABLED`、`SYSTEM_PROXY_UNAVAILABLE`、`SYSTEM_PROXY_START_FAILED`、`NO_DEFAULT_INTERFACE`、`PROBE_METHOD_UNSUPPORTED`。
+- **Profile 校验类错误码的权威列表**：`ppvpn_core::codes::PROFILE_VALIDATION`，或者 `Error::is_profile_validation()`。`validate` 和 `apply` 在改动任何东西之前，用这些码拒绝请求：Profile 本身、`routing_mode`、`allowed_rule_set_hosts`、`pins`。它们都是 retryable=false，已应用的状态不变。宿主直接使用这份列表，不要自己维护；列表只增不减。golden 运行器会校验 `validation.json` 里每一步的结果码都在列表中。
+- **错误码沿用 Core API v1**：Profile 校验类（`PROFILE_*`、`SCHEMA_UNSUPPORTED`、`RULE_SET_*`、`ROUTING_*` 等，列表见上一条，每个码对应的 field 见 `testdata/golden/contract/validation.json`）、`ROUTING_MODE_INVALID`（field=`routing_mode`）、`NODE_NOT_FOUND`、`INGRESS_NOT_FOUND`、`PROFILE_NOT_APPLIED`、`CORE_NOT_RUNNING`、`LOCAL_PROXY_DISABLED`、`SYSTEM_PROXY_UNAVAILABLE`、`SYSTEM_PROXY_START_FAILED`、`NO_DEFAULT_INTERFACE`、`PROBE_METHOD_UNSUPPORTED`。
 - **Profile 本身的问题**（D5）：空 Profile 返回 `PROFILE_REQUIRED`；不是合法 JSON，或者字段类型不对，返回 `PROFILE_MALFORMED`。两者都是 retryable=false。Go 版在这两种情况下都折叠成 `CORE_OPERATION_FAILED`。
 - **新增的码**：
   - `CORE_PANICKED`：retryable=false，实例已进入 `Fatal`；
