@@ -103,6 +103,7 @@ impl Inner {
         // says nothing.
         if let Some(snapshot) = snapshot.filter(|s| s.offline || s.interface.is_some()) {
             log_default_interface("start", &snapshot);
+            self.local_dns_network(&snapshot);
             let mut live = self.live();
             live.offline = snapshot.offline;
             self.settle(&mut live);
@@ -154,6 +155,7 @@ impl Inner {
         // The change's kind decides offline (sail's one definition).
         let offline = change.change == "offline";
         log_default_interface("changed", &change.new);
+        self.local_dns_network(&change.new);
         self.on_network(interface_if(&change.new, offline));
         self.guard_check("network changed");
         self.arm_reprobe();

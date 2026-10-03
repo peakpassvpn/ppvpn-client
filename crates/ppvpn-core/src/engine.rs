@@ -143,6 +143,7 @@ impl Engine {
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error())?;
         let engine = Engine::assemble(config, Arc::new(runtime), log)?;
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
+        engine.inner.start_local_dns().await?;
         Ok(engine)
     }
 
@@ -202,8 +203,10 @@ impl Engine {
             // may take the directory once it is free.
             state_dir: inner.state_dir.lock().expect("state dir lock").take(),
         };
-        // A sleeping re-probe goes first; one under way held `op` and is done.
+        // A sleeping re-probe or local proxy retry goes first; one under
+        // way held `op` and is done.
         inner.network_stopped();
+        inner.local_proxy_stopped();
         // Before the TUN closes: sail's cleanup must not be undone.
         inner.guard_stopped();
         let report = cleanup::cleanup(parts, left).await;

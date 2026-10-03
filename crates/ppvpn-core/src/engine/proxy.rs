@@ -6,7 +6,10 @@
 //! `proxies` is held.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
+
+use tokio::task::JoinHandle;
 
 use super::{now, Error, Inner};
 use crate::config::{EngineConfig, Role};
@@ -22,6 +25,11 @@ use crate::types::{LocalProxyCredential, LocalProxyMetadata};
 /// Where the system proxy listener listens (the translation's inbound).
 const SYSTEM_PROXY_LISTEN: &str = "127.0.0.1";
 
+/// The first retry of a local proxy listener that could not be opened,
+/// doubling up to [`RETRY_MAX`].
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+
 /// A Standard instance's listeners: the shared local proxy's state and the
 /// system proxy listener's toggle.
 pub(super) struct Proxies {
@@ -31,6 +39,29 @@ pub(super) struct Proxies {
     system_proxy: bool,
     /// Its port, chosen when it was turned on and again at each start.
     system_port: u16,
+    /// The shared listener could not be opened: this run goes without it
+    /// (`Degraded{LocalProxyUnavailable}`) and `retry` tries again.
+    unavailable: bool,
+    retry: Option<JoinHandle<()>>,
+    /// Tests: how many more times opening the shared listener fails.
+    #[cfg(test)]
+    refuse: u32,
+}
+
+impl Proxies {
+    /// Before the shared listener opens: its port, moved when taken.
+    fn reconcile(&mut self) -> Result<Option<Event>, Error> {
+        #[cfg(test)]
+        if self.refuse > 0 {
+            self.refuse -= 1;
+            return Err(Error::new(
+                codes::CORE_OPERATION_FAILED,
+                true,
+                "refused by the test",
+            ));
+        }
+        self.state.reconcile_port()
+    }
 }
 
 impl Proxies {
@@ -47,6 +78,10 @@ impl Proxies {
             state,
             system_proxy: false,
             system_port: 0,
+            unavailable: false,
+            retry: None,
+            #[cfg(test)]
+            refuse: 0,
         })))
     }
 }
@@ -67,9 +102,13 @@ impl Inner {
             .ok_or_else(local_proxy_disabled)
     }
 
-    /// `Options.local_proxy`: the shared inbound and its users.
+    /// `Options.local_proxy`: the shared inbound and its users, unless
+    /// this run goes without it.
     pub(super) fn local_proxy_options(&self) -> Option<translate::LocalProxy> {
-        self.local_proxy().ok().map(|p| p.state.translate_options())
+        self.local_proxy()
+            .ok()
+            .filter(|p| !p.unavailable)
+            .map(|p| p.state.translate_options())
     }
 
     /// `Options.system_proxy_port`: the listener while turned on.
@@ -81,13 +120,20 @@ impl Inner {
     /// Before `start` opens the listeners (never while they are open): a
     /// shared port taken meanwhile moves (`LocalProxyEndpointChanged`), and
     /// the system proxy listener's port is checked again, as Go's start.
+    /// A shared listener that cannot be opened is left out of the run
+    /// (section 4.6): the start goes on without it.
     pub(super) fn prepare_listeners(&self) -> Result<(), Error> {
         let moved = {
             let Some(mut proxies) = self.proxies() else {
                 return Ok(());
             };
+            proxies.unavailable = false;
             let moved = if self.config.local_proxy.is_some() {
-                proxies.state.reconcile_port()?
+                proxies.reconcile().unwrap_or_else(|error| {
+                    tracing::warn!(error = %error.message, "local proxy listener unavailable");
+                    proxies.unavailable = true;
+                    None
+                })
             } else {
                 None
             };
@@ -103,6 +149,141 @@ impl Inner {
             self.publish(event);
         }
         Ok(())
+    }
+
+    /// After a start that failed with the shared listener in it: whether
+    /// the start is worth trying again without it (it was in it).
+    pub(super) fn leave_out_local_proxy(&self) -> bool {
+        match self.local_proxy() {
+            Ok(mut proxies) if !proxies.unavailable => {
+                proxies.unavailable = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether this run goes without the shared listener.
+    pub(super) fn local_proxy_left_out(&self) -> bool {
+        self.local_proxy().is_ok_and(|p| p.unavailable)
+    }
+
+    /// After a start without the shared listener: tries to open it with
+    /// backoff ([`RETRY_FIRST`] doubling to [`RETRY_MAX`]) while run `run`
+    /// lasts. The stop or shutdown cancels it.
+    pub(super) fn retry_local_proxy(self: &Arc<Self>, run: u64) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let weak = Arc::downgrade(self);
+        let task = handle.spawn(async move {
+            let mut delay = RETRY_FIRST;
+            loop {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(RETRY_MAX);
+                let Some(inner) = weak.upgrade() else { return };
+                if inner.open_local_proxy(run).await {
+                    return;
+                }
+            }
+        });
+        if let Some(mut proxies) = self.proxies() {
+            if let Some(previous) = proxies.retry.replace(task) {
+                previous.abort();
+            }
+        }
+    }
+
+    /// One retry: true when there is nothing more to retry (opened, or the
+    /// run is over).
+    async fn open_local_proxy(&self, run: u64) -> bool {
+        let _op = self.op.lock().await;
+        let (profile, mode, selected, pins) = {
+            let live = self.live();
+            let Some(a) = live
+                .applied
+                .as_ref()
+                .filter(|_| live.running && !live.shut_down && live.run == run)
+            else {
+                return true;
+            };
+            (
+                a.profile.clone(),
+                a.mode,
+                a.selected.clone(),
+                a.pins.clone(),
+            )
+        };
+        let moved = {
+            let Some(mut proxies) = self.proxies() else {
+                return true;
+            };
+            match proxies.reconcile() {
+                Ok(moved) => {
+                    proxies.unavailable = false;
+                    moved
+                }
+                Err(error) => {
+                    tracing::debug!(error = %error.message, "local proxy listener still unavailable");
+                    return false;
+                }
+            }
+        };
+        if let Some(event) = moved {
+            self.publish(event);
+        }
+        let opened = match translate::translate(&profile, &self.options(mode, &selected, &pins)) {
+            Ok(translation) => {
+                match inbound_of(&translation.json, translate::LOCAL_PROXY_INBOUND_TAG) {
+                    Ok(inbound) => match self.runtime.add_inbound(&inbound).await {
+                        Ok(()) => Ok(translation),
+                        Err(e) => Err(self.runtime_error(&e)),
+                    },
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        };
+        let translation = match opened {
+            Ok(translation) => translation,
+            Err(error) => {
+                if let Some(mut proxies) = self.proxies() {
+                    proxies.unavailable = true;
+                }
+                tracing::warn!(error = %error.message, "local proxy listener still unavailable");
+                return false;
+            }
+        };
+        if let Some(mut proxies) = self.proxies() {
+            proxies.retry = None;
+        }
+        let mut live = self.live();
+        live.local_proxy_unavailable = false;
+        if let Some(applied) = live.applied.as_mut() {
+            applied.translation = translation;
+        }
+        self.settle(&mut live);
+        drop(live);
+        tracing::info!("local proxy listener open");
+        true
+    }
+
+    /// At stop or shutdown: a pending retry goes with the run.
+    pub(super) fn local_proxy_stopped(&self) {
+        if let Some(mut proxies) = self.proxies() {
+            if let Some(retry) = proxies.retry.take() {
+                retry.abort();
+            }
+            proxies.unavailable = false;
+        }
+    }
+
+    /// Tests: opening the shared listener fails `times` more times.
+    #[cfg(test)]
+    pub(super) fn refuse_local_proxy(&self, times: u32) {
+        if let Some(mut proxies) = self.proxies() {
+            proxies.refuse = times;
+        }
     }
 
     /// `status.local_proxy`: on an instance with a local proxy.
@@ -225,7 +406,7 @@ impl Inner {
     ) -> Result<(), Error> {
         let translation = translate::translate(profile, &self.options(mode, selected, pins))?;
         let result = if enabled {
-            let inbound = system_proxy_inbound(&translation.json)?;
+            let inbound = inbound_of(&translation.json, translate::SYSTEM_PROXY_INBOUND_TAG)?;
             self.runtime.add_inbound(&inbound).await
         } else {
             self.runtime
@@ -260,6 +441,8 @@ pub(super) fn system_proxy_unavailable() -> Error {
 }
 
 /// The listener cannot be opened: no port, or the runtime refused it.
+/// The message is passed on as it is: the system proxy inbound carries no
+/// credentials, and the state file's errors name only the file.
 fn start_failed(error: Error) -> Error {
     Error::new(
         codes::SYSTEM_PROXY_START_FAILED,
@@ -268,8 +451,8 @@ fn start_failed(error: Error) -> Error {
     )
 }
 
-/// The system proxy inbound of a translation, as JSON.
-fn system_proxy_inbound(config: &str) -> Result<String, Error> {
+/// The inbound tagged `tag` of a translation, as JSON.
+fn inbound_of(config: &str, tag: &str) -> Result<String, Error> {
     let config: serde_json::Value = serde_json::from_str(config).map_err(|e| {
         Error::new(
             codes::CORE_OPERATION_FAILED,
@@ -281,13 +464,13 @@ fn system_proxy_inbound(config: &str) -> Result<String, Error> {
         .as_array()
         .into_iter()
         .flatten()
-        .find(|i| i["tag"] == translate::SYSTEM_PROXY_INBOUND_TAG)
+        .find(|i| i["tag"] == tag)
         .map(|i| i.to_string())
         .ok_or_else(|| {
             Error::new(
                 codes::CORE_OPERATION_FAILED,
                 false,
-                "translation: no system proxy inbound",
+                format!("translation: no {tag} inbound"),
             )
         })
 }

@@ -139,16 +139,22 @@ impl Inner {
                 })
             }
         };
-        {
-            // A new run of sail: what was read of the old one goes.
+        let retry = {
+            // A new run of sail: what was read of the old one goes. A local
+            // proxy listener still left out is retried in the new run.
             let mut live = self.live();
             live.run += 1;
             live.clear_runtime();
+            live.local_proxy_unavailable = self.local_proxy_left_out();
             self.settle(&mut live);
-        }
+            live.local_proxy_unavailable.then_some(live.run)
+        };
         self.network_started();
         // What sail installed for the new TUN.
         self.guard_started();
+        if let Some(run) = retry {
+            self.retry_local_proxy(run);
+        }
         match error {
             None => Ok(()),
             Some(error) => Err(error),
