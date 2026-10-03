@@ -421,7 +421,9 @@ async fn a_runtime_that_ends_on_its_own_is_fatal() {
 
 #[tokio::test]
 async fn no_default_interface_degrades_a_running_instance() {
-    let (engine, _) = engine();
+    let (engine, fake) = engine();
+    // A start snapshot that knows no network keeps what was remembered.
+    fake.set_network(crate::runtime::NetworkSnapshot::default());
     engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
     let mut rx = engine.subscribe(EventKind::ALL);
 
