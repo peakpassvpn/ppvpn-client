@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Platform-neutral view models shared by the Windows (WinUI 3) and Linux (GTK 4 / Gir.Core)
+    apps. No UI framework references: everything host-specific goes through the seams in
+    ViewModels/Abstractions.cs, and callbacks are marshalled with the SynchronizationContext
+    the host installs on its UI thread. See README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>PPVPN.App.Core</RootNamespace>
+    <AssemblyName>PPVPN.App.Core</AssemblyName>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same version as apps/windows/PPVPN.Windows. -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../PPVPN.Client/PPVPN.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- String catalogs for ILocalizer (JsonLocalizer); see README.md. -->
+    <EmbeddedResource Include="Strings/strings.json" LogicalName="PPVPN.App.Core.Strings.strings.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PPVPN.App.Core.Tests" />
+  </ItemGroup>
+</Project>

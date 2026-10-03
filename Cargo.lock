@@ -496,7 +496,7 @@ dependencies = [
 [[package]]
 name = "btls"
 version = "0.5.6"
-source = "git+https://github.com/peakpassvpn/btls.git?rev=3eb203a7ed44fd93d31056156a1ddfab5a6b9338#3eb203a7ed44fd93d31056156a1ddfab5a6b9338"
+source = "git+https://github.com/peakpassvpn/btls.git?rev=c0fb9dd9f610d0f76ae2b5afb30d65dce9b5e74c#c0fb9dd9f610d0f76ae2b5afb30d65dce9b5e74c"
 dependencies = [
  "bitflags 2.13.2",
  "btls-sys",
@@ -508,7 +508,7 @@ dependencies = [
 [[package]]
 name = "btls-sys"
 version = "0.5.6"
-source = "git+https://github.com/peakpassvpn/btls.git?rev=3eb203a7ed44fd93d31056156a1ddfab5a6b9338#3eb203a7ed44fd93d31056156a1ddfab5a6b9338"
+source = "git+https://github.com/peakpassvpn/btls.git?rev=c0fb9dd9f610d0f76ae2b5afb30d65dce9b5e74c#c0fb9dd9f610d0f76ae2b5afb30d65dce9b5e74c"
 dependencies = [
  "bindgen",
  "cmake",
@@ -2439,6 +2439,7 @@ dependencies = [
  "libc",
  "mimalloc",
  "ppvpn-account",
+ "ppvpn-cli",
  "ppvpn-core",
  "secret-service",
  "security-framework",
@@ -2480,12 +2481,18 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64",
+ "btls",
+ "bytes",
  "chrono",
  "futures-util",
  "getrandom 0.4.3",
  "hickory-proto",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "idna",
  "libc",
+ "miniz_oxide",
  "netlink-packet-core",
  "netlink-packet-route",
  "netlink-sys",
@@ -3020,7 +3027,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "sail"
 version = "0.16.0"
-source = "git+https://github.com/peakpassvpn/sail.git?rev=235d12a9b5e1bfc3b8076409be21f80cf8e60029#235d12a9b5e1bfc3b8076409be21f80cf8e60029"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=a59e9bd53ef1059cb3b163eefeb806c13c7c30c9#a59e9bd53ef1059cb3b163eefeb806c13c7c30c9"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3110,7 +3117,7 @@ dependencies = [
 [[package]]
 name = "sail-netstack"
 version = "0.1.0"
-source = "git+https://github.com/peakpassvpn/sail.git?rev=235d12a9b5e1bfc3b8076409be21f80cf8e60029#235d12a9b5e1bfc3b8076409be21f80cf8e60029"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=a59e9bd53ef1059cb3b163eefeb806c13c7c30c9#a59e9bd53ef1059cb3b163eefeb806c13c7c30c9"
 
 [[package]]
 name = "same-file"
