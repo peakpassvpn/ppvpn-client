@@ -809,3 +809,31 @@ fn local_proxy_listens_where_configured() {
         "listen must be an address"
     );
 }
+
+#[test]
+fn debug_leaves_credentials_out() {
+    // A value no field name or default could contain by chance.
+    let secret = format!("redact-{:x}", std::process::id() as u64 * 7919 + 11);
+    let local_proxy = LocalProxy {
+        listen: "127.0.0.1".into(),
+        port: 7890,
+        prefix: "p".into(),
+        password: secret.clone(),
+    };
+    let shown = format!("{local_proxy:?}");
+    assert!(!shown.contains(&secret), "{shown}");
+    assert!(shown.contains("7890"), "{shown}");
+
+    let translation = Translation {
+        json: format!(r#"{{"inbounds":[{{"password":"{secret}"}}]}}"#),
+        node_tags: Default::default(),
+        outbound_nodes: Default::default(),
+        ingress_keys: Default::default(),
+        groups: Default::default(),
+        members: Default::default(),
+        direct_ipv6_hand_off: false,
+    };
+    let shown = format!("{translation:?}");
+    assert!(!shown.contains(&secret), "{shown}");
+    assert!(shown.contains("bytes"), "{shown}");
+}

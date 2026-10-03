@@ -260,6 +260,8 @@ pub(super) fn system_proxy_unavailable() -> Error {
 }
 
 /// The listener cannot be opened: no port, or the runtime refused it.
+/// The message is passed on as it is: the system proxy inbound carries no
+/// credentials, and the state file's errors name only the file.
 fn start_failed(error: Error) -> Error {
     Error::new(
         codes::SYSTEM_PROXY_START_FAILED,
