@@ -1,0 +1,5 @@
+# Pin the macOS deployment target for every build, not only build-apple.sh:
+# ring's build script does not rebuild when this variable changes, so one
+# unpinned build would leave objects for the host's macOS in the cache.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.0"
