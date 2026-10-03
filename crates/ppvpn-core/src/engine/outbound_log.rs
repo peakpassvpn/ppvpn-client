@@ -4,10 +4,10 @@
 //! node's failover group reads the groups again at once, so the ingress
 //! health in `status.nodes` follows without waiting for the next refresh.
 //!
-//! Transitional: sail names a group's member in the chain only once it
-//! connected, and a member that fails before another one carries the
-//! connection sends nothing, so a line names the group, not the ingress
-//! (rust-parity group 7).
+//! The chain names every hop before the dial, outermost first (`F>G>m`),
+//! and each member of a failover group that fails is one `DialFailed`
+//! (`more_to_try` until the connection's last): one line per ingress, as
+//! Go's (sail 2eb3fe47).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -161,7 +161,7 @@ impl Inner {
                 tracing::debug!(stage = %failed.stage, node_id = %node_id,
                     endpoint_key = %endpoint_key.as_deref().unwrap_or(""), outbound,
                     destination = %failed.destination, error = %failed.error,
-                    count = failed.count, "outbound failed");
+                    count = failed.count, more_to_try = failed.more_to_try, "outbound failed");
             }
             Through::Other => {
                 tracing::debug!(stage = %failed.stage, outbound, destination = %failed.destination,

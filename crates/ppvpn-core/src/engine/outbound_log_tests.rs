@@ -74,7 +74,7 @@ fn chains_name_their_node_and_ingress() {
             group: false
         }
     );
-    // A failed group names the group alone (sail, transitional).
+    // A chain without the member (before sail 2eb3fe47): the node only.
     assert_eq!(
         through(&t, "node-a>node-a-auto"),
         Through::Node {
@@ -179,4 +179,26 @@ fn only_upstream_exchanges_of_sails_servers_are_logged() {
         "exchanged"
     )));
     assert_eq!(crate::localdns::rcode_name(3), "NXDOMAIN");
+}
+
+/// Each member that fails is its own line: the chain names it, outermost
+/// first, so the line names its ingress.
+#[test]
+fn each_failed_member_names_its_ingress() {
+    let mut t = translation();
+    t.outbound_nodes.insert("node-a-2".into(), "a".into());
+    t.ingress_keys.insert("node-a-2".into(), "9002".into());
+    for (chain, key) in [
+        ("selected>node-a>node-a-auto>node-a-1", "9001"),
+        ("selected>node-a>node-a-auto>node-a-2", "9002"),
+    ] {
+        assert_eq!(
+            through(&t, chain),
+            Through::Node {
+                node_id: "a".into(),
+                endpoint_key: Some(key.into()),
+                group: true
+            }
+        );
+    }
 }
