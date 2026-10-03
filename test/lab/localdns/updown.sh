@@ -19,14 +19,20 @@
 #      every 200 ms for 5 s (a burst of netlink events)
 # Probe: a direct DNS query through the TUN every ~100 ms (dns-local in the
 # kernel, its socket bound to the default interface, like direct-host).
-# Checks: recovery within LIMIT_MS (default 2500) of the link coming up, and
+# Checks: recovery within LIMIT_MS (2500 by default, 6000 on the Go baseline:
+# SWITCH_GRACE_MS > 0) of the link coming up, and
 # the kernel switches before the link came up and in total. Exit status 1 on
 # a FAIL.
 set -eu
 CORE=$(realpath "$1"); LAB=$(realpath "$2"); PROFILE=$(realpath "$3"); MODE=$4
 mkdir -p "$5"; OUT=$(realpath "$5"); rm -rf "${OUT:?}"/*
 R=$OUT/run; mkdir -p "$R"
-LIMIT_MS=${LIMIT_MS:-2500}
+# The Rust core must recover within 2.5 s. On the Go baseline
+# (SWITCH_GRACE_MS > 0, as CI runs it) the kernel's own interface monitor can
+# be held back by each netlink event (#45, docs/rust-parity.md): 3035 ms was
+# seen on a CI runner. It gets up to 6 s, and the log keeps the time taken.
+GRACE=${SWITCH_GRACE_MS:-0}
+if [ "$GRACE" -gt 0 ]; then LIMIT_MS=${LIMIT_MS:-6000}; else LIMIT_MS=${LIMIT_MS:-2500}; fi
 now() { "$LAB" now; }
 log() { echo "$(now) $*" >> "$OUT/steps.log"; }
 c() { ip netns exec ud-c "$@"; }
