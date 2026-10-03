@@ -202,6 +202,9 @@ fn rule_and_target<'a>(t: Option<&Translation>, r: &'a Routed) -> (String, &'a s
 pub(super) fn connection_line(t: Option<&Translation>, r: &Routed) {
     let (rule, target, target_kind) = rule_and_target(t, r);
     let id = r.id.map(|id| id.to_string()).unwrap_or_default();
+    // Go logs the outbound the rules named (its tag; a node's selector or
+    // group, or direct): the chain's first, outermost hop. The member that
+    // carried it is the chain's last.
     let outbound = r.chain.first().map(String::as_str).unwrap_or("");
     tracing::debug!(
         id = %id,
