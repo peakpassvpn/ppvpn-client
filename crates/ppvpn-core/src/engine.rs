@@ -82,8 +82,19 @@ impl Drop for Inner {
             .get_mut()
             .map(|live| live.running && !live.shut_down)
             .unwrap_or(false);
-        if running {
-            cleanup::cleanup_on_drop(self.runtime.clone(), running);
+        let shut_down = self
+            .live
+            .get_mut()
+            .map(|live| live.shut_down)
+            .unwrap_or(true);
+        if !shut_down {
+            // The lock goes with the teardown: released when it is done.
+            let parts = cleanup::Parts {
+                runtime: running.then(|| self.runtime.clone()),
+                steps: Vec::new(),
+                state_dir: self.state_dir.get_mut().ok().and_then(Option::take),
+            };
+            cleanup::cleanup_on_drop(parts);
         }
     }
 }
@@ -145,7 +156,14 @@ impl Engine {
             .ok();
         let running = inner.live().running;
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let report = cleanup::cleanup(inner.runtime.clone(), running, left).await;
+        let parts = cleanup::Parts {
+            runtime: running.then(|| inner.runtime.clone()),
+            steps: Vec::new(),
+            // Released by the teardown when it is done: another instance
+            // may take the directory once it is free.
+            state_dir: inner.state_dir.lock().expect("state dir lock").take(),
+        };
+        let report = cleanup::cleanup(parts, left).await;
         drop(op);
         {
             let mut live = inner.live();
@@ -157,8 +175,6 @@ impl Engine {
             }
         }
         inner.bus.close();
-        // Last: another instance may take the directory once it is free.
-        inner.state_dir.lock().expect("state dir lock").take();
         Ok(report)
     }
 
