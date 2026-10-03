@@ -75,8 +75,8 @@ lab 用例里也有一项偏离（#45 待定项 D4，2026-10-03 决定：Rust �
 | CI 步骤 | 脚本 | 覆盖的行为 | 相关 Go 测试 | Rust 接入 |
 | --- | --- | --- | --- | --- |
 | tun：残留检查自检 | `run.sh` 加一个伪造的测试 | 宿主命名空间被改动时，run.sh 必须判失败 | — | 不变 |
-| tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 换成 Rust 的同名集成测试 |
-| tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上 |
+| tun：规则补回 | `run.sh` + `runtime.test -test.run TestTUNRulesRestoredAfterDeletion` | 真实 TUN 下，三种删法删掉的策略路由都被补回，宿主不受影响 | 第 2 组 `TestTUNRulesRestoredAfterDeletion` | 已有：`run.sh --libtest ppvpn_core.test tunrules::linux_tests::`（与 Go 并行） |
+| tun：规则损坏上报 | 同上，`PPVPN_TEST_TUN_RULES_NO_RESTORE=1` | 补不回来时，状态为 broken，并发出 TunRoutingBroken | 第 2 组 `TestTUNRulesBrokenIsReported` | 同上（同一步，进程内关掉补回） |
 | network-change：dns-local 跟随网络变化 | `run.sh --host test/lab/localdns/run.sh` | 切到另一块网卡、同一网卡换网络（新地址和新 DNS）、读不到 DNS 时在 500 ms 内回 SERVFAIL、DNS 出现后 1.5 s 内恢复、127.0.0.1 陷阱始终没被查询、发往物理 DNS 的查询不进 TUN、每次变化都有 `local dns servers` 日志 | 第 3 组 `TestCacheFollowsInterfaceChanges`、`TestCacheFailsFastWithoutServers`、`TestExchangeWithoutServersAnswersServfailAtOnce`（单元层面）；对应 #45 dns-local 用例 D1、E1–E3、E6 | 被测二进制换成 `ppvpn-core-lab` |
 | network-change：断网恢复，模式 0–4 | `run.sh --host test/lab/localdns/updown.sh` | up 后 2.5 s 内恢复；断网期间不切换内核（#69）；整轮切换次数：IPv6 不再回来时为 1，其余为 0；在断网状态下启动；网卡 up 后有连续的 netlink 事件 | 第 5 组 `TestReprobeSkipsWhileOffline`、`TestReprobeSwitchesWhenIPv6PathIsLost`（单元层面）；对应 dns-local 用例 E4 | 同上 |
 
@@ -145,15 +145,15 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
 | `internal/config` `TestDesktopTUNUsesOwnIPRoute2Namespace` | Desktop tun uses own ip route2 namespace |  | todo | 断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
-| `internal/runtime` `TestTUNRulesBrokenIsReported` | : rules that stay missing set the status to broken and send TunRoutingBroken. |  | todo | netns CI：tun 作业（关掉补回） |
-| `internal/runtime` `TestTUNRulesRestoredAfterDeletion` | deletes the TUN's policy routing the ways seen in the field (everything, as networkd does on a link down; just the goto target; the table's routes) and requires each to … |  | todo | netns CI：tun 作业，runner 上的独立 netns 中真实 TUN |
+| `internal/runtime` `TestTUNRulesBrokenIsReported` | : rules that stay missing set the status to broken and send TunRoutingBroken. | `ppvpn-core` `tunrules::linux_tests::tun_rules_broken_is_reported` | done | netns CI：tun 作业（`run.sh --libtest`），在进程内关掉补回，不用环境变量；守护层面断言 `Broken{missing}`，事件和 `Fatal` 由 Engine 接入后的测试覆盖。另验证手动补回后报 `Restored` |
+| `internal/runtime` `TestTUNRulesRestoredAfterDeletion` | deletes the TUN's policy routing the ways seen in the field (everything, as networkd does on a link down; just the goto target; the table's routes) and requires each to … | `ppvpn-core` `tunrules::linux_tests::tun_rules_restored_after_deletion` | done | netns CI：tun 作业（`run.sh --libtest`），独立 netns 中真实的 sail TUN；守护层面断言 `Restored`，`Status::tun_routing` 由 Engine 接入后的测试覆盖 |
 | `internal/runtime` `TestTUNRulesSurviveNetworkdLinkFlap` | reproduces the field report: with systemd-networkd managing a link (ManageForeignRoutingPolicyRules on, its default), taking the link down and up makes networkd drop the … |  | todo | 不在 CI：runner 没有 systemd-networkd 管理的链路；在容器里跑 |
-| `internal/tunrules` `TestMissingCountsDuplicates` | Missing counts duplicates |  | todo |  |
-| `internal/tunrules` `TestOwnedKeepsEverySingTunRule` | Owned keeps every sing tun rule |  | todo |  |
-| `internal/tunrules` `TestOwnedLeavesOtherProgramsRules` | Owned leaves other programs rules |  | todo |  |
-| `internal/tunrules` `TestRestoreOrderPutsGotoTargetsFirst` | Restore order puts goto targets first |  | todo |  |
-| `internal/tunrules` `TestRouteRestoreOrderPutsGatewayCoveringRoutesLast` | Route restore order puts gateway covering routes last |  | todo |  |
-| `internal/tunrules` `TestRuleString` | Rule string |  | todo |  |
+| `internal/tunrules` `TestMissingCountsDuplicates` | Missing counts duplicates | `ppvpn-core` `tunrules::tests::missing_counts_duplicates` | done |  |
+| `internal/tunrules` `TestOwnedKeepsEverySingTunRule` | Owned keeps every sing tun rule | `ppvpn-core` `tunrules::tests::owned_keeps_every_sing_tun_rule` | done | 另有 `owned_keeps_every_sail_auto_route_rule`：sail auto_route 为桌面 TUN 装的全部规则 |
+| `internal/tunrules` `TestOwnedLeavesOtherProgramsRules` | Owned leaves other programs rules | `ppvpn-core` `tunrules::tests::owned_leaves_other_programs_rules` | done |  |
+| `internal/tunrules` `TestRestoreOrderPutsGotoTargetsFirst` | Restore order puts goto targets first | `ppvpn-core` `tunrules::tests::restore_order_puts_goto_targets_first` | done |  |
+| `internal/tunrules` `TestRouteRestoreOrderPutsGatewayCoveringRoutesLast` | Route restore order puts gateway covering routes last | `ppvpn-core` `tunrules::tests::route_restore_order_puts_gateway_covering_routes_last` | done | sail 的路由没有网关，保留这个顺序是为了有网关的路由 |
+| `internal/tunrules` `TestRuleString` | Rule string | `ppvpn-core` `tunrules::tests::rule_string` | done | 字符串与 Go 逐字一致（宿主在 `missing` 里看到的就是它） |
 
 ## 3. dns-local
 
