@@ -114,6 +114,13 @@ pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport 
             Ok(Err(e)) => leftovers.push(format!("runtime: {e}")),
             Err(_) => leftovers.push("runtime: stop timed out".into()),
         }
+        // sail's own report of the tasks its stop could not end.
+        leftovers.extend(
+            runtime
+                .stop_leftovers()
+                .into_iter()
+                .map(|l| format!("runtime: {l}")),
+        );
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
     let spawned = thread::Builder::new()
@@ -165,6 +172,12 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
                     Ok(Err(_)) => leftovers.push("runtime: stop timed out".into()),
                     Err(e) => leftovers.push(format!("runtime: {e}")),
                 }
+                leftovers.extend(
+                    runtime
+                        .stop_leftovers()
+                        .into_iter()
+                        .map(|l| format!("runtime: {l}")),
+                );
             }
             leftovers.append(&mut run_steps(steps, until, state_dir));
             let _ = tx.send(leftovers);
@@ -271,6 +284,24 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), ["routing", "dns"]);
         assert_eq!(runtime.state(), RuntimeState::Stopped);
         StateDirLock::acquire(&dir).expect("free");
+    }
+
+    #[tokio::test]
+    async fn tasks_sail_could_not_stop_are_leftovers() {
+        let runtime = Arc::new(FakeRuntime::default());
+        runtime.start("{}").await.unwrap();
+        runtime.leave_after_stop(vec![
+            "sail task tun-read (1) still running after 2000 ms".into()
+        ]);
+        let parts = Parts {
+            runtime: Some(runtime.clone()),
+            ..Parts::default()
+        };
+        let report = cleanup(parts, SHUTDOWN_LIMIT).await;
+        assert_eq!(
+            report.leftovers,
+            ["runtime: sail task tun-read (1) still running after 2000 ms"]
+        );
     }
 
     #[tokio::test]

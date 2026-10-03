@@ -10,6 +10,9 @@
 //!   reads the groups again. sail tells no selector's switch by hand, so
 //!   `select` tells those itself;
 //! - dial failures: sail's `events(Kinds::DIAL)` as [`DialFailed`];
+//! - routes, only once `routes()` is taken (the Engine logs at debug):
+//!   sail's `events(Kinds::ROUTE)` as [`Routed`], built by sail only while
+//!   someone subscribes;
 //! - logs: the instance's lines as logfmt, into a bounded channel; lines
 //!   that do not fit are dropped and counted, never waited for;
 //! - network: sail's network events (`instance.events(Kinds::NETWORK)`,
@@ -29,8 +32,8 @@ use tokio::task::JoinHandle;
 
 use super::{
     AsyncReadWrite, Datagram, DialFailed, GroupInfo, GroupSwitch, MemberInfo, NetworkChange,
-    NetworkSnapshot, Runtime, RuntimeConnection, RuntimeError, RuntimeState, RuntimeTraffic,
-    Target,
+    NetworkSnapshot, Routed, Runtime, RuntimeConnection, RuntimeError, RuntimeState,
+    RuntimeTraffic, Target,
 };
 use crate::logfmt;
 
@@ -41,6 +44,8 @@ const SWITCH_BUFFER: usize = 256;
 /// Dial failures that wait for the Engine before new ones are dropped
 /// (sail already folds a chain's failures into one with a count).
 const DIAL_BUFFER: usize = 256;
+/// Routed connections that wait for the Engine before new ones are dropped.
+const ROUTE_BUFFER: usize = 1024;
 
 /// Each group's member as last told, by tag: what a switch is from, and
 /// what the groups are compared with after falling behind.
@@ -54,6 +59,8 @@ pub(crate) struct SailRuntime {
     switch_tx: mpsc::Sender<GroupSwitch>,
     members: Members,
     failures: Mutex<Option<mpsc::Receiver<DialFailed>>>,
+    /// The routes' follower, started by the first `routes()`.
+    route_task: Mutex<Option<JoinHandle<()>>>,
     logs: Mutex<Option<mpsc::Receiver<String>>>,
     dropped: Arc<AtomicU64>,
     /// sail's network changes, as ours (`network_changes`).
@@ -149,6 +156,7 @@ impl SailRuntime {
             switch_tx,
             members,
             failures: Mutex::new(Some(dial_rx)),
+            route_task: Mutex::new(None),
             logs: Mutex::new(Some(log_rx)),
             dropped,
             network,
@@ -232,6 +240,9 @@ impl Drop for SailRuntime {
         for task in &self.tasks {
             task.abort();
         }
+        if let Some(task) = self.route_task.lock().expect("route task").take() {
+            task.abort();
+        }
     }
 }
 
@@ -297,6 +308,66 @@ async fn follow_groups(instance: Instance, members: Members, tx: mpsc::Sender<Gr
                         });
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn routed(r: &embed::RoutedConnection) -> Routed {
+    use embed::{DomainSource as S, RouteAction as A};
+    Routed {
+        id: r.id,
+        network: r.network.to_string(),
+        inbound: r.inbound.clone(),
+        source: r.source.to_string(),
+        destination: r.destination.to_string(),
+        domain: r.domain.clone(),
+        domain_source: r.domain_source.map(|s| {
+            match s {
+                S::Request => "request",
+                S::FakeIp => "fake_ip",
+                S::Sniffed => "sniffed",
+                S::ReverseMapping => "reverse_mapping",
+                _ => "other",
+            }
+            .to_owned()
+        }),
+        protocol: r.sniffed_protocol.map(str::to_owned),
+        rule: r.rule.map(|i| i as usize),
+        action: match r.action {
+            A::Outbound => "outbound",
+            A::Reject => "reject",
+            A::Drop => "drop",
+            A::HijackDns => "hijack_dns",
+            _ => "other",
+        }
+        .to_owned(),
+        chain: r.chain.clone(),
+        request_destination: r.request_destination.as_ref().map(ToString::to_string),
+        target: r.target.map(|t| t.to_string()),
+        error: match &r.connect {
+            Some(Err(kind)) => Some(format!("{kind:?}")),
+            _ => None,
+        },
+        connect_ms: match &r.connect {
+            Some(Ok(took)) => Some(took.as_millis() as u64),
+            _ => None,
+        },
+    }
+}
+
+/// sail's routed connections, through every run. Behind (`Lagged`): those
+/// missed are gone, and how many is logged.
+async fn follow_routes(instance: Instance, tx: mpsc::Sender<Routed>) {
+    let mut events = Box::pin(instance.events(embed::Kinds::ROUTE));
+    while let Some(event) = events.next().await {
+        match event {
+            embed::Event::Routed(r) => {
+                let _ = tx.try_send(routed(&r));
+            }
+            embed::Event::Lagged { kind, missed } if kind.contains(embed::Kinds::ROUTE) => {
+                tracing::debug!(missed, "routed connections dropped: the reader fell behind");
             }
             _ => {}
         }
@@ -379,8 +450,33 @@ impl Runtime for SailRuntime {
             .map_err(error)
     }
 
+    /// A stop that ended with tasks still running is a stop: sail's
+    /// report of them is `stop_leftovers`, and a warn line.
     async fn stop(&self) -> Result<(), RuntimeError> {
-        self.instance.stop().await.map_err(error)
+        match self.instance.stop().await {
+            Ok(()) => Ok(()),
+            Err(_) if !self.stop_leftovers().is_empty() => {
+                tracing::warn!(left = ?self.stop_leftovers(), "sail stopped with tasks still running");
+                Ok(())
+            }
+            Err(e) => Err(error(e)),
+        }
+    }
+
+    fn stop_leftovers(&self) -> Vec<String> {
+        match self.instance.stop_report() {
+            Some(report) if !report.clean() => report
+                .tasks
+                .iter()
+                .map(|(task, n)| {
+                    format!(
+                        "sail task {task} ({n}) still running after {} ms",
+                        report.waited.as_millis()
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn states(&self) -> watch::Receiver<RuntimeState> {
@@ -452,6 +548,14 @@ impl Runtime for SailRuntime {
             .expect("switches")
             .take()
             .expect("group_switches is taken once")
+    }
+
+    fn routes(&self) -> mpsc::Receiver<Routed> {
+        let (tx, rx) = mpsc::channel(ROUTE_BUFFER);
+        let mut task = self.route_task.lock().expect("route task");
+        assert!(task.is_none(), "routes is taken once");
+        *task = Some(tokio::spawn(follow_routes(self.instance.clone(), tx)));
+        rx
     }
 
     fn dial_failures(&self) -> mpsc::Receiver<DialFailed> {

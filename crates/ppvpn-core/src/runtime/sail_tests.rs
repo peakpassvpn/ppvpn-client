@@ -495,3 +495,47 @@ async fn a_failed_connection_is_told() {
     assert!(failed.count >= 1, "{failed:?}");
     runtime.stop().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_routed_connection_is_told_once_taken() {
+    let echo = echo().await;
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("routed")).unwrap();
+    let mut routes = runtime.routes();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    let mut proxied = socks(port, "u1", &p1, echo)
+        .await
+        .expect("through the proxy");
+    round_trip(&mut proxied, b"routed").await;
+    let routed = tokio::time::timeout(WAIT, async {
+        loop {
+            let r = routes.recv().await.expect("the channel");
+            if r.destination == echo.to_string() {
+                return r;
+            }
+        }
+    })
+    .await
+    .expect("routed in time");
+    // route.final is the selector pick, on direct: the chain says the
+    // outbound that carried it first.
+    assert_eq!(
+        (
+            routed.network.as_str(),
+            routed.inbound.as_str(),
+            routed.action.as_str(),
+            routed.rule,
+            routed.chain.first().map(String::as_str),
+            routed.error.as_deref(),
+        ),
+        ("tcp", "local", "outbound", None, Some("direct"), None),
+        "{routed:?}"
+    );
+    assert!(routed.connect_ms.is_some(), "{routed:?}");
+    runtime.stop().await.unwrap();
+    assert!(runtime.stop_leftovers().is_empty());
+}

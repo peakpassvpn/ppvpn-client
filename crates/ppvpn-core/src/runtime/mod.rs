@@ -152,6 +152,45 @@ pub(crate) struct GroupSwitch {
 /// Connections through one chain of outbounds that failed (#45
 /// DialFailed): `count` since the one before for that chain, `last` the
 /// latest of them.
+/// A connection once the rules decided of it and, where they sent it to an
+/// outbound, once its dial ended (sail's `Routed`): a TCP connection, a UDP
+/// session or a stream of a multiplexed one. Addresses and domains whole:
+/// the Engine redacts what it logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Routed {
+    /// As `connections()` lists it; None where it never opened.
+    pub id: Option<u64>,
+    /// `tcp` or `udp`.
+    pub network: String,
+    /// The inbound's tag.
+    pub inbound: String,
+    /// `ip:port`.
+    pub source: String,
+    /// Where it was to go, as the rules saw it (`host:port`).
+    pub destination: String,
+    pub domain: Option<String>,
+    /// `request`, `fake_ip`, `sniffed` or `reverse_mapping`.
+    pub domain_source: Option<String>,
+    /// The protocol sniffing recognized.
+    pub protocol: Option<String>,
+    /// The deciding rule's index in `route.rules` (a logical rule is one);
+    /// None for `route.final`, or a dial of the host's own.
+    pub rule: Option<usize>,
+    /// `outbound`, `reject`, `drop` or `hijack_dns`.
+    pub action: String,
+    /// The outbound that carried it first, then the groups' choices back to
+    /// the outbound the rules named; empty where none was asked.
+    pub chain: Vec<String>,
+    /// What the outbound was asked to reach (`host:port`).
+    pub request_destination: Option<String>,
+    /// The address its TCP connection out was made to (`ip:port`).
+    pub target: Option<String>,
+    /// How the dial failed (the I/O error's kind); None when it connected
+    /// or none was made.
+    pub error: Option<String>,
+    pub connect_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DialFailed {
     /// The outbounds it went through, joined by `>` as the log's `out=`:
@@ -235,6 +274,9 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     async fn reload(&self, config: &str) -> Result<(), RuntimeError>;
     /// Returns once listeners are closed and connections dropped.
     async fn stop(&self) -> Result<(), RuntimeError>;
+    /// What the last stop could not end within its bound (sail's tasks
+    /// still running), one line each; empty when it all ended.
+    fn stop_leftovers(&self) -> Vec<String>;
 
     /// Subscribe first, then read.
     fn states(&self) -> watch::Receiver<RuntimeState>;
@@ -250,6 +292,11 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// Failed connections as they happen, through starts and stops; those
     /// that do not fit while the reader is behind are dropped. Taken once.
     fn dial_failures(&self) -> mpsc::Receiver<DialFailed>;
+    /// Each connection routed, through starts and stops; those that do not
+    /// fit while the reader is behind are dropped. Taken once, and only when
+    /// wanted (the Engine's log at debug): sail builds them only for a
+    /// subscriber, which taking this makes.
+    fn routes(&self) -> mpsc::Receiver<Routed>;
 
     async fn traffic(&self) -> Result<RuntimeTraffic, RuntimeError>;
     async fn connections(&self) -> Result<Vec<RuntimeConnection>, RuntimeError>;

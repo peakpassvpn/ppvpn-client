@@ -65,6 +65,9 @@ pub(crate) struct FakeRuntime {
         mpsc::Sender<DialFailed>,
         Mutex<Option<mpsc::Receiver<DialFailed>>>,
     ),
+    routes_seen: (mpsc::Sender<Routed>, Mutex<Option<mpsc::Receiver<Routed>>>),
+    /// What stop_leftovers says after the next stops.
+    leftovers: Mutex<Vec<String>>,
     dropped: AtomicU64,
     network: Mutex<NetworkSnapshot>,
     network_changes: watch::Sender<Option<NetworkChange>>,
@@ -76,6 +79,7 @@ impl Default for FakeRuntime {
         let (switch_tx, switch_rx) = mpsc::channel(64);
         let (log_tx, log_rx) = mpsc::channel(LOG_CAPACITY);
         let (dial_tx, dial_rx) = mpsc::channel(64);
+        let (route_tx, route_rx) = mpsc::channel(64);
         Self {
             calls: Mutex::default(),
             config: Mutex::default(),
@@ -90,6 +94,8 @@ impl Default for FakeRuntime {
             switches: (switch_tx, Mutex::new(Some(switch_rx))),
             logs: (log_tx, Mutex::new(Some(log_rx))),
             failures_seen: (dial_tx, Mutex::new(Some(dial_rx))),
+            routes_seen: (route_tx, Mutex::new(Some(route_rx))),
+            leftovers: Mutex::default(),
             dropped: AtomicU64::new(0),
             // Known at the start, as sail's start returns with its first
             // detection done; `set_network` makes it unknown for a test.
@@ -227,6 +233,18 @@ impl FakeRuntime {
         let _ = self.failures_seen.0.try_send(failed);
     }
 
+    /// As if sail routed a connection.
+    #[allow(dead_code)] // for the Engine's tests once it follows them
+    pub(crate) fn routed(&self, routed: Routed) {
+        let _ = self.routes_seen.0.try_send(routed);
+    }
+
+    /// As if sail's stops left these tasks running.
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn leave_after_stop(&self, leftovers: Vec<String>) {
+        *self.leftovers.lock().unwrap() = leftovers;
+    }
+
     /// A log line from sail; dropped and counted when the reader is behind.
     /// The network becomes `new`, as sail would publish it (`reason`:
     /// default_interface, state, host or wake).
@@ -360,6 +378,19 @@ impl Runtime for FakeRuntime {
 
     fn group_switches(&self) -> mpsc::Receiver<GroupSwitch> {
         self.switches.1.lock().unwrap().take().expect("taken once")
+    }
+
+    fn routes(&self) -> mpsc::Receiver<Routed> {
+        self.routes_seen
+            .1
+            .lock()
+            .unwrap()
+            .take()
+            .expect("taken once")
+    }
+
+    fn stop_leftovers(&self) -> Vec<String> {
+        self.leftovers.lock().unwrap().clone()
     }
 
     fn dial_failures(&self) -> mpsc::Receiver<DialFailed> {
