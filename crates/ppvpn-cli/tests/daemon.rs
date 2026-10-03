@@ -211,20 +211,3 @@ fn a_killed_daemon_leaves_nothing_that_blocks_the_next_one() {
     assert_eq!(cli.run(&["--json", "stop"]).1["stopped"], true);
     assert!(child.wait().unwrap().success());
 }
-
-#[test]
-fn release_builds_cannot_start_without_profile_download() {
-    let home = home();
-    let cli = Cli { home: home.path() };
-    let (code, value) = cli.run(&["--json", "start"]);
-    assert_eq!(
-        (code, value["code"].as_str()),
-        (1, Some("NOT_IMPLEMENTED")),
-        "{value}"
-    );
-    assert_eq!(
-        cli.run(&["--json", "status"]).1["daemon_running"],
-        false,
-        "no daemon may be left behind"
-    );
-}

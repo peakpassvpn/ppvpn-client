@@ -8,6 +8,7 @@
 use clap::CommandFactory;
 use serde_json::{json, Value};
 
+use crate::account;
 use crate::buildinfo::{self, BuildConfig, Profile};
 use crate::cli::{Cli, Command};
 use crate::client::{self, Client};
@@ -18,8 +19,24 @@ use crate::error::{CliError, Exit, Result};
 use crate::output::Printer;
 use crate::paths::Paths;
 use crate::settings::{RoutingMode, Settings};
+use crate::Hooks;
 
-pub fn run(cli: &Cli, env: &Env, out: &mut Printer) -> Result<()> {
+fn build_config(env: &Env, hooks: &Hooks) -> Result<BuildConfig> {
+    match &hooks.build {
+        Some(config) => Ok(config.clone()),
+        None => buildinfo::resolve(env),
+    }
+}
+
+fn auth(config: &BuildConfig, env: &Env, hooks: &Hooks) -> ppvpn_account::auth::Auth {
+    let store = hooks
+        .store
+        .clone()
+        .unwrap_or_else(crate::keystore::platform_store);
+    account::auth(config, env, store)
+}
+
+pub fn run(cli: &Cli, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
     cli.command.validate(cli.json)?;
     let io = |err: std::io::Error| CliError::new(Exit::Other, "OUTPUT_FAILED", err.to_string());
     match &cli.command {
@@ -33,9 +50,12 @@ pub fn run(cli: &Cli, env: &Env, out: &mut Printer) -> Result<()> {
         }
         Command::Completion { shell } => completion(shell, out).map_err(io),
         Command::Mode { mode } => mode_command(mode.as_deref(), env, out),
-        Command::Doctor => doctor(env, out),
-        Command::Start { foreground } => start(env, out, *foreground, false),
-        Command::Restart { foreground } => start(env, out, *foreground, true),
+        Command::Doctor => doctor(env, hooks, out),
+        Command::Login { no_browser } => login(env, hooks, out, *no_browser),
+        Command::Account => account_command(env, hooks, out),
+        Command::Logout => logout(env, hooks, out),
+        Command::Start { foreground } => start(env, hooks, out, *foreground, false),
+        Command::Restart { foreground } => start(env, hooks, out, *foreground, true),
         Command::Stop => stop(env, out),
         Command::Status => status(env, out),
         Command::Daemon => daemon(env),
@@ -90,8 +110,8 @@ fn mode_command(mode: Option<&str>, env: &Env, out: &mut Printer) -> Result<()> 
     .map_err(io)
 }
 
-fn doctor(env: &Env, out: &mut Printer) -> Result<()> {
-    let config = buildinfo::resolve(env)?;
+fn doctor(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
+    let config = build_config(env, hooks)?;
     let paths = Paths::resolve(env)?;
     let platform = platform(env.os);
     let value: Value = json!({
@@ -145,30 +165,25 @@ fn output_error(err: std::io::Error) -> CliError {
     CliError::new(Exit::Other, "OUTPUT_FAILED", err.to_string())
 }
 
-/// The profile to apply. Downloading it needs `ppvpn-account`; until that is
-/// wired in, only dev builds can supply one from `PPVPN_PROFILE_FILE`.
-fn load_profile(env: &Env, config: &BuildConfig) -> Result<Vec<u8>> {
-    let path = match (config.profile, env.var("PPVPN_PROFILE_FILE")) {
-        (Profile::Dev, Some(path)) if path.starts_with('/') => path,
-        (Profile::Dev, Some(_)) => {
-            return Err(CliError::argument(
-                "PPVPN_PROFILE_FILE must be an absolute path",
-            ))
+/// The profile to apply: downloaded with the saved login, or, in a dev
+/// build only, read from the absolute path in `PPVPN_PROFILE_FILE`.
+async fn load_profile(env: &Env, hooks: &Hooks, config: &BuildConfig) -> Result<Vec<u8>> {
+    if config.profile == Profile::Dev {
+        if let Some(path) = env.var("PPVPN_PROFILE_FILE") {
+            if !path.starts_with('/') {
+                return Err(CliError::argument(
+                    "PPVPN_PROFILE_FILE must be an absolute path",
+                ));
+            }
+            return std::fs::read(path).map_err(|e| {
+                CliError::environment(
+                    "PROFILE_FILE_UNREADABLE",
+                    format!("cannot read {path}: {e}"),
+                )
+            });
         }
-        _ => {
-            return Err(CliError::new(
-                Exit::Other,
-                "NOT_IMPLEMENTED",
-                "downloading the profile is not implemented yet (needs ppvpn-account)",
-            ))
-        }
-    };
-    std::fs::read(path).map_err(|e| {
-        CliError::environment(
-            "PROFILE_FILE_UNREADABLE",
-            format!("cannot read {path}: {e}"),
-        )
-    })
+    }
+    account::download_profile(&auth(config, env, hooks)).await
 }
 
 fn apply_request(
@@ -249,12 +264,20 @@ fn status_output(status: Value, pid: Option<u32>) -> (Value, String) {
     (value, human)
 }
 
-fn start(env: &Env, out: &mut Printer, foreground: bool, restart: bool) -> Result<()> {
-    let config = buildinfo::resolve(env)?;
+fn start(
+    env: &Env,
+    hooks: &Hooks,
+    out: &mut Printer,
+    foreground: bool,
+    restart: bool,
+) -> Result<()> {
+    let config = build_config(env, hooks)?;
     let paths = Paths::resolve(env)?;
-    let profile = load_profile(env, &config)?;
-    let request = apply_request(profile, &Settings::load(&paths.settings)?, &config);
     runtime()?.block_on(async {
+        // Fetch the profile before touching the daemon, so a missing login
+        // or an unreachable backend never stops a running instance.
+        let profile = load_profile(env, hooks, &config).await?;
+        let request = apply_request(profile, &Settings::load(&paths.settings)?, &config);
         if restart {
             stop_daemon(&paths).await?;
         }
@@ -345,5 +368,115 @@ fn daemon(env: &Env) -> Result<()> {
     runtime()?.block_on(async {
         let (daemon, listener) = Daemon::bind(&paths, env.os).await?;
         daemon.serve(listener).await
+    })
+}
+
+fn hostname() -> String {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is valid for its length; gethostname writes at most that.
+    let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+    let len = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    let name = String::from_utf8_lossy(&buf[..len]).trim().to_string();
+    if ok && !name.is_empty() {
+        name
+    } else {
+        "terminal".to_string()
+    }
+}
+
+/// Opens the authorization page; failing to is fine, the URL is printed.
+fn open_browser(os: Os, url: &str) {
+    let program = match os {
+        Os::Macos => "open",
+        Os::Linux => "xdg-open",
+    };
+    let _ = std::process::Command::new(program)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+fn login(env: &Env, hooks: &Hooks, out: &mut Printer, no_browser: bool) -> Result<()> {
+    let config = build_config(env, hooks)?;
+    let auth = auth(&config, env, hooks);
+    let platform = match env.os {
+        Os::Macos => "macos",
+        Os::Linux => "linux",
+    };
+    runtime()?.block_on(async {
+        let started = auth
+            .start(&hostname(), platform, buildinfo::version())
+            .await
+            .map_err(|e| account::auth_error(&e))?;
+        // The account password is only ever typed into the browser page.
+        let _ = out.progress(&format!(
+            "Authorize this device at:\n{}\n\nConfirmation code: {}",
+            started.verification_url, started.user_code
+        ));
+        if !no_browser {
+            open_browser(env.os, &started.verification_url);
+        }
+        let _ = out.progress("Waiting for authorization...");
+        let pending = auth
+            .poll_until_done(started.generation)
+            .await
+            .map_err(|e| account::auth_error(&e))?;
+        let _guard = auth.lock().await;
+        auth.activate(pending, Some(started.generation))
+            .await
+            .map_err(|e| account::auth_error(&e))?;
+        out.success(
+            &json!({"ok": true, "status": "authorized", "user_code": started.user_code}),
+            "Authorized this device.",
+        )
+        .map_err(output_error)
+    })
+}
+
+fn account_command(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
+    let config = build_config(env, hooks)?;
+    let auth = auth(&config, env, hooks);
+    runtime()?.block_on(async {
+        let token = account::access_token(&auth).await?;
+        let user = auth
+            .api()
+            .account(&token)
+            .await
+            .map_err(|e| account::api_error(&e))?;
+        let mut value = json!({"ok": true, "account": {"id": user.id, "name": user.name}});
+        if let Some(email) = &user.email {
+            value["account"]["email"] = json!(email);
+        }
+        out.success(&value, &format!("{} ({})", user.name, user.id))
+            .map_err(output_error)
+    })
+}
+
+fn logout(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
+    let config = build_config(env, hooks)?;
+    let store = hooks
+        .store
+        .clone()
+        .unwrap_or_else(crate::keystore::platform_store);
+    let saved = store.load().map_err(|failure| {
+        let code = if failure.locked {
+            "CREDENTIAL_STORE_LOCKED"
+        } else {
+            "CREDENTIAL_STORE_UNAVAILABLE"
+        };
+        CliError::environment(code, failure.message)
+    })?;
+    if saved.is_none() {
+        return Err(account::not_logged_in());
+    }
+    let auth = account::auth(&config, env, store);
+    runtime()?.block_on(async {
+        // Revoking on the backend is best effort; removing the local
+        // credential is what logs this device out.
+        auth.logout().await.map_err(|e| account::auth_error(&e))?;
+        out.success(&json!({"ok": true, "local_removed": true}), "Logged out.")
+            .map_err(output_error)
     })
 }
