@@ -1,0 +1,43 @@
+# ppvpn-archive-keyring (deb) and ppvpn-release (rpm): the repository's GPG key and source
+# entry, built by ../scripts/build-repo-packages.sh (which fills in every $-brace placeholder). The name is
+# per packager, as Debian and Fedora name these packages differently.
+name: ${PPVPN_REPO_PACKAGE}
+arch: all
+platform: linux
+version: ${PPVPN_REPO_PACKAGE_VERSION}
+section: misc
+priority: optional
+maintainer: ${PPVPN_PACKAGE_MAINTAINER}
+vendor: PeakPass VPN LLC
+homepage: https://www.peakpassvpn.com
+license: GPL-3.0-or-later
+description: |-
+  PPVPN package repository configuration
+  The signing key and source entry for https://pkg.peakpassvpn.com, from which
+  apt or dnf installs and upgrades PPVPN.
+
+contents:
+  # apt: a binary keyring referenced by signed-by, so the key is trusted for this source only.
+  - src: ${PPVPN_REPO_STAGE}/ppvpn-archive-keyring.gpg
+    dst: /usr/share/keyrings/ppvpn-archive-keyring.gpg
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_REPO_DIR}/ppvpn.list
+    dst: /etc/apt/sources.list.d/ppvpn.list
+    type: config
+    packager: deb
+    file_info:
+      mode: 0644
+  # dnf: the armored key the .repo file points at.
+  - src: ${PPVPN_REPO_KEY}
+    dst: /etc/pki/rpm-gpg/RPM-GPG-KEY-ppvpn
+    packager: rpm
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_REPO_DIR}/ppvpn.repo
+    dst: /etc/yum.repos.d/ppvpn.repo
+    type: config|noreplace
+    packager: rpm
+    file_info:
+      mode: 0644
