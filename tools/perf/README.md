@@ -51,6 +51,7 @@ CPU, throughput and latency (#45's performance thresholds) depend on the machine
 
 - **Pairs.** Each round measures every engine given with `--engine`, in turn (Go, Rust, Go, Rust, ...), in one run. Go 0.5.21 and the Rust engine are therefore always compared on the same machine on the same day. Hosts are rebuilt, so numbers from different runs or days are not compared.
 - **Cores.** `--engine-cpus`, `--load-cpus` and `--node-cpus` pin the engine, loadgen and fakenode to their own cores (`taskset -c`), so that the load and the fake node do not take the engine's CPU. Give them disjoint sets within the cores the job was granted.
+- **Parts.** Ask for the cores a part uses, not more. `--part light` (idle CPU, latency, connections, CPU at 100 Mbit/s) needs two physical cores: one for the engine, one shared by loadgen and fakenode. `--part throughput` (unpaced streams) keeps all three busy, so it needs three, but only for a few minutes. Run both parts on the same day, and collect their logs together.
 - **Where.** The first output line, `ENV {...}`, records the CPU model, cores, memory, kernel, date and the pinning, plus `--label` values: give the job's id, for example `--label hostq_job=<id>`. The report quotes it.
 - **What.** The standard instance only (local proxy), against the fake node on loopback. Nothing leaves the host.
   - idle CPU and context switches over 60 s;
@@ -66,10 +67,9 @@ CPU, throughput and latency (#45's performance thresholds) depend on the machine
 - **AnyTLS** trusts the fake node's certificate through `SSL_CERT_FILE`. The Go engine honours it on Linux. The Rust engine goes through sail's system store (`rustls-native-certs`), which honours it too, because the translation does not choose another store.
 
 ```sh
-sudo -E tools/perf/measure.py --tier b --rounds 3 \
-  --engine go=build/ppvpn-core --engine rust=target/release/ppvpn-core-lab \
-  --fakenode "$FAKENODE" --loadgen "$LOADGEN" \
-  --engine-cpus 2,3 --load-cpus 4,5 --node-cpus 6,7 --label hostq_job=<id> | tee tierb.log
-for e in go rust; do tools/perf/report.py collect --sha "$(git rev-parse HEAD)" --engine $e tierb.log > $e.json; done
+B="--tier b --rounds 3 --engine go=build/ppvpn-core --engine rust=target/release/ppvpn-core-lab --fakenode $FAKENODE --loadgen $LOADGEN"
+tools/perf/measure.py $B --part light --engine-cpus 2,3 --load-cpus 4,5 --node-cpus 4,5 --label job=<id> | tee light.log
+tools/perf/measure.py $B --part throughput --engine-cpus 2,3 --load-cpus 4,5 --node-cpus 6,7 --label job=<id> | tee tput.log
+for e in go rust; do tools/perf/report.py collect --sha "$(git rev-parse HEAD)" --engine $e light.log tput.log > $e.json; done
 tools/perf/report.py compare rust.json --baseline go.json
 ```

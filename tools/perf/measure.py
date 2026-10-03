@@ -56,6 +56,11 @@ name ("engine"):
     <proto>.connect_p50_us         a new connection (20 a second, 20 s)
                                    until its first byte comes back
     <proto>.connect_p99_us
+--part splits the run by what it needs, so that each part asks for the
+cores it uses: light (idle, latency, connections, CPU at 100 Mbit/s; the
+load and the fake node can share a core) and throughput (unpaced: the
+engine, the load and the fake node each busy). report.py merges the parts'
+logs of one engine.
 A first `ENV {...}` line says where: the CPU model, cores, memory, kernel,
 the cores each part was pinned to, and --label's (the hostq job). The
 engine, the load and the fake node run on the cores given (taskset), so
@@ -249,20 +254,24 @@ def measure_tier_b(args, work, ports, env, name, binary):
         engine.call("start")
         time.sleep(args.idle_seconds)
         row = {"profile": "tierb", "engine": name}
-        before = switches(engine)
-        _, row["idle_cpu_pct"] = busy(engine, lambda: time.sleep(args.b_idle_seconds))
-        row["idle_switches_per_s"] = round((switches(engine) - before) / args.b_idle_seconds, 2)
-        direct = loadgen(args, None, ports, "pingpong", "-duration", seconds)
-        row["direct_rtt_p50_us"], row["direct_rtt_p99_us"] = direct["p50_us"], direct["p99_us"]
+        light, heavy = args.part in ("all", "light"), args.part in ("all", "throughput")
+        if light:
+            before = switches(engine)
+            _, row["idle_cpu_pct"] = busy(engine, lambda: time.sleep(args.b_idle_seconds))
+            row["idle_switches_per_s"] = round((switches(engine) - before) / args.b_idle_seconds, 2)
+            direct = loadgen(args, None, ports, "pingpong", "-duration", seconds)
+            row["direct_rtt_p50_us"], row["direct_rtt_p99_us"] = direct["p50_us"], direct["p99_us"]
         for node in PROFILE_NODES:
             credential = engine.call("get-local-proxy-credential", {"node_id": node})
-            for conns in (1, 8):
+            for conns in (1, 8) if heavy else ():
                 # With the engine's CPU meanwhile: near its cores' 100 per
                 # core, the engine is the bottleneck; well below, the load
                 # or the fake node is, and the number says less.
                 result, row[f"{node}.tput{conns}_engine_cpu_pct"] = busy(engine, lambda: loadgen(
                     args, credential, ports, "stream", "-conns", str(conns), "-rate-mbit", "0", "-duration", seconds))
                 row[f"{node}.tput{conns}_mbit"] = round(result["bytes_received"] * 8 / result["elapsed_ms"] / 1000, 1)
+            if not light:
+                continue
             _, row[f"{node}.cpu100_pct"] = busy(engine, lambda: loadgen(
                 args, credential, ports, "stream", "-conns", "8", "-rate-mbit", "100", "-duration", seconds))
             rtt = loadgen(args, credential, ports, "pingpong", "-duration", seconds)
@@ -375,6 +384,9 @@ def main():
     parser.add_argument("--node-cpus", help="tier B: fakenode's cores")
     parser.add_argument("--label", action="append", metavar="KEY=VALUE",
                         help="tier B: recorded in the ENV line (hostq_job=...)")
+    parser.add_argument("--part", choices=("all", "light", "throughput"), default="all",
+                        help="tier B: light (idle, latency, connections, CPU at 100 Mbit/s: two "
+                             "physical cores do) or throughput (unpaced: each part its own cores)")
     parser.add_argument("--b-idle-seconds", type=float, default=60)
     parser.add_argument("--b-load-seconds", type=int, default=20)
     parser.add_argument("--fakenode", required=True)
@@ -395,7 +407,9 @@ def main():
         engines = [spec.partition("=")[::2] for spec in args.engine]
         if any(not name or not binary for name, binary in engines):
             parser.error("--engine is NAME=BIN")
-        print("ENV " + json.dumps(environment(args), sort_keys=True), flush=True)
+        env_line = environment(args)
+        env_line["part"] = args.part
+        print("ENV " + json.dumps(env_line, sort_keys=True), flush=True)
     for round_number in range(1, args.rounds + 1):
         work = tempfile.mkdtemp(prefix="perf-")
         os.chmod(work, 0o700)
