@@ -5,8 +5,8 @@
 //!
 //! Level `info` by default; `PPVPN_LOG` accepts a `tracing` filter such as
 //! `debug` or `ppvpn_client=trace`. With the Rust core (`rust-core`), sail's
-//! and the engine's events go to the engine's own log through their tracing
-//! layers, never into this file; the filter applies to this file only, so it
+//! and the engine's events go to the engine's own log through
+//! `ppvpn_core::tracing_layer()` (sail's included), never into this file; the filter applies to this file only, so it
 //! cannot drop the engine's debug lines. Never log tokens, credentials, local-proxy
 //! passwords or profile bodies: the log pages of the apps show these files.
 
@@ -140,9 +140,7 @@ pub(crate) fn install_with_prefix(log_dir: &str, prefix: &'static str) {
         // Global (not thread-local): sail's and the engine's worker threads
         // log through it.
         #[cfg(feature = "rust-core")]
-        let registry = registry
-            .with(sail::embed::tracing_layer())
-            .with(ppvpn_core::tracing_layer());
+        let registry = registry.with(ppvpn_core::tracing_layer());
         let _ = registry.try_init();
         // A panic inside a background task is otherwise only printed to
         // stderr, which GUI apps discard; keep it in the log file too.

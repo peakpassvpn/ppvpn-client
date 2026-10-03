@@ -100,7 +100,7 @@ pub fn from_core(code: &str, field: Option<String>, retryable: bool, message: &s
         | "SYSTEM_PROXY_START_FAILED"
         | "TUN_INSTANCE_EXISTS"
         | "WINTUN_UNAVAILABLE" => Exit::Incompatible,
-        "STATE_DIR_IN_USE" | "PERMISSION_DENIED" => Exit::Environment,
+        "STATE_DIR_IN_USE" | "PERMISSION_DENIED" | "TUN_NAME_TAKEN" => Exit::Environment,
         _ => Exit::Profile,
     };
     CliError {
@@ -124,6 +124,7 @@ mod tests {
         assert_eq!(exit("ENGINE_SHUT_DOWN"), 5);
         assert_eq!(exit("LOCAL_PROXY_DISABLED"), 6);
         assert_eq!(exit("STATE_DIR_IN_USE"), 8);
+        assert_eq!(exit("TUN_NAME_TAKEN"), 8);
         assert_eq!(exit("PROFILE_EXPIRED"), 7);
         assert_eq!(exit("RULE_SET_HOST_NOT_ALLOWED"), 7);
         let err = from_core(

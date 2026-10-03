@@ -26,7 +26,7 @@ const WAIT: Duration = Duration::from_secs(5);
 /// Our layer as this thread's subscriber (the tests' runtime is this
 /// thread), whatever the process's global one is.
 fn subscribe() -> tracing::subscriber::DefaultGuard {
-    tracing::subscriber::set_default(tracing_subscriber::registry().with(tracing_layer()))
+    tracing::subscriber::set_default(tracing_subscriber::registry().with(core_layer()))
 }
 
 fn engine(level: LogLevel, sink: LogSink) -> (Engine, Arc<FakeRuntime>) {

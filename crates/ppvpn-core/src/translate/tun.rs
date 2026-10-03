@@ -100,9 +100,9 @@ pub(crate) struct Tun {
 /// counts its TUN as its own (default interface choice, DNS server filter)
 /// only when it is named, and logs and captures name it: `ppvpn0` on Linux,
 /// `PPVPN` on Windows (the Wintun adapter, reused by name; its GUID follows
-/// from the name). Not on macOS: sail opens a utun by its number and fails
-/// when it is taken, so the kernel picks it and sail reports the name it
-/// got. Not on mobile, where the host builds the tunnel. Hosts do not
+/// from the name). Not on macOS: sail chooses a free utun, tries another
+/// when the one it chose is taken before it opens (`TUN_NAME_TAKEN` after
+/// three), and reports the name it got. Not on mobile, where the host builds the tunnel. Hosts do not
 /// depend on the name.
 pub(crate) fn interface_name(platform: Platform) -> &'static str {
     match platform {
