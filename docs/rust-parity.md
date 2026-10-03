@@ -103,9 +103,9 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 | 平台 | 状态 | 依据 |
 | --- | --- | --- |
-| Linux | done | sail 的台账记下 TUN、路由和规则，强杀后由下一次 `new` 的 `sweep` 撤销；另有 tunrules 按我们的优先级段和表清扫 |
-| macOS | done（不靠台账） | 强杀后 utun 和经它的路由由内核回收；Sail 的常驻 CI 每次都验证 |
-| Windows | todo | Sail 的 Windows TUN 还不写台账，强杀后的残留（Wintun 适配器等）还没测 |
+| Linux | done | Sail 在 run_dir 的台账记下改动，强杀后由下一次 `new` 的 `sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表、fw4 drop-in；另有 tunrules 按我们的优先级段和表清扫 |
+| macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
+| Windows | todo（切换前缺口） | Sail 在 Windows 上还没有台账和 sweep；强杀后 Wintun 适配器及其路由、DNS 会不会残留还没测 |
 
 ## Lab 用例（`test/lab/engine/cases`）
 
