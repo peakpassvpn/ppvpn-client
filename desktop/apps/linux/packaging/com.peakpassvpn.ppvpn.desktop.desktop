@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PPVPN
+Comment=PeakPass VPN desktop client
+Comment[zh_CN]=PeakPass VPN 桌面客户端
+Exec=/usr/bin/ppvpn
+Icon=com.peakpassvpn.ppvpn.desktop
+Terminal=false
+Categories=Network;
+Keywords=VPN;Proxy;
+StartupNotify=true
