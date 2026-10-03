@@ -370,6 +370,7 @@ pub struct Error {
   - `STATE_DIR_IN_USE`：retryable=false，`state_dir` 已被另一个实例使用；
   - `PERMISSION_DENIED`：retryable=false，Tun 实例的权限不足（见第 2 节）；
   - `WINTUN_UNAVAILABLE`：retryable=false，找不到或加载不了宿主传入的 wintun.dll；
+  - `TUN_NAME_TAKEN`：`start` 时 TUN 网卡名被其他程序占用（第 11 节）。message 里有被占用的名字；名字由 Sail 选时，还有它试过的次数。名字由我们配置时（Linux `ppvpn0`、Windows `PPVPN`）retryable=false，多半是另一个 ppvpn-core 正在运行；名字由 Sail 选时（macOS）retryable=true，再次 `start` 可能成功。和 `TUN_INSTANCE_EXISTS` 不同：后者是同一进程里重复创建 Tun 实例，在 `new` 时返回；
   - `PINS_INVALID`：retryable=false，`pins` 里同一个节点出现多次，field=`pins[i].node_id`；
   - `PROFILE_MALFORMED`：retryable=false，Profile 不是合法 JSON 或者字段类型不对（D5）。
 - **`CORE_OPERATION_FAILED`**：只用于真正的内部错误，原因写进日志。Go 版有几种本该是结构化错误的情况会折叠成这个码，Rust 版改成具体的码（D1、D2）。
@@ -444,8 +445,8 @@ pub struct Error {
   - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#45）。
   - 上游查询优先经 Runtime 的 `dial_udp`/`dial_tcp` 走 direct 出站，由 Sail 的默认拨号器绑定物理网卡，不进 TUN。
 - **TUN 网卡名**：Linux 固定为 `ppvpn0`，Windows 固定为 `PPVPN`（Wintun 适配器名，按名字复用；适配器 GUID 由名字确定生成，不会每次变化）。名字要显式交给 Sail，原因是 Sail 只有在名字显式给出时，才会把这块网卡当作自己的：选默认网卡和过滤 DNS 服务器时都要排除它；名字也便于日志和抓包。
-  - macOS 不写名字。Sail 按编号打开 utun，编号被占用时启动直接失败，不会自己换。Sail 会改为不写名字时由内核分配编号，并通过 embed 报告实际拿到的名字，Runtime 再读出来用于日志和状态。排除隧道网段这件事，由 Sail 改动后的行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。
-  - 过渡期的已知限制：Sail 的这项改动合入之前，不写名字时 Sail 固定用 `utun233`，这个编号被别的程序占用时启动会失败。
+  - macOS 不写名字，由 Sail 选：取比现有最大的 `utunN` 大一的编号，并通过 embed 报告实际拿到的名字（`tun_names()`），Runtime 读出来用于日志和状态。选好的名字在打开前被别的程序抢走时，Sail 换下一个空闲的名字重试，最多试 3 个；仍然失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true）。排除隧道网段由 Sail 的这一行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。
+  - Linux 和 Windows 的名字是配置的，被占用时不换名，`start` 直接返回 `TUN_NAME_TAKEN`（retryable=false）。
   - 宿主不依赖这个名字：Desktop 靠地址、规则优先级和表号识别自己的 TUN。
 
 ## 12. 与 Core API v1 的对照

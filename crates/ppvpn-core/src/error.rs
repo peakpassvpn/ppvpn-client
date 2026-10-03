@@ -163,6 +163,8 @@ pub mod codes {
     pub const STATE_DIR_IN_USE: &str = "STATE_DIR_IN_USE";
     pub const PERMISSION_DENIED: &str = "PERMISSION_DENIED";
     pub const WINTUN_UNAVAILABLE: &str = "WINTUN_UNAVAILABLE";
+    /// At start: the TUN's device name is in use by another program.
+    pub const TUN_NAME_TAKEN: &str = "TUN_NAME_TAKEN";
 }
 
 /// The error of a public call.

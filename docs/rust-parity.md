@@ -127,7 +127,7 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 | macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
 | Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，tun + auto_route，双栈）：强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录。未覆盖 MSVC 构建和 `strict_route`（WFP 过滤器），见"切换前要复测的项目" |
 
-运行中开关系统代理监听，用的是 `Runtime::add_inbound` / `remove_inbound`（#149，`runtime/sail.rs`），经 `Instance::manager()` 调用 sail 的 `add_inbound` / `remove_inbound`，在 embed 的稳定接口之外。sail 的 reload 不会新增或删除监听（embed.md 的 Reload 表），所以不能用 reload 做。`remove_inbound` 在 sail 移除监听之后，还会关掉从这个 inbound 进来的连接（在真实 sail 上测过），所以关闭系统代理只断开它自己的连接，`engine::proxy_tests::system_proxy_listener_toggles` 断言了这一点。Sail 会在 `Instance` 上提供这两个方法，届时改用它们。
+运行中开关系统代理监听，用的是 sail `Instance` 上的 `add_inbound` / `remove_inbound`（`runtime/sail.rs`）；sail 的 reload 不会新增或删除监听，所以不能用 reload 做。`remove_inbound` 停止监听，并由 sail 断开这个 inbound 接进来的全部连接，其他 inbound 的连接不动（`engine::proxy_tests::system_proxy_listener_toggles`、`runtime::sail_tests` 都断言了这一点）。已知缺口（Sail）：多路复用入站上，sail 断开其中的各条流，但暂时不断开承载它们的连接；系统代理监听是 mixed，没有多路复用，不受影响。
 
 ## Lab 用例（`test/lab/engine/cases`）
 
@@ -193,7 +193,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 
 dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 Sail 的 `local`（2026-10-03 决定）。Sail `local` 的缺口作为 Sail 的通用改进继续推进，**不阻塞切换**：忽略 macOS 手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败，以及 split DNS 和日志行。翻译层把 dns-local 渲染成指向监听的 tcp 服务器（`translate::tests::dns_local_listener_is_asked_over_tcp`）。下表的 Rust 用例指 `crate::localdns`。
 
-过渡期已知限制（macOS）：TUN 不写网卡名，由 Sail 分配。Sail 改为由内核分配编号并报告实际名字之前，它固定用 `utun233`，这个编号被别的程序占用时启动失败。排除隧道网段由 dns-local 自己的隧道地址过滤保证。
+macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一），实际名字从 `tun_names()` 读。选好的名字在打开前被抢走时，Sail 换名重试，最多 3 个，仍失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true；Linux、Windows 的名字是配置的，被占用时 retryable=false，见 host-integration 第 7 节）。排除隧道网段由 dns-local 自己的隧道地址过滤保证。
 
 已知行为（macOS，Sail `98a5cbf5`，见 Sail 的 routing 文档）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 会替换它并打一行警告；停止时**不恢复**被替换的路由。
 
