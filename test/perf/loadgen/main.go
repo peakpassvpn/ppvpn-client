@@ -50,6 +50,11 @@ type result struct {
 	Samples        int   `json:"samples,omitempty"`
 	P50Us          int64 `json:"p50_us,omitempty"`
 	P99Us          int64 `json:"p99_us,omitempty"`
+	// connect: the setup's parts, through the proxy: its TCP connection,
+	// and the CONNECT's 200 (what follows it until the first byte is the
+	// engine's dial to the node and the node's to the sink).
+	TCPP50Us int64 `json:"tcp_p50_us,omitempty"`
+	OKP50Us  int64 `json:"ok_p50_us,omitempty"`
 }
 
 func main() {
@@ -88,7 +93,14 @@ func main() {
 	case "pingpong":
 		r.setTimes(pingpong(dial, *pingBytes, *duration, &r))
 	case "connect":
-		r.setTimes(setup(dial, *churnRate, *duration, &r))
+		timed := func() (net.Conn, time.Duration, time.Duration, error) {
+			if *direct {
+				conn, err := dial()
+				return conn, 0, 0, err
+			}
+			return connectTimed(*proxy, *user, *pass, *target)
+		}
+		r.setTimes(setup(timed, *churnRate, *duration, &r))
 	default:
 		log.Fatalf("unknown mode %q", *mode)
 	}
@@ -100,27 +112,37 @@ func main() {
 }
 
 func connect(proxy, user, pass, target string) (net.Conn, error) {
+	conn, _, _, err := connectTimed(proxy, user, pass, target)
+	return conn, err
+}
+
+// connectTimed is connect, saying how long the TCP connection to the proxy
+// and the CONNECT's answer took, each from the start.
+func connectTimed(proxy, user, pass, target string) (net.Conn, time.Duration, time.Duration, error) {
+	start := time.Now()
 	conn, err := net.DialTimeout("tcp", proxy, 5*time.Second)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
+	tcp := time.Since(start)
 	auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
 	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth)
 	reader := bufio.NewReader(conn)
 	response, err := http.ReadResponse(reader, nil)
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return nil, 0, 0, err
 	}
+	ok := time.Since(start)
 	if response.StatusCode != http.StatusOK {
 		conn.Close()
-		return nil, fmt.Errorf("CONNECT: %s", response.Status)
+		return nil, 0, 0, fmt.Errorf("CONNECT: %s", response.Status)
 	}
 	if reader.Buffered() > 0 {
 		conn.Close()
-		return nil, errors.New("unexpected bytes after CONNECT")
+		return nil, 0, 0, errors.New("unexpected bytes after CONNECT")
 	}
-	return conn, nil
+	return conn, tcp, ok, nil
 }
 
 func stream(dial func() (net.Conn, error), conns int, rateMbit float64, duration time.Duration, r *result) {
@@ -253,14 +275,15 @@ func pingpong(dial func() (net.Conn, error), size int, duration time.Duration, r
 
 // setup opens rate connections a second until the deadline, each timed
 // from the dial until the first byte it sent comes back.
-func setup(dial func() (net.Conn, error), rate int, duration time.Duration, r *result) []time.Duration {
+func setup(dial func() (net.Conn, time.Duration, time.Duration, error), rate int, duration time.Duration, r *result) []time.Duration {
 	ticker := time.NewTicker(time.Second / time.Duration(rate))
 	defer ticker.Stop()
 	deadline := time.Now().Add(duration)
 	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		times []time.Duration
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		times     []time.Duration
+		tcps, oks []time.Duration
 	)
 	for time.Now().Before(deadline) {
 		<-ticker.C
@@ -268,7 +291,7 @@ func setup(dial func() (net.Conn, error), rate int, duration time.Duration, r *r
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			conn, err := dial()
+			conn, tcp, ok, err := dial()
 			if err != nil {
 				atomic.AddInt64(&r.FailedConnects, 1)
 				return
@@ -287,11 +310,24 @@ func setup(dial func() (net.Conn, error), rate int, duration time.Duration, r *r
 			atomic.AddInt64(&r.Connections, 1)
 			mu.Lock()
 			times = append(times, took)
+			if ok > 0 {
+				tcps, oks = append(tcps, tcp), append(oks, ok)
+			}
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
+	r.TCPP50Us, r.OKP50Us = median(tcps), median(oks)
 	return times
+}
+
+// median of times in microseconds; 0 for none.
+func median(times []time.Duration) int64 {
+	if len(times) == 0 {
+		return 0
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
+	return times[len(times)/2].Microseconds()
 }
 
 // setTimes records the times' count, p50 and p99.
