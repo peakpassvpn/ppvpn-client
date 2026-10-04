@@ -1,7 +1,7 @@
-//! The routing golden files (testdata/golden/routing) on a real sail: Go
-//! 0.5.21's decisions (internal/runtime/golden_routing_test.go) for a
+//! The routing golden files (testdata/golden/routing) on a real sail: the
+//! decisions Go 0.5.21 exported (frozen; the Go core is gone) for a
 //! profile and a set of connections, checked against what sail decides
-//! with the Rust translation. As the Go runner: the TUN is a SOCKS inbound
+//! with the Rust translation. As the Go runner did: the TUN is a SOCKS inbound
 //! carrying the TUN's tag (TLS or HTTP bytes after the CONNECT to sniff),
 //! the local proxy and the system proxy are themselves, and every outbound
 //! that dials is bound to loopback, so a dial fails at once and nothing
