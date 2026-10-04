@@ -212,13 +212,15 @@ jobs:
       # traffic stays out), failed by a fault the test arms (the test
       # build's fault-injection feature, never a release's). The runner is
       # administrator; wintun.dll, sail's pinned one, goes beside the test.
-      # Five runs, the system compared before and after each (twenty on the
-      # pull request that added it).
+      # The system compared before and after each run: once on a pull
+      # request, five times on main (a pull request adding a test of this
+      # kind sets RUNS to 20 until it has shown it stable).
       - name: the runtime's failures (Windows, administrator)
         shell: pwsh
         env:
           WINTUN_VERSION: 0.14.1
           WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+          RUNS: ${{ github.event_name == 'pull_request' && 1 || 5 }}
         run: |
           $zip = "$env:RUNNER_TEMP\wintun.zip"
           Invoke-WebRequest "https://www.wintun.net/builds/wintun-$env:WINTUN_VERSION.zip" -OutFile $zip
@@ -227,7 +229,7 @@ jobs:
           $deps = "target\x86_64-pc-windows-msvc\debug\deps"
           New-Item -ItemType Directory -Force $deps | Out-Null
           Copy-Item "$env:RUNNER_TEMP\wintun\wintun\bin\amd64\wintun.dll" $deps
-          foreach ($i in 1..5) {
+          foreach ($i in 1..[int]$env:RUNS) {
             Write-Output "::group::run $i"
             cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc -- --ignored --test-threads 1 --nocapture runtime::windows_tests:: | Tee-Object -Variable out
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
