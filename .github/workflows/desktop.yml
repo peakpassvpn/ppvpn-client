@@ -124,9 +124,9 @@ jobs:
         run: dotnet test desktop/apps/linux/PPVPN.Linux.Tests
 
   # The client with the Rust ppvpn-core linked in (feature `rust-core`, off
-  # in releases until the switch). Linux only here; rust.yml builds the
-  # engine on Windows (MSVC) and macOS. sail builds from source; its
-  # BoringSSL comes prebuilt, as in rust.yml.
+  # in releases until the switch): clippy and tests on Linux. The macOS and
+  # Windows builds of it are the two jobs below. sail builds from source;
+  # its BoringSSL comes prebuilt, as in rust.yml.
   desktop-rust-core:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -157,6 +157,73 @@ jobs:
         run: |
           cargo clippy --locked --features rust-core --all-targets -- -D warnings
           cargo test --locked --features rust-core --lib rust_core
+
+  # The client library the apps link, with the Rust engine (feature
+  # rust-core), built for every target the apps ship: both macOS
+  # architectures (the app's universal library) and Windows x64 (MSVC).
+  # Compile and link only; the engine's own tests run in rust.yml on these
+  # platforms. BoringSSL comes prebuilt per target, as there.
+  desktop-rust-core-macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-rust-core-macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock "$target" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+          done
+      - name: Build the client library with the Rust core
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --locked -p ppvpn-client --features rust-core --lib --target "$target"
+          done
+
+  desktop-rust-core-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      # bindgen's libclang (btls-sys), from the runner's LLVM: still needed
+      # with the prebuilt BoringSSL (NASM and CMake are not).
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-rust-core-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: prebuilt BoringSSL
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-pc-windows-msvc | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+      - name: Build the client library with the Rust core
+        shell: bash
+        run: cargo build --locked -p ppvpn-client --features rust-core --lib --target x86_64-pc-windows-msvc
 
   # Linux enhanced mode end to end, as root on the runner: the privileged
   # service with the vendored Go core, the client crate connecting and
