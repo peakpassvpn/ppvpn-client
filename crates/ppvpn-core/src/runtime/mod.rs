@@ -227,6 +227,15 @@ pub(crate) struct DnsExchange {
     pub for_instance: bool,
 }
 
+/// What a reload did with each inbound: those of the configuration in its
+/// order, then those it no longer has.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ReloadReport {
+    /// By tag: `untouched`, `reloaded` (new users, certificate or key; the
+    /// listener kept), `added`, `removed` or `replaced`.
+    pub inbounds: Vec<(String, String)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DialFailed {
     /// The outbounds it went through, outermost first, joined by `>` as the
@@ -310,10 +319,16 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// Runs `config` (sing-box JSON, the translation's output). An error
     /// leaves it not running.
     async fn start(&self, config: &str) -> Result<(), RuntimeError>;
-    /// In place: listeners and open connections kept; group selections and
-    /// pins kept for groups of the same tag; the DNS cache emptied. A failed
-    /// reload changes nothing.
-    async fn reload(&self, config: &str) -> Result<(), RuntimeError>;
+    /// In place: group selections and pins kept for groups of the same tag;
+    /// the DNS cache emptied. The inbounds `config` has are those that run
+    /// after it, compared by tag (one added at run time and not in `config`
+    /// is removed); what became of each is the report, and only those
+    /// removed or replaced lose their connections. A failed reload changes
+    /// nothing; its own errors are `needs_restart` (a TUN added, removed or
+    /// changed: only a start sets one up) and `inbound_lost` (a replaced
+    /// inbound's new listener did not bind and the old one could not listen
+    /// again: that inbound listens no more).
+    async fn reload(&self, config: &str) -> Result<ReloadReport, RuntimeError>;
     /// Returns once listeners are closed and connections dropped.
     async fn stop(&self) -> Result<(), RuntimeError>;
     /// What the last stop could not end within its bound (sail's tasks

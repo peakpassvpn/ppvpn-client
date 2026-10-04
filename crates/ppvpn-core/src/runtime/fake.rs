@@ -50,9 +50,11 @@ pub(crate) struct FakeRuntime {
     explicit_groups: AtomicBool,
     connections: Mutex<Vec<RuntimeConnection>>,
     /// The inbounds' tags: the configuration's at start, then as
-    /// add_inbound and remove_inbound change them; none after stop. A
-    /// reload that would add or remove one is refused, as sail's is.
+    /// add_inbound and remove_inbound change them, and each reload makes
+    /// them the configuration's (as sail's); none after stop.
     inbounds: Mutex<Vec<String>>,
+    /// Each running inbound as configured, by tag (reload compares them).
+    inbound_json: Mutex<HashMap<String, serde_json::Value>>,
     traffic: Mutex<RuntimeTraffic>,
     /// How often `traffic` was read.
     traffic_reads: AtomicU64,
@@ -97,6 +99,7 @@ impl Default for FakeRuntime {
             explicit_groups: AtomicBool::new(false),
             connections: Mutex::default(),
             inbounds: Mutex::default(),
+            inbound_json: Mutex::default(),
             traffic: Mutex::default(),
             traffic_reads: AtomicU64::new(0),
             tcp_route: Mutex::default(),
@@ -122,13 +125,32 @@ impl Default for FakeRuntime {
     }
 }
 
-/// The tags of a configuration's inbounds.
-fn inbound_tags(config: &str) -> Vec<String> {
+/// A configuration's inbounds, by tag, in order.
+fn config_inbounds(config: &str) -> Vec<(String, serde_json::Value)> {
     let config: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
     config["inbounds"]
         .as_array()
-        .map(|list| list.iter().filter_map(inbound_tag).collect())
+        .map(|list| {
+            list.iter()
+                .filter_map(|i| inbound_tag(i).map(|t| (t, i.clone())))
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// An inbound without what a reload hands to a running one (its users,
+/// certificate and key): what is left differing means a new listener.
+fn listener_of(inbound: &serde_json::Value) -> serde_json::Value {
+    let mut listener = inbound.clone();
+    if let Some(map) = listener.as_object_mut() {
+        map.remove("users");
+        if let Some(tls) = map.get_mut("tls").and_then(|t| t.as_object_mut()) {
+            for key in ["certificate", "certificate_path", "key", "key_path"] {
+                tls.remove(key);
+            }
+        }
+    }
+    listener
 }
 
 impl FakeRuntime {
@@ -138,7 +160,9 @@ impl FakeRuntime {
     }
 
     fn take_inbounds_of(&self, config: &str) {
-        *self.inbounds.lock().unwrap() = inbound_tags(config);
+        let list = config_inbounds(config);
+        *self.inbounds.lock().unwrap() = list.iter().map(|(t, _)| t.clone()).collect();
+        *self.inbound_json.lock().unwrap() = list.into_iter().collect();
     }
 
     pub(crate) fn calls(&self) -> Vec<Call> {
@@ -364,26 +388,60 @@ impl Runtime for FakeRuntime {
         Ok(())
     }
 
-    /// As sail's: a reload that adds or removes an inbound (by tag, against
-    /// the running ones, those of add_inbound among them) is refused whole.
-    async fn reload(&self, config: &str) -> Result<(), RuntimeError> {
+    /// As sail's: the configuration's inbounds are those that run after it,
+    /// compared by tag with those running (add_inbound's among them); a TUN
+    /// added, removed or changed refuses the whole reload (`needs_restart`).
+    async fn reload(&self, config: &str) -> Result<ReloadReport, RuntimeError> {
         self.record(Call::Reload(config.to_owned()));
         self.running()?;
         self.check(Op::Reload)?;
-        let (mut now, mut wanted) = (self.inbounds(), inbound_tags(config));
-        now.sort();
-        wanted.sort();
-        if now != wanted {
+        let wanted = config_inbounds(config);
+        let running = self.inbound_json.lock().unwrap().clone();
+        let tun = |v: &serde_json::Value| v["type"] == "tun";
+        let tuns_now: Vec<_> = running.iter().filter(|(_, v)| tun(v)).collect();
+        let tuns_wanted: Vec<_> = wanted.iter().filter(|(_, v)| tun(v)).collect();
+        let tun_changed = tuns_now.len() != tuns_wanted.len()
+            || tuns_wanted
+                .iter()
+                .any(|(t, v)| running.get(t).map(listener_of) != Some(listener_of(v)));
+        if tun_changed {
             return Err(RuntimeError::new(
-                "config",
-                format!(
-                    "a reload cannot add or remove inbounds: running {now:?}, given {wanted:?}"
-                ),
+                "needs_restart",
+                "a TUN is set up only at a start: stop and start to apply",
             ));
         }
+        let mut report = ReloadReport::default();
+        for (tag, inbound) in &wanted {
+            let change = match running.get(tag) {
+                None => "added",
+                Some(old) if old == inbound => "untouched",
+                Some(old) if listener_of(old) == listener_of(inbound) => "reloaded",
+                Some(_) => "replaced",
+            };
+            report.inbounds.push((tag.clone(), change.to_owned()));
+        }
+        let gone: Vec<String> = self
+            .inbounds()
+            .into_iter()
+            .filter(|t| !wanted.iter().any(|(w, _)| w == t))
+            .collect();
+        {
+            let mut connections = self.connections.lock().unwrap();
+            connections.retain(|c| {
+                !gone.contains(&c.inbound)
+                    && !report
+                        .inbounds
+                        .iter()
+                        .any(|(t, ch)| *t == c.inbound && ch == "replaced")
+            });
+        }
+        report
+            .inbounds
+            .extend(gone.into_iter().map(|t| (t, "removed".to_owned())));
         *self.config.lock().unwrap() = Some(config.to_owned());
         self.take_groups_of(config);
-        Ok(())
+        self.take_inbounds_of(config);
+        Ok(report)
     }
 
     async fn stop(&self) -> Result<(), RuntimeError> {
@@ -393,6 +451,7 @@ impl Runtime for FakeRuntime {
         self.connections.lock().unwrap().clear();
         self.state.send_replace(RuntimeState::Stopped);
         self.inbounds.lock().unwrap().clear();
+        self.inbound_json.lock().unwrap().clear();
         Ok(())
     }
 
@@ -575,7 +634,8 @@ impl Runtime for FakeRuntime {
                 format!("[{tag}] inbound: exists"),
             ));
         }
-        inbounds.push(tag);
+        inbounds.push(tag.clone());
+        self.inbound_json.lock().unwrap().insert(tag, value);
         Ok(())
     }
 
@@ -586,6 +646,7 @@ impl Runtime for FakeRuntime {
         let mut inbounds = self.inbounds.lock().unwrap();
         let before = inbounds.len();
         inbounds.retain(|t| t != tag);
+        self.inbound_json.lock().unwrap().remove(tag);
         if inbounds.len() == before {
             return Err(RuntimeError::new(
                 "not_found",
@@ -711,21 +772,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reload_that_changes_the_inbounds_is_refused() {
+    async fn a_reload_runs_the_configuration_s_inbounds() {
         let runtime = FakeRuntime::default();
         let local = r#"{"inbounds":[{"type":"mixed","tag":"local"}]}"#;
-        let both =
-            r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"mixed","tag":"system"}]}"#;
         runtime.start(local).await.unwrap();
         runtime
             .add_inbound(r#"{"type":"mixed","tag":"system"}"#)
             .await
             .unwrap();
-        assert_eq!(runtime.reload(local).await.unwrap_err().code, "config");
-        assert_eq!(runtime.config().as_deref(), Some(local), "nothing changed");
-        runtime.reload(both).await.unwrap();
-        runtime.remove_inbound("system").await.unwrap();
-        runtime.reload(local).await.unwrap();
+        // Left out of the configuration: removed, the rest untouched.
+        let report = runtime.reload(local).await.unwrap();
+        assert_eq!(
+            report.inbounds,
+            [
+                ("local".into(), "untouched".into()),
+                ("system".into(), "removed".into())
+            ]
+        );
+        assert_eq!(runtime.inbounds(), ["local"]);
+        // Users alone: reloaded; another port: replaced; a new one: added.
+        let next = r#"{"inbounds":[
+            {"type":"mixed","tag":"local","users":[{"username":"u","password":"p"}]},
+            {"type":"mixed","tag":"extra","listen_port":1080}]}"#;
+        let report = runtime.reload(next).await.unwrap();
+        assert_eq!(
+            report.inbounds,
+            [
+                ("local".into(), "reloaded".into()),
+                ("extra".into(), "added".into())
+            ]
+        );
+        let moved = r#"{"inbounds":[
+            {"type":"mixed","tag":"local","users":[{"username":"u","password":"p"}]},
+            {"type":"mixed","tag":"extra","listen_port":1081}]}"#;
+        let report = runtime.reload(moved).await.unwrap();
+        assert_eq!(report.inbounds[1], ("extra".into(), "replaced".into()));
+    }
+
+    #[tokio::test]
+    async fn a_reload_that_changes_a_tun_needs_a_restart() {
+        let runtime = FakeRuntime::default();
+        let with_tun = r#"{"inbounds":[{"type":"tun","tag":"tun","mtu":1500}]}"#;
+        runtime.start(with_tun).await.unwrap();
+        for next in [
+            r#"{"inbounds":[]}"#,
+            r#"{"inbounds":[{"type":"tun","tag":"tun","mtu":9000}]}"#,
+        ] {
+            assert_eq!(
+                runtime.reload(next).await.unwrap_err().code,
+                "needs_restart"
+            );
+            assert_eq!(
+                runtime.config().as_deref(),
+                Some(with_tun),
+                "nothing changed"
+            );
+        }
+        runtime.reload(with_tun).await.unwrap();
     }
 
     #[tokio::test]
