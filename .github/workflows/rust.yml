@@ -18,6 +18,13 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older run; other runs (main's
+# pushes, the schedule) each get a group of their own, so none is
+# cancelled, pending or running.
+concurrency:
+  group: rust-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
