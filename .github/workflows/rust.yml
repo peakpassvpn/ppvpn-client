@@ -281,7 +281,10 @@ jobs:
   # CI does not use (its macOS runners are Apple Silicon). Built here on an
   # Apple Silicon runner and run under Rosetta when the runner has it. Not
   # a required check.
+  # Intel macOS on main pushes only: macOS runners are the account's
+  # scarcest, and the arm64 job (required check macos) covers pull requests.
   macos-x86_64:
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 60
     env:
