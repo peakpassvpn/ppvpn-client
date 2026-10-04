@@ -160,8 +160,8 @@ jobs:
       # traffic stays out), failed by a fault the test arms (the test
       # build's fault-injection feature, never a release's). The runner is
       # administrator; wintun.dll, sail's pinned one, goes beside the test.
-      # Run whatever the step before did; twenty runs on this pull request
-      # to show it is stable.
+      # Run whatever the step before did; five runs, the system compared
+      # before and after each (twenty on the pull request that added it).
       - name: the runtime's failures (Windows, administrator)
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -176,7 +176,7 @@ jobs:
           $deps = "target\x86_64-pc-windows-msvc\debug\deps"
           New-Item -ItemType Directory -Force $deps | Out-Null
           Copy-Item "$env:RUNNER_TEMP\wintun\wintun\bin\amd64\wintun.dll" $deps
-          foreach ($i in 1..20) {
+          foreach ($i in 1..5) {
             Write-Output "::group::run $i"
             cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc -- --ignored --test-threads 1 --nocapture runtime::windows_tests:: | Tee-Object -Variable out
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
