@@ -236,7 +236,7 @@ impl Inner {
         }
         // What sail installed for the new TUN.
         self.guard_started();
-        self.check_pinned();
+        self.sync_pinned_checks();
         if let Some(run) = retry {
             self.retry_local_proxy(run);
         }

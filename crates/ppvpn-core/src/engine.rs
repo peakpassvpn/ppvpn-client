@@ -103,6 +103,7 @@ struct Inner {
     kernel_gen: std::sync::atomic::AtomicU64,
     /// The Linux desktop TUN's routing guard while it runs.
     routing: routing::RoutingGuard,
+    pinned: pinned::PinnedChecks,
     /// The profile's rule sets: cache, downloads, refresh.
     rule_sets: crate::rulesets::Manager,
     /// Set when `shutdown` begins: rule set downloads under way give up.
@@ -210,6 +211,7 @@ impl Engine {
             reads: reads::Reads::new(),
             kernel_gen: std::sync::atomic::AtomicU64::new(0),
             routing: routing::RoutingGuard::default(),
+            pinned: pinned::PinnedChecks::default(),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),
@@ -270,6 +272,7 @@ impl Engine {
         inner.local_proxy_stopped();
         // Before the TUN closes: sail's cleanup must not be undone.
         inner.guard_stopped();
+        inner.stop_pinned_checks();
         inner.cancel_dns_queries();
         inner.rule_sets.close();
         let report = cleanup::cleanup(parts, left).await;
@@ -559,6 +562,7 @@ impl Inner {
             self.settle(&mut live);
             drop(live);
             self.guard_stopped();
+            self.stop_pinned_checks();
             self.fatal_cleanup();
         }
         error.to_error_on(self.config.platform)

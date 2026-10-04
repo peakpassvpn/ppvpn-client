@@ -53,6 +53,7 @@ fn translation() -> Translation {
         rule_ids: Vec::new(),
         dns_members: Default::default(),
         dns_local_listener: false,
+        check_interval: Default::default(),
     };
     t.outbound_nodes.insert("node-a".into(), "a".into());
     t.outbound_nodes.insert("node-a-1".into(), "a".into());

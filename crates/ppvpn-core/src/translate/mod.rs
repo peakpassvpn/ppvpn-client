@@ -78,7 +78,7 @@ pub(crate) const PRIVATE_PREFIXES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HealthCheck {
     pub urls: Vec<String>,
-    pub interval: String,
+    pub interval: std::time::Duration,
     pub timeout: String,
     pub dial_timeout: String,
     pub expected_status: String,
@@ -87,10 +87,6 @@ pub(crate) struct HealthCheck {
     pub min_dwell: String,
 }
 
-/// How often a fallback group tests its members (Go's failover.Interval);
-/// the Engine checks a pinned node's group as often.
-pub(crate) const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
-
 impl Default for HealthCheck {
     fn default() -> Self {
         Self {
@@ -98,7 +94,8 @@ impl Default for HealthCheck {
                 "http://www.gstatic.com/generate_204".into(),
                 "http://cp.cloudflare.com/generate_204".into(),
             ],
-            interval: format!("{}s", CHECK_INTERVAL.as_secs()),
+            // Go's failover.Interval.
+            interval: std::time::Duration::from_secs(15),
             timeout: "5s".into(),
             dial_timeout: "2s".into(),
             expected_status: "200-399".into(),
@@ -206,6 +203,8 @@ pub(crate) struct Translation {
     pub dns_members: BTreeMap<String, (String, String)>,
     /// dns-local is the engine's own listener (which logs its exchanges).
     pub dns_local_listener: bool,
+    /// How often the fallback groups test their members.
+    pub check_interval: std::time::Duration,
 }
 
 impl std::fmt::Debug for Translation {
@@ -221,6 +220,7 @@ impl std::fmt::Debug for Translation {
             .field("rule_ids", &self.rule_ids)
             .field("dns_members", &self.dns_members)
             .field("dns_local_listener", &self.dns_local_listener)
+            .field("check_interval", &self.check_interval)
             .finish()
     }
 }
@@ -231,6 +231,7 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     let mut b = Builder {
         translation: Translation {
             json: String::new(),
+            check_interval: options.health_check.interval,
             node_tags: BTreeMap::new(),
             outbound_nodes: BTreeMap::new(),
             ingress_keys: BTreeMap::new(),
@@ -546,7 +547,7 @@ impl Builder {
                 "url": check.urls,
                 "url_policy": "any",
                 "expected_status": check.expected_status,
-                "interval": check.interval,
+                "interval": format!("{}s", check.interval.as_secs()),
                 "timeout": check.timeout,
                 "dial_timeout": check.dial_timeout,
                 "debounce": {

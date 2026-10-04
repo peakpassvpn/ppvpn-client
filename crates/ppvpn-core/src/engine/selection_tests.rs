@@ -217,8 +217,9 @@ async fn queries_come_from_the_profile_and_the_runtime() {
 
 /// docs/backend-profile.md: checks go on while a node is pinned. The pin
 /// leaves the node's fallback group unused, so sail's lazy tests would
-/// pause; the Engine has the group test each interval while the pin lasts,
-/// and no longer once unpinned or stopped.
+/// pause; the Engine has the group test at the group's own interval while
+/// the pin lasts. The timer exists only while running with a pinned group:
+/// none before, none after the unpin or the stop.
 #[tokio::test(start_paused = true)]
 async fn a_pinned_node_keeps_its_group_checked() {
     let (engine, fake) = engine();
@@ -231,17 +232,19 @@ async fn a_pinned_node_keeps_its_group_checked() {
             .cloned()
             .collect::<Vec<_>>()
     };
-    let half = crate::translate::CHECK_INTERVAL / 2;
-    let rounds = |n: u32| tokio::time::sleep(crate::translate::CHECK_INTERVAL * n);
+    let timer = || engine.inner.pinned.running();
+    let interval = crate::translate::HealthCheck::default().interval;
+    // Half an interval past the rounds, never on one.
+    let rounds = |n: u32| tokio::time::sleep(interval * n + interval / 2);
 
-    // Unpinned: sail's own tests, none asked by the Engine.
-    tokio::time::sleep(half).await;
+    // Unpinned, and a pinned single-ingress node (no group): no timer.
+    engine.pin_ingress(NODE_2, Some("9003")).await.unwrap();
+    assert!(!timer());
     rounds(2).await;
     assert_eq!(checks(), vec![]);
 
-    // A single-ingress node has no group to check.
     engine.pin_ingress(NODE_1, Some("9002")).await.unwrap();
-    engine.pin_ingress(NODE_2, Some("9003")).await.unwrap();
+    assert!(timer());
     rounds(2).await;
     assert_eq!(
         checks(),
@@ -252,17 +255,22 @@ async fn a_pinned_node_keeps_its_group_checked() {
     );
 
     engine.pin_ingress(NODE_1, None).await.unwrap();
+    assert!(!timer(), "unpinned");
     rounds(2).await;
     assert_eq!(checks().len(), 2, "unpinned");
 
     engine.pin_ingress(NODE_1, Some("9002")).await.unwrap();
     engine.stop().await.unwrap();
+    assert!(!timer(), "stopped");
     rounds(2).await;
     assert_eq!(checks().len(), 2, "stopped");
 
-    // The next start checks the pin it kept.
+    // Pinned while stopped: the start begins checking it.
     engine.start().await.unwrap();
-    tokio::time::sleep(half).await;
+    assert!(timer(), "started again");
     rounds(1).await;
     assert_eq!(checks().len(), 3, "started again");
+
+    let _ = engine.shutdown().await;
+    assert!(!timer(), "shut down");
 }
