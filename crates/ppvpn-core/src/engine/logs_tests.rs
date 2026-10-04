@@ -162,13 +162,24 @@ async fn a_full_channel_drops_counts_and_tells() {
     assert!(queued.len() <= QUEUE, "{}", queued.len());
     assert!(queued.iter().any(|l| l.contains("msg=core-flood i=0 ")));
 
-    // The next line that fits comes after one that says how many went.
+    // The next line that fits comes after one that says how many went. Our
+    // own next line is one; but the pipes are the process's, and an event
+    // of a test running beside this one, with no instance, goes to every
+    // instance: it may take the first free place while `drain` empties the
+    // queue, and the summary comes before it, among the drained lines.
     span.in_scope(|| tracing::info!("after-the-drops"));
     let lines = until(&mut rx, |l| l.contains("msg=after-the-drops ")).await;
-    let summary = lines
+    let seen: Vec<&String> = queued.iter().chain(lines.iter()).collect();
+    let summary = seen
         .iter()
         .find(|l| l.contains(" level=warn msg=\"log lines dropped\" dropped="))
-        .expect("the summary line");
+        .unwrap_or_else(|| {
+            panic!(
+                "no summary line; {dropped} dropped, {} queued, then {:?}",
+                queued.len(),
+                lines
+            )
+        });
     let told: u64 = summary
         .split(" dropped=")
         .nth(1)
