@@ -12,10 +12,26 @@ name: desktop-pages
 #
 # Called by desktop-release.yml after a stable release is published; by
 # hand to rebuild the site as it is.
+#
+# A rehearsal of the release deploys nothing: the site is built from the
+# rehearsal's own files, which are in no release, and kept three days as
+# the artifact site-rehearsal for inspection.
 
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      rehearsal:
+        description: >-
+          Build the site from the calling run's release files instead of the
+          published releases, and upload it as a workflow artifact instead
+          of deploying it.
+        type: boolean
+        default: false
+      tag:
+        description: The release's tag name (rehearsal only)
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -53,6 +69,7 @@ jobs:
       # "Newest" is the highest version, not the latest published: a release
       # published again later must not move the channel back.
       - name: The stable releases, newest first
+        if: ${{ !inputs.rehearsal }}
         run: |
           set -eu
           if [ -z "$SITE_BASE" ]; then
@@ -69,6 +86,7 @@ jobs:
           fi
           cat tags
       - name: Download their Linux packages, and the newest release's metadata
+        if: ${{ !inputs.rehearsal }}
         run: |
           set -eu
           while read -r tag; do
@@ -80,11 +98,39 @@ jobs:
           mkdir newest
           gh release download "$newest" --repo "$GITHUB_REPOSITORY" --dir newest --pattern 'release-meta-*.json'
           echo "NEWEST=$newest" >> "$GITHUB_ENV"
+      # A rehearsal's files come from the calling run, laid out as the one
+      # release there is.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ inputs.rehearsal }}
+        with:
+          name: release-files
+          path: rehearsal-release
+      - name: The rehearsal's release
+        if: ${{ inputs.rehearsal }}
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          if [ -z "$SITE_BASE" ]; then
+            echo "the variable DESKTOP_SITE_BASE (the update site's https address) is not set" >&2
+            exit 1
+          fi
+          printf '%s' "$TAG" | grep -Eq '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a stable tag name: $TAG" >&2; exit 1; }
+          echo "$TAG" > tags
+          mkdir -p "linux-releases/$TAG" newest "sums/$TAG"
+          cp rehearsal-release/release-meta-linux-x64-*.json rehearsal-release/*.deb rehearsal-release/*.rpm "linux-releases/$TAG/"
+          cp rehearsal-release/release-meta-*.json newest/
+          cp rehearsal-release/SHA256SUMS "sums/$TAG/SHA256SUMS"
+          echo "NEWEST=$TAG" >> "$GITHUB_ENV"
       # The site redistributes only what the release workflow produced: every
       # downloaded file must be in its release's SHA256SUMS with that hash,
       # and carry build provenance signed by desktop-release.yml in this
       # repository. One failure and nothing is deployed.
+      # (A rehearsal has no provenance: its files are checked against its
+      # SHA256SUMS only.)
       - name: Verify the downloads
+        env:
+          REHEARSAL: ${{ inputs.rehearsal }}
         run: |
           set -eu
           verify() {   # tag, directory
@@ -96,14 +142,18 @@ jobs:
               listed=$(awk -v name="$name" '$2 == name || $2 == "*" name { print $1 }' "$sums")
               [ -n "$listed" ] || { echo "$1: $name is not in SHA256SUMS" >&2; exit 1; }
               [ "$listed" = "$(sha256sum "$file" | cut -d' ' -f1)" ] || { echo "$1: $name does not have its SHA256SUMS hash" >&2; exit 1; }
-              gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
-                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml" >/dev/null \
-                || { echo "$1: $name has no provenance from desktop-release.yml" >&2; exit 1; }
+              if [ "$REHEARSAL" != true ]; then
+                gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+                  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml" >/dev/null \
+                  || { echo "$1: $name has no provenance from desktop-release.yml" >&2; exit 1; }
+              fi
               echo "verified $1/$name"
             done
-            gh attestation verify "$sums" --repo "$GITHUB_REPOSITORY" \
-              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml" >/dev/null \
-              || { echo "$1: SHA256SUMS has no provenance from desktop-release.yml" >&2; exit 1; }
+            if [ "$REHEARSAL" != true ]; then
+              gh attestation verify "$sums" --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml" >/dev/null \
+                || { echo "$1: SHA256SUMS has no provenance from desktop-release.yml" >&2; exit 1; }
+            fi
           }
           while read -r tag; do verify "$tag" "linux-releases/$tag"; done < tags
           verify "$NEWEST" newest
@@ -137,10 +187,23 @@ jobs:
           # Pages refuses a site over 1 GB.
           [ "$(du -sm site | cut -f1)" -lt 900 ] || { echo "the site is close to the Pages limit of 1 GB" >&2; exit 1; }
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: ${{ !inputs.rehearsal }}
         with:
           path: site
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ inputs.rehearsal }}
+        with:
+          name: site-rehearsal
+          path: site
+          if-no-files-found: error
+          retention-days: 3
+      - name: Rehearsal summary
+        if: ${{ inputs.rehearsal }}
+        run: |
+          echo "The site was built and not deployed. It is the artifact site-rehearsal of this run." >>"$GITHUB_STEP_SUMMARY"
 
   deploy:
+    if: ${{ !inputs.rehearsal }}
     needs: site
     runs-on: ubuntu-latest
     permissions:
