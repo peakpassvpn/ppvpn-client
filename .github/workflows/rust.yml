@@ -57,6 +57,18 @@ jobs:
       # than sail's: a lock regenerated for a new crate can drift.
       - name: Cargo.lock against sail's
         run: tools/sail-lock-compare.py
+      # tools/release-features-check.sh, which the release builds run: it
+      # passes the shipped crates and refuses a test-only feature.
+      - name: release feature check
+        run: |
+          tools/release-features-check.sh -p ppvpn-cli
+          tools/release-features-check.sh -p ppvpn-client --features rust-core
+          for features in "-p ppvpn-core --features fault-injection" "-p ppvpn-core --features testing" \
+                          "-p ppvpn-core --features lab" "-p ppvpn-cli --features testing"; do
+            if tools/release-features-check.sh $features; then
+              echo "::error::the check let $features through"; exit 1
+            fi
+          done
       - name: format
         run: cargo fmt --all --check
       - name: clippy
