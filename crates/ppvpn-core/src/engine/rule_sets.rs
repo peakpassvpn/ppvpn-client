@@ -279,14 +279,16 @@ impl Inner {
         };
         let result = match build() {
             Ok(translation) => match &running {
-                Some(running) => self.switch_to(running, translation, &build).await.map(
-                    |(switch, translation)| {
-                        if switch == crate::request::SwitchKind::KernelSwitch {
-                            self.kernel_switched(&profile.revision);
-                        }
-                        translation
-                    },
-                ),
+                Some(running) => {
+                    self.switch_to(running, translation, &build)
+                        .await
+                        .map(|switched| {
+                            if switched.kind == crate::request::SwitchKind::KernelSwitch {
+                                self.kernel_switched(&profile.revision);
+                            }
+                            switched.translation
+                        })
+                }
                 None => Ok(translation),
             },
             Err(e) => Err(e),

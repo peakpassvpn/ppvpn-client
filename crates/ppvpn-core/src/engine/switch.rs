@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{Error, Inner};
-use crate::request::SwitchKind;
+use crate::request::{ListenerChange, ListenerChangeKind, SwitchKind};
 use crate::runtime::inbound_tag;
 use crate::translate::{
     Translation, LOCAL_PROXY_INBOUND_TAG, SYSTEM_PROXY_INBOUND_TAG, TUN_INBOUND_TAG,
@@ -59,6 +59,38 @@ pub(super) fn full_restart_reasons(running: &str, next: &str) -> Vec<String> {
     reasons
 }
 
+/// What only a stop and a start can take: the TUN's changes (sail sets
+/// up a TUN only at a start). sail's reload takes every other listener
+/// change in place, by tag, and the route's interface options too; its
+/// `needs_restart` is the final word, this saves the try where the answer
+/// is known.
+pub(super) fn restart_reasons(running: &str, next: &str) -> Vec<String> {
+    full_restart_reasons(running, next)
+        .into_iter()
+        .filter(|r| r == "tun options changed" || r == "inbound tun added or removed")
+        .collect()
+}
+
+/// The listeners a reload changed, from its report.
+fn listener_changes(report: &crate::runtime::ReloadReport) -> Vec<ListenerChange> {
+    report
+        .inbounds
+        .iter()
+        .filter_map(|(tag, change)| {
+            let change = match change.as_str() {
+                "added" => ListenerChangeKind::Added,
+                "removed" => ListenerChangeKind::Removed,
+                "replaced" => ListenerChangeKind::Replaced,
+                _ => return None,
+            };
+            Some(ListenerChange {
+                tag: tag.clone(),
+                change,
+            })
+        })
+        .collect()
+}
+
 fn inbounds(config: &Value) -> BTreeMap<String, &Value> {
     config["inbounds"]
         .as_array()
@@ -81,6 +113,15 @@ fn interface_options(config: &Value) -> Vec<&Value> {
         .iter()
         .map(|key| &config["route"][key])
         .collect()
+}
+
+/// How the running configuration was replaced, and with what.
+pub(super) struct Switched {
+    pub kind: SwitchKind,
+    /// The configuration now running.
+    pub translation: Translation,
+    /// The listeners a hot switch changed (none for a full restart).
+    pub listeners: Vec<ListenerChange>,
 }
 
 /// Builds the configuration again from the current inputs (the listeners'
@@ -106,20 +147,37 @@ impl Inner {
         running: &Translation,
         next: Translation,
         build: Build<'_>,
-    ) -> Result<(SwitchKind, Translation), Error> {
-        let reasons = full_restart_reasons(&running.json, &next.json);
+    ) -> Result<Switched, Error> {
+        let mut reasons = restart_reasons(&running.json, &next.json);
         if reasons.is_empty() {
-            if let Err(e) = self.runtime.reload(&next.json).await {
-                return Err(self.runtime_error(&e));
+            match self.runtime.reload(&next.json).await {
+                Ok(report) => {
+                    self.guard_check("kernel switch");
+                    return Ok(Switched {
+                        kind: SwitchKind::KernelSwitch,
+                        translation: next,
+                        listeners: listener_changes(&report),
+                    });
+                }
+                // sail has the final word: what it cannot take in place is
+                // a restart, and a listener that could not move (it
+                // listens no more) is one too.
+                Err(e) if e.code == "needs_restart" || e.code == "inbound_lost" => {
+                    tracing::warn!(error = %e, "the reload needs a restart");
+                    reasons.push(e.code.clone());
+                }
+                Err(e) => return Err(self.runtime_error(&e)),
             }
-            self.guard_check("kernel switch");
-            return Ok((SwitchKind::KernelSwitch, next));
         }
         tracing::info!(reasons = reasons.join("; "), "full restart");
         self.live().restarting = true;
         let result = self.restart(running, build).await;
         self.live().restarting = false;
-        result.map(|translation| (SwitchKind::FullRestart { reasons }, translation))
+        result.map(|translation| Switched {
+            kind: SwitchKind::FullRestart { reasons },
+            translation,
+            listeners: Vec::new(),
+        })
     }
 
     async fn restart(

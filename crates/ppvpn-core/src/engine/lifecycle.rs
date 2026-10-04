@@ -91,6 +91,7 @@ impl Inner {
                 selection_reset,
                 cleared_pins,
                 switch: None,
+                listeners: Vec::new(),
             });
         }
 
@@ -124,12 +125,15 @@ impl Inner {
             translate::translate(&profile, &options)
         };
         let mut translation = build().map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
+        let mut listeners = Vec::new();
         let switch = if let Some(running) = &running {
-            let (switch, now_running) = self
+            let switched = self
                 .switch_to(running, translation, &build)
                 .await
                 .map_err(|error| self.reload_failed(error, RELOAD_REFUSED))?;
-            translation = now_running;
+            translation = switched.translation;
+            listeners = switched.listeners;
+            let switch = switched.kind;
             if switch == SwitchKind::KernelSwitch {
                 self.kernel_switched(&profile.revision);
                 self.reassert(&translation, &selected, &pins).await;
@@ -183,6 +187,7 @@ impl Inner {
             selection_reset,
             cleared_pins,
             switch,
+            listeners,
         })
     }
 
