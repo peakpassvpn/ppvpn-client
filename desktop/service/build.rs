@@ -28,10 +28,13 @@ fn main() {
 #[cfg(windows)]
 fn file_version() -> String {
     println!("cargo:rerun-if-env-changed=PPVPN_BUILD_VERSION");
-    let four_part = |v: &str| v.split('.').count() == 4 && v.split('.').all(|p| p.parse::<u16>().is_ok());
+    let four_part =
+        |v: &str| v.split('.').count() == 4 && v.split('.').all(|p| p.parse::<u16>().is_ok());
     match std::env::var("PPVPN_BUILD_VERSION") {
         Ok(v) if four_part(v.trim()) => v.trim().to_string(),
-        Ok(v) if !v.trim().is_empty() => panic!("PPVPN_BUILD_VERSION must be a four-part numeric version, not '{v}'"),
+        Ok(v) if !v.trim().is_empty() => {
+            panic!("PPVPN_BUILD_VERSION must be a four-part numeric version, not '{v}'")
+        }
         _ => format!("{}.0", std::env::var("CARGO_PKG_VERSION").unwrap()),
     }
 }
@@ -48,7 +51,8 @@ fn version_resource() {
         .map(|p| p.parse::<u64>().unwrap())
         .fold(0u64, |acc, p| (acc << 16) | p);
     // The app icon (assets/icons/icon.ico), so Explorer and Task Manager show PPVPN, not a blank exe.
-    let icon = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../assets/icons/icon.ico");
+    let icon = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../assets/icons/icon.ico");
     println!("cargo:rerun-if-changed={}", icon.display());
     let mut res = winresource::WindowsResource::new();
     res.set_icon(icon.to_str().expect("UTF-8 icon path"));
