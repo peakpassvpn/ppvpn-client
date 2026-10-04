@@ -10,16 +10,20 @@
 //! answered. A change of network does not touch the listener or sail's
 //! configuration: [`Listener::invalidate`] makes the next query read the
 //! interface again.
+//!
+//! Each query (and each TCP connection from sail) runs as a task the
+//! Listener holds: [`Listener::cancel_queries`] ends those under way before
+//! the runtime stops, so that sail's stop waits for no dial of ours.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use hickory_proto::op::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::LocalDns;
 
@@ -30,6 +34,34 @@ pub(crate) struct Listener {
     addr: SocketAddr,
     dns: Arc<LocalDns>,
     tasks: Vec<JoinHandle<()>>,
+    queries: Queries,
+}
+
+/// The queries (and sail's TCP connections) under way.
+#[derive(Clone, Default)]
+struct Queries(Arc<Mutex<JoinSet<()>>>);
+
+impl Queries {
+    fn set(&self) -> MutexGuard<'_, JoinSet<()>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn spawn(&self, query: impl std::future::Future<Output = ()> + Send + 'static) {
+        let mut set = self.set();
+        // Those done are reaped as new ones come.
+        while set.try_join_next().is_some() {}
+        set.spawn(query);
+    }
+
+    fn abort_all(&self) {
+        self.set().abort_all();
+    }
+
+    fn len(&self) -> usize {
+        let mut set = self.set();
+        while set.try_join_next().is_some() {}
+        set.len()
+    }
 }
 
 impl Listener {
@@ -42,6 +74,19 @@ impl Listener {
     pub(crate) fn invalidate(&self) {
         self.dns.cache().invalidate();
     }
+
+    /// Ends the queries under way (before the runtime stops: their answers
+    /// would reach no one, and sail's stop would wait for their dials). The
+    /// clients ask again; new queries are served as before.
+    pub(crate) fn cancel_queries(&self) {
+        self.queries.abort_all();
+    }
+
+    /// How many queries (and TCP connections) are under way (tests).
+    #[allow(dead_code)]
+    pub(crate) fn queries_under_way(&self) -> usize {
+        self.queries.len()
+    }
 }
 
 impl Drop for Listener {
@@ -49,6 +94,7 @@ impl Drop for Listener {
         for task in &self.tasks {
             task.abort();
         }
+        self.queries.abort_all();
     }
 }
 
@@ -59,7 +105,8 @@ pub(crate) async fn start(dns: Arc<LocalDns>) -> io::Result<Listener> {
     let addr = tcp.local_addr()?;
     let udp = Arc::new(udp);
     let mut tasks = Vec::new();
-    let d = dns.clone();
+    let queries = Queries::default();
+    let (q, d) = (queries.clone(), dns.clone());
     tasks.push(tokio::spawn(async move {
         let mut buffer = vec![0u8; 65535];
         while let Ok((n, peer)) = udp.recv_from(&mut buffer).await {
@@ -70,23 +117,28 @@ pub(crate) async fn start(dns: Arc<LocalDns>) -> io::Result<Listener> {
                 continue;
             };
             let (udp, dns) = (udp.clone(), d.clone());
-            tokio::spawn(async move {
+            q.spawn(async move {
                 if let Ok(answer) = dns.exchange(&query).await.to_vec() {
                     let _ = udp.send_to(&answer, peer).await;
                 }
             });
         }
     }));
-    let d = dns.clone();
+    let (q, d) = (queries.clone(), dns.clone());
     tasks.push(tokio::spawn(async move {
         while let Ok((stream, peer)) = tcp.accept().await {
             if !peer.ip().is_loopback() {
                 continue;
             }
-            tokio::spawn(serve_stream(stream, d.clone()));
+            q.spawn(serve_stream(stream, d.clone()));
         }
     }));
-    Ok(Listener { addr, dns, tasks })
+    Ok(Listener {
+        addr,
+        dns,
+        tasks,
+        queries,
+    })
 }
 
 /// One free loopback port for both TCP and UDP. Windows excludes port

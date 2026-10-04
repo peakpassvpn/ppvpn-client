@@ -256,6 +256,7 @@ impl Engine {
         inner.local_proxy_stopped();
         // Before the TUN closes: sail's cleanup must not be undone.
         inner.guard_stopped();
+        inner.cancel_dns_queries();
         inner.rule_sets.close();
         let report = cleanup::cleanup(parts, left).await;
         // Shut down before the operation lock goes, so nothing queued on it
