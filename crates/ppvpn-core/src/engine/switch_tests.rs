@@ -242,12 +242,13 @@ async fn a_full_restart_retries_a_left_out_local_proxy() {
         .clone();
     let mut next = running.clone();
     let mut config: Value = serde_json::from_str(&next.json).unwrap();
-    // The route's interface options change: only a restart takes that.
-    let flipped = !config["route"]["auto_detect_interface"]
-        .as_bool()
-        .unwrap_or(false);
-    config["route"]["auto_detect_interface"] = flipped.into();
+    // A change the runtime takes only by a restart (it says so).
+    config["route"]["final"] = "direct".into();
     next.json = config.to_string();
+    fake.fail_next(
+        Op::Reload,
+        RuntimeError::new("needs_restart", "only a start sets that up"),
+    );
     let build = || -> Result<Translation, Error> { Ok(next.clone()) };
     let switched = engine
         .inner
@@ -358,15 +359,16 @@ async fn a_restart_checks_the_listener_ports_again() {
             a.translation.clone(),
         )
     };
-    // The route's interface options change, so the switch is a restart.
+    // The runtime takes the change only by a restart (it says so).
+    fake.fail_next(
+        Op::Reload,
+        RuntimeError::new("needs_restart", "only a start sets that up"),
+    );
     let build = || -> Result<Translation, Error> {
         let mut t =
             crate::translate::translate(&profile, &engine.inner.options(mode, &selected, &pins))?;
         let mut config: Value = serde_json::from_str(&t.json).unwrap();
-        let flipped = !config["route"]["auto_detect_interface"]
-            .as_bool()
-            .unwrap_or(false);
-        config["route"]["auto_detect_interface"] = flipped.into();
+        config["route"]["final"] = "direct".into();
         t.json = config.to_string();
         Ok(t)
     };
