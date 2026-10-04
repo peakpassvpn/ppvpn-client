@@ -53,6 +53,8 @@ THRESHOLDS = [
     ("cpu100_pct", None, 0.10, False, "#214: CPU at 100 Mbit/s at most 110% of Go's"),
     ("idle_cpu_pct", None, 0.0, False, "#214: idle CPU not above Go's"),
     ("idle_switches_per_s", None, None, False, "record only: wakeups, roughly"),
+    # Tier C (G4): under loss, delay and jitter, against Go the same way.
+    ("_failed", None, 0, False, "G4: no more failed connections than Go", "abs"),
     ("_cpu_pct", None, None, False, "record only: where the throughput's bottleneck was"),
     ("_load_limited", None, None, False, "1: the throughput beside it is the load side's"),
     ("_us", None, None, False, "record only"),

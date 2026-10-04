@@ -6,6 +6,10 @@
                --fakenode BIN --loadgen BIN [--rounds N]
                [--engine-cpus LIST --load-cpus LIST --node-cpus LIST]
                [--label KEY=VALUE ...]
+    measure.py --tier c --engine NAME=BIN [--engine NAME=BIN ...]
+               --fakenode BIN --loadgen BIN [--rounds N] [--netem COND ...]
+               [--engine-cpus LIST --load-cpus LIST --node-cpus LIST]
+               [--label KEY=VALUE ...]
 
 The engine is a process that serves Core API v1 on a Unix socket with the
 `ppvpn-core serve` command line and log format: ppvpn-core itself, or the
@@ -72,6 +76,30 @@ A first `ENV {...}` line says where: the CPU model, cores, memory, kernel,
 the cores each part was pinned to, and --label's (the hostq job). The
 engine, the load and the fake node run on the cores given (taskset), so
 that they do not take each other's.
+
+Tier C (#214's G4, a weak network): as tier B, each engine in turn, but
+everything runs in a network namespace of its own (root), whose loopback
+has a 1500-byte MTU and a netem qdisc for the packets to and from the
+node's ports only, both ways: the engine-to-node link is impaired, the
+load's link to the local proxy and the node's to the sink are not. One
+level each (--netem picks; default all):
+    none     nothing
+    loss     1% of packets each way
+    delay    50 ms each way (100 ms more round trip)
+    jitter   50 ms +- 20 ms each way, normally distributed (reorders)
+Per condition and engine, a `PERF {...}` line ("profile": "netem") with,
+for each node, <cond>.<proto>.:
+    rtt_p50_us / _p99_us           64-byte round trips through the proxy
+    tput8_mbit                     8 connections, unpaced, echoed back
+    connect_p50_us / _p99_us       new connections (20 a second) until
+                                   their first byte comes back
+    connect_failed                 new connections that failed
+    stream_failed                  round-trip and throughput connections
+                                   that failed
+each load --c-load-seconds (20). Connections that fail are counted, not an
+error. The ENV line says whether segmentation offload could be turned off
+on the loopback (offload_off; ethtool): with it on, a lost packet can be
+several segments.
 """
 
 import argparse
@@ -229,8 +257,9 @@ def pinned(cpus, command):
     return ["taskset", "-c", cpus, *command] if cpus else command
 
 
-def loadgen(args, credential, ports, mode, *extra):
-    """One loadgen run through the proxy (credential None: direct)."""
+def loadgen(args, credential, ports, mode, *extra, failures_ok=False):
+    """One loadgen run through the proxy (credential None: direct).
+    failures_ok: failed connections are counted, not an error (tier C)."""
     command = [args.loadgen, "-target", f"127.0.0.1:{ports['sink_port']}", "-mode", mode, *extra]
     if credential is None:
         command.append("-direct")
@@ -239,7 +268,7 @@ def loadgen(args, credential, ports, mode, *extra):
                     "-user", credential["username"], "-pass", credential["password"]]
     result = json.loads(subprocess.run(pinned(args.load_cpus, command), check=True,
                                        capture_output=True, text=True).stdout)
-    if result["failed_connections"]:
+    if result["failed_connections"] and not failures_ok:
         raise RuntimeError(f"{mode}: {result['failed_connections']} connections failed: {result}")
     return result
 
@@ -327,6 +356,95 @@ def measure_tier_b(args, work, ports, env, name, binary, node_pid):
             row[f"{node}.extra_p99_us"] = rtt["p99_us"] - direct["p99_us"]
             setup = loadgen(args, credential, ports, "connect", "-churn-rate", "20", "-duration", seconds)
             row[f"{node}.connect_p50_us"], row[f"{node}.connect_p99_us"] = setup["p50_us"], setup["p99_us"]
+        return row
+    finally:
+        engine.stop()
+
+
+# Tier C (G4): one level each of loss, latency and jitter, on the path
+# between the engine and the node only. netem delays each direction, so the
+# round trip gains twice the delay.
+NETEM = {
+    "none": [],
+    "loss": ["loss", "1%"],
+    "delay": ["delay", "50ms"],
+    "jitter": ["delay", "50ms", "20ms", "distribution", "normal"],
+}
+
+
+def netem_namespace():
+    """Runs this script again inside a network namespace of its own, as tier
+    C changes the loopback's queueing; returns its exit code. Inside, does
+    nothing and returns None."""
+    if os.environ.get("PERF_NETEM_NETNS"):
+        return None
+    if os.geteuid() != 0:
+        sys.exit("tier C needs root: it makes a network namespace and sets netem in it")
+    netns = f"perfc{os.getpid()}"
+    subprocess.run(["ip", "netns", "add", netns], check=True)
+    try:
+        # A real link's MTU, so that a lost packet is a segment's worth.
+        for command in (["ip", "link", "set", "lo", "mtu", "1500"], ["ip", "link", "set", "lo", "up"]):
+            subprocess.run(["ip", "netns", "exec", netns, *command], check=True)
+        return subprocess.run(["ip", "netns", "exec", netns, sys.executable, *sys.argv],
+                              env=dict(os.environ, PERF_NETEM_NETNS=netns)).returncode
+    finally:
+        subprocess.run(["ip", "netns", "del", netns], check=False)
+
+
+def netem_setup(ports):
+    """Sends the node ports' packets, both ways, through a netem qdisc on the
+    namespace's loopback; the rest (loadgen to the local proxy, the node to
+    the sink) is not impaired. Returns whether segmentation offload is off,
+    as a lost offloaded packet is many segments."""
+    offload_off = subprocess.run(["ethtool", "-K", "lo", "tso", "off", "gso", "off", "gro", "off"],
+                                 capture_output=True).returncode == 0 if shutil.which("ethtool") else False
+    tc = lambda *a: subprocess.run(["tc", *a], check=True)
+    # Bands 1-3 take what prio's default priomap sends them; band 4 only the
+    # filtered packets.
+    tc("qdisc", "add", "dev", "lo", "root", "handle", "1:", "prio", "bands", "4")
+    tc("qdisc", "add", "dev", "lo", "parent", "1:4", "handle", "40:", "netem")
+    for port in (ports["ss_port"], ports["anytls_port"]):
+        for side in ("dport", "sport"):
+            tc("filter", "add", "dev", "lo", "parent", "1:", "protocol", "ip", "prio", "1",
+               "u32", "match", "ip", side, str(port), "0xffff", "flowid", "1:4")
+    return offload_off
+
+
+def netem_set(condition):
+    # An empty netem qdisc passes everything as it comes.
+    subprocess.run(["tc", "qdisc", "change", "dev", "lo", "parent", "1:4", "handle", "40:", "netem",
+                    *(NETEM[condition] or ["delay", "0ms"])], check=True)
+
+
+def measure_tier_c(args, work, ports, env, name, binary, condition):
+    """One engine's tier C row under one netem condition: per node, round
+    trips, unpaced throughput over 8 connections, and new connections; with
+    the connections that failed rather than stopping at them."""
+    seconds = f"{args.c_load_seconds}s"
+    engine = Engine(binary, work, f"c-{name}-{condition}", ["--tun=false", "--local-proxy=true"], env=env,
+                    wrap=lambda c: pinned(args.engine_cpus, c))
+    try:
+        engine.call("apply-profile", {"profile": profile("perf#1", ports)})
+        engine.call("start")
+        time.sleep(args.idle_seconds)
+        row = {"profile": "netem", "engine": name}
+        for node in PROFILE_NODES:
+            credential = engine.call("get-local-proxy-credential", {"node_id": node})
+            key = f"{condition}.{node}"
+            run = lambda mode, *extra: loadgen(args, credential, ports, mode, "-duration", seconds, *extra,
+                                               failures_ok=True)
+            rtt = run("pingpong")
+            tput = run("stream", "-conns", "8", "-rate-mbit", "0")
+            setup = run("connect", "-churn-rate", "20")
+            row[f"{key}.tput8_mbit"] = round(tput["bytes_received"] * 8 / tput["elapsed_ms"] / 1000, 1)
+            # No times when nothing completed: the failures say so.
+            for metric, result in (("rtt", rtt), ("connect", setup)):
+                for p in ("p50", "p99"):
+                    if f"{p}_us" in result:
+                        row[f"{key}.{metric}_{p}_us"] = result[f"{p}_us"]
+            row[f"{key}.connect_failed"] = setup["failed_connections"]
+            row[f"{key}.stream_failed"] = rtt["failed_connections"] + tput["failed_connections"]
         return row
     finally:
         engine.stop()
@@ -422,20 +540,23 @@ def measure_tun(args, work):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--tier", choices=("a", "b"), default="a")
+    parser.add_argument("--tier", choices=("a", "b", "c"), default="a")
     parser.add_argument("--engine-bin", help="tier A: the engine")
     parser.add_argument("--engine", action="append", metavar="NAME=BIN",
-                        help="tier B: an engine, by name (go, rust); all of them each round, in turn")
-    parser.add_argument("--engine-cpus", help="tier B: the engine's cores (taskset -c)")
-    parser.add_argument("--load-cpus", help="tier B: loadgen's cores")
+                        help="tiers B and C: an engine, by name (go, rust); all of them each round, in turn")
+    parser.add_argument("--engine-cpus", help="tiers B and C: the engine's cores (taskset -c)")
+    parser.add_argument("--load-cpus", help="tiers B and C: loadgen's cores")
     parser.add_argument("--node-cpus", help="tier B: fakenode's cores")
     parser.add_argument("--label", action="append", metavar="KEY=VALUE",
-                        help="tier B: recorded in the ENV line (hostq_job=...)")
+                        help="tiers B and C: recorded in the ENV line (hostq_job=...)")
     parser.add_argument("--part", choices=("all", "light", "throughput"), default="all",
                         help="tier B: light (idle, latency, connections, CPU at 100 Mbit/s: two "
                              "physical cores do) or throughput (unpaced: each part its own cores)")
     parser.add_argument("--b-idle-seconds", type=float, default=60)
     parser.add_argument("--b-load-seconds", type=int, default=20)
+    parser.add_argument("--netem", action="append", choices=tuple(NETEM),
+                        help="tier C: the conditions (default: all of them)")
+    parser.add_argument("--c-load-seconds", type=int, default=20)
     parser.add_argument("--fakenode", required=True)
     parser.add_argument("--loadgen", required=True)
     parser.add_argument("--rounds", type=int, default=1)
@@ -448,20 +569,31 @@ def main():
         sys.exit("measure.py runs on Linux (/proc)")
     if args.tier == "a" and not args.engine_bin:
         parser.error("tier A needs --engine-bin")
-    if args.tier == "b":
+    if args.tier in ("b", "c"):
         if not args.engine:
-            parser.error("tier B needs --engine NAME=BIN")
+            parser.error(f"tier {args.tier.upper()} needs --engine NAME=BIN")
         engines = [spec.partition("=")[::2] for spec in args.engine]
         if any(not name or not binary for name, binary in engines):
             parser.error("--engine is NAME=BIN")
+    if args.tier == "c":
+        code = netem_namespace()
+        if code is not None:
+            sys.exit(code)
+        conditions = args.netem or list(NETEM)
+    if args.tier in ("b", "c"):
         env_line = environment(args)
-        env_line["part"] = args.part
-        print("ENV " + json.dumps(env_line, sort_keys=True), flush=True)
+        if args.tier == "b":
+            env_line["part"] = args.part
+            print("ENV " + json.dumps(env_line, sort_keys=True), flush=True)
+        else:
+            # Printed once whether offload is off is known.
+            env_line["netem"] = ",".join(conditions)
     for round_number in range(1, args.rounds + 1):
         work = tempfile.mkdtemp(prefix="perf-")
         os.chmod(work, 0o700)
-        node_cpus = args.node_cpus if args.tier == "b" else None
+        node_cpus = args.node_cpus if args.tier in ("b", "c") else None
         fakenode = subprocess.Popen(pinned(node_cpus, [args.fakenode, "-dir", work]), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        netem = False
         try:
             ports = json.loads(fakenode.stdout.readline())
             # The engine trusts the fake node's certificate (AnyTLS) through
@@ -470,6 +602,17 @@ def main():
             if args.tier == "b":
                 rows = [measure_tier_b(args, work, ports, env, name, binary, fakenode.pid)
                         for name, binary in engines]
+            elif args.tier == "c":
+                netem = True
+                offload_off = netem_setup(ports)
+                if round_number == 1:
+                    env_line["offload_off"] = int(offload_off)
+                    print("ENV " + json.dumps(env_line, sort_keys=True), flush=True)
+                rows = []
+                for condition in conditions:
+                    netem_set(condition)
+                    rows += [measure_tier_c(args, work, ports, env, name, binary, condition)
+                             for name, binary in engines]
             else:
                 rows = [measure_standard(args, work, ports, env)]
             if args.tier == "a" and not args.skip_tun:
@@ -481,6 +624,8 @@ def main():
                 row["round"] = round_number
                 print("PERF " + json.dumps(row, sort_keys=True), flush=True)
         finally:
+            if netem:
+                subprocess.run(["tc", "qdisc", "del", "dev", "lo", "root"], check=False)
             fakenode.stdin.close()
             fakenode.terminate()
             fakenode.wait(10)
