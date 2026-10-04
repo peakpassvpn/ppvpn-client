@@ -402,6 +402,78 @@ mod failures {
         fault::disarm();
     }
 
+    /// G7: an Engine with a TUN, its process killed with SIGKILL (no stop,
+    /// no drop), leaves its rules and routes; the next `Engine::new` on the
+    /// same state_dir sweeps them (sail's ledger and tunrules), and the
+    /// system is as before the killed one started.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs root in a network namespace of its own: test/netns/run.sh"]
+    async fn the_next_engine_sweeps_what_a_killed_one_left() {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+
+        use crate::config::{EngineConfig, Platform, Role};
+        use crate::engine::Engine;
+
+        if let Some(why) = skip_reason() {
+            eprintln!("SKIP: {why}");
+            return;
+        }
+        fault::disarm();
+        let before = settled();
+        let dir = std::env::temp_dir().join(format!("ppvpn-netns-killed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut child = Command::new(std::env::current_exe().expect("this binary"))
+            .args([
+                "--exact",
+                "runtime::netns_helper::engine",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("PPVPN_NETNS_ENGINE_DIR", &dir)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the engine");
+        let stdout = child.stdout.take().unwrap();
+        let (running, ran) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if line.contains("engine running") {
+                    let _ = running.send(());
+                }
+            }
+        });
+        if ran.recv_timeout(Duration::from_secs(30)).is_err() {
+            let _ = child.kill();
+            panic!("the engine did not start within 30 s: {:?}", child.wait());
+        }
+        assert_ne!(system(), before, "routed once started");
+
+        child.kill().expect("SIGKILL");
+        child.wait().expect("reaped");
+        let left = settled();
+        assert_ne!(
+            left, before,
+            "a killed engine leaves its rules (nothing to sweep otherwise)"
+        );
+
+        let engine = Engine::new(EngineConfig::new(Role::Tun, Platform::Linux, &dir))
+            .await
+            .expect("the next engine");
+        assert_eq!(
+            settled(),
+            before,
+            "the next engine's sweep left the system changed"
+        );
+        let report = engine.shutdown().await.unwrap();
+        assert!(report.leftovers.is_empty(), "{report:?}");
+        assert_eq!(settled(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The engine's side of #208: a TUN instance whose runtime fails goes
     /// Fatal, and the system is as before it started without the host's
     /// shutdown; the later shutdown has nothing left to report.
