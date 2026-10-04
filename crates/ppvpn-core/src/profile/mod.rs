@@ -4,6 +4,8 @@
 
 mod addr;
 mod model;
+#[cfg(test)]
+mod parity_tests;
 mod parse;
 mod ruleset;
 mod validate;

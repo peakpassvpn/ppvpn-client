@@ -467,20 +467,20 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `probe` `TestPingTimeoutAndCancel` | Ping timeout and cancel | `ppvpn-core` `probe::icmp::tests::ping_timeout_and_cancel` | done | 取消即丢弃 future |
 | `profile` `TestEntryIPOptional` | Entry ip optional |  | todo |  |
 | `profile` `TestFixtureProfileParsesAndValidates` | Fixture profile parses and validates |  | todo |  |
-| `profile` `TestIngressFailoverShapes` | Ingress failover shapes |  | todo |  |
+| `profile` `TestIngressFailoverShapes` | Ingress failover shapes | `ppvpn-core` `profile::parity_tests::ingress_failover_shapes` | done | Go 的 `"\xff"` 标签用例在 Rust 里写不出来（`String` 必为 UTF-8）；线上的等价情形见 `profile::parity_tests::invalid_utf8_in_the_profile_bytes`：Go 的 encoding/json 把非法 UTF-8 读成 U+FFFD 并接受，Rust 报 `PROFILE_MALFORMED` |
 | `profile` `TestIngressLabelIsOptionalDisplayOnly` | Ingress label is optional display only |  | todo |  |
 | `profile` `TestIsPrivateIP` | Is private ip |  | todo |  |
 | `profile` `TestMaxIngressesAccepted` | Max ingresses accepted |  | todo |  |
-| `profile` `TestParseIgnoresUnknownFields` | Parse ignores unknown fields |  | todo |  |
+| `profile` `TestParseIgnoresUnknownFields` | Parse ignores unknown fields | `ppvpn-core` `profile::parity_tests::parse_ignores_unknown_fields` | done |  |
 | `profile` `TestParseRejectsSingBoxConfig` | Parse rejects sing box config |  | todo |  |
 | `profile` `TestProtocolFieldsFailClosed` | Protocol fields fail closed |  | todo |  |
-| `profile` `TestRealityServerNameIsBorrowed` | Reality server name is borrowed |  | todo |  |
+| `profile` `TestRealityServerNameIsBorrowed` | Reality server name is borrowed | `ppvpn-core` `profile::parity_tests::reality_server_name_is_borrowed` | done |  |
 | `profile` `TestReplicaOrdinalPresenceRequired` | Replica ordinal presence required |  | todo |  |
 | `profile` `TestReservedEntryIPsRejected` | Reserved entry i ps rejected |  | todo |  |
 | `profile` `TestRoutingActionUnionIsStrict` | Routing action union is strict |  | todo |  |
-| `profile` `TestRoutingValidationIDNAPortsCIDRAndStrictJSON` | Routing validation idna ports cidr and strict json |  | todo |  |
+| `profile` `TestRoutingValidationIDNAPortsCIDRAndStrictJSON` | Routing validation idna ports cidr and strict json | `ppvpn-core` `profile::parity_tests::routing_validation_idna_ports_cidr_and_unknown_fields` | done |  |
 | `profile` `TestRoutingValidationRejectsDuplicateIDsAndUnknownNodes` | Routing validation rejects duplicate i ds and unknown nodes |  | todo |  |
-| `profile` `TestRuleSetHostPinning` | Rule set host pinning |  | todo |  |
+| `profile` `TestRuleSetHostPinning` | Rule set host pinning | `ppvpn-core` `profile::parity_tests::rule_set_host_pinning` | done |  |
 | `profile` `TestRuleSetUpdateIntervalClamp` | Rule set update interval clamp |  | todo |  |
 | `profile` `TestRuleSetValidation` | Rule set validation |  | todo |  |
 | `profile` `TestSchemaIncompatible` | Schema incompatible |  | todo |  |
