@@ -140,6 +140,7 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 Sail E2（实例的任务都放进作用域）大部分已在（sail 17d9ac08 起：协议、传输、DNS、入站、API、TUN、平台各模块的任务都在作用域里；2f967b1a 起宿主经 `dial_tcp`/`dial_udp` 发起的拨号也是作用域里的任务）：
 - 已有：任务作用域；两类 panic（任务自己结束，或实例失败）都不会带崩宿主，`Engine::new` 在编译期断言 `sail::embed::PANICS_ARE_CAUGHT`（以 `panic = "unwind"` 构建）；有界的 stop；残留报告（stop 时还没结束的任务进 `ShutdownReport.leftovers`，`runtime: sail task <名> (<数>) still running after <ms> ms`，这样的停止不算失败，另记一行 warn）。stop 会等宿主的拨号，挂住的拨号不会拖住 stop（`runtime::sail_tests::a_hanging_dial_does_not_hold_the_stop`）。
 - 还差两项，合入前仍按未保证对待：不在作用域里的任务能被发现的检查；实例失败而宿主存活时系统资源的清理（Q1）。
+- 不涉及：sail 的 Clash API（WebSocket 和流式的 `/traffic`、`/logs`、`/connections`）还不随 stop 结束，一个开着的连接会比 stop 活得久。它只在配置了 `experimental.clash_api` 时才监听，翻译从不生成 `experimental` 段；ppvpn-core-lab 对外的是 Core API v1（自己的 Unix socket），不经过它。
 
 连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`（出站链外层在前，最后一个是承载连接的出站；这是 sail 2eb3fe47 代码的实际顺序，它的文档注释写的是相反的顺序，已请 Sail 确认），地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。 Engine 用它记 Go 的 `connection` 行（debug，键名同 Go 的 `logRouted`：id、inbound、network、destination、route_domain、protocol、rule、outbound、target、target_kind，另加 action 和 error）：rule 由 `Translation::rule_ids` 还原成 profile 的规则 id，没有规则时为 `final`；outbound 同 Go，是规则选中的出站，即出站链的第一个，也就是最外层；承载连接的成员是最后一个；target 是出站被要求去的地址（`request_destination`）。和 Go 的差异：UDP 会话的 FakeIP 域名，以及 sniff 规则 override 的域名，sail 目前都标为 `request`。
 
