@@ -38,8 +38,8 @@ fn scope() -> Scope {
     }
 }
 
-/// Why this cannot run here, if it cannot.
-fn skip_reason() -> Option<&'static str> {
+/// Why this cannot run here, if it cannot (also runtime::netns_tests).
+pub(crate) fn skip_reason() -> Option<&'static str> {
     if std::env::var("PPVPN_TEST_REAL_TUN").as_deref() != Ok("1")
         // SAFETY: no arguments, no memory.
         || unsafe { libc::geteuid() } != 0

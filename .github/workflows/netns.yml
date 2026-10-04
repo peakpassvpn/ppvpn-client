@@ -70,6 +70,11 @@ jobs:
           cp "$bin" "$RUNNER_TEMP/ppvpn_core.test"
       - name: TUN rules put back and broken reported (Rust)
         run: sudo NETNS_TIMEOUT=240 test/netns/run.sh --libtest "$RUNNER_TEMP/ppvpn_core.test" 'tunrules::linux_tests::'
+      # sail's route.default_interface changed by a reload: new direct
+      # connections leave by the new link, one already open stays on its own
+      # (a second veth to ppvpn-w, the link told by its sent bytes).
+      - name: a reload moves new connections to the new default interface (Rust)
+        run: sudo NETNS_TIMEOUT=120 test/netns/run.sh --libtest "$RUNNER_TEMP/ppvpn_core.test" 'runtime::netns_tests::'
 
   network-change:
     # dns-local and the host-IPv6 re-probe across network changes (#61, #69):

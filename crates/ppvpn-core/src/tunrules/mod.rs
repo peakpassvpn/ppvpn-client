@@ -24,7 +24,7 @@ use std::net::IpAddr;
 #[cfg(target_os = "linux")]
 mod guard;
 #[cfg(all(test, target_os = "linux"))]
-mod linux_tests;
+pub(crate) mod linux_tests;
 #[cfg(target_os = "linux")]
 mod netlink;
 #[cfg(not(target_os = "linux"))]
