@@ -154,7 +154,7 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 reload 之后 fallback 组的健康状态从头开始（sail 2f967b1a 读自代码）：每次 reload（apply 的热切换、规则集重建、host IPv6 重探）都会重建出站和组。selector 的选择和 fallback 的 pin 会按 tag 带到新组；fallback 当前用的成员和健康历史则从头开始，新组在首轮检查完成前停在第一个成员（主入口）上。这和 Go 一致：Go 的热切换是换一个新内核，新内核的 failover 组同样从主入口开始，所有成员先算健康。可见的影响两边也一样：主入口不可用时，reload 后的第一条连接先试主入口，失败后在同一次拨号里换到下一个成员；sail 0.16 起只有这一条连接要等拨号超时。随后组切走，引擎发一次 `NodeIngressSwitched`（pin 住的节点不发）。所以不算偏离，引擎不另做处理。开关系统代理监听和本地代理重试走的是只涉及入站的 reload（`inbounds_only`，不碰出站和组），不受影响（#221）。
 
-`KernelSwitched` 的连接数和 `draining_kernels`（以及 `kernel switched` 日志行的同名字段）暂时都是 0：要等第 1 组的排空接上。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
+`draining_kernels`（以及 `kernel switched` 日志行的同名字段）恒为 0：Rust 版没有旧内核排空，Sail 在实例内原地 reload（契约 4.1）。`KernelSwitched` 的 `closed_connections` 和 `kept_connections` 暂时也是 0，要等切换时主动关掉新 Profile 拿走的连接（第 1 组的 A 类项）实现后才有数。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
 
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
 
