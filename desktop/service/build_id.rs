@@ -2,8 +2,8 @@
 // service/build.rs; crates/ppvpn-client/build.rs carries an identical copy
 // (it must build without this directory) and its tests check the two agree.
 //
-// Inputs, in sorted path order with `/` separators: Cargo.toml, Cargo.lock
-// (when present), every file under src/ and the current vendored core's
+// Inputs, in sorted path order with `/` separators: Cargo.toml, the
+// workspace's Cargo.lock (as "Cargo.lock", when present), every file under src/ and the current vendored core's
 // manifest.json (as "vendor/ppvpn-core/manifest.json"). Each file contributes its
 // relative path, a NUL, its length (u64 LE) and its bytes.
 
@@ -36,8 +36,11 @@ fn service_build_inputs(
     }
 
     let mut inputs = Vec::new();
-    for name in ["Cargo.toml", "Cargo.lock"] {
-        let path = service_dir.join(name);
+    // The service's manifest, and the workspace's lock it builds with.
+    for (name, path) in [
+        ("Cargo.toml", service_dir.join("Cargo.toml")),
+        ("Cargo.lock", service_dir.join("../../Cargo.lock")),
+    ] {
         if path.is_file() {
             inputs.push((name.to_string(), path));
         }

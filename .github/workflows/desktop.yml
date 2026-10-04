@@ -44,8 +44,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The privileged service (its own Cargo.lock, outside the workspace), the
-  # vendored Go core and the scripts.
+  # The privileged service (a workspace member, shipped with the "service"
+  # profile), the vendored Go core and the scripts.
   desktop-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -58,7 +58,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: desktop/service
+          key: desktop-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The Go core's binaries are not in git: download them from the release
       # the manifest names and check each against the manifest.
@@ -206,7 +206,7 @@ jobs:
           core="desktop/vendor/ppvpn-core/$(cat desktop/vendor/ppvpn-core/CURRENT)/build/ppvpn-core-linux-amd64"
           sudo install -D -o root -g root -m 0755 "$CLIENT_TEST" /usr/lib/ppvpn/ppvpn
           sudo install -D -o root -g root -m 0755 "$core" /usr/lib/ppvpn/ppvpn-core
-          sudo install -D -o root -g root -m 0755 desktop/service/target/debug/ppvpn-service /usr/lib/ppvpn-service/ppvpn-service
+          sudo install -D -o root -g root -m 0755 target/debug/ppvpn-service /usr/lib/ppvpn-service/ppvpn-service
           sudo install -D -o root -g root -m 0755 "$core" /usr/lib/ppvpn-service/ppvpn-core
       - name: Enhanced mode end to end
         run: |

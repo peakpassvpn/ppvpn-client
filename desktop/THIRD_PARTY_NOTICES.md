@@ -62,7 +62,6 @@ Test projects only (not shipped): xunit 2.9.2 and xunit.runner.visualstudio
 
 `ppvpn-client` and `ppvpn-service` link further crates from crates.io (tokio,
 reqwest with rustls, serde, tracing, log4rs, sysinfo and others). Their exact
-versions are in the root `Cargo.lock` (client) and `service/Cargo.lock`
-(service); each crate's licence is stated in its own manifest — see upstream.
+versions are in the root `Cargo.lock`; each crate's licence is stated in its own manifest — see upstream.
 
 PPVPN is not affiliated with or endorsed by any of the projects above.

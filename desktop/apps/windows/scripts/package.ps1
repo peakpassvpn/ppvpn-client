@@ -143,11 +143,12 @@ Write-Host "==> cargo build ppvpn-service ($target)"
 $env:PPVPN_BUILD_VERSION = $buildVersion
 Push-Location $serviceDir
 try {
-  Invoke-Native "cargo" @("build", "--locked", "--release", "--target", $target)
+  Invoke-Native "cargo" @("build", "--locked", "-p", "ppvpn-service", "--profile", "service", "--target", $target)
 } finally {
   Pop-Location
 }
-$serviceOut = Join-Path $serviceDir "target\$target\release"
+# A workspace member: the workspace's target directory, profile "service" (Cargo.toml).
+$serviceOut = Join-Path $serviceDir "..\..\target\$target\service"
 
 # --- 3. ppvpn-client + app ----------------------------------------------------
 # The crate's release cdylib and matching bindings (apps/shared/PPVPN.Client/Generated and
