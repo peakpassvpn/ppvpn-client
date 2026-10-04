@@ -14,9 +14,9 @@ name: desktop-release
 # A desktop release is never the repository's "latest" release: that is
 # the core's (release.yml, tags vX.Y.Z, which the desktop tags do not match).
 #
-# The update site (feeds, channel pointers, apt/dnf repositories) is
-# deployed by a later step; here the site's pointer and feeds are only
-# generated, as a check of the release and for inspection.
+# After a stable release the update site (channel pointer, feeds, apt/dnf
+# repositories) is rebuilt from the releases and deployed
+# (desktop-pages.yml). The dev channel is not on the site.
 
 on:
   workflow_dispatch:
@@ -251,3 +251,14 @@ jobs:
           # On the tag it runs on. Never the repository's latest release.
           gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
             --latest=false --title "PPVPN desktop $VERSION" --notes "$notes"
+
+  # The update site follows a stable release.
+  site:
+    if: inputs.channel == 'stable'
+    needs: publish
+    uses: ./.github/workflows/desktop-pages.yml
+    permissions:
+      contents: read
+      attestations: read
+      pages: write
+      id-token: write
