@@ -101,12 +101,30 @@ pub(super) struct Parts {
     /// The instance's credentials, kept out of every leftover's detail
     /// (it reaches the host's log; contract section 3).
     pub secrets: Vec<String>,
+    /// What an earlier teardown left (the runtime's stop when it failed,
+    /// #208), reported first.
+    pub earlier: Vec<Leftover>,
 }
 
 /// `shutdown`: takes `parts` down within `deadline` and reports what is left.
 /// The steps run on a thread of their own, so that one stuck in a system
 /// call cannot hold the caller past the deadline; it is left running and
 /// named in the report.
+/// Stops `runtime` by `until`; what it could not undo, as sail reports it
+/// (a stop that fails or runs late is one too). Safe on a runtime that
+/// already stopped or failed: sail returns the last stop's report.
+pub(super) async fn stop_runtime(runtime: &dyn Runtime, until: Instant) -> Vec<Leftover> {
+    let mut leftovers = Vec::new();
+    match tokio::time::timeout_at(until.into(), runtime.stop()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => leftovers.push(runtime_left(e.to_string())),
+        Err(_) => leftovers.push(runtime_left("stop timed out")),
+    }
+    // sail's own report of what its stop could not undo.
+    leftovers.extend(runtime.stop_leftovers());
+    leftovers
+}
+
 pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport {
     let until = Instant::now() + deadline;
     let Parts {
@@ -114,16 +132,11 @@ pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport 
         steps,
         state_dir,
         secrets,
+        earlier,
     } = parts;
-    let mut leftovers = Vec::new();
+    let mut leftovers = earlier;
     if let Some(runtime) = runtime {
-        match tokio::time::timeout_at(until.into(), runtime.stop()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => leftovers.push(runtime_left(e.to_string())),
-            Err(_) => leftovers.push(runtime_left("stop timed out")),
-        }
-        // sail's own report of the tasks its stop could not end.
-        leftovers.extend(runtime.stop_leftovers());
+        leftovers.extend(stop_runtime(runtime.as_ref(), until).await);
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
     let spawned = thread::Builder::new()
@@ -167,8 +180,9 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
                 steps,
                 state_dir,
                 secrets,
+                earlier,
             } = parts;
-            let mut leftovers = Vec::new();
+            let mut leftovers = earlier;
             if let Some(runtime) = runtime {
                 let stopped = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -323,6 +337,7 @@ mod tests {
             steps: vec![step("routing"), step("dns")],
             state_dir: Some(StateDirLock::acquire(&dir).unwrap()),
             secrets: Vec::new(),
+            earlier: Vec::new(),
         };
         let report = cleanup(parts, SHUTDOWN_LIMIT).await;
         assert!(report.leftovers.is_empty(), "{report:?}");
@@ -457,6 +472,7 @@ mod tests {
             ],
             state_dir: Some(StateDirLock::acquire(&dir).unwrap()),
             secrets: Vec::new(),
+            earlier: Vec::new(),
         };
         let report = cleanup_on_drop(parts);
         assert!(report.leftovers.is_empty(), "{report:?}");

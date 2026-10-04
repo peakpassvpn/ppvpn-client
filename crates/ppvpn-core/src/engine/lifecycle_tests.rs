@@ -555,6 +555,47 @@ async fn shutdown_stops_a_runtime_that_failed() {
     assert_eq!(fake.calls().last(), Some(&Call::Stop));
 }
 
+/// A runtime that fails is stopped at once (#208), without the host's
+/// shutdown: what it opened goes now. What the stop could not undo comes
+/// with the later ShutdownReport.
+#[tokio::test]
+async fn a_runtime_that_fails_is_stopped_at_once() {
+    use crate::types::{Leftover, LeftoverKind};
+    let (engine, fake) = engine();
+    running(&engine).await;
+    let left = Leftover::new(
+        LeftoverKind::Route,
+        "table 2022",
+        "ip route flush table 2022",
+    );
+    fake.leave_after_stop(vec![left.clone()]);
+    fake.set_state(RuntimeState::Failed {
+        code: "io".into(),
+        message: "tun gone".into(),
+    });
+    for _ in 0..500 {
+        if fake.calls().last() == Some(&Call::Stop) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        fake.calls().last(),
+        Some(&Call::Stop),
+        "stopped without a shutdown"
+    );
+    assert!(matches!(engine.status().state, EngineState::Fatal { .. }));
+
+    let report = engine.shutdown().await.unwrap();
+    assert!(report.leftovers.contains(&left), "{report:?}");
+    let stops = fake
+        .calls()
+        .iter()
+        .filter(|c| matches!(c, Call::Stop))
+        .count();
+    assert_eq!(stops, 1, "the shutdown does not stop it again");
+}
+
 #[tokio::test]
 async fn tun_routing_degrades_recovers_and_breaks() {
     use crate::engine::TunRoutingSignal;
