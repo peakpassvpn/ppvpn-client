@@ -34,8 +34,8 @@ use tokio::task::JoinHandle;
 
 use super::{
     AsyncReadWrite, Datagram, DialFailed, DnsExchange, GroupInfo, GroupSwitch, MemberInfo,
-    NetworkChange, NetworkSnapshot, Routed, Runtime, RuntimeConnection, RuntimeError, RuntimeState,
-    RuntimeTraffic, Target,
+    NetworkChange, NetworkSnapshot, ReloadReport, Routed, Runtime, RuntimeConnection, RuntimeError,
+    RuntimeState, RuntimeTraffic, Target,
 };
 use crate::logfmt;
 
@@ -504,11 +504,30 @@ impl Runtime for SailRuntime {
             .map_err(error)
     }
 
-    async fn reload(&self, config: &str) -> Result<(), RuntimeError> {
-        self.instance
+    async fn reload(&self, config: &str) -> Result<ReloadReport, RuntimeError> {
+        use embed::InboundChange as C;
+        let report = self
+            .instance
             .reload(Some(Config::Json(config.into())))
             .await
-            .map_err(error)
+            .map_err(error)?;
+        Ok(ReloadReport {
+            inbounds: report
+                .inbounds
+                .into_iter()
+                .map(|(tag, change)| {
+                    let change = match change {
+                        C::Untouched => "untouched",
+                        C::Reloaded => "reloaded",
+                        C::Added => "added",
+                        C::Removed => "removed",
+                        C::Replaced => "replaced",
+                        _ => "other",
+                    };
+                    (tag, change.to_owned())
+                })
+                .collect(),
+        })
     }
 
     /// A stop that ended with tasks still running is a stop: sail's

@@ -676,63 +676,129 @@ fn with_extra(config: &str, port: u16) -> String {
     config.to_string()
 }
 
-// sail's reload keeps the inbounds a run has: one that adds or removes an
-// inbound (by tag) is refused whole, an inbound added at run time
-// (add_inbound) among them. The Engine's reloads carry what it added (the
-// local and system proxy listeners are in its translation while open).
+// sail's reload runs the configuration's inbounds (2f967b1a): compared by
+// tag with those running, an inbound added at run time (add_inbound) among
+// them. The Engine's reloads carry what it added (the local and system
+// proxy listeners are in its translation while open).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reload_keeps_the_inbounds_add_inbound_made() {
+async fn a_reload_runs_the_configuration_s_inbounds() {
     let (port, extra_port) = (free_port(), free_port());
     let p1 = password();
     let base = config(port, &[("u1", &p1)], false);
     let extra = serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": extra_port });
 
-    // 1. The reload names the added inbound: it goes through, the listener
-    // stays.
+    // 1. The reload names the added inbound: untouched, still listening.
     let runtime = SailRuntime::new(options("reload-with")).unwrap();
     runtime.start(&base).await.unwrap();
     runtime.add_inbound(&extra.to_string()).await.unwrap();
-    runtime
+    let report = runtime
         .reload(&with_extra(&base, extra_port))
         .await
         .expect("a reload that names the added inbound");
+    assert!(
+        report
+            .inbounds
+            .contains(&("extra".into(), "untouched".into())),
+        "{report:?}"
+    );
     assert!(
         TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok(),
         "the added listener stays"
     );
     runtime.stop().await.unwrap();
 
-    // 2. The reload leaves it out: refused whole, and so is every such
-    // reload, while one that names it goes through. (Sail plans to diff
-    // inbounds by tag on reload; ours is the configuration's view.)
+    // 2. The reload leaves it out: it is removed, the rest goes on.
     let runtime = SailRuntime::new(options("reload-without")).unwrap();
     runtime.start(&base).await.unwrap();
     runtime.add_inbound(&extra.to_string()).await.unwrap();
-    for attempt in 1..=2 {
-        let refused = runtime.reload(&base).await;
-        assert!(
-            refused.is_err(),
-            "attempt {attempt}: a reload without the added inbound is refused"
-        );
-    }
-    assert!(
-        TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok(),
-        "the refused reloads changed nothing"
-    );
-    runtime
-        .reload(&with_extra(&base, extra_port))
+    let report = runtime
+        .reload(&base)
         .await
-        .expect("one that names it still goes through");
+        .expect("a reload without the added inbound");
+    assert!(
+        report
+            .inbounds
+            .contains(&("extra".into(), "removed".into()))
+            && report
+                .inbounds
+                .contains(&("local".into(), "untouched".into())),
+        "{report:?}"
+    );
+    assert!(
+        TcpStream::connect(("127.0.0.1", extra_port)).await.is_err(),
+        "the removed listener is closed"
+    );
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).await.is_ok(),
+        "the configured one goes on"
+    );
     runtime.stop().await.unwrap();
 
-    // 3. Removed first: the reload without it goes through.
+    // 3. Removed first: the reload without it has nothing to remove.
     let runtime = SailRuntime::new(options("reload-removed")).unwrap();
     runtime.start(&base).await.unwrap();
     runtime.add_inbound(&extra.to_string()).await.unwrap();
     runtime.remove_inbound("extra").await.unwrap();
-    runtime
+    let report = runtime
         .reload(&base)
         .await
         .expect("a reload after remove_inbound, without it");
+    assert_eq!(report.inbounds, [("local".into(), "untouched".into())]);
     runtime.stop().await.unwrap();
+}
+
+// sail waits for a host's dials when it stops (e7bfe39c: they are tasks of
+// the instance's scope): a dial that hangs must not hold the stop. The dial
+// goes through a socks outbound whose server accepts and never answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hanging_dial_does_not_hold_the_stop() {
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent_port = silent.local_addr().unwrap().port();
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((conn, _)) = silent.accept().await {
+            open.push(conn);
+        }
+    });
+    let port = free_port();
+    let p1 = password();
+    let mut config: serde_json::Value =
+        serde_json::from_str(&config(port, &[("u1", &p1)], false)).unwrap();
+    config["outbounds"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({ "type": "socks", "tag": "silent", "server": "127.0.0.1", "server_port": silent_port }));
+    let runtime = Arc::new(SailRuntime::new(options("hanging-dial")).unwrap());
+    runtime.start(&config.to_string()).await.unwrap();
+
+    let dialler = runtime.clone();
+    let dial = tokio::spawn(async move {
+        dialler
+            .dial_tcp(
+                "silent",
+                Target::Domain("example.invalid".into(), 80),
+                Duration::from_secs(60),
+            )
+            .await
+            .map(|_| ())
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!dial.is_finished(), "the dial hangs on the silent server");
+
+    let started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(10), runtime.stop())
+        .await
+        .expect("stop returns in time")
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    let dialled = tokio::time::timeout(WAIT, dial)
+        .await
+        .expect("the dial ends with the stop")
+        .unwrap();
+    assert!(dialled.is_err(), "the hanging dial fails: {dialled:?}");
+    held.abort();
 }
