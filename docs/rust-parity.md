@@ -79,12 +79,18 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 已知缺口：
 
-- Q1：WFP 动态会话和 Wintun 适配器的存活期跟着打开它们的进程，嵌入时这个进程是宿主。实例进入 `Failed`、宿主进程还在时，这些资源要由实例自己撤掉；Sail 确认这是 E2 的缺口，正在做。在它合入之前，不能假定实例失败后宿主的网络已经恢复。
+- Q1：实例进入 `Failed`、宿主进程还在时，它改动的系统资源要由实例自己撤掉。Linux 和 macOS 已由 sail dddc2d1c 做到并有测试（见"过渡实现"里的 E2 状态，以及 `runtime::netns_tests::failures`）。Windows 上 WFP 动态会话和 Wintun 适配器的存活期跟着打开它们的进程（嵌入时就是宿主），它们的清理步骤和测试还没合入 sail：在 Windows 上仍不能假定实例失败后宿主的网络已经恢复。
 
 ## 测试宿主的约定
 
 - 所有 lab 和性能检查都通过 `ppvpn-core-lab`（Rust 的测试宿主）驱动 Rust 版。它要提供和 `ppvpn-core serve` 相同的命令行、日志格式，以及 lab 实际用到的那部分 Core API v1（#214）。
 - `ppvpn-core-lab` 必须能信任测试时现场生成的 CA：性能检查的 AnyTLS 假节点（`tools/perf`）就是这样。Go 版通过 `SSL_CERT_FILE` 实现（只在 Linux 上有效）；Rust 版要支持 `SSL_CERT_FILE`，例如 rustls-native-certs，或者提供等价的命令行参数来注入 CA 文件，否则 `tools/perf/measure.py` 测不了 AnyTLS。
+
+## 性能
+
+性能检查的数字和结论记在 #193（tier B：同一台机器、同一天，Go 0.5.21 和 Rust 成对测），工具和方法见 `tools/perf/README.md`。这里只记影响实现的事实：
+
+- **内联路由规则的内存**：sail 里每条内联规则本身约占 2 KB 堆内存（Sail 在分析）；c3abd614 起仅入站的 reload 还为比较保留一份解析后的配置，再加约每条 1.7 KB（Sail 正在改成只保留摘要）。大的域名和 IP 列表走二进制规则集（Profile 的 `routing.rule_sets`，翻译成 `route.rule_set` 引用下载好的 .srs 文件），省得多。翻译不把大列表内联：Profile 每条规则的条目原样成为一条路由规则，翻译自己另加的只有固定的几条（TUN 的嗅探、DNS 劫持、私网直连）以及每个入口的直连规则、每个节点的本地代理用户规则。实测见 #193。
 
 ## netns CI（G3、G7）
 
@@ -138,8 +144,9 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 | Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：tun + auto_route 时，强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录；`strict_route` 加排除段时，适配器、路由、DNS、6 个 WFP 过滤器和 sail 子层在强杀后约 0.5 秒内全部消失，物理默认路由不受影响。未覆盖 MSVC 构建，见"切换前要复测的项目"；实例 Failed 而宿主还在时由谁撤，见 Q1 |
 
 Sail E2：任务作用域已完成（sail 7da87ccd）：实例启动的每一个任务都在作用域里，不在任何作用域里的任务会让运行失败，越过作用域的 spawn 是静态检查错误；协议、传输、DNS、入站、API、TUN、平台各模块的任务，以及宿主经 `dial_tcp`/`dial_udp` 发起的拨号（2f967b1a），都随 stop 在 `stop_within`（默认 2 秒）内结束。
-- 已有：任务作用域；两类 panic（任务自己结束，或实例失败）都不会带崩宿主，根任务的 panic 也让实例失败而不是展开到 `run()`（f25d1a79），`Engine::new` 在编译期断言 `sail::embed::PANICS_ARE_CAUGHT`（以 `panic = "unwind"` 构建）；有界的 stop；残留报告（stop 时还没结束的任务进 `ShutdownReport.leftovers`，`runtime: sail task <名> (<数>) still running after <ms> ms`，这样的停止不算失败，另记一行 warn）。挂住的拨号不会拖住 stop（`runtime::sail_tests::a_hanging_dial_does_not_hold_the_stop`）。
-- 还差一项，合入前仍按未保证对待：实例失败而宿主存活时系统资源的清理（Q1）；第一部分（根任务的 panic 让实例失败，f25d1a79）已在。
+- 已有：任务作用域；两类 panic（任务自己结束，或实例失败）都不会带崩宿主，根任务的 panic 也让实例失败而不是展开到 `run()`（f25d1a79），`Engine::new` 在编译期断言 `sail::embed::PANICS_ARE_CAUGHT`（以 `panic = "unwind"` 构建）；有界的 stop；挂住的拨号不会拖住 stop（`runtime::sail_tests::a_hanging_dial_does_not_hold_the_stop`）。
+- 失败后的清理（sail dddc2d1c，Linux 和 macOS，有 sail 自己的测试）：一次运行无论怎样结束（stop、实例失败、启动到一半失败、线程上的 panic 展开），都先撤掉它改动的系统资源（路由、策略规则、nftables、DNS、TUN），再结束任务。撤不掉的进 sail 的停止报告，每项有类别、原因和手工清除的命令；`Runtime::stop_leftovers` 把它们转成 `ShutdownReport.leftovers` 的条目（类别：sail 的 Wfp、Tun、Route、Dns 对应同名，Rule 和 Nft 对应 `rule`，Task 对应 `task`，其他归 `runtime`；原因和清除命令在 `detail` 里，例如 ``timed out after 5s; clear it with `nft delete table inet sail_tun0` ``）。对已经不在运行的实例调 stop 立即返回上次的报告，不再清理第二次。我们这边的故障测试在 netns 的 tun 作业里（需要测试构建的 `fault-injection` 特性）：实例运行中失败、启动到一半失败，系统状态都回到启动前；一个清理步骤 panic 时，它按类别报出，带的清除命令执行后系统复原（`runtime::netns_tests::failures`）。
+- 还没有：Windows 的清理步骤和测试（WFP、Wintun）未合入 sail，失败后的清理在 Windows 上仍按未保证对待（Q1）。
 - 不涉及：sail 的 Clash API（WebSocket 和流式的 `/traffic`、`/logs`、`/connections`）还不随 stop 结束，一个开着的连接会比 stop 活得久。它只在配置了 `experimental.clash_api` 时才监听，翻译从不生成 `experimental` 段；ppvpn-core-lab 对外的是 Core API v1（自己的 Unix socket），不经过它。
 
 连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`（出站链外层在前，最后一个是承载连接的出站；这是 sail 2eb3fe47 代码的实际顺序，它的文档注释写的是相反的顺序，已请 Sail 确认），地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。 Engine 用它记 Go 的 `connection` 行（debug，键名同 Go 的 `logRouted`：id、inbound、network、destination、route_domain、protocol、rule、outbound、target、target_kind，另加 action 和 error）：rule 由 `Translation::rule_ids` 还原成 profile 的规则 id，没有规则时为 `final`；outbound 同 Go，是规则选中的出站，即出站链的第一个，也就是最外层；承载连接的成员是最后一个；target 是出站被要求去的地址（`request_destination`）。和 Go 的差异：UDP 会话的 FakeIP 域名，以及 sniff 规则 override 的域名，sail 目前都标为 `request`。
@@ -182,7 +189,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | `internal/runtime` `TestDrainToleratesShortPauses` | Pauses shorter than the threshold do not close a draining connection. |  | todo |  |
 | `internal/runtime` `TestEffectiveProfile` | Effective profile |  | todo |  |
 | `internal/runtime` `TestFirstKernelDrainsAcrossSwitches` | The first kernel drains like any other across several switches: its idle keep-alive connection is closed after drainIdleClose, a connection with a heartbeat stays (its … |  | todo |  |
-| `internal/runtime` `TestFullRestartReasons` | fullRestartReasons is a whitelist: only listener changes stop the engine. | `ppvpn-core` `engine::switch::tests::full_restart_reasons_are_a_whitelist`、`ppvpn-core` `engine::switch::tests::a_changed_tun_restarts_instead_of_reloading`、`ppvpn-core` `engine::switch::tests::an_unchanged_listener_set_reloads`、`ppvpn-core` `engine::switch::tests::a_failed_restart_puts_the_running_configuration_back` | done | 白名单和 reasons 的措辞同 Go；比较的是新旧翻译的 JSON。sail 的 reload 不增删监听、只替换已有监听的 users，所以其余变化都走 stop 再 start。新配置起不来时恢复原配置，apply 报错；原配置也起不来就停止实例。host IPv6 重探同样经过这一比较（目前只改 direct，不改 TUN，所以是 reload）。有意偏离（#221，sail 2f967b1a 的差分 reload）：这个白名单只剩 TUN 一类直接决定重启（route 的网卡选项 sail 的 reload 也接受，不需要重启，`runtime::sail::tests::a_reload_takes_the_route_s_interface_options`；新连接改用新的 `default_interface` 已验证：netns 的 tun 作业里 `runtime::netns_tests::a_reload_moves_new_connections_to_the_new_default_interface`，两条 veth，reload 后新连接走新网卡，reload 前的连接仍走原网卡；`default_mark` 还没有覆盖）（`engine::switch::restart_reasons`），其余监听变化走 reload，由 sail 原地增、删、换，只断开那个监听的连接（`engine::switch::tests::a_moved_listener_is_replaced_in_place`）；reload 返回 `needs_restart` 或 `inbound_lost` 时照样重启 |
+| `internal/runtime` `TestFullRestartReasons` | fullRestartReasons is a whitelist: only listener changes stop the engine. | `ppvpn-core` `engine::switch::tests::full_restart_reasons_are_a_whitelist`、`ppvpn-core` `engine::switch::tests::a_changed_tun_restarts_instead_of_reloading`、`ppvpn-core` `engine::switch::tests::an_unchanged_listener_set_reloads`、`ppvpn-core` `engine::switch::tests::a_failed_restart_puts_the_running_configuration_back` | done | 白名单和 reasons 的措辞同 Go；比较的是新旧翻译的 JSON。sail 的 reload 不增删监听、只替换已有监听的 users，所以其余变化都走 stop 再 start。新配置起不来时恢复原配置，apply 报错；原配置也起不来就停止实例。host IPv6 重探同样经过这一比较（目前只改 direct，不改 TUN，所以是 reload）。有意偏离（#221，sail 2f967b1a 的差分 reload）：这个白名单只剩 TUN 一类直接决定重启（route 的网卡选项 sail 的 reload 也接受，不需要重启，`runtime::sail::tests::a_reload_takes_the_route_s_interface_options`；新连接改用新的 `default_interface` 已验证：netns 的 tun 作业里 `runtime::netns_tests::a_reload_moves_new_connections_to_the_new_default_interface`，两条 veth，reload 后新连接走新网卡，reload 前的连接仍走原网卡；`default_mark` 由 sail 自己的测试覆盖（sail 41ea4db8，需要 root，不在 sail 的 CI 里自动运行），我们这边没有单独的用例）（`engine::switch::restart_reasons`），其余监听变化走 reload，由 sail 原地增、删、换，只断开那个监听的连接（`engine::switch::tests::a_moved_listener_is_replaced_in_place`）；reload 返回 `needs_restart` 或 `inbound_lost` 时照样重启 |
 | `internal/runtime` `TestKernelSwitchKeepsReverseMapping` | A kernel switch keeps the reverse mapping: a client that resolved a name through the old kernel and connects to the address through the new one still matches the name's … |  | todo |  |
 | `internal/runtime` `TestLifecycleAndRuntimeRollback` | Lifecycle and runtime rollback |  | todo |  |
 | `internal/runtime` `TestLifecycleLogsPhaseTimings` | Apply and start each write one info line with per-phase durations, so a slow /v1/start shows where the time went. |  | todo |  |

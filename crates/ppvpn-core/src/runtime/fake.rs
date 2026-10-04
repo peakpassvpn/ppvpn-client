@@ -75,7 +75,7 @@ pub(crate) struct FakeRuntime {
         Mutex<Option<mpsc::Receiver<DnsExchange>>>,
     ),
     /// What stop_leftovers says after the next stops.
-    leftovers: Mutex<Vec<String>>,
+    leftovers: Mutex<Vec<crate::types::Leftover>>,
     dropped: AtomicU64,
     network: Mutex<NetworkSnapshot>,
     network_changes: watch::Sender<Option<NetworkChange>>,
@@ -323,7 +323,7 @@ impl FakeRuntime {
 
     /// As if sail's stops left these tasks running.
     #[allow(dead_code)] // for the Engine's tests
-    pub(crate) fn leave_after_stop(&self, leftovers: Vec<String>) {
+    pub(crate) fn leave_after_stop(&self, leftovers: Vec<crate::types::Leftover>) {
         *self.leftovers.lock().unwrap() = leftovers;
     }
 
@@ -567,7 +567,7 @@ impl Runtime for FakeRuntime {
         self.dns_seen.1.lock().unwrap().take().expect("taken once")
     }
 
-    fn stop_leftovers(&self) -> Vec<String> {
+    fn stop_leftovers(&self) -> Vec<crate::types::Leftover> {
         self.leftovers.lock().unwrap().clone()
     }
 

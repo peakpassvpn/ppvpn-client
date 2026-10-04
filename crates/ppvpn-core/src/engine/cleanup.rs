@@ -123,12 +123,7 @@ pub(super) async fn cleanup(parts: Parts, deadline: Duration) -> ShutdownReport 
             Err(_) => leftovers.push(runtime_left("stop timed out")),
         }
         // sail's own report of the tasks its stop could not end.
-        leftovers.extend(
-            runtime
-                .stop_leftovers()
-                .into_iter()
-                .map(|l| Leftover::new(LeftoverKind::Runtime, "runtime", l)),
-        );
+        leftovers.extend(runtime.stop_leftovers());
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
     let spawned = thread::Builder::new()
@@ -189,12 +184,7 @@ pub(super) fn cleanup_on_drop(parts: Parts) -> ShutdownReport {
                     Ok(Err(_)) => leftovers.push(runtime_left("stop timed out")),
                     Err(e) => leftovers.push(runtime_left(e.to_string())),
                 }
-                leftovers.extend(
-                    runtime
-                        .stop_leftovers()
-                        .into_iter()
-                        .map(|l| Leftover::new(LeftoverKind::Runtime, "runtime", l)),
-                );
+                leftovers.extend(runtime.stop_leftovers());
             }
             leftovers.append(&mut run_steps(steps, until, state_dir));
             let _ = tx.send(redacted(leftovers, &secrets));
@@ -345,22 +335,25 @@ mod tests {
     async fn tasks_sail_could_not_stop_are_leftovers() {
         let runtime = Arc::new(FakeRuntime::default());
         runtime.start("{}").await.unwrap();
-        runtime.leave_after_stop(vec![
-            "sail task tun-read (1) still running after 2000 ms".into()
-        ]);
+        let left = [
+            Leftover::new(
+                LeftoverKind::Task,
+                "tun-read",
+                "1 still running after 2000 ms",
+            ),
+            Leftover::new(
+                LeftoverKind::Rule,
+                "nft table inet sail_tun0",
+                "timed out after 5s; clear it with `nft delete table inet sail_tun0`",
+            ),
+        ];
+        runtime.leave_after_stop(left.to_vec());
         let parts = Parts {
             runtime: Some(runtime.clone()),
             ..Parts::default()
         };
         let report = cleanup(parts, SHUTDOWN_LIMIT).await;
-        assert_eq!(
-            report.leftovers,
-            [Leftover::new(
-                LeftoverKind::Runtime,
-                "runtime",
-                "sail task tun-read (1) still running after 2000 ms"
-            )]
-        );
+        assert_eq!(report.leftovers, left, "sail's, with their kinds");
     }
 
     /// A leftover's detail reaches the host's log: whatever quotes a
