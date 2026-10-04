@@ -339,9 +339,12 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     async fn reload(&self, config: &str) -> Result<ReloadReport, RuntimeError>;
     /// Returns once listeners are closed and connections dropped.
     async fn stop(&self) -> Result<(), RuntimeError>;
-    /// What the last stop could not end within its bound (sail's tasks
-    /// still running), one line each; empty when it all ended.
-    fn stop_leftovers(&self) -> Vec<String>;
+    /// What the last end of a run (a stop, a failure, a start that failed
+    /// partway) left: sail's tasks still running, and what it changed in the
+    /// system and could not undo, each with its kind and, in its detail, the
+    /// command that clears it by hand where there is one. Empty when it all
+    /// ended; the same report until the next start.
+    fn stop_leftovers(&self) -> Vec<crate::types::Leftover>;
 
     /// Subscribe first, then read.
     fn states(&self) -> watch::Receiver<RuntimeState>;

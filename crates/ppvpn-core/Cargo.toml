@@ -65,6 +65,10 @@ lab = []
 # Test support for tests/ (the in-memory runtime behind internal): turned on
 # by the dev-dependency on this crate below, so never in a host's build.
 testing = []
+# sail's fault points (sail::fault), for the netns tests that make an
+# instance fail on purpose: only netns.yml's test build turns it on, never
+# a release (sail's CI refuses a release that names it).
+fault-injection = ["sail/fault-injection"]
 
 [dev-dependencies]
 # The rule set tests' TLS server and its certificate (sail's BoringSSL).

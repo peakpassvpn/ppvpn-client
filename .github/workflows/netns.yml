@@ -64,7 +64,7 @@ jobs:
       - name: Build the Rust test binary (as the runner user)
         run: |
           set -euo pipefail
-          bin=$(cargo test -p ppvpn-core --lib --no-run --locked --message-format=json |
+          bin=$(cargo test -p ppvpn-core --lib --no-run --locked --features fault-injection --message-format=json |
             jq -r 'select(.reason == "compiler-artifact" and .profile.test and .target.name == "ppvpn_core") | .executable')
           test -x "$bin"
           cp "$bin" "$RUNNER_TEMP/ppvpn_core.test"
@@ -73,7 +73,11 @@ jobs:
       # sail's route.default_interface changed by a reload: new direct
       # connections leave by the new link, one already open stays on its own
       # (a second veth to ppvpn-w, the link told by its sent bytes).
-      - name: a reload moves new connections to the new default interface (Rust)
+      # With the test build's fault-injection: an instance that fails,
+      # a start that fails once routed and a teardown step that panics
+      # leave the namespace as it was (the step reported with its kind and
+      # the command that clears it).
+      - name: the runtime's reload and failures (Rust)
         run: sudo NETNS_TIMEOUT=120 test/netns/run.sh --libtest "$RUNNER_TEMP/ppvpn_core.test" 'runtime::netns_tests::'
 
   network-change:

@@ -38,6 +38,7 @@ use super::{
     RuntimeState, RuntimeTraffic, Target,
 };
 use crate::logfmt;
+use crate::types::{Leftover, LeftoverKind};
 
 /// Log lines that wait for the Engine before new ones are dropped.
 const LOG_BUFFER: usize = 1024;
@@ -434,6 +435,21 @@ async fn follow_dns(instance: Instance, tx: mpsc::Sender<DnsExchange>) {
     }
 }
 
+/// sail's kind of what is left, as ours: those we have no kind for are the
+/// runtime's.
+fn left_kind(kind: embed::LeftKind) -> LeftoverKind {
+    use embed::LeftKind as K;
+    match kind {
+        K::Wfp => LeftoverKind::Wfp,
+        K::Tun => LeftoverKind::Tun,
+        K::Route => LeftoverKind::Route,
+        K::Dns => LeftoverKind::Dns,
+        K::Rule | K::Nft => LeftoverKind::Rule,
+        K::Task => LeftoverKind::Task,
+        _ => LeftoverKind::Runtime,
+    }
+}
+
 fn dial_stage(stage: embed::DialStage) -> &'static str {
     match stage {
         embed::DialStage::Dial => "dial",
@@ -537,33 +553,47 @@ impl Runtime for SailRuntime {
         })
     }
 
-    /// A stop that ended with tasks still running is a stop: sail's
-    /// report of them is `stop_leftovers`, and a warn line.
+    /// A stop that ended with something left (tasks still running, what it
+    /// changed in the system and could not undo) is a stop: sail's report
+    /// of it is `stop_leftovers`, and a warn line. sail stops an instance
+    /// that no longer runs (failed, stopped) at once, telling again what
+    /// its run's end left.
     async fn stop(&self) -> Result<(), RuntimeError> {
         match self.instance.stop().await {
             Ok(()) => Ok(()),
             Err(_) if !self.stop_leftovers().is_empty() => {
-                tracing::warn!(left = ?self.stop_leftovers(), "sail stopped with tasks still running");
+                let left: Vec<String> = self
+                    .stop_leftovers()
+                    .iter()
+                    .map(|l| format!("{}: {}", l.name, l.detail))
+                    .collect();
+                tracing::warn!(?left, "sail stopped with something left");
                 Ok(())
             }
             Err(e) => Err(error(e)),
         }
     }
 
-    fn stop_leftovers(&self) -> Vec<String> {
-        match self.instance.stop_report() {
-            Some(report) if !report.clean() => report
-                .tasks
-                .iter()
-                .map(|(task, n)| {
-                    format!(
-                        "sail task {task} ({n}) still running after {} ms",
-                        report.waited.as_millis()
-                    )
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
+    fn stop_leftovers(&self) -> Vec<Leftover> {
+        let Some(report) = self.instance.stop_report() else {
+            return Vec::new();
+        };
+        let waited = report.waited.as_millis();
+        let tasks = report.tasks.iter().map(|(task, n)| {
+            Leftover::new(
+                LeftoverKind::Task,
+                *task,
+                format!("{n} still running after {waited} ms"),
+            )
+        });
+        let system = report.left.iter().map(|left| {
+            let detail = match &left.clear {
+                Some(clear) => format!("{}; clear it with `{clear}`", left.why),
+                None => left.why.clone(),
+            };
+            Leftover::new(left_kind(left.kind), left.resource.clone(), detail)
+        });
+        tasks.chain(system).collect()
     }
 
     fn states(&self) -> watch::Receiver<RuntimeState> {
