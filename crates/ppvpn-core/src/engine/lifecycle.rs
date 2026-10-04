@@ -416,6 +416,8 @@ impl Inner {
         drop(live);
         // The TUN is gone with the runtime.
         self.guard_stopped();
+        // What it had opened goes now, not at the host's shutdown.
+        self.fatal_cleanup();
     }
 
     /// The default interface changed (`None`: none). Offline while running

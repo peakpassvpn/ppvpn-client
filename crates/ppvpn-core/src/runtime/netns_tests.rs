@@ -244,14 +244,18 @@ mod failures {
     }
 
     /// The system once it is still: an earlier test's teardown may still
-    /// be going.
+    /// be going, and an IPv6 address the kernel is still checking for
+    /// duplicates (pt0's link-local, after an earlier test) gets its local
+    /// route only when the check ends, a second or more later, with
+    /// nothing to see in between.
     fn settled() -> String {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut last = system();
         loop {
             std::thread::sleep(Duration::from_millis(300));
             let now = system();
-            if now == last || Instant::now() >= deadline {
+            let checking = !run("ip", "-6 addr show tentative").trim().is_empty();
+            if (now == last && !checking) || Instant::now() >= deadline {
                 return now;
             }
             last = now;
@@ -383,5 +387,63 @@ mod failures {
         assert!(status.success(), "{clear}");
         assert_eq!(settled(), before, "more than the table was left");
         fault::disarm();
+    }
+
+    /// The engine's side of #208: a TUN instance whose runtime fails goes
+    /// Fatal, and the system is as before it started without the host's
+    /// shutdown; the later shutdown has nothing left to report.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs root in a network namespace of its own: test/netns/run.sh"]
+    async fn the_engine_undoes_a_failed_runtime_without_the_host() {
+        use std::sync::Arc;
+
+        use crate::config::{EngineConfig, Platform, Role};
+        use crate::engine::Engine;
+        use crate::request::ApplyRequest;
+        use crate::status::EngineState;
+
+        if let Some(why) = skip_reason() {
+            eprintln!("SKIP: {why}");
+            return;
+        }
+        fault::disarm();
+        let before = settled();
+        let dir = std::env::temp_dir().join(format!("ppvpn-netns-engine-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = Engine::with_runtime(
+            EngineConfig::new(Role::Tun, Platform::Linux, &dir),
+            Arc::new(runtime("engine")),
+        );
+        let profile = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../testdata/golden/contract/profiles/base.json"
+        ))
+        .unwrap();
+        engine.apply(ApplyRequest::new(profile)).await.unwrap();
+        engine.start().await.unwrap();
+        assert_ne!(system(), before, "routed once started");
+
+        fault::arm(Point::EssentialTask);
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while !matches!(engine.status().state, EngineState::Fatal { .. }) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("Fatal within 15 s");
+        fault::disarm();
+        // No shutdown yet: the engine stopped the runtime itself.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut now = settled();
+        while now != before && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            now = settled();
+        }
+        assert_eq!(now, before, "the failed runtime left the system changed");
+
+        let report = engine.shutdown().await.unwrap();
+        assert!(report.leftovers.is_empty(), "{report:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
