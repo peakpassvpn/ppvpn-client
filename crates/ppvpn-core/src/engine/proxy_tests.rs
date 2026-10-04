@@ -318,8 +318,8 @@ async fn system_proxy_listener_toggles() {
         listening.port
     );
 
-    // While running the listener alone comes and goes: no reload (a
-    // reload neither opens nor closes a listener), the local proxy's stays.
+    // While running the listener alone comes and goes: an inbounds-only
+    // reload each time (nothing else built again), the local proxy's stays.
     let listening = |fake: &FakeRuntime, tag: &str| fake.inbounds().iter().any(|t| t == tag);
     assert!(listening(&fake, SYSTEM_PROXY_INBOUND_TAG));
     let connection = |id: u64, inbound: &str| crate::runtime::RuntimeConnection {
@@ -350,7 +350,7 @@ async fn system_proxy_listener_toggles() {
         serde_json::to_string(&off).unwrap(),
         r#"{"available":true,"enabled":false,"listening":false}"#
     );
-    assert_eq!(reloads(&fake), 0);
+    assert_eq!(engine.inner.toggle_paths(), ["inbounds_only"]);
     assert!(!listening(&fake, SYSTEM_PROXY_INBOUND_TAG), "closed");
     assert!(listening(&fake, LOCAL_PROXY_INBOUND_TAG), "untouched");
     match drain(&mut rx).as_slice() {
@@ -361,7 +361,7 @@ async fn system_proxy_listener_toggles() {
     }
 
     // The runtime refuses it: still off, SYSTEM_PROXY_START_FAILED.
-    fake.fail_next(Op::AddInbound, RuntimeError::new("config", "refused"));
+    fake.fail_next(Op::Reload, RuntimeError::new("config", "refused"));
     let err = engine.set_system_proxy_listener(true).await.unwrap_err();
     assert_eq!(
         (err.code, err.retryable),
@@ -373,7 +373,11 @@ async fn system_proxy_listener_toggles() {
 
     let on = engine.set_system_proxy_listener(true).await.unwrap();
     assert!(on.enabled && on.listening);
-    assert_eq!(reloads(&fake), 0);
+    assert_eq!(
+        engine.inner.toggle_paths(),
+        ["inbounds_only", "inbounds_only"],
+        "each toggle reloads the inbounds alone"
+    );
     assert!(listening(&fake, SYSTEM_PROXY_INBOUND_TAG), "open");
     assert!(listening(&fake, LOCAL_PROXY_INBOUND_TAG));
     // The translation the next reload or start uses has it.
@@ -420,13 +424,6 @@ async fn system_proxy_start_falls_back_when_port_taken() {
     );
 }
 
-fn adds(fake: &FakeRuntime) -> usize {
-    fake.calls()
-        .iter()
-        .filter(|c| matches!(c, Call::AddInbound(_)))
-        .count()
-}
-
 fn local_proxy_open(fake: &FakeRuntime) -> bool {
     fake.inbounds().iter().any(|t| t == LOCAL_PROXY_INBOUND_TAG)
 }
@@ -459,14 +456,15 @@ async fn an_unavailable_local_proxy_degrades_and_is_retried() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(local_proxy_open(&fake), "the second retry opens it");
     assert_eq!(engine.status().state, EngineState::Running);
-    assert_eq!(reloads(&fake), 0, "opened in place");
-    assert!(fake
-        .calls()
-        .contains(&Call::AddInbound(LOCAL_PROXY_INBOUND_TAG.into())));
+    assert_eq!(
+        engine.inner.toggle_paths(),
+        ["inbounds_only"],
+        "opened by an inbounds-only reload"
+    );
 
     // Opened: no further retries.
     tokio::time::sleep(Duration::from_secs(120)).await;
-    assert_eq!(adds(&fake), 1);
+    assert_eq!(reloads(&fake), 1);
 }
 
 /// A start that fails with the shared listener in it (its port taken
@@ -510,7 +508,7 @@ async fn stop_cancels_the_local_proxy_retry() {
     assert_eq!(engine.status().state, EngineState::Configured);
 
     tokio::time::sleep(Duration::from_secs(120)).await;
-    assert_eq!(adds(&fake), 0);
+    assert_eq!(reloads(&fake), 0);
 
     engine.start().await.unwrap();
     assert!(local_proxy_open(&fake));

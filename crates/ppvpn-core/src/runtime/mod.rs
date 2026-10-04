@@ -418,14 +418,6 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// None until the first since the runtime started. The receiver lives
     /// across starts and stops.
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>>;
-
-    /// Starts listening with `inbound` (one inbound of sing-box JSON) while
-    /// running: a reload neither adds nor removes listeners (embed.md,
-    /// Reload). The other inbounds and every connection stay.
-    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError>;
-    /// Stops listening on the inbound `tag` and closes the connections that
-    /// came in through it; the other inbounds and their connections stay.
-    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError>;
 }
 
 /// An inbound's tag in sing-box JSON: `tag`, else its `type`.

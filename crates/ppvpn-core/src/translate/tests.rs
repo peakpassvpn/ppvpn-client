@@ -907,3 +907,35 @@ fn secrets_are_the_translations_credentials() {
     assert!(secrets.contains(&local.password));
     assert!(secrets.iter().all(|s| s.len() >= 6));
 }
+
+/// sail takes a reload inbounds-only when the configuration differs from
+/// the running one in its inbounds alone, compared field by field: the
+/// translation is the same for the same inputs, and turning a listener on
+/// changes the inbounds and nothing else (#221).
+#[test]
+fn a_translation_is_deterministic_and_a_listener_changes_only_the_inbounds() {
+    let local = LocalProxy {
+        listen: "127.0.0.1".into(),
+        port: 7890,
+        prefix: "pp".into(),
+        password: format!("lp{:x}", std::process::id() as u64 * 7919 + 17),
+    };
+    let without = Options {
+        local_proxy: Some(local.clone()),
+        ..Options::default()
+    };
+    let with = Options {
+        system_proxy_port: Some(7891),
+        ..without.clone()
+    };
+    let a = translate(&contract(), &without).unwrap().json;
+    let b = translate(&contract(), &without).unwrap().json;
+    assert_eq!(a, b, "the same inputs, the same configuration");
+
+    let mut a = value(&translate(&contract(), &without).unwrap());
+    let mut b = value(&translate(&contract(), &with).unwrap());
+    assert_ne!(a["inbounds"], b["inbounds"]);
+    a.as_object_mut().unwrap().remove("inbounds");
+    b.as_object_mut().unwrap().remove("inbounds");
+    assert_eq!(a, b, "the system proxy listener changes the inbounds alone");
+}

@@ -22,8 +22,6 @@ pub(crate) enum Call {
     DialUdp(String, Target),
     ReplaceInboundUsers(String, Vec<(String, String)>),
     NetworkChanged,
-    AddInbound(String),
-    RemoveInbound(String),
 }
 
 /// Which call the next failure is for.
@@ -35,8 +33,6 @@ pub(crate) enum Op {
     Select,
     Dial,
     ReplaceInboundUsers,
-    AddInbound,
-    RemoveInbound,
 }
 
 const LOG_CAPACITY: usize = 64;
@@ -49,9 +45,8 @@ pub(crate) struct FakeRuntime {
     /// Set by `set_groups`: the config no longer decides them.
     explicit_groups: AtomicBool,
     connections: Mutex<Vec<RuntimeConnection>>,
-    /// The inbounds' tags: the configuration's at start, then as
-    /// add_inbound and remove_inbound change them, and each reload makes
-    /// them the configuration's (as sail's); none after stop.
+    /// The inbounds' tags: the configuration's at start, and each reload
+    /// makes them the configuration's (as sail's); none after stop.
     inbounds: Mutex<Vec<String>>,
     /// Each running inbound as configured, by tag (reload compares them).
     inbound_json: Mutex<HashMap<String, serde_json::Value>>,
@@ -432,7 +427,7 @@ impl Runtime for FakeRuntime {
     }
 
     /// As sail's: the configuration's inbounds are those that run after it,
-    /// compared by tag with those running (add_inbound's among them); a TUN
+    /// compared by tag with those running; a TUN
     /// added, removed or changed refuses the whole reload (`needs_restart`).
     async fn reload(&self, config: &str) -> Result<ReloadReport, RuntimeError> {
         self.record(Call::Reload(config.to_owned()));
@@ -675,47 +670,6 @@ impl Runtime for FakeRuntime {
         }
         super::configured_tun_name(self.config.lock().unwrap().as_deref()?)
     }
-
-    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError> {
-        let value: serde_json::Value = serde_json::from_str(inbound)
-            .map_err(|e| RuntimeError::new("config", format!("inbound: {e}")))?;
-        let tag =
-            inbound_tag(&value).ok_or_else(|| RuntimeError::new("config", "inbound: no type"))?;
-        self.record(Call::AddInbound(tag.clone()));
-        self.running()?;
-        self.check(Op::AddInbound)?;
-        let mut inbounds = self.inbounds.lock().unwrap();
-        if inbounds.contains(&tag) {
-            return Err(RuntimeError::new(
-                "config",
-                format!("[{tag}] inbound: exists"),
-            ));
-        }
-        inbounds.push(tag.clone());
-        self.inbound_json.lock().unwrap().insert(tag, value);
-        Ok(())
-    }
-
-    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError> {
-        self.record(Call::RemoveInbound(tag.into()));
-        self.running()?;
-        self.check(Op::RemoveInbound)?;
-        let mut inbounds = self.inbounds.lock().unwrap();
-        let before = inbounds.len();
-        inbounds.retain(|t| t != tag);
-        self.inbound_json.lock().unwrap().remove(tag);
-        if inbounds.len() == before {
-            return Err(RuntimeError::new(
-                "not_found",
-                format!("[{tag}] inbound: does not exist"),
-            ));
-        }
-        self.connections
-            .lock()
-            .unwrap()
-            .retain(|c| c.inbound != tag);
-        Ok(())
-    }
 }
 
 /// A datagram association that answers what it is sent.
@@ -752,20 +706,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fake.inbounds(), ["local", "tun"]);
-        fake.add_inbound(r#"{"type":"mixed","tag":"system"}"#)
-            .await
-            .unwrap();
-        assert!(fake
-            .add_inbound(r#"{"type":"mixed","tag":"system"}"#)
-            .await
-            .is_err());
-        fake.remove_inbound("system").await.unwrap();
-        assert_eq!(
-            fake.remove_inbound("system").await.unwrap_err().code,
-            "not_found"
-        );
-        assert_eq!(fake.inbounds(), ["local", "tun"]);
-        assert!(fake.calls().contains(&Call::AddInbound("system".into())));
     }
 
     #[tokio::test]
@@ -844,9 +784,10 @@ mod tests {
     async fn a_reload_runs_the_configuration_s_inbounds() {
         let runtime = FakeRuntime::default();
         let local = r#"{"inbounds":[{"type":"mixed","tag":"local"}]}"#;
-        runtime.start(local).await.unwrap();
         runtime
-            .add_inbound(r#"{"type":"mixed","tag":"system"}"#)
+            .start(
+                r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"mixed","tag":"system"}]}"#,
+            )
             .await
             .unwrap();
         // Left out of the configuration: removed, the rest untouched.

@@ -18,8 +18,9 @@ use crate::event::Event;
 use crate::localproxy::{LocalProxyState, PROTOCOLS};
 use crate::profile::Profile;
 use crate::request::RoutingMode;
+use crate::runtime::RuntimeError;
 use crate::status::{LocalProxyStatus, SystemProxyStatus};
-use crate::translate;
+use crate::translate::{self, Translation};
 use crate::types::{LocalProxyCredential, LocalProxyMetadata};
 
 /// Where the system proxy listener listens (the translation's inbound).
@@ -46,6 +47,9 @@ pub(super) struct Proxies {
     /// Tests: how many more times opening the shared listener fails.
     #[cfg(test)]
     refuse: u32,
+    /// Tests: the path of each reload a listener toggle made.
+    #[cfg(test)]
+    toggle_paths: Vec<String>,
 }
 
 impl Proxies {
@@ -82,6 +86,8 @@ impl Proxies {
             retry: None,
             #[cfg(test)]
             refuse: 0,
+            #[cfg(test)]
+            toggle_paths: Vec::new(),
         })))
     }
 }
@@ -240,16 +246,14 @@ impl Inner {
         if let Some(event) = moved {
             self.publish(event);
         }
+        // The configuration with the listener back, differing from the
+        // running one in it alone: an inbounds-only reload. A listener that
+        // does not bind (`inbound_lost`) is still unavailable: retried.
         let opened = match translate::translate(&profile, &self.options(mode, &selected, &pins)) {
-            Ok(translation) => {
-                match inbound_of(&translation.json, translate::LOCAL_PROXY_INBOUND_TAG) {
-                    Ok(inbound) => match self.runtime.add_inbound(&inbound).await {
-                        Ok(()) => Ok(translation),
-                        Err(e) => Err(self.runtime_error(&e)),
-                    },
-                    Err(e) => Err(e),
-                }
-            }
+            Ok(translation) => match self.reload_inbounds(&translation).await {
+                Ok(()) => Ok(translation),
+                Err(e) => Err(self.runtime_error(&e)),
+            },
             Err(e) => Err(e),
         };
         let translation = match opened {
@@ -284,6 +288,21 @@ impl Inner {
             }
             proxies.unavailable = false;
         }
+    }
+
+    #[cfg(test)]
+    fn last_toggle_path(&self, path: String) {
+        if let Some(mut proxies) = self.proxies() {
+            proxies.toggle_paths.push(path);
+        }
+    }
+
+    /// Tests: the path of each reload a listener toggle made.
+    #[cfg(test)]
+    pub(super) fn toggle_paths(&self) -> Vec<String> {
+        self.proxies()
+            .map(|p| p.toggle_paths.clone())
+            .unwrap_or_default()
     }
 
     /// Tests: opening the shared listener fails `times` more times.
@@ -402,6 +421,21 @@ impl Inner {
         Ok(self.system_proxy_status(running))
     }
 
+    /// A listener toggled: `translation` differs from the running one in
+    /// its inbounds alone, which sail takes without building anything else
+    /// again (an inbounds-only reload; outbounds, groups, DNS and routing
+    /// go on as they ran). A full reload means the configurations differ
+    /// elsewhere, which they must not: logged as a warning.
+    async fn reload_inbounds(&self, translation: &Translation) -> Result<(), RuntimeError> {
+        let report = self.runtime.reload(&translation.json).await?;
+        if report.path != "inbounds_only" {
+            tracing::warn!(path = %report.path, "a listener toggle reloaded more than the inbounds");
+        }
+        #[cfg(test)]
+        self.last_toggle_path(report.path);
+        Ok(())
+    }
+
     /// While running: the system proxy listener alone is added or removed,
     /// and the translation the next reload or start uses follows.
     async fn toggle_listener(
@@ -412,16 +446,11 @@ impl Inner {
         selected: &str,
         pins: &BTreeMap<String, String>,
     ) -> Result<(), Error> {
+        // With the listener or without it, the configuration differs from
+        // the running one in it alone: an inbounds-only reload adds it, or
+        // removes it closing its own connections.
         let translation = translate::translate(profile, &self.options(mode, selected, pins))?;
-        let result = if enabled {
-            let inbound = inbound_of(&translation.json, translate::SYSTEM_PROXY_INBOUND_TAG)?;
-            self.runtime.add_inbound(&inbound).await
-        } else {
-            self.runtime
-                .remove_inbound(translate::SYSTEM_PROXY_INBOUND_TAG)
-                .await
-        };
-        if let Err(e) = result {
+        if let Err(e) = self.reload_inbounds(&translation).await {
             return Err(self.runtime_error(&e));
         }
         let mut live = self.live();
@@ -457,28 +486,4 @@ fn start_failed(error: Error) -> Error {
         true,
         format!("system proxy listener: {}", error.message),
     )
-}
-
-/// The inbound tagged `tag` of a translation, as JSON.
-fn inbound_of(config: &str, tag: &str) -> Result<String, Error> {
-    let config: serde_json::Value = serde_json::from_str(config).map_err(|e| {
-        Error::new(
-            codes::CORE_OPERATION_FAILED,
-            false,
-            format!("translation: {e}"),
-        )
-    })?;
-    config["inbounds"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|i| i["tag"] == tag)
-        .map(|i| i.to_string())
-        .ok_or_else(|| {
-            Error::new(
-                codes::CORE_OPERATION_FAILED,
-                false,
-                format!("translation: no {tag} inbound"),
-            )
-        })
 }
