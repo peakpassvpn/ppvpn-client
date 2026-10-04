@@ -94,9 +94,20 @@ if [ "$HOST_MODE" = 1 ]; then
 else
 	for ns in "$T" "$W"; do ip netns add "$ns"; ip -n "$ns" link set lo up; done
 	ip link add pt0 netns "$T" type veth peer name pw0 netns "$W"
+	# No IPv6 on the veths: the kernel adds a veth's IPv6 routes by itself
+	# once it handles the carrier event (up to a second after both ends are
+	# up), the link-local's local route later still, after the duplicate
+	# address check, so a test comparing the namespace before and after
+	# would see them appear. The tests' traffic over pt0 is IPv4; a test's
+	# TUN carries its own IPv6.
+	ip netns exec "$T" sysctl -qw net.ipv6.conf.pt0.disable_ipv6=1
+	ip netns exec "$W" sysctl -qw net.ipv6.conf.pw0.disable_ipv6=1
 	ip -n "$T" addr add 10.243.0.1/24 dev pt0; ip -n "$T" link set pt0 up
 	ip -n "$W" addr add 10.243.0.2/24 dev pw0; ip -n "$W" link set pw0 up
 	ip -n "$T" route add default via 10.243.0.2
+	if ip -n "$T" -6 route show table all dev pt0 | grep -q .; then
+		echo "run.sh: pt0 has IPv6 routes the tests do not expect" >&2; exit 1
+	fi
 	if [ "$LIBTEST" = 1 ]; then
 		args=(--ignored --test-threads=1 --nocapture "$@")
 	else

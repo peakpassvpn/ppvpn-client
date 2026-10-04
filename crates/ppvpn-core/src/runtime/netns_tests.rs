@@ -29,6 +29,19 @@ fn ip(args: &[&str]) {
     assert!(status.success(), "ip {}", args.join(" "));
 }
 
+/// Turns IPv6 off on `link`, here or in `netns`.
+fn no_ipv6(netns: Option<&str>, link: &str) {
+    let setting = format!("net.ipv6.conf.{link}.disable_ipv6=1");
+    let status = match netns {
+        Some(netns) => Command::new("ip")
+            .args(["netns", "exec", netns, "sysctl", "-qw", &setting])
+            .status(),
+        None => Command::new("sysctl").args(["-qw", &setting]).status(),
+    }
+    .expect("sysctl");
+    assert!(status.success(), "sysctl {setting}");
+}
+
 fn tx_bytes(link: &str) -> u64 {
     std::fs::read_to_string(format!("/sys/class/net/{link}/statistics/tx_bytes"))
         .expect("tx_bytes")
@@ -49,6 +62,9 @@ impl Links {
         ip(&[
             "link", "add", "pt1", "type", "veth", "peer", "name", "pw1", "netns", UPLINK,
         ]);
+        // As run.sh's pt0: no IPv6, whose routes the kernel adds late.
+        no_ipv6(None, "pt1");
+        no_ipv6(Some(UPLINK), "pw1");
         ip(&["addr", "add", "10.243.1.1/24", "dev", "pt1"]);
         ip(&["link", "set", "pt1", "up"]);
         ip(&["-n", UPLINK, "addr", "add", "10.243.1.2/24", "dev", "pw1"]);
@@ -244,18 +260,15 @@ mod failures {
     }
 
     /// The system once it is still: an earlier test's teardown may still
-    /// be going, and an IPv6 address the kernel is still checking for
-    /// duplicates (pt0's link-local, after an earlier test) gets its local
-    /// route only when the check ends, a second or more later, with
-    /// nothing to see in between.
+    /// be going. (Nothing appears late by itself: run.sh's pt0 and the
+    /// links here have IPv6 off, whose routes the kernel would add late.)
     fn settled() -> String {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(5);
         let mut last = system();
         loop {
             std::thread::sleep(Duration::from_millis(300));
             let now = system();
-            let checking = !run("ip", "-6 addr show tentative").trim().is_empty();
-            if (now == last && !checking) || Instant::now() >= deadline {
+            if now == last || Instant::now() >= deadline {
                 return now;
             }
             last = now;
