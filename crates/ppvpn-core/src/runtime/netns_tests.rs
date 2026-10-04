@@ -244,14 +244,18 @@ mod failures {
     }
 
     /// The system once it is still: an earlier test's teardown may still
-    /// be going.
+    /// be going, and an IPv6 address the kernel is still checking for
+    /// duplicates (pt0's link-local, after an earlier test) gets its local
+    /// route only when the check ends, a second or more later, with
+    /// nothing to see in between.
     fn settled() -> String {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut last = system();
         loop {
             std::thread::sleep(Duration::from_millis(300));
             let now = system();
-            if now == last || Instant::now() >= deadline {
+            let checking = !run("ip", "-6 addr show tentative").trim().is_empty();
+            if (now == last && !checking) || Instant::now() >= deadline {
                 return now;
             }
             last = now;
