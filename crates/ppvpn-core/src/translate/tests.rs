@@ -907,3 +907,70 @@ fn secrets_are_the_translations_credentials() {
     assert!(secrets.contains(&local.password));
     assert!(secrets.iter().all(|s| s.len() >= 6));
 }
+
+/// sail takes a reload inbounds-only when the configuration differs from
+/// the running one in its inbounds alone, compared field by field: the
+/// translation is the same for the same inputs, and turning a listener on
+/// changes the inbounds and nothing else (#221).
+#[test]
+fn a_translation_is_deterministic_and_a_listener_changes_only_the_inbounds() {
+    let local = LocalProxy {
+        listen: "127.0.0.1".into(),
+        port: 7890,
+        prefix: "pp".into(),
+        password: format!("lp{:x}", std::process::id() as u64 * 7919 + 17),
+    };
+    let without = Options {
+        local_proxy: Some(local.clone()),
+        ..Options::default()
+    };
+    let with = Options {
+        system_proxy_port: Some(7891),
+        ..without.clone()
+    };
+    let a = translate(&contract(), &without).unwrap().json;
+    let b = translate(&contract(), &without).unwrap().json;
+    assert_eq!(a, b, "the same inputs, the same configuration");
+
+    let mut a = value(&translate(&contract(), &without).unwrap());
+    let mut b = value(&translate(&contract(), &with).unwrap());
+    assert_ne!(a["inbounds"], b["inbounds"]);
+    a.as_object_mut().unwrap().remove("inbounds");
+    b.as_object_mut().unwrap().remove("inbounds");
+    assert_eq!(a, b, "the system proxy listener changes the inbounds alone");
+}
+
+/// A local proxy listener left out of the run keeps its routing rules
+/// (they name its inbound alone and match nothing without it): opening it
+/// again changes the inbounds alone.
+#[test]
+fn a_left_out_local_proxy_keeps_its_rules() {
+    let local = LocalProxy {
+        listen: "127.0.0.1".into(),
+        port: 7890,
+        prefix: "pp".into(),
+        password: format!("lp{:x}", std::process::id() as u64 * 7919 + 19),
+    };
+    let open = Options {
+        local_proxy: Some(local),
+        ..Options::default()
+    };
+    let left_out = Options {
+        local_proxy_left_out: true,
+        ..open.clone()
+    };
+    let mut open = value(&translate(&contract(), &open).unwrap());
+    let mut left_out = value(&translate(&contract(), &left_out).unwrap());
+    let has_listener = |config: &Value| {
+        config["inbounds"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|i| i["tag"] == LOCAL_PROXY_INBOUND_TAG)
+    };
+    assert!(has_listener(&open));
+    assert!(!has_listener(&left_out));
+    open.as_object_mut().unwrap().remove("inbounds");
+    left_out.as_object_mut().unwrap().remove("inbounds");
+    assert_eq!(open, left_out, "the rest, rules included, is the same");
+}

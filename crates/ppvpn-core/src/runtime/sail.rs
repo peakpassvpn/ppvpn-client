@@ -823,20 +823,6 @@ impl Runtime for SailRuntime {
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {
         self.network.subscribe()
     }
-
-    /// The inbound is one entry of sing-box's `inbounds`, as sail takes it.
-    async fn add_inbound(&self, inbound: &str) -> Result<(), RuntimeError> {
-        let inbound: serde_json::Value = serde_json::from_str(inbound)
-            .map_err(|e| RuntimeError::new("config", format!("inbound: {e}")))?;
-        self.instance.add_inbound(inbound).await.map_err(error)
-    }
-
-    /// sail stops the listener and disconnects the connections it accepted
-    /// (not those of other inbounds).
-    async fn remove_inbound(&self, tag: &str) -> Result<(), RuntimeError> {
-        self.instance.remove_inbound(tag).await.map_err(error)?;
-        Ok(())
-    }
 }
 
 /// Seconds since the epoch, for tests that compare `started`.

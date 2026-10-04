@@ -454,31 +454,44 @@ async fn socks_open(port: u16, to: SocketAddr) -> Option<TcpStream> {
     (head[1] == 0).then_some(s)
 }
 
-// An inbound added while running listens (a reload would not add it); its
-// removal stops the listener and closes its own connections only.
+// A listener toggled by a reload whose configuration differs in its
+// inbounds alone (the Engine's system proxy listener and local proxy retry,
+// #221): sail takes it inbounds-only (c3abd614), adds the listener, and on
+// the way back removes it closing its own connections only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbounds_added_and_removed_while_running() {
+async fn a_listener_toggled_by_an_inbounds_only_reload() {
     let echo = echo().await;
     let (main_port, extra_port) = (free_port(), free_port());
     let runtime = SailRuntime::new(options("inbounds")).unwrap();
-    runtime.start(&config(main_port, &[], false)).await.unwrap();
+    let base = config(main_port, &[], false);
+    runtime.start(&base).await.unwrap();
     let mut kept = socks_open(main_port, echo)
         .await
         .expect("the configured inbound");
     round_trip(&mut kept, b"configured").await;
 
-    let extra = serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": extra_port });
-    runtime.add_inbound(&extra.to_string()).await.unwrap();
+    let report = runtime
+        .reload(&with_extra(&base, extra_port))
+        .await
+        .unwrap();
+    assert_eq!(report.path, "inbounds_only", "{report:?}");
+    assert!(
+        report.inbounds.contains(&("extra".into(), "added".into())),
+        "{report:?}"
+    );
     let mut through_extra = socks_open(extra_port, echo)
         .await
         .expect("the added inbound listens");
     round_trip(&mut through_extra, b"added").await;
-    assert!(
-        runtime.add_inbound(&extra.to_string()).await.is_err(),
-        "a tag in use"
-    );
 
-    runtime.remove_inbound("extra").await.unwrap();
+    let report = runtime.reload(&base).await.unwrap();
+    assert_eq!(report.path, "inbounds_only", "{report:?}");
+    assert!(
+        report
+            .inbounds
+            .contains(&("extra".into(), "removed".into())),
+        "{report:?}"
+    );
     assert!(
         TcpStream::connect(("127.0.0.1", extra_port)).await.is_err(),
         "no longer listening"
@@ -492,10 +505,6 @@ async fn inbounds_added_and_removed_while_running() {
         "its connection is closed: {read:?}"
     );
     round_trip(&mut kept, b"the other inbound's connection stays").await;
-    assert!(
-        runtime.remove_inbound("extra").await.is_err(),
-        "gone already"
-    );
     runtime.stop().await.unwrap();
 }
 
@@ -676,77 +685,6 @@ fn with_extra(config: &str, port: u16) -> String {
     config.to_string()
 }
 
-// sail's reload runs the configuration's inbounds (2f967b1a): compared by
-// tag with those running, an inbound added at run time (add_inbound) among
-// them. The Engine's reloads carry what it added (the local and system
-// proxy listeners are in its translation while open).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reload_runs_the_configuration_s_inbounds() {
-    let (port, extra_port) = (free_port(), free_port());
-    let p1 = password();
-    let base = config(port, &[("u1", &p1)], false);
-    let extra = serde_json::json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": extra_port });
-
-    // 1. The reload names the added inbound: untouched, still listening.
-    let runtime = SailRuntime::new(options("reload-with")).unwrap();
-    runtime.start(&base).await.unwrap();
-    runtime.add_inbound(&extra.to_string()).await.unwrap();
-    let report = runtime
-        .reload(&with_extra(&base, extra_port))
-        .await
-        .expect("a reload that names the added inbound");
-    assert!(
-        report
-            .inbounds
-            .contains(&("extra".into(), "untouched".into())),
-        "{report:?}"
-    );
-    assert!(
-        TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok(),
-        "the added listener stays"
-    );
-    runtime.stop().await.unwrap();
-
-    // 2. The reload leaves it out: it is removed, the rest goes on.
-    let runtime = SailRuntime::new(options("reload-without")).unwrap();
-    runtime.start(&base).await.unwrap();
-    runtime.add_inbound(&extra.to_string()).await.unwrap();
-    let report = runtime
-        .reload(&base)
-        .await
-        .expect("a reload without the added inbound");
-    assert!(
-        report
-            .inbounds
-            .contains(&("extra".into(), "removed".into()))
-            && report
-                .inbounds
-                .contains(&("local".into(), "untouched".into())),
-        "{report:?}"
-    );
-    assert!(
-        TcpStream::connect(("127.0.0.1", extra_port)).await.is_err(),
-        "the removed listener is closed"
-    );
-    assert!(
-        TcpStream::connect(("127.0.0.1", port)).await.is_ok(),
-        "the configured one goes on"
-    );
-    runtime.stop().await.unwrap();
-
-    // 3. Removed first: the reload without it has nothing to remove.
-    let runtime = SailRuntime::new(options("reload-removed")).unwrap();
-    runtime.start(&base).await.unwrap();
-    runtime.add_inbound(&extra.to_string()).await.unwrap();
-    runtime.remove_inbound("extra").await.unwrap();
-    let report = runtime
-        .reload(&base)
-        .await
-        .expect("a reload after remove_inbound, without it");
-    assert_eq!(report.inbounds, [("local".into(), "untouched".into())]);
-    runtime.stop().await.unwrap();
-}
-
 // sail waits for a host's dials when it stops (e7bfe39c: they are tasks of
 // the instance's scope): a dial that hangs must not hold the stop. The dial
 // goes through a socks outbound whose server accepts and never answers.
@@ -867,5 +805,57 @@ async fn a_reload_of_the_inbounds_alone_keeps_the_rest() {
     let report = runtime.reload(&ruled.to_string()).await.unwrap();
     assert_eq!(report.path, "full", "a rule: {report:?}");
     assert!(report.notes.is_empty(), "{report:?}");
+    runtime.stop().await.unwrap();
+}
+
+// A rule naming an inbound that does not run (the local proxy's rules
+// while its listener is left out, #229): sail starts the configuration,
+// takes the inbound back by an inbounds-only reload, and leaves it out
+// again. Were the rule refused, a left-out listener would fail the whole
+// start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rules_may_name_an_inbound_that_does_not_run() {
+    let echo = echo().await;
+    let (port, ghost_port) = (free_port(), free_port());
+    let mut base: serde_json::Value = serde_json::from_str(&config(port, &[], false)).unwrap();
+    base["route"]["rules"] = serde_json::json!([
+        { "inbound": ["extra"], "action": "route", "outbound": "direct" }
+    ]);
+    let base = base.to_string();
+    let runtime = SailRuntime::new(options("ghost-inbound")).unwrap();
+    runtime
+        .start(&base)
+        .await
+        .expect("a rule naming an inbound that does not run is no error");
+    assert!(runtime
+        .dial_tcp("direct", Target::Addr(echo), WAIT)
+        .await
+        .is_ok());
+
+    let report = runtime
+        .reload(&with_extra(&base, ghost_port))
+        .await
+        .expect("the inbound back");
+    assert_eq!(report.path, "inbounds_only", "{report:?}");
+    assert!(
+        report.inbounds.contains(&("extra".into(), "added".into())),
+        "{report:?}"
+    );
+    let mut through = socks_open(ghost_port, echo)
+        .await
+        .expect("the inbound back listens");
+    round_trip(&mut through, b"back").await;
+
+    let report = runtime
+        .reload(&base)
+        .await
+        .expect("the inbound left out again");
+    assert_eq!(report.path, "inbounds_only", "{report:?}");
+    assert!(
+        report
+            .inbounds
+            .contains(&("extra".into(), "removed".into())),
+        "{report:?}"
+    );
     runtime.stop().await.unwrap();
 }
