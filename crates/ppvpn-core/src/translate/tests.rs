@@ -240,7 +240,25 @@ fn a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses() {
     let fallback = outbound(&config, &auto);
     assert_eq!(fallback["type"], "fallback");
     assert_eq!(fallback["outbounds"], json!(members));
-    assert_eq!(fallback["url"], "http://www.gstatic.com/generate_204");
+    // docs/backend-profile.md, 故障转移语义: two URLs, either passes on
+    // 2xx/3xx; 2 failed rounds down, 3 passed up; 2 s per member's dial;
+    // 60 s on a healthy member after a switch.
+    assert_eq!(
+        fallback["url"],
+        json!([
+            "http://www.gstatic.com/generate_204",
+            "http://cp.cloudflare.com/generate_204"
+        ])
+    );
+    assert_eq!(fallback["url_policy"], "any");
+    assert_eq!(fallback["expected_status"], "200-399");
+    assert_eq!(fallback["interval"], "15s");
+    assert_eq!(fallback["timeout"], "5s");
+    assert_eq!(fallback["dial_timeout"], "2s");
+    assert_eq!(
+        fallback["debounce"],
+        json!({ "fail_after": 2, "recover_after": 3, "min_dwell": "60s" })
+    );
 
     assert_eq!(t.groups[&node], auto);
     assert_eq!(t.members[&node], members);

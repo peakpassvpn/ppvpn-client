@@ -76,7 +76,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `profile` | 0 | 4 | 18 | 1 |
 | `internal/config` | 1 | 1 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
-| `internal/failover` | 6 | 0 | 1 | 5 |
+| `internal/failover` | 1 | 0 | 1 | 5 |
 | `api` | 0 | 1 | 2 | 5 |
 | `internal/privateacl` | 0 | 0 | 1 | 6 |
 | `internal/proxyinbound` | 1 | 1 | 2 | 2 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 13 | 13 | 71 | 66 |
+| 合计 | 8 | 13 | 71 | 66 |
 
-A 合计约 7.25 人日，B 合计约 6.25 人日（按行估计，依据见各行）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -347,15 +347,15 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | --- | --- | --- | --- | --- |
 | `api` `TestPinIngressEndpoint` | Pin ingress endpoint | `tests/golden_contract.rs` `scenarios_match_the_go_golden`（`pin_ingress`）、`ppvpn-core` `engine::selection_tests::pin_ingress_validates_then_pins_and_unpins` | done | `endpoint_key` 为 `None` 时恢复自动（选中节点 selector 里的 `<tag>-auto`） |
 | `internal/failover` `TestActiveTracksSwitchesAndNotifiesObserver` | Active tracks switches and notifies observer |  | todo | 【C】组切换由 sail 的 GROUP 事件上报（runtime Runtime::group_switches，sail test_group_fallback 覆盖切换），引擎发 NodeIngressSwitched 已有 engine::lifecycle_tests（line 486）覆盖，端到端用例可切换后补。 |
-| `internal/failover` `TestCheckFallsBackToTheSecondURL` | checkAny passes when a later URL answers although the first does not. |  | todo | 【A，0.25 人日】translate/mod.rs HealthCheck 只给一个 URL（gstatic），未按 backend-profile.md 配第二个 cp.cloudflare.com 与 url_policy any（sail fallback 已支持 url 列表），需补翻译字段和 translate 测试。 |
-| `internal/failover` `TestDialTimeoutMovesToTheNextMember` | A member that hangs costs dialTimeout, then the next member serves the same dial. |  | todo | 【A，0.25 人日】translate/mod.rs 的 fallback 组没设 dial_timeout，sail 默认取 timeout 5s，与 backend-profile.md 约定的 2 秒不符（sail 已支持 dial_timeout），需补翻译字段和测试。 |
-| `internal/failover` `TestDwellKeepsBackupAfterSwitch` | Within minDwell of a switch the backup keeps leading even once the primary is healthy again; afterwards the primary leads. |  | todo | 【A，0.25 人日】translate/mod.rs 的 fallback 组没设 debounce.min_dwell（sail 默认 0），缺 backend-profile.md 约定的 60 秒迟滞，sail 已支持，需补翻译字段和测试。 |
-| `internal/failover` `TestHTTPCheck` | Http check |  | todo | 【A，0.25 人日】translate/mod.rs 没设 expected_status，sail fallback 默认任何 HTTP 状态都算通过，而 Go/backend-profile.md 只认 2xx/3xx（5xx 不算），需补 expected_status 及测试（sail only_the_statuses_expected_pass 已测机制）。 |
+| `internal/failover` `TestCheckFallsBackToTheSecondURL` | checkAny passes when a later URL answers although the first does not. | `ppvpn-core` `translate::tests::a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses` | done | 两个检查 URL（gstatic、cloudflare），`url_policy: any`，任一回 2xx/3xx 即通过：翻译按 docs/backend-profile.md 设好 sail fallback 组的参数 |
+| `internal/failover` `TestDialTimeoutMovesToTheNextMember` | A member that hangs costs dialTimeout, then the next member serves the same dial. | `ppvpn-core` `translate::tests::a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses` | done | 除最后一个成员外每个成员拨号 2 秒（`dial_timeout`），超时即在同一次拨号里换下一个（sail fallback 的机制，sail 自测）：翻译按 docs/backend-profile.md 设好 sail fallback 组的参数 |
+| `internal/failover` `TestDwellKeepsBackupAfterSwitch` | Within minDwell of a switch the backup keeps leading even once the primary is healthy again; afterwards the primary leads. | `ppvpn-core` `translate::tests::a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses` | done | 自动切换后 60 秒内当前成员健康就不切回（`debounce.min_dwell`，sail 自测机制）：翻译按 docs/backend-profile.md 设好 sail fallback 组的参数 |
+| `internal/failover` `TestHTTPCheck` | Http check | `ppvpn-core` `translate::tests::a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses` | done | 只认 2xx/3xx（`expected_status: 200-399`），5xx 不算通过（sail `only_the_statuses_expected_pass` 测机制）：翻译按 docs/backend-profile.md 设好 sail fallback 组的参数 |
 | `internal/failover` `TestHealthLoopIsLazyAndChecksEveryMember` | Health loop is lazy and checks every member |  | todo | 【D】惰性检查与逐成员检查由 sail fallback（lazy 默认 true，health.rs Checker::used）实现并有 sail tests/it/test_group_fallback.rs a_lazy_group_tests_only_while_it_is_used 覆盖。 |
 | `internal/failover` `TestNetworkFilteringAndAllFailed` | Network filtering and all failed |  | todo | 【D】UDP 按节点 capabilities 由 translate reject_udp_before（D4）拦截，全部成员失败时仍按序尝试由 sail when_every_member_is_down_the_first_takes_the_connections 覆盖。 |
 | `internal/failover` `TestPinnedMemberHasNoFallback` | A pinned member carries every connection alone, with no fallback even while it fails; unpinning restores automatic selection. |  | todo | 【A，0.5 人日】pin 走节点 selector 直接选成员（translate node()、engine selection pin_ingress 已测），结构上不回退，但这样 fallback 组不再被使用、sail 惰性检查（health.rs used()）会暂停，违背 backend-profile.md“固定后检查照常进行以报告是否可用”，需让 pin 住的节点照常检查（如该组 lazy:false）并补测试。 |
 | `internal/failover` `TestPrefersPrimaryAndFailsOverImmediately` | Prefers primary and fails over immediately |  | todo | 【D】sail fallback 已实现并测试优先首个成员、拨号失败当次换下一个并立即标记不可用（test_group_fallback.rs the_first_member_up_is_used_however_slow、a_member_whose_server_refuses_is_left_at_once、a_connection_that_fails_is_tried_through_the_next_member）。 |
-| `internal/failover` `TestProbeThresholds` | Checks mark a member unhealthy only after UnhealthyAfter consecutive failures, and healthy again only after RecoverAfter consecutive passes; a failed dial marks it … |  | todo | 【A，0.25 人日】translate/mod.rs 没设 debounce.fail_after=2/recover_after=3（sail 默认均为 1），缺 backend-profile.md 约定的阈值（D6 只记了计数方式的偏离），需补翻译字段和测试。 |
+| `internal/failover` `TestProbeThresholds` | Checks mark a member unhealthy only after UnhealthyAfter consecutive failures, and healthy again only after RecoverAfter consecutive passes; a failed dial marks it … | `ppvpn-core` `translate::tests::a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses` | done | 连续 2 轮失败判为不健康、连续 3 轮通过才恢复（`debounce.fail_after`/`recover_after`，sail 自测机制）：翻译按 docs/backend-profile.md 设好 sail fallback 组的参数 |
 | `internal/failover` `TestRejectsInvalidMembers` | Rejects invalid members |  | todo | 【D】非法成员由 sail 配置校验拒绝（test_group_fallback.rs configuration_mistakes_are_errors），翻译层另有 tag 冲突检查（translate node()）。 |
 | `internal/failover` `TestReturnsToPrimaryAfterRecovery` | Returns to primary after recovery |  | todo | 【D】恢复后回到主入口由 sail fallback 实现并测试（test_group_fallback.rs it_goes_back_to_the_first_member_once_it_passes_again），阈值/迟滞参数另见 TestProbeThresholds、TestDwellKeepsBackupAfterSwitch。 |
 | `internal/runtime` `TestDeadPortRefusesAndStaysReserved` | A dead port refuses connections at once (a dial that hangs instead would make a dead ingress look like a slow one), and on Linux, where released ports get reused, no … |  | todo | 【D】Go 测试夹具 deadPort 自身的自检，不是产品行为；Rust 用例用自己的夹具（runtime/sail_tests.rs free_port 等）。 |
