@@ -231,9 +231,17 @@ pub(crate) struct DnsExchange {
 /// order, then those it no longer has.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct ReloadReport {
+    /// How much was built again: `full` (outbounds, groups, DNS, routing
+    /// and rule-sets anew), or `inbounds_only` when the configuration
+    /// differed from the running one in its inbounds (and `user_limits`)
+    /// alone, all else kept as it ran.
+    pub path: String,
     /// By tag: `untouched`, `reloaded` (new users, certificate or key; the
     /// listener kept), `added`, `removed` or `replaced`.
     pub inbounds: Vec<(String, String)>,
+    /// What the reload took and did not reach everywhere (an endpoint that
+    /// runs keeps the dial defaults it was built with), as sail says it.
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
