@@ -105,9 +105,11 @@ jobs:
           path: ${{ env.LAB_WORK }}/repro-logs
           retention-days: 7
 
-  # The Sail regression: not on pull requests (sail moves by its own commits).
+  # The Sail regression: daily and by hand only (sail moves by its own
+  # commits, and a run takes 13 to 22 minutes of a runner); a sail upgrade's
+  # pull request can dispatch it on its branch.
   repro:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
