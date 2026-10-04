@@ -76,7 +76,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `profile` | 0 | 4 | 18 | 1 |
 | `internal/config` | 1 | 1 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
-| `internal/failover` | 1 | 0 | 1 | 5 |
+| `internal/failover` | 0 | 0 | 1 | 5 |
 | `api` | 0 | 1 | 2 | 5 |
 | `internal/privateacl` | 0 | 0 | 1 | 6 |
 | `internal/proxyinbound` | 1 | 1 | 2 | 2 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 8 | 13 | 71 | 66 |
+| 合计 | 7 | 13 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -353,7 +353,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/failover` `TestHTTPCheck` | Http check | `ppvpn-core` `translate::tests::a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses` | done | 只认 2xx/3xx（`expected_status: 200-399`），5xx 不算通过（sail `only_the_statuses_expected_pass` 测机制）：翻译按 docs/backend-profile.md 设好 sail fallback 组的参数 |
 | `internal/failover` `TestHealthLoopIsLazyAndChecksEveryMember` | Health loop is lazy and checks every member |  | todo | 【D】惰性检查与逐成员检查由 sail fallback（lazy 默认 true，health.rs Checker::used）实现并有 sail tests/it/test_group_fallback.rs a_lazy_group_tests_only_while_it_is_used 覆盖。 |
 | `internal/failover` `TestNetworkFilteringAndAllFailed` | Network filtering and all failed |  | todo | 【D】UDP 按节点 capabilities 由 translate reject_udp_before（D4）拦截，全部成员失败时仍按序尝试由 sail when_every_member_is_down_the_first_takes_the_connections 覆盖。 |
-| `internal/failover` `TestPinnedMemberHasNoFallback` | A pinned member carries every connection alone, with no fallback even while it fails; unpinning restores automatic selection. |  | todo | 【A，0.5 人日】pin 走节点 selector 直接选成员（translate node()、engine selection pin_ingress 已测），结构上不回退，但这样 fallback 组不再被使用、sail 惰性检查（health.rs used()）会暂停，违背 backend-profile.md“固定后检查照常进行以报告是否可用”，需让 pin 住的节点照常检查（如该组 lazy:false）并补测试。 |
+| `internal/failover` `TestPinnedMemberHasNoFallback` | A pinned member carries every connection alone, with no fallback even while it fails; unpinning restores automatic selection. | `ppvpn-core` `engine::selection_tests::a_pinned_node_keeps_its_group_checked`、`engine::selection_tests::pin_ingress_validates_then_pins_and_unpins`、`translate::tests::a_pin_is_the_node_selectors_default_and_the_host_selection_wins` | done | pin 让节点 selector 直接选该入口，结构上不回退；fallback 组因此不再被使用，sail 的惰性检查会暂停，所以 pin 期间由 Engine 每个检查间隔（15 秒）让该组检查一次成员（sail `url_test_members`，用组自己的 URL 与超时），取消 pin 或停止后不再检查 |
 | `internal/failover` `TestPrefersPrimaryAndFailsOverImmediately` | Prefers primary and fails over immediately |  | todo | 【D】sail fallback 已实现并测试优先首个成员、拨号失败当次换下一个并立即标记不可用（test_group_fallback.rs the_first_member_up_is_used_however_slow、a_member_whose_server_refuses_is_left_at_once、a_connection_that_fails_is_tried_through_the_next_member）。 |
 | `internal/failover` `TestProbeThresholds` | Checks mark a member unhealthy only after UnhealthyAfter consecutive failures, and healthy again only after RecoverAfter consecutive passes; a failed dial marks it … | `ppvpn-core` `translate::tests::a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses` | done | 连续 2 轮失败判为不健康、连续 3 轮通过才恢复（`debounce.fail_after`/`recover_after`，sail 自测机制）：翻译按 docs/backend-profile.md 设好 sail fallback 组的参数 |
 | `internal/failover` `TestRejectsInvalidMembers` | Rejects invalid members |  | todo | 【D】非法成员由 sail 配置校验拒绝（test_group_fallback.rs configuration_mistakes_are_errors），翻译层另有 tag 冲突检查（translate node()）。 |

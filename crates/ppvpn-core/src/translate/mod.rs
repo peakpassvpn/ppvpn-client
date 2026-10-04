@@ -87,6 +87,10 @@ pub(crate) struct HealthCheck {
     pub min_dwell: String,
 }
 
+/// How often a fallback group tests its members (Go's failover.Interval);
+/// the Engine checks a pinned node's group as often.
+pub(crate) const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
 impl Default for HealthCheck {
     fn default() -> Self {
         Self {
@@ -94,7 +98,7 @@ impl Default for HealthCheck {
                 "http://www.gstatic.com/generate_204".into(),
                 "http://cp.cloudflare.com/generate_204".into(),
             ],
-            interval: "15s".into(),
+            interval: format!("{}s", CHECK_INTERVAL.as_secs()),
             timeout: "5s".into(),
             dial_timeout: "2s".into(),
             expected_status: "200-399".into(),

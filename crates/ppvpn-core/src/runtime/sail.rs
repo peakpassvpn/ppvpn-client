@@ -659,6 +659,15 @@ impl Runtime for SailRuntime {
         self.instance.unfix(group).await.map_err(error)
     }
 
+    async fn check_group(&self, group: &str, within: Duration) -> Result<(), RuntimeError> {
+        // A fallback group runs its own check (sail's url_test_members).
+        self.instance
+            .url_test_members(group, None, within)
+            .await
+            .map(drop)
+            .map_err(error)
+    }
+
     fn group_switches(&self) -> mpsc::Receiver<GroupSwitch> {
         self.switches
             .lock()

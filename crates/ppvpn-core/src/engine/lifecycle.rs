@@ -249,6 +249,7 @@ impl Inner {
         }
         self.network_started();
         self.guard_started();
+        self.check_pinned();
         self.refresh().await;
         Ok(())
     }

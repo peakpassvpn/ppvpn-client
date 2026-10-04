@@ -37,6 +37,7 @@ mod lifecycle_tests;
 mod logs;
 mod network;
 mod outbound_log;
+mod pinned;
 mod probes;
 #[cfg(test)]
 mod probes_tests;

@@ -214,3 +214,55 @@ async fn queries_come_from_the_profile_and_the_runtime() {
     assert!(engine.connections().is_empty());
     assert_eq!(engine.traffic().upload_bytes, 10);
 }
+
+/// docs/backend-profile.md: checks go on while a node is pinned. The pin
+/// leaves the node's fallback group unused, so sail's lazy tests would
+/// pause; the Engine has the group test each interval while the pin lasts,
+/// and no longer once unpinned or stopped.
+#[tokio::test(start_paused = true)]
+async fn a_pinned_node_keeps_its_group_checked() {
+    let (engine, fake) = engine();
+    running(&engine).await;
+    let group = format!("{}{AUTO_SUFFIX}", node_tag(NODE_1));
+    let checks = || {
+        fake.calls()
+            .iter()
+            .filter(|c| matches!(c, Call::CheckGroup(_)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let half = crate::translate::CHECK_INTERVAL / 2;
+    let rounds = |n: u32| tokio::time::sleep(crate::translate::CHECK_INTERVAL * n);
+
+    // Unpinned: sail's own tests, none asked by the Engine.
+    tokio::time::sleep(half).await;
+    rounds(2).await;
+    assert_eq!(checks(), vec![]);
+
+    // A single-ingress node has no group to check.
+    engine.pin_ingress(NODE_1, Some("9002")).await.unwrap();
+    engine.pin_ingress(NODE_2, Some("9003")).await.unwrap();
+    rounds(2).await;
+    assert_eq!(
+        checks(),
+        vec![
+            Call::CheckGroup(group.clone()),
+            Call::CheckGroup(group.clone())
+        ]
+    );
+
+    engine.pin_ingress(NODE_1, None).await.unwrap();
+    rounds(2).await;
+    assert_eq!(checks().len(), 2, "unpinned");
+
+    engine.pin_ingress(NODE_1, Some("9002")).await.unwrap();
+    engine.stop().await.unwrap();
+    rounds(2).await;
+    assert_eq!(checks().len(), 2, "stopped");
+
+    // The next start checks the pin it kept.
+    engine.start().await.unwrap();
+    tokio::time::sleep(half).await;
+    rounds(1).await;
+    assert_eq!(checks().len(), 3, "started again");
+}
