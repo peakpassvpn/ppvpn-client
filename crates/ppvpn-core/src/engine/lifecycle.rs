@@ -5,12 +5,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
 use super::{not_applied, now, shut_down, Error, Inner};
 use crate::error::codes;
 use crate::event::Event;
+use crate::profile::Profile;
 use crate::request::{
     validate_request, ApplyRequest, ApplyResult, ClearedPin, PinClearReason, SwitchKind,
 };
@@ -23,6 +25,76 @@ use crate::translate::{self, Translation, SELECTED_TAG};
 const CANDIDATE_FAILED: &str = "candidate validation or build failed";
 /// What it says when the runtime refused the new configuration.
 const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
+
+/// Go's `ingress tls` line (tlsdebug.go `logIngressTLS`): at debug level,
+/// one per REALITY or TLS ingress of an applied profile, with fingerprints
+/// of the values the core will use, so they can be compared with the
+/// server's without logging them: the first 10 hex digits of the SHA-256 of
+/// the public key and short ID strings exactly as received, their lengths
+/// and the key's encoding, plus the server name, uTLS fingerprint and flow.
+fn log_ingress_tls(profile: &Profile) {
+    for node in &profile.nodes {
+        for ingress in &node.ingresses {
+            let Some(tls) = &ingress.tls else {
+                continue;
+            };
+            let flow = ingress
+                .credentials
+                .vless
+                .as_ref()
+                .map_or("", |vless| vless.flow.as_str());
+            match &tls.reality {
+                Some(reality) => tracing::debug!(
+                    node_id = %node.id,
+                    endpoint_key = %ingress.endpoint_key,
+                    protocol = %ingress.protocol,
+                    server_name = %tls.server_name,
+                    public_key_sha256 = %short_digest(&reality.public_key),
+                    public_key_len = reality.public_key.len(),
+                    public_key_encoding = base64_flavor(&reality.public_key),
+                    short_id_sha256 = %short_digest(&reality.short_id),
+                    short_id_len = reality.short_id.len(),
+                    fingerprint = "chrome",
+                    flow,
+                    "ingress tls"
+                ),
+                None => tracing::debug!(
+                    node_id = %node.id,
+                    endpoint_key = %ingress.endpoint_key,
+                    protocol = %ingress.protocol,
+                    server_name = %tls.server_name,
+                    insecure = tls.insecure,
+                    flow,
+                    "ingress tls"
+                ),
+            }
+        }
+    }
+}
+
+fn short_digest(value: &str) -> String {
+    let sum = Sha256::digest(value.as_bytes());
+    sum[..5].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A base64 string's padding and alphabet from the characters it uses:
+/// "unpadded url" is base64 raw-url, the form REALITY keys use; a key
+/// without '-', '_', '+' or '/' fits either alphabet.
+pub(super) fn base64_flavor(value: &str) -> &'static str {
+    let padded = value.ends_with('=');
+    match (
+        padded,
+        value.contains(['+', '/']),
+        value.contains(['-', '_']),
+    ) {
+        (true, true, _) => "padded std",
+        (true, false, true) => "padded url",
+        (true, false, false) => "padded url-or-std",
+        (false, true, _) => "unpadded std",
+        (false, false, true) => "unpadded url",
+        (false, false, false) => "unpadded url-or-std",
+    }
+}
 
 impl Inner {
     pub(super) async fn apply(
@@ -152,6 +224,7 @@ impl Inner {
         };
 
         let revision = profile.revision.clone();
+        self.log.span().in_scope(|| log_ingress_tls(&profile));
         {
             let mut live = self.live();
             live.applied = Some(Applied {
