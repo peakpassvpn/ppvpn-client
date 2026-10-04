@@ -807,3 +807,55 @@ async fn a_reload_of_the_inbounds_alone_keeps_the_rest() {
     assert!(report.notes.is_empty(), "{report:?}");
     runtime.stop().await.unwrap();
 }
+
+// A rule naming an inbound that does not run (the local proxy's rules
+// while its listener is left out, #229): sail starts the configuration,
+// takes the inbound back by an inbounds-only reload, and leaves it out
+// again. Were the rule refused, a left-out listener would fail the whole
+// start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rules_may_name_an_inbound_that_does_not_run() {
+    let echo = echo().await;
+    let (port, ghost_port) = (free_port(), free_port());
+    let mut base: serde_json::Value = serde_json::from_str(&config(port, &[], false)).unwrap();
+    base["route"]["rules"] = serde_json::json!([
+        { "inbound": ["extra"], "action": "route", "outbound": "direct" }
+    ]);
+    let base = base.to_string();
+    let runtime = SailRuntime::new(options("ghost-inbound")).unwrap();
+    runtime
+        .start(&base)
+        .await
+        .expect("a rule naming an inbound that does not run is no error");
+    assert!(runtime
+        .dial_tcp("direct", Target::Addr(echo), WAIT)
+        .await
+        .is_ok());
+
+    let report = runtime
+        .reload(&with_extra(&base, ghost_port))
+        .await
+        .expect("the inbound back");
+    assert_eq!(report.path, "inbounds_only", "{report:?}");
+    assert!(
+        report.inbounds.contains(&("extra".into(), "added".into())),
+        "{report:?}"
+    );
+    let mut through = socks_open(ghost_port, echo)
+        .await
+        .expect("the inbound back listens");
+    round_trip(&mut through, b"back").await;
+
+    let report = runtime
+        .reload(&base)
+        .await
+        .expect("the inbound left out again");
+    assert_eq!(report.path, "inbounds_only", "{report:?}");
+    assert!(
+        report
+            .inbounds
+            .contains(&("extra".into(), "removed".into())),
+        "{report:?}"
+    );
+    runtime.stop().await.unwrap();
+}
