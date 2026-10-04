@@ -167,7 +167,9 @@ Linux), the control socket moves to a private, owner-checked `0700` directory `p
 system temporary directory, named after a hash of the runtime directory.
 
 The process record survives reboots, so a recorded process counts as the CLI's daemon only when its PID is
-alive, runs the recorded executable, and started within 10 seconds of the recorded time.
+alive, runs the recorded executable, and is the process that was recorded: on Linux the same boot (the
+kernel's boot ID) and the same start tick, which do not depend on the wall clock; on macOS a start within 10
+seconds of the recorded time.
 
 ## Settings
 
