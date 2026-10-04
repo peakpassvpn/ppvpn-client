@@ -93,6 +93,7 @@ env:
   # rust-toolchain.toml's version; keep them in step.
   RUST_TOOLCHAIN: 1.98.1
   UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
+  CARGO_ZIGBUILD_VERSION: 0.23.4
   DOTNET_NOLOGO: '1'
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   # 'none' (a test build) and pull requests record no channel.
@@ -142,6 +143,27 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '8.0.x'
+      # Rust dependencies, built once and restored. Caches are scoped by ref:
+      # a run reads its own ref's and the default branch's, and a pull
+      # request's caches are visible to that pull request only. Saved here
+      # only by runs on main and on tags, which is where every signing run
+      # is, so a signing job never restores anything a pull request wrote.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: desktop-package-linux
+          workspaces: |
+            . -> target
+            desktop/service -> target
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+      # The two cargo-installed tools, built once per version (minutes each
+      # from source) and kept as binaries.
+      - name: Cache the cargo-installed tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-zigbuild
+            ~/.cargo/bin/uniffi-bindgen-cs
+          key: package-tools-${{ runner.os }}-zigbuild-${{ env.CARGO_ZIGBUILD_VERSION }}-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}
       - name: Install packaging tools
         run: |
           # NativeAOT (the push agent) links with clang against zlib.
@@ -151,8 +173,14 @@ jobs:
           sudo ln -sf "/opt/zig-linux-x86_64-$ZIG_VERSION/zig" /usr/local/bin/zig
           curl -sSfL "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin nfpm
-          cargo install --locked cargo-zigbuild
-          cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs
+          # Installed only when missing or of another version (either cache
+          # may have restored one).
+          if ! cargo-zigbuild --version 2>/dev/null | grep -qF " $CARGO_ZIGBUILD_VERSION"; then
+            cargo install --locked --force cargo-zigbuild --version "$CARGO_ZIGBUILD_VERSION"
+          fi
+          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
+            cargo install --locked --force --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs
+          fi
       - name: Fetch the vendored core
         run: desktop/scripts/fetch-vendored-core.sh linux-x86_64
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
@@ -630,6 +658,18 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '8.0.x'
+      # Rust dependencies, built once and restored. Caches are scoped by ref:
+      # a run reads its own ref's and the default branch's, and a pull
+      # request's caches are visible to that pull request only. Saved here
+      # only by runs on main and on tags, which is where every signing run
+      # is, so a signing job never restores anything a pull request wrote.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: desktop-package-windows
+          workspaces: |
+            . -> target
+            desktop/service -> target
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
       - name: Ensure NSIS
         shell: powershell
         run: |
@@ -694,6 +734,23 @@ jobs:
       MACOS_SIGNING_P12_PASSWORD: ${{ inputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The toolchain before the cache, whose key names the compiler.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # Rust dependencies, built once and restored. Caches are scoped by ref:
+      # a run reads its own ref's and the default branch's, and a pull
+      # request's caches are visible to that pull request only. Saved here
+      # only by runs on main and on tags, which is where every signing run
+      # is, so a signing job never restores anything a pull request wrote.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: desktop-package-macos
+          workspaces: |
+            . -> target
+            desktop/service -> target
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
       - name: Fetch the vendored core
         run: desktop/scripts/fetch-vendored-core.sh macos-cli-arm64 macos-cli-x86_64
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
