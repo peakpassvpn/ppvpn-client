@@ -173,16 +173,55 @@ jobs:
           args=()
           for test in "${skip[@]}"; do args+=(--skip "$test"); done
           cargo test -p ppvpn-core -p ppvpn-account --locked --target x86_64-pc-windows-msvc -- --exact "${args[@]}"
+
+  # windows-msvc's build with the test build's fault-injection feature, and
+  # the runtime's failures on Windows: a job of its own, beside
+  # windows-msvc rather than after its tests, so that neither waits for the
+  # other. Its cache is its own (other features, other artifacts).
+  windows-failures:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: 0
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The runner's git checks text out with CRLF; fixtures compared byte
+      # for byte (localdns/testdata) must stay as committed.
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # BoringSSL as btls publishes it for the btls-sys Cargo.lock pins
+      # (checked against the release's SHA256SUMS and build attestation),
+      # instead of compiling it; the script at a fixed commit of btls.
+      - name: prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
+            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-pc-windows-msvc | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+      - name: build
+        run: cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
       # A failing instance leaves the system as it was while the host lives
       # on (runtime::windows_tests): our MSVC build of sail, with a TUN,
       # auto_route and strict_route (198.18.0.0/16 alone, the runner's own
       # traffic stays out), failed by a fault the test arms (the test
       # build's fault-injection feature, never a release's). The runner is
       # administrator; wintun.dll, sail's pinned one, goes beside the test.
-      # Run whatever the step before did; five runs, the system compared
-      # before and after each (twenty on the pull request that added it).
+      # Five runs, the system compared before and after each (twenty on the
+      # pull request that added it).
       - name: the runtime's failures (Windows, administrator)
-        if: ${{ !cancelled() }}
         shell: pwsh
         env:
           WINTUN_VERSION: 0.14.1
