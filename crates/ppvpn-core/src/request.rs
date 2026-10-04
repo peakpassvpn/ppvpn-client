@@ -121,6 +121,32 @@ pub struct ApplyResult {
     pub cleared_pins: Vec<ClearedPin>,
     /// How a running instance took it; `None` when not running.
     pub switch: Option<SwitchKind>,
+    /// With `KernelSwitch`: the listeners added, removed or replaced in
+    /// place (a removed or replaced one's connections were closed; the
+    /// others kept theirs). Empty otherwise: a `FullRestart` restarts them
+    /// all.
+    pub listeners: Vec<ListenerChange>,
+}
+
+/// One listener a hot switch changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ListenerChange {
+    /// The inbound's tag (`local-proxy`, `system-proxy`, ...).
+    pub tag: String,
+    pub change: ListenerChangeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ListenerChangeKind {
+    Added,
+    /// Its connections were closed.
+    Removed,
+    /// Listens anew (another address or port, other options); its
+    /// connections were closed.
+    Replaced,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

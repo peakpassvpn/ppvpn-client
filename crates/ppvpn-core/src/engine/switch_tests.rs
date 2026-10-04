@@ -242,20 +242,19 @@ async fn a_full_restart_retries_a_left_out_local_proxy() {
         .clone();
     let mut next = running.clone();
     let mut config: Value = serde_json::from_str(&next.json).unwrap();
-    // Left out, the local proxy was the only listener: none is left.
-    let extra = json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": 1 });
-    match config["inbounds"].as_array_mut() {
-        Some(inbounds) => inbounds.push(extra),
-        None => config["inbounds"] = json!([extra]),
-    }
+    // The route's interface options change: only a restart takes that.
+    let flipped = !config["route"]["auto_detect_interface"]
+        .as_bool()
+        .unwrap_or(false);
+    config["route"]["auto_detect_interface"] = flipped.into();
     next.json = config.to_string();
     let build = || -> Result<Translation, Error> { Ok(next.clone()) };
-    let (switch, _) = engine
+    let switched = engine
         .inner
         .switch_to(&running, next.clone(), &build)
         .await
         .unwrap();
-    assert!(matches!(switch, SwitchKind::FullRestart { .. }));
+    assert!(matches!(switched.kind, SwitchKind::FullRestart { .. }));
     assert_eq!(engine.status().state, left_out);
     assert!(!fake.inbounds().iter().any(|t| t == LOCAL_PROXY_INBOUND_TAG));
 
@@ -359,24 +358,26 @@ async fn a_restart_checks_the_listener_ports_again() {
             a.translation.clone(),
         )
     };
-    // Another listener appears, so the switch is a restart.
+    // The route's interface options change, so the switch is a restart.
     let build = || -> Result<Translation, Error> {
         let mut t =
             crate::translate::translate(&profile, &engine.inner.options(mode, &selected, &pins))?;
         let mut config: Value = serde_json::from_str(&t.json).unwrap();
-        config["inbounds"].as_array_mut().unwrap().push(
-            json!({ "type": "mixed", "tag": "extra", "listen": "127.0.0.1", "listen_port": 1 }),
-        );
+        let flipped = !config["route"]["auto_detect_interface"]
+            .as_bool()
+            .unwrap_or(false);
+        config["route"]["auto_detect_interface"] = flipped.into();
         t.json = config.to_string();
         Ok(t)
     };
     let next = build().unwrap();
-    let (switch, now_running) = engine
+    let switched = engine
         .inner
         .switch_to(&running, next, &build)
         .await
         .unwrap();
-    assert!(matches!(switch, SwitchKind::FullRestart { .. }));
+    let now_running = switched.translation;
+    assert!(matches!(switched.kind, SwitchKind::FullRestart { .. }));
     let after = engine.status().local_proxy.unwrap().port;
     assert_ne!(after, before);
     assert!(now_running
@@ -402,4 +403,73 @@ async fn a_hot_apply_sends_kernel_switched() {
         .await
         .unwrap();
     assert!(super::super::lifecycle_tests::drain(&mut rx).is_empty());
+}
+
+/// A listener that moves (another port) is a reload, not a restart: sail
+/// replaces it in place, only its own connections close, and the apply
+/// says which listener changed (contract 4.1).
+#[tokio::test]
+async fn a_moved_listener_is_replaced_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = Arc::new(FakeRuntime::default());
+    let engine = Engine::with_runtime(
+        EngineConfig::new(Role::Standard, Platform::Linux, tmp.path())
+            .with_local_proxy(crate::config::LocalProxyConfig::new().with_preferred_port(0))
+            .with_system_proxy(true),
+        fake.clone(),
+    );
+    running(&engine).await;
+    engine.set_system_proxy_listener(true).await.unwrap();
+    let connection = |id, inbound: &str| crate::runtime::RuntimeConnection {
+        id,
+        inbound: inbound.into(),
+        chain: vec!["direct".into()],
+        network: "tcp".into(),
+        destination: "192.0.2.10:443".into(),
+        upload_bytes: 0,
+        download_bytes: 0,
+        started: std::time::SystemTime::now(),
+    };
+    fake.set_connections(vec![
+        connection(1, LOCAL_PROXY_INBOUND_TAG),
+        connection(2, SYSTEM_PROXY_INBOUND_TAG),
+    ]);
+    let running_translation = engine
+        .inner
+        .live()
+        .applied
+        .as_ref()
+        .unwrap()
+        .translation
+        .clone();
+    let mut next = running_translation.clone();
+    let mut config: Value = serde_json::from_str(&next.json).unwrap();
+    for inbound in config["inbounds"].as_array_mut().unwrap() {
+        if inbound["tag"] == LOCAL_PROXY_INBOUND_TAG {
+            inbound["listen_port"] = 1.into();
+        }
+    }
+    next.json = config.to_string();
+    let build = || -> Result<Translation, Error> { Ok(next.clone()) };
+    let switched = engine
+        .inner
+        .switch_to(&running_translation, next.clone(), &build)
+        .await
+        .unwrap();
+    assert_eq!(switched.kind, SwitchKind::KernelSwitch);
+    assert_eq!(
+        switched.listeners,
+        [ListenerChange {
+            tag: LOCAL_PROXY_INBOUND_TAG.into(),
+            change: ListenerChangeKind::Replaced
+        }]
+    );
+    assert_eq!(count(&fake, |c| matches!(c, Call::Stop)), 0);
+    let left: Vec<u64> = crate::runtime::Runtime::connections(fake.as_ref())
+        .await
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(left, [2], "the system proxy's connection is kept");
 }

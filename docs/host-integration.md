@@ -125,6 +125,7 @@ pub struct ApplyResult {
     pub selection_reset: bool,            // true：传入的 selected_node_id 不在新 Profile 里，已改用 default_node_id
     pub cleared_pins: Vec<ClearedPin>,    // { node_id, endpoint_key, reason: NodeRemoved | IngressRemoved }
     pub switch: Option<SwitchKind>,       // 运行中：KernelSwitch（不断连）| FullRestart { reasons }
+    pub listeners: Vec<ListenerChange>,   // KernelSwitch 时原地增、删、换的监听：{ tag, change: added | removed | replaced }
 }
 pub async fn apply(&self, request: ApplyRequest) -> Result<ApplyResult, Error>;
 pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例，不联网
@@ -146,7 +147,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
   - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
   - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
 - **规则集**：apply 前会准备规则集，总共最多等 10 秒。只从 `allowed_rule_set_hosts` 列出的主机下载（宿主传拉取 Profile 的 API 主机）；为空时一个也不下载，只用本地已有的、sha256 相符的缓存，其余规则集报 `RULE_SET_HOST_NOT_PINNED`（和 Go 一致，默认拒绝）。不为空时，Profile 里的规则集 URL 必须都在这些主机上，否则 apply 被拒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
-- **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。只有改动了监听本身时，才走 `FullRestart`（停止再启动，`reasons` 说明是哪个监听变了，例如 `tun options changed`）。重启和 `start` 一样会重新检查监听端口（被占就换，发 `LocalProxyEndpointChanged`），本地代理监听起不来时不带它启动（`Degraded{LocalProxyUnavailable}`）。重启期间状态保持 `Running`，不发 `CoreStopped`、`CoreStarted` 或 `StateChanged`；已有连接断开，监听短暂关闭，宿主从 apply 的结果 `switch = FullRestart { reasons }` 得知发生了重启。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
+- **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。监听的变化大多也原地完成：新增的监听建起来，消失的移除，地址、端口或选项变了的就地替换；被移除或替换的那个监听断开它自己的连接，其他连接不受影响。这些仍算 `KernelSwitch`，`ApplyResult.listeners` 列出哪些监听被增、删、换。只有 TUN 的变化和 route 网卡选项的变化、或者运行时自己表示必须重启时，才走 `FullRestart`（停止再启动，所有连接断开，`reasons` 说明原因，例如 `tun options changed`；这时 `listeners` 为空）。这是 Rust 版和 Go 0.5.21 的行为差异：Go 对任何监听变化都整体重启。重启和 `start` 一样会重新检查监听端口（被占就换，发 `LocalProxyEndpointChanged`），本地代理监听起不来时不带它启动（`Degraded{LocalProxyUnavailable}`）。重启期间状态保持 `Running`，不发 `CoreStopped`、`CoreStarted` 或 `StateChanged`；已有连接断开，监听短暂关闭，宿主从 apply 的结果 `switch = FullRestart { reasons }` 得知发生了重启。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
 ### 4.2 start / stop
 

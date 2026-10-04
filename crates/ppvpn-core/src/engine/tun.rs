@@ -353,7 +353,7 @@ impl Inner {
             return;
         };
         let (switch, translation) = match self.switch_to(&running, translation, &build).await {
-            Ok(switched) => switched,
+            Ok(switched) => (switched.kind, switched.translation),
             Err(error) => {
                 tracing::error!(previous_policy = policy(previous), policy = policy(state),
                     rebuilt = false, error = %error, "host ipv6 changed");
