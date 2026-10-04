@@ -139,6 +139,10 @@ pub(crate) struct Options {
     /// node id → pinned endpoint_key (validated by the request).
     pub pins: HashMap<String, String>,
     pub local_proxy: Option<LocalProxy>,
+    /// The local proxy's listener is left out of this run (it could not be
+    /// opened): its routing rules stay, its inbound goes. Opening it again
+    /// then changes the inbounds alone (an inbounds-only reload).
+    pub local_proxy_left_out: bool,
     pub system_proxy_port: Option<u16>,
     /// Rule set id → its local copy; a rule set without one is unavailable.
     pub rule_sets: HashMap<String, RuleSetFile>,
@@ -266,7 +270,7 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         b.label_rules("tun");
     }
     if let Some(local_proxy) = &options.local_proxy {
-        b.local_proxy(profile, local_proxy)?;
+        b.local_proxy(profile, local_proxy, options.local_proxy_left_out)?;
         b.label_rules("local-proxy");
     }
     if let Some(port) = options.system_proxy_port {
@@ -525,7 +529,12 @@ impl Builder {
         Ok(group.into_iter().chain(outbounds).collect())
     }
 
-    fn local_proxy(&mut self, profile: &Profile, proxy: &LocalProxy) -> Result<(), Error> {
+    fn local_proxy(
+        &mut self,
+        profile: &Profile,
+        proxy: &LocalProxy,
+        left_out: bool,
+    ) -> Result<(), Error> {
         if proxy.listen.parse::<std::net::IpAddr>().is_err()
             || proxy.port == 0
             || proxy.prefix.is_empty()
@@ -559,13 +568,16 @@ impl Builder {
             "action": "reject",
             "method": "default",
         }));
-        self.inbounds.push(json!({
-            "type": "mixed",
-            "tag": LOCAL_PROXY_INBOUND_TAG,
-            "listen": proxy.listen,
-            "listen_port": proxy.port,
-            "users": users,
-        }));
+        // Its rules name its inbound alone: without it, they match nothing.
+        if !left_out {
+            self.inbounds.push(json!({
+                "type": "mixed",
+                "tag": LOCAL_PROXY_INBOUND_TAG,
+                "listen": proxy.listen,
+                "listen_port": proxy.port,
+                "users": users,
+            }));
+        }
         Ok(())
     }
 

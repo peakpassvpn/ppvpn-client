@@ -229,7 +229,7 @@ pub async fn set_system_proxy_listener(&self, enabled: bool) -> Result<SystemPro
   - 监听失败时，例如端口被占用而且换不了，进入 `Degraded{LocalProxyUnavailable}`，并按退避重试。
 - **系统代理监听**：`set_system_proxy_listener` 只开关 7891 的无认证监听。操作系统的代理设置（指向这个端口）由宿主负责。
   - 幂等；开关状态不持久化，`new` 之后是关的。端口优先级：持久化的端口、7891、任意空闲端口，不会和本地代理端口相同。
-  - 未 start 时只改状态，`start` 时生效（届时端口被占用就换一个）。运行中开关是原地增删这一个监听（和 Go 版一样），不 reload 配置。都发出 `SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。
+  - 未 start 时只改状态，`start` 时生效（届时端口被占用就换一个）。运行中开关时，引擎生成带或不带这个监听的配置，交给运行时做一次只涉及入站的 reload：这个监听被加上或移除，出站、节点组（包括故障转移的当前入口和健康状态）、DNS、路由和规则集都原样保留，不算内核切换，不发 `KernelSwitched`。效果和 Go 版的原地增删一样。都发出 `SystemProxyChanged`（`message` 为 `enabled` 或 `disabled`）。
   - 运行中开关的保证：
     - 打开时，任何已有连接都不受影响；
     - 按节点的本地代理和 routed 用户的监听始终可用，地址和端口不变；

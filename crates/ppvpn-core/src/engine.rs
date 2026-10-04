@@ -563,6 +563,7 @@ impl Inner {
             selected_node_id: Some(selected.to_owned()),
             pins: pins.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             local_proxy: self.local_proxy_options(),
+            local_proxy_left_out: self.local_proxy_left_out(),
             system_proxy_port: self.system_proxy_options(),
             log_level: match self.config.log.level {
                 LogLevel::Info => "info",
