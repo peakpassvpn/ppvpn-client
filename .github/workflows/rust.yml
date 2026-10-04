@@ -29,7 +29,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # What this pull request or push changes (tools/ci-changes.sh); the jobs
+  # below skip when it is none of their business. A skipped job still
+  # satisfies a required check.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      engine: ${{ steps.diff.outputs.engine }}
+      desktop: ${{ steps.diff.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+
   lint:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -82,6 +104,8 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
 
   test:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -128,6 +152,8 @@ jobs:
   # on every pull request here. The crates the desktop links only:
   # ppvpn-cli does not support Windows (it ships for Linux and macOS).
   windows-msvc:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -179,6 +205,8 @@ jobs:
   # windows-msvc rather than after its tests, so that neither waits for the
   # other. Its cache is its own (other features, other artifacts).
   windows-failures:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -244,6 +272,8 @@ jobs:
           }
 
   macos:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -284,7 +314,8 @@ jobs:
   # Intel macOS on main pushes only: macOS runners are the account's
   # scarcest, and the arm64 job (required check macos) covers pull requests.
   macos-x86_64:
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: github.event_name != 'pull_request' && needs.changes.outputs.engine == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
     env:

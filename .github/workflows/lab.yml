@@ -29,6 +29,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # A pull request's newer push cancels its older run; other runs (the
 # schedule, by hand) each get a group of their own, so none is
@@ -43,7 +44,26 @@ env:
   LAB_BIN: ${{ github.workspace }}/lab-bin
 
 jobs:
+  # A scheduled run on a main commit that already had a successful
+  # scheduled run measures nothing new: skip.
+  fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.last.outputs.run }}
+    steps:
+      - id: last
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != schedule ]; then echo run=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          last=$(gh run list -R "$GITHUB_REPOSITORY" --workflow lab.yml --event schedule --status success \
+                   --limit 1 --json headSha --jq '.[0].headSha' || true)
+          if [ "$last" = "$GITHUB_SHA" ]; then echo run=false; else echo run=true; fi >> "$GITHUB_OUTPUT"
+
   cases:
+    needs: fresh
+    if: needs.fresh.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -114,7 +134,8 @@ jobs:
   # commits, and a run takes 13 to 22 minutes of a runner); a sail upgrade's
   # pull request can dispatch it on its branch.
   repro:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: fresh
+    if: needs.fresh.outputs.run == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
