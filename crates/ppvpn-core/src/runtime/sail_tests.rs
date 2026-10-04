@@ -836,3 +836,36 @@ async fn a_reload_takes_the_route_s_interface_options() {
     runtime.reload(&plain).await.unwrap();
     runtime.stop().await.unwrap();
 }
+
+// sail 390e494f: a configuration that differs from the running one in its
+// inbounds alone is applied to the inbounds alone (outbounds, groups, DNS,
+// routing and rule-sets kept as they ran); any other change rebuilds them.
+// The Engine's system proxy toggle is such a reload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reload_of_the_inbounds_alone_keeps_the_rest() {
+    let (port, system_port) = (free_port(), free_port());
+    let p1 = password();
+    let base = config(port, &[("u1", &p1)], false);
+    let runtime = SailRuntime::new(options("reload-path")).unwrap();
+    runtime.start(&base).await.unwrap();
+
+    // The system proxy listener, added and taken away again.
+    let with_system = with_extra(&base, system_port);
+    let report = runtime.reload(&with_system).await.unwrap();
+    assert_eq!(report.path, "inbounds_only", "added: {report:?}");
+    assert!(
+        report.inbounds.contains(&("extra".into(), "added".into())),
+        "{report:?}"
+    );
+    let report = runtime.reload(&base).await.unwrap();
+    assert_eq!(report.path, "inbounds_only", "removed: {report:?}");
+
+    // A rule changed: everything is built again.
+    let mut ruled: serde_json::Value = serde_json::from_str(&base).unwrap();
+    ruled["route"]["rules"] =
+        serde_json::json!([{ "domain_suffix": ["example.test"], "outbound": "direct-b" }]);
+    let report = runtime.reload(&ruled.to_string()).await.unwrap();
+    assert_eq!(report.path, "full", "a rule: {report:?}");
+    assert!(report.notes.is_empty(), "{report:?}");
+    runtime.stop().await.unwrap();
+}

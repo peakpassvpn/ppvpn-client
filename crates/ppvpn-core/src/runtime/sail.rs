@@ -505,13 +505,20 @@ impl Runtime for SailRuntime {
     }
 
     async fn reload(&self, config: &str) -> Result<ReloadReport, RuntimeError> {
-        use embed::InboundChange as C;
+        use embed::{InboundChange as C, ReloadPath as P};
         let report = self
             .instance
             .reload(Some(Config::Json(config.into())))
             .await
             .map_err(error)?;
         Ok(ReloadReport {
+            path: match report.path {
+                P::Full => "full",
+                P::InboundsOnly => "inbounds_only",
+                _ => "other",
+            }
+            .to_owned(),
+            notes: report.notes.iter().map(ToString::to_string).collect(),
             inbounds: report
                 .inbounds
                 .into_iter()

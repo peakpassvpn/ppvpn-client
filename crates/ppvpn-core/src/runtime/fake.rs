@@ -158,6 +158,17 @@ fn config_inbounds(config: &str) -> Vec<(String, serde_json::Value)> {
         .unwrap_or_default()
 }
 
+/// A configuration without its inbounds and user_limits: what sail
+/// compares to choose an inbounds-only reload.
+fn without_inbounds(config: &str) -> serde_json::Value {
+    let mut config: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
+    if let Some(map) = config.as_object_mut() {
+        map.remove("inbounds");
+        map.remove("user_limits");
+    }
+    config
+}
+
 /// An inbound without what a reload hands to a running one (its users,
 /// certificate and key): what is left differing means a new listener.
 fn listener_of(inbound: &serde_json::Value) -> serde_json::Value {
@@ -442,7 +453,17 @@ impl Runtime for FakeRuntime {
                 "a TUN is set up only at a start: stop and start to apply",
             ));
         }
-        let mut report = ReloadReport::default();
+        let mut report = ReloadReport {
+            path: if without_inbounds(config)
+                == without_inbounds(&self.config().unwrap_or_default())
+            {
+                "inbounds_only"
+            } else {
+                "full"
+            }
+            .to_owned(),
+            ..ReloadReport::default()
+        };
         for (tag, inbound) in &wanted {
             let change = match running.get(tag) {
                 None => "added",
@@ -805,6 +826,18 @@ mod tests {
         assert_eq!(runtime.state(), RuntimeState::Running);
         runtime.reload("c").await.unwrap();
         assert_eq!(runtime.config().as_deref(), Some("c"));
+    }
+
+    #[tokio::test]
+    async fn a_reload_that_changes_the_inbounds_alone_keeps_the_rest() {
+        let runtime = FakeRuntime::default();
+        let base = r#"{"inbounds":[{"type":"mixed","tag":"local"}],"route":{"final":"a"}}"#;
+        let more = r#"{"inbounds":[{"type":"mixed","tag":"local"},{"type":"mixed","tag":"system"}],"route":{"final":"a"}}"#;
+        let other = r#"{"inbounds":[{"type":"mixed","tag":"local"}],"route":{"final":"b"}}"#;
+        runtime.start(base).await.unwrap();
+        assert_eq!(runtime.reload(more).await.unwrap().path, "inbounds_only");
+        assert_eq!(runtime.reload(base).await.unwrap().path, "inbounds_only");
+        assert_eq!(runtime.reload(other).await.unwrap().path, "full");
     }
 
     #[tokio::test]
