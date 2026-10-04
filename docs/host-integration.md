@@ -77,7 +77,7 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
     - Windows：不需要清扫。强杀后 Wintun 适配器及其路由、DNS 随进程一起消失：Wintun 在创建它的进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。依据是 Sail 在 VM 上的两次实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：
       - tun + auto_route：`Stop-Process -Force` 后 3 秒内，适配器、它的 `0.0.0.0/0` 和 `::/0` 路由、它的 DNS 都没有了；运行中重启 VM 后也没有适配器和 PnP 记录；再次启动用同一 GUID 重建正常。
       - 再加 `strict_route` 和排除段（绕开 `10.0.0.0/8`、`192.168.0.0/16`，加 `::/0`）：运行时有 Wintun 适配器、metric 0 的路由、TUN 的 DNS、6 个 WFP 过滤器和 1 个名为 sail 的子层；强杀后约 0.5 秒内全部消失，+1、+3、+10 秒都没有回来；物理默认路由没有被改动，之后出口和 DNS 正常；第二次启动再强杀，结果相同。WFP 过滤器属于动态会话，随进程一起撤掉。
-      - 局限只剩一项：测的是 windows-gnu 构建（Windows 的 TUN 和 WFP 代码与当前 master 相同），没有用我们的 MSVC 构建测。所以用我们自己的构建复测之前，这一条不算验收（`docs/rust-parity.md`，切换前要复测的项目）。
+      - 局限只剩一项：强杀测的是 windows-gnu 构建（Windows 的 TUN 和 WFP 代码与当前 master 相同），没有用我们的 MSVC 构建测。所以用我们自己的构建复测之前，这一条不算验收（`docs/rust-parity.md` R1）。实例失败而进程还在的情形不同，我们的 MSVC 构建已在 CI 里验证（第 9 节）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
   - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
@@ -401,7 +401,7 @@ pub struct Error {
   - 网络变化期间（包括断网、切换网卡）**不会进入 `Fatal`**，只会出现 `Degraded`，网络稳定后自动回到 `Running`；
   - 流量一旦绕过 TUN，**立即处理**：先尝试补回路由，补不回来就进入 `Fatal{TunRoutingBroken}`。
   - `Fatal{TunRoutingBroken}` 时运行时和 TUN 照常运行，引擎不会自己停止（同 Go 0.5.20）：这时流量绕过 TUN 直连，用户的流量**正在泄露**到隧道之外，但没有断网。宿主**必须立即**丢弃并重建实例（先 `shutdown`，再 `new`、`apply`、`start`），由新实例重新装上路由，期间不要套用“网络正在稳定”的宽限。重建失败时，宿主告诉用户保护已经中断，由用户决定是否继续。Go 版宿主就是这样做的：Desktop 增强模式的健康检查读到 `tun_routing` 为 broken，就按泄露处理，不等宽限，立刻重连。
-  - 运行时失败或 panic 进入的 `Fatal`（`KernelUnrecoverable`、`Panic`）不一样：运行时已经失效，留着只剩系统里的残留（Windows 上 strict_route 的过滤器会挡住所有不走 TUN 的流量）。进入这类 `Fatal` 时，引擎立即停止运行时（有界，至多 10 秒），不等宿主：Sail 先撤路由、规则、过滤器和 DNS，再关设备。撤不掉的记下来，宿主之后 `shutdown`（或 drop）时列在 `ShutdownReport.leftovers` 里，每项带类别和手工清除的说明。Linux 和 macOS 上 Sail 保证这一清理（netns CI 验证：运行时失败后、宿主还没 shutdown，系统已经回到启动前）；Windows 上 Sail 的清理步骤尚未合入，仍按未保证对待，宿主保留自己的兜底（例如 leftovers 里有 `wfp` 时退出进程）。宿主看到这类 `Fatal`，仍应 `shutdown` 并重建实例。
+  - 运行时失败或 panic 进入的 `Fatal`（`KernelUnrecoverable`、`Panic`）不一样：运行时已经失效，留着只剩系统里的残留（Windows 上 strict_route 的过滤器会挡住所有不走 TUN 的流量）。进入这类 `Fatal` 时，引擎立即停止运行时（有界，至多 10 秒），不等宿主：Sail 先撤路由、规则、过滤器和 DNS，再关设备。撤不掉的记下来，宿主之后 `shutdown`（或 drop）时列在 `ShutdownReport.leftovers` 里，每项带类别和手工清除的说明。三个平台上 Sail 都保证这一清理，并有 CI 测试（Linux、macOS 自 sail dddc2d1c，Windows 自 sail 99b8daef：先撤 WFP 过滤器，再撤 DNS、路由，最后关 Wintun 会话）。我们自己的构建也验证：Linux 在 netns CI，Windows 在 windows-msvc 作业（MSVC 构建、管理员、strict_route）；运行时失败后、宿主还没 shutdown，系统已经回到启动前，再次启动成功。撤不掉的项照常列在 leftovers 里；宿主可以保留自己的兜底（例如 leftovers 里有 `wfp` 时退出进程），但不再是必需的。宿主看到这类 `Fatal`，仍应 `shutdown` 并重建实例。
 - 路由规则守护，以及 Wintun、utun 的自愈；
 - 热切换和排空；
 - 路由和规则层面的完整性：规则或路由都在，流量没有绕过 TUN。Linux 沿用 Go 0.5.20 的规则守护；**macOS 和 Windows 是 Rust 版新增的能力**，至少要能检测到并上报，能自愈的就自愈，由 G5 实机验收。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。

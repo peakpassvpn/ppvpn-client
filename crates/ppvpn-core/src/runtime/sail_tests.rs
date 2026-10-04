@@ -370,6 +370,25 @@ async fn dns_local_dials_through_the_direct_outbound() {
         .expect("v4 loopback");
     let (_, from) = exchange(&dial, &[v4], &query).await.unwrap();
     assert_eq!(from, v4);
+    // A server whose port is closed draws an ICMP port unreachable, which
+    // Windows used to turn into an error on the socket's next receive and
+    // end the direct UDP session with (sail a76d4a96): the next server, and
+    // the next query, still go through the same outbound.
+    let closed = {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.local_addr().unwrap()
+    };
+    let asked = std::time::Instant::now();
+    let errors = exchange(&dial, &[closed], &query).await.unwrap_err();
+    assert!(
+        asked.elapsed() < crate::localdns::exchange::SERVER_TIMEOUT + Duration::from_secs(2),
+        "{errors:?} after {:?}",
+        asked.elapsed()
+    );
+    let (_, from) = exchange(&dial, &[closed, v4], &query).await.unwrap();
+    assert_eq!(from, v4, "past the closed port");
+    let (_, from) = exchange(&dial, &[v4], &query).await.unwrap();
+    assert_eq!(from, v4, "and again");
     if let Some(v6) = mirror("[::1]:0".parse().unwrap()).await {
         let (_, from) = exchange(&dial, &[v6], &query).await.unwrap();
         assert_eq!(from, v6);

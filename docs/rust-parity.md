@@ -75,11 +75,11 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 | # | 行为 | 已有依据 | 复测方法 |
 | --- | --- | --- | --- |
-| R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：tun + auto_route，以及 `strict_route` 加排除段（6 个 WFP 过滤器和 sail 子层，强杀后约 0.5 秒内全部消失），都是 windows-gnu 构建；唯一的局限是没有用 MSVC 构建测（见下文"过渡实现"里的清扫表） | 等 Engine 在 Windows 上能打开 TUN 后，在 windows-latest（管理员）上加一个 CI 用例：用我们的 MSVC 构建和配置（开 `strict_route`）起 Tun 实例，强杀，再检查 Wintun 适配器、它的路由、DNS 和 WFP 过滤器都不在 |
+| R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：tun + auto_route，以及 `strict_route` 加排除段（6 个 WFP 过滤器和 sail 子层，强杀后约 0.5 秒内全部消失），都是 windows-gnu 构建；唯一的局限是没有用 MSVC 构建测（见下文"过渡实现"里的清扫表） | windows-latest（管理员）能用我们的 MSVC 构建建 Wintun 适配器和 WFP 会话，已由 `runtime::windows_tests` 证实（实例失败的用例）。还缺强杀这一项：在同一作业里用我们的构建和配置（开 `strict_route`）起 Tun 实例，强杀进程，再检查 Wintun 适配器、它的路由、DNS 和 WFP 过滤器都不在 |
 
 已知缺口：
 
-- Q1：实例进入 `Failed`、宿主进程还在时，它改动的系统资源要由实例自己撤掉。Linux 和 macOS 已由 sail dddc2d1c 做到并有测试（见"过渡实现"里的 E2 状态，以及 `runtime::netns_tests::failures`）。Windows 上 WFP 动态会话和 Wintun 适配器的存活期跟着打开它们的进程（嵌入时就是宿主），它们的清理步骤和测试还没合入 sail：在 Windows 上仍不能假定实例失败后宿主的网络已经恢复。
+- Q1：实例进入 `Failed`、宿主进程还在时，它改动的系统资源要由实例自己撤掉。三个平台都已由 Sail 做到并有 CI 测试：Linux 和 macOS 自 sail dddc2d1c，Windows 自 sail 99b8daef（WFP 过滤器、DNS、路由、Wintun 会话，按这个顺序撤）。我们自己的构建也有用例：Linux 在 netns 的 tun 作业（`runtime::netns_tests::failures`），Windows 在 windows-msvc 作业（`runtime::windows_tests`，MSVC 构建、管理员、strict_route）。不开 Clash API 的宿主（我们的翻译从不生成 `experimental` 段）在这一点上已经完整。局限见"过渡实现"里的 E2 状态。
 
 ## 测试宿主的约定
 
@@ -145,8 +145,9 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 
 Sail E2：任务作用域已完成（sail 7da87ccd）：实例启动的每一个任务都在作用域里，不在任何作用域里的任务会让运行失败，越过作用域的 spawn 是静态检查错误；协议、传输、DNS、入站、API、TUN、平台各模块的任务，以及宿主经 `dial_tcp`/`dial_udp` 发起的拨号（2f967b1a），都随 stop 在 `stop_within`（默认 2 秒）内结束。
 - 已有：任务作用域；两类 panic（任务自己结束，或实例失败）都不会带崩宿主，根任务的 panic 也让实例失败而不是展开到 `run()`（f25d1a79），`Engine::new` 在编译期断言 `sail::embed::PANICS_ARE_CAUGHT`（以 `panic = "unwind"` 构建）；有界的 stop；挂住的拨号不会拖住 stop（`runtime::sail_tests::a_hanging_dial_does_not_hold_the_stop`）。
-- 失败后的清理（sail dddc2d1c，Linux 和 macOS，有 sail 自己的测试）：一次运行无论怎样结束（stop、实例失败、启动到一半失败、线程上的 panic 展开），都先撤掉它改动的系统资源（路由、策略规则、nftables、DNS、TUN），再结束任务。撤不掉的进 sail 的停止报告，每项有类别、原因和手工清除的命令；`Runtime::stop_leftovers` 把它们转成 `ShutdownReport.leftovers` 的条目（类别：sail 的 Wfp、Tun、Route、Dns 对应同名，Rule 和 Nft 对应 `rule`，Task 对应 `task`，其他归 `runtime`；原因和清除命令在 `detail` 里，例如 ``timed out after 5s; clear it with `nft delete table inet sail_tun0` ``）。对已经不在运行的实例调 stop 立即返回上次的报告，不再清理第二次。我们这边的故障测试在 netns 的 tun 作业里（需要测试构建的 `fault-injection` 特性）：实例运行中失败、启动到一半失败，系统状态都回到启动前；一个清理步骤 panic 时，它按类别报出，带的清除命令执行后系统复原（`runtime::netns_tests::failures`）。限制：这组用例的上行网卡关掉了 IPv6（内核会在链路 up 后自己补加 IPv6 路由，前后快照因此不稳定），所以不覆盖上行网卡带 IPv6 的情况；TUN 自己的 IPv6 地址和路由在覆盖范围内。
-- 还没有：Windows 的清理步骤和测试（WFP、Wintun）未合入 sail，失败后的清理在 Windows 上仍按未保证对待（Q1）。
+- 失败后的清理（Linux 和 macOS 自 sail dddc2d1c，Windows 自 sail 99b8daef；三个平台都有 sail 自己的 CI 测试）：一次运行无论怎样结束（stop、实例失败、启动到一半失败、线程上的 panic 展开），都先撤掉它改动的系统资源（路由、策略规则、nftables、DNS、TUN），再结束任务。撤不掉的进 sail 的停止报告，每项有类别、原因和手工清除的命令；`Runtime::stop_leftovers` 把它们转成 `ShutdownReport.leftovers` 的条目（类别：sail 的 Wfp、Tun、Route、Dns 对应同名，Rule 和 Nft 对应 `rule`，Task 对应 `task`，其他归 `runtime`；原因和清除命令在 `detail` 里，例如 ``timed out after 5s; clear it with `nft delete table inet sail_tun0` ``）。对已经不在运行的实例调 stop 立即返回上次的报告，不再清理第二次。我们这边的故障测试在 netns 的 tun 作业里（需要测试构建的 `fault-injection` 特性）：实例运行中失败、启动到一半失败，系统状态都回到启动前；一个清理步骤 panic 时，它按类别报出，带的清除命令执行后系统复原（`runtime::netns_tests::failures`）。限制：这组用例的上行网卡关掉了 IPv6（内核会在链路 up 后自己补加 IPv6 路由，前后快照因此不稳定），所以不覆盖上行网卡带 IPv6 的情况；TUN 自己的 IPv6 地址和路由在覆盖范围内。
+- Windows：sail 先撤 strict_route 的 WFP 过滤器，再撤 TUN 的 DNS、路由，最后关 Wintun 会话，中间没有"过滤器还挡着、TUN 已经没了"的时刻。我们的用例在 windows-msvc 作业（`runtime::windows_tests`，管理员，wintun.dll 放在测试旁，只在这个测试构建里打开 `fault-injection`）：TUN 加 auto_route 和 strict_route（只路由 198.18.0.0/16，运行器自己的流量不进 TUN），实例运行中失败、启动到一半失败之后，适配器、路由、TUN 的 DNS 和名为 sail 的 WFP 过滤器都回到启动前，进程还在，再次启动成功。
+- 局限：sail 的测试用的是它自己的构建；我们的 MSVC 构建只覆盖上面两种失败，清理步骤 panic 的用例只在 Linux 上有（Windows 没有对应的故障点用例）；强杀之后的状态见 R1。
 - 不涉及：sail 的 Clash API（WebSocket 和流式的 `/traffic`、`/logs`、`/connections`）还不随 stop 结束，一个开着的连接会比 stop 活得久。它只在配置了 `experimental.clash_api` 时才监听，翻译从不生成 `experimental` 段；ppvpn-core-lab 对外的是 Core API v1（自己的 Unix socket），不经过它。
 
 连接的路由结果（`Runtime::routes`）来自 sail 的 `events(Kinds::ROUTE)`：只在 Engine 的日志级别为 debug 时取，sail 只在有订阅者时才构造这些事件；字段见 `runtime::Routed`（出站链外层在前，最后一个是承载连接的出站；这是 sail 2eb3fe47 代码的实际顺序，它的文档注释写的是相反的顺序，已请 Sail 确认），地址和域名原样交给 Engine，由 Engine 决定脱敏；落后时丢弃，并记一行丢了多少。Engine 侧的 `msg=connection` 行由它生成。 Engine 用它记 Go 的 `connection` 行（debug，键名同 Go 的 `logRouted`：id、inbound、network、destination、route_domain、protocol、rule、outbound、target、target_kind，另加 action 和 error）：rule 由 `Translation::rule_ids` 还原成 profile 的规则 id，没有规则时为 `final`；outbound 同 Go，是规则选中的出站，即出站链的第一个，也就是最外层；承载连接的成员是最后一个；target 是出站被要求去的地址（`request_destination`）。和 Go 的差异：UDP 会话的 FakeIP 域名，以及 sniff 规则 override 的域名，sail 目前都标为 `request`。
