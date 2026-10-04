@@ -451,6 +451,11 @@ pub(crate) fn configured_tun_name(config: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod netns_helper;
+#[cfg(all(test, target_os = "linux"))]
+mod netns_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
