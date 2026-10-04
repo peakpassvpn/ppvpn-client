@@ -395,10 +395,7 @@ impl Inner {
             proxies.system_proxy = enabled;
         }
         if let (true, Some((profile, mode, selected, pins))) = (running, &applied) {
-            if let Err(error) = self
-                .toggle_listener(enabled, profile, *mode, selected, pins)
-                .await
-            {
+            if let Err(error) = self.toggle_listener(profile, *mode, selected, pins).await {
                 if let Some(mut proxies) = self.proxies() {
                     proxies.system_proxy = !enabled;
                 }
@@ -436,11 +433,11 @@ impl Inner {
         Ok(())
     }
 
-    /// While running: the system proxy listener alone is added or removed,
-    /// and the translation the next reload or start uses follows.
+    /// While running: the system proxy listener alone is added or removed
+    /// (as it is now turned), and the translation the next reload or start
+    /// uses follows.
     async fn toggle_listener(
         &self,
-        enabled: bool,
         profile: &Profile,
         mode: RoutingMode,
         selected: &str,
