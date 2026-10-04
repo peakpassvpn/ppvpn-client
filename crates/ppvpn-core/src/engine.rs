@@ -30,6 +30,7 @@ use crate::types::{
 
 mod bus;
 mod cleanup;
+mod fatal;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -88,6 +89,10 @@ struct Inner {
     log: Logs,
     tun: tun::TunState,
     network: network::NetworkState,
+    /// Itself, for the tasks it starts from a `&self` (the cleanup at Fatal).
+    this: std::sync::Weak<Inner>,
+    /// The runtime's stop when it failed or panicked (#208).
+    fatal: fatal::FatalCleanup,
     /// The host's reads, which keep the runtime's figures fresh.
     reads: reads::Reads,
     /// Direct failures logged at most once per destination per window.
@@ -136,6 +141,7 @@ impl Drop for Inner {
                     .and_then(|live| live.applied.as_ref())
                     .map(|a| translate::secrets(&a.translation.json))
                     .unwrap_or_default(),
+                earlier: self.fatal_leftovers_now(),
             };
             cleanup::cleanup_on_drop(parts);
         }
@@ -192,6 +198,8 @@ impl Engine {
         let proxies = proxy::Proxies::open(&config)?;
         log.attach(&runtime);
         let inner = Arc::new_cyclic(|weak| Inner {
+            this: weak.clone(),
+            fatal: fatal::FatalCleanup::default(),
             rule_sets: rule_sets::manager(&config, weak.clone()),
             rule_set_inputs: Mutex::default(),
             closing: rule_sets::Closing::default(),
@@ -230,8 +238,12 @@ impl Engine {
         let op = tokio::time::timeout_at(deadline, inner.op.lock())
             .await
             .ok();
-        // Also a runtime that failed or panicked: stopping it takes down
-        // what it opened (the TUN, its filters).
+        // A runtime that failed or panicked was stopped then (#208): that
+        // stop finishes first, within the limit, and what it left is
+        // reported.
+        let earlier = inner.fatal_leftovers(deadline).await;
+        // Also a runtime that failed or panicked and is not stopped yet:
+        // stopping it takes down what it opened (the TUN, its filters).
         let running = {
             let live = inner.live();
             live.running || live.needs_stop
@@ -249,6 +261,7 @@ impl Engine {
                 .as_ref()
                 .map(|a| translate::secrets(&a.translation.json))
                 .unwrap_or_default(),
+            earlier,
         };
         // A sleeping re-probe or local proxy retry goes first; one under
         // way held `op` and is done.
@@ -545,6 +558,7 @@ impl Inner {
             self.settle(&mut live);
             drop(live);
             self.guard_stopped();
+            self.fatal_cleanup();
         }
         error.to_error_on(self.config.platform)
     }
