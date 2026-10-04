@@ -40,7 +40,9 @@ pub(super) struct Ipv6State {
 
 /// What a TUN instance keeps besides `Live`.
 pub(super) struct TunState {
-    local_dns: LocalDns,
+    /// The host's override of dns-local's servers, those outside the
+    /// tunnel (zones kept); empty: the system's.
+    local_dns: Vec<Server>,
     probe: Mutex<Probe>,
     /// The last probe's result, which the next translation uses.
     host: Mutex<Ipv6State>,
@@ -56,7 +58,7 @@ impl TunState {
     pub(super) fn new(config: &EngineConfig) -> Self {
         Self {
             // `Engine::new` refused one that does not parse.
-            local_dns: local_dns(config).unwrap_or(LocalDns::System),
+            local_dns: local_dns(config).unwrap_or_default(),
             probe: Mutex::new(Arc::new(system_probe)),
             host: Mutex::default(),
             listener: Mutex::new(None),
@@ -73,19 +75,34 @@ pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
     Ok(())
 }
 
-/// dns-local's servers: the host's override, else the system's.
-fn local_dns(config: &EngineConfig) -> Result<LocalDns, Error> {
+/// The host's override of dns-local's servers, those outside the tunnel;
+/// with none left (or none given) dns-local reads the default interface's.
+fn local_dns(config: &EngineConfig) -> Result<Vec<Server>, Error> {
     let servers = config
         .tun
         .as_ref()
         .map(|tun| tun.local_dns_servers.as_slice())
         .unwrap_or_default();
-    if servers.is_empty() {
-        return Ok(LocalDns::System);
-    }
     translate::local_dns_servers(servers)
-        .map(LocalDns::Servers)
         .map_err(|e| Error::invalid(codes::CORE_OPERATION_FAILED, "tun.local_dns_servers", e))
+}
+
+/// dns-local as sail's own servers, where the core runs no dns-local of
+/// its own (mobile): the host's override, else the system's. sail's DNS
+/// servers take a bare IP and dial it without a scope, so a server with a
+/// zone (the one way to reach a link-local resolver) is left out, as the
+/// core's dns-local leaves out one it cannot reach.
+fn sail_local_dns(servers: &[Server]) -> LocalDns {
+    let servers: Vec<_> = servers
+        .iter()
+        .filter(|s| s.zone.is_none())
+        .map(|s| std::net::SocketAddr::new(s.ip, s.port))
+        .collect();
+    if servers.is_empty() {
+        LocalDns::System
+    } else {
+        LocalDns::Servers(servers)
+    }
 }
 
 /// Desktop TUNs own the default route (auto_route); mobile hosts build the
@@ -171,7 +188,7 @@ impl Inner {
             interface_name: translate::interface_name(self.config.platform).into(),
             local_dns: match self.tun.listener.lock().expect("dns-local").as_ref() {
                 Some(listener) => LocalDns::Listener(listener.addr()),
-                None => self.tun.local_dns.clone(),
+                None => sail_local_dns(&self.tun.local_dns),
             },
         })
     }
@@ -185,13 +202,10 @@ impl Inner {
         if self.config.role != Role::Tun || !desktop(self.config.platform) {
             return Ok(());
         }
-        let overridden: Vec<Server> = match &self.tun.local_dns {
-            LocalDns::Servers(servers) => servers
-                .iter()
-                .map(|s| Server::new(s.ip(), s.port()))
-                .collect(),
-            _ => Vec::new(),
-        };
+        // Zones kept: a link-local resolver of the default interface is
+        // dialled with its index, one of another interface left out
+        // (localdns::servers::usable).
+        let overridden = self.tun.local_dns.clone();
         let current = self.tun.interface.clone();
         let runtime = self.runtime.clone();
         let started = std::time::Instant::now();
@@ -535,6 +549,147 @@ mod tests {
                 false
             )
         );
+        // Zones do not make a bad entry good.
+        for bad in [
+            "[fe80::1%en0]",
+            "[fe80::1%en0]:0",
+            "fe80::1%",
+            "192.0.2.53%en0",
+        ] {
+            let err = check(
+                &EngineConfig::new(Role::Tun, Platform::Linux, "/nonexistent")
+                    .with_tun(TunConfig::new().with_local_dns_servers(vec![bad.into()])),
+            )
+            .unwrap_err();
+            assert_eq!(
+                (err.code, err.field.as_deref()),
+                (codes::CORE_OPERATION_FAILED, Some("tun.local_dns_servers")),
+                "{bad}"
+            );
+        }
+    }
+
+    fn zoned_config(platform: Platform) -> EngineConfig {
+        EngineConfig::new(Role::Tun, platform, "/nonexistent").with_tun(
+            TunConfig::new().with_local_dns_servers(vec![
+                "[fe80::1%eth0]:53".into(),
+                "fe80::2%eth1".into(),
+                "10.60.159.90".into(),
+                " 192.0.2.53 ".into(),
+                "[2001:db8::53]:5353".into(),
+            ]),
+        )
+    }
+
+    /// Go: TestLocalDNSServers. A link-local resolver with its zone (by
+    /// interface name, as hosts read it from the system) is accepted, kept
+    /// in order with the rest, less those inside the tunnel, and dns-local
+    /// dials it with the default interface's index; one of another
+    /// interface is left out.
+    #[tokio::test]
+    async fn zoned_link_local_servers_reach_dns_local_with_their_zone() {
+        let config = zoned_config(Platform::Linux);
+        assert!(check(&config).is_ok());
+        let fake = Arc::new(FakeRuntime::default());
+        let engine = Engine::with_runtime(config, fake.clone());
+        engine.inner.set_host_ipv6_probe(|| HostIpv6 {
+            available: true,
+            route: Ok(true),
+        });
+        let server = |ip: &str, zone: Option<&str>, port| Server {
+            ip: ip.parse().unwrap(),
+            zone: zone.map(str::to_owned),
+            port,
+        };
+        assert_eq!(
+            engine.inner.tun.local_dns,
+            vec![
+                server("fe80::1", Some("eth0"), 53),
+                server("fe80::2", Some("eth1"), 53),
+                server("192.0.2.53", None, 53),
+                server("2001:db8::53", None, 5353),
+            ]
+        );
+
+        engine.inner.start_local_dns().await.unwrap();
+        running(&engine).await;
+        let addr = match engine.inner.tun_options().unwrap().local_dns {
+            LocalDns::Listener(addr) => addr,
+            other => panic!("{other:?}"),
+        };
+        let mut query = hickory_proto::op::Message::new(
+            7,
+            hickory_proto::op::MessageType::Query,
+            hickory_proto::op::OpCode::Query,
+        );
+        query.add_query(hickory_proto::op::Query::query(
+            "example.com.".parse().unwrap(),
+            hickory_proto::rr::RecordType::A,
+        ));
+        let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(&query.to_vec().unwrap(), addr)
+            .await
+            .unwrap();
+        let mut buf = [0u8; 512];
+        tokio::time::timeout(std::time::Duration::from_secs(10), client.recv(&mut buf))
+            .await
+            .expect("an answer")
+            .unwrap();
+        let dialed: Vec<std::net::SocketAddr> = fake
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::DialUdp(_, crate::runtime::Target::Addr(to)) => Some(to),
+                _ => None,
+            })
+            .collect();
+        // sail's network is eth0, index 2.
+        let first = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+            "fe80::1".parse().unwrap(),
+            53,
+            0,
+            2,
+        ));
+        assert_eq!(dialed.first(), Some(&first), "{dialed:?}");
+        assert!(
+            dialed
+                .iter()
+                .all(|to| to.ip() != "fe80::2".parse::<std::net::IpAddr>().unwrap()),
+            "{dialed:?}"
+        );
+    }
+
+    /// Where sail asks the servers itself (mobile): sail's DNS servers take
+    /// a bare IP and dial it without a scope, so zoned servers are left out;
+    /// with none left, the system's.
+    #[tokio::test]
+    async fn sail_asks_the_servers_without_a_zone() {
+        let engine = Engine::with_runtime(
+            zoned_config(Platform::Android),
+            Arc::new(FakeRuntime::default()),
+        );
+        assert_eq!(
+            engine.inner.tun_options().unwrap().local_dns,
+            LocalDns::Servers(vec![
+                "192.0.2.53:53".parse().unwrap(),
+                "[2001:db8::53]:5353".parse().unwrap(),
+            ])
+        );
+        for servers in [
+            vec!["fe80::1%wlan0".to_string()],
+            vec!["10.60.159.90".to_string()],
+        ] {
+            let engine = Engine::with_runtime(
+                EngineConfig::new(Role::Tun, Platform::Android, "/nonexistent")
+                    .with_tun(TunConfig::new().with_local_dns_servers(servers)),
+                Arc::new(FakeRuntime::default()),
+            );
+            assert_eq!(
+                engine.inner.tun_options().unwrap().local_dns,
+                LocalDns::System
+            );
+        }
     }
 
     fn engine_default() -> (Engine, Arc<FakeRuntime>, Arc<Host>) {

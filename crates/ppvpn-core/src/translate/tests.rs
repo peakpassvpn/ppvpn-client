@@ -661,28 +661,71 @@ fn d4_rejects_udp_to_a_fixed_udp_less_node() {
 
 #[test]
 fn local_dns_servers_as_go_reads_them() {
+    use crate::localdns::Server;
     let read = |v: &[&str]| local_dns_servers(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    let server = |ip: &str, zone: Option<&str>, port| Server {
+        ip: ip.parse().unwrap(),
+        zone: zone.map(str::to_owned),
+        port,
+    };
     assert_eq!(
         read(&[
             " 192.168.50.1 ",
             "192.168.50.2:5353",
             "[2001:db8::1]:53",
-            "::ffff:192.168.50.3"
+            "2001:db8::2",
+            "::ffff:192.168.50.3",
+            // Link-local with its zone, by interface name or index, with
+            // and without a port (Go: TestLocalDNSServers).
+            "[fe80::1%en0]:53",
+            "fe80::2%en0",
+            "[fe80::3%6]:5353",
+            "fe80::4%6",
         ])
         .unwrap(),
         vec![
-            "192.168.50.1:53".parse().unwrap(),
-            "192.168.50.2:5353".parse().unwrap(),
-            "[2001:db8::1]:53".parse().unwrap(),
-            "192.168.50.3:53".parse().unwrap(),
+            server("192.168.50.1", None, 53),
+            server("192.168.50.2", None, 5353),
+            server("2001:db8::1", None, 53),
+            server("2001:db8::2", None, 53),
+            server("192.168.50.3", None, 53),
+            server("fe80::1", Some("en0"), 53),
+            server("fe80::2", Some("en0"), 53),
+            server("fe80::3", Some("6"), 5353),
+            server("fe80::4", Some("6"), 53),
         ]
     );
-    // Inside the tunnel, now or before 0.5.7: left out.
+    // Inside the tunnel, now or before 0.5.7: left out, the rest in order.
     assert_eq!(
-        read(&["10.60.159.90", "172.19.0.2", "fde2:ec40:9312:c7fd::2"]).unwrap(),
-        Vec::<std::net::SocketAddr>::new()
+        read(&[
+            "10.60.159.90",
+            "fe80::1%en0",
+            "172.19.0.2",
+            "fde2:ec40:9312:c7fd::2",
+            "fdfe:dcba:9876::2",
+            "192.168.1.1:5353",
+        ])
+        .unwrap(),
+        vec![
+            server("fe80::1", Some("en0"), 53),
+            server("192.168.1.1", None, 5353),
+        ]
     );
-    for bad in ["dns.example", "0.0.0.0", "192.168.50.1:0", "[::]:53", ""] {
+    for bad in [
+        "dns.example",
+        "0.0.0.0",
+        "192.168.50.1:0",
+        "[::]:53",
+        "[::1]:abc",
+        "",
+        "[fe80::1%en0]",
+        "[fe80::1%en0]:0",
+        "fe80::1%",
+        "[fe80::1%]:53",
+        "192.168.50.1%en0",
+        "[192.168.50.1%en0]:53",
+        "dns.example%en0",
+    ] {
         assert!(read(&[bad]).is_err(), "{bad}");
     }
 }
