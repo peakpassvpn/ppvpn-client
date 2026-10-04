@@ -59,18 +59,15 @@ pub(super) fn full_restart_reasons(running: &str, next: &str) -> Vec<String> {
     reasons
 }
 
-/// What only a stop and a start can take (sail's reload takes every other
-/// listener change in place, by tag): the TUN's, and the route's interface
-/// options. sail refusing a reload with `needs_restart` is the final word;
-/// this saves the try where the answer is known.
+/// What only a stop and a start can take: the TUN's changes (sail sets
+/// up a TUN only at a start). sail's reload takes every other listener
+/// change in place, by tag, and the route's interface options too; its
+/// `needs_restart` is the final word, this saves the try where the answer
+/// is known.
 pub(super) fn restart_reasons(running: &str, next: &str) -> Vec<String> {
     full_restart_reasons(running, next)
         .into_iter()
-        .filter(|r| {
-            r == "tun options changed"
-                || r == "inbound tun added or removed"
-                || r == "interface options changed"
-        })
+        .filter(|r| r == "tun options changed" || r == "inbound tun added or removed")
         .collect()
 }
 
