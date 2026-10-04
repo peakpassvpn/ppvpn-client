@@ -32,6 +32,10 @@ on:
         description: The release's tag name (rehearsal only)
         type: string
         required: false
+      approved:
+        description: The calling run already went through the release approval
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -41,7 +45,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A run by hand signs the repositories with the release key, so it goes
+  # through the same approval as a release. A call from the release
+  # workflow was approved there.
+  approve:
+    if: ${{ !inputs.approved }}
+    runs-on: ubuntu-latest
+    environment: desktop-release-approval
+    steps:
+      - run: echo "approved"
+
   site:
+    if: ${{ !cancelled() && (needs.approve.result == 'success' || (inputs.approved && needs.approve.result == 'skipped')) }}
+    needs: approve
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The package repositories' signing key signs the apt and dnf indexes.
@@ -203,7 +219,7 @@ jobs:
           echo "The site was built and not deployed. It is the artifact site-rehearsal of this run." >>"$GITHUB_STEP_SUMMARY"
 
   deploy:
-    if: ${{ !inputs.rehearsal }}
+    if: ${{ !cancelled() && !inputs.rehearsal && needs.site.result == 'success' }}
     needs: site
     runs-on: ubuntu-latest
     permissions:

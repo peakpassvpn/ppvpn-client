@@ -145,8 +145,24 @@ jobs:
             echo "**Rehearsal**: nothing is published. No tag, no provenance, a draft release, the site as an artifact." >>"$GITHUB_STEP_SUMMARY"
           fi
 
-  package:
+  # The one approval of a stable run, rehearsals included: the environment
+  # has the reviewers and no secret. Every job after it that reads the
+  # stable environment's secrets needs this one, so none of them runs
+  # unapproved. A dev run needs no approval.
+  approve:
+    if: inputs.channel == 'stable'
     needs: prepare
+    runs-on: ubuntu-latest
+    environment: desktop-release-approval
+    steps:
+      - run: echo "approved"
+
+  package:
+    # After the approval for stable; for dev, where it is skipped, without.
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' &&
+          (needs.approve.result == 'success' || (inputs.channel == 'dev' && needs.approve.result == 'skipped')) }}
+    needs: [prepare, approve]
     uses: ./.github/workflows/desktop-package.yml
     with:
       channel: ${{ inputs.channel }}
@@ -168,7 +184,7 @@ jobs:
   # signatures, the tag, and that the channel does not go back.
   release-files:
     if: inputs.channel == 'stable' && needs.prepare.outputs.publish == 'true'
-    needs: [prepare, package]
+    needs: [prepare, approve, package]
     runs-on: ubuntu-latest
     # For the package repositories' signing key, which signs the rpms here.
     environment: desktop-release-stable
@@ -260,7 +276,7 @@ jobs:
     # A rehearsal attests nothing (the log of attestations is public) and
     # leaves a draft release, which has no tag and which only the
     # repository's members can see.
-    needs: [prepare, release-files]
+    needs: [prepare, approve, release-files]
     runs-on: ubuntu-latest
     environment: desktop-release-stable
     permissions:
@@ -295,9 +311,12 @@ jobs:
           if [ "$REHEARSAL" = true ]; then
             # A draft: no tag is created, and it is not public. To be deleted
             # after the rehearsal (gh release delete "$TAG").
-            url=$(gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            # No --target: naming a commit made the API refuse the workflow's
+            # token (403), as it does for a tag on a commit that changes
+            # workflow files; a draft makes no tag, so it needs none.
+            url=$(gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" \
               --draft --latest=false --title "PPVPN desktop $VERSION (rehearsal, build $BUILD)" \
-              --notes "Rehearsal of the release workflow. Not a release. $notes")
+              --notes "Rehearsal of the release workflow at commit $GITHUB_SHA. Not a release. $notes")
             echo "Draft release (delete it after the rehearsal): $url" >>"$GITHUB_STEP_SUMMARY"
           else
             # On the tag it runs on. Never the repository's latest release.
@@ -308,9 +327,11 @@ jobs:
   # The update site follows a stable release.
   site:
     if: inputs.channel == 'stable'
-    needs: [prepare, publish]
+    needs: [prepare, approve, publish]
     uses: ./.github/workflows/desktop-pages.yml
     with:
+      # This run was approved above.
+      approved: true
       rehearsal: ${{ inputs.rehearsal }}
       tag: ${{ needs.prepare.outputs.tag }}
     permissions:
