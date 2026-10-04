@@ -238,6 +238,15 @@ impl Inner {
 
     /// sail reported the network: dns-local follows the default interface
     /// and reads its resolvers again at the next query.
+    /// Before the runtime stops (stop, restart, shutdown): dns-local's
+    /// queries under way end, so that sail's stop waits for none of their
+    /// dials (#221).
+    pub(super) fn cancel_dns_queries(&self) {
+        if let Some(listener) = self.tun.listener.lock().expect("dns-local").as_ref() {
+            listener.cancel_queries();
+        }
+    }
+
     pub(super) fn local_dns_network(&self, snapshot: &NetworkSnapshot) {
         let interface = interface_of(snapshot);
         *self.tun.interface.lock().unwrap_or_else(|e| e.into_inner()) = interface;
@@ -662,6 +671,56 @@ mod tests {
         assert!(localdns::Dial::udp(&dial, server).await.is_ok());
         gate.notify_one();
         starting.await.unwrap().unwrap();
+    }
+
+    /// A dns-local query hung in its dial (a resolver that does not
+    /// answer) ends when the instance stops: sail's stop waits for no dial
+    /// of ours, and the stop returns at once (#221).
+    #[tokio::test]
+    async fn stop_ends_the_dns_local_queries_under_way() {
+        let fake = Arc::new(FakeRuntime::default());
+        let engine = Engine::with_runtime(
+            EngineConfig::new(Role::Tun, Platform::Linux, "/nonexistent")
+                .with_tun(TunConfig::new().with_local_dns_servers(vec!["192.0.2.53:53".into()])),
+            fake.clone(),
+        );
+        engine.inner.set_host_ipv6_probe(|| HostIpv6 {
+            available: true,
+            route: Ok(true),
+        });
+        engine.inner.start_local_dns().await.unwrap();
+        running(&engine).await;
+        fake.hang_dials();
+        let addr = match engine.inner.tun_options().unwrap().local_dns {
+            LocalDns::Listener(addr) => addr,
+            other => panic!("{other:?}"),
+        };
+        let mut query = hickory_proto::op::Message::new(
+            7,
+            hickory_proto::op::MessageType::Query,
+            hickory_proto::op::OpCode::Query,
+        );
+        query.add_query(hickory_proto::op::Query::query(
+            "example.com.".parse().unwrap(),
+            hickory_proto::rr::RecordType::A,
+        ));
+        let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(&query.to_vec().unwrap(), addr)
+            .await
+            .unwrap();
+        while fake.pending_dials() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let started = std::time::Instant::now();
+        engine.stop().await.unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "{:?}",
+            started.elapsed()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(fake.pending_dials(), 0, "the hung dial is dropped");
     }
 
     #[tokio::test]

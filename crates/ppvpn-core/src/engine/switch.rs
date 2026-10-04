@@ -129,6 +129,7 @@ impl Inner {
     ) -> Result<Translation, Error> {
         // Before the TUN closes: sail's cleanup must not be undone.
         self.guard_stopped();
+        self.cancel_dns_queries();
         if let Err(e) = self.runtime.stop().await {
             let error = self.runtime_error(&e);
             // Still running: the TUN stays, and so does its guard.

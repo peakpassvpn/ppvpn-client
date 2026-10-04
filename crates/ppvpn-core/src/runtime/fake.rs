@@ -82,6 +82,24 @@ pub(crate) struct FakeRuntime {
     generation: AtomicU64,
     /// Holds the next start in Starting (`hold_start`).
     start_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    hang_dials: AtomicBool,
+    pending_dials: Arc<AtomicU64>,
+}
+
+/// Counts a hung dial while it is not dropped.
+struct Pending(Arc<AtomicU64>);
+
+impl Pending {
+    fn new(count: &Arc<AtomicU64>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Pending(count.clone())
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Default for FakeRuntime {
@@ -119,6 +137,8 @@ impl Default for FakeRuntime {
                 ..NetworkSnapshot::default()
             }),
             network_changes: watch::channel(None).0,
+            hang_dials: AtomicBool::new(false),
+            pending_dials: Arc::default(),
             start_gate: Mutex::new(None),
             generation: AtomicU64::new(0),
         }
@@ -342,6 +362,18 @@ impl FakeRuntime {
             RuntimeState::Starting | RuntimeState::Running => Ok(()),
             _ => Err(RuntimeError::new("not_running", "not running")),
         }
+    }
+
+    /// Dials from now on never complete (a resolver that does not answer);
+    /// `pending_dials` counts those not dropped yet.
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn hang_dials(&self) {
+        self.hang_dials.store(true, Ordering::SeqCst);
+    }
+
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn pending_dials(&self) -> u64 {
+        self.pending_dials.load(Ordering::SeqCst)
     }
 
     /// The next `start` stays in Starting until the returned gate is
@@ -575,6 +607,10 @@ impl Runtime for FakeRuntime {
     ) -> Result<Box<dyn Datagram>, RuntimeError> {
         self.record(Call::DialUdp(outbound.to_owned(), to));
         self.dialable()?;
+        if self.hang_dials.load(Ordering::SeqCst) {
+            let _pending = Pending::new(&self.pending_dials);
+            std::future::pending::<()>().await;
+        }
         self.check(Op::Dial)?;
         Ok(Box::new(Echo::default()))
     }
