@@ -220,7 +220,7 @@ jobs:
         env:
           WINTUN_VERSION: 0.14.1
           WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
-          RUNS: ${{ github.event_name == 'pull_request' && 1 || 5 }}
+          RUNS: ${{ github.event_name == 'pull_request' && 20 || 5 }}
         run: |
           $zip = "$env:RUNNER_TEMP\wintun.zip"
           Invoke-WebRequest "https://www.wintun.net/builds/wintun-$env:WINTUN_VERSION.zip" -OutFile $zip
@@ -233,8 +233,8 @@ jobs:
             Write-Output "::group::run $i"
             cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc -- --ignored --test-threads 1 --nocapture runtime::windows_tests:: | Tee-Object -Variable out
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            # None skipped quietly: both tests ran.
-            if (-not ($out -match "test result: ok\. 2 passed")) { throw "runtime::windows_tests: not both tests ran" }
+            # None skipped quietly: all three tests ran.
+            if (-not ($out -match "test result: ok\. 3 passed")) { throw "runtime::windows_tests: not all three tests ran" }
             Write-Output "::endgroup::"
           }
 

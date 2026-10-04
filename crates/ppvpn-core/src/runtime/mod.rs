@@ -459,6 +459,8 @@ mod netns_helper;
 #[cfg(all(test, target_os = "linux"))]
 mod netns_tests;
 #[cfg(all(test, windows, feature = "fault-injection"))]
+mod windows_helper;
+#[cfg(all(test, windows, feature = "fault-injection"))]
 mod windows_tests;
 
 #[cfg(test)]

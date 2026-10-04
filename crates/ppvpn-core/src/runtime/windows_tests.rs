@@ -71,7 +71,7 @@ fn settled() -> String {
     }
 }
 
-fn config() -> String {
+pub(super) fn config() -> String {
     serde_json::json!({
         "log": { "level": "info" },
         "inbounds": [{
@@ -85,7 +85,7 @@ fn config() -> String {
     .to_string()
 }
 
-fn runtime(name: &str) -> SailRuntime {
+pub(super) fn runtime(name: &str) -> SailRuntime {
     let dir = std::env::temp_dir().join(format!("ppvpn-win-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     SailRuntime::new(Options::new().data_dir(dir)).unwrap()
@@ -123,6 +123,63 @@ async fn starts_again(before: &str) {
         before,
         "a stop after a failure left the system changed"
     );
+}
+
+/// G7 on Windows (R1): an instance's process killed outright (no stop, no
+/// drop) leaves nothing either: the Wintun adapter and its routes and DNS
+/// go with the process's handles, strict_route's WFP filters with its
+/// dynamic session. A child process of this test binary
+/// (runtime::windows_helper::instance) runs the instance; once it is
+/// killed the system is as before it started, and an instance starts
+/// again. The runtime rather than an Engine: an Engine's translation routes
+/// everything into the TUN with strict_route, the runner's own traffic too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs administrator and wintun.dll beside the test: rust.yml's windows-msvc job"]
+async fn a_killed_instance_leaves_the_system_as_it_was() {
+    use std::io::BufRead;
+    use std::process::Stdio;
+
+    let _one = ONE_AT_A_TIME.lock().await;
+    fault::disarm();
+    let before = settled();
+    let mut child = Command::new(std::env::current_exe().expect("this binary"))
+        .args([
+            "--exact",
+            "runtime::windows_helper::instance",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("PPVPN_WINDOWS_INSTANCE", "1")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("the instance");
+    let stdout = child.stdout.take().unwrap();
+    let (running, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { return };
+            if line.contains("instance running") {
+                let _ = running.send(());
+            }
+        }
+    });
+    if ran.recv_timeout(Duration::from_secs(60)).is_err() {
+        let _ = child.kill();
+        panic!("the instance did not start within 60 s: {:?}", child.wait());
+    }
+    routed(&before);
+
+    // TerminateProcess: no stop, no drop, no unwinding.
+    child.kill().expect("kill");
+    child.wait().expect("reaped");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut now = settled();
+    while now != before && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        now = settled();
+    }
+    assert_eq!(now, before, "the killed instance left the system changed");
+    starts_again(&before).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
