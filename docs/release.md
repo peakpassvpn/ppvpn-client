@@ -10,7 +10,7 @@
 
 ## CI 分层与 GitHub Release
 
-- `ci.yml`（每个 PR、每次推送 `main`）：`go vet`（本机与 `GOOS=windows`）和三组构建标签下的 `go test`。
+- `ci.yml`（改动 Go 代码的 PR 和 `main` 推送；只改 `crates/`、`desktop/`、文档时跳过）：`go vet`（本机与 `GOOS=windows`）和三组构建标签下的 `go test`。
 - `release.yml`（`v*` tag；改动 `version/version.go` 或该工作流的 PR；手动触发）：上面全部，加
   `-race`、`govulncheck`、Windows 原生测试，以及全部平台产物。发版 PR 改了版本号，所以完整门禁在合并前
   就已跑过，tag 不会是第一次遇到它。

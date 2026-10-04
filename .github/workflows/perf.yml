@@ -3,7 +3,7 @@ name: perf
 # The performance checks' tier A (#214): numbers that barely depend on the
 # machine — release binary sizes, the engine process's RSS idle and under a
 # fixed loopback load, allocations, apply and kernel-switch time — measured
-# at each main push and compared with the last main run and with the Go
+# once a day on main and compared with the last main run and with the Go
 # 0.5.21 baseline (testdata/perf). A crossed threshold turns this workflow
 # red; it blocks nothing (not a required check). tools/perf/measure.py
 # drives any engine that serves Core API v1 like `ppvpn-core serve`, so the
@@ -12,7 +12,9 @@ name: perf
 # measures ten times over, to calibrate the thresholds.
 on:
   push:
-    branches: [main, "ci/perf-*"]
+    branches: ["ci/perf-*"]
+  schedule:
+    - cron: "41 18 * * *"
   workflow_dispatch:
 
 permissions:

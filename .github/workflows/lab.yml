@@ -8,8 +8,8 @@ name: lab
 #           Each group first checks the core runs and answers get-status,
 #           and fails as a whole when it does not;
 #   repro   the Sail regression: every repro on the pinned sail and on
-#           sing-box 1.13.12, and the comparisons (main pushes, nightly,
-#           by hand); its logs are kept as an artifact.
+#           sing-box 1.13.12, and the comparisons (nightly, by hand);
+#           its logs are kept as an artifact.
 # A failed nightly run opens, or comments on, an issue. Not a required
 # check yet.
 
@@ -23,8 +23,6 @@ on:
       - "Cargo.lock"
       - "go.sum"
       - ".github/workflows/lab.yml"
-  push:
-    branches: [main]
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
@@ -32,8 +30,8 @@ on:
 permissions:
   contents: read
 
-# A pull request's newer push cancels its older run; other runs (main's
-# pushes, the schedule) each get a group of their own, so none is
+# A pull request's newer push cancels its older run; other runs (the
+# schedule, by hand) each get a group of their own, so none is
 # cancelled, pending or running.
 concurrency:
   group: lab-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
