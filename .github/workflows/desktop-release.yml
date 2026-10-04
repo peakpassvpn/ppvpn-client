@@ -120,6 +120,9 @@ jobs:
     # The package jobs run in the environment and use its secrets. A called
     # workflow sees an environment's secrets only when the caller hands its
     # secrets on: with none passed, they were empty there (first dev run).
+    # The repository itself holds no secret, only the environments do, so
+    # nothing else is handed on. Keep it so: a repository-level secret
+    # added later would reach the package workflow through this line.
     secrets: inherit
 
   # Stable only (a dev build ends with the package jobs' artifacts). The
