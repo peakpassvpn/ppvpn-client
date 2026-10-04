@@ -802,3 +802,39 @@ async fn a_hanging_dial_does_not_hold_the_stop() {
     assert!(dialled.is_err(), "the hanging dial fails: {dialled:?}");
     held.abort();
 }
+
+/// A reload that changes the route's interface options takes effect for
+/// new connections (sail says reload takes them; #221): bound to an
+/// interface that does not exist, a direct dial fails; unbound again, it
+/// connects.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reload_changes_the_default_interface() {
+    let echo = echo().await;
+    let runtime = SailRuntime::new(options("default-interface")).unwrap();
+    let port = free_port();
+    let plain = config(port, &[], false);
+    runtime.start(&plain).await.unwrap();
+    assert!(runtime
+        .dial_tcp("direct", Target::Addr(echo), WAIT)
+        .await
+        .is_ok());
+
+    let mut bound: serde_json::Value = serde_json::from_str(&plain).unwrap();
+    bound["route"]["default_interface"] = "ppvpn-none0".into();
+    runtime.reload(&bound.to_string()).await.unwrap();
+    assert!(
+        runtime
+            .dial_tcp("direct", Target::Addr(echo), WAIT)
+            .await
+            .is_err(),
+        "a dial after the reload binds to the missing interface"
+    );
+
+    runtime.reload(&plain).await.unwrap();
+    assert!(runtime
+        .dial_tcp("direct", Target::Addr(echo), WAIT)
+        .await
+        .is_ok());
+    runtime.stop().await.unwrap();
+}
