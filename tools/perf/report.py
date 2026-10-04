@@ -183,6 +183,34 @@ def limit_text_of(limit, how):
     return f"{'-' if how == 'down' else ''}{limit:.0%}"
 
 
+def throughput_breakdown(new, against):
+    """Tier B's throughputs, each with the CPU of the engine, loadgen and
+    fakenode (100 = one CPU) and whether the load side capped it, for the new
+    file and each it is compared with: where the bottleneck was is part of
+    the result."""
+    files = [("new", new)] + list(against)
+    keys = sorted(k.removesuffix("_mbit") for k in new["metrics"] if k.startswith("tierb.") and k.endswith("_mbit"))
+    if not keys:
+        return []
+    med = lambda f, k: (f["metrics"].get(k) or {}).get("median")
+    lines = ["Throughput, with each process's CPU (engine / loadgen / fakenode) and whether the load side capped it:", "",
+             "| metric | " + " | ".join(f"{n} ({f['engine']})" for n, f in files) + " |",
+             "| --- | " + " | ".join("---" for _ in files) + " |"]
+    for key in keys:
+        cells = []
+        for _, f in files:
+            mbit = med(f, f"{key}_mbit")
+            if mbit is None:
+                cells.append("—")
+                continue
+            cpus = " / ".join(f"{med(f, f'{key}_{p}_cpu_pct'):.0f}" if med(f, f"{key}_{p}_cpu_pct") is not None else "?"
+                              for p in ("engine", "load", "node"))
+            capped = " **load-limited**" if (med(f, f"{key}_load_limited") or 0) >= 0.5 else ""
+            cells.append(f"{mbit:.6g} Mbit/s ({cpus}){capped}")
+        lines.append(f"| {key.removeprefix('tierb.')} | " + " | ".join(cells) + " |")
+    return lines
+
+
 def compare(args):
     new = load(args.new)
     against = []
@@ -227,6 +255,9 @@ def compare(args):
             limit_text = "—"
         lines.append(f"| {metric} | {now['median']:.6g} | " + " | ".join(cells) + f" | {limit_text} |")
     print("\n".join(lines))
+    breakdown = throughput_breakdown(new, against)
+    if breakdown:
+        print("\n" + "\n".join(breakdown))
     print("\nLimits: against main / against the Go 0.5.21 baseline; — records only. "
           "RSS is the engine process's (the lab binary for Rust); the host process's total RSS "
           "and installer size are Desktop's measurements.")
