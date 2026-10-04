@@ -77,8 +77,16 @@ jobs:
       # a start that fails once routed and a teardown step that panics
       # leave the namespace as it was (the step reported with its kind and
       # the command that clears it).
+      # Five runs, each in fresh namespaces: the failure tests compare the
+      # namespace before and after, and a run takes seconds, so a timing
+      # flake shows here rather than in someone else's pull request.
       - name: the runtime's reload and failures (Rust)
-        run: sudo NETNS_TIMEOUT=120 test/netns/run.sh --libtest "$RUNNER_TEMP/ppvpn_core.test" 'runtime::netns_tests::'
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "::group::run $i"
+            sudo NETNS_TIMEOUT=120 test/netns/run.sh --libtest "$RUNNER_TEMP/ppvpn_core.test" 'runtime::netns_tests::'
+            echo "::endgroup::"
+          done
 
   network-change:
     # dns-local and the host-IPv6 re-probe across network changes (#61, #69):
