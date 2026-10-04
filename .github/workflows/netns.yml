@@ -82,7 +82,7 @@ jobs:
       # flake shows here rather than in someone else's pull request.
       - name: the runtime's reload and failures (Rust)
         run: |
-          for i in 1 2 3 4 5; do
+          for i in $(seq 20); do
             echo "::group::run $i"
             sudo NETNS_TIMEOUT=120 test/netns/run.sh --libtest "$RUNNER_TEMP/ppvpn_core.test" 'runtime::netns_tests::'
             echo "::endgroup::"
