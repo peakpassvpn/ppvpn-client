@@ -108,13 +108,11 @@ impl Inner {
             .ok_or_else(local_proxy_disabled)
     }
 
-    /// `Options.local_proxy`: the shared inbound and its users, unless
-    /// this run goes without it.
+    /// `Options.local_proxy`: the shared inbound and its users (with
+    /// `Options.local_proxy_left_out` when this run goes without the
+    /// listener: its rules stay).
     pub(super) fn local_proxy_options(&self) -> Option<translate::LocalProxy> {
-        self.local_proxy()
-            .ok()
-            .filter(|p| !p.unavailable)
-            .map(|p| p.state.translate_options())
+        self.local_proxy().ok().map(|p| p.state.translate_options())
     }
 
     /// `Options.system_proxy_port`: the listener while turned on.

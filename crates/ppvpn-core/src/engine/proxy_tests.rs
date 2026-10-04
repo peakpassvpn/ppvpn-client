@@ -485,8 +485,16 @@ async fn a_start_failing_with_the_local_proxy_goes_on_without_it() {
         })
         .collect();
     assert_eq!(starts.len(), 2);
-    assert!(starts[0].contains(LOCAL_PROXY_INBOUND_TAG));
-    assert!(!starts[1].contains(LOCAL_PROXY_INBOUND_TAG));
+    let has_listener = |config: &str| {
+        let config: Value = serde_json::from_str(config).unwrap();
+        config["inbounds"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|i| i["tag"] == LOCAL_PROXY_INBOUND_TAG)
+    };
+    assert!(has_listener(&starts[0]));
+    assert!(!has_listener(&starts[1]), "started without the listener");
     assert_eq!(engine.status().state, local_proxy_unavailable());
 
     tokio::time::sleep(Duration::from_millis(1100)).await;
