@@ -100,8 +100,9 @@ jobs:
         # network.
         run: sudo NETNS_TIMEOUT=180 NETNS_ENV=SWITCH_GRACE_MS=10000 test/netns/run.sh --host test/lab/localdns/run.sh build/ppvpn-core-lab-linux "$RUNNER_TEMP/ldnslab" testdata/profiles/multi-ingress.json "$RUNNER_TEMP/localdns"
       - name: link down/up, no kernel switch while offline (#69), modes 0-4
-        # SWITCH_GRACE_MS: the Go baseline's limits (recovery within 6 s, not
-        # 2.5 s), as for dns-local above; the Rust core keeps the strict ones.
+        # SWITCH_GRACE_MS: the Go baseline's limits (recovery within 15 s, not
+        # 2.5 s: Go 0.5.21 started offline once took 11 s to see the link,
+        # updown.sh); the Rust core keeps the strict ones.
         run: |
           status=0
           for mode in 0 1 2 3 4; do
