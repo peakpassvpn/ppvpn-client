@@ -21,7 +21,7 @@ if ($env:WINDOWS_SIGN_COMMAND) {
   & cmd.exe /d /s /c $command
   if ($LASTEXITCODE -ne 0) { throw "WINDOWS_SIGN_COMMAND failed with exit code $LASTEXITCODE for $Path" }
 } elseif ($env:WINDOWS_CERTIFICATE) {
-  $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+  $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "tools\desktop\sign-windows.ps1") $Path
   if ($LASTEXITCODE -ne 0) { throw "sign-windows.ps1 failed with exit code $LASTEXITCODE for $Path" }
 } else {

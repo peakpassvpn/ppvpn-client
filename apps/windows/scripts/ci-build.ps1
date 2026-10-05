@@ -47,7 +47,7 @@ function Invoke-Native {
   if ($LASTEXITCODE -ne 0) { throw "$Exe failed with exit code $LASTEXITCODE" }
 }
 
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $inCi = [bool]$env:GITHUB_ACTIONS
 
 if (-not $Channel) { $Channel = "" }

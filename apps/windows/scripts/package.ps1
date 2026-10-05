@@ -82,7 +82,7 @@ if (-not $Channel -and $env:PPVPN_RELEASE_CHANNEL) { $Channel = $env:PPVPN_RELEA
 if ($Channel -notin @("", "dev", "stable")) { throw "Channel must be dev or stable, not '$Channel'." }
 if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be x.y.z (no pre-release suffix), not '$Version'." }
 
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $windowsDir = Join-Path $repo "apps\windows"
 $project = Join-Path $windowsDir "PPVPN.Windows\PPVPN.Windows.csproj"
 $agentProject = Join-Path $windowsDir "PPVPN.PushAgent\PPVPN.PushAgent.csproj"
