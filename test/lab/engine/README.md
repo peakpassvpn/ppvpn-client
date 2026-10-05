@@ -27,8 +27,8 @@ the backend sends them without a pinned entry IP.
 ## Run
 
 Needs Docker, a privileged container (TUN, iptables), and Linux x86_64 or
-arm64 binaries: a core (`ppvpn-core`, built with `make build-linux-artifact`
-or the release file), a Sail for the nodes and as the subject, and sing-box
+arm64 binaries: a core (`ppvpn-core`: the v0.5.21 release file, or
+`ppvpn-core-lab` for the Rust engine), a Sail for the nodes and as the subject, and sing-box
 1.13.12 (`go build -tags with_gvisor,with_utls github.com/sagernet/sing-box/cmd/sing-box@v1.13.12`).
 
 ```sh

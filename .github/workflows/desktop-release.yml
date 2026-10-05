@@ -22,7 +22,8 @@ name: desktop-release
 # attestation is an entry in a public log.
 #
 # A desktop release is never the repository's "latest" release: that is
-# the core's (release.yml, tags vX.Y.Z, which the desktop tags do not match).
+# the Go core's (v0.5.21, its last; tags vX.Y.Z, which the desktop tags do
+# not match).
 #
 # After a stable release the update site (channel pointer, feeds, apt/dnf
 # repositories) is rebuilt from the releases and deployed

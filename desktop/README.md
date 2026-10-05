@@ -51,7 +51,7 @@ desktop/
   要在它自己的目录下或用 `-p ppvpn-client` 构建。
 - `service/` 不在 workspace 里，有自己的 `Cargo.lock`。
 - 工具链版本由仓库根的 `rust-toolchain.toml` 固定（1.98.1）。
-- 工作流在仓库根的 `.github/workflows/desktop.yml`。
+- 测试在仓库根的 `.github/workflows/ci.yml`（`desktop-*` job），发行在 `desktop-release.yml`。
 
 ## 许可证
 

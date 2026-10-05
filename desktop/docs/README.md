@@ -2,7 +2,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [ci.md](./ci.md) | `desktop.yml` 的各个 job、触发条件、vendored core 的 manifest 与下载校验 |
+| [ci.md](./ci.md) | `ci.yml` 里桌面端的各个 job、触发条件、vendored core 的 manifest 与下载校验 |
 | [baseline-go-0.5.21.md](./baseline-go-0.5.21.md) | Go core 0.5.21 的安装包大小与内存基线（切换到 Rust 引擎时的对比基准，#214） |
 | [qa-checklist.md](./qa-checklist.md) | 各平台的真机 QA 清单 |
 

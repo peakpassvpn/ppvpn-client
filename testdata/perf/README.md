@@ -1,8 +1,8 @@
 # Performance baselines
 
-`baseline-go-0.5.21.json` holds the tier A numbers of the frozen Go core (v0.5.21 behaviour). `perf.yml` compares every main run with it, and with the last main run (see `tools/perf/README.md`).
+`baseline-go-0.5.21.json` holds the tier A numbers of the frozen Go core (v0.5.21 behaviour). `tools/perf/report.py compare` compares a run with it (see `tools/perf/README.md`).
 
-- **Measured:** `perf.yml` on GitHub `ubuntu-latest` (image in `environment`), go1.26.8 with the desktop tags, Go's own allocator with GOGC and GOMEMLIMIT at their defaults. One perf run (3 rounds) plus the calibration run (10 rounds), 13 rounds in all; each metric keeps its rounds and their median.
+- **Measured:** the former `perf.yml` on GitHub `ubuntu-latest` (image in `environment`), go1.26.8 with the desktop tags, Go's own allocator with GOGC and GOMEMLIMIT at their defaults. One perf run (3 rounds) plus the calibration run (10 rounds), 13 rounds in all; each metric keeps its rounds and their median.
 - **Thresholds:** set from those rounds, in `tools/perf/report.py`:
 
   | Metric | Spread (max − min over median) | Threshold against main | Threshold against this baseline |
