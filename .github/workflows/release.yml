@@ -1322,8 +1322,14 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets --locked
           cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin
-          cargo test -p ppvpn-core -p ppvpn-cli -p ppvpn-client --lib --locked --no-run
+          # The same cargo invocations as ci.yml's macos job, one package at
+          # a time: a combined build unifies features differently and its
+          # artifacts would not be reused.
+          cargo test -p ppvpn-core --lib --locked --no-run
+          cargo test -p ppvpn-cli --lib --locked --no-run
+          (cd desktop/crates/ppvpn-client && cargo test --lib --locked --no-run)
           cargo test -p ppvpn-cli --test keystore --locked --no-run
+          (cd desktop/crates/ppvpn-client && for t in aarch64-apple-darwin x86_64-apple-darwin; do cargo build --lib --locked --target "$t"; done)
 
   # windows.
   cache-windows:
@@ -1359,5 +1365,8 @@ jobs:
         run: |
           cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-client -p ppvpn-engine-host -p ppvpn-service \
             --all-targets --locked --target x86_64-pc-windows-msvc
-          cargo test -p ppvpn-core -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc --no-run
+          # As ci.yml's windows job runs them, one package at a time.
+          cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc --no-run
+          cargo test -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc --no-run
+          cargo build -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc
           cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
