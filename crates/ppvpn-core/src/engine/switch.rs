@@ -1,8 +1,10 @@
-//! Taking a new translation while running (#150). sail's reload keeps
-//! every listener as it is: it neither adds nor removes an inbound, and of
-//! an existing one it replaces only the users. A change it cannot take is
-//! a stop and a start (`SwitchKind::FullRestart`), as Go's
-//! `fullRestartReasons`, whose whitelist and words this keeps.
+//! Taking a new translation while running (#150). sail's reload takes it
+//! in place: it diffs the inbounds by tag (adds, removes, replaces or
+//! keeps each) and leaves the other connections where they are. What only
+//! a stop and a start can take, a TUN's change, is a full restart
+//! (`SwitchKind::FullRestart`), as is a reload sail refuses with
+//! `needs_restart` or ends with `inbound_lost`. The reasons keep the words
+//! of Go's `fullRestartReasons`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
@@ -122,6 +124,42 @@ pub(super) struct Switched {
     pub translation: Translation,
     /// The listeners a hot switch changed (none for a full restart).
     pub listeners: Vec<ListenerChange>,
+    /// A hot switch's connections: closed (their node is gone) and kept.
+    /// A full restart closes them all and counts none.
+    pub closed: u32,
+    pub kept: u32,
+}
+
+/// The connections a switch from `running` to `next` closes (Go's
+/// `closeOnSwitch`): those through a node `next` no longer has. A
+/// connection's node is the one its chain recorded when it was routed:
+/// node and ingress tags are made from the node's id (translate's
+/// `node_tag`), so a tag names the same node in every build. A connection
+/// through no node (direct, a rejected one) and one on a node that stays,
+/// whatever its ingress, rule or selection now, is kept: sail's reload
+/// leaves it on the outbound it was routed through. A removed local proxy
+/// user's connections are among these (its node went); sail itself closes
+/// those of a listener or user it removes.
+pub(super) fn close_on_switch(
+    running: &Translation,
+    next: &Translation,
+    connections: &[crate::runtime::RuntimeConnection],
+) -> Vec<u64> {
+    let remaining: BTreeSet<&String> = next.outbound_nodes.values().collect();
+    connections
+        .iter()
+        .filter(|c| {
+            c.chain
+                .iter()
+                .find_map(|tag| {
+                    next.outbound_nodes
+                        .get(tag)
+                        .or_else(|| running.outbound_nodes.get(tag))
+                })
+                .is_some_and(|node| !remaining.contains(node))
+        })
+        .map(|c| c.id)
+        .collect()
 }
 
 /// Builds the configuration again from the current inputs (the listeners'
@@ -150,13 +188,36 @@ impl Inner {
     ) -> Result<Switched, Error> {
         let mut reasons = restart_reasons(&running.json, &next.json);
         if reasons.is_empty() {
+            // Before the reload: sail closes a removed user's connections
+            // itself, and they still count as closed.
+            let connections = self.runtime.connections().await.unwrap_or_default();
             match self.runtime.reload(&next.json).await {
                 Ok(report) => {
                     self.guard_check("kernel switch");
+                    let doomed = close_on_switch(running, &next, &connections);
+                    for id in &doomed {
+                        if let Err(e) = self.runtime.close_connection(*id).await {
+                            tracing::warn!(id, error = %e, "cannot close a connection of a removed node");
+                        }
+                    }
+                    // Kept: those still open, less the closed. sail has
+                    // already closed a removed or replaced listener's own.
+                    let kept = self
+                        .runtime
+                        .connections()
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .filter(|c| !doomed.contains(&c.id))
+                        .count();
+                    let closed = u32::try_from(doomed.len()).unwrap_or(u32::MAX);
+                    let kept = u32::try_from(kept).unwrap_or(u32::MAX);
                     return Ok(Switched {
                         kind: SwitchKind::KernelSwitch,
                         translation: next,
                         listeners: listener_changes(&report),
+                        closed,
+                        kept,
                     });
                 }
                 // sail has the final word: what it cannot take in place is
@@ -177,6 +238,8 @@ impl Inner {
             kind: SwitchKind::FullRestart { reasons },
             translation,
             listeners: Vec::new(),
+            closed: 0,
+            kept: 0,
         })
     }
 
@@ -236,6 +299,7 @@ impl Inner {
         }
         // What sail installed for the new TUN.
         self.guard_started();
+        self.sync_pinned_checks();
         if let Some(run) = retry {
             self.retry_local_proxy(run);
         }
@@ -272,23 +336,24 @@ impl Inner {
     }
 
     /// A reload switched kernels for `revision` (Go's `kernel switched`
-    /// line and `KernelSwitched`). The connection counts and the draining
-    /// kernels come with the drain (rust-parity group 1): 0 until then.
-    pub(super) fn kernel_switched(&self, revision: &str) {
+    /// line and `KernelSwitched`), closing `closed` connections and keeping
+    /// `kept` ([`close_on_switch`]). No kernel drains: sail reloads in
+    /// place, so `draining_kernels` is 0.
+    pub(super) fn kernel_switched(&self, revision: &str, closed: u32, kept: u32) {
         let gen = self.kernel_gen.fetch_add(1, Ordering::SeqCst) + 1;
         tracing::info!(
             gen,
             previous = gen - 1,
-            closed_connections = 0u32,
-            kept_connections = 0u32,
+            closed_connections = closed,
+            kept_connections = kept,
             draining_kernels = 0u32,
             "kernel switched"
         );
         self.publish(crate::event::Event::KernelSwitched {
             at: super::now(),
             revision: revision.into(),
-            closed_connections: 0,
-            kept_connections: 0,
+            closed_connections: closed,
+            kept_connections: kept,
             draining_kernels: 0,
         });
     }

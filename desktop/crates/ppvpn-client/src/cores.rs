@@ -13,8 +13,8 @@ use std::time::Duration;
 use crate::enhanced::{Enhanced, EnhancedConfig};
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
 use crate::service::ServiceApi;
-use crate::session::ClientRef;
-use crate::standard::{CoreLauncher, StandardCore};
+use crate::session::{ClientRef, SelectionSource};
+use crate::standard::{CoreLauncher, StandardCore, StandardSettings};
 use crate::StandardState;
 use crate::{Client, ClientConfig, PlatformHooks};
 
@@ -36,10 +36,7 @@ enum Trigger {
 fn is_standard_error(info: &ClientErrorInfo) -> bool {
     matches!(
         info.code,
-        ErrorCode::StandardCoreFailed
-            | ErrorCode::CoreBinaryMissing
-            | ErrorCode::CoreIncompatible
-            | ErrorCode::ProfileExpired
+        ErrorCode::StandardCoreFailed | ErrorCode::ProfileExpired
     )
 }
 
@@ -80,15 +77,30 @@ pub(crate) fn build_cores(
     ingress_pins: crate::ingress::PinsCell,
     this: &Weak<Client>,
 ) -> (StandardCore, Enhanced, crate::compat::Compat) {
+    // Both cores apply every profile with the current selection.
+    let weak_selection = this.clone();
+    let selection = SelectionSource::new(move || {
+        ClientRef::upgrade(&weak_selection).and_then(|client| client.selected_node())
+    });
     let weak = this.clone();
-    let standard = StandardCore::with_routing(
+    let weak_reset = this.clone();
+    let standard = StandardCore::with_settings(
         launcher,
         Arc::new(move |state| {
             if let Some(client) = ClientRef::upgrade(&weak) {
                 client.on_standard_state(state);
             }
         }),
-        routing.clone(),
+        StandardSettings {
+            routing: routing.clone(),
+            ingress_pins: ingress_pins.clone(),
+            selection: selection.clone(),
+            on_credentials_reset: Some(Arc::new(move || {
+                if let Some(client) = ClientRef::upgrade(&weak_reset) {
+                    client.on_local_proxy_credentials_reset();
+                }
+            })),
+        },
     );
     let weak_state = this.clone();
     let weak_error = this.clone();
@@ -96,6 +108,7 @@ pub(crate) fn build_cores(
         EnhancedConfig {
             routing,
             ingress_pins,
+            selection,
             ..EnhancedConfig::from_client(config)
         },
         service,
@@ -154,6 +167,17 @@ impl Client {
             }
             snapshot.standard = state;
         });
+    }
+
+    /// A new standard core rebuilt the local proxy credentials: shown
+    /// until dismissed, whatever later cores report.
+    fn on_local_proxy_credentials_reset(&self) {
+        tracing::info!("local proxy credentials reset: telling the user");
+        self.update(|snapshot| snapshot.local_proxy_credentials_reset = true);
+    }
+
+    pub(crate) fn clear_local_proxy_credentials_reset(&self) {
+        self.update(|snapshot| snapshot.local_proxy_credentials_reset = false);
     }
 
     /// A failure of background work: shown until the next success.
@@ -243,7 +267,8 @@ impl Client {
         }
         sync.applied_team = current.team_id.clone();
         // Standard-core failures surface through its state sink; a rejected
-        // update of a running core keeps it ready and is reported here.
+        // update of a running core keeps it ready and is reported here. Both
+        // cores get the selection and the pins with the profile.
         if let Err(error) = self
             .standard
             .apply_profile(&current.raw, &current.revision)
@@ -257,18 +282,10 @@ impl Client {
                 }
             }
         }
-        if let Some(node_id) = self.selected_node() {
-            self.select_standard_node(&node_id).await;
-        }
-        self.push_standard_pins().await;
-        let enhanced = match self
+        let enhanced = self
             .enhanced
             .set_profile(&current.raw, &current.revision)
-            .await
-        {
-            Ok(()) => self.push_selection().await,
-            Err(error) => Err(error),
-        };
+            .await;
         if let Some(info) = enhanced.err().and_then(|error| error.info()) {
             if is_profile_rejection(&info) {
                 self.mark_core_rejected(&current.revision, info);
@@ -300,16 +317,7 @@ impl Client {
                 .set_profile(&current.raw, &current.revision)
                 .await?;
         }
-        self.push_selection().await
-    }
-
-    /// Tells enhanced mode the selected node (restored from disk, or the
-    /// profile default); applied live only while it is on.
-    async fn push_selection(&self) -> Result<(), ClientError> {
-        match self.selected_node() {
-            Some(node_id) => self.apply_selection(&node_id).await,
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     pub(crate) fn selected_node(&self) -> Option<String> {
@@ -319,9 +327,10 @@ impl Client {
             .and_then(|snapshot| snapshot.selected_node_id.clone())
     }
 
-    /// Selects `node_id` on both cores: best effort on the standard core
-    /// (its system-proxy endpoint follows the selection), and live or for the
-    /// next connect in enhanced mode (errors returned).
+    /// Selects `node_id` live on both cores (the user chose it): best effort
+    /// on the standard core (its system-proxy endpoint follows the
+    /// selection), and in enhanced mode while it is on (errors returned).
+    /// The next apply or connect carries it anyway.
     pub(crate) async fn apply_selection(&self, node_id: &str) -> Result<(), ClientError> {
         self.select_standard_node(node_id).await;
         self.enhanced.select_node(node_id).await
@@ -423,9 +432,11 @@ pub(crate) mod test_support {
         /// `GetStatus.rule_sets`; omitted while `null`.
         pub(crate) rule_sets: Arc<Mutex<Value>>,
         /// Ingress pins the core holds (node id → endpoint key); reported in
-        /// `GetStatus.nodes` like core 0.5.7. Cleared by a test to mimic a
-        /// restarted core.
+        /// `GetStatus.nodes` like core 0.5.7. Replaced by every apply, like
+        /// the engine.
         pub(crate) pins: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
+        /// The next launches report rebuilt local proxy credentials.
+        pub(crate) credentials_reset: Arc<AtomicBool>,
     }
 
     impl FakeLauncher {
@@ -531,6 +542,23 @@ pub(crate) mod test_support {
                     ),
                     "/v1/apply-profile" => {
                         *applied.lock().unwrap() = Some(body["profile"].clone());
+                        // The engine takes the selection (default: the
+                        // profile's) and the pins with the profile.
+                        *selected.lock().unwrap() = body["selected_node_id"]
+                            .as_str()
+                            .or_else(|| body["profile"]["selection"]["default_node_id"].as_str())
+                            .map(str::to_string);
+                        *core_pins.lock().unwrap() = body["pins"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|pin| {
+                                Some((
+                                    pin["node_id"].as_str()?.to_string(),
+                                    pin["endpoint_key"].as_str()?.to_string(),
+                                ))
+                            })
+                            .collect();
                         ok(json!({"applied": true}))
                     }
                     "/v1/list-nodes" => {
@@ -562,6 +590,7 @@ pub(crate) mod test_support {
                 fail_apply,
                 rule_sets,
                 pins,
+                credentials_reset: Arc::default(),
             })
         }
 
@@ -588,9 +617,8 @@ pub(crate) mod test_support {
                         "stopped".to_string()
                     }),
                     stop,
-                    rule_set_hosts: Some(vec!["127.0.0.1".into()]),
-                    accepts_routing_mode: true,
-                    accepts_routed_proxy: true,
+                    rule_set_hosts: vec!["127.0.0.1".into()],
+                    credentials_reset: self.credentials_reset.load(Ordering::SeqCst),
                 })
             })
         }
@@ -618,6 +646,7 @@ pub(crate) mod test_support {
             _: &'a Value,
             _: bool,
             _: crate::RoutingMode,
+            _: &'a crate::core_ipc::ApplyChoices,
         ) -> BoxFuture<'a, Result<u32, ServiceError>> {
             Box::pin(async { unavailable() })
         }
@@ -626,6 +655,7 @@ pub(crate) mod test_support {
             _: &'a SessionRef,
             _: &'a Value,
             _: crate::RoutingMode,
+            _: &'a crate::core_ipc::ApplyChoices,
         ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
             Box::pin(async { unavailable() })
         }
@@ -751,7 +781,6 @@ mod tests {
             api_base: base,
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir.clone(),
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };
@@ -823,7 +852,6 @@ mod tests {
                 api_base: base,
                 data_dir: data_dir.clone(),
                 log_dir: data_dir.clone(),
-                core_bin_dir: data_dir.clone(),
                 platform: "macos".into(),
                 app_version: "0.0.0-test".into(),
             },
@@ -1018,6 +1046,17 @@ mod tests {
             Some("HKG-A")
         );
         let selected = snapshot.selected_node_id.clone().unwrap();
+        // The selection goes with the profile, not after it.
+        let applied = launcher
+            .core
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(path, _)| path == "/v1/apply-profile")
+            .map(|(_, body)| body.clone())
+            .unwrap();
+        assert_eq!(applied["selected_node_id"], json!(selected));
         let selects = |launcher: &FakeLauncher| {
             launcher
                 .core
@@ -1029,7 +1068,7 @@ mod tests {
                 .map(|(_, body)| body["node_id"].as_str().unwrap().to_string())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(selects(&launcher).last(), Some(&selected));
+        assert!(selects(&launcher).is_empty(), "no select-node after apply");
 
         let other = client
             .nodes()
@@ -1099,26 +1138,71 @@ mod tests {
         assert_eq!(pinned.healthy, Some(false));
         assert!(pinned.active);
 
-        // A restarted core forgot it: the monitor sends it again.
-        launcher.pins.lock().unwrap().clear();
-        wait_for(&client, |_| {
-            launcher.pins.lock().unwrap().get(&node).map(String::as_str) == Some("12")
-        });
-
         // Back to automatic.
         block_on(client.pin_ingress(node.clone(), None)).unwrap();
         assert!(client.snapshot().ingress_pins.is_empty());
         assert!(launcher.pins.lock().unwrap().is_empty());
 
-        // Pinned again, then the profile drops that ingress: the pin goes.
+        // Pinned again, another node too, then the profile drops the first
+        // pin's ingress: that pin goes, the other comes with the new profile.
+        let other = "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-102".to_string();
         block_on(client.pin_ingress(node.clone(), Some("12".into()))).unwrap();
+        block_on(client.pin_ingress(other.clone(), Some("22".into()))).unwrap();
+        let live_pins = launcher.calls("/v1/pin-ingress");
         block_on(client.refresh_profile()).unwrap();
         let snapshot = wait_for(&client, |s| !s.cleared_ingress_pins.is_empty());
-        assert!(snapshot.ingress_pins.is_empty());
+        assert_eq!(
+            snapshot.ingress_pins,
+            vec![crate::IngressPin {
+                node_id: other.clone(),
+                endpoint_key: "22".into()
+            }]
+        );
         assert_eq!(snapshot.cleared_ingress_pins[0].endpoint_key, "12");
-        assert!(crate::ingress::load(&data_dir).is_empty());
+        assert_eq!(crate::ingress::load(&data_dir).len(), 1);
+        let last_apply = || {
+            launcher
+                .core
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| path == "/v1/apply-profile")
+                .map(|(_, body)| body.clone())
+                .next_back()
+                .unwrap()
+        };
+        wait_for(&client, |_| {
+            last_apply()["profile"]["revision"] == json!("r-without-12")
+        });
+        let applied = last_apply();
+        assert_eq!(
+            applied["pins"],
+            json!([{"node_id": other, "endpoint_key": "22"}])
+        );
+        assert_eq!(
+            launcher.calls("/v1/pin-ingress"),
+            live_pins,
+            "no pin-ingress after an apply"
+        );
         client.dismiss_cleared_ingress_pins();
         assert!(client.snapshot().cleared_ingress_pins.is_empty());
+
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn rebuilt_local_proxy_credentials_show_until_dismissed() {
+        let launcher = FakeLauncher::new();
+        launcher.credentials_reset.store(true, Ordering::SeqCst);
+        let (client, _, _launcher, data_dir) =
+            signed_in_client_with(vec![("200 OK", r#"{"revoked":true}"#.into())], launcher);
+        let snapshot = wait_for(&client, |s| s.local_proxy_credentials_reset);
+        assert!(matches!(snapshot.standard, StandardState::Ready { .. }));
+
+        client.dismiss_local_proxy_credentials_reset();
+        assert!(!client.snapshot().local_proxy_credentials_reset);
 
         client.shutdown();
         let _ = std::fs::remove_dir_all(data_dir);
@@ -1503,7 +1587,6 @@ mod tests {
                 api_base: "http://127.0.0.1:9".into(),
                 data_dir: data_dir.clone(),
                 log_dir: data_dir.clone(),
-                core_bin_dir: data_dir.clone(),
                 platform: "macos".into(),
                 app_version: "0.0.0-test".into(),
             },
@@ -1858,7 +1941,6 @@ mod tests {
                 api_base,
                 data_dir: data_dir.into(),
                 log_dir: data_dir.into(),
-                core_bin_dir: data_dir.into(),
                 platform: "linux".into(),
                 app_version: "0.0.0-test".into(),
             }

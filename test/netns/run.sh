@@ -2,8 +2,7 @@
 # Runs a core test binary that needs a real TUN (PPVPN_TEST_REAL_TUN=1) in a
 # network namespace of its own, and checks that the host was left as it was.
 #
-#   go test -c -o runtime.test ./internal/runtime        # as a normal user
-#   sudo test/netns/run.sh ./runtime.test -test.run 'TestTUNRules' [more test flags]
+#   sudo test/netns/run.sh <go test binary> -test.run 'TestX' [more test flags]
 #   sudo test/netns/run.sh --host <script> [args]        # a script that builds
 #                                                        # namespaces of its own
 #   sudo test/netns/run.sh --libtest <rust test binary> <filter> [libtest args]

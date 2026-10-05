@@ -22,7 +22,7 @@ use crate::{
     AuthState, Client, ClientSnapshot, DeviceCode, Node, ProfileStatus, StandardState, Team,
 };
 
-/// Profile refresh period while signed in (the Tauri web UI used the same).
+/// Profile refresh period while signed in.
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Retry period after a failed background refresh, e.g. offline at launch.
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
@@ -246,6 +246,27 @@ fn is_steady_failure(error: &ClientError) -> bool {
 #[derive(Serialize, Deserialize)]
 struct SelectionFile {
     node_id: String,
+}
+
+/// The selected node (`snapshot.selected_node_id`) as both cores read it
+/// for every `apply-profile`; reads `None` when unset (tests).
+#[derive(Clone, Default)]
+pub(crate) struct SelectionSource(Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>);
+
+impl SelectionSource {
+    pub(crate) fn new(read: impl Fn() -> Option<String> + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(read)))
+    }
+
+    pub(crate) fn get(&self) -> Option<String> {
+        self.0.as_ref().and_then(|read| read())
+    }
+}
+
+impl std::fmt::Debug for SelectionSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SelectionSource")
+    }
 }
 
 /// The node chosen in an earlier run, if any.
@@ -1147,8 +1168,8 @@ impl Client {
         if !applied {
             return Err(ClientError::NotSignedIn);
         }
-        // Applied to the standard core, and live while enhanced mode is on
-        // (stored for the next connect otherwise).
+        // Applied to the standard core, and live while enhanced mode is on;
+        // every later apply and connect carries it.
         self.apply_selection(&node_id)
             .await
             .map_err(|error| self.report(error))
@@ -1239,7 +1260,6 @@ mod tests {
             api_base: base.to_string(),
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir.clone(),
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };
@@ -1564,7 +1584,6 @@ mod tests {
             api_base: "http://127.0.0.1:9".into(),
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir,
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };

@@ -68,7 +68,7 @@ public struct Restriction {
 }
 
 public struct Notice: Identifiable {
-    public enum Action { case retry, takeOver, retryLocalProxy, backToAuto, dismissClearedPins }
+    public enum Action { case retry, takeOver, retryLocalProxy, backToAuto, dismissClearedPins, dismissProxyReset }
     public enum Secondary { case useCompatible }
 
     public let id: String
@@ -371,6 +371,14 @@ extension AppState {
                 id: "pinCleared", tone: .warn, systemImage: "arrow.uturn.backward",
                 title: tr("pinClearedT"), message: tr("pinClearedD", ["n": names.joined(separator: ", ")]),
                 actionTitle: tr("ok"), action: .dismissClearedPins))
+        }
+        // The standard core rebuilt the local proxy credentials: apps holding
+        // the old ones (a browser extension) must copy them again. Said once.
+        if isSignedIn, restricted == nil, snapshot.localProxyCredentialsReset {
+            notices.append(Notice(
+                id: "proxyReset", tone: .warn, systemImage: "key",
+                title: tr("proxyResetT"), message: tr("proxyResetD"),
+                actionTitle: tr("ok"), action: .dismissProxyReset))
         }
 
         return ConnectionPresentation(

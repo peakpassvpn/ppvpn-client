@@ -58,11 +58,11 @@ repository as well, purge the setup package (`sudo apt purge ppvpn-archive-keyri
 | Path | |
 |---|---|
 | `/usr/lib/ppvpn/ppvpn` | the app (self-contained .NET apphost); `ppvpn-service` only accepts IPC from this path |
-| `/usr/lib/ppvpn/{ppvpn-core,ppvpn-service,ppvpn-service-install,ppvpn-service-uninstall}` | copied to `/usr/lib/ppvpn-service` and run as the `ppvpn-service` systemd unit when Enhanced Mode is first turned on (pkexec) |
+| `/usr/lib/ppvpn/{ppvpn-service,ppvpn-service-install,ppvpn-service-uninstall}` | the service is copied to `/usr/lib/ppvpn-service` and run as the `ppvpn-service` systemd unit when Enhanced Mode is first turned on (pkexec) |
 | `/usr/lib/ppvpn/package-format` | `deb` or `rpm`: which upgrade command the update notice shows |
 | `/usr/lib/ppvpn/ppvpn-push-agent` | push agent (NativeAOT, `PPVPN.PushAgent/`): shows backend pushes as desktop notifications, also while the app is closed; one per user session, started from `/etc/xdg/autostart/com.peakpassvpn.ppvpn.push-agent.desktop` and by the app |
 | `~/.local/share/ppvpn`, `~/.local/state/ppvpn/logs`, `~/.config/ppvpn` | per-user data, logs, settings (XDG) |
-| `/var/log/ppvpn/{ppvpn-service,ppvpn-core}.log` | privileged service and Enhanced Mode core logs (root only; 5 MB per file, 3 files kept); kept when the service is uninstalled or reinstalled |
+| `/var/log/ppvpn/{ppvpn-service,ppvpn-core}.log` | privileged service and Enhanced Mode engine logs (root only; 5 MB per file, 3 files kept); kept when the service is uninstalled or reinstalled |
 
 Credentials go to the Secret Service (GNOME Keyring, KWallet, …); only without one, to a
 0600 file in the data directory. A saved login in a locked keyring whose unlock prompt was
@@ -95,8 +95,8 @@ apps/linux/scripts/build-repo-packages.sh  # ppvpn-archive-keyring (deb), ppvpn-
 apps/linux/scripts/smoke-test.sh deb|rpm   # start an installed package once under Xvfb
 ```
 
-Releases publish through `.github/workflows/desktop-native-release.yml`: after the installers
-go to R2, `scripts/ci/publish-linux-repo.sh` adds the deb and rpm to the signed repositories in
+Releases publish through `.github/workflows/release.yml` (see `desktop/docs/ci.md`); the
+script below is the older R2 path: after the installers go to R2, `scripts/ci/publish-linux-repo.sh` adds the deb and rpm to the signed repositories in
 the packages bucket (apt `linux/apt`, suites `dev` and `stable`; dnf `linux/rpm/<channel>/x86_64`),
 publishes the setup packages and writes `linux/<channel>/latest.json`. Packages are immutable;
 indexes, signatures and `latest.json` move last. `PKG_STORE=dir:<path>` publishes into a local
@@ -105,5 +105,5 @@ directory instead (with a throwaway key) to try it out.
 `build-package.sh` documents its inputs (version, build number, channel, API base, update
 feed). The Rust code is linked against glibc 2.35 with cargo-zigbuild; the NativeAOT push
 agent links against the build host's glibc (and needs clang and zlib1g-dev), so build on
-Ubuntu 22.04 — the script refuses binaries that need a newer glibc. CI: `.github/workflows/desktop-native-linux.yml`, called by
-the unified desktop release, which publishes the packages to the repository.
+Ubuntu 22.04 — the script refuses binaries that need a newer glibc. CI: `release.yml`'s `linux` job,
+on every merge to main and in a release run (`desktop/docs/ci.md`).

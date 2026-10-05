@@ -92,7 +92,7 @@ fn main() -> Result<(), anyhow::Error> {
         .status();
     // The service removes its system DNS override when it stops; one left
     // by a service that was killed instead goes here.
-    macdns::TunDns::default().clean_leftover(false, "uninstall");
+    macdns::TunDns::default().clean_leftover("uninstall");
 
     let _ = fs::remove_file(LAUNCHD_PLIST_PATH);
     if Path::new(BUNDLE_PATH).exists() {

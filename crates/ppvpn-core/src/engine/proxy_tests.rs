@@ -178,6 +178,8 @@ async fn rebuilt_credentials_are_reported() {
     let path = tmp.path().join(STATE_FILE);
     std::fs::write(&path, "{").unwrap();
     let (engine, _) = standard(tmp.path(), false);
+    // Compared with in the unix-only permission check below.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let first = engine.local_proxy_routed_credential().unwrap();
     assert_eq!(
         engine.status().local_proxy.unwrap().credentials_reset,

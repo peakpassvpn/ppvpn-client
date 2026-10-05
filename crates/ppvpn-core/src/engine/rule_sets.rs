@@ -284,7 +284,11 @@ impl Inner {
                         .await
                         .map(|switched| {
                             if switched.kind == crate::request::SwitchKind::KernelSwitch {
-                                self.kernel_switched(&profile.revision);
+                                self.kernel_switched(
+                                    &profile.revision,
+                                    switched.closed,
+                                    switched.kept,
+                                );
                             }
                             switched.translation
                         })

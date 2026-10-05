@@ -24,7 +24,7 @@
 | 实例 | 所在进程 | 权限 | 启用的能力 |
 | --- | --- | --- | --- |
 | 标准实例（`Role::Standard`） | UI 进程，或 CLI 的 daemon | 普通用户 | 共享本地代理（7890）、兼容模式的系统代理监听（7891）、探测、流量与连接统计 |
-| TUN 实例（`Role::Tun`） | 特权 service | root / SYSTEM | TUN、路由规则守护、TUN 内的 DNS（劫持、解析、dns-local）、热切换和排空 |
+| TUN 实例（`Role::Tun`） | 特权 service | root / SYSTEM | TUN、路由规则守护、TUN 内的 DNS（劫持、解析、dns-local）、热切换 |
 
 CLI 只运行标准实例，而且不开 7891。
 
@@ -36,14 +36,14 @@ CLI 只运行标准实例，而且不开 7891。
 
 标准实例在所有平台上都不需要任何特权。
 
-**系统层面的 DNS 设置不属于本库**，例如 macOS 上用 scutil 覆盖系统 DNS。这部分由 service 负责，包括退出和异常后的清理（见 `docs/desktop.md`）。
+**系统层面的 DNS**：macOS 上由 Sail 负责（Sail 0.17.0 起）。Sail 打开 utun 时写一个临时的 dynamic store 键 `State:/Network/Service/<id>/DNS`（supplemental，匹配全部域名），指向 TUN 通告的 DNS 地址；teardown 时这一项（`LeftKind::Dns`）先于路由撤掉。临时键属于写它的进程，进程退出时由系统删除，被强杀也一样。service 不再用 scutil 覆盖系统 DNS。宿主自己打开 TUN 时（移动端的平台隧道）Sail 不设 DNS，由宿主负责。`ppvpn-core` 自己的 dns-local 读的是默认网卡的 DNS（`State:/Network/Global/DNS` 和该网卡的 scoped 解析器），不含这个键，隧道地址也另有过滤。其他平台上系统层面的 DNS 设置不属于本库，由 service 负责，包括退出和异常后的清理（见 `docs/desktop.md`）。
 
 ## 3. 生命周期
 
 ```rust
 pub struct EngineConfig {
     pub role: Role,                         // Standard | Tun
-    pub platform: Platform,                 // Linux | Macos | Windows（今后加 Ios | Android）
+    pub platform: Platform,                 // Linux | Macos | Windows | Ios | Android（移动端只影响 TUN 配置，FFI 还没有，见 mobile.md）
     pub state_dir: PathBuf,                 // 私有目录：规则集缓存、本地代理状态
     pub local_proxy: Option<LocalProxyConfig>, // 仅 Standard：listen（默认 127.0.0.1）、preferred_port（默认 7890；0 = 任意空闲端口，供测试）
     pub system_proxy: bool,                 // 仅 Standard：是否允许 set_system_proxy_listener（CLI 设为 false）
@@ -80,7 +80,8 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
       - 局限只剩一项：强杀测的是 windows-gnu 构建（Windows 的 TUN 和 WFP 代码与当前 master 相同），没有用我们的 MSVC 构建测。所以用我们自己的构建复测之前，这一条不算验收（`docs/rust-parity.md` R1）。实例失败而进程还在的情形不同，我们的 MSVC 构建已在 CI 里验证（第 9 节）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
-  - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
+  - 在**多线程**的 tokio 运行时里调用 `new` 时，实例跑在这个运行时上（Sail 的 `Runtime::Host`），每个实例只另占 Sail 的一个线程；在单线程运行时里或不在 tokio 里调用时，实例用 Sail 自带的运行时。用多线程运行时的宿主，要让它启用 I/O 和定时器（`enable_all()`），并一直活到 `shutdown` 返回；运行时先没了，实例会失败（`Fatal`），系统改动仍由 Sail 自己的线程撤销。Sail 会用这个运行时的 blocking 线程池（系统解析器的查询等），宿主自己的阻塞任务接近上限时要调大 `max_blocking_threads`。
+  - **内存（Linux，glibc）**：一个进程里反复起停实例时，glibc 的 malloc 不把释放的内存还给系统，RSS 会一直涨（Sail 的测量：64 MB 涨到 264 MB，用宿主运行时是 133 MB），不是泄漏。宿主进程**应设环境变量 `MALLOC_ARENA_MAX=2`**（同一测量降到 79–92 MB），要在进程启动前设，例如写进 systemd unit 或启动脚本。引擎另外在每次加载配置后调用 `malloc_trim(0)`，把这次加载的峰值还回去。macOS、Windows 和 musl 不受影响。
   - 实例不使用全局单例、静态运行时或全局注册表。同一个进程里可以先后创建多个实例（G7 要求反复启停 100 次不留残留）。
 - **实例数量**：
   - **Tun**：同一时刻只能有一个，因为它们会争用同一套规则命名空间。重复创建时返回 `TUN_INSTANCE_EXISTS`（retryable=false）。
@@ -147,7 +148,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
   - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
   - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
 - **规则集**：apply 前会准备规则集，总共最多等 10 秒。只从 `allowed_rule_set_hosts` 列出的主机下载（宿主传拉取 Profile 的 API 主机）；为空时一个也不下载，只用本地已有的、sha256 相符的缓存，其余规则集报 `RULE_SET_HOST_NOT_PINNED`（和 Go 一致，默认拒绝）。不为空时，Profile 里的规则集 URL 必须都在这些主机上，否则 apply 被拒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
-- **热切换**：运行中的 apply 只换内核，不关监听，也不断开已有连接，旧内核排空。监听的变化大多也原地完成：新增的监听建起来，消失的移除，地址、端口或选项变了的就地替换；被移除或替换的那个监听断开它自己的连接，其他连接不受影响。这些仍算 `KernelSwitch`，`ApplyResult.listeners` 列出哪些监听被增、删、换。route 的网卡选项（`default_interface`、`auto_detect_interface`、`default_mark` 等）的变化也由 reload 接受，不需要重启，进行中的连接保留原来的套接字；新连接改用新值（`default_interface` 由我们的 netns CI 验证；`default_mark` 由 Sail 的 CI 覆盖：Linux 网络命名空间里以 root 运行，sail 41ea4db8；其余选项按 Sail 的说明，尚未验证）。选项指向一张不存在的网卡时，运行时拒绝这次 reload，运行中的配置不变，apply 返回 `CORE_OPERATION_FAILED`（retryable=false），并发出 `ReloadFailed`。只有 TUN 的变化、或者运行时自己表示必须重启时，才走 `FullRestart`（停止再启动，所有连接断开，`reasons` 说明原因，例如 `tun options changed`；这时 `listeners` 为空）。这是 Rust 版和 Go 0.5.21 的行为差异：Go 对任何监听变化都整体重启。重启和 `start` 一样会重新检查监听端口（被占就换，发 `LocalProxyEndpointChanged`），本地代理监听起不来时不带它启动（`Degraded{LocalProxyUnavailable}`）。重启期间状态保持 `Running`，不发 `CoreStopped`、`CoreStarted` 或 `StateChanged`；已有连接断开，监听短暂关闭，宿主从 apply 的结果 `switch = FullRestart { reasons }` 得知发生了重启。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
+- **热切换**：运行中的 apply 原地换掉配置，不关监听，已有连接留在原处继续运行。Rust 版没有“旧内核排空”：Sail 在同一个实例里原地 reload，进行中的连接不迁移、也不需要等待，没有旧内核可排空，所以不发 `KernelDrained`，`status.draining_kernels` 恒为 0（与 Go 0.5.21 的差异：Go 换一个新内核，旧内核带着连接排空，最长 10 分钟）。Go 在切换时还会主动关掉三类连接，这一点和排空无关、Rust 照做：所用节点被新 Profile 删除的、经本地代理进来而其用户已不在新列表里的、新规则会拒绝的；`KernelSwitched` 的 `closed_connections` 是这样关掉的连接数，`kept_connections` 是留下的。前两类已实现（被删用户的连接由 Sail 在 reload 时关掉，计数时也算在内）；新规则会拒绝的那一类尚未实现，见 `docs/rust-parity.md` 的 A 类项。监听的变化大多也原地完成：新增的监听建起来，消失的移除，地址、端口或选项变了的就地替换；被移除或替换的那个监听断开它自己的连接，其他连接不受影响。这些仍算 `KernelSwitch`，`ApplyResult.listeners` 列出哪些监听被增、删、换。route 的网卡选项（`default_interface`、`auto_detect_interface`、`default_mark` 等）的变化也由 reload 接受，不需要重启，进行中的连接保留原来的套接字；新连接改用新值（`default_interface` 由我们的 netns CI 验证；`default_mark` 由 Sail 的 CI 覆盖：Linux 网络命名空间里以 root 运行，sail 41ea4db8；其余选项按 Sail 的说明，尚未验证）。选项指向一张不存在的网卡时，运行时拒绝这次 reload，运行中的配置不变，apply 返回 `CORE_OPERATION_FAILED`（retryable=false），并发出 `ReloadFailed`。只有 TUN 的变化、或者运行时自己表示必须重启时，才走 `FullRestart`（停止再启动，所有连接断开，`reasons` 说明原因，例如 `tun options changed`；这时 `listeners` 为空）。这是 Rust 版和 Go 0.5.21 的行为差异：Go 对任何监听变化都整体重启。重启和 `start` 一样会重新检查监听端口（被占就换，发 `LocalProxyEndpointChanged`），本地代理监听起不来时不带它启动（`Degraded{LocalProxyUnavailable}`）。重启期间状态保持 `Running`，不发 `CoreStopped`、`CoreStarted` 或 `StateChanged`；已有连接断开，监听短暂关闭，宿主从 apply 的结果 `switch = FullRestart { reasons }` 得知发生了重启。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
 ### 4.2 start / stop
 
@@ -266,8 +267,8 @@ pub struct Status {
                                             // failures（非 ready 时连续下载失败次数，0 时省略）、
                                             // next_retry_at（非 ready 时下次重试时间；主机未固定或没有存储时省略），同 get-status
     pub system_proxy: SystemProxyStatus,
-    pub draining_kernels: u32,
-    pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded（Linux、macOS、Windows）
+    pub draining_kernels: u32,             // Rust 版恒为 0：没有旧内核排空（第 4.1 节）
+    pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded（守护目前只在 Linux；macOS、Windows 恒为 Ok，见 4.4）
     pub dropped_log_lines: u64,             // 日志接收端阻塞而丢弃的行数，见第 10 节
 }
 #[non_exhaustive]
@@ -350,7 +351,7 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 | `RuleSetChanged` | 是 | |
 | `SystemProxyChanged` | 是 | |
 | `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
-| `KernelSwitched`、`KernelDrained` | 是 | 热切换和排空 |
+| `KernelSwitched`、`KernelDrained` | 是 | 热切换；Rust 版不发 `KernelDrained`（没有旧内核排空，第 4.1 节） |
 | `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
 | `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有；Rust 版三个平台都有。同时会反映在 `StateChanged` 里 |
 
@@ -379,7 +380,7 @@ pub struct Error {
   - `WINTUN_UNAVAILABLE`：retryable=false，找不到或加载不了宿主传入的 wintun.dll；
   - `TUN_NAME_TAKEN`：`start` 时 TUN 网卡名被其他程序占用（第 11 节）。message 里有被占用的名字；名字由 Sail 选时，还有它试过的次数。名字由我们配置时（Linux `ppvpn0`、Windows `PPVPN`）retryable=false，多半是另一个 ppvpn-core 正在运行；名字由 Sail 选时（macOS）retryable=true，再次 `start` 可能成功。和 `TUN_INSTANCE_EXISTS` 不同：后者是同一进程里重复创建 Tun 实例，在 `new` 时返回；
   - `PINS_INVALID`：retryable=false，`pins` 里同一个节点出现多次，field=`pins[i].node_id`；
-  - `PROFILE_MALFORMED`：retryable=false，Profile 不是合法 JSON 或者字段类型不对（D5）。
+  - `PROFILE_MALFORMED`：retryable=false，Profile 不是合法 JSON 或者字段类型不对（D5）message 只说错误类别（`Syntax`、`Data`、`Eof`、`Io`），语法错误再加行列号，不带 Profile 里的任何值。
 - **`CORE_OPERATION_FAILED`**：只用于真正的内部错误，原因写进日志。Go 版有几种本该是结构化错误的情况会折叠成这个码，Rust 版改成具体的码（D1、D2）。
 - **IPC 专用的码不再出现**：`UNAUTHENTICATED`、`CORE_API_UNSUPPORTED`、`REQUEST_INVALID`、`API_NOT_FOUND`、`STREAM_UNSUPPORTED`，库里没有对应的情形。
 - **CLI 依赖**：CLI 的退出码和 `--json` 输出依赖 `code`、`field`、`retryable` 这三个字段。
@@ -401,9 +402,9 @@ pub struct Error {
   - 网络变化期间（包括断网、切换网卡）**不会进入 `Fatal`**，只会出现 `Degraded`，网络稳定后自动回到 `Running`；
   - 流量一旦绕过 TUN，**立即处理**：先尝试补回路由，补不回来就进入 `Fatal{TunRoutingBroken}`。
   - `Fatal{TunRoutingBroken}` 时运行时和 TUN 照常运行，引擎不会自己停止（同 Go 0.5.20）：这时流量绕过 TUN 直连，用户的流量**正在泄露**到隧道之外，但没有断网。宿主**必须立即**丢弃并重建实例（先 `shutdown`，再 `new`、`apply`、`start`），由新实例重新装上路由，期间不要套用“网络正在稳定”的宽限。重建失败时，宿主告诉用户保护已经中断，由用户决定是否继续。Go 版宿主就是这样做的：Desktop 增强模式的健康检查读到 `tun_routing` 为 broken，就按泄露处理，不等宽限，立刻重连。
-  - 运行时失败或 panic 进入的 `Fatal`（`KernelUnrecoverable`、`Panic`）不一样：运行时已经失效，留着只剩系统里的残留（Windows 上 strict_route 的过滤器会挡住所有不走 TUN 的流量）。进入这类 `Fatal` 时，引擎立即停止运行时（有界，至多 10 秒），不等宿主：Sail 先撤路由、规则、过滤器和 DNS，再关设备。撤不掉的记下来，宿主之后 `shutdown`（或 drop）时列在 `ShutdownReport.leftovers` 里，每项带类别和手工清除的说明。三个平台上 Sail 都保证这一清理，并有 CI 测试（Linux、macOS 自 sail dddc2d1c，Windows 自 sail 99b8daef：先撤 WFP 过滤器，再撤 DNS、路由，最后关 Wintun 会话）。我们自己的构建也验证：Linux 在 netns CI，Windows 在 windows-msvc 作业（MSVC 构建、管理员、strict_route）；运行时失败后、宿主还没 shutdown，系统已经回到启动前，再次启动成功。正常情况下引擎已经撤干净，leftovers 为空。leftovers 里出现 `wfp`，或者 Windows 上出现无法归类的 `runtime` 残留，说明清理没有成功、过滤器可能还挡着流量：宿主应当退出进程，由服务管理器重启，进程退出时系统会回收这些过滤器。这是清理失败时唯一的恢复手段。局限：清理步骤自身 panic 的用例只在 Linux 上有；进程被强杀的情形在我们的 MSVC 构建上还没有测；Sail 的 Windows 测试跑在 Windows Server 的 CI 机器上，不是桌面版实机。宿主看到这类 `Fatal`，仍应 `shutdown` 并重建实例。
+  - 运行时失败或 panic 进入的 `Fatal`（`KernelUnrecoverable`、`Panic`）不一样：运行时已经失效，留着只剩系统里的残留（Windows 上 strict_route 的过滤器会挡住所有不走 TUN 的流量）。进入这类 `Fatal` 时，引擎立即停止运行时（有界，至多 10 秒），不等宿主：Sail 先撤路由、规则、过滤器和 DNS，再关设备。撤不掉的记下来，宿主之后 `shutdown`（或 drop）时列在 `ShutdownReport.leftovers` 里，每项带类别和手工清除的说明。三个平台上 Sail 都保证这一清理，并有 CI 测试（Linux、macOS 自 sail dddc2d1c，Windows 自 sail 99b8daef：先撤 WFP 过滤器，再撤 DNS、路由，最后关 Wintun 会话）。我们自己的构建也验证：Linux 在 netns CI，Windows 在 CI 的 `windows` 作业（MSVC 构建、管理员、strict_route）；运行时失败后、宿主还没 shutdown，系统已经回到启动前，再次启动成功。正常情况下引擎已经撤干净，leftovers 为空。leftovers 里出现 `wfp`，或者 Windows 上出现无法归类的 `runtime` 残留，说明清理没有成功、过滤器可能还挡着流量：宿主应当退出进程，由服务管理器重启，进程退出时系统会回收这些过滤器。这是清理失败时唯一的恢复手段。局限：清理步骤自身 panic 的用例只在 Linux 上有；进程被强杀的情形在我们的 MSVC 构建上还没有测；Sail 的 Windows 测试跑在 Windows Server 的 CI 机器上，不是桌面版实机。宿主看到这类 `Fatal`，仍应 `shutdown` 并重建实例。
 - 路由规则守护，以及 Wintun、utun 的自愈；
-- 热切换和排空；
+- 热切换，以及切换时关掉新 Profile 拿走的连接；
 - 路由和规则层面的完整性：规则或路由都在，流量没有绕过 TUN。Linux 沿用 Go 0.5.20 的规则守护；**macOS 和 Windows 是 Rust 版新增的能力**，至少要能检测到并上报，能自愈的就自愈，由 G5 实机验收。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。
 
 留在宿主的：
@@ -414,7 +415,7 @@ pub struct Error {
 - 多用户和接管；
 - service 的安装；
 - UI 状态的映射；
-- 系统层面的 DNS 设置；
+- 系统层面的 DNS 设置（macOS 除外：TUN 期间由 Sail 设置，见第 2 节）；
 - 拉取 Profile 失败时，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。后端的口径见 proxy-profile 格式文档（ingress-endpoints.md）：
   - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）；
   - **500**：违反客户端契约，或者规则集读不出来。
@@ -429,6 +430,7 @@ pub struct Error {
 
 - **输出方式**：日志行通过 `LogConfig` 交给宿主，可以是写入宿主提供的文件，也可以是一个按行接收的通道。格式与 Go 版一致（logfmt：`level=… msg=… key=value`），lab 和性能检查会解析这些行。
   - 一行是 `<RFC 3339 UTC 时间，纳秒> level=<error|warn|info|debug> msg=<消息> key=value … source=<core|sail>`。`source=core` 是 `ppvpn-core` 自己的行，其余字段是事件的字段；`source=sail` 是 Sail 的行，Sail 的原文整个放在 `msg` 里。
+  - **级别与隐私**：`LogConfig.level` 为 `Info`（默认）时，日志里不出现连接的目的地址或域名，与 Go 版一致。`ppvpn-core` 自己写目的地的行（`connection`、`outbound failed`、DNS 交换）都在 debug 级。Sail 在 info 级会给每条连接写一行 `handled … dst=<目的地>`，所以引擎在 `Info` 下只让 Sail 记 warn 及以上，`Debug` 下让 Sail 记 debug。
   - 一个实例的两种行进同一个有界队列（1024 行），再按 `LogSink` 输出：
     - `None`：不保留任何行，也不计丢弃；
     - `File { path }`：`Engine::new` 时打开文件（不存在就创建，Unix 上权限 0600），只追加；打不开时 `new` 返回 `CORE_OPERATION_FAILED`（field=`log.sink.path`）。写盘在引擎自己的线程里做，不阻塞打日志的一方；写失败的行计入丢弃。只追加，core 不做轮转，也没有大小上限；实例存活期间引擎一直持有这个文件，宿主只能在 `Engine::new` 之前截断或改名；
@@ -449,6 +451,7 @@ pub struct Error {
 - **产品策略**：故障转移的防抖参数、DNS 回退预算、本地代理用户名规则等，在 `ppvpn-core` 里实现，叠加在 Sail 提供的机制之上。
 - **dns-local（Tun 实例）**：用 `ppvpn-core` 自己的实现，移植自 Go 的 `internal/localdns`，不用 Sail 的 `local`。原因是 Sail 的 `local` 有几处直接影响用户的缺口：忽略 macOS 的手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败。这些作为 Sail 的通用改进继续推进，不阻塞切换。
   - Engine 在 `new` 时（仅 Tun 实例）在 127.0.0.1 的随机端口上起 UDP 和 TCP 监听。监听自己读默认网卡的 DNS 服务器（Windows 读适配器，macOS 读 scutil，Linux 读 resolv.conf 或 systemd-resolved 里该网卡的 DNS）；宿主给了 `local_dns_servers` 时改用这些静态服务器。查询按顺序发出，每个服务器有超时，TC 时改用 TCP，没有服务器时立即回 SERVFAIL。
+  - `local_dns_servers` 每项是 IP、`IP:port` 或 `[IPv6]:port`，默认端口 53；IPv6 可以带 zone（网卡名或编号），如 `fe80::1%en0`、`[fe80::1%en0]:53`。其他写法（域名、端口 0、未指定地址、IPv4 带 zone、`[IPv6%zone]` 不带端口）让 `new` 失败：`CORE_OPERATION_FAILED`，field=`tun.local_dns_servers`。隧道网段内的地址（宿主残留的旧系统 DNS）被去掉，其余按原顺序使用；一个都不剩时与没给一样，读默认网卡。带 zone 的链路本地服务器只在 zone 是当前默认网卡时使用（按该网卡的编号发出），别的网卡的被跳过。移动端没有自己的 dns-local，服务器直接交给 Sail：Sail 的 DNS 服务器地址不接受 zone，带 zone 的项被跳过，不剩时用 Sail 的 `local`。
   - Sail 的 dns-local 服务器渲染成指向这个监听的 **tcp** 服务器。Sail 的 udp 客户端遇到截断应答不会改走 TCP，用 tcp 能拿到完整应答。
   - 服务器列表变化不需要 reload Sail；网卡变化的触发来自 Sail 的网络事件（只用 Sail 一个网卡监视器），监听收到后让缓存失效。
   - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#214）。

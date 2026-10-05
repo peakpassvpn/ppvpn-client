@@ -1,144 +1,108 @@
 # 五分钟快速开始
 
-本指南用于本地验证和桌面端接入。需要 Go 1.25 或 `go.mod` 指定的兼容工具链。
+本指南用于本地验证和宿主接入。引擎是 Rust 库 `ppvpn-core`（`crates/ppvpn-core`，内嵌 Sail），没有单独发行的核心进程：Desktop 和 CLI 在自己的进程里链接它。接口契约见 [宿主接入](host-integration.md)，测试见 [测试分层](testing.md)。
+
+本机试用有三条路：
+
+- 在自己的 Rust 代码里直接调用 `Engine`（第 3 节）；
+- `ppvpn` CLI 的 dev 构建，读本地 Profile 文件运行标准实例（第 4 节）；
+- 测试宿主 `ppvpn-core-lab`，用 Core API v1 的形状对外提供引擎（第 5 节）。它只给 lab 和 CI 用，不是产品。
+
+工具链：不低于 `Cargo.toml` 里的 `rust-version`。
 
 ## 1. 构建与自检
 
 ```sh
-go test ./...
-go build -trimpath -o build/ppvpn-core ./cmd/ppvpn-core
-./build/ppvpn-core version
+cargo build --locked -p ppvpn-core-lab
+./target/debug/ppvpn-core-lab version
 ```
 
-预期版本响应（`core_version` 是当前版本，即 `version/version.go` 的 `CoreVersion`）：
+`version` 输出 `Engine::version()`（`core_version` 是 crate 版本，`sail_version`、`sail_commit` 是链接的 Sail）：
 
 ```json
-{"core_version":"X.Y.Z","core_api_version":1,"profile_schema_version":1,"flow_adapter_version":1,"local_proxy_contract_version":1}
+{"core_version":"X.Y.Z","sail_version":"…","sail_commit":"…","profile_schema_version":1,"local_proxy_contract_version":1}
 ```
+
+测试入口是 `make test-unit`、`make test-integration` 和 `make test-system`（Linux，需要 sudo），见 [测试分层](testing.md)。
 
 ## 2. 准备 Profile
 
-参考 [Backend Profile](backend-profile.md) 生成 `profile.json`，将所有演示地址和凭据换成真实服务值，然后先做离线校验：
+参考 [Backend Profile](backend-profile.md) 生成 `profile.json`，把所有演示地址和凭据换成真实服务的值。
 
-```sh
-./build/ppvpn-core validate profile.json
-./build/ppvpn-core probe-entrance --method tcp --timeout 5s --concurrency 4 profile.json
-./build/ppvpn-core probe-entrance --method icmp profile.json
+校验不需要实例，也不联网：在 Rust 里是 `Engine::validate(&ApplyRequest)`，经 `ppvpn-core-lab` 是 `/v1/validate-profile`（第 5 节）。失败时返回稳定的错误码和字段路径，例如 `ENTRY_IP_NOT_PUBLIC`、field=`nodes[0].ingresses[0].endpoint.ip`。
+
+Profile 只放在内存里：引擎的 `state_dir` 不保存 Profile 原文，宿主也不必落盘。
+
+## 3. 在 Rust 宿主里使用
+
+```rust
+use ppvpn_core::{
+    ApplyRequest, Engine, EngineConfig, LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform,
+    Role,
+};
+
+async fn run(state_dir: &str, log_path: &str, profile: Vec<u8>) -> Result<(), ppvpn_core::Error> {
+    let config = EngineConfig::new(Role::Standard, Platform::Linux, state_dir)
+        .with_local_proxy(LocalProxyConfig::new())
+        .with_log(LogConfig::new(
+            LogLevel::Info,
+            LogSink::File { path: log_path.into() },
+        ));
+    let engine = Engine::new(config).await?;
+    let request = ApplyRequest::new(profile)
+        .with_allowed_rule_set_hosts(vec!["api.example.com".into()]);
+    engine.apply(request).await?;
+    engine.start().await?;
+    let endpoints = engine.local_proxy_metadata()?; // 不含密码
+    // …
+    engine.shutdown().await?;
+    Ok(())
+}
 ```
 
-`validate` 成功输出 `profile valid`。入口探测只验证公网字面量 IP 的 TCP 可达性，不等价于节点协议可用。
+- `Role::Standard` 不需要特权：共享本地代理、探测、流量与连接统计。`Role::Tun` 需要 root（Linux 也可以是 `CAP_NET_ADMIN` 加 `CAP_NET_RAW`）或 Windows 的 SYSTEM，一个进程里最多一个。
+- `state_dir` 是私有目录，存规则集缓存和本地代理状态（prefix、密码、端口），被实例独占加锁。
+- `allowed_rule_set_hosts` 为空时一个规则集也不下载，只用本地已有、sha256 相符的缓存。宿主传拉取 Profile 的 API 主机。
+- 选中节点、ingress pin 和 `routing_mode` 由宿主持久化，每次 apply 一起传入（`with_selected_node_id`、`with_pins`、`with_routing_mode`）。
+- 宿主如果装了自己的 tracing 订阅者，要加上 `ppvpn_core::tracing_layer()`，否则日志行进不了实例的 sink。
 
-需要排查配置转换时可使用：
+完整的生命周期、状态、事件和错误码见 [宿主接入](host-integration.md)。
+
+## 4. 用 CLI 运行标准实例
+
+`ppvpn` CLI 在自己的 daemon 里运行一个标准实例：只有共享本地代理，不建 TUN，不改系统网络设置。dev 构建可以不登录、直接读本地 Profile：
 
 ```sh
-./build/ppvpn-core render --platform macos profile.json
+PPVPN_BUILD_PROFILE=dev cargo build --locked -p ppvpn-cli
+export PPVPN_API_BASE=https://api.example.com    # 规则集只从这个主机下载
+export PPVPN_PROFILE_FILE="$PWD/profile.json"    # 必须是绝对路径；release 构建忽略它
+./target/debug/ppvpn start --foreground
 ```
 
-输出已经过脱敏，但仍只应在本机受控环境查看；该命令不是后端或产品客户端的配置生成接口。
+在另一个终端用 `ppvpn status`、`ppvpn nodes`、`ppvpn proxy` 查看状态和本地代理端点，`ppvpn proxy credential [node-id]` 读凭据。CLI 把核心日志写到运行目录的 `core.log`（info 级别）。命令、退出码和文件位置见 [CLI](cli.md)。
 
-## 3. 启动桌面核心
+## 5. 用 ppvpn-core-lab 调用 Core API v1
 
-创建一个仅当前用户可访问的应用状态目录。以下路径仅为 macOS/Linux 开发示例：
+`ppvpn-core-lab serve` 的参数和日志格式与原来的 `ppvpn-core serve` 相同，lab 和 netns CI 的脚本直接用它。创建一个仅当前用户可访问的目录（下面的路径只是 macOS/Linux 开发示例）：
 
 ```sh
 APP_STATE="${TMPDIR:-/tmp}/ppvpn-core-demo"
 mkdir -m 700 "$APP_STATE"
 
-./build/ppvpn-core serve \
+./target/debug/ppvpn-core-lab serve \
   --socket "$APP_STATE/core.sock" \
   --session-secret-file "$APP_STATE/session.secret" \
-  --state-dir "$APP_STATE/state" \
-  --platform macos
+  --state-dir "$APP_STATE/state"
 ```
 
-`serve` 默认启用共享认证本地代理：所有节点共用一个 loopback 端口（优先 7890），用户名
-`<prefix>-<node_id>` 选择节点，密码为设备 secret。`--local-proxy=false` 可关闭它；核心不提供
-无认证的系统代理兼容入口。桌面端的推荐组合是：登录期间常驻一个非特权核心
-`--tun=false --local-proxy=true`（共享本地代理端口，`probe-availability` 通过它工作），
-增强模式另起一个特权核心 `--tun --local-proxy=false`（本地代理相关 API 返回
-`LOCAL_PROXY_DISABLED`）。TUN 核心会把所有入口 IP 加入 `route_exclude_address`，
-因此非特权核心到入口的连接和探测不会进入隧道。
-方式。
+- 默认是标准实例，带共享本地代理（`--local-proxy=false` 关闭）。所有节点共用一个 loopback 端口（优先 7890），用户名 `<prefix>-<node_id>` 选择节点，裸 `<prefix>` 按规则路由。
+- `--tun` 改为 TUN 实例，需要特权；这时本地代理相关的接口返回 `LOCAL_PROXY_DISABLED`，建议同时传 `--local-proxy=false`。
+- `--local-dns-servers <list>` 只能和 `--tun` 一起用：逗号分隔的物理网络 DNS 服务器，作为 dns-local 的静态覆盖，不跟随网络变化。不传时 dns-local 自己读默认网卡的 DNS（Windows 读适配器，macOS 读 scutil，Linux 读 resolv.conf 或 systemd-resolved），网卡变化后重读。
+- `--log-file <path>` 追加到文件，默认写 stderr；`--log-level info|debug`，默认 `info`（见第 6 节）。
+- `--exit-on-stdin-close`：父进程持有的 stdin 关闭时退出。
+- 只有 Unix socket；Windows 的 Named Pipe 还没有实现。
 
-生产环境不要使用共享临时目录。macOS 应使用 App Container/Application Support 私有目录；Windows 应使用带当前用户 ACL 的 LocalAppData 目录和 Named Pipe 路径。
-
-`serve` 把第一方诊断日志写到 stderr（每行一次写入并刷盘），或用 `--log-file <path>` 追加到文件；
-启动时记录版本、平台、`tun`/`local_proxy` 参数和状态目录，生命周期请求（apply/start/stop/reload）的成功与所有失败原因都会记录。
-`dns-local` 每次换用另一组服务器时（启动后第一次查询、默认网卡变化后）记一行
-`msg="local dns servers"`：`source`（`adapter`：Windows 网卡；`scutil-global`/`scutil-scoped`：macOS；
-`override`：`--local-dns-servers`）、`interface` 与 `servers`；读不到时为 warn，`servers=none` 并附 `error`。
-
-`--local-dns-servers <list>`（仅与 `--tun` 一起使用）：逗号分隔的物理网络 DNS 服务器（IP、IP:port 或
-`[IPv6%zone]:port`，默认端口 53），作为 `dns-local` 的**静态覆盖**：核心按顺序使用其中所有不在隧道地址段
-（`10.60.159.88/30`、`fde2:ec40:9312:c7fd::/126`，以及 0.5.7 之前的 `172.19.0.0/30`、
-`fdfe:dcba:9876::/126`）内的地址（绑定物理网卡），用来解析路由为直连的域名；它们不跟随网络变化，启动时记一行
-warn。非法项会让 `serve` 启动失败。0.5.20 起不需要再传：不传（或全部被过滤）时，Windows 与 macOS 上的
-`dns-local` 自己读取物理默认网卡的 DNS，并在网卡变化（换 Wi‑Fi、插拔网线）时立即重读；Linux 上是
-sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun的-dns-与防泄漏) 与
-[设计](design-local-dns.md)。
-
-`--log-level info|debug`（默认 `info`，由宿主 service 传入）：
-
-- 任何级别（0.5.10 起）：桌面 TUN（`auto_detect_interface`）启动时和默认网卡每次变化时各记一行
-  `msg="default interface"`：`event`（`start`/`changed`）、`name`、`index`、`mtu`、`addresses`；`name=none`
-  表示没有可用网卡。核心自己的出站连接（拨节点、直连、DNS）都绑定在这块网卡上。
-- 任何级别（TUN）：每次 apply 与 start 探测主机 IPv6，记一行 `msg="host ipv6"`：`host_ipv6_enabled`、
-  `host_ipv6_route`（是否有全局单播 IPv6 地址 + IPv6 默认路由）、`policy`（`tun_ipv6`；
-  `tun_ipv6_direct_ipv4` 表示无 IPv6 出口，直连的 IPv6 目标改按域名走 IPv4；`tun_ipv4_only` 表示主机
-  关闭了 IPv6）。路由探测失败时另记一行 warn `msg="host ipv6 route probe failed"`，按有出口处理。
-  默认网卡变化后（防抖 2 秒）也会重新探测；结果变了就热切换内核，记一行
-  `msg="host ipv6 changed"`：`previous_host_ipv6_route`、`host_ipv6_route`、`previous_policy`、
-  `policy`、`rebuilt`、`switch`（应为 `kernel`；如果出现 `full_restart`，说明有 bug）。
-  详见 [security.md](security.md#ipv6)。
-
-- `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：
-  - `msg="apply timing"`：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`local_proxy_ms`、
-    `host_ipv6_ms`（主机 IPv6 探测）、`build_ms`、`routing_ms`，运行中 apply 还有 `kernel_switch_ms`
-    （0.5.18 起：新内核创建、启动与切换），走「停止再启动」路径时为 `engine_create_ms`/`engine_start_ms`；
-  - 运行中 apply（0.5.18 起）：`msg="kernel switched"`（`gen`、`previous`、`closed_connections`、
-    `kept_connections`，0.5.19 起统计所有仍在排空的旧内核；`draining_kernels`，切换后正在排空的旧内核数）；旧内核关闭时 `msg="kernel drained"`（`gen`、`reason`=`idle`/`deadline`、
-    `closed_connections`、`idle_closed`（0.5.19 起：排空期间因空闲 60 秒被关闭的连接数））；
-    监听变化需要重启时 `msg="apply full restart" reasons=…`；
-  - 排空中的旧内核（0.5.20 起，`debug` 级别）每分钟一行 `msg="kernel draining"`：`gen`、`age_s`（已排空多久）、
-    `open`（仍在的连接）、`idle_candidates`（空闲已超过阈值一半）、`oldest_idle_s`、`low_traffic`（这一分钟双向合计
-    不足 4 KB 的连接）。`open` 一直不降、`idle_candidates` 为 0 而 `low_traffic` 等于 `open`，说明旧内核被只有
-    心跳的长连接拖住，会等到 10 分钟上限；
-  - `msg="start timing"`：`system_proxy_ms`（启用时）、`engine_create_ms`（sing-box 解析与构造）、
-    `engine_start_ms`（sing-box 启动：出站、DNS、路由与规则集、入站，含打开 TUN 与安装 `auto_route`
-    路由）、`total_ms`。sing-box 内部各组件不再细分：其计时只在上游日志里，而上游日志保持关闭。
-- `debug`：再为每条被路由的连接记一行 `msg=connection`：`inbound`、`network`、`destination`、
-  `route_domain`（路由规则匹配用的域名：嗅探所得或 DNS 反查；HTTP 嗅探可能留下地址本身）、`protocol`、
-  `rule`、`outbound`（实际节点）、`target`（交给节点的目标）与 `target_kind`（`domain`/`ip`）。
-  被 reject 或 hijack-dns 的连接不经过此处。
-  另外每次发往上游 DNS 服务器的尝试记一行 `msg=dns`：`name`、`type`、`server`（`dns-local`、`dns-remote`，
-  或回退上游 `dns-remote-8.8.8.8`/`dns-remote-9.9.9.9`）、`dns-local` 实际应答的服务器 `upstream`（0.5.20 起，
-  Windows/macOS 或传了 `--local-dns-servers` 时）、远端查询的 `attempt`（第几次尝试）、`rcode` 与 `answers`，或 `error`，以及 `ms`。命中 DNS 缓存的查询
-  不会发往上游，因此不记录。
-
-另外（0.5.9 起）每次连接节点失败记一行 `msg="outbound failed"`：`stage`（`dial`：TCP 连接失败，VLESS/REALITY
-与 AnyTLS 的 TLS 握手也在这一步；`closed before any response`：连上后节点没回任何数据就关闭，例如 Shadowsocks
-密钥被拒）、`node_id`、`endpoint_key`、`outbound`、`protocol`、`network`、`destination`、`error` 与 `ms`。不记录
-任何凭据；只在 debug 级别记录。0.5.21 起直连出站（`direct`，以及无主机 IPv6 时的 `direct-host`）拨号失败也记
-同样的一行：`stage=dial`、`outbound`、`protocol=direct`、`network`、`destination`、`error`、`ms`，没有 `node_id` 与
-`endpoint_key`。断网时直连会大量失败，所以同一出站、同一目标 10 秒内只记第一次；窗口过后的下一行附
-`suppressed`，即期间被省略的次数。每次 apply（不含 reload/规则集重建）还为每个带 TLS 的入口记一行
-`msg="ingress tls"`，用于和服务端核对参数而不暴露原文：`server_name`、`flow`，REALITY 入口另有
-`public_key_sha256`/`short_id_sha256`（按收到的字符串原样取 SHA-256 的前 10 个十六进制字符）、两者长度、
-`public_key_encoding`（`padded`/`unpadded` 与 `url`/`std`/`url-or-std` 字母表）和 uTLS `fingerprint`。
-
-`dns-remote`（经所选节点的 DoT）带有防半开连接的保护：每次尝试最多 3 秒，失败（超时、EOF、连接重置等）
-即重试，最多 3 次、总计不超过 8 秒（0.5.11 前为 10 秒）；DNS 应答（包括 NXDOMAIN、SERVFAIL）不重试。0.5.11 起每次重试换下一个上游：
-`1.1.1.1` → `8.8.8.8` → `9.9.9.9`（都是经所选节点的 DoT，三次尝试各一个）。例外：若失败发生在已建立的连接上
-（EOF、连接重置/已关闭，典型是连接池里空闲时被对端关掉的连接），每个查询有一次机会先清空该上游的连接池、在同一上游
-用新连接重试，再进入回退；这次重试是额外的一次尝试，仍在总预算内。超时和拨号失败直接回退；某个回退上游应答后，之后 10 分钟内的
-查询从它开始，避免每次先撞已被拦截的上游，10 分钟后重新从 `1.1.1.1` 开始；三个都失败时立即回 SERVFAIL（不缓存，下次查询重新尝试），客户端不必等到自己超时。总预算短于 sing-box 自身的 10 秒 DNS 超时，以保证 SERVFAIL 能在被取消前发出。距上次成功超过
-30 秒且没有进行中的查询时，先清空各上游的连接池再查询，避免复用已被中间设备静默丢弃的空闲连接。**debug 日志包含用户访问的域名，只能在排查时临时开启，
-  不得常开或默认开启。**
-`serve` 每次启动覆盖生成新的会话密钥，正常退出时删除密钥文件。产品桌面端还应启用 `--exit-on-stdin-close`，并保持传入核心的 stdin 写端存活，使父 App 崩溃后核心自动退出。
-
-## 4. 调用 API
-
-在另一个终端：
+`serve` 每次启动生成新的会话密钥，退出时删除密钥文件，并在 10 秒内关闭实例。在另一个终端：
 
 ```sh
 APP_STATE="${TMPDIR:-/tmp}/ppvpn-core-demo"
@@ -153,10 +117,11 @@ curl --unix-socket "$APP_STATE/core.sock" \
   http://localhost/v1/get-version
 ```
 
-应用 Profile 时，不要用 shell 拼接含密钥的命令。产品代码应直接在内存中编码请求并写入 IPC。仅本机开发可用下列 `jq` 示例：
+应用 Profile 时，不要用 shell 拼接含密钥的命令。仅本机开发可用下列 `jq` 示例：
 
 ```sh
-jq -n --slurpfile profile profile.json '{profile:$profile[0]}' > "$APP_STATE/apply-request.json"
+jq -n --slurpfile profile profile.json \
+  '{profile:$profile[0], allowed_rule_set_hosts:["api.example.com"]}' > "$APP_STATE/apply-request.json"
 
 curl --unix-socket "$APP_STATE/core.sock" \
   -H "Authorization: Bearer $SECRET" \
@@ -166,18 +131,46 @@ curl --unix-socket "$APP_STATE/core.sock" \
   http://localhost/v1/apply-profile
 ```
 
-随后调用 `/v1/start`，并用 `/v1/get-local-proxy-metadata` 读取不含 secret 的每节点
-HTTP/SOCKS5 端点（所有节点同一端口）；只有原生凭据面板按需调用 `/v1/get-local-proxy-credential`。Windows
-和 macOS 产品都由特权 service 以 TUN 模式（`--tun`）运行 core，macOS 不使用 Network Extension；
-两者都不写系统 HTTP/SOCKS 设置。节点切换只调用 `/v1/select-node`，退出时
-调用 `/v1/stop`。完整顺序和 DTO 见 [Core API v1](core-api.md)。
+同样的请求体发到 `/v1/validate-profile` 只做校验。随后调用 `/v1/start`，用 `/v1/get-status` 看状态，用 `/v1/get-local-proxy-metadata` 读不含 secret 的端点，`/v1/get-local-proxy-credential` 读凭据（`kind` 为 `node` 或 `routed`）。节点切换用 `/v1/select-node`，结束用 `/v1/stop`。`ppvpn-core-lab` 只实现 lab 用到的那部分 Core API v1，DTO 见 [Core API v1](core-api.md)。
 
-## 5. 常见问题
+## 6. 日志
+
+每一行的格式是 `<RFC 3339 UTC 时间，纳秒> level=<error|warn|info|debug> msg=<消息> key=value …`。引擎的行末尾带 `source=core`（`ppvpn-core` 自己的行）或 `source=sail`（Sail 的行，原文整个放在 `msg` 里）。任何级别都不记录凭据。
+
+**info（默认）**：日志里不出现连接的目的地址或域名。Sail 在这个级别只记 warn 及以上，因为它的 info 会给每条连接写一行目的地。常见的 info 行：
+
+- `msg="default interface"`：每次 start 和默认网卡每次变化各一行。`event`（`start`/`changed`）、`name`、`index`、`addresses`；`name=none` 表示没有可用网卡（离线）。没有 `mtu`：Sail 的网络快照不带它。
+- `msg="host ipv6"`（TUN 实例，桌面平台）：每次 apply 和 start 探测主机 IPv6，记一行 `host_ipv6_enabled`、`host_ipv6_route`（是否有全局单播 IPv6 地址加 IPv6 默认路由）、`policy`。`policy` 取值：`tun_ipv6`；`tun_ipv6_direct_ipv4`，表示没有 IPv6 出口，直连的 IPv6 目标改按域名走 IPv4；`tun_ipv4_only`，表示主机关闭了 IPv6。路由读不出来时附 `error`，按有出口处理。
+  - 默认网卡最后一次变化 2 秒后再探测一次（离线时跳过）。出口的有无变了，就生成新配置让 Sail 原地 reload，记一行 `msg="host ipv6 changed"`：`previous_policy`、`policy`、`rebuilt=true`；失败时是 error 级的同一行，`rebuilt=false` 并附 `error`。详见 [security.md](security.md#ipv6)。
+- `msg="local dns servers"`（TUN 实例）：dns-local 读到的服务器和上次不同时记一行。`interface`、`source`（`adapter`：Windows；`scutil-global`/`scutil-scoped`：macOS；`resolv.conf`/`resolved`：Linux；`override`：`--local-dns-servers` 或 `TunConfig.local_dns_servers`）、`servers`；读不到时 `servers=none` 并附 `error`。详见 [安全模型](security.md#增强模式tun的-dns-与防泄漏) 与 [设计](design-local-dns.md)。
+- `msg="kernel switched"`：运行中的 apply、规则集重建或 IPv6 重探让 Sail 原地 reload 时记一行。`gen` 和 `previous` 是引擎对配置代数的计数；`closed_connections`、`kept_connections` 目前恒为 0（`docs/rust-parity.md` 的 A 类项）。原地 reload 不关监听，已有连接留在原处。
+- `msg="full restart" reasons=…`：Sail 不能原地接受的变化（例如 `tun options changed`）改为停止再启动，所有连接断开。
+- `msg="rule set"`：规则集状态变化。`id`、`state`（`ready`/`stale`/`unavailable`）、`error`、`failures`、`next_retry_at`。
+- `msg="apply timing"`：每次 apply 一行，用于定位慢启动。`outcome`（`ok`/`failed`）、`tun`、`rule_sets_ready`/`rule_sets_stale`/`rule_sets_unavailable`，然后各分段的毫秒数，没跑到的分段不写：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`wait_ms`（等另一个生命周期调用释放操作锁）、`host_ipv6_ms`（主机 IPv6 探测）、`build_ms`（翻译），停止时 `check_ms`（配置交给 Sail 校验），运行中 `kernel_switch_ms`（reload 与恢复选择/固定）或 `full_restart_ms`，最后 `total_ms`。内容未变的 apply 不记。
+- `msg="start timing"`：每次 start 一行。`outcome`、`tun`、`local_proxy_ms`（检查监听端口）、`host_ipv6_ms`、`build_ms`、`engine_start_ms`（Sail 解析、构造与启动：出站、DNS、路由与规则集、入站，含打开 TUN 与安装路由，不再细分）、`total_ms`。已在运行时 start 不记。
+- `msg="log lines dropped" dropped=<行数>`（warn）：日志接收端阻塞时丢了行，恢复后补这一行。
+
+`ppvpn-core-lab` 自己另记 `serve starting`（`core_version`、`sail_commit`、`os`、`arch`、`log_level`、`platform`、`tun`、`tun_stack`、`local_proxy`、`state_dir`、`socket`）、`serve ready`、`serve stopping`，以及生命周期请求（apply/start/stop/set-system-proxy/pin-ingress）的 `request ok` 和所有请求的 `request rejected`（`path`、`request_id`、`code`，有字段时带 `field`）。
+
+**debug**：Sail 也记 debug。引擎另外记下面几种含目的地的行。**debug 日志包含用户访问的域名，只能在排查时临时开启，不得常开或默认开启。**
+
+- `msg=connection`：每条被路由的连接一行。`id`、`inbound`、`network`、`destination`、`route_domain`（路由规则匹配用的域名）、`protocol`、`rule`（Profile 规则的 id，没有命中规则时为 `final`）、`outbound`（规则选中的出站）、`target`（交给出站的目标）、`target_kind`（`domain`/`ip`）、`action`、`error`。
+- `msg="outbound failed"`：每次拨号失败一行。`stage`、`outbound`、`destination`、`error`；经节点时另有 `node_id`、`endpoint_key`、`count`、`more_to_try`（多入口节点的每个入口失败各一行，只有这条连接最后一次失败为 false）。直连出站同一目标 10 秒内只记第一次，窗口过后的下一行附 `suppressed`，即期间省略的次数。
+- `msg=dns`：发往上游 DNS 服务器的每次查询一行，命中缓存的不记。`name`、`type`、`server`（`dns-local` 或 `dns-remote`）、`upstream`（实际应答的服务器）、`attempt`（`dns-remote` 的第几次尝试）、`rcode` 与 `answers`，或 `error`，以及 `ms`。
+- `msg="ingress tls"`：每次 apply 为每个带 TLS 的入口记一行，用于和服务端核对参数而不暴露原文：`node_id`、`endpoint_key`、`protocol`、`server_name`、`flow`；REALITY 入口另有 `public_key_sha256`、`short_id_sha256`（按收到的字符串原样取 SHA-256 的前 10 个十六进制字符）、两者的长度、`public_key_encoding` 和 `fingerprint`；其他 TLS 入口另有 `insecure`。
+
+`dns-remote`（TUN 实例）经所选节点用 DoT 查询，按顺序试 `1.1.1.1`、`8.8.8.8`、`9.9.9.9`：每次尝试最多 3 秒，总计不超过 8 秒，三个都失败时回 SERVFAIL；某个上游应答后，之后 10 分钟内的查询先问它。
+
+## 7. 常见问题
 
 - `SCHEMA_UNSUPPORTED`：核心和后端的 Profile Schema 不兼容，先停止应用配置。
-- `ENTRY_IP_NOT_PUBLIC`：入口 `endpoint.ip` 不是可拨号公网单播 IP；不要填域名或文档地址（不知道 IP 时可省略该字段）。
+- `ENTRY_IP_NOT_PUBLIC`：入口 `endpoint.ip` 不是可拨号的公网单播 IP；不要填域名或文档地址（不知道 IP 时可省略该字段）。
 - `TLS_SERVER_NAME_MISMATCH`：AnyTLS 的 TLS SNI 必须等于 `endpoint.domain`（REALITY 的 SNI 是借用站点，不受此限）。
-- `CORE_OPERATION_FAILED`：上游错误已安全折叠。核心日志（默认 stderr，或 `--log-file`）中有一行 `level=error msg=CORE_OPERATION_FAILED`，包含 `path`、`request_id`、`stage`、`error` 和 `chain`（错误链类型，OS 错误附带数值，如 `syscall.Errno(5)`）。
-- TUN 启动失败并提示 `gVisor is not included`：核心未带 `with_gvisor` 构建，而 `mixed`/`gvisor` 栈需要它；使用 Makefile 的桌面目标构建（`serve` 会在启动时直接拒绝这种组合）。
-- 本地代理端口变更：核心启动前发现持久端口（或 7890）已占用时改用空闲端口并持久化；`start` 后调用 `GetLocalProxyMetadata` 刷新。
-- TUN 启动失败：保持未连接并由原生宿主通知用户；不要静默回退到系统代理。
+- `PROFILE_NOT_APPLIED`：`start`、`select_node` 之前要先 apply。
+- `STATE_DIR_IN_USE`：另一个实例正在使用同一个 `state_dir`。
+- `PERMISSION_DENIED`：TUN 实例的权限不足。
+- `TUN_NAME_TAKEN`：TUN 网卡名被占用；Linux（`ppvpn0`）和 Windows（`PPVPN`）上多半是另一个 ppvpn-core 正在运行。
+- 规则集状态带 `error=RULE_SET_HOST_NOT_PINNED`：没有传 `allowed_rule_set_hosts`，引擎不下载，只能用已有的缓存。列表不为空、而 Profile 的规则集 URL 不在这些主机上时，apply 直接被拒。
+- `CORE_OPERATION_FAILED`：内部错误，原因只写进日志。`ppvpn-core-lab` 的日志里有一行 `level=error msg=CORE_OPERATION_FAILED`，带 `path`、`request_id` 和 `error`。
+- 本地代理端口：启动时持久化的端口（或 7890）被占用，就换一个空闲端口并持久化，发出 `LocalProxyEndpointChanged`；之后重新读 metadata。监听打不开时实例照常运行，状态为 `Degraded{LocalProxyUnavailable}`，并按退避重试。
+- TUN 启动失败：保持未连接并由宿主通知用户；不要静默回退到系统代理。

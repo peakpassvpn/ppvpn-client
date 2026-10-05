@@ -16,7 +16,7 @@ public final class PreviewBackend: ClientBackend {
         auth: .restoring, account: nil, team: nil, profile: nil, profileStatus: .loading, standard: .stopped,
         connectionMode: .enhanced, routingMode: .rules, connection: PreviewBackend.idle, serviceInstalled: false,
         selectedNodeId: nil, lastError: nil, unreadNotifications: 0, ruleSetsUnavailable: [],
-        ingressPins: [], nodeIngresses: [], clearedIngressPins: []
+        ingressPins: [], nodeIngresses: [], clearedIngressPins: [], localProxyCredentialsReset: false
     ) {
         didSet { events?.clientDidUpdate(state) }
     }
@@ -236,6 +236,8 @@ public final class PreviewBackend: ClientBackend {
     }
 
     public func dismissClearedIngressPins() { state.clearedIngressPins = [] }
+
+    public func dismissLocalProxyCredentialsReset() { state.localProxyCredentialsReset = false }
 
     public func networkChanged() {}
 

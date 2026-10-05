@@ -59,8 +59,7 @@ public partial class App : Application
         LaunchAtLogin.Refresh();
 
         var apiBase = BuildInfo.EffectiveApiBase(settings);
-        // CoreBinDir: ppvpn-core.exe is installed next to ppvpn.exe.
-        var config = new ClientConfig(apiBase, paths.DataDir, paths.LogDir, AppContext.BaseDirectory, "windows", services.AppVersion);
+        var config = new ClientConfig(apiBase, paths.DataDir, paths.LogDir, "windows", services.AppVersion);
         log.Info($"app {services.AppVersion} ({services.BuildNumber}) starting, pid {Environment.ProcessId}, UI thread {Environment.CurrentManagedThreadId}, args [{string.Join(' ', Environment.GetCommandLineArgs().Skip(1))}]");
         log.Info($"backend: {(Options.UseFake ? $"fake ({Options.Fake.PersonalTeam})" : "ppvpn-client")}, api {apiBase}{(apiBase == BuildInfo.ApiBase ? "" : $" (override; build default {BuildInfo.ApiBase})")}, strings {strings.Language}");
         if (Options.Unknown.Count > 0) log.Warn($"ignored command-line switches: {string.Join(' ', Options.Unknown)}");

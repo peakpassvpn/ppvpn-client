@@ -760,4 +760,346 @@ mod tests {
         assert!(!valid_uuid("00000000-0000-6000-8000-000000000001"));
         assert!(!valid_uuid("00000000-0000-4000-c000-000000000001"));
     }
+
+    fn random<const N: usize>() -> [u8; N] {
+        let mut buf = [0u8; N];
+        getrandom::fill(&mut buf).unwrap();
+        buf
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Go's validIngress: keyed by its domain, ordinal 0, with credentials
+    /// made up for this run. No entry IP: a public one is outside the
+    /// documentation ranges, and `addr::tests` covers which are accepted.
+    fn ingress(protocol: &str, role: &str, domain: &str) -> Ingress {
+        let mut ingress = Ingress {
+            role: role.into(),
+            endpoint_key: domain.into(),
+            protocol: protocol.into(),
+            endpoint: Endpoint {
+                domain: domain.into(),
+                ip: String::new(),
+                port: 443,
+            },
+            capabilities: Capabilities {
+                tcp: true,
+                udp: true,
+            },
+            ..Ingress::default()
+        };
+        match protocol {
+            "shadowsocks" => {
+                ingress.credentials.shadowsocks = Some(ShadowsocksCredentials {
+                    method: "2022-blake3-aes-128-gcm".into(),
+                    identity_keys: Vec::new(),
+                    user_key: base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        random::<16>(),
+                    ),
+                });
+            }
+            "vless" => {
+                // A version 4 UUID of the RFC 4122 variant.
+                let mut uuid = random::<16>();
+                uuid[6] = 0x40 | (uuid[6] & 0x0f);
+                uuid[8] = 0x80 | (uuid[8] & 0x3f);
+                let h = hex(&uuid);
+                ingress.credentials.vless = Some(VlessCredentials {
+                    uuid: format!(
+                        "{}-{}-{}-{}-{}",
+                        &h[..8],
+                        &h[8..12],
+                        &h[12..16],
+                        &h[16..20],
+                        &h[20..]
+                    ),
+                    flow: "xtls-rprx-vision".into(),
+                });
+                ingress.tls = Some(Tls {
+                    server_name: domain.into(),
+                    reality: Some(Reality {
+                        public_key: base64::Engine::encode(
+                            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                            random::<32>(),
+                        ),
+                        short_id: "01".into(),
+                    }),
+                    ..Tls::default()
+                });
+            }
+            "anytls" => {
+                ingress.credentials.anytls = Some(AnyTlsCredentials {
+                    password: hex(&random::<12>()),
+                });
+                ingress.tls = Some(Tls {
+                    server_name: domain.into(),
+                    ..Tls::default()
+                });
+            }
+            other => panic!("no test ingress for {other}"),
+        }
+        ingress
+    }
+
+    fn backup(protocol: &str, ordinal: i64, domain: &str) -> Ingress {
+        Ingress {
+            replica_ordinal: ordinal,
+            ..ingress(protocol, "backup", domain)
+        }
+    }
+
+    /// Go's validProfile: one node, one primary ingress, no expiry.
+    fn profile(protocol: &str) -> Profile {
+        Profile {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            revision: "r1".into(),
+            nodes: vec![Node {
+                id: "node-1".into(),
+                name: "Tokyo".into(),
+                entry_key: "cn-optimized".into(),
+                exit: Exit {
+                    ip: "203.0.113.9".into(),
+                    region: "Tokyo".into(),
+                    country_code: String::new(),
+                },
+                capabilities: Capabilities {
+                    tcp: true,
+                    udp: true,
+                },
+                ingresses: vec![ingress(protocol, "primary", "edge.example.com")],
+                ..Node::default()
+            }],
+            selection: Selection {
+                mode: "manual".into(),
+                default_node_id: "node-1".into(),
+            },
+            routing: Routing {
+                final_action: RoutingAction {
+                    kind: "proxy".into(),
+                    target: "selected".into(),
+                    node_id: String::new(),
+                },
+                ..Routing::default()
+            },
+            ..Profile::default()
+        }
+    }
+
+    /// The code and field `validate` rejects `p` with.
+    fn rejection(p: &Profile) -> (&'static str, String) {
+        let err = validate(p, Utc::now()).expect_err("accepted");
+        (err.code, err.field.unwrap_or_default())
+    }
+
+    /// The Shadowsocks profile after `mutate`, rejected.
+    fn rejected(mutate: impl FnOnce(&mut Profile)) -> (&'static str, String) {
+        let mut p = profile("shadowsocks");
+        mutate(&mut p);
+        rejection(&p)
+    }
+
+    /// Go: profile TestIngressFailoverShapes.
+    #[test]
+    fn failover_shapes_fail_with_go_s_code_and_field() {
+        let mut p = profile("shadowsocks");
+        p.nodes[0].ingresses.extend([
+            backup("vless", 1, "backup.example.com"),
+            backup("anytls", 5, "backup2.example.com"),
+        ]);
+        validate(&p, Utc::now()).expect("a primary and two backups");
+
+        let mut cases: Vec<(&str, &str, (&'static str, String))> = vec![
+            (
+                codes::FIELD_REQUIRED,
+                "nodes[0].ingresses",
+                rejected(|p| p.nodes[0].ingresses.clear()),
+            ),
+            // Roles: a backup first, an unknown role, a second primary.
+            (
+                codes::INGRESS_ROLE_INVALID,
+                "nodes[0].ingresses[0].role",
+                rejected(|p| p.nodes[0].ingresses[0].role = "backup".into()),
+            ),
+            (
+                codes::INGRESS_ROLE_INVALID,
+                "nodes[0].ingresses[0].role",
+                rejected(|p| p.nodes[0].ingresses[0].role = "standby".into()),
+            ),
+            (
+                codes::INGRESS_ROLE_INVALID,
+                "nodes[0].ingresses[1].role",
+                rejected(|p| {
+                    p.nodes[0].ingresses.push(Ingress {
+                        replica_ordinal: 1,
+                        ..ingress("shadowsocks", "primary", "second.example.com")
+                    })
+                }),
+            ),
+            (
+                codes::ENTRY_KEY_INVALID,
+                "nodes[0].entry_key",
+                rejected(|p| p.nodes[0].entry_key = String::new()),
+            ),
+            (
+                codes::ENTRY_KEY_INVALID,
+                "nodes[0].entry_key",
+                rejected(|p| p.nodes[0].entry_key = "-cn".into()),
+            ),
+            (
+                codes::ENTRY_KEY_INVALID,
+                "nodes[0].entry_key",
+                rejected(|p| p.nodes[0].entry_key = "a".repeat(65)),
+            ),
+            (
+                codes::ENDPOINT_KEY_INVALID,
+                "nodes[0].ingresses[0].endpoint_key",
+                rejected(|p| p.nodes[0].ingresses[0].endpoint_key = String::new()),
+            ),
+            (
+                codes::ENDPOINT_KEY_INVALID,
+                "nodes[0].ingresses[0].endpoint_key",
+                rejected(|p| p.nodes[0].ingresses[0].endpoint_key = "a/b".into()),
+            ),
+            (
+                codes::ENDPOINT_KEY_INVALID,
+                "nodes[0].ingresses[0].endpoint_key",
+                rejected(|p| p.nodes[0].ingresses[0].endpoint_key = "a".repeat(129)),
+            ),
+            (
+                codes::ENDPOINT_KEY_DUPLICATE,
+                "nodes[0].ingresses[1].endpoint_key",
+                rejected(|p| {
+                    let key = p.nodes[0].ingresses[0].endpoint_key.clone();
+                    p.nodes[0].ingresses.push(Ingress {
+                        endpoint_key: key,
+                        ..backup("shadowsocks", 1, "backup.example.com")
+                    });
+                }),
+            ),
+            // Unique across the whole profile, not just within a node.
+            (
+                codes::ENDPOINT_KEY_DUPLICATE,
+                "nodes[1].ingresses[0].endpoint_key",
+                rejected(|p| {
+                    let other = Node {
+                        id: "node-2".into(),
+                        ..p.nodes[0].clone()
+                    };
+                    p.nodes.push(other);
+                }),
+            ),
+            (
+                codes::REPLICA_ORDINAL_INVALID,
+                "nodes[0].ingresses[0].replica_ordinal",
+                rejected(|p| p.nodes[0].ingresses[0].replica_ordinal = -1),
+            ),
+            // Ordinals strictly increase in failover order.
+            (
+                codes::REPLICA_ORDINAL_INVALID,
+                "nodes[0].ingresses[1].replica_ordinal",
+                rejected(|p| {
+                    p.nodes[0]
+                        .ingresses
+                        .push(backup("shadowsocks", 0, "backup.example.com"))
+                }),
+            ),
+            (
+                codes::REPLICA_ORDINAL_INVALID,
+                "nodes[0].ingresses[1].replica_ordinal",
+                rejected(|p| {
+                    p.nodes[0].ingresses[0].replica_ordinal = 3;
+                    p.nodes[0]
+                        .ingresses
+                        .push(backup("shadowsocks", 2, "backup.example.com"));
+                }),
+            ),
+            (
+                codes::ENTRY_IP_NOT_PUBLIC,
+                "nodes[0].ingresses[0].endpoint.ip",
+                rejected(|p| p.nodes[0].ingresses[0].endpoint.ip = "not-an-ip".into()),
+            ),
+            // The node carries UDP; its primary does not.
+            (
+                codes::CAPABILITIES_INVALID,
+                "nodes[0].capabilities",
+                rejected(|p| p.nodes[0].ingresses[0].capabilities.udp = false),
+            ),
+            (
+                codes::EXIT_IP_INVALID,
+                "nodes[0].exit.ip",
+                rejected(|p| p.nodes[0].exit.ip = "999.1.1.1".into()),
+            ),
+            // A backup's REALITY key is checked as a primary's is.
+            (
+                codes::REALITY_PUBLIC_KEY_INVALID,
+                "nodes[0].ingresses[1].tls.reality.public_key",
+                rejected(|p| {
+                    let mut b = backup("vless", 1, "backup.example.com");
+                    if let Some(reality) = b.tls.as_mut().and_then(|tls| tls.reality.as_mut()) {
+                        reality.public_key = "not-a-key".into();
+                    }
+                    p.nodes[0].ingresses.push(b);
+                }),
+            ),
+            (
+                codes::INGRESS_COUNT_INVALID,
+                "nodes[0].ingresses",
+                rejected(|p| {
+                    p.nodes[0].ingresses = vec![Ingress::default(); MAX_INGRESSES_PER_NODE + 1]
+                }),
+            ),
+            // A backup's credentials are validated with the same rules.
+            (
+                codes::TLS_SERVER_NAME_MISMATCH,
+                "nodes[0].ingresses[1].tls.server_name",
+                rejected(|p| {
+                    let mut b = backup("anytls", 1, "backup.example.com");
+                    if let Some(tls) = b.tls.as_mut() {
+                        tls.server_name = "other.example.com".into();
+                    }
+                    p.nodes[0].ingresses.push(b);
+                }),
+            ),
+        ];
+        // Go also rejects the label "\xff". A Rust String cannot hold
+        // invalid UTF-8, and serde_json refuses such bytes when it parses
+        // the profile (PROFILE_MALFORMED), so there is no case for it here.
+        let long = "a".repeat(MAX_INGRESS_LABEL_LENGTH + 1);
+        for label in ["", "   ", " Tokyo", "Tokyo\n2", "a\u{0}b", long.as_str()] {
+            cases.push((
+                codes::INGRESS_LABEL_INVALID,
+                "nodes[0].ingresses[0].label",
+                rejected(|p| p.nodes[0].ingresses[0].label = Some(label.into())),
+            ));
+        }
+        for (i, (code, field, got)) in cases.iter().enumerate() {
+            assert_eq!((got.0, got.1.as_str()), (*code, *field), "case {i}");
+        }
+    }
+
+    /// Go: profile TestRealityServerNameIsBorrowed. REALITY borrows a third
+    /// party's SNI, so its server name need not be the endpoint domain; it
+    /// must still be a host name.
+    #[test]
+    fn a_reality_server_name_may_differ_from_the_endpoint_domain() {
+        let mut p = profile("vless");
+        let set = |p: &mut Profile, name: &str| {
+            if let Some(tls) = p.nodes[0].ingresses[0].tls.as_mut() {
+                tls.server_name = name.into();
+            }
+        };
+        set(&mut p, "www.example.org");
+        validate(&p, Utc::now()).expect("a borrowed REALITY server name");
+        set(&mut p, "not a domain");
+        assert_eq!(
+            rejection(&p),
+            (
+                codes::TLS_SERVER_NAME_INVALID,
+                "nodes[0].ingresses[0].tls.server_name".to_owned()
+            )
+        );
+    }
 }

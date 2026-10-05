@@ -28,7 +28,9 @@ fi
 cd "$CRATE_DIR"
 cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} --locked --lib
 TARGET_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
-LIB="$TARGET_DIR/$PROFILE/libppvpn_client.so"
+# CARGO_BUILD_TARGET (CI sets it so that every build shares one target
+# directory) puts the output under the triple.
+LIB="$TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}$PROFILE/libppvpn_client.so"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

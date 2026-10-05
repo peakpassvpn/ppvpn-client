@@ -1,5 +1,7 @@
 # 完成度审计
 
+> 本文描述的是 Go 内核（v0.5.21），它已从 main 移除；文中的 Go 源码路径和构建命令以 tag `v0.5.21` 为准。Rust 引擎的接口见 [宿主接入](host-integration.md)，测试见 [测试分层](testing.md)。
+
 本表用于实现验收；具体接入步骤见[快速开始](quickstart.md)、[Core API](core-api.md)、[移动端接入](mobile.md)和[构建发布](release.md)。
 
 | 要求 | 实现与证据 |

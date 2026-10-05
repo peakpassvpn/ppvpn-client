@@ -13,11 +13,11 @@
        then dotnet publish (Release, win-x64, self-contained) -> ppvpn.exe + runtime + WinSparkle.dll
        + runtimes\win-x64\native\ppvpn_client.dll (other RIDs are pruned),
        and the push agent (NativeAOT publish of PPVPN.PushAgent) -> ppvpn-push-agent.exe next to it
-    4. stages ppvpn-core.exe (vendored artifact, sha256-checked)
-    5. optional Authenticode signing (scripts/sign-windows.ps1 environment)
-    6. makensis -> dist/windows/PPVPN-<version>-windows-x64-setup.exe (+ .sha256); solid LZMA,
+       wintun.dll (pinned release, sha256-checked) goes beside the service
+    4. optional Authenticode signing (scripts/sign-windows.ps1 environment)
+    5. makensis -> dist/windows/PPVPN-<version>-windows-x64-setup.exe (+ .sha256); solid LZMA,
        or zlib with -FastCompression
-    7. EdDSA signature for the update feed + dist/windows/release-meta-windows-x64.json
+    6. EdDSA signature for the update feed + dist/windows/release-meta-windows-x64.json
 
   It builds and signs only; it never uploads. Publishing to R2 is a separate job.
 
@@ -34,15 +34,10 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File apps\windows\scripts\package.ps1
 .EXAMPLE
-  .\package.ps1 -CoreExe C:\drop\ppvpn-core-windows-amd64.exe -CoreSha256 7b42... -BuildNumber 12
+  .\package.ps1 -BuildNumber 12
 #>
 [CmdletBinding()]
 param(
-  # ppvpn-core.exe to ship. Default: vendor/ppvpn-core/<CURRENT>/build/ppvpn-core-windows-amd64.exe,
-  # verified against that release's manifest.json.
-  [string] $CoreExe,
-  # Expected sha256 of -CoreExe. Without it, a windows-SHA256SUMS next to the file (or in its parent) is used.
-  [string] $CoreSha256,
   # Overrides PpvpnBuildNumber (the 4th part of the file version WinSparkle compares).
   [string] $BuildNumber,
   # Backend base URL baked into the app (ClientConfig.ApiBase; else PPVPN_API_BASE, else the csproj default).
@@ -143,11 +138,12 @@ Write-Host "==> cargo build ppvpn-service ($target)"
 $env:PPVPN_BUILD_VERSION = $buildVersion
 Push-Location $serviceDir
 try {
-  Invoke-Native "cargo" @("build", "--locked", "--release", "--target", $target)
+  Invoke-Native "cargo" @("build", "--locked", "-p", "ppvpn-service", "--profile", "service", "--target", $target)
 } finally {
   Pop-Location
 }
-$serviceOut = Join-Path $serviceDir "target\$target\release"
+# A workspace member: the workspace's target directory, profile "service" (Cargo.toml).
+$serviceOut = Join-Path $serviceDir "..\..\target\$target\service"
 
 # --- 3. ppvpn-client + app ----------------------------------------------------
 # The crate's release cdylib and matching bindings (apps/shared/PPVPN.Client/Generated and
@@ -210,37 +206,21 @@ foreach ($bin in @("ppvpn-service", "ppvpn-service-install", "ppvpn-service-unin
   Copy-Item -LiteralPath (Join-Path $serviceOut "$bin.exe") -Destination (Join-Path $stage "$bin.exe")
 }
 
-# --- 4. core ------------------------------------------------------------------
-if (-not $CoreExe) {
-  $coreVersion = (Get-Content -Raw (Join-Path $repo "vendor\ppvpn-core\CURRENT")).Trim()
-  $coreDir = Join-Path $repo "vendor\ppvpn-core\$coreVersion"
-  $manifest = Get-Content -Raw (Join-Path $coreDir "manifest.json") | ConvertFrom-Json
-  $artifact = $manifest.artifacts.'windows-x86_64'
-  $CoreExe = Join-Path $coreDir $artifact.path
-  if (-not $CoreSha256) { $CoreSha256 = $artifact.sha256 }
-  Write-Host "ppvpn-core $coreVersion (vendored)"
-}
-if (-not (Test-Path -LiteralPath $CoreExe -PathType Leaf)) { throw "ppvpn-core not found: $CoreExe" }
-if (-not $CoreSha256) {
-  $coreItem = Get-Item -LiteralPath $CoreExe
-  foreach ($sums in @((Join-Path $coreItem.DirectoryName "windows-SHA256SUMS"), (Join-Path $coreItem.Directory.Parent.FullName "windows-SHA256SUMS"))) {
-    if (Test-Path -LiteralPath $sums) {
-      $line = Get-Content -LiteralPath $sums | Where-Object { $_ -match ("[\\/ *]" + [regex]::Escape($coreItem.Name) + '$') } | Select-Object -First 1
-      if ($line) { $CoreSha256 = ($line -split '\s+')[0]; break }
-    }
-  }
-}
-if (-not $CoreSha256) { throw "No expected sha256 for $CoreExe; pass -CoreSha256." }
-$actualCoreSha = Get-Sha256 $CoreExe
-if ($actualCoreSha -ne $CoreSha256.ToLowerInvariant()) {
-  throw "ppvpn-core sha256 mismatch: expected $CoreSha256, got $actualCoreSha ($CoreExe)"
-}
-Write-Host "ppvpn-core sha256 ok: $actualCoreSha"
-# The service starts exactly ppvpn-core.exe from its own directory (service/src/core.rs).
-Copy-Item -LiteralPath $CoreExe -Destination (Join-Path $stage "ppvpn-core.exe")
+# The Wintun driver DLL of the TUN instance the service runs, beside it
+# (service/src/core.rs): the version sail pins (WINTUN_VERSION), checked
+# against the release's hash. Shipped as published (signed by its vendor).
+$wintunVersion = "0.14.1"
+$wintunSha256 = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
+$wintunZip = Join-Path $work "wintun-$wintunVersion.zip"
+Invoke-WebRequest "https://www.wintun.net/builds/wintun-$wintunVersion.zip" -OutFile $wintunZip
+if ((Get-Sha256 $wintunZip) -ne $wintunSha256) { throw "wintun-$wintunVersion.zip: not the pinned sha256" }
+$wintunDir = Join-Path $work "wintun"
+Expand-Archive -LiteralPath $wintunZip -DestinationPath $wintunDir -Force
+Copy-Item -LiteralPath (Join-Path $wintunDir "wintun\bin\amd64\wintun.dll") -Destination (Join-Path $stage "wintun.dll")
+Write-Host "wintun.dll $wintunVersion staged"
 
-# --- 5. Authenticode (optional) -----------------------------------------------
-$ownBinaries = @("ppvpn.exe", "ppvpn-push-agent.exe", "ppvpn-core.exe", "ppvpn-service.exe", "ppvpn-service-install.exe", "ppvpn-service-uninstall.exe", $clientDll)
+# --- 4. Authenticode (optional) -----------------------------------------------
+$ownBinaries = @("ppvpn.exe", "ppvpn-push-agent.exe", "ppvpn-service.exe", "ppvpn-service-install.exe", "ppvpn-service-uninstall.exe", $clientDll)
 foreach ($name in $ownBinaries) { Invoke-Sign (Join-Path $stage $name) }
 
 # The GPL text: the installer's license page and LICENSE.txt in the install directory. Copied from
@@ -258,7 +238,7 @@ $dirs = Get-ChildItem -LiteralPath $stage -Recurse -Directory |
 $lines = @($files) + @("install-files.txt") + @($dirs)
 Write-Utf8NoBom (Join-Path $stage "install-files.txt") (($lines -join "`r`n") + "`r`n")
 
-# --- 6. makensis --------------------------------------------------------------
+# --- 5. makensis --------------------------------------------------------------
 if (-not $Makensis) {
   $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
   if ($cmd) { $Makensis = $cmd.Source }
@@ -297,7 +277,7 @@ Write-Host "installer: $installer"
 Write-Host "sha256:    $sha256"
 Write-Host "length:    $($installerItem.Length)"
 
-# --- 7. update signature + release metadata ------------------------------------
+# --- 6. update signature + release metadata ------------------------------------
 $keyFile = $UpdateKeyFile
 if (-not $keyFile -and $env:PPVPN_UPDATE_PRIVATE_KEY_FILE) { $keyFile = $env:PPVPN_UPDATE_PRIVATE_KEY_FILE }
 $temporaryKey = $null

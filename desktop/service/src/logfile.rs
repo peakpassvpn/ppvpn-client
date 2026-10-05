@@ -1,5 +1,5 @@
-//! Log files of the service (`ppvpn-service.log`) and of the privileged core
-//! it runs (`ppvpn-core.log`).
+//! Log files of the service (`ppvpn-service.log`) and of the TUN instance it
+//! runs (`ppvpn-core.log`, the engine's lines).
 //!
 //! They live in a directory that neither uninstalling nor reinstalling the
 //! service touches, so the evidence of a failed session survives a repair:
@@ -195,33 +195,6 @@ pub fn init_service_logger() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(path)
 }
 
-/// Copies what the core writes to stdout / stderr into `log` until the
-/// core closes the pipe (it exits). One thread per stream.
-pub fn forward_output(
-    mut stream: impl std::io::Read + Send + 'static,
-    log: std::sync::Arc<parking_lot::Mutex<RotatingLog>>,
-) {
-    let spawned = std::thread::Builder::new()
-        .name("core-log".into())
-        .spawn(move || {
-            let mut buffer = [0u8; 8 * 1024];
-            loop {
-                match stream.read(&mut buffer) {
-                    Ok(0) => return,
-                    Ok(read) => {
-                        // A full disk must not block the core: drop the chunk.
-                        let _ = log.lock().write(&buffer[..read]);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                    Err(_) => return,
-                }
-            }
-        });
-    if let Err(error) = spawned {
-        log::warn!("cannot forward ppvpn-core output: {error}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,22 +257,6 @@ mod tests {
         for file in [path.clone(), dir.join("ppvpn-service.1.log")] {
             let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o644, "{}", file.display());
-        }
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn forwarded_output_lands_in_the_log() {
-        let dir = temp_dir();
-        let path = dir.join("ppvpn-core.log");
-        let log = std::sync::Arc::new(parking_lot::Mutex::new(
-            RotatingLog::open(&path, MAX_BYTES, KEEP_FILES).unwrap(),
-        ));
-        forward_output(std::io::Cursor::new(b"core says hi\n".to_vec()), log);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while read(&path) != "core says hi\n" {
-            assert!(std::time::Instant::now() < deadline, "{}", read(&path));
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let _ = std::fs::remove_dir_all(dir);
     }

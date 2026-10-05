@@ -1,9 +1,7 @@
 namespace PPVPN.Linux.Platform;
 
 /// <summary>
-/// Per-user directories following the XDG base directory spec. The
-/// standard-mode core socket lives in $XDG_RUNTIME_DIR and is chosen by
-/// ppvpn-client itself.
+/// Per-user directories following the XDG base directory spec.
 /// </summary>
 public static class LinuxPaths
 {
@@ -25,8 +23,8 @@ public static class LinuxPaths
     public static string AutostartDir => Path.Combine(XdgBase("XDG_CONFIG_HOME", ".config"), "autostart");
 
     /// <summary>
-    /// Directory of the apphost. The packages install ppvpn-core and the
-    /// ppvpn-service helpers next to it in /usr/lib/ppvpn.
+    /// Directory of the apphost. The packages install the ppvpn-service
+    /// helpers next to it in /usr/lib/ppvpn.
     /// </summary>
     public static string AppDir => AppContext.BaseDirectory;
 }

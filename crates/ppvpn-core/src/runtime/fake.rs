@@ -17,6 +17,7 @@ pub(crate) enum Call {
     Stop,
     Select(String, String),
     Unfix(String),
+    CheckGroup(String),
     CloseConnection(u64),
     DialTcp(String, Target),
     DialUdp(String, Target),
@@ -543,6 +544,11 @@ impl Runtime for FakeRuntime {
             .ok_or_else(|| RuntimeError::new("not_found", format!("group {group}")))?;
         group.fixed = false;
         Ok(())
+    }
+
+    async fn check_group(&self, group: &str, _within: Duration) -> Result<(), RuntimeError> {
+        self.record(Call::CheckGroup(group.to_owned()));
+        self.running()
     }
 
     fn group_switches(&self) -> mpsc::Receiver<GroupSwitch> {

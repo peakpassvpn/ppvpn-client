@@ -1,6 +1,6 @@
 //! IPC protocol shared by main app and service. Kept byte-identical on both
 //! sides — if you change this, mirror the change in
-//! `../../src-tauri/src/service_client.rs`.
+//! `crates/ppvpn-client/src/service.rs`.
 //!
 //! Wire format:
 //!   [u32 BE: length of JSON payload] [JSON bytes]
@@ -211,6 +211,26 @@ pub struct SessionRef {
     pub generation: u64,
 }
 
+/// A node fixed to one of its ingresses.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngressPin {
+    pub node_id: String,
+    pub endpoint_key: String,
+}
+
+/// The client's node selection and ingress pins, forwarded with every
+/// `apply-profile` of the session's core: the engine applies them together
+/// with the profile, so a new core needs no `select-node` / `pin-ingress`
+/// afterwards. Absent from older clients: the profile's default node, no
+/// pins.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplyChoices {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<IngressPin>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConnectPayload {
     #[serde(flatten)]
@@ -228,6 +248,8 @@ pub struct ConnectPayload {
     /// `apply-profile` when the core accepts it (0.5.6+).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_mode: Option<String>,
+    #[serde(flatten)]
+    pub choices: ApplyChoices,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -242,6 +264,10 @@ pub struct UpdateProfilePayload {
     /// mode is applied again (the core dedupes on both).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_mode: Option<String>,
+    /// As [`ConnectPayload::choices`]; also used for a rollback, so the
+    /// previous revision comes back with the client's current choices.
+    #[serde(flatten)]
+    pub choices: ApplyChoices,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

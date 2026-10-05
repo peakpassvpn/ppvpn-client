@@ -1,13 +1,14 @@
 #!/bin/sh
 # Lab test of dns-local following network changes (docs/design-local-dns.md §4.2).
 #
-#   [CORE_ENGINE=go|rust] run.sh <core> <ldnslab> <profile.json> <out dir>
+#   [CORE_ENGINE=rust|go] run.sh <core> <ldnslab> <profile.json> <out dir>
 #
-# CORE_ENGINE=go (default): the core is the Go lab build (make
-# build-lab-linux: localdns_testsource), which reads the default interface's
-# resolvers from $PPVPN_LOCALDNS_TEST_FILE instead of the system; interface
-# changes are read from its log lines.
-# CORE_ENGINE=rust: the core is ppvpn-core-lab (the Rust engine), which has
+# CORE_ENGINE=go: the core is a Go 0.5.21 lab build (built from the v0.5.21
+# tag with the localdns_testsource tag; the Go core is no longer on main),
+# which reads the default interface's resolvers from
+# $PPVPN_LOCALDNS_TEST_FILE instead of the system; interface changes are read
+# from its log lines.
+# CORE_ENGINE=rust (default): the core is ppvpn-core-lab (the Rust engine), which has
 # no test source: on Linux its dns-local reads /etc/resolv.conf, as sing-box's
 # and sail's `local` do. Each step rewrites the client namespace's
 # /etc/netns/ldns-c/resolv.conf in place (ip netns exec bind-mounts that
@@ -33,7 +34,7 @@ rm -rf "$OUT"/*
 PIN=""; [ -n "${CPUS:-}" ] && PIN="taskset -c $CPUS"
 R=$OUT/run; mkdir -p $R
 TESTFILE=$OUT/servers.json
-ENGINE=${CORE_ENGINE:-go}
+ENGINE=${CORE_ENGINE:-rust}
 case $ENGINE in go|rust) ;; *) echo "CORE_ENGINE must be go or rust, not $ENGINE" >&2; exit 2 ;; esac
 NETNS_ETC=/etc/netns/ldns-c
 RESOLV=$NETNS_ETC/resolv.conf
