@@ -38,7 +38,7 @@ apps/
 crates/
 ├── desktop/        # 共享客户端核心（账号、Profile、连接状态机、健康检查、UniFFI）
 ├── engine-host/    # 进程内引擎上的 Core API v1（客户端与特权服务共用）
-└── service/        # 特权服务：进程内运行增强模式引擎、client↔service IPC、系统 DNS
+└── service/        # 特权服务：进程内运行增强模式引擎、client↔service IPC、清理旧版残留的系统 DNS（macOS）
 tools/desktop/      # build-service.sh、签名、图标与 CI 辅助脚本
 docs/desktop/       # 本文、构建说明、CI、真机 QA 清单
 ```

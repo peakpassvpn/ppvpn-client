@@ -75,9 +75,6 @@ pub mod stop_reason {
     pub const SERVICE_STOPPING: &str = "service_stopping";
 }
 pub const LEASE_DURATION: Duration = Duration::from_secs(45);
-/// How long the service waits at exit for its system DNS changes (launchd
-/// kills it 30 s after SIGTERM).
-const DNS_FLUSH_TIMEOUT: Duration = Duration::from_secs(15);
 /// The process exit code that asks the service manager for a restart.
 #[cfg(windows)]
 const RESTART_EXIT_CODE: i32 = 3;
@@ -328,11 +325,6 @@ pub struct CoreManager {
     launched: u64,
     /// Watch connections, told when a session's instance stops.
     watchers: Arc<crate::watch::Hub>,
-    /// macOS system DNS override (see [`crate::macdns`]); a no-op elsewhere.
-    dns: crate::macdns::DnsWorker,
-    /// The override was (or may have been) published and is still to be
-    /// removed.
-    dns_applied: bool,
 }
 
 impl Default for CoreManager {
@@ -343,8 +335,6 @@ impl Default for CoreManager {
             state: None,
             launched: 0,
             watchers: Default::default(),
-            dns: Default::default(),
-            dns_applied: false,
         }
     }
 }
@@ -520,23 +510,7 @@ impl CoreManager {
             return Err(error);
         }
         info!("ppvpn-core TUN started");
-        self.apply_dns();
         Ok(std::process::id())
-    }
-
-    /// Points the macOS system resolver at the TUN. A failure is logged and
-    /// the connection kept: the TUN still carries (and hijacks) every query
-    /// to a resolver that is not on-link.
-    fn apply_dns(&mut self) {
-        self.dns_applied = true;
-        self.dns.apply();
-    }
-
-    /// At service start: removes the override a killed service left behind
-    /// (its instance died with it).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub fn clean_dns_leftover(&mut self) {
-        self.dns.clean_leftover();
     }
 
     /// At service start (Linux): sweeps what the instance of a killed
@@ -560,22 +534,6 @@ impl CoreManager {
                 }
             }
             Err(error) => log::warn!("startup sweep failed: {error:#}"),
-        }
-    }
-
-    /// Removes the macOS system DNS override if it is in place.
-    fn restore_dns(&mut self) {
-        if std::mem::take(&mut self.dns_applied) {
-            self.dns.remove();
-        }
-    }
-
-    /// Waits until the queued system DNS changes ran (service exit).
-    pub fn flush_dns(&mut self) {
-        if !self.dns.flush(DNS_FLUSH_TIMEOUT) {
-            log::error!(
-                "system DNS changes did not finish within {DNS_FLUSH_TIMEOUT:?}; exiting anyway"
-            );
         }
     }
 
@@ -633,10 +591,6 @@ impl CoreManager {
         if let Some(reason) = fatal {
             log::warn!("ppvpn-core failed on its own (fatal: {reason}); stopping it");
             self.stop_because(stop_reason::EXITED).ok();
-        } else if self.dns_applied && self.state.is_none() {
-            // No instance left to take the override down with it.
-            log::warn!("no TUN instance running; restoring the system DNS");
-            self.restore_dns();
         }
     }
 
@@ -650,7 +604,7 @@ impl CoreManager {
         body: Value,
         client_pid: u32,
     ) -> Result<Value> {
-        let (_, instance) = self.prepare_call(session, path, client_pid)?;
+        let instance = self.prepare_call(session, path, client_pid)?;
         let timeout = call_timeout(path, &body);
         instance.call(path, body, timeout)
     }
@@ -662,14 +616,14 @@ impl CoreManager {
         session: &SessionRef,
         path: &str,
         client_pid: u32,
-    ) -> Result<(u64, Arc<dyn Instance>)> {
+    ) -> Result<Arc<dyn Instance>> {
         if !ALLOWED_PATHS.contains(&path) {
             return Err(anyhow!("Core API path is not allowed"));
         }
         let caller_user = process_user(client_pid);
         let core = self.authorize(session, caller_user.as_deref())?;
         core.lease_deadline = Instant::now() + LEASE_DURATION;
-        Ok((core.id, core.instance.clone()))
+        Ok(core.instance.clone())
     }
 
     /// The caller must run as the owner's OS user *and* present the owner's
@@ -714,9 +668,6 @@ impl CoreManager {
     pub fn stop_because(&mut self, reason: &str) -> Result<()> {
         if let Some(core) = self.state.take() {
             self.watchers.core_stopped(&core.session, reason);
-            // Queued first: the system DNS goes back while the TUN still
-            // answers, not seconds after it is gone (scutil can be slow).
-            self.restore_dns();
             let started = Instant::now();
             info!("stopping ppvpn-core ({reason})");
             let leftovers = core.instance.shutdown();
@@ -733,7 +684,6 @@ impl CoreManager {
                 restart_process();
             }
         }
-        self.restore_dns();
         Ok(())
     }
 }
@@ -866,22 +816,9 @@ pub fn call_api(
     body: Value,
     client_pid: u32,
 ) -> Result<Value> {
-    let (id, instance) = core.lock().prepare_call(session, path, client_pid)?;
+    let instance = core.lock().prepare_call(session, path, client_pid)?;
     let timeout = call_timeout(path, &body);
-    let data = instance.call(path, body, timeout)?;
-    // The data plane of the same instance was started or stopped without
-    // Connect / Disconnect: the system DNS follows it.
-    if path == "/v1/start" || path == "/v1/stop" {
-        let mut manager = core.lock();
-        if manager.is_current(id) {
-            if path == "/v1/start" {
-                manager.apply_dns();
-            } else {
-                manager.restore_dns();
-            }
-        }
-    }
-    Ok(data)
+    instance.call(path, body, timeout)
 }
 
 /// `UpdateProfile`: checks the schema and applies the new profile (rolling
@@ -1629,10 +1566,6 @@ pub(crate) mod tests {
         let manager = CoreManager {
             launcher: Box::new(FakeLauncher(engines.clone())),
             state_dir: std::env::temp_dir().join("ppvpn-service-test-unused"),
-            dns: crate::macdns::DnsWorker::inline(crate::macdns::TunDns::new(
-                Box::new(crate::macdns::FakeSystem::default()),
-                false,
-            )),
             ..CoreManager::default()
         };
         (manager, engines)
@@ -1651,57 +1584,6 @@ pub(crate) mod tests {
 
     pub(crate) fn new_session(generation: u64) -> SessionRef {
         session(&uuid::Uuid::new_v4().to_string(), generation)
-    }
-
-    /// The system DNS override follows the TUN: published only once it
-    /// started, removed when it stops, is stopped over the Core API, or
-    /// fails on its own.
-    #[test]
-    fn the_system_dns_override_follows_the_tun_instance() {
-        use crate::macdns::{DnsWorker, FakeSystem, TunDns};
-        let failing = FakePlan {
-            fail_start: true,
-            ..FakePlan::default()
-        };
-        let (mut manager, engines) = fake_manager(vec![failing]);
-        let system = FakeSystem::default();
-        manager.dns = DnsWorker::inline(TunDns::new(Box::new(system.clone()), true));
-        let published = || system.store.lock().unwrap().is_some();
-        let me = std::process::id();
-
-        let first = new_session(1);
-        assert!(manager.connect(connect_payload(&first), me).is_err());
-        assert!(!published(), "an instance that failed to start gets no DNS");
-        assert!(!system
-            .calls()
-            .iter()
-            .any(|call| call.contains("set State:")));
-
-        let second = new_session(2);
-        manager.connect(connect_payload(&second), me).unwrap();
-        assert!(published(), "published once the TUN started");
-        manager.disconnect(&second, me).unwrap();
-        assert!(!published(), "removed on disconnect");
-
-        let third = new_session(3);
-        manager.connect(connect_payload(&third), me).unwrap();
-        assert!(published());
-        engines.fail_last();
-        manager.reap_exited();
-        assert!(manager.state.is_none(), "a failed instance is stopped");
-        assert!(!published(), "and its override removed by the watchdog");
-
-        // The data plane stopped / started again over the Core API.
-        let fourth = new_session(4);
-        manager.connect(connect_payload(&fourth), me).unwrap();
-        let core = Mutex::new(manager);
-        let empty = || serde_json::json!({});
-        call_api(&core, &fourth, "/v1/stop", empty(), me).unwrap();
-        assert!(!published(), "removed with the data plane");
-        call_api(&core, &fourth, "/v1/start", empty(), me).unwrap();
-        assert!(published(), "back with the data plane");
-        core.lock().stop().unwrap();
-        assert!(!published());
     }
 
     #[test]

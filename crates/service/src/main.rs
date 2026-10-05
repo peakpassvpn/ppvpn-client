@@ -35,18 +35,20 @@ fn start_lease_watchdog() {
 
 /// What a previous service process killed while connected (kill -9, crash,
 /// a stop timeout) left behind: its instance's policy rules (Linux) and the
-/// system DNS override (macOS), whose TUN went with that process.
+/// system DNS override of an older service version (macOS, see
+/// [`macdns`]), whose TUN went with that process.
 #[cfg(unix)]
 fn clean_up_after_previous_instance() {
     let started = std::time::Instant::now();
-    // Under the lock: a Connect that came first owns what is there now.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(unused_mut))]
-    let mut manager = core::CORE.lock();
     #[cfg(target_os = "linux")]
-    manager.sweep_leftovers();
+    {
+        // Under the lock: a Connect that came first owns what is there now.
+        core::CORE.lock().sweep_leftovers();
+    }
+    // Not under the lock: nothing the service or Sail writes now uses this
+    // key, so a Connect cannot race it, and `scutil` can be slow.
     #[cfg(target_os = "macos")]
-    manager.clean_dns_leftover();
-    drop(manager);
+    macdns::remove_leftover("service start");
     info!(
         "startup clean-up done in {} ms",
         started.elapsed().as_millis()
@@ -78,8 +80,7 @@ fn stop_data_plane_and_exit() -> ! {
     std::process::exit(0)
 }
 
-/// Stops taking work, tells the watchers, stops the core and waits for
-/// the system DNS changes.
+/// Stops taking work, tells the watchers and stops the core.
 fn stop_data_plane() {
     ipc::begin_stopping();
     let started = std::time::Instant::now();
@@ -87,7 +88,6 @@ fn stop_data_plane() {
     if let Err(error) = core.stop_because(core::stop_reason::SERVICE_STOPPING) {
         log::error!("failed to stop data plane during service shutdown: {error}");
     }
-    core.flush_dns();
     info!(
         "data plane stopped in {} ms; service exiting",
         started.elapsed().as_millis()

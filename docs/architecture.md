@@ -108,7 +108,7 @@ Profile 描述"连接到哪些服务以及使用什么协议"；`EngineConfig` �
 
 TUN 实例由引擎让 Sail 创建 TUN 设备。在 Linux、macOS、Windows 上，TUN 入站带 `auto_route`、`strict_route`，并把 Profile 里所有入口的字面 IP 排除在隧道外，所以标准实例到入口的连接和探测不会进入隧道。网卡名在 Linux 上是 `ppvpn0`，Windows 上是 `PPVPN`，macOS 上由 Sail 选一个空闲的 `utunN`。
 
-引擎不获取权限，不安装驱动，不设置系统代理，也不承载平台 UI。权限由宿主提供：桌面端由特权 service 运行 TUN 实例；Windows 的 wintun.dll 由宿主随安装包分发。系统层面的 DNS 设置（例如 macOS 上用 `scutil` 覆盖）归 service，TUN 内部的 DNS 归引擎。TUN 启动失败时，宿主保持未连接并通知用户，不静默回退到系统代理。
+引擎不获取权限，不安装驱动，不设置系统代理，也不承载平台 UI。权限由宿主提供：桌面端由特权 service 运行 TUN 实例；Windows 的 wintun.dll 由宿主随安装包分发。TUN 内部的 DNS 归引擎；macOS 上把系统 DNS 指向 TUN 的那一项也由引擎通过 Sail 设置（Sail 0.17.0 起，见 [宿主接入](host-integration.md) 第 2 节），其他平台上系统层面的 DNS 设置归 service。TUN 启动失败时，宿主保持未连接并通知用户，不静默回退到系统代理。
 
 Linux 上，路由规则被删时由守护补回，补不回来进入 `Fatal{TunRoutingBroken}`。macOS 和 Windows 的路由完整性检查还没有，`status.tun_routing` 恒为 `ok`（`docs/rust-parity.md` N2）。
 
