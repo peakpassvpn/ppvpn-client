@@ -16,7 +16,7 @@ path = "uniffi-bindgen.rs"
 
 [features]
 # Compiles the Linux enhanced-mode end-to-end test (src/e2e_linux.rs; CI job
-# desktop-linux-enhanced). Test-only: no code outside #[cfg(test)].
+# linux). Test-only: no code outside #[cfg(test)].
 linux-e2e = []
 
 [build-dependencies]

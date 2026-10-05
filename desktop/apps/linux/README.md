@@ -95,8 +95,8 @@ apps/linux/scripts/build-repo-packages.sh  # ppvpn-archive-keyring (deb), ppvpn-
 apps/linux/scripts/smoke-test.sh deb|rpm   # start an installed package once under Xvfb
 ```
 
-Releases publish through `.github/workflows/desktop-native-release.yml`: after the installers
-go to R2, `scripts/ci/publish-linux-repo.sh` adds the deb and rpm to the signed repositories in
+Releases publish through `.github/workflows/release.yml` (see `desktop/docs/ci.md`); the
+script below is the older R2 path: after the installers go to R2, `scripts/ci/publish-linux-repo.sh` adds the deb and rpm to the signed repositories in
 the packages bucket (apt `linux/apt`, suites `dev` and `stable`; dnf `linux/rpm/<channel>/x86_64`),
 publishes the setup packages and writes `linux/<channel>/latest.json`. Packages are immutable;
 indexes, signatures and `latest.json` move last. `PKG_STORE=dir:<path>` publishes into a local
@@ -105,5 +105,5 @@ directory instead (with a throwaway key) to try it out.
 `build-package.sh` documents its inputs (version, build number, channel, API base, update
 feed). The Rust code is linked against glibc 2.35 with cargo-zigbuild; the NativeAOT push
 agent links against the build host's glibc (and needs clang and zlib1g-dev), so build on
-Ubuntu 22.04 — the script refuses binaries that need a newer glibc. CI: `.github/workflows/desktop-native-linux.yml`, called by
-the unified desktop release, which publishes the packages to the repository.
+Ubuntu 22.04 — the script refuses binaries that need a newer glibc. CI: `release.yml`'s `linux` job,
+on every merge to main and in a release run (`desktop/docs/ci.md`).

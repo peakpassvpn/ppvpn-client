@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The site and the release downloads, served from one local port, for the
-self-test of the apt and dnf repositories (the `package-linux-repo` job of
-desktop-package.yml). Not for anything published. Standard library only.
+self-test of the apt and dnf repositories (the `linux-repo` job of
+release.yml). Not for anything published. Standard library only.
 
     repo-selftest-server.py --site DIR --assets DIR [--port 8080] [--bind 127.0.0.1]
 

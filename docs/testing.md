@@ -77,20 +77,39 @@
 
 ## CI 什么时候跑哪一层
 
-全部在 `.github/workflows/ci.yml`。
+只有两个 workflow：`.github/workflows/ci.yml` 在 PR 推送时跑全部测试，`.github/workflows/release.yml` 在合入 main 时构建安装包（见 [release.md](./release.md)）。没有合并队列，没有定时运行。
 
-| 时机 | 跑什么 |
+`ci.yml` 在每个 PR 的每次推送上并行跑 7 个 job。命名规则：与平台无关的 job 按它检查的内容命名（实际跑在 ubuntu 上，只是实现细节）；平台 job 以系统命名，只覆盖该系统自己的代码。
+
+| job | 内容 |
 |---|---|
-| PR 的每次推送 | 只在 Linux：`lint`、`test`（L1 + L2）、`sensitive`；改了 `desktop/` 时再加桌面端的 Linux job |
-| 合并队列 | 变更涉及的全部：L1–L3，Linux、macOS（arm64、x86_64）、Windows；桌面端各平台的构建；改了打包输入时构建安装包 |
-| 手动触发（`gh workflow run ci.yml --ref <分支>`） | 同合并队列 |
-| PR 带 `ci:full` 标签 | 同合并队列；标签在下一次推送时生效（加标签本身不触发） |
-| main 推送 | 只为保存缓存：`test`；`Cargo.toml`、`Cargo.lock` 或工具链变了时，其他 job 也跑一次以更新各自的缓存 |
-| 定时 | 没有。依赖都按提交固定，夜里不会变 |
+| `lint` | 敏感信息检查（tree 和新增提交）、`cargo fmt`、clippy、Sail 的 patch 与 lock 核对、发行 feature 检查 |
+| `unit` | L1（`make test-unit`） |
+| `integration` | L2（`make test-integration`），与 L1 并行 |
+| `desktop` | 桌面各层：特权 service 和客户端 crate 的测试与 clippy、桌面脚本、C# 绑定和 App.Core / Linux 测试、Swift 绑定和 AppLogic 测试 |
+| `linux` | Linux 自己的：网络命名空间里的 L3（`make test-system`：tun 及 G7、network-change），以及桌面增强模式端到端 |
+| `macos` | macOS 自己的：整个 workspace 在 aarch64 和 x86_64 上的 clippy、macOS 平台测试、Debug app 构建 |
+| `windows` | Windows 自己的：桌面链接的 crate 在 MSVC 上的 clippy、Windows 平台测试、G7 Windows、C# 绑定、App.Core 测试、app 和推送代理构建 |
 
-`tools/ci-changes.sh` 判断一个变更涉及哪些部分（引擎、桌面、打包输入、依赖），不相关的 job 用 job 级的 `if` 跳过。被跳过的 job 对必需检查算作通过，所以必需检查（`test`、`lint`、`windows-msvc`、`macos`、`tun`、`network-change`、`sensitive`）的名字不变，PR 上没跑的那几项显示为跳过，到合并队列里才真正运行。
+L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重跑，只编译（clippy 覆盖各平台 `cfg` 的代码）并跑平台测试。
 
-缓存只从 main 保存：PR 和合并队列都恢复 main 的缓存，不会把它挤出仓库的缓存配额。
+只改了 `docs/` 或 Markdown 的 PR，7 个 job 照样运行并报告，但都跳过构建和测试步骤（`tools/ci-changes.sh` 的 `code`）；`lint` 仍做敏感信息检查。
+
+手动重跑：`gh workflow run ci.yml --ref <分支>`（`windows` 的 G7 Windows 这时跑 5 遍）。
+
+### 平台测试
+
+只对某一个系统有意义的测试，要么放在以该系统命名的模块里（`darwin`、`windows`、`windows_tests`），要么列在下表里。`macos` 和 `windows` 只按这些过滤条件跑测试（`cargo test -p <crate> -- <过滤条件>`）；新增平台测试时改这张表和 `ci.yml` 里对应的那一步：
+
+| crate | macOS | Windows |
+|---|---|---|
+| `ppvpn-core` | `hostipv6::darwin`、`localdns::source`、`probe::icmp`、`runtime::sail_tests`（Sail 的网卡监视器按平台实现，整个模块在 macOS 上再跑一遍） | `hostipv6::windows`、`localdns::source`、`probe::icmp`；`runtime::windows_tests`（feature `fault-injection`，管理员，G7 Windows） |
+| `ppvpn-cli` | `identity`；`--test keystore`（登录钥匙串，`PPVPN_TEST_KEYSTORE=1`） | 不支持 Windows |
+| `ppvpn-client` | `detect`、`service`、`sysproxy` | `detect`、`service`、`sysproxy` |
+
+### 缓存
+
+PR 只读缓存，不写。缓存在合入 main 时由 `release.yml` 的 `cache-*` job 保存，而且只在 `Cargo.toml`、`Cargo.lock`、工具链或共享 action 变了的时候（`tools/ci-changes.sh` 的 `deps`）。每个缓存键（`shared-key`）对应一个 `cache-*` job：`linux`（`lint` 和 `linux` 共用）、`unit`、`integration`、`desktop`、`macos`、`windows`。rust-cache 只缓存依赖，所以依赖不变时，旧缓存一直有效。
 
 ## 不是测试层的东西
 

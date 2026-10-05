@@ -32,5 +32,5 @@ git config core.hooksPath .githooks
 
 确实需要保留的行，在行尾注明 `sensitive-check: allow`。
 
-CI（`.github/workflows/ci.yml` 的 `sensitive` job）在每个 PR 和合并队列里运行：先做 tree 检查，再对本次新增的提交做
-range 检查（PR 用 base..head，合并队列用队列的 base..head）。CI 里没有本地敏感词文件，只按通用规则检查。
+CI（`.github/workflows/ci.yml` 的 `lint` job）在每个 PR 上运行：先做 tree 检查，再对本次新增的提交（base..head）做
+range 检查。CI 里没有本地敏感词文件，只按通用规则检查。
