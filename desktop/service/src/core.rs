@@ -618,7 +618,8 @@ impl CoreManager {
         }
     }
 
-    #[cfg(test)]
+    // Only ipc's unix tests use it.
+    #[cfg(all(test, unix))]
     pub fn watchers(&self) -> Arc<crate::watch::Hub> {
         self.watchers.clone()
     }
