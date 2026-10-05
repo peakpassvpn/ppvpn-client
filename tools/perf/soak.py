@@ -24,8 +24,12 @@ ticks. Each load's failed and stalled connections go into DIR/loads.csv.
 The run stops early, with a FAILED line, if the engine exits.
 
 `summarize` reads DIRs and prints, per run, what a leak would show: the
-idle samples of the second hour against those of the last hour (RSS,
-descriptors, sockets), the largest values, and the failures. Its numbers
+median of the idle samples of each hour (RSS, descriptors, threads,
+sockets), an early and a late window of those hourly medians compared
+(from the second hour, and the last hours, each a third of what is left,
+one hour at least), the largest values, and the failures. One hour can
+dip or rise on its own (the allocator, the kernel reclaiming pages), so
+a window of hours is compared rather than two single hours. Its numbers
 go into #214; nothing here runs in CI.
 """
 
@@ -200,16 +204,22 @@ def summarize(args):
             samples = [{k: (v if k == "phase" else int(v)) for k, v in row.items()} for row in csv.DictReader(f)]
         with open(os.path.join(out, "loads.csv")) as f:
             load_rows = list(csv.DictReader(f))
-        idle = [s for s in samples if s["phase"] == "idle"]
         last = max(s["seconds"] for s in samples)
-        second_hour = [s for s in idle if 3600 <= s["seconds"] < 7200]
-        last_hour = [s for s in idle if s["seconds"] >= last - 3600]
-        med = lambda rows, key: statistics.median(r[key] for r in rows) if rows else None
+        hours = {}
+        for s in samples:
+            if s["phase"] == "idle":
+                hours.setdefault(s["seconds"] // 3600, []).append(s)
+        full = sorted(h for h in hours if h >= 1)
+        span = max(1, (len(full) - 1) // 3)
+        early, late = full[:span], full[-span:]
         summary = {"run": os.path.basename(os.path.normpath(out)), "hours": round(last / 3600, 2),
-                   "samples": len(samples), "loads": len(load_rows)}
+                   "samples": len(samples), "loads": len(load_rows),
+                   "early_hours": [h + 1 for h in early], "late_hours": [h + 1 for h in late]}
         for key in ("rss_kb", "fds", "threads", "tcp_all", "tcp_established"):
-            summary[f"idle_{key}_hour2"] = med(second_hour, key)
-            summary[f"idle_{key}_last_hour"] = med(last_hour, key)
+            hourly = {h: statistics.median(r[key] for r in hours[h]) for h in full}
+            summary[f"idle_{key}_by_hour"] = [hourly[h] for h in full]
+            summary[f"idle_{key}_early"] = statistics.median(hourly[h] for h in early) if early else None
+            summary[f"idle_{key}_late"] = statistics.median(hourly[h] for h in late) if late else None
             summary[f"max_{key}"] = max(s[key] for s in samples)
         summary["hwm_kb"] = max(s["hwm_kb"] for s in samples)
         summary["connections"] = sum(int(r["connections"]) for r in load_rows)
