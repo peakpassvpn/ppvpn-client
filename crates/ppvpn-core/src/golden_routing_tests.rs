@@ -9,7 +9,7 @@
 //! connection. `classifier` (Go's flow adapter, for comparison) has no Rust
 //! counterpart and is not compared.
 
-use std::collections::BTreeMap;
+use std::collections::btree_map::{BTreeMap, Entry};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,6 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use crate::config::Platform;
 use crate::profile;
 use crate::request::RoutingMode;
 use crate::runtime::sail::SailRuntime;
@@ -30,7 +31,6 @@ use crate::translate::{
     self, interface_name, LocalDns, LocalProxy, Options, Translation, Tun, DIRECT_TAG,
     SELECTED_TAG, TUN_INBOUND_TAG,
 };
-use crate::config::Platform;
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -81,6 +81,8 @@ struct Instance {
     socks_port: u16,
     proxy: Option<LocalProxy>,
     system_port: u16,
+    /// sail's data directory, removed after the stop.
+    dir: PathBuf,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -107,11 +109,12 @@ async fn routing_matches_the_go_golden() {
             let tun = case.inbound == "tun";
             let host_ipv6 = case.host_ipv6_route.unwrap_or(true);
             let key = format!("{tun}/{mode:?}/{host_ipv6}");
-            if !instances.contains_key(&key) {
-                let instance = start(&profile_bytes, tun, mode, host_ipv6, &key).await;
-                instances.insert(key.clone(), instance);
-            }
-            let instance = instances.get_mut(&key).unwrap();
+            let instance = match instances.entry(key.clone()) {
+                Entry::Occupied(e) => e.into_mut(),
+                Entry::Vacant(e) => {
+                    e.insert(start(&profile_bytes, tun, mode, host_ipv6, &key).await)
+                }
+            };
             let got = instance.decide(case).await;
             let mut want = expect.clone();
             want.as_object_mut().unwrap().remove("classifier");
@@ -119,8 +122,9 @@ async fn routing_matches_the_go_golden() {
                 failures.push(format!("{}:\n  got  {got}\n  want {want}", case.name));
             }
         }
-        for (_, instance) in instances {
+        for instance in instances.into_values() {
             instance.runtime.stop().await.unwrap();
+            let _ = std::fs::remove_dir_all(&instance.dir);
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -198,7 +202,7 @@ async fn start(
     std::fs::create_dir_all(&dir).unwrap();
     let runtime = SailRuntime::new(
         sail::embed::Options::new()
-            .data_dir(dir)
+            .data_dir(dir.clone())
             .threads(sail::embed::Threads::One),
     )
     .unwrap();
@@ -211,6 +215,7 @@ async fn start(
         socks_port,
         proxy: options.local_proxy,
         system_port,
+        dir,
     }
 }
 
@@ -233,15 +238,10 @@ fn stand_in_for_the_tun(config: &mut Value, port: u16) {
 /// Binds every outbound that dials to the loopback interface: a dial to
 /// anywhere else fails at once, after routing has decided.
 fn bind_loopback(config: &mut Value) {
-    let name = if cfg!(target_os = "macos") {
-        "lo0"
-    } else {
-        "lo"
-    };
     for outbound in config["outbounds"].as_array_mut().unwrap() {
         let kind = outbound["type"].as_str().unwrap_or_default();
         if !matches!(kind, "selector" | "fallback" | "urltest" | "block" | "dns") {
-            outbound["bind_interface"] = name.into();
+            outbound["bind_interface"] = "lo".into();
         }
     }
 }
