@@ -3,7 +3,7 @@ name: perf
 # The performance checks' tier A (#214): numbers that barely depend on the
 # machine — release binary sizes, the engine process's RSS idle and under a
 # fixed loopback load, allocations, apply and kernel-switch time — measured
-# at each main push and compared with the last main run and with the Go
+# once a day on main and compared with the last main run and with the Go
 # 0.5.21 baseline (testdata/perf). A crossed threshold turns this workflow
 # red; it blocks nothing (not a required check). tools/perf/measure.py
 # drives any engine that serves Core API v1 like `ppvpn-core serve`, so the
@@ -12,7 +12,9 @@ name: perf
 # measures ten times over, to calibrate the thresholds.
 on:
   push:
-    branches: [main, "ci/perf-*"]
+    branches: ["ci/perf-*"]
+  schedule:
+    - cron: "41 18 * * *"
   workflow_dispatch:
 
 permissions:
@@ -20,7 +22,26 @@ permissions:
   actions: read
 
 jobs:
+  # A scheduled run on a main commit that already had a successful
+  # scheduled run measures nothing new: skip.
+  fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.last.outputs.run }}
+    steps:
+      - id: last
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != schedule ]; then echo run=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          last=$(gh run list -R "$GITHUB_REPOSITORY" --workflow perf.yml --event schedule --status success \
+                   --limit 1 --json headSha --jq '.[0].headSha' || true)
+          if [ "$last" = "$GITHUB_SHA" ]; then echo run=false; else echo run=true; fi >> "$GITHUB_OUTPUT"
+
   measure:
+    needs: fresh
+    if: needs.fresh.outputs.run == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -65,7 +86,8 @@ jobs:
 
   # The release binaries, built as release.yml builds them.
   size:
-    if: github.ref != 'refs/heads/ci/perf-calib'
+    needs: fresh
+    if: needs.fresh.outputs.run == 'true' && (github.ref != 'refs/heads/ci/perf-calib')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

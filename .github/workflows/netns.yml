@@ -16,8 +16,37 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older run; other runs (main's
+# pushes, the schedule) each get a group of their own, so none is
+# cancelled, pending or running.
+concurrency:
+  group: netns-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # What this pull request or push changes (tools/ci-changes.sh); the jobs
+  # below skip when it is none of their business. A skipped job still
+  # satisfies a required check.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      engine: ${{ steps.diff.outputs.engine }}
+      desktop: ${{ steps.diff.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+
   tun:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     # The Rust test binary builds sail and BoringSSL from source until this
     # job's cache (saved from main) has them.
@@ -89,6 +118,8 @@ jobs:
           done
 
   network-change:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     # dns-local and the host-IPv6 re-probe across network changes (#61, #69):
     # scripts that build namespaces of their own, run through run.sh --host
     # for the timeout and the host check.
@@ -130,6 +161,8 @@ jobs:
           exit $status
 
   network-change-rust:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     # The same scripts on the Rust engine (ppvpn-core-lab), strictly:
     # SWITCH_GRACE_MS=0, the change reported within 2 s and the first query
     # after it on the new network (docs/rust-parity.md, "Go 0.5.21 的已知

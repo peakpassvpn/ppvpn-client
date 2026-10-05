@@ -334,6 +334,10 @@ jobs:
       approved: true
       rehearsal: ${{ inputs.rehearsal }}
       tag: ${{ needs.prepare.outputs.tag }}
+    # As for package: the called site job runs in the release environment
+    # and reads its signing key only if the caller hands its secrets on
+    # (the repository holds none itself; see package).
+    secrets: inherit
     permissions:
       contents: read
       attestations: read
