@@ -475,3 +475,83 @@ async fn a_moved_listener_is_replaced_in_place() {
         .collect();
     assert_eq!(left, [2], "the system proxy's connection is kept");
 }
+
+/// Go: internal/runtime TestApplyClosesConnectionsOfRemovedNodes and
+/// TestCloseOnSwitchDecidesByRecordedNode. Taking a node away closes the
+/// connections through it, through any of its ingresses, on the switch; a
+/// connection on a node that stays, or through no node, keeps running.
+/// Which node a connection is on is the one its chain recorded: the tag is
+/// made from the node's id, so the remaining node keeps its tag although
+/// its place in the profile moved. (On a desktop TUN a removed node's entry
+/// IPs leave the TUN's excluded routes: a full restart, which closes all.)
+#[tokio::test]
+async fn a_switch_closes_the_connections_of_removed_nodes() {
+    use super::super::lifecycle_tests::{drain, engine, NODE_1, NODE_2};
+    let (engine, fake) = engine();
+    running(&engine).await;
+    let applied = |engine: &Engine| {
+        engine
+            .inner
+            .live()
+            .applied
+            .as_ref()
+            .unwrap()
+            .translation
+            .clone()
+    };
+    let before = applied(&engine);
+    let (n1, n2) = (
+        before.node_tags[NODE_1].clone(),
+        before.node_tags[NODE_2].clone(),
+    );
+    let n1_backup = before.members[&n1][1].clone();
+    let connection = |id, chain: &[&str]| crate::runtime::RuntimeConnection {
+        id,
+        inbound: SYSTEM_PROXY_INBOUND_TAG.into(),
+        chain: chain.iter().map(|t| t.to_string()).collect(),
+        network: "tcp".into(),
+        destination: "192.0.2.10:443".into(),
+        upload_bytes: 0,
+        download_bytes: 0,
+        started: std::time::SystemTime::now(),
+    };
+    fake.set_connections(vec![
+        connection(1, &[crate::translate::SELECTED_TAG, &n1, &n1_backup]),
+        connection(2, &[&n2]),
+        connection(3, &["direct"]),
+        connection(4, &[&n1_backup]),
+    ]);
+    let mut rx = engine.subscribe(&[crate::event::EventKind::KernelSwitched]);
+
+    let without_node_1 = profile_with(R2, |v| {
+        v["nodes"].as_array_mut().unwrap().remove(0);
+        v["selection"]["default_node_id"] = NODE_2.into();
+    });
+    engine
+        .apply(ApplyRequest::new(without_node_1))
+        .await
+        .unwrap();
+
+    let events = drain(&mut rx);
+    assert!(
+        matches!(
+            events.as_slice(),
+            [crate::event::Event::KernelSwitched {
+                closed_connections: 2,
+                kept_connections: 2,
+                ..
+            }]
+        ),
+        "{events:?}"
+    );
+    let closed: Vec<u64> = fake
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            Call::CloseConnection(id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(closed, [1, 4]);
+    assert_eq!(applied(&engine).node_tags[NODE_2], n2);
+}
