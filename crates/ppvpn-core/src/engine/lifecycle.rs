@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -10,6 +11,7 @@ use tokio::task::JoinHandle;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
 use super::{not_applied, now, shut_down, Error, Inner};
+use crate::config::Role;
 use crate::error::codes;
 use crate::event::Event;
 use crate::profile::Profile;
@@ -97,9 +99,45 @@ pub(super) fn base64_flavor(value: &str) -> &'static str {
 }
 
 impl Inner {
+    /// Applies `request`, then one info line with how long each phase took
+    /// (Go's `apply timing`); an apply that changes nothing writes none.
     pub(super) async fn apply(
         self: &Arc<Self>,
         request: ApplyRequest,
+    ) -> Result<ApplyResult, Error> {
+        let mut timer = PhaseTimer::new();
+        let mut sets = (0, 0, 0);
+        let result = self.apply_phases(request, &mut timer, &mut sets).await;
+        if !matches!(&result, Ok(r) if !r.applied) {
+            let (ready, stale, unavailable) = sets;
+            tracing::info!(
+                outcome = outcome(&result),
+                tun = self.config.role == Role::Tun,
+                rule_sets_ready = ready,
+                rule_sets_stale = stale,
+                rule_sets_unavailable = unavailable,
+                validate_ms = timer.ms("validate"),
+                rule_sets_ms = timer.ms("rule_sets"),
+                wait_ms = timer.ms("wait"),
+                host_ipv6_ms = timer.ms("host_ipv6"),
+                build_ms = timer.ms("build"),
+                check_ms = timer.ms("check"),
+                kernel_switch_ms = timer.ms("kernel_switch"),
+                full_restart_ms = timer.ms("full_restart"),
+                total_ms = timer.total_ms(),
+                "apply timing"
+            );
+        }
+        result
+    }
+
+    /// `apply`'s work, its phases marked on `timer`; `sets` gets the rule
+    /// sets by state (ready, stale, unavailable).
+    async fn apply_phases(
+        self: &Arc<Self>,
+        request: ApplyRequest,
+        timer: &mut PhaseTimer,
+        sets: &mut (usize, usize, usize),
     ) -> Result<ApplyResult, Error> {
         self.admit()?;
         // D3: the profile as given, before any selection is carried over.
@@ -167,6 +205,7 @@ impl Inner {
             });
         }
 
+        timer.mark("validate");
         // Rule sets never fail an apply: a set that cannot be had degrades
         // its rules. Their downloads (up to PREPARE_TIMEOUT) run before the
         // operation lock, so that a shutdown neither waits for them nor
@@ -181,8 +220,12 @@ impl Inner {
         else {
             return Err(shut_down());
         };
+        timer.mark("rule_sets");
+        *sets = rule_sets.counts();
+        // Another lifecycle call may hold the lock.
         let _op = self.op.lock().await;
         self.admit()?;
+        timer.mark("wait");
         let running = {
             let live = self.live();
             live.running
@@ -190,6 +233,7 @@ impl Inner {
                 .flatten()
         };
         self.probe_host_ipv6();
+        timer.mark("host_ipv6");
         let files = rule_sets.files();
         let build = || {
             let mut options = self.options(request.routing_mode, &selected, &pins);
@@ -197,6 +241,7 @@ impl Inner {
             translate::translate(&profile, &options)
         };
         let mut translation = build().map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
+        timer.mark("build");
         let mut listeners = Vec::new();
         let switch = if let Some(running) = &running {
             let switched = self
@@ -209,6 +254,9 @@ impl Inner {
             if switch == SwitchKind::KernelSwitch {
                 self.kernel_switched(&profile.revision);
                 self.reassert(&translation, &selected, &pins).await;
+                timer.mark("kernel_switch");
+            } else {
+                timer.mark("full_restart");
             }
             Some(switch)
         } else {
@@ -220,6 +268,7 @@ impl Inner {
                     Error::new(codes::CORE_OPERATION_FAILED, false, format!("check: {e}"))
                 })?
                 .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
+            timer.mark("check");
             None
         };
 
@@ -266,15 +315,35 @@ impl Inner {
         })
     }
 
+    /// Starts the applied profile, then one info line with how long each
+    /// phase took (Go's `start timing`); none when already running.
     pub(super) async fn start(self: &Arc<Self>) -> Result<(), Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
+        if self.live().running {
+            return Ok(());
+        }
+        let mut timer = PhaseTimer::new();
+        let result = self.start_phases(&mut timer).await;
+        tracing::info!(
+            outcome = outcome(&result),
+            tun = self.config.role == Role::Tun,
+            local_proxy_ms = timer.ms("local_proxy"),
+            host_ipv6_ms = timer.ms("host_ipv6"),
+            build_ms = timer.ms("build"),
+            engine_start_ms = timer.ms("engine_start"),
+            total_ms = timer.total_ms(),
+            "start timing"
+        );
+        result
+    }
+
+    /// `start`'s work under the operation lock, not running, its phases
+    /// marked on `timer`.
+    async fn start_phases(self: &Arc<Self>, timer: &mut PhaseTimer) -> Result<(), Error> {
         let (profile, mode, selected, pins) = {
             let live = self.live();
-            if live.running {
-                return Ok(());
-            }
             let Some(a) = &live.applied else {
                 return Err(not_applied());
             };
@@ -287,10 +356,13 @@ impl Inner {
         };
         // The listeners' ports may have been taken while stopped.
         self.prepare_listeners()?;
+        timer.mark("local_proxy");
         self.probe_host_ipv6();
+        timer.mark("host_ipv6");
         // Translated again: select and pin may have moved since the apply.
         let mut translation =
             translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+        timer.mark("build");
         self.live().needs_stop = true;
         let mut started = self.runtime.start(&translation.json).await;
         if let Err(e) = &started {
@@ -303,6 +375,9 @@ impl Inner {
                 started = self.runtime.start(&translation.json).await;
             }
         }
+        // sail's start: parse, outbounds, DNS, routing, inbounds (the TUN
+        // and its routes included); not divided further.
+        timer.mark("engine_start");
         if let Err(e) = started {
             return Err(self.runtime_error(&e));
         }
@@ -543,6 +618,58 @@ impl Inner {
             }
         }
         self.settle(&mut live);
+    }
+}
+
+/// How long each phase of an apply or a start took, for its one info line
+/// (Go's phaseTimer).
+struct PhaseTimer {
+    started: Instant,
+    last: Instant,
+    phases: Vec<(&'static str, u64)>,
+}
+
+impl PhaseTimer {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            started: now,
+            last: now,
+            phases: Vec::new(),
+        }
+    }
+
+    /// Ends the phase that began at the previous mark (or at creation).
+    fn mark(&mut self, phase: &'static str) {
+        let now = Instant::now();
+        self.phases.push((phase, millis(now - self.last)));
+        self.last = now;
+    }
+
+    /// A phase's milliseconds; None (no field) for a phase that did not
+    /// end.
+    fn ms(&self, phase: &str) -> Option<u64> {
+        self.phases
+            .iter()
+            .find(|(name, _)| *name == phase)
+            .map(|(_, ms)| *ms)
+    }
+
+    fn total_ms(&self) -> u64 {
+        millis(self.started.elapsed())
+    }
+}
+
+fn millis(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// A timing line's `outcome`.
+fn outcome<T>(result: &Result<T, Error>) -> &'static str {
+    if result.is_ok() {
+        "ok"
+    } else {
+        "failed"
     }
 }
 

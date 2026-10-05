@@ -72,7 +72,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 | Go 包 | A | B | C | D |
 | --- | --- | --- | --- | --- |
-| `internal/runtime` | 4 | 5 | 23 | 17 |
+| `internal/runtime` | 3 | 5 | 23 | 17 |
 | `profile` | 0 | 4 | 18 | 1 |
 | `internal/config` | 1 | 1 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 6 | 13 | 71 | 66 |
+| 合计 | 5 | 13 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -227,7 +227,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | `internal/runtime` `TestFullRestartReasons` | fullRestartReasons is a whitelist: only listener changes stop the engine. | `ppvpn-core` `engine::switch::tests::full_restart_reasons_are_a_whitelist`、`ppvpn-core` `engine::switch::tests::a_changed_tun_restarts_instead_of_reloading`、`ppvpn-core` `engine::switch::tests::an_unchanged_listener_set_reloads`、`ppvpn-core` `engine::switch::tests::a_failed_restart_puts_the_running_configuration_back` | done | 白名单和 reasons 的措辞同 Go；比较的是新旧翻译的 JSON。sail 的 reload 不增删监听、只替换已有监听的 users，所以其余变化都走 stop 再 start。新配置起不来时恢复原配置，apply 报错；原配置也起不来就停止实例。host IPv6 重探同样经过这一比较（目前只改 direct，不改 TUN，所以是 reload）。有意偏离（#221，sail 2f967b1a 的差分 reload）：这个白名单只剩 TUN 一类直接决定重启（route 的网卡选项 sail 的 reload 也接受，不需要重启，`runtime::sail::tests::a_reload_takes_the_route_s_interface_options`；新连接改用新的 `default_interface` 已验证：netns 的 tun 作业里 `runtime::netns_tests::a_reload_moves_new_connections_to_the_new_default_interface`，两条 veth，reload 后新连接走新网卡，reload 前的连接仍走原网卡；`default_mark` 由 sail 自己的测试覆盖（sail 41ea4db8，需要 root，不在 sail 的 CI 里自动运行），我们这边没有单独的用例）（`engine::switch::restart_reasons`），其余监听变化走 reload，由 sail 原地增、删、换，只断开那个监听的连接（`engine::switch::tests::a_moved_listener_is_replaced_in_place`）；reload 返回 `needs_restart` 或 `inbound_lost` 时照样重启 |
 | `internal/runtime` `TestKernelSwitchKeepsReverseMapping` | A kernel switch keeps the reverse mapping: a client that resolved a name through the old kernel and connects to the address through the new one still matches the name's … |  | todo | 【D】反向映射存于 sail 的环境级 env.reverse_map（sail app/dns/client.rs），跨 reload 保留由 sail 自测（sail tests/it/test_route_dial_domain.rs 步骤 5 原地 reload 后），lab reverse-map.1–.4 在 Rust 下 PASS。 |
 | `internal/runtime` `TestLifecycleAndRuntimeRollback` | Lifecycle and runtime rollback |  | todo | 【C】已覆盖：engine::lifecycle_tests::a_failed_apply_keeps_what_runs_and_says_why（替换失败时旧运行时和 revision 保留）与 lifecycle_tests 的 start/stop 状态用例。 |
-| `internal/runtime` `TestLifecycleLogsPhaseTimings` | Apply and start each write one info line with per-phase durations, so a slow /v1/start shows where the time went. |  | todo | 【A，0.5 人日】Rust 缺：engine/lifecycle.rs 没有 "apply timing"/"start timing" 分阶段耗时日志行（docs/quickstart.md 记载用于排查慢启动），需在 apply/start 各阶段计时并记一行 info。 |
+| `internal/runtime` `TestLifecycleLogsPhaseTimings` | Apply and start each write one info line with per-phase durations, so a slow /v1/start shows where the time went. | `ppvpn-core` `engine::logs::tests::apply_and_start_log_phase_timings` | done | 消息名、`outcome`、`tun`、`rule_sets_*`、`total_ms` 同 Go；分段按 Rust 的步骤命名（apply：validate/rule_sets/wait/host_ipv6/build，再 check、kernel_switch 或 full_restart；start：local_proxy/host_ipv6/build/engine_start），没有 `rebuild` 字段，见 quickstart.md |
 | `internal/runtime` `TestProfileIsCopiedBeforeRetention` | Profile is copied before retention |  | todo | 【D】Go 指针别名问题，Rust 的 apply 以所有权/克隆接收 Profile，调用方不可能再改动引擎持有的副本。 |
 | `internal/runtime` `TestProfileRejectRuleDoesNotCrashCore` | hits a profile reject rule on a real sing-box. |  | todo | 【C】崩溃源于 Go 直接把 option 交给 box.New（未经 JSON 解码），Rust 以 JSON 交给 sail；reject 渲染由 translate::tests::final_reject_is_a_catch_all_rule 等覆盖，真实 sail 端到端用例可后补。 |
 | `internal/runtime` `TestRapidAppliesDrainEveryKernel` | Rapid applies stack draining kernels; each drains on its own once its connections end, and none is left behind. |  | todo | 【D】堆叠的排空内核是 Go 进程模型，Rust 每次 apply 都在同一 sail 实例上原地 reload，不会遗留内核。 |
