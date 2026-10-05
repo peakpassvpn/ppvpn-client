@@ -619,6 +619,34 @@ fn now() -> DateTime<Utc> {
     Utc::now()
 }
 
+/// Where sail runs the instance's tasks: on the host's runtime when `new`
+/// is awaited on a multi-thread tokio runtime (one runtime for the
+/// process, and memory a stopped instance freed is reused: sail
+/// embed.md, "Memory"), else on a runtime of sail's own. sail refuses a
+/// current-thread runtime, so that one keeps sail's own too.
+fn sail_runtime() -> sail::embed::Runtime {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            sail::embed::Runtime::Host(handle)
+        }
+        _ => sail::embed::Runtime::Own,
+    }
+}
+
+/// glibc's malloc keeps what a load freed (a start, a reload, a rule
+/// set's update parse a document and drop it) until later allocations;
+/// sail runs this after each such load, so an idle instance gives the
+/// peak back. Once per process; other allocators need nothing.
+fn give_back_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    sail::runtime::memory::on_memory_freed(|| {
+        // SAFETY: malloc_trim only walks glibc's own arenas.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,32 +838,4 @@ mod tests {
         let back: Status = serde_json::from_str(&serde_json::to_string(&status).unwrap()).unwrap();
         assert_eq!(back, status);
     }
-}
-
-/// Where sail runs the instance's tasks: on the host's runtime when `new`
-/// is awaited on a multi-thread tokio runtime (one runtime for the
-/// process, and memory a stopped instance freed is reused: sail
-/// embed.md, "Memory"), else on a runtime of sail's own. sail refuses a
-/// current-thread runtime, so that one keeps sail's own too.
-fn sail_runtime() -> sail::embed::Runtime {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            sail::embed::Runtime::Host(handle)
-        }
-        _ => sail::embed::Runtime::Own,
-    }
-}
-
-/// glibc's malloc keeps what a load freed (a start, a reload, a rule
-/// set's update parse a document and drop it) until later allocations;
-/// sail runs this after each such load, so an idle instance gives the
-/// peak back. Once per process; other allocators need nothing.
-fn give_back_freed_memory() {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    sail::runtime::memory::on_memory_freed(|| {
-        // SAFETY: malloc_trim only walks glibc's own arenas.
-        unsafe {
-            libc::malloc_trim(0);
-        }
-    });
 }
