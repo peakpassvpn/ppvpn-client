@@ -33,6 +33,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -190,6 +191,7 @@ def run(args):
         fakenode.stdin.close()
         fakenode.terminate()
         fakenode.wait(10)
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def summarize(args):
