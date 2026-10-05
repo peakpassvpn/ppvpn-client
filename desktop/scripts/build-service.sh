@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 OUT_DIR="$SCRIPT_DIR/../build/binaries"
-SERVICE_DIR="$SCRIPT_DIR/../service"
+ROOT_DIR="$SCRIPT_DIR/../.."
 mkdir -p "$OUT_DIR"
 
 target="${1:-windows}"
@@ -19,8 +19,8 @@ target="${1:-windows}"
 build_macos_triple() {
   local triple="$1"
   echo "building ppvpn-service for $triple"
-  (cd "$SERVICE_DIR" && cargo build --locked --release --target "$triple")
-  local src_dir="$SERVICE_DIR/target/$triple/release"
+  (cd "$ROOT_DIR" && cargo build --locked -p ppvpn-service --profile service --target "$triple")
+  local src_dir="$ROOT_DIR/target/$triple/service"
   for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
     cp "$src_dir/$bin" "$OUT_DIR/$bin-$triple"
     chmod 755 "$OUT_DIR/$bin-$triple"
@@ -63,9 +63,9 @@ case "$target" in
 esac
 
 echo "building ppvpn-service for $triple"
-(cd "$SERVICE_DIR" && cargo build --locked --release --target "$triple")
+(cd "$ROOT_DIR" && cargo build --locked -p ppvpn-service --profile service --target "$triple")
 
-src_dir="$SERVICE_DIR/target/$triple/release"
+src_dir="$ROOT_DIR/target/$triple/service"
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   cp "$src_dir/${bin}${suffix}" "$OUT_DIR/${bin}-${triple}${suffix}"
   echo "✓ $OUT_DIR/${bin}-${triple}${suffix}"
