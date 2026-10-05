@@ -176,7 +176,10 @@ impl Engine {
         let log = Logs::new(&config.log)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         log.span().in_scope(|| cleanup::sweep(&config))?;
-        let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
+        give_back_freed_memory();
+        let options = sail::embed::Options::new()
+            .run_dir(cleanup::run_dir(&config))
+            .runtime(sail_runtime());
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error_on(config.platform))?;
         let engine = Engine::assemble(config, Arc::new(runtime), log)?;
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
@@ -614,6 +617,34 @@ fn not_applied() -> Error {
 
 fn now() -> DateTime<Utc> {
     Utc::now()
+}
+
+/// Where sail runs the instance's tasks: on the host's runtime when `new`
+/// is awaited on a multi-thread tokio runtime (one runtime for the
+/// process, and memory a stopped instance freed is reused: sail
+/// embed.md, "Memory"), else on a runtime of sail's own. sail refuses a
+/// current-thread runtime, so that one keeps sail's own too.
+fn sail_runtime() -> sail::embed::Runtime {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            sail::embed::Runtime::Host(handle)
+        }
+        _ => sail::embed::Runtime::Own,
+    }
+}
+
+/// glibc's malloc keeps what a load freed (a start, a reload, a rule
+/// set's update parse a document and drop it) until later allocations;
+/// sail runs this after each such load, so an idle instance gives the
+/// peak back. Once per process; other allocators need nothing.
+fn give_back_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    sail::runtime::memory::on_memory_freed(|| {
+        // SAFETY: malloc_trim only walks glibc's own arenas.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    });
 }
 
 #[cfg(test)]

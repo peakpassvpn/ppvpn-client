@@ -80,7 +80,8 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
       - 局限只剩一项：强杀测的是 windows-gnu 构建（Windows 的 TUN 和 WFP 代码与当前 master 相同），没有用我们的 MSVC 构建测。所以用我们自己的构建复测之前，这一条不算验收（`docs/rust-parity.md` R1）。实例失败而进程还在的情形不同，我们的 MSVC 构建已在 CI 里验证（第 9 节）。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
-  - 终态（Sail E2 之后）是在宿主当前的 tokio 运行时里运行，实例有自己的任务范围。E2 之前，内部可能另起运行时线程（Sail 自带的运行时）。这一点的变化不影响接口，不算破坏性变更。
+  - 在**多线程**的 tokio 运行时里调用 `new` 时，实例跑在这个运行时上（Sail 的 `Runtime::Host`），每个实例只另占 Sail 的一个线程；在单线程运行时里或不在 tokio 里调用时，实例用 Sail 自带的运行时。用多线程运行时的宿主，要让它启用 I/O 和定时器（`enable_all()`），并一直活到 `shutdown` 返回；运行时先没了，实例会失败（`Fatal`），系统改动仍由 Sail 自己的线程撤销。Sail 会用这个运行时的 blocking 线程池（系统解析器的查询等），宿主自己的阻塞任务接近上限时要调大 `max_blocking_threads`。
+  - **内存（Linux，glibc）**：一个进程里反复起停实例时，glibc 的 malloc 不把释放的内存还给系统，RSS 会一直涨（Sail 的测量：64 MB 涨到 264 MB，用宿主运行时是 133 MB），不是泄漏。宿主进程**应设环境变量 `MALLOC_ARENA_MAX=2`**（同一测量降到 79–92 MB），要在进程启动前设，例如写进 systemd unit 或启动脚本。引擎另外在每次加载配置后调用 `malloc_trim(0)`，把这次加载的峰值还回去。macOS、Windows 和 musl 不受影响。
   - 实例不使用全局单例、静态运行时或全局注册表。同一个进程里可以先后创建多个实例（G7 要求反复启停 100 次不留残留）。
 - **实例数量**：
   - **Tun**：同一时刻只能有一个，因为它们会争用同一套规则命名空间。重复创建时返回 `TUN_INSTANCE_EXISTS`（retryable=false）。
