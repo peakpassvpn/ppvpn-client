@@ -68,20 +68,39 @@ pub(crate) const PRIVATE_PREFIXES: &[&str] = &[
     "::1/128",
 ];
 
-/// The failover group's health check (Go internal/failover).
+/// The failover group's health check and switching (Go internal/failover;
+/// docs/backend-profile.md, 故障转移语义): an HTTP 204 request through
+/// each ingress to each URL, passed when any answers 2xx/3xx; a member is
+/// down after `fail_after` failed rounds in a row and up again after
+/// `recover_after` passed ones; a dial through a member that is not the
+/// last gets `dial_timeout`; after a switch the group stays `min_dwell` on
+/// a healthy member before going back to an earlier one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HealthCheck {
-    pub url: String,
+    pub urls: Vec<String>,
     pub interval: String,
     pub timeout: String,
+    pub dial_timeout: String,
+    pub expected_status: String,
+    pub fail_after: u32,
+    pub recover_after: u32,
+    pub min_dwell: String,
 }
 
 impl Default for HealthCheck {
     fn default() -> Self {
         Self {
-            url: "http://www.gstatic.com/generate_204".into(),
+            urls: vec![
+                "http://www.gstatic.com/generate_204".into(),
+                "http://cp.cloudflare.com/generate_204".into(),
+            ],
             interval: "15s".into(),
             timeout: "5s".into(),
+            dial_timeout: "2s".into(),
+            expected_status: "200-399".into(),
+            fail_after: 2,
+            recover_after: 3,
+            min_dwell: "60s".into(),
         }
     }
 }
@@ -519,9 +538,17 @@ impl Builder {
                 "type": "fallback",
                 "tag": auto,
                 "outbounds": members,
-                "url": check.url,
+                "url": check.urls,
+                "url_policy": "any",
+                "expected_status": check.expected_status,
                 "interval": check.interval,
                 "timeout": check.timeout,
+                "dial_timeout": check.dial_timeout,
+                "debounce": {
+                    "fail_after": check.fail_after,
+                    "recover_after": check.recover_after,
+                    "min_dwell": check.min_dwell,
+                },
             }),
         ];
         t.groups.insert(tag.clone(), auto);
