@@ -1169,7 +1169,7 @@ mod tests {
                 .iter()
                 .filter(|(path, _)| path == "/v1/apply-profile")
                 .map(|(_, body)| body.clone())
-                .last()
+                .next_back()
                 .unwrap()
         };
         wait_for(&client, |_| {
@@ -1196,7 +1196,7 @@ mod tests {
     fn rebuilt_local_proxy_credentials_show_until_dismissed() {
         let launcher = FakeLauncher::new();
         launcher.credentials_reset.store(true, Ordering::SeqCst);
-        let (client, _, launcher, data_dir) =
+        let (client, _, _launcher, data_dir) =
             signed_in_client_with(vec![("200 OK", r#"{"revoked":true}"#.into())], launcher);
         let snapshot = wait_for(&client, |s| s.local_proxy_credentials_reset);
         assert!(matches!(snapshot.standard, StandardState::Ready { .. }));
