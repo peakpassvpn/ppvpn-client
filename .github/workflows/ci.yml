@@ -1,14 +1,32 @@
 name: CI
 
-# Tier 1: every pull request and push to main. Fast checks only: vet and the
-# unit/integration tests under the tag sets the products build with. The
-# race detector, govulncheck, Windows-native tests and all artifact builds run
-# in release.yml.
+# Tier 1: every pull request and push to main that can change the Go core.
+# Fast checks only: vet and the unit/integration tests under the tag sets the
+# products build with. The race detector, govulncheck, Windows-native tests
+# and all artifact builds run in release.yml. The Go core is frozen (#214),
+# so changes only to the Rust crates, the desktop or the docs skip it; the
+# required check "test" then comes from rust.yml alone.
 
 on:
   pull_request:
+    paths-ignore:
+      - "crates/**"
+      - "desktop/**"
+      - "docs/**"
+      - "**.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
   push:
     branches: [main]
+    paths-ignore:
+      - "crates/**"
+      - "desktop/**"
+      - "docs/**"
+      - "**.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
 
 permissions:
   contents: read
