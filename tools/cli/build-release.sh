@@ -101,7 +101,7 @@ macos)
 	mkdir -p "$(dirname "$bin")"
 	lipo -create -output "$bin" \
 		target/aarch64-apple-darwin/release/ppvpn target/x86_64-apple-darwin/release/ppvpn
-	lipo -verify_arch arm64 x86_64 "$bin"
+	lipo "$bin" -verify_arch arm64 x86_64
 	# The desktop app's certificate (tools/desktop/ci/build-macos-native.sh):
 	# self-signed, so the designated requirement is pinned to the identifier
 	# and the certificate, and the Keychain item's access carries across
