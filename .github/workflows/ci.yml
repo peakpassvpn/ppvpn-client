@@ -473,8 +473,10 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5
         run: PPVPN_TEST_KEYSTORE=1 cargo test -p ppvpn-cli --test keystore --locked -- --nocapture
+      # Only when the desktop or what it builds from changed: the app
+      # compiles the client for both architectures.
       - name: Build the Debug app against the client
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         run: |
           brew install xcodegen
           desktop/apps/macos/scripts/bootstrap.sh
@@ -576,41 +578,43 @@ jobs:
             Write-Output "::endgroup::"
           }
 
+      # The C# bindings, App.Core and the app: only when the desktop or what
+      # it builds from changed. Debug bindings, as the engine's tests build.
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         with:
           dotnet-version: '8.0.x'
       - name: Cache uniffi-bindgen-cs
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs.exe
           key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
       # build-dotnet.ps1 refuses any other version of the generator.
       - name: Install uniffi-bindgen-cs
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         run: |
           if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
             cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
           fi
       - name: Generate C# bindings
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         shell: powershell
-        run: desktop/crates/ppvpn-client/scripts/build-dotnet.ps1 -Release
+        run: desktop/crates/ppvpn-client/scripts/build-dotnet.ps1
       - name: Test App.Core
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         shell: powershell
         run: |
           dotnet test desktop/apps/shared/PPVPN.App.Core.Tests
           if ($LASTEXITCODE -ne 0) { throw "dotnet test failed" }
       - name: Build the app
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         shell: powershell
         run: |
           dotnet build desktop/apps/windows/PPVPN.Windows/PPVPN.Windows.csproj -c Release -p:Platform=x64 -warnaserror
           if ($LASTEXITCODE -ne 0) { throw "dotnet build failed" }
       - name: Build the push agent (NativeAOT)
-        if: steps.scope.outputs.code == 'true'
+        if: steps.scope.outputs.desktop == 'true'
         shell: powershell
         run: |
           dotnet publish desktop/apps/windows/PPVPN.PushAgent/PPVPN.PushAgent.csproj -c Release -r win-x64 -warnaserror -o "$env:RUNNER_TEMP\push-agent"
