@@ -715,7 +715,10 @@ mod tests {
     }
 
     fn wait_for(client: &Client, what: impl Fn(&ClientSnapshot) -> bool) -> ClientSnapshot {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Generous: a loaded CI runner (Windows, the tests in parallel) can
+        // take seconds to sign in and start the fake core; a passing wait
+        // returns as soon as the state is there.
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let snapshot = client.snapshot();
             if what(&snapshot) {
@@ -1423,7 +1426,8 @@ mod tests {
         block_on(client.set_connection_mode(crate::ConnectionMode::Compatible)).unwrap();
         block_on(client.connect()).unwrap();
         let took = started.elapsed();
-        assert!(took < Duration::from_secs(1), "waited {took:?}");
+        // Well under the uninstall's 3 s, with room for a slow runner.
+        assert!(took < Duration::from_secs(2), "waited {took:?}");
         assert_eq!(client.snapshot().connection.phase, ConnectionPhase::On);
         assert!(
             !uninstalling.is_finished(),
