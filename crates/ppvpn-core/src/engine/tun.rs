@@ -585,7 +585,8 @@ mod tests {
     /// interface name, as hosts read it from the system) is accepted, kept
     /// in order with the rest, less those inside the tunnel, and dns-local
     /// dials it with the default interface's index; one of another
-    /// interface is left out.
+    /// interface is left out (that part:
+    /// localdns::servers::tests::usable_leaves_out_tunnel_loopback_and_foreign_link_local).
     #[tokio::test]
     async fn zoned_link_local_servers_reach_dns_local_with_their_zone() {
         let config = zoned_config(Platform::Linux);
@@ -613,6 +614,9 @@ mod tests {
 
         engine.inner.start_local_dns().await.unwrap();
         running(&engine).await;
+        // The dial is all this looks at: held, so no answer is read (the
+        // fake's echo would hand back the query itself, never an answer).
+        fake.hang_dials();
         let addr = match engine.inner.tun_options().unwrap().local_dns {
             LocalDns::Listener(addr) => addr,
             other => panic!("{other:?}"),
@@ -631,11 +635,13 @@ mod tests {
             .send_to(&query.to_vec().unwrap(), addr)
             .await
             .unwrap();
-        let mut buf = [0u8; 512];
-        tokio::time::timeout(std::time::Duration::from_secs(10), client.recv(&mut buf))
-            .await
-            .expect("an answer")
-            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while fake.pending_dials() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("dns-local dials");
         let dialed: Vec<std::net::SocketAddr> = fake
             .calls()
             .into_iter()
@@ -652,12 +658,7 @@ mod tests {
             2,
         ));
         assert_eq!(dialed.first(), Some(&first), "{dialed:?}");
-        assert!(
-            dialed
-                .iter()
-                .all(|to| to.ip() != "fe80::2".parse::<std::net::IpAddr>().unwrap()),
-            "{dialed:?}"
-        );
+        engine.stop().await.unwrap();
     }
 
     /// Where sail asks the servers itself (mobile): sail's DNS servers take
