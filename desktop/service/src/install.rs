@@ -4,8 +4,8 @@
 //! - Windows: registers a Windows service (Service Control Manager).
 //! - macOS: writes a LaunchDaemon under /Library/LaunchDaemons/ and a
 //!   helper bundle under /Library/PrivilegedHelperTools/, then bootstraps it.
-//! - Linux: copies the service and core into /usr/lib/ppvpn-service/ and
-//!   enables a systemd unit.
+//! - Linux: copies the service into /usr/lib/ppvpn-service/ and enables a
+//!   systemd unit.
 //!
 //! Must be run with admin/root privileges. On macOS the app shells out via
 //! `osascript ... with administrator privileges`, on Linux via `pkexec`, so
@@ -38,8 +38,12 @@ fn main() -> windows_service::Result<()> {
     let mgr_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
     let mgr = ServiceManager::local_computer(None::<&str>, mgr_access)?;
 
-    let access = ServiceAccess::QUERY_STATUS | ServiceAccess::START | ServiceAccess::STOP;
+    let access = ServiceAccess::QUERY_STATUS
+        | ServiceAccess::START
+        | ServiceAccess::STOP
+        | ServiceAccess::CHANGE_CONFIG;
     if let Ok(existing) = mgr.open_service(SERVICE_NAME, access) {
+        restart_on_failure(&existing)?;
         if let Ok(status) = existing.query_status() {
             match status.current_state {
                 // The app reinstalls a service whose build differs from its
@@ -108,10 +112,37 @@ fn main() -> windows_service::Result<()> {
     let access = ServiceAccess::CHANGE_CONFIG | ServiceAccess::START;
     let svc = mgr.create_service(&info, access)?;
     svc.set_description(DESCRIPTION)?;
+    restart_on_failure(&svc)?;
     svc.start(&Vec::<&OsStr>::new())?;
 
     println!("installed and started {SERVICE_NAME}");
     Ok(())
+}
+
+/// The service manager restarts the service when it ends on its own: it
+/// exits for a restart when a TUN instance's shutdown left WFP filters
+/// behind (they go with the process; see service/src/core.rs).
+#[cfg(windows)]
+fn restart_on_failure(service: &windows_service::service::Service) -> windows_service::Result<()> {
+    use std::time::Duration;
+    use windows_service::service::{
+        ServiceAction, ServiceActionType, ServiceFailureActions, ServiceFailureResetPeriod,
+    };
+    let restart = |delay| ServiceAction {
+        action_type: ServiceActionType::Restart,
+        delay,
+    };
+    service.update_failure_actions(ServiceFailureActions {
+        reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(24 * 60 * 60)),
+        reboot_msg: None,
+        command: None,
+        actions: Some(vec![
+            restart(Duration::from_secs(2)),
+            restart(Duration::from_secs(5)),
+            restart(Duration::from_secs(30)),
+        ]),
+    })?;
+    service.set_failure_actions_on_non_crash_failures(true)
 }
 
 #[cfg(windows)]
@@ -142,7 +173,7 @@ const BUNDLE_PATH: &str = "/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.
 #[cfg(target_os = "macos")]
 const LAUNCHD_PLIST_PATH: &str = "/Library/LaunchDaemons/com.peakpassvpn.ppvpn.service.plist";
 
-/// Logs of the service and its core (see service/src/logfile.rs).
+/// Logs of the service and its engine (see service/src/logfile.rs).
 #[cfg(target_os = "macos")]
 const LOG_DIR: &str = "/Library/Logs/PPVPN";
 
@@ -224,33 +255,22 @@ fn main() -> Result<(), anyhow::Error> {
     .find(|p| p.exists())
     .ok_or_else(|| anyhow!("ppvpn-service binary not found next to {}", exe.display()))?;
 
-    let src_core = [
-        dir.join("ppvpn-core"),
-        dir.join("ppvpn-core-aarch64-apple-darwin"),
-        dir.join("ppvpn-core-x86_64-apple-darwin"),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
-    .ok_or_else(|| anyhow!("ppvpn-core binary not found next to {}", exe.display()))?;
-
     let macos_dir = format!("{BUNDLE_PATH}/Contents/MacOS");
     let target_bin = format!("{macos_dir}/ppvpn-service");
-    let target_core = format!("{macos_dir}/ppvpn-core");
     let info_plist = format!("{BUNDLE_PATH}/Contents/Info.plist");
 
-    // Stop the running service first: on SIGTERM it stops ppvpn-core in
-    // order (routes, DNS), which takes up to ~17 s (ExitTimeOut is 30 s).
+    // Stop the running service first: on SIGTERM it shuts its TUN instance
+    // down (routes, DNS) within ~10 s (ExitTimeOut is 30 s).
     stop_launchd_job()?;
 
-    // Never rewrite a binary in place: a process still running it (a core
-    // orphaned by an earlier crash) would fail its code signature check and
-    // be SIGKILLed with its routes up. A new inode leaves it untouched.
+    // Never rewrite a binary in place: a process still running it would
+    // fail its code signature check and be SIGKILLed with its routes up. A
+    // new inode leaves it untouched.
     fs::create_dir_all(&macos_dir).with_context(|| format!("mkdir {macos_dir}"))?;
     replace_file(&src_bin, Path::new(&target_bin), 0o544)?;
-    replace_file(&src_core, Path::new(&target_core), 0o544)?;
     fs::write(&info_plist, INFO_PLIST).with_context(|| format!("write {info_plist}"))?;
 
-    // The service's and the core's logs (and launchd's stdout / stderr
+    // The service's and the engine's logs (and launchd's stdout / stderr
     // files) live here, outside the helper bundle, so they survive
     // uninstalling and reinstalling the service.
     fs::create_dir_all(LOG_DIR).with_context(|| format!("mkdir {LOG_DIR}"))?;
@@ -270,7 +290,6 @@ fn main() -> Result<(), anyhow::Error> {
     run("chmod", &["-R", "755", BUNDLE_PATH])?;
     run("chown", &["-R", "root:wheel", BUNDLE_PATH])?;
     run("chmod", &["544", &target_bin])?;
-    run("chmod", &["544", &target_core])?;
 
     // Enable + load + start.
     run("launchctl", &["enable", &format!("system/{SERVICE_LABEL}")])?;
@@ -384,10 +403,8 @@ const INSTALL_DIR: &str = "/usr/lib/ppvpn-service";
 
 // RuntimeDirectory/StateDirectory/LogsDirectory back the paths in
 // protocol.rs, core.rs and logfile.rs (systemd keeps LogsDirectory= when the
-// service stops; the uninstaller leaves it too). KillMode stays
-// control-group so ppvpn-core gets SIGTERM with the service and tears down
-// its routes; the service refuses new Connects from then on (stopping
-// state) so no client starts another core while it shuts down.
+// service stops; the uninstaller leaves it too). On SIGTERM the service
+// refuses new Connects (stopping state) and shuts its TUN instance down.
 #[cfg(target_os = "linux")]
 const UNIT: &str = r#"[Unit]
 Description=PPVPN privileged service
@@ -399,8 +416,7 @@ Type=simple
 ExecStart=/usr/lib/ppvpn-service/ppvpn-service
 Restart=always
 RestartSec=5
-# On SIGTERM the service stops ppvpn-core in order (/v1/stop, then up to 7 s
-# grace), which may take ~17 s.
+# On SIGTERM the service shuts its TUN instance down (at most 10 s).
 TimeoutStopSec=30
 UMask=0077
 RuntimeDirectory=ppvpn
@@ -443,7 +459,6 @@ fn main() -> Result<(), anyhow::Error> {
         .ok_or_else(|| anyhow!("{name} binary not found next to {}", exe.display()))
     };
     let src_bin = find("ppvpn-service")?;
-    let src_core = find("ppvpn-core")?;
 
     // Stop before replacing binaries; a missing unit is fine.
     let _ = std::process::Command::new("systemctl")
@@ -452,9 +467,11 @@ fn main() -> Result<(), anyhow::Error> {
 
     fs::create_dir_all(INSTALL_DIR).with_context(|| format!("mkdir {INSTALL_DIR}"))?;
     fs::set_permissions(INSTALL_DIR, fs::Permissions::from_mode(0o755))?;
-    for (src, name) in [(&src_bin, "ppvpn-service"), (&src_core, "ppvpn-core")] {
-        replace_file(src, &Path::new(INSTALL_DIR).join(name), 0o755)?;
-    }
+    replace_file(
+        &src_bin,
+        &Path::new(INSTALL_DIR).join("ppvpn-service"),
+        0o755,
+    )?;
     run("chown", &["-R", "root:root", INSTALL_DIR])?;
 
     fs::write(UNIT_PATH, UNIT).with_context(|| format!("write {UNIT_PATH}"))?;

@@ -1594,15 +1594,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_watcher_hears_stopping_then_eof_and_does_not_delay_the_stop() {
-        use crate::core::tests::{connect_payload, fake_manager, new_session, process_exists};
+        use crate::core::tests::{connect_payload, fake_manager, new_session};
         use std::time::{Duration, Instant};
 
-        let (manager, _cores) = fake_manager(vec![], Duration::from_secs(5));
+        let (manager, engines) = fake_manager(vec![]);
         let hub = manager.watchers();
         let core = parking_lot::Mutex::new(manager);
         let me = std::process::id();
         let session = new_session(1);
-        let pid = core.lock().connect(connect_payload(&session), me).unwrap();
+        core.lock().connect(connect_payload(&session), me).unwrap();
         let (request, key) = watch_request(me, &session);
 
         std::thread::scope(|scope| {
@@ -1631,7 +1631,10 @@ mod tests {
                 .unwrap();
             let took = started.elapsed();
             assert!(took < Duration::from_secs(2), "stop took {took:?}");
-            assert!(!process_exists(pid), "core stopped");
+            assert!(
+                engines.events().contains(&"1 shutdown".to_string()),
+                "instance stopped"
+            );
 
             let mut events = Vec::new();
             while let Some(frame) = read_frame(&mut client) {
@@ -1659,15 +1662,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_watcher_hears_core_stopped_when_its_core_dies() {
+    fn a_watcher_hears_core_stopped_when_its_instance_fails() {
         use crate::core::tests::{connect_payload, fake_manager, new_session};
         use std::time::{Duration, Instant};
 
-        let (manager, _cores) = fake_manager(vec![], Duration::from_secs(5));
+        let (manager, engines) = fake_manager(vec![]);
         let core = parking_lot::Mutex::new(manager);
         let me = std::process::id();
         let session = new_session(1);
-        let pid = core.lock().connect(connect_payload(&session), me).unwrap();
+        core.lock().connect(connect_payload(&session), me).unwrap();
         let (request, key) = watch_request(me, &session);
         let done = std::sync::atomic::AtomicBool::new(false);
 
@@ -1681,8 +1684,8 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(10));
                 }
             });
-            // The core crashes.
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            // The instance fails.
+            engines.fail_last();
             let started = Instant::now();
             let frame = read_frame(&mut client).unwrap();
             assert!(started.elapsed() < Duration::from_secs(1));
@@ -1701,7 +1704,7 @@ mod tests {
         use crate::core::tests::{connect_payload, fake_manager, new_session};
         use std::time::Duration;
 
-        let (manager, _cores) = fake_manager(vec![], Duration::from_secs(5));
+        let (manager, _engines) = fake_manager(vec![]);
         let core = parking_lot::Mutex::new(manager);
         let me = std::process::id();
         let session = new_session(2);

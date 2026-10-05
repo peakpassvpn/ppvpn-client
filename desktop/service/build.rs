@@ -8,14 +8,16 @@ fn main() {
     // Clients reinstall a service whose build id differs from the one they
     // were built with (crates/ppvpn-client/build.rs computes the same value).
     let dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    for input in ["Cargo.toml", "../../Cargo.lock", "src", "build_id.rs"] {
+    for input in [
+        "Cargo.toml",
+        "../../Cargo.lock",
+        "src",
+        "build_id.rs",
+        "../crates/engine-host",
+        "../../crates/ppvpn-core",
+    ] {
         println!("cargo:rerun-if-changed={}", dir.join(input).display());
     }
-    // The vendored core (CURRENT and each version's manifest).
-    println!(
-        "cargo:rerun-if-changed={}",
-        dir.join("../vendor/ppvpn-core").display()
-    );
     let id = service_build_id(&dir).expect("hash the service sources");
     println!("cargo:rustc-env=PPVPN_SERVICE_BUILD_ID={id}");
 

@@ -83,56 +83,7 @@ impl CoreCallError {
 
 /// Core error codes that mean "the backend profile is not acceptable".
 pub(crate) fn is_profile_error(code: &str) -> bool {
-    // The engine's set, then the Go core's, which the privileged service
-    // still runs.
-    if ppvpn_core::codes::PROFILE_VALIDATION.contains(&code) {
-        return true;
-    }
-    matches!(
-        code,
-        "PROFILE_REQUIRED"
-            | "FIELD_REQUIRED"
-            | "SCHEMA_UNSUPPORTED"
-            | "PROFILE_EXPIRED"
-            | "TIME_RANGE_INVALID"
-            | "NODE_ID_INVALID"
-            | "NODE_ID_DUPLICATE"
-            | "ENTRY_IP_NOT_PUBLIC"
-            | "PORT_INVALID"
-            | "CREDENTIALS_INVALID"
-            | "PROTOCOL_UNSUPPORTED"
-            | "TRANSPORT_UNSUPPORTED"
-            | "INGRESS_ROLE_INVALID"
-            | "INGRESS_COUNT_INVALID"
-            | "ENTRY_KEY_INVALID"
-            | "ENDPOINT_KEY_INVALID"
-            | "ENDPOINT_KEY_DUPLICATE"
-            | "REPLICA_ORDINAL_INVALID"
-            | "EXIT_IP_INVALID"
-            | "SHADOWSOCKS_METHOD_UNSUPPORTED"
-            | "SHADOWSOCKS_KEY_INVALID"
-            | "REALITY_REQUIRED"
-            | "REALITY_PUBLIC_KEY_INVALID"
-            | "REALITY_SHORT_ID_INVALID"
-            | "TLS_REQUIRED"
-            | "TLS_SERVER_NAME_MISMATCH"
-            | "TLS_SERVER_NAME_INVALID"
-            | "CAPABILITIES_INVALID"
-            | "DEFAULT_NODE_NOT_FOUND"
-            | "SELECTION_MODE_UNSUPPORTED"
-            // Rule sets (core 0.5.0). HOST_NOT_ALLOWED: a rule set URL outside
-            // the pinned API host, a backend misconfiguration.
-            | "RULE_SET_ID_INVALID"
-            | "RULE_SET_ID_DUPLICATE"
-            | "RULE_SET_COUNT_INVALID"
-            | "RULE_SET_URL_INVALID"
-            | "RULE_SET_SHA256_INVALID"
-            | "RULE_SET_INTERVAL_INVALID"
-            | "RULE_SET_NOT_FOUND"
-            | "RULE_SET_REF_DUPLICATE"
-            | "RULE_SET_HOST_NOT_ALLOWED"
-            | "RULE_SET_HOSTS_INVALID"
-    )
+    ppvpn_core::codes::PROFILE_VALIDATION.contains(&code)
 }
 
 // ---------------------------------------------------------------------------

@@ -211,6 +211,19 @@ foreach ($bin in @("ppvpn-service", "ppvpn-service-install", "ppvpn-service-unin
   Copy-Item -LiteralPath (Join-Path $serviceOut "$bin.exe") -Destination (Join-Path $stage "$bin.exe")
 }
 
+# The Wintun driver DLL of the TUN instance the service runs, beside it
+# (service/src/core.rs): the version sail pins (WINTUN_VERSION), checked
+# against the release's hash. Shipped as published (signed by its vendor).
+$wintunVersion = "0.14.1"
+$wintunSha256 = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
+$wintunZip = Join-Path $work "wintun-$wintunVersion.zip"
+Invoke-WebRequest "https://www.wintun.net/builds/wintun-$wintunVersion.zip" -OutFile $wintunZip
+if ((Get-Sha256 $wintunZip) -ne $wintunSha256) { throw "wintun-$wintunVersion.zip: not the pinned sha256" }
+$wintunDir = Join-Path $work "wintun"
+Expand-Archive -LiteralPath $wintunZip -DestinationPath $wintunDir -Force
+Copy-Item -LiteralPath (Join-Path $wintunDir "wintun\bin\amd64\wintun.dll") -Destination (Join-Path $stage "wintun.dll")
+Write-Host "wintun.dll $wintunVersion staged"
+
 # --- 4. core ------------------------------------------------------------------
 if (-not $CoreExe) {
   $coreVersion = (Get-Content -Raw (Join-Path $repo "vendor\ppvpn-core\CURRENT")).Trim()

@@ -1,19 +1,19 @@
 //! Linux enhanced mode end to end (CI job `desktop-linux-enhanced`): the real
-//! privileged service with the vendored core, this crate's [`Client`] in
+//! privileged service (the engine in process), this crate's [`Client`] in
 //! enhanced mode, a mock backend and a local Shadowsocks node. Checks that
-//! connecting brings up the TUN with the core's policy rules (priorities
+//! connecting brings up the TUN with the engine's policy rules (priorities
 //! 9091–9101) and routing table 2091, that traffic to an outside address
 //! goes through the TUN and the node, and that the routing state is gone
-//! after a disconnect, after `kill -9` of the core, and after `kill -9` of
-//! the core together with the service once the service restarts (netclean).
+//! after a disconnect, once the lease of a killed app lapses, and after
+//! `kill -9` of the service once it starts again (its startup sweep).
 //!
 //! Runs only under `test/netns/run.sh --libtest` (it sets
 //! `PPVPN_TEST_REAL_TUN=1` inside its namespace `ppvpn-t`, whose uplink
 //! namespace `ppvpn-w` is 10.243.0.2), as root, with the installed layout:
 //!
 //! - this test binary as `/usr/lib/ppvpn/ppvpn` (the only client path the
-//!   service accepts), the vendored `ppvpn-core` next to it (standard core);
-//! - `ppvpn-service` and the same `ppvpn-core` in `/usr/lib/ppvpn-service`;
+//!   service accepts);
+//! - `ppvpn-service` in `/usr/lib/ppvpn-service`;
 //! - `PPVPN_E2E_FAKENODE`: the `test/fakenode` binary.
 //!
 //! The client runs in a child process (this binary again, test
@@ -57,9 +57,14 @@ const TARGET_IP: &str = "192.0.2.10";
 const TARGET_PORT: u16 = 8080;
 const TARGET_BODY: &str = "ppvpn-e2e-ok";
 
-/// The core's TUN auto-route (desktop/service/src/netclean.rs).
+/// The engine's TUN auto-route (crates/ppvpn-core/src/translate/tun.rs).
 const RULE_PRIORITIES: RangeInclusive<u32> = 9091..=9101;
 const ROUTE_TABLE: &str = "2091";
+
+/// How long the routing state may take to go after a stop.
+const CLEAN_WAIT: Duration = Duration::from_secs(30);
+/// The service's lease (45 s) plus the watchdog and the shutdown.
+const LEASE_WAIT: Duration = Duration::from_secs(70);
 
 const ROLE_ENV: &str = "PPVPN_E2E_ROLE";
 const API_ENV: &str = "PPVPN_E2E_API";
@@ -100,31 +105,30 @@ fn enhanced_mode_routes_and_cleanup() {
     expect_routes_up(ipv6, "after connect");
     expect_traffic_through_node(&node);
 
-    // 2. Disconnect: everything the core installed is gone.
+    // 2. Disconnect: everything the engine installed is gone.
     app.command("disconnect", ConnectionPhase::Off);
-    expect_clean(ipv6, "after disconnect");
+    expect_clean(ipv6, "after disconnect", CLEAN_WAIT);
 
-    // 3. The app is killed, then the core: the running service cleans up.
+    // 3. The app is killed: the service stops the instance once its lease
+    // lapses.
     app.command("connect", ConnectionPhase::On);
     expect_routes_up(ipv6, "after reconnect");
     app.kill();
-    kill_cores();
-    expect_clean(
-        ipv6,
-        "after kill -9 of the app and the core (service running)",
-    );
+    expect_clean(ipv6, "after kill -9 of the app (lease lapsed)", LEASE_WAIT);
 
-    // 4. Core and service killed together (a stop timeout): the service
-    // cleans up when it starts again.
+    // 4. The service killed with the instance up (a stop timeout): it
+    // sweeps what was left when it starts again.
     let mut app = App::start(&api);
     app.command("connect", ConnectionPhase::On);
-    expect_routes_up(ipv6, "before killing core and service");
+    expect_routes_up(ipv6, "before killing the service");
     app.kill();
     service.kill();
-    kill_cores();
-    println!("e2e: state left by the killed core:\n{}", routing_state());
+    println!(
+        "e2e: state left by the killed service:\n{}",
+        routing_state()
+    );
     let service = Service::start();
-    expect_clean(ipv6, "after the service restarted");
+    expect_clean(ipv6, "after the service restarted", CLEAN_WAIT);
 
     service.stop();
     node.stop();
@@ -409,7 +413,7 @@ impl Service {
         let _ = self.0.wait();
     }
 
-    /// SIGTERM, then waits: the service stops its core on the way out.
+    /// SIGTERM, then waits: the service stops its instance on the way out.
     fn stop(mut self) {
         signal(self.0.id(), "TERM");
         let _ = self.0.wait();
@@ -490,13 +494,12 @@ fn expect_routes_up(ipv6: bool, when: &str) {
     println!("e2e: routes up ({when}): TUN {:?}", tun_links());
 }
 
-fn expect_clean(ipv6: bool, when: &str) {
-    wait_until(&format!("clean ({when})"), Duration::from_secs(30), || {
+fn expect_clean(ipv6: bool, when: &str, wait: Duration) {
+    wait_until(&format!("clean ({when})"), wait, || {
         tun_links().is_empty()
             && rules(false).is_empty()
             && table_routes(false).is_empty()
             && (!ipv6 || (rules(true).is_empty() && table_routes(true).is_empty()))
-            && core_pids().is_empty()
     });
     println!("e2e: clean ({when})");
 }
@@ -535,7 +538,7 @@ fn http_get(destination: &str) -> std::io::Result<String> {
     Ok(response)
 }
 
-/// TUN devices, whatever the core names them (`tun0`, `ppvpn0`, ...).
+/// TUN devices, whatever the engine names them (`ppvpn0`, ...).
 fn tun_links() -> Vec<String> {
     output("ip", &["-o", "-d", "link", "show"])
         .lines()
@@ -579,30 +582,6 @@ fn ipv6_enabled() -> bool {
         .is_ok_and(|value| value.trim() == "0")
 }
 
-/// Running privileged cores (the service's copy of ppvpn-core).
-fn core_pids() -> Vec<u32> {
-    let core = Path::new(SERVICE_DIR).join("ppvpn-core");
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
-            let exe = std::fs::read_link(entry.path().join("exe")).ok()?;
-            let exe = exe.to_string_lossy();
-            (Path::new(exe.strip_suffix(" (deleted)").unwrap_or(&exe)) == core).then_some(pid)
-        })
-        .collect()
-}
-
-fn kill_cores() {
-    for pid in core_pids() {
-        println!("e2e: kill -9 ppvpn-core (pid {pid})");
-        signal(pid, "KILL");
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -627,7 +606,6 @@ fn routing_state() -> String {
     ] {
         state.push_str(&format!("## {title}\n{}", output(program, args)));
     }
-    state.push_str(&format!("## privileged cores {:?}\n", core_pids()));
     state
 }
 

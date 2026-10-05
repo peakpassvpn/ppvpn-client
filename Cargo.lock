@@ -2668,6 +2668,8 @@ dependencies = [
  "log4rs",
  "once_cell",
  "parking_lot",
+ "ppvpn-core",
+ "ppvpn-engine-host",
  "serde",
  "serde_json",
  "sha2",
