@@ -10,6 +10,9 @@ default-members = ["crates/core", "crates/cli", "crates/account", "crates/core-l
 resolver = "2"
 
 [workspace.package]
+# One version for every crate the project ships (engine, account, CLI,
+# desktop, service): it goes on from the Go core's last, v0.5.21.
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.98.1"
 license = "GPL-3.0-or-later"
