@@ -20,8 +20,8 @@
 # Usage: scripts/ci/build-linux-repo.sh --channel dev|stable --releases <dir>
 #          --download-base <https URL> --site-base <https URL> --out <site dir> [--keep 5]
 #
-#   --releases       one subdirectory per release, named by its tag (desktop-vX.Y.Z, or
-#                    desktop-vX.Y.Z-dev.N on dev), each holding release-meta-linux-x64-deb.json,
+#   --releases       one subdirectory per release, named by its tag (vX.Y.Z, or
+#                    vX.Y.Z-dev.N on dev), each holding release-meta-linux-x64-deb.json,
 #                    the deb, release-meta-linux-x64-rpm.json, the signed rpm, and possibly the
 #                    setup packages (ppvpn-archive-keyring_*_all.deb, ppvpn-release-*.noarch.rpm,
 #                    the latter signed). Nothing else may be in <dir>.
@@ -112,7 +112,7 @@ python3 - "$RELEASES" "$CHANNEL" >"$PLAN" <<'PY'
 import hashlib, json, os, re, sys
 
 releases, channel = sys.argv[1:3]
-TAG = re.compile(r"^desktop-v(\d+\.\d+\.\d+)(?:-dev\.(\d+))?$")
+TAG = re.compile(r"^v(\d+\.\d+\.\d+)(?:-dev\.(\d+))?$")
 FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 def refuse(message):
@@ -176,7 +176,7 @@ for tag in sorted(os.listdir(releases)):
     number = build[len(version) + 1:]
     if not build.startswith(version + ".") or not number.isdigit():
         refuse(f"{tag}: build {build!r} is not {version}.<number>")
-    expected = f"desktop-v{version}" if channel == "stable" else f"desktop-v{version}-dev.{int(number)}"
+    expected = f"v{version}" if channel == "stable" else f"v{version}-dev.{int(number)}"
     if tag != expected:
         refuse(f"{tag}: the metadata ({channel}, build {build}) belongs to tag {expected}")
     order = tuple(int(part) for part in version.split(".")) + (int(number),)

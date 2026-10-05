@@ -55,7 +55,7 @@ class Build(unittest.TestCase):
         self.addCleanup(self.assets.cleanup)
         self.addCleanup(self.out.cleanup)
 
-    def build(self, tag="desktop-v0.4.0", channel="stable"):
+    def build(self, tag="v0.4.0", channel="stable"):
         return site.build(self.assets.name, tag, channel, DOWNLOAD, SITE, self.out.name)
 
     def pointer(self, channel="stable"):
@@ -76,13 +76,13 @@ class Build(unittest.TestCase):
         ])
         pointer = self.pointer()
         self.assertEqual((pointer["schema"], pointer["channel"], pointer["version"], pointer["build"], pointer["tag"]),
-                         (2, "stable", "0.4.0", 1234, "desktop-v0.4.0"))
+                         (2, "stable", "0.4.0", 1234, "v0.4.0"))
         self.assertEqual(pointer["published_at"], "2026-11-01T08:00:00Z")
         self.assertEqual(pointer["release_notes_url"], pointer["release_url"])
-        self.assertEqual(pointer["sha256sums_url"], f"{DOWNLOAD}/desktop-v0.4.0/SHA256SUMS")
+        self.assertEqual(pointer["sha256sums_url"], f"{DOWNLOAD}/v0.4.0/SHA256SUMS")
         self.assertEqual(set(pointer["platforms"]), set(site.PLATFORMS))
         windows = pointer["platforms"]["windows-x64"]
-        self.assertEqual(windows["url"], f"{DOWNLOAD}/desktop-v0.4.0/{FILES['windows-x64']}")
+        self.assertEqual(windows["url"], f"{DOWNLOAD}/v0.4.0/{FILES['windows-x64']}")
         self.assertEqual(windows["installer_arguments"], "/S")
         self.assertEqual(windows["appcast_url"], f"{SITE}/desktop/stable/appcast-windows-x64.xml")
         deb = pointer["platforms"]["linux-x64-deb"]
@@ -93,10 +93,10 @@ class Build(unittest.TestCase):
 
     def test_dev_release_tag_carries_the_build(self):
         release(self.assets.name, channel="dev")
-        self.build(tag="desktop-v0.4.0-dev.1234", channel="dev")
-        self.assertEqual(self.pointer("dev")["tag"], "desktop-v0.4.0-dev.1234")
+        self.build(tag="v0.4.0-dev.1234", channel="dev")
+        self.assertEqual(self.pointer("dev")["tag"], "v0.4.0-dev.1234")
         with self.assertRaises(site.Refused):
-            self.build(tag="desktop-v0.4.0", channel="dev")
+            self.build(tag="v0.4.0", channel="dev")
 
     def test_feeds(self):
         release(self.assets.name)
@@ -109,7 +109,7 @@ class Build(unittest.TestCase):
             self.assertEqual(item.find(f"{SPARKLE_NS}minimumSystemVersion").text, MIN_OS[platform])
             self.assertEqual(item.find("pubDate").text, "Sun, 01 Nov 2026 08:00:00 +0000")
             enclosure = item.find("enclosure")
-            self.assertEqual(enclosure.get("url"), f"{DOWNLOAD}/desktop-v0.4.0/{FILES[platform]}")
+            self.assertEqual(enclosure.get("url"), f"{DOWNLOAD}/v0.4.0/{FILES[platform]}")
             self.assertEqual(enclosure.get(f"{SPARKLE_NS}edSignature"), "c2lnbmF0dXJl")
             self.assertEqual(int(enclosure.get("length")), len(f"installer of {platform}"))
             if platform == "windows-x64":
@@ -143,19 +143,19 @@ class Build(unittest.TestCase):
             with self.subTest(name), tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
                 release(assets, **overrides)
                 with self.assertRaises(site.Refused):
-                    site.build(assets, "desktop-v0.4.0", "stable", DOWNLOAD, SITE, out)
+                    site.build(assets, "v0.4.0", "stable", DOWNLOAD, SITE, out)
                 self.assertEqual(os.listdir(out), [])
 
     def test_wrong_tag_or_channel(self):
         release(self.assets.name)
-        for tag, channel in (("desktop-v0.4.1", "stable"), ("v0.4.0", "stable"), ("desktop-v0.4.0-dev.1234", "dev")):
+        for tag, channel in (("v0.4.1", "stable"), ("desktop-v0.4.0", "stable"), ("v0.4.0-dev.1234", "dev")):
             with self.subTest(tag=tag, channel=channel), self.assertRaises(site.Refused):
                 self.build(tag=tag, channel=channel)
 
     def test_bases_must_be_https(self):
         release(self.assets.name)
         with self.assertRaises(site.Refused):
-            site.build(self.assets.name, "desktop-v0.4.0", "stable", "http://example.com", SITE, self.out.name)
+            site.build(self.assets.name, "v0.4.0", "stable", "http://example.com", SITE, self.out.name)
 
 
 class Downgrade(unittest.TestCase):
@@ -163,14 +163,14 @@ class Downgrade(unittest.TestCase):
         """The pointer of an already published stable release."""
         with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
             release(assets, version=version, build=build)
-            site.build(assets, f"desktop-v{version}", "stable", DOWNLOAD, SITE, out)
+            site.build(assets, f"v{version}", "stable", DOWNLOAD, SITE, out)
             with open(os.path.join(out, "desktop", "channels", "stable.json"), encoding="utf-8") as f:
                 return json.load(f)
 
     def publish(self, version, build, current, **options):
         with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
             release(assets, version=version, build=build)
-            site.build(assets, f"desktop-v{version}", "stable", DOWNLOAD, SITE, out, current=current, **options)
+            site.build(assets, f"v{version}", "stable", DOWNLOAD, SITE, out, current=current, **options)
             return sorted(os.listdir(out))
 
     def test_newer_releases_are_published(self):
@@ -194,7 +194,7 @@ class Downgrade(unittest.TestCase):
         with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
             release(assets, version="0.3.9", build="1200")
             with self.assertRaises(site.Refused):
-                site.build(assets, "desktop-v0.3.9", "stable", DOWNLOAD, SITE, out, current=current)
+                site.build(assets, "v0.3.9", "stable", DOWNLOAD, SITE, out, current=current)
             self.assertEqual(os.listdir(out), [])
 
     def test_allow_downgrade(self):
@@ -214,7 +214,7 @@ class Check(unittest.TestCase):
     def pointer(self):
         with tempfile.TemporaryDirectory() as assets, tempfile.TemporaryDirectory() as out:
             release(assets)
-            site.build(assets, "desktop-v0.4.0", "stable", DOWNLOAD, SITE, out)
+            site.build(assets, "v0.4.0", "stable", DOWNLOAD, SITE, out)
             with open(os.path.join(out, "desktop", "channels", "stable.json"), encoding="utf-8") as f:
                 return json.load(f)
 
@@ -233,11 +233,11 @@ class Check(unittest.TestCase):
             "build zero": lambda p: p.update(build=0),
             "build too large": lambda p: p.update(build=65536),
             "build as text": lambda p: p.update(build="1234"),
-            "tag": lambda p: p.update(tag="desktop-v0.4.1"),
+            "tag": lambda p: p.update(tag="v0.4.1"),
             "local time": lambda p: p.update(published_at="2026-11-01T16:00:00+08:00"),
             "a platform missing": lambda p: p["platforms"].pop("linux-x64-rpm"),
             "http url": lambda p: p["platforms"]["macos-x64"].update(url="http://example.com/" + FILES["macos-x64"]),
-            "url of another file": lambda p: p["platforms"]["macos-x64"].update(url=DOWNLOAD + "/desktop-v0.4.0/other.dmg"),
+            "url of another file": lambda p: p["platforms"]["macos-x64"].update(url=DOWNLOAD + "/v0.4.0/other.dmg"),
             "zero length": lambda p: p["platforms"]["windows-x64"].update(length=0),
             "short hash": lambda p: p["platforms"]["windows-x64"].update(sha256="abc"),
             "no signature": lambda p: p["platforms"]["windows-x64"].update(ed_signature=""),

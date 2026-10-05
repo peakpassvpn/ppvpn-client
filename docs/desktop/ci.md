@@ -29,8 +29,11 @@
 - 每次合入 main：`linux`（deb 和 rpm）、`macos`（每个架构一个 DMG）、`windows`（NSIS）构建安装包，不读任何密钥
   （Windows 不签名、macOS ad-hoc 签名、没有更新签名），作为 workflow artifact；`linux-rpm-smoke` 在 dnf 下安装一次，
   `linux-repo` 用这些包自测 apt/dnf 仓库。什么都不发布。
-- 手动触发 `channel=stable`：在 tag `desktop-vX.Y.Z` 上，经 `desktop-release-approval` 审批，在
-  `desktop-release-stable` 里构建并签名，`release-files` 整体核对，`publish` 发 GitHub Release，`pages` 和
-  `pages-deploy` 重建并部署更新站点。`rehearsal` 只出草稿 Release 和站点 artifact。
+- 手动触发 `channel=stable`：在 tag `vX.Y.Z`（0.6.0 及以后；桌面端、CLI 和引擎同一个版本、同一个 Release）上，
+  经 `desktop-release-approval` 审批，在 `desktop-release-stable` 里构建并签名，`release-files` 整体核对，
+  `publish` 发 GitHub Release，`site` 重建更新站点，`site-deploy` 上传到 R2（`https://pkg.peakpassvpn.com`）。
+  `rehearsal` 只出草稿 Release 和站点 artifact `site`，不上传。
 - 手动触发 `channel=dev`：在 main 上、`desktop-release-dev` 里构建，从不发布。
-- 手动触发 `channel=site`：经同一审批，按已发布的 Release 重建并部署更新站点。
+- 手动触发 `channel=site`：经同一审批，按已发布的 Release 重建并上传更新站点。
+
+更新站点的内容、上传顺序、缓存设置和需要建的变量与 secret 见 [构建与发布](../release.md#更新站点r2)。

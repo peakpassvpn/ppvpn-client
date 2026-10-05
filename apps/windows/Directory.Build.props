@@ -10,7 +10,7 @@
     FileVersion       VersionPrefix.Build, the monotonic version WinSparkle compares (sparkle:version)
   -->
   <PropertyGroup>
-    <VersionPrefix>0.3.0</VersionPrefix>
+    <VersionPrefix>0.6.0</VersionPrefix>
     <PpvpnBuildNumber Condition="'$(PpvpnBuildNumber)' == ''">1</PpvpnBuildNumber>
     <FileVersion>$(VersionPrefix).$(PpvpnBuildNumber)</FileVersion>
     <AssemblyVersion>$(FileVersion)</AssemblyVersion>

@@ -13,7 +13,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
-    <Version>0.1.0</Version>
+    <Version>0.6.0</Version>
     <PublishAot>true</PublishAot>
     <!-- No culture data needed: the agent formats nothing, so no libicu either. -->
     <InvariantGlobalization>true</InvariantGlobalization>
