@@ -390,7 +390,7 @@ jobs:
             curl -fsSL --retry 3 -o "$RUNNER_TEMP/swift.tar.gz.sig" "$url.sig"
             export GNUPGHOME="$RUNNER_TEMP/gnupg"
             install -d -m 700 "$GNUPGHOME"
-            curl -fsSL --retry 3 https://swift.org/keys/all-keys.asc | gpg --batch --import
+            curl -fsSL --retry 3 --compressed https://www.swift.org/keys/all-keys.asc | gpg --batch --import
             gpg --batch --verify "$RUNNER_TEMP/swift.tar.gz.sig" "$RUNNER_TEMP/swift.tar.gz"
             mkdir -p "$dir"
             tar -xzf "$RUNNER_TEMP/swift.tar.gz" -C "$dir" --strip-components=1
