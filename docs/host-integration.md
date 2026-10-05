@@ -450,6 +450,7 @@ pub struct Error {
 - **产品策略**：故障转移的防抖参数、DNS 回退预算、本地代理用户名规则等，在 `ppvpn-core` 里实现，叠加在 Sail 提供的机制之上。
 - **dns-local（Tun 实例）**：用 `ppvpn-core` 自己的实现，移植自 Go 的 `internal/localdns`，不用 Sail 的 `local`。原因是 Sail 的 `local` 有几处直接影响用户的缺口：忽略 macOS 的手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败。这些作为 Sail 的通用改进继续推进，不阻塞切换。
   - Engine 在 `new` 时（仅 Tun 实例）在 127.0.0.1 的随机端口上起 UDP 和 TCP 监听。监听自己读默认网卡的 DNS 服务器（Windows 读适配器，macOS 读 scutil，Linux 读 resolv.conf 或 systemd-resolved 里该网卡的 DNS）；宿主给了 `local_dns_servers` 时改用这些静态服务器。查询按顺序发出，每个服务器有超时，TC 时改用 TCP，没有服务器时立即回 SERVFAIL。
+  - `local_dns_servers` 每项是 IP、`IP:port` 或 `[IPv6]:port`，默认端口 53；IPv6 可以带 zone（网卡名或编号），如 `fe80::1%en0`、`[fe80::1%en0]:53`。其他写法（域名、端口 0、未指定地址、IPv4 带 zone、`[IPv6%zone]` 不带端口）让 `new` 失败：`CORE_OPERATION_FAILED`，field=`tun.local_dns_servers`。隧道网段内的地址（宿主残留的旧系统 DNS）被去掉，其余按原顺序使用；一个都不剩时与没给一样，读默认网卡。带 zone 的链路本地服务器只在 zone 是当前默认网卡时使用（按该网卡的编号发出），别的网卡的被跳过。移动端没有自己的 dns-local，服务器直接交给 Sail：Sail 的 DNS 服务器地址不接受 zone，带 zone 的项被跳过，不剩时用 Sail 的 `local`。
   - Sail 的 dns-local 服务器渲染成指向这个监听的 **tcp** 服务器。Sail 的 udp 客户端遇到截断应答不会改走 TCP，用 tcp 能拿到完整应答。
   - 服务器列表变化不需要 reload Sail；网卡变化的触发来自 Sail 的网络事件（只用 Sail 一个网卡监视器），监听收到后让缓存失效。
   - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#214）。

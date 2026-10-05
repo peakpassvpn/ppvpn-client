@@ -74,7 +74,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | --- | --- | --- | --- | --- |
 | `internal/runtime` | 3 | 5 | 23 | 17 |
 | `profile` | 0 | 4 | 18 | 1 |
-| `internal/config` | 1 | 1 | 16 | 2 |
+| `internal/config` | 0 | 1 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
 | `internal/failover` | 0 | 0 | 1 | 5 |
 | `api` | 0 | 1 | 2 | 5 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 5 | 13 | 71 | 66 |
+| 合计 | 4 | 13 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -261,7 +261,7 @@ macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
 | `cmd/ppvpn-core` `TestServeValidatesLocalDNSServers` | Serve validates local dns servers |  | todo | 【C】本地 DNS 服务器解析在 translate::local_dns_servers（translate::tests::local_dns_servers_as_go_reads_them 已测），engine/tun.rs::local_dns 在 new 时报 tun.local_dns_servers 错误，"requires --tun" 由 TunConfig 结构保证，Engine 层用例可切换后补。 |
-| `internal/config` `TestLocalDNSServers` | Host-supplied physical resolvers become a static ppvpn-local dns-local with every one outside the tunnel, in order; with none left (or none given) dns-local reads the … |  | todo | 【A，0.5 人日】宿主覆盖里带 zone 的链路本地解析器（如 [fe80::1%en0]:53）在 translate/tun.rs local_dns_servers 用 SocketAddr 解析时被拒，Engine::new 直接报 tun.local_dns_servers 错误，且 engine/tun.rs start_local_dns 的 Server::new(ip, port) 丢掉 zone，与 config.rs TunConfig 文档承诺的 [IPv6%zone]:port 不符；其余（顺序、隧道内剔除、全部剔除后回退读网卡）已由 local_dns_servers_as_go_reads_them 与 localdns 覆盖。；断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
+| `internal/config` `TestLocalDNSServers` | Host-supplied physical resolvers become a static ppvpn-local dns-local with every one outside the tunnel, in order; with none left (or none given) dns-local reads the … | `ppvpn-core` `translate::tests::local_dns_servers_as_go_reads_them`、`ppvpn-core` `engine::tun::tests::zoned_link_local_servers_reach_dns_local_with_their_zone`、`ppvpn-core` `engine::tun::tests::sail_asks_the_servers_without_a_zone`、`ppvpn-core` `engine::tun::tests::local_dns_servers_override_the_system_and_bad_ones_fail_new` | done | 断言产品行为而不是配置形状：解析（含按网卡名的 zone，带或不带端口）、去掉隧道网段、保持顺序、坏输入报 `tun.local_dns_servers`；桌面 dns-local 用默认网卡编号拨带 zone 的链路本地服务器，别的网卡的跳过；一个不剩时读默认网卡。移动端由 Sail 直接问：Sail 的 DNS 服务器地址不接受 zone，带 zone 的项跳过 |
 | `internal/localdns` `TestCacheFailsFastWithoutServers` | DHCP has not handed out DNS yet: queries fail at once with a clear error (never 127.0.0.1, never a 5 s timeout), and the interface is read again at most once per … | `ppvpn-core` `localdns::cache::tests::fails_fast_without_servers` | done | #214 B3、B7；端到端仍由 netns CI network-change 覆盖 |
 | `internal/localdns` `TestCacheFollowsInterfaceChanges` | Cache follows interface changes | `ppvpn-core` `localdns::cache::tests::follows_interface_changes` | done | #214 B1、B2、B7；端到端仍由 netns CI network-change 覆盖 |
 | `internal/localdns` `TestCacheReadsOnceForConcurrentQueries` | Concurrent queries after an invalidation share one read. | `ppvpn-core` `localdns::cache::tests::concurrent_queries_share_one_read` | done | #214 B6 |
