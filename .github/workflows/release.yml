@@ -213,8 +213,8 @@ jobs:
   # in the channel's environment (after the approval for stable), which
   # holds the signing secrets and the backend address. Not for a site run.
 
-  # deb and rpm, x86_64, everything native linked against glibc 2.35
-  # (cargo-zigbuild). See desktop/apps/linux/scripts/build-package.sh.
+  # deb and rpm, x86_64, everything native linked against glibc 2.35 by
+  # building on Ubuntu 22.04. See desktop/apps/linux/scripts/build-package.sh.
   linux:
     name: linux
     needs: [prepare, approve]
@@ -227,7 +227,6 @@ jobs:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      ZIG_VERSION: '0.13.0'
       NFPM_VERSION: '2.47.0'
       PPVPN_API_BASE: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
     steps:
@@ -244,11 +243,8 @@ jobs:
           # NativeAOT (the push agent) links with clang against zlib.
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends clang zlib1g-dev
-          curl -sSfL "https://ziglang.org/download/$ZIG_VERSION/zig-linux-x86_64-$ZIG_VERSION.tar.xz" | sudo tar -xJ -C /opt
-          sudo ln -sf "/opt/zig-linux-x86_64-$ZIG_VERSION/zig" /usr/local/bin/zig
           curl -sSfL "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin nfpm
-          cargo install --locked cargo-zigbuild
           cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs
       - uses: ./.github/actions/prebuilt-boringssl
         with:

@@ -7,11 +7,12 @@
 #
 # Usage: apps/linux/scripts/build-package.sh
 #
-# Everything native is linked against glibc 2.35 (Ubuntu 22.04) with cargo-zigbuild,
-# so the packages run on Ubuntu 22.04+, Debian 12+ and Fedora 36+. The NativeAOT push
-# agent links against the build host's glibc: build on Ubuntu 22.04 (checked below).
+# Everything native is linked against glibc 2.35 by building on Ubuntu 22.04 (checked
+# below), so the packages run on Ubuntu 22.04+, Debian 12+ and Fedora 36+. Not with
+# cargo-zigbuild: the engine links btls's prebuilt BoringSSL, built against libstdc++,
+# which zig's toolchain does not provide.
 #
-# Tools: rustup + cargo, zig + cargo-zigbuild, uniffi-bindgen-cs (see
+# Tools: rustup + cargo, uniffi-bindgen-cs (see
 # crates/ppvpn-client/scripts/build-dotnet.sh), .NET 8 SDK, nfpm, python3.
 #
 # Environment:
@@ -53,14 +54,12 @@ API_KIND=custom; [[ "$API_BASE" == "https://www.peakpassvpn.com" ]] && API_KIND=
 echo "PPVPN $VERSION (build $BUILD) for $RID, channel ${CHANNEL:-none}, api $API_KIND"
 
 # --- 1. ppvpn-client: native library + C# bindings -----------------------------------
-# With zigbuild, build-dotnet.sh generates the bindings from a native host build (zig's
-# linker drops UniFFI's metadata) and checks the zig library exports every symbol they call.
-PPVPN_CARGO_BUILD="cargo zigbuild" "$REPO_DIR/crates/ppvpn-client/scripts/build-dotnet.sh" "$TRIPLE.$GLIBC" --release
+"$REPO_DIR/crates/ppvpn-client/scripts/build-dotnet.sh" "$TRIPLE" --release
 
 # --- 2. privileged service -----------------------------------------------------------
 rustup target add "$TRIPLE" >/dev/null
 # The "service" profile of the root workspace (size-optimised), as on macOS and Windows.
-(cd "$REPO_DIR/service" && cargo zigbuild --locked -p ppvpn-service --profile service --bins --target "$TRIPLE.$GLIBC")
+(cd "$REPO_DIR/service" && cargo build --locked -p ppvpn-service --profile service --bins --target "$TRIPLE")
 SERVICE_OUT="$(cd "$REPO_DIR/service" && cargo metadata --format-version 1 --no-deps \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')/$TRIPLE/service"
 
@@ -101,7 +100,7 @@ for entry in 32x32:32x32.png 128x128:128x128.png 256x256:128x128@2x.png; do
   install -m 0644 "$ICON_SOURCE/${entry#*:}" "$STAGE/icons/$size/apps/com.peakpassvpn.ppvpn.desktop.png"
 done
 
-# The glibc floor is the point of zigbuild; make sure nothing slipped past it.
+# The glibc floor: make sure nothing slipped past it.
 max_glibc() { readelf -W --dyn-syms "$1" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -Vu | tail -1; }
 for binary in "$STAGE/app/runtimes/$RID/native/libppvpn_client.so" "$STAGE/app/ppvpn-push-agent" "$STAGE/app/ppvpn-service" \
     "$STAGE/app/ppvpn-service-install" "$STAGE/app/ppvpn-service-uninstall"; do
