@@ -225,7 +225,7 @@ async fn start(
 /// The TUN inbound becomes a SOCKS inbound on loopback with the TUN's tag:
 /// the rules that name the TUN (sniff, override_destination, the floors)
 /// apply to it. What only a TUN has goes with it.
-fn stand_in_for_the_tun(config: &mut Value, port: u16) {
+pub(crate) fn stand_in_for_the_tun(config: &mut Value, port: u16) {
     let inbounds = config["inbounds"].as_array_mut().unwrap();
     let tun = inbounds
         .iter_mut()
@@ -355,7 +355,7 @@ impl Instance {
 /// A SOCKS5 greeting and CONNECT (IP or domain); once answered, the
 /// payload to sniff, as an application sends it. sail answers a sniffed
 /// connection before it dials.
-async fn socks_open(port: u16, destination: &str, payload: &[u8]) -> Option<TcpStream> {
+pub(crate) async fn socks_open(port: u16, destination: &str, payload: &[u8]) -> Option<TcpStream> {
     let (host, port_text) = destination.rsplit_once(':').unwrap();
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let to: u16 = port_text.parse().unwrap();
@@ -414,7 +414,7 @@ pub(crate) async fn connect_open(
 
 /// A TLS 1.2 ClientHello record carrying `server_name` (SNI), enough for a
 /// sniffer.
-fn client_hello(server_name: &str) -> Vec<u8> {
+pub(crate) fn client_hello(server_name: &str) -> Vec<u8> {
     let name = server_name.as_bytes();
     let mut sni = Vec::new();
     sni.extend(((name.len() + 3) as u16).to_be_bytes()); // server name list
