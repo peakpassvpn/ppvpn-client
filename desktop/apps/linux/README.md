@@ -58,11 +58,11 @@ repository as well, purge the setup package (`sudo apt purge ppvpn-archive-keyri
 | Path | |
 |---|---|
 | `/usr/lib/ppvpn/ppvpn` | the app (self-contained .NET apphost); `ppvpn-service` only accepts IPC from this path |
-| `/usr/lib/ppvpn/{ppvpn-core,ppvpn-service,ppvpn-service-install,ppvpn-service-uninstall}` | copied to `/usr/lib/ppvpn-service` and run as the `ppvpn-service` systemd unit when Enhanced Mode is first turned on (pkexec) |
+| `/usr/lib/ppvpn/{ppvpn-service,ppvpn-service-install,ppvpn-service-uninstall}` | the service is copied to `/usr/lib/ppvpn-service` and run as the `ppvpn-service` systemd unit when Enhanced Mode is first turned on (pkexec) |
 | `/usr/lib/ppvpn/package-format` | `deb` or `rpm`: which upgrade command the update notice shows |
 | `/usr/lib/ppvpn/ppvpn-push-agent` | push agent (NativeAOT, `PPVPN.PushAgent/`): shows backend pushes as desktop notifications, also while the app is closed; one per user session, started from `/etc/xdg/autostart/com.peakpassvpn.ppvpn.push-agent.desktop` and by the app |
 | `~/.local/share/ppvpn`, `~/.local/state/ppvpn/logs`, `~/.config/ppvpn` | per-user data, logs, settings (XDG) |
-| `/var/log/ppvpn/{ppvpn-service,ppvpn-core}.log` | privileged service and Enhanced Mode core logs (root only; 5 MB per file, 3 files kept); kept when the service is uninstalled or reinstalled |
+| `/var/log/ppvpn/{ppvpn-service,ppvpn-core}.log` | privileged service and Enhanced Mode engine logs (root only; 5 MB per file, 3 files kept); kept when the service is uninstalled or reinstalled |
 
 Credentials go to the Secret Service (GNOME Keyring, KWallet, …); only without one, to a
 0600 file in the data directory. A saved login in a locked keyring whose unlock prompt was

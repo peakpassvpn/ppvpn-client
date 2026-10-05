@@ -4,10 +4,9 @@
   .github/workflows/desktop-package.yml. Also runs locally.
 
 .DESCRIPTION
-  1. verifies the vendored ppvpn-core against its manifest (scripts/verify-vendored-core.mjs)
-  2. runs package.ps1 (which also builds the ppvpn-client crate and bindings with -Release)
-     with the API base, the feed URL derived from it, the channel, version, build number
-     and update keys
+  Runs package.ps1 (which also builds the ppvpn-client crate and bindings with -Release)
+  with the API base, the feed URL derived from it, the channel, version, build number
+  and update keys.
 
   Builds only; publishing is the release workflow's job.
 
@@ -35,10 +34,7 @@ param(
   [string] $ApiBase = $env:PPVPN_API_BASE,
   [string] $UpdateSite = $env:PPVPN_UPDATE_SITE,
   [string] $BuildNumber = $env:PPVPN_BUILD_NUMBER,
-  [string] $Version = $env:PPVPN_VERSION,
-  # Passed through to package.ps1 (default: the vendored core).
-  [string] $CoreExe,
-  [string] $CoreSha256
+  [string] $Version = $env:PPVPN_VERSION
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,25 +72,7 @@ if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be
 $apiKind = if ($ApiBase -eq "https://www.peakpassvpn.com") { "production" } else { "custom" }
 Write-Host "channel '$Channel', api $apiKind, version $(if ($Version) { $Version } else { '(Directory.Build.props)' }), build number $(if ($BuildNumber) { $BuildNumber } else { '(Directory.Build.props)' })"
 
-# --- 1. vendored core ---------------------------------------------------------
-if (-not $CoreExe) {
-  $coreVersion = (Get-Content -Raw (Join-Path $repo "vendor\ppvpn-core\CURRENT")).Trim()
-  $node = Get-Command node -ErrorAction SilentlyContinue
-  if ($node) {
-    Invoke-Native $node.Source @(
-      (Join-Path $repo "scripts\verify-vendored-core.mjs"),
-      "--vendor-dir", (Join-Path $repo "vendor\ppvpn-core\$coreVersion"),
-      "--artifact", "windows-x86_64",
-      "--expected-version", $coreVersion
-    )
-  } elseif ($inCi) {
-    throw "node is required to verify the vendored core."
-  } else {
-    Write-Warning "node not found: skipping verify-vendored-core.mjs (package.ps1 still checks the sha256 from manifest.json)."
-  }
-}
-
-# --- 2. update keys -----------------------------------------------------------
+# --- 1. update keys -----------------------------------------------------------
 $publicKey = "$env:PPVPN_SPARKLE_PUBLIC_KEY".Trim()
 $privateKey = "$env:SPARKLE_PRIVATE_KEY".Trim()
 if (-not $publicKey -or -not $privateKey) {
@@ -117,8 +95,6 @@ try {
     $packageArgs += @("-UpdateKeyFile", $keyFile)
   }
   if ($BuildNumber) { $packageArgs += @("-BuildNumber", $BuildNumber) }
-  if ($CoreExe) { $packageArgs += @("-CoreExe", $CoreExe) }
-  if ($CoreSha256) { $packageArgs += @("-CoreSha256", $CoreSha256) }
   Invoke-Native "powershell" $packageArgs
 } finally {
   if ($keyFile -and (Test-Path -LiteralPath $keyFile)) {

@@ -37,10 +37,9 @@ desktop/
 ├── crates/ppvpn-client/  # 共享客户端核心（账号、Profile、连接状态机、健康检查、UniFFI）
 ├── crates/engine-host/   # 进程内引擎上的 Core API v1（客户端与特权服务共用）
 ├── service/              # 特权服务：进程内运行增强模式引擎、client↔service IPC、系统 DNS
-├── vendor/ppvpn-core/    # Go core 的 CURRENT 与 manifest；二进制不入库，由脚本下载
 ├── assets/icons/         # 品牌与托盘图标
-├── scripts/              # fetch-vendored-core.sh、verify-vendored-core.mjs
-└── docs/                 # CI、Go 基线、真机 QA 清单
+├── scripts/              # build-service.sh、签名、图标与 CI 辅助脚本
+└── docs/                 # CI、真机 QA 清单
 ```
 
 与仓库其余部分的关系：

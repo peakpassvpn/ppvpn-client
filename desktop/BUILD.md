@@ -9,50 +9,35 @@ Xcode、XcodeGen 和 Swift 6.4。
 
 ## 共用的前置步骤
 
-```bash
-# Go core 的二进制不入库：按 vendor/ppvpn-core/<CURRENT>/manifest.json 从 ppvpn-core 的
-# GitHub Release 下载，并校验大小和 SHA-256。需要 curl、jq、node。
-scripts/fetch-vendored-core.sh                 # 全部平台
-scripts/fetch-vendored-core.sh linux-x86_64    # 只取一个（manifest 里的 key）
+引擎是 Rust `ppvpn-core`，客户端和特权服务都在进程内链接它（经 `crates/engine-host`），没有单独的
+core 二进制。
 
+```bash
 # 客户端 crate（仓库根 workspace 的成员，在进程内链接 Rust ppvpn-core 和 sail）
 (cd crates/ppvpn-client && cargo test --locked)
 
-# 特权服务（不在 workspace 里，有自己的 Cargo.lock）
-(cd service && cargo build --release --locked --bins)
-```
-
-下载的二进制在 `vendor/ppvpn-core/<版本>/build/`（已被 git 忽略），已存在且校验通过的文件不会重新下载。
-`scripts/verify-vendored-core.mjs` 可以单独校验某一个：
-
-```bash
-node scripts/verify-vendored-core.mjs --vendor-dir vendor/ppvpn-core/0.5.21 \
-  --artifact linux-x86_64 --expected-version 0.5.21
+# 特权服务（workspace 成员，增强模式的引擎在它的进程里）
+cargo build --locked -p ppvpn-service --profile service --bins
 ```
 
 ## 各平台
 
 - **macOS**：`apps/macos/scripts/bootstrap.sh` 生成 `PPVPNClient` Swift 包和 `PPVPN.xcodeproj`，
-  之后用 Xcode 或 `xcodebuild` 构建 Debug。Debug 构建不需要嵌入 core 和 service（缺少时只给出警告）。
+  之后用 Xcode 或 `xcodebuild` 构建 Debug。Debug 构建不需要嵌入 service（缺少时只给出警告）。
 - **Linux**：`crates/ppvpn-client/scripts/build-dotnet.sh x86_64-unknown-linux-gnu` 生成 C# 绑定和
   原生库，之后 `dotnet run --project apps/linux`。deb/rpm 由 `apps/linux/scripts/build-package.sh`
-  在 Ubuntu 22.04（glibc 2.35）基线上构建，它自己构建 service 并校验 vendored core。
+  在 Ubuntu 22.04（glibc 2.35）基线上构建，它自己构建 service。
 - **Windows**：只在 Windows 上构建（`crates\ppvpn-client\scripts\build-dotnet.ps1`，MSVC 工具链），
-  见 `apps/windows/README.md`。
+  见 `apps/windows/README.md`。安装包里另有 `wintun.dll`（增强模式的 TUN 驱动，`package.ps1` 下载并按哈希校验）。
 
 ## 嵌入 app 的二进制
 
 ```bash
-# macOS：把 vendored core 的两个架构合成 universal，放到 build/binaries/
-scripts/stage-macos-core.sh
-# 构建特权服务（macos / windows），产物同样放到 build/binaries/
+# 构建特权服务（macos / windows），产物放到 build/binaries/
 scripts/build-service.sh macos
 ```
 
 macOS 的 Release 构建和 `apps/macos/scripts/package-dmg.sh` 需要这些产物。
-
-升级 vendored core 用 `scripts/vendor-core-release.sh X.Y.Z`（Go core 已冻结在 0.5.21，目前用不到）：
-它只提交 `CURRENT` 和 manifest，二进制留在被忽略的 `build/` 目录里。
 
 ## 尚未迁入的部分
 

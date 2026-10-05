@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Xcode pre-build phase (so the final app signature seals them): copy ppvpn-core and the privileged-service helpers into
-# Contents/MacOS, where ppvpn-service-install (current_exe siblings) looks for
-# them, and ad-hoc sign each one.
+# Xcode pre-build phase (so the final app signature seals them): copy the
+# privileged-service helpers into Contents/MacOS, where ppvpn-service-install
+# (current_exe siblings) looks for them, and ad-hoc sign each one.
 #
-# Inputs are the universal binaries staged by the repo scripts:
-#   scripts/stage-macos-core.sh && scripts/build-service.sh macos
+# Inputs are the universal binaries staged by the repo script:
+#   scripts/build-service.sh macos
 # Override the source with PPVPN_BINARIES_DIR.
 set -euo pipefail
 
 SOURCE_DIR="${PPVPN_BINARIES_DIR:-$SRCROOT/../../build/binaries}"
 DEST_DIR="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
-BINARIES=(ppvpn-core ppvpn-service ppvpn-service-install ppvpn-service-uninstall)
+BINARIES=(ppvpn-service ppvpn-service-install ppvpn-service-uninstall)
 
 missing=()
 for bin in "${BINARIES[@]}"; do
@@ -18,13 +18,13 @@ for bin in "${BINARIES[@]}"; do
 done
 
 if ((${#missing[@]})); then
-  message="missing ${missing[*]} in $SOURCE_DIR; run scripts/stage-macos-core.sh and scripts/build-service.sh macos"
+  message="missing ${missing[*]} in $SOURCE_DIR; run scripts/build-service.sh macos"
   if [[ "$CONFIGURATION" == Release ]]; then
     echo "error: $message"
     exit 1
   fi
-  # Debug UI work does not need the cores; enhanced/standard mode will
-  # report the missing binary at runtime.
+  # Debug UI work does not need the service; enhanced mode reports the
+  # missing helper at runtime.
   echo "warning: $message"
   exit 0
 fi

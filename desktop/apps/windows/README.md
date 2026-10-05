@@ -33,10 +33,9 @@ dotnet build -c Debug -p:Platform=x64
 #    + runtimes\win-x64\native\ppvpn_client.dll (copied from PPVPN.Client)
 ```
 
-The build must stay warning-free. Standard mode (local proxies, speed tests) needs
-`ppvpn-core.exe` next to `ppvpn.exe`; a dev build does not copy it, so copy
-`vendor\ppvpn-core\<CURRENT>\build\ppvpn-core-windows-amd64.exe` there as
-`ppvpn-core.exe` when you need it.
+The build must stay warning-free. Standard mode (local proxies, speed tests)
+runs the engine inside `ppvpn_client.dll`; nothing else is needed next to
+`ppvpn.exe`.
 
 If the XAML compiler fails with `WMC9999` saying it cannot find
 `Microsoft.UI.Xaml.Markup.Compiler.ErrorMessages.resources`, there is a real
@@ -285,10 +284,9 @@ before exiting.
 Other clients are disconnected at the handshake (`ServiceClientRejected`).
 That is why `AssemblyName` is `ppvpn`, and why the installer must put
 `ppvpn.exe` and its self-contained runtime in the same directory as
-`ppvpn-service.exe`, `ppvpn-core.exe` and the install/uninstall helpers. The
-crate talks to the service over `\\.\pipe\ppvpn-service` and to the
-standard-mode core over `\\.\pipe\ppvpn-core-user-<32hex>`. The app itself
-does not touch either pipe.
+`ppvpn-service.exe`, `wintun.dll` and the install/uninstall helpers. The
+crate talks to the service over `\\.\pipe\ppvpn-service`; the app itself
+does not touch the pipe.
 
 ## Packaging (NSIS installer)
 
@@ -298,7 +296,7 @@ the .NET 8 SDK, Rust (`x86_64-pc-windows-msvc`), MSVC and NSIS 3.08+
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File apps\windows\scripts\package.ps1 `
-  [-CoreExe <ppvpn-core-windows-amd64.exe> [-CoreSha256 <hex>]] [-BuildNumber N] `
+  [-BuildNumber N] `
   [-ApiBase <url>] [-FeedUrl <appcast>] [-PublicKey <base64>] [-UpdateKeyFile <private key>] `
   [-Version x.y.z] [-Channel dev|stable]
 ```
@@ -320,18 +318,17 @@ and build number). `-Channel` is recorded in the release metadata.
    it from; other `runtimes\<rid>` folders are pruned. Then the push agent's NativeAOT
    `dotnet publish`; only `ppvpn-push-agent.exe` is staged (it must have been built
    against the same `ppvpn_client.dll`, which the script checks).
-4. Copies `ppvpn-core.exe`: by default the vendored
-   `vendor/ppvpn-core/<CURRENT>/build/ppvpn-core-windows-amd64.exe`, checked
-   against that release's `manifest.json`. With `-CoreExe`, the sha256 comes
-   from `-CoreSha256` or a `windows-SHA256SUMS` next to the file or in its parent.
-5. Optional Authenticode signing through `sign-file.ps1`: `WINDOWS_SIGN_COMMAND`
+   It also stages `wintun.dll` (the Wintun release sail pins, checked against
+   its sha256) beside the service, which runs the enhanced-mode engine in
+   process.
+4. Optional Authenticode signing through `sign-file.ps1`: `WINDOWS_SIGN_COMMAND`
    (with `%1`) or `WINDOWS_CERTIFICATE` (+ password, timestamp URL) for
    `scripts/sign-windows.ps1`. Nothing is signed when neither is set. makensis
    signs the installer and the uninstaller with `!finalize`/`!uninstfinalize`.
    `ppvpn_client.dll` and `ppvpn-push-agent.exe` are signed with the executables.
-6. Writes `install-files.txt` (what this version installs) and runs makensis:
+5. Writes `install-files.txt` (what this version installs) and runs makensis:
    `dist/windows/PPVPN-<version>-windows-x64-setup.exe` and `.sha256`.
-7. With an EdDSA private key (`-UpdateKeyFile`, `PPVPN_UPDATE_PRIVATE_KEY_FILE`
+6. With an EdDSA private key (`-UpdateKeyFile`, `PPVPN_UPDATE_PRIVATE_KEY_FILE`
    or the base64 key in `PPVPN_UPDATE_PRIVATE_KEY`), prints
    `sparkle:edSignature="…" length="…"` (and verifies it when the public key
    is known), then writes `dist/windows/release-meta-windows-x64.json`
@@ -345,11 +342,11 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
   directory must stay admin-write-only).
 - Everything in one directory: `ppvpn.exe` and its runtime, `WinSparkle.dll`,
   `runtimes\win-x64\native\ppvpn_client.dll`, `ppvpn-push-agent.exe`,
-  `ppvpn-core.exe`, `ppvpn-service.exe`, `ppvpn-service-install.exe`,
+  `ppvpn-service.exe`, `wintun.dll`, `ppvpn-service-install.exe`,
   `ppvpn-service-uninstall.exe`, `install-files.txt`, `uninstall.exe`. The
   helpers use the plain names; `ppvpn-service-install.exe` finds
-  `ppvpn-service.exe` next to itself, and the service starts `ppvpn-core.exe`
-  from its own directory. The service writes `ppvpn-service.log` and
+  `ppvpn-service.exe` next to itself, and the service loads `wintun.dll` from
+  its own directory. The service writes `ppvpn-service.log` and
   `ppvpn-core.log` to `%ProgramData%\PPVPN\logs` (5 MB per file, 3 files
   kept), which uninstalling or reinstalling the service leaves in place.
 - UI in Chinese or English from the Windows UI language (English is the fallback).
@@ -387,7 +384,7 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
 
 `.github/workflows/desktop-native-windows.yml` (mirrors `macos-native.yml`)
 runs on pull requests and pushes to main/dev that touch the Windows app, the
-client crate, the service or the vendored core, on `workflow_dispatch`, and as
+client crate or the service, on `workflow_dispatch`, and as
 a reusable workflow (`workflow_call`: `channel`, `api_base`, optional `version`
 and `build_number`; secret `SPARKLE_PRIVATE_KEY`; output `artifact`).
 
@@ -397,8 +394,7 @@ and `build_number`; secret `SPARKLE_PRIVATE_KEY`; output `artifact`).
   `dotnet build` of the app (`-warnaserror`; NuGet advisories NU1901/NU1902, low and
   moderate, stay warnings, `Directory.Build.props`), and a warning-free NativeAOT
   `dotnet publish` of the push agent.
-- `package`: `scripts/ci-build.ps1`, which verifies the vendored core with
-  `scripts/verify-vendored-core.mjs` and runs `package.ps1` with `-ApiBase <api_base>`
+- `package`: `scripts/ci-build.ps1`, which runs `package.ps1` with `-ApiBase <api_base>`
   (the app's backend) and, for a channel build, the feed
   `<PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-windows-x64.xml`,
   the public key from `vars.PPVPN_SPARKLE_PUBLIC_KEY` and the private key from

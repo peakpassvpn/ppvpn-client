@@ -8,9 +8,8 @@ Paths and commands here are relative to `desktop/`.
 ## Build
 
 ```bash
-# 1. ppvpn-core and the privileged-service helpers (embedded into Contents/MacOS).
-#    A Debug build works without them.
-scripts/stage-macos-core.sh
+# 1. The privileged-service helpers (embedded into Contents/MacOS; the service
+#    runs the enhanced-mode engine in process). A Debug build works without them.
 scripts/build-service.sh macos
 
 # 2. PPVPNClient Swift package + PPVPN.xcodeproj
@@ -47,7 +46,7 @@ apps/macos/scripts/package-dmg.sh x86_64   # → dist/macos/PPVPN-<version>-maco
 
 Runs `bootstrap.sh --release` (skip with `SKIP_BOOTSTRAP=1`), builds Release for
 the one architecture, thins every Mach-O in the app to it (our code, the shared
-`PPVPNClientFFI.framework`, Sparkle, ppvpn-core and the service helpers, which
+`PPVPNClientFFI.framework`, Sparkle and the service helpers, which
 are staged universal) and re-signs inside out, then checks each binary's
 architecture, that the app and the push agent link the single framework in
 `Contents/Frameworks`, and the signature. It ad-hoc signs the DMG and writes
@@ -116,8 +115,8 @@ installing"): `credentials` for Release, `credentials.debug` for Debug.
 
 ## Logs
 
-- App (ppvpn-client, standard-mode core, push agent): `~/Library/Logs/PPVPN/`
-- Privileged service and Enhanced Mode core: `/Library/Logs/PPVPN/` (`ppvpn-service.log`,
+- App (ppvpn-client, standard-mode engine, push agent): `~/Library/Logs/PPVPN/`
+- Privileged service and Enhanced Mode engine: `/Library/Logs/PPVPN/` (`ppvpn-service.log`,
   `ppvpn-core.log`, launchd's `ppvpn-service.out.log` / `.err.log`; readable without root;
   5 MB per file, 3 files kept). Uninstalling or reinstalling the service leaves them in place;
   builds up to 18 wrote them inside the helper bundle, where the uninstall deleted them.

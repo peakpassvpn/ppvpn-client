@@ -22,14 +22,12 @@
 #   PPVPN_API_BASE            backend baked into the app (default https://www.peakpassvpn.com)
 #   PPVPN_UPDATE_FEED         latest.json the app polls for the update notice
 #                             (default <PPVPN_UPDATE_SITE, else https://pkg.peakpassvpn.com>/linux/<channel or stable>/latest.json)
-#   PPVPN_CORE_DIR            directory with ppvpn-core-linux-amd64 (default: the vendored
-#                             core, vendor/ppvpn-core/<CURRENT>, verified against its manifest)
 #   PPVPN_PACKAGE_MAINTAINER  deb Maintainer / rpm Packager (default: PeakPass VPN LLC <support@peakpassvpn.com>)
 #   PPVPN_DIST_DIR            output directory (default: dist/linux)
 set -euo pipefail
 
 # Linux ships for x86_64 only.
-ARCH=x64 TRIPLE=x86_64-unknown-linux-gnu RID=linux-x64 NFPM_ARCH=amd64 CORE_ARCH=amd64
+ARCH=x64 TRIPLE=x86_64-unknown-linux-gnu RID=linux-x64 NFPM_ARCH=amd64
 GLIBC=2.35
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,43 +59,12 @@ PPVPN_CARGO_BUILD="cargo zigbuild" "$REPO_DIR/crates/ppvpn-client/scripts/build-
 
 # --- 2. privileged service -----------------------------------------------------------
 rustup target add "$TRIPLE" >/dev/null
-(cd "$REPO_DIR/service" && cargo zigbuild --release --locked --bins --target "$TRIPLE.$GLIBC")
+# The "service" profile of the root workspace (size-optimised), as on macOS and Windows.
+(cd "$REPO_DIR/service" && cargo zigbuild --locked -p ppvpn-service --profile service --bins --target "$TRIPLE.$GLIBC")
 SERVICE_OUT="$(cd "$REPO_DIR/service" && cargo metadata --format-version 1 --no-deps \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')/$TRIPLE/release"
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')/$TRIPLE/service"
 
-# --- 3. ppvpn-core (static Go binary) -------------------------------------------------
-# The vendored build, checked against its manifest (artifact linux-x86_64); PPVPN_CORE_DIR
-# overrides it for local core builds.
-if [[ -n "${PPVPN_CORE_DIR:-}" ]]; then
-  CORE="$PPVPN_CORE_DIR/ppvpn-core-linux-$CORE_ARCH"
-else
-  CORE_VERSION="$(tr -d '[:space:]' < "$REPO_DIR/vendor/ppvpn-core/CURRENT")"
-  VENDOR_DIR="$REPO_DIR/vendor/ppvpn-core/$CORE_VERSION"
-  if command -v node >/dev/null 2>&1; then
-    node "$REPO_DIR/scripts/verify-vendored-core.mjs" --vendor-dir "$VENDOR_DIR" \
-      --artifact linux-x86_64 --expected-version "$CORE_VERSION"
-  else
-    python3 - "$VENDOR_DIR" linux-x86_64 "$CORE_VERSION" <<'PY'
-import hashlib, json, os, sys
-vendor, key, version = sys.argv[1:]
-manifest = json.load(open(os.path.join(vendor, "manifest.json")))
-if str(manifest.get("version", version)).lstrip("v") != version:
-    sys.exit(f"error: manifest is for {manifest.get('version')}, not {version}")
-artifact = manifest["artifacts"][key]
-path = os.path.realpath(os.path.join(vendor, artifact["path"]))
-if not path.startswith(os.path.realpath(vendor) + os.sep):
-    sys.exit(f"error: artifact {key} escapes the vendor directory")
-digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-if digest != artifact["sha256"]:
-    sys.exit(f"error: {artifact['path']} sha256 {digest} does not match the manifest")
-print(f"verified vendored core {version} ({key})")
-PY
-  fi
-  CORE="$VENDOR_DIR/$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"]["linux-x86_64"]["path"])' "$VENDOR_DIR/manifest.json")"
-fi
-[[ -f "$CORE" ]] || { echo "error: missing $CORE" >&2; exit 1; }
-
-# --- 4. the app (self-contained, apphost named ppvpn) --------------------------------
+# --- 3. the app (self-contained, apphost named ppvpn) --------------------------------
 PUBLISH="$WORK/publish"
 dotnet publish "$PROJECT" -c Release -r "$RID" --self-contained true -o "$PUBLISH" -nologo \
   -p:Version="$VERSION" -p:PPVPNBuildNumber="$BUILD" -p:PPVPNApiBase="$API_BASE" \
@@ -106,17 +73,16 @@ dotnet publish "$PROJECT" -c Release -r "$RID" --self-contained true -o "$PUBLIS
 find "$PUBLISH/runtimes" -mindepth 1 -maxdepth 1 ! -name "$RID" -exec rm -rf {} +
 [[ -f "$PUBLISH/runtimes/$RID/native/libppvpn_client.so" ]] || { echo "error: libppvpn_client.so missing from publish" >&2; exit 1; }
 
-# --- 4b. the push agent (NativeAOT: links against this host's glibc, checked below) ----
+# --- 3b. the push agent (NativeAOT: links against this host's glibc, checked below) ----
 AGENT="$WORK/agent"
 dotnet publish "$APP_DIR/PPVPN.PushAgent/PPVPN.PushAgent.csproj" -c Release -r "$RID" -o "$AGENT" -nologo \
   -p:Version="$VERSION" -p:DebugType=None -p:DebugSymbols=false -p:StripSymbols=true
 [[ -x "$AGENT/ppvpn-push-agent" ]] || { echo "error: ppvpn-push-agent missing from publish" >&2; exit 1; }
 
-# --- 5. staging tree -----------------------------------------------------------------
+# --- 4. staging tree -----------------------------------------------------------------
 STAGE="$WORK/stage"
 mkdir -p "$STAGE/app"
 cp -a "$PUBLISH/." "$STAGE/app/"
-install -m 0755 "$CORE" "$STAGE/app/ppvpn-core"
 # It loads libppvpn_client.so from the app's runtimes/ folder.
 install -m 0755 "$AGENT/ppvpn-push-agent" "$STAGE/app/ppvpn-push-agent"
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
@@ -160,7 +126,7 @@ open(sys.argv[2], "w").write(re.sub(r"\$\{(\w+)\}", value, text))
 PY
 }
 
-# --- 6. deb + rpm ----------------------------------------------------------------------
+# --- 5. deb + rpm ----------------------------------------------------------------------
 mkdir -p "$OUT_DIR"
 export NFPM_ARCH PPVPN_VERSION="$VERSION" PPVPN_BUILD_NUMBER="$BUILD"
 export PPVPN_STAGE_DIR="$STAGE" PPVPN_PACKAGING_DIR="$APP_DIR/packaging"
@@ -174,7 +140,7 @@ for format in deb rpm; do
   PACKAGES+=("$package")
 done
 
-# --- 7. release metadata ---------------------------------------------------------------
+# --- 6. release metadata ---------------------------------------------------------------
 # Linux updates through the apt/dnf repositories, which the release workflow signs with
 # GPG; the packages themselves carry no EdDSA signature (ed_signature null).
 for package in "${PACKAGES[@]}"; do

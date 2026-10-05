@@ -63,7 +63,7 @@ targets:
           destination: wrapper
           subpath: Contents/Library/LoginItems
     preBuildScripts:
-      - name: Embed ppvpn-core and service helpers
+      - name: Embed the service helpers
         path: scripts/embed-binaries.sh
         basedOnDependencyAnalysis: false
         showEnvVars: false

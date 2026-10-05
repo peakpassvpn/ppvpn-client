@@ -11,10 +11,10 @@
 ;
 ; Layout: everything in one directory, because ppvpn-service only accepts
 ; clients named ppvpn.exe that run from the service's own directory, and it
-; starts ppvpn-core.exe from that directory too:
+; loads wintun.dll from that directory too:
 ;   $PROGRAMFILES64\PPVPN\ppvpn.exe (+ .NET/Windows App SDK runtime, WinSparkle.dll)
 ;   ppvpn-push-agent.exe (NativeAOT; shares runtimes\win-x64\native\ppvpn_client.dll)
-;   ppvpn-core.exe, ppvpn-service.exe, ppvpn-service-install.exe, ppvpn-service-uninstall.exe
+;   ppvpn-service.exe, ppvpn-service-install.exe, ppvpn-service-uninstall.exe, wintun.dll
 ;   install-files.txt (what this version installed; used to clean up on upgrade)
 ;   uninstall.exe
 ;
@@ -58,7 +58,6 @@ RequestExecutionLevel admin
 !define APP_NAME "PPVPN"
 !define PUBLISHER "PeakPass VPN LLC"
 !define APP_EXE "ppvpn.exe"
-!define CORE_EXE "ppvpn-core.exe"
 ; PPVPN.PushAgent (Program.cs) and PPVPN.Windows/Platform/PushAgentAutostart.cs
 !define AGENT_EXE "ppvpn-push-agent.exe"
 !define AGENT_QUIT_EVENT "Local\PPVPN.PushAgent.Quit"
@@ -358,9 +357,6 @@ Section "PPVPN" SecMain
     nsExec::ExecToLog 'sc.exe delete ${SERVICE_NAME}'
     Pop $0
   ${EndIf}
-  ; Standard-mode cores started by the app, if any survived it.
-  nsExec::Exec 'taskkill.exe /f /im ${CORE_EXE}'
-  Pop $0
 
   ; 2. Replace the files. Remove what the previous version installed first so
   ; stale runtime files do not pile up; drop the Tauri sidecar names.
@@ -474,8 +470,6 @@ Section "Uninstall"
     nsExec::ExecToLog 'sc.exe delete ${SERVICE_NAME}'
     Pop $0
   ${EndIf}
-  nsExec::Exec 'taskkill.exe /f /im ${CORE_EXE}'
-  Pop $0
 
   ; Leftovers of the Tauri build: the HKLM ppvpn:// handler and the per-user
   ; one tauri-plugin-deep-link wrote.
