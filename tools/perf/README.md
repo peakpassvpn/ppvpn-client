@@ -93,3 +93,27 @@ sudo -E tools/perf/measure.py $C --engine-cpus 2,3 --load-cpus 4,5 --node-cpus 6
 for e in go rust; do tools/perf/report.py collect --sha "$(git rev-parse HEAD)" --engine $e netem.log > $e.json; done
 tools/perf/report.py compare rust.json --baseline go.json
 ```
+
+## The long run (G6)
+
+`soak.py` runs one engine for a day under a repeating load and samples it from outside (#214's G6). It is a one-off acceptance check before the switch, run by hand as root on a Linux host and never in CI. The results go into #214.
+
+- **Side by side.** Go and Rust run at the same time as two jobs, each in a network namespace of its own so that their ports do not clash. Each job gets cores of its own: the engine on one physical core, the fake node and loadgen on another.
+- **The load.** A 10-minute cycle, on both nodes at once:
+  - streams: 8 connections per node, 20 Mbit/s in total, echoed, 180 s;
+  - new connections: 50 a second per node, 60 s;
+  - round trips: 30 s;
+  - idle for the rest of the cycle.
+
+  Every hour an apply-profile switches kernels.
+- **Samples.** Every 30 s: RSS, HWM, open descriptors, threads, the engine's TCP sockets, and CPU (recorded only).
+- **The verdict** (`soak.py summarize`): no leak means the idle samples do not climb. It compares the hourly medians of an early window of hours with a late one, and it checks that descriptors, threads and sockets return to the same values when idle. Failed and stalled connections are counted too.
+
+```sh
+sudo -E tools/perf/soak.py run --engine go=./ppvpn-core-0.5.21 --fakenode "$FAKENODE" --loadgen "$LOADGEN" --out soak/go \
+  --engine-cpus 2,3 --load-cpus 4 --node-cpus 5 &
+sudo -E tools/perf/soak.py run --engine rust=target/release/ppvpn-core-lab --fakenode "$FAKENODE" --loadgen "$LOADGEN" --out soak/rust \
+  --engine-cpus 6,7 --load-cpus 8 --node-cpus 9 &
+wait
+tools/perf/soak.py summarize soak/go soak/rust
+```
