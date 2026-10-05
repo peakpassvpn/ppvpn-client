@@ -87,7 +87,7 @@ targets:
         PPVPN_SPARKLE_PUBLIC_KEY: ""
         INFOPLIST_KEY_CFBundleDisplayName: PPVPN
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
-        INFOPLIST_KEY_NSHumanReadableCopyright: "© PeakPass VPN LLC"
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 PeakPass VPN LLC"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]: DEBUG
   # Push agent: UI-less helper started by launchd at login (SMAppService.agent),
   # embedded at Contents/Library/LoginItems/PPVPN Agent.app.
@@ -113,5 +113,5 @@ targets:
         INFOPLIST_KEY_LSUIElement: YES
         # Notifications show under this name.
         INFOPLIST_KEY_CFBundleDisplayName: PPVPN
-        INFOPLIST_KEY_NSHumanReadableCopyright: "© PeakPass VPN LLC"
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 PeakPass VPN LLC"
         SKIP_INSTALL: YES

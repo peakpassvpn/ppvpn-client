@@ -71,6 +71,20 @@ private struct GeneralSettings: View {
                 Spacer()
                 CheckForUpdatesButton()
             }
+            Section {
+                Text(AboutNotice.notice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 16) {
+                    ForEach(AboutNotice.links) { Link($0.title, destination: $0.url) }
+                    Spacer()
+                    Text(AboutNotice.copyright)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+            }
         }
         .formStyle(.grouped)
         .onAppear { loginItem.refresh() }

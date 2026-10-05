@@ -20,6 +20,9 @@ struct PPVPNApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .appInfo) {
+                Button(tr("about")) { AboutPanel.show() }
+            }
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesButton()
             }
