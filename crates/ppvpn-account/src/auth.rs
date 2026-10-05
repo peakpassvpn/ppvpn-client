@@ -31,11 +31,9 @@ pub struct AuthConfig {
     pub verification_paths: Vec<String>,
 }
 
-/// The backend's browser authorization page, for every client. The page
-/// moved from the old path to the new one; both are accepted while
-/// backends in the field still return the old one.
-pub const VERIFICATION_PATHS: &[&str] =
-    &["/dashboard/device/authorize", "/dashboard/cli/authorize"];
+/// The backend's browser authorization page, for every client. Only the
+/// device page: the old `/dashboard/cli/authorize` is refused.
+pub const VERIFICATION_PATHS: &[&str] = &["/dashboard/device/authorize"];
 
 /// The host's secret store for the credential blob (Keychain, Credential
 /// Manager, Secret Service, ...). Called from any thread; may block briefly.
@@ -1249,21 +1247,23 @@ mod tests {
     }
 
     #[test]
-    fn the_backend_page_is_accepted_at_its_new_and_old_paths() {
+    fn only_the_device_page_is_accepted() {
         let config = AuthConfig {
             verification_host: "www.example.com".into(),
             verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
         };
         let base = "https://api.example.com";
-        for path in ["/dashboard/device/authorize", "/dashboard/cli/authorize"] {
-            let url = format!("https://www.example.com{path}?user_code=ABCD-EFGH");
+        let device = "https://www.example.com/dashboard/device/authorize?user_code=ABCD-EFGH";
+        assert!(validate_verification_url(&config, device, "ABCD-EFGH", base, false).is_ok());
+        for bad in [
+            "https://www.example.com/dashboard/cli/authorize?user_code=ABCD-EFGH",
+            "https://www.example.com/dashboard/authorize?user_code=ABCD-EFGH",
+        ] {
             assert!(
-                validate_verification_url(&config, &url, "ABCD-EFGH", base, false).is_ok(),
-                "{url}"
+                validate_verification_url(&config, bad, "ABCD-EFGH", base, false).is_err(),
+                "{bad}"
             );
         }
-        let bad = "https://www.example.com/dashboard/authorize?user_code=ABCD-EFGH";
-        assert!(validate_verification_url(&config, bad, "ABCD-EFGH", base, false).is_err());
     }
 
     #[test]

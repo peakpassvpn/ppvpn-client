@@ -97,7 +97,7 @@ public final class PreviewBackend: ClientBackend {
 
     public func authStart() async throws -> DeviceCode {
         let code = DeviceCode(userCode: "SMDR-M4VY",
-                              verificationUrl: "https://example.com/cli/authorize?code=SMDR-M4VY",
+                              verificationUrl: "https://example.com/dashboard/device/authorize?code=SMDR-M4VY",
                               expiresInSecs: 600, browserOpened: false)
         state.auth = .awaitingBrowser(code: code)
         loginTask?.cancel()
