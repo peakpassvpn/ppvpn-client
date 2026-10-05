@@ -88,6 +88,8 @@ pub fn sail_runtime_running(id: sail::RuntimeId) -> bool {
 // Linux: the outbounds bound to loopback fail their dials at once.
 #[cfg(all(test, target_os = "linux"))]
 mod golden_routing_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod local_proxy_routing_tests;
 
 #[cfg(test)]
 mod tests {

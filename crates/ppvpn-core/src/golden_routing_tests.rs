@@ -38,7 +38,7 @@ const WAIT: Duration = Duration::from_secs(5);
 const DIRECT_CONNECT: &str = "300ms";
 
 /// The time the Go runner built the profile at.
-fn golden_now() -> DateTime<Utc> {
+pub(crate) fn golden_now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap()
 }
 
@@ -145,13 +145,13 @@ fn resolve(reference: &BTreeMap<String, String>) -> Vec<u8> {
 }
 
 /// A password made for this run: none is written in the source.
-fn password() -> String {
+pub(crate) fn password() -> String {
     let mut buf = [0u8; 12];
     getrandom::fill(&mut buf).unwrap();
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn free_port() -> u16 {
+pub(crate) fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -243,7 +243,7 @@ fn stand_in_for_the_tun(config: &mut Value, port: u16) {
 /// dials a closed port on loopback and is refused; `direct` is bound to
 /// loopback, where a dial elsewhere goes nowhere, and gives up after
 /// DIRECT_CONNECT (sail's default is 5 s, as long as a case waits).
-fn bind_loopback(config: &mut Value) {
+pub(crate) fn bind_loopback(config: &mut Value) {
     let closed = free_port();
     for outbound in config["outbounds"].as_array_mut().unwrap() {
         match outbound["type"].as_str().unwrap_or_default() {
@@ -393,7 +393,7 @@ async fn socks_open(port: u16, destination: &str, payload: &[u8]) -> Option<TcpS
 
 /// An HTTP CONNECT (Basic credentials `user:password` when given) and the
 /// payload.
-async fn connect_open(
+pub(crate) async fn connect_open(
     port: u16,
     credentials: Option<&str>,
     destination: &str,
