@@ -304,7 +304,7 @@ fn opt_string(value: &Value, key: &str) -> Option<String> {
 
 pub(crate) async fn get_status(core: &dyn CoreTransport) -> Result<CoreStatus, CoreCallError> {
     let data = core.call("/v1/get-status", json!({}), CALL_TIMEOUT).await?;
-    // The Tauri shell accepted a nested `core` object; keep that tolerance.
+    // A status nested in a `core` object is accepted too.
     let status = data.get("core").unwrap_or(&data);
     Ok(CoreStatus {
         state: opt_string(status, "state").unwrap_or_default(),

@@ -22,7 +22,7 @@ use crate::{
     AuthState, Client, ClientSnapshot, DeviceCode, Node, ProfileStatus, StandardState, Team,
 };
 
-/// Profile refresh period while signed in (the Tauri web UI used the same).
+/// Profile refresh period while signed in.
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Retry period after a failed background refresh, e.g. offline at launch.
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);

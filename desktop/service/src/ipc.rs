@@ -1119,28 +1119,19 @@ fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
     let path = unsafe { CStr::from_ptr(buffer.as_ptr()) }
         .to_str()
         .context("decode client process path")?;
-    if !macos_client_path_allowed(Path::new(path), cfg!(debug_assertions)) {
+    if !macos_client_path_allowed(Path::new(path)) {
         return Err(anyhow!("CLIENT_IMAGE_NOT_ALLOWED:{path}"));
     }
     Ok(pid as u32)
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn macos_client_path_allowed(path: &std::path::Path, debug_build: bool) -> bool {
-    let normalized = path.to_string_lossy();
-    if matches!(
-        normalized.as_ref(),
+fn macos_client_path_allowed(path: &std::path::Path) -> bool {
+    matches!(
+        path.to_string_lossy().as_ref(),
         "/Applications/PPVPN.app/Contents/MacOS/PPVPN"
             | "/Applications/PPVPN（开发版）.app/Contents/MacOS/PPVPN"
-    ) {
-        return true;
-    }
-    debug_build
-        && matches!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("ppvpn-desktop" | "PPVPN")
-        )
-        && normalized.contains("/ppvpn-desktop/src-tauri/target/")
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -1745,23 +1736,15 @@ mod tests {
     }
 
     #[test]
-    fn macos_client_path_requires_the_app_bundle_outside_debug_builds() {
+    fn macos_client_path_requires_the_app_bundle() {
         use std::path::Path;
 
-        assert!(macos_client_path_allowed(
-            Path::new("/Applications/PPVPN.app/Contents/MacOS/PPVPN"),
-            false
-        ));
-        assert!(!macos_client_path_allowed(
-            Path::new("/tmp/PPVPN.app/Contents/MacOS/PPVPN"),
-            false
-        ));
-        assert!(macos_client_path_allowed(
-            Path::new(
-                "/Volumes/dev/src/Projects/ppvpn-desktop/src-tauri/target/debug/ppvpn-desktop"
-            ),
-            true
-        ));
+        assert!(macos_client_path_allowed(Path::new(
+            "/Applications/PPVPN.app/Contents/MacOS/PPVPN"
+        )));
+        assert!(!macos_client_path_allowed(Path::new(
+            "/tmp/PPVPN.app/Contents/MacOS/PPVPN"
+        )));
     }
 
     #[test]
