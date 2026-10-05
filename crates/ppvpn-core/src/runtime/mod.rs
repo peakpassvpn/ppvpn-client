@@ -355,6 +355,10 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     async fn select(&self, group: &str, member: &str) -> Result<(), RuntimeError>;
     /// Back to automatic.
     async fn unfix(&self, group: &str) -> Result<(), RuntimeError>;
+    /// Has the group test its members now, with its own URLs and timeouts,
+    /// within `within`; the group chooses from the results as from its
+    /// scheduled tests.
+    async fn check_group(&self, group: &str, within: Duration) -> Result<(), RuntimeError>;
     /// Group switches as they happen. Taken once (by the Engine, at new).
     fn group_switches(&self) -> mpsc::Receiver<GroupSwitch>;
     /// Failed connections as they happen, through starts and stops; those

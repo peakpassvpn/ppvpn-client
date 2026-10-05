@@ -853,6 +853,7 @@ fn debug_leaves_credentials_out() {
         rule_ids: Vec::new(),
         dns_members: Default::default(),
         dns_local_listener: false,
+        check_interval: Default::default(),
     };
     let shown = format!("{translation:?}");
     assert!(!shown.contains(&secret), "{shown}");

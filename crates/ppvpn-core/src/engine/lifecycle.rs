@@ -177,6 +177,8 @@ impl Inner {
             }
         }
         self.activate_rule_sets(rule_sets, request.allowed_rule_set_hosts);
+        // A pin the request added, or one it cleared.
+        self.sync_pinned_checks();
         if running.is_some() {
             self.refresh().await;
         }
@@ -249,6 +251,7 @@ impl Inner {
         }
         self.network_started();
         self.guard_started();
+        self.sync_pinned_checks();
         self.refresh().await;
         Ok(())
     }
@@ -263,11 +266,13 @@ impl Inner {
         }
         // Before the TUN closes: sail's cleanup must not be undone.
         self.guard_stopped();
+        self.stop_pinned_checks();
         self.cancel_dns_queries();
         if let Err(e) = self.runtime.stop().await {
             let error = self.runtime_error(&e);
             // Still running: the TUN stays, and so does its guard.
             self.guard_restarted();
+            self.sync_pinned_checks();
             return Err(error);
         }
         self.network_stopped();
@@ -416,6 +421,7 @@ impl Inner {
         drop(live);
         // The TUN is gone with the runtime.
         self.guard_stopped();
+        self.stop_pinned_checks();
         // What it had opened goes now, not at the host's shutdown.
         self.fatal_cleanup();
     }
