@@ -511,10 +511,15 @@ async fn a_listener_toggled_by_an_inbounds_only_reload() {
             .contains(&("extra".into(), "removed".into())),
         "{report:?}"
     );
-    assert!(
-        TcpStream::connect(("127.0.0.1", extra_port)).await.is_err(),
-        "no longer listening"
-    );
+    // sail aborts a removed inbound's listener task without waiting for it
+    // (commit_reload), so the socket closes shortly after reload returns.
+    tokio::time::timeout(WAIT, async {
+        while TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("no longer listening");
     let mut buf = [0u8; 1];
     let read = tokio::time::timeout(WAIT, through_extra.read(&mut buf))
         .await
