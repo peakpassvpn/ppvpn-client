@@ -252,7 +252,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 
 ## 3. dns-local
 
-dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 Sail 的 `local`（2026-10-03 决定）。Sail `local` 的缺口作为 Sail 的通用改进继续推进，**不阻塞切换**：忽略 macOS 手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败，以及 split DNS 和日志行。翻译层把 dns-local 渲染成指向监听的 tcp 服务器（`translate::tests::dns_local_listener_is_asked_over_tcp`）。下表的 Rust 用例指 `crate::localdns`。
+dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 Sail 的 `local`（2026-10-03 决定）。当初列出的 Sail `local` 缺口，Sail 0.17.0 已补上大部分：macOS 手动 DNS（412848dc、9ef7458c）、链路本地服务器（59b76435）、每个服务器独立超时（a2e1ca00）、TC 改走 TCP（8ad1bec2）、没有网卡时立即失败（6a720ca0、8e685d88）、日志行（6a720ca0、3e456c54、ade315d3）。回环服务器按设计保留，有 TUN 时 Sail 给出警告。只剩 split DNS 没做，已在 Sail 排队。我们仍用自研的 dns-local，这里只更新记录。翻译层把 dns-local 渲染成指向监听的 tcp 服务器（`translate::tests::dns_local_listener_is_asked_over_tcp`）。下表的 Rust 用例指 `crate::localdns`。
 
 macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一），实际名字从 `tun_names()` 读。选好的名字在打开前被抢走时，Sail 换名重试，最多 3 个，仍失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true；Linux、Windows 的名字是配置的，被占用时 retryable=false，见 host-integration 第 7 节）。排除隧道网段由 dns-local 自己的隧道地址过滤保证。macOS 的系统 DNS 自 Sail 0.17.0（093041df）起由 Sail 负责：utun 打开时写一个临时的 supplemental 键，teardown 时先于路由撤掉；宿主自己开 TUN 时 Sail 不设（host-integration 第 2、9 节）。
 
