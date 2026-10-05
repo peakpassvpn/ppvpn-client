@@ -406,7 +406,9 @@ async fn dns_local_dials_through_the_direct_outbound() {
 
 // The network as sail sees it (instance.network()), and its changes as
 // sail::embed's network events (here a wake, which sail announces whatever
-// the state: the same interface, another network, so `moved`).
+// the state: the same interface, another network, so `moved`). A change
+// right after start is told (sail 1b90c92f: the subscription is there from
+// the start, through stops and starts), in every run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_changes_are_sails_own() {
     use sail::net::network::ChangeReason;
@@ -414,45 +416,47 @@ async fn network_changes_are_sails_own() {
     let runtime = SailRuntime::new(options("network")).unwrap();
     let mut changes = runtime.network_changes();
     assert_eq!(runtime.network(), None, "not running");
-    runtime
-        .start(&config(free_port(), &[], false))
-        .await
-        .unwrap();
-    // Settled at start (sail b3533615): the default interface, or offline,
-    // at generation 1, told by no event.
-    assert!(runtime.network().is_some());
-    assert_eq!(*changes.borrow_and_update(), None, "no change yet");
+    for run in 1..=2 {
+        runtime
+            .start(&config(free_port(), &[], false))
+            .await
+            .unwrap();
+        // Settled at start (sail b3533615): the default interface, or
+        // offline, at generation 1, told by no event.
+        assert!(runtime.network().is_some(), "run {run}: settled at start");
+        let settled = runtime.instance.network().unwrap().generation;
+        assert_eq!(settled, 1, "run {run}: each run starts at 1");
+        changes.borrow_and_update();
 
-    // The subscription follows the start (sail subscribes once the run is
-    // up): announce until a change comes through.
-    tokio::time::timeout(WAIT, async {
-        loop {
-            runtime
-                .instance
-                .manager()
-                .unwrap()
-                .network()
-                .announce(ChangeReason::Wake);
-            if tokio::time::timeout(Duration::from_millis(200), changes.changed())
-                .await
-                .is_ok()
-            {
-                return;
-            }
-        }
-    })
-    .await
-    .expect("a change");
-    let change = changes.borrow_and_update().clone().expect("the change");
-    assert_eq!(
-        (change.change.as_str(), change.reason.as_str()),
-        ("moved", "wake")
-    );
-    assert!(change.generation >= 2, "after the start's: {change:?}");
-    assert_eq!(change.old, change.new, "announced: the state did not move");
+        // Once, right after the start: no retry.
+        runtime
+            .instance
+            .manager()
+            .unwrap()
+            .network()
+            .announce(ChangeReason::Wake);
+        tokio::time::timeout(WAIT, changes.changed())
+            .await
+            .unwrap_or_else(|_| panic!("run {run}: the change right after start"))
+            .unwrap();
+        let change = changes.borrow_and_update().clone().expect("the change");
+        assert_eq!(
+            (change.change.as_str(), change.reason.as_str()),
+            ("moved", "wake"),
+            "run {run}"
+        );
+        assert_eq!(
+            change.generation, 2,
+            "run {run}: the one after the start's: {change:?}"
+        );
+        assert_eq!(
+            change.old, change.new,
+            "run {run}: announced, the state did not move"
+        );
 
-    runtime.stop().await.unwrap();
-    assert_eq!(runtime.network(), None);
+        runtime.stop().await.unwrap();
+        assert_eq!(runtime.network(), None);
+    }
 }
 
 /// A SOCKS5 connection without authentication through `port` to `to`.
