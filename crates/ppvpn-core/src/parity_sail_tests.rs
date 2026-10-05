@@ -78,7 +78,10 @@ fn fail_the_nodes(config: &str, stand_in: Option<&str>, closed: u16) -> String {
     let mut config: Value = serde_json::from_str(config).unwrap();
     for outbound in config["outbounds"].as_array_mut().unwrap() {
         if let Some(tag) = stand_in.filter(|tag| outbound["tag"] == *tag) {
-            *outbound = json!({ "type": "direct", "tag": tag });
+            // An option the real direct lacks: sail shares one handler
+            // between outbounds of identical options, and a connection
+            // routed to `direct` would be reported under this tag.
+            *outbound = json!({ "type": "direct", "tag": tag, "connect_timeout": "5s" });
             continue;
         }
         match outbound["type"].as_str().unwrap_or_default() {
