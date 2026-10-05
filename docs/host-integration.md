@@ -43,7 +43,7 @@ CLI 只运行标准实例，而且不开 7891。
 ```rust
 pub struct EngineConfig {
     pub role: Role,                         // Standard | Tun
-    pub platform: Platform,                 // Linux | Macos | Windows（今后加 Ios | Android）
+    pub platform: Platform,                 // Linux | Macos | Windows | Ios | Android（移动端只影响 TUN 配置，FFI 还没有，见 mobile.md）
     pub state_dir: PathBuf,                 // 私有目录：规则集缓存、本地代理状态
     pub local_proxy: Option<LocalProxyConfig>, // 仅 Standard：listen（默认 127.0.0.1）、preferred_port（默认 7890；0 = 任意空闲端口，供测试）
     pub system_proxy: bool,                 // 仅 Standard：是否允许 set_system_proxy_listener（CLI 设为 false）
@@ -267,7 +267,7 @@ pub struct Status {
                                             // next_retry_at（非 ready 时下次重试时间；主机未固定或没有存储时省略），同 get-status
     pub system_proxy: SystemProxyStatus,
     pub draining_kernels: u32,             // Rust 版恒为 0：没有旧内核排空（第 4.1 节）
-    pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded（Linux、macOS、Windows）
+    pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded（守护目前只在 Linux；macOS、Windows 恒为 Ok，见 4.4）
     pub dropped_log_lines: u64,             // 日志接收端阻塞而丢弃的行数，见第 10 节
 }
 #[non_exhaustive]
