@@ -73,11 +73,11 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | Go 包 | A | B | C | D |
 | --- | --- | --- | --- | --- |
 | `internal/runtime` | 1 | 5 | 23 | 17 |
-| `profile` | 0 | 4 | 18 | 1 |
-| `internal/config` | 0 | 1 | 16 | 2 |
+| `profile` | 0 | 0 | 18 | 1 |
+| `internal/config` | 0 | 0 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
 | `internal/failover` | 0 | 0 | 1 | 5 |
-| `api` | 0 | 1 | 2 | 5 |
+| `api` | 0 | 0 | 2 | 5 |
 | `internal/privateacl` | 0 | 0 | 1 | 6 |
 | `internal/proxyinbound` | 1 | 1 | 2 | 2 |
 | `routing` | 0 | 0 | 0 | 6 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 2 | 13 | 71 | 66 |
+| 合计 | 2 | 7 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）、切换时关掉被删节点的连接（约 1.25 人日）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）、切换时关掉被删节点的连接（约 1.25 人日）、校验错误的脱敏（约 0.5 人日）、规则匹配项的映射与本地代理规则优先（约 0.25 人日）、入口故障转移形态的守卫分支（约 0.5 人日）、忽略未知字段（约 0.25 人日）、借用的 REALITY SNI（约 0.25 人日）、规则集主机钉住的各变体（约 0.25 人日）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -390,7 +390,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `api` `TestSystemProxyUnavailableWithoutStateOrInTUNCore` | System proxy unavailable without state or in tun core | `ppvpn-core` `engine::proxy_tests::instances_without_a_local_proxy_refuse_its_calls` | done | 库里没有"无状态路径"的情形：`system_proxy=false` 的实例和 TUN 实例返回 SYSTEM_PROXY_UNAVAILABLE |
 | `api` `TestUnauthenticatedRejected` | Unauthenticated rejected |  | todo | 【D】Bearer 会话密钥鉴权属 IPC，库在宿主进程内运行、没有会话密钥（host-integration 形态一节）。 |
 | `api` `TestUnknownMethodUsesEnvelope` | Unknown method uses envelope |  | todo | 【D】API_NOT_FOUND 属 IPC 路由，库的方法在编译期确定，host-integration 列为不再出现的码。 |
-| `api` `TestValidationErrorIsStructuredAndRedacted` | Validation error is structured and redacted |  | todo | 【B，0.5 人日】结构化部分由 golden 覆盖，但脱敏无测试且有缺口：profile/parse.rs::malformed 把 serde 错误原文放进 message，类型不符时 serde 会回显字符串值（如 identity_keys 写成字符串即带出密钥），违背 host-integration 第 7 节 message 不含凭据，需切换前修正并补测试。 |
+| `api` `TestValidationErrorIsStructuredAndRedacted` | Validation error is structured and redacted | `ppvpn-core` `profile::parse::tests::a_malformed_profile_error_never_quotes_a_value`、`ppvpn-core` `profile::parse::tests::a_syntax_error_says_where` | done | 结构化部分由 golden 覆盖；脱敏缺口已修：malformed 只报错误类别和行列，不带 serde 回显的值，7 种类型不符或语法错误的输入都不含随机生成的密钥 |
 | `cmd/ppvpn-core` `TestRotateSessionSecret` | Rotate session secret |  | todo | 【D】会话密钥文件只服务于 IPC 鉴权，库形态没有会话密钥。 |
 | `cmd/ppvpn-core` `TestServeLogsToFileEvenWhenStartupFails` | Serve logs to file even when startup fails |  | todo | 【D】serve 进程的启动日志属 Go 进程入口，Rust 由宿主进程负责，日志文件由 LogSink::File 在 Engine::new 打开。 |
 | `cmd/ppvpn-core` `TestServeRejectsTUNStackMissingFromBuild` | Serve rejects tun stack missing from build |  | todo | 【D】gVisor/with_gvisor 构建标签与 tun-stack 选项是 sing-tun 专有，Sail 接管 TUN 栈，没有这一构建维度。 |
@@ -405,7 +405,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/config` `TestPlatformCapabilitiesStayOutsideProfile` | Platform capabilities stay outside profile |  | todo | 【C】设备侧输入在 translate::Options 与 Profile 分离，TUN 与本地代理并存的配置由 every_fixture_passes_sail_check 的 "contract, TUN desktop" 夹具经 sail check 验证；Go 的 Stack 透传在 Rust 中有意去掉（sail 对 stack 告警）。；断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestPrivateBypassRuleFollowsPerNodeRules` | Private bypass rule follows per node rules |  | todo | 【C】translate/mod.rs 先 local_proxy 再 routing，local_proxy_users_go_to_their_node_and_strangers_are_rejected 已断言私网直连规则排在本地代理规则之后。；断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestProfileToOptionsGolden` | Profile to options golden |  | n-a | sing-box 配置的 golden，Rust 的配置形状不同 |
-| `internal/config` `TestRuleMappingAndFixedPriority` | Rule mapping and fixed priority |  | todo | 【B，0.25 人日】translate/mod.rs rule_match 的 IDN/大小写归一、port_range "a-b"→"a:b"、network、port 映射在 translate/tests.rs 中没有用例（routing 夹具无 port_range/IDN），错映射会导致误路由，切换前补一条与 Go 同输入的断言。；断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
+| `internal/config` `TestRuleMappingAndFixedPriority` | Rule mapping and fixed priority | `ppvpn-core` `translate::tests::a_rule_maps_its_matchers_and_comes_after_the_local_proxy_rules` | done | 与 Go 同输入（IDN 加尾点、大写后缀、未掩码的 CIDR、network、port、port_range）；断言翻译出的规则里归一后的取值，且本地代理的规则都排在它前面 |
 | `internal/config` `TestRuleSetsMirrorIntoTUNDNS` | Domain rule sets are mirrored into DNS like domain matchers: direct to dns-local, proxy to dns-remote, reject refused. |  | todo | 【C】translate/tun.rs mirror_dns_rules 按 RuleSetFile.mirror_dns 镜像规则集，dns_mirrors_domain_rules_in_order 已断言直连集→dns-local、含 CIDR 的集不进 DNS；reject/proxy 集走同一代码路径，可后补。；断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestRuleSetsRenderAsLocalBinaryAndRulesReferenceThem` | Rule sets render as local binary and rules reference them |  | todo | 【C】translate/mod.rs Builder::routing 生成 local/binary 规则集并在规则里引用 rule-set-<id>，every_fixture_passes_sail_check 与 dns_mirrors_domain_rules_in_order 已覆盖。；断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
 | `internal/config` `TestShadowsocksEIHPasswordOrder` | SIP022: identity_keys are the server iPSKs, outermost first, and user_key is the user's uPSK; the EIH password is iPSK1:...:iPSKn:uPSK. |  | todo | 【C】translate/mod.rs outbound 按 identity_keys 顺序再接 user_key 拼接，a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses 已断言单 iPSK 情形，缺 0 个与多个 iPSK 的用例，可后补。；断言的是生成的 sing-box 配置：Rust 用例应断言等价的产品行为，不是配置形状 |
@@ -500,20 +500,20 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `probe` `TestPingTimeoutAndCancel` | Ping timeout and cancel | `ppvpn-core` `probe::icmp::tests::ping_timeout_and_cancel` | done | 取消即丢弃 future |
 | `profile` `TestEntryIPOptional` | Entry ip optional |  | todo | 【C】入口 IP 为空时 profile/validate.rs::validate_ingress 跳过公网检查，golden contract/profiles/base.json 的无 IP 备用入口经 validation.json valid_base 已覆盖，单测可切换后补。 |
 | `profile` `TestFixtureProfileParsesAndValidates` | Fixture profile parses and validates |  | todo | 【C】testdata/profiles/multi-ingress.json 由 crates/ppvpn-cli/tests/engine.rs 解析并应用，同形的 golden base.json 由 tests/golden_contract.rs::validation_matches_the_go_golden 校验通过，形状断言可切换后补。 |
-| `profile` `TestIngressFailoverShapes` | Ingress failover shapes |  | todo | 【B，0.5 人日】功能在 profile/validate.rs::validate_ingresses 已实现，但 golden 每个码只有一例，第二个 primary、未知 role、跨节点 endpoint_key 重复、序号递增、备用入口凭据校验等守卫分支在 Rust 无测试，属宿主依赖的校验需切换前补（约 30 个表驱动用例移植）。 |
+| `profile` `TestIngressFailoverShapes` | Ingress failover shapes | `ppvpn-core` `profile::validate::tests::failover_shapes_fail_with_go_s_code_and_field` | done | Go 表 27 例中的 26 例逐例断言错误码和 field，另有主入口加两个备用入口通过的一例；标签 "\xff" 未移植：Rust 的 String 装不下非法 UTF-8，这样的字节在 parse 就被拒（PROFILE_MALFORMED）。入口 IP 留空（公网地址不在文档网段内，接受规则见 addr::tests） |
 | `profile` `TestIngressLabelIsOptionalDisplayOnly` | Ingress label is optional display only |  | todo | 【C】profile/validate.rs::valid_label 按字符计数（chars().count()，同 Go RuneCount），golden base.json 有 label 的入口已通过且超长 label 被拒，中文边界用例可切换后补。 |
 | `profile` `TestIsPrivateIP` | Is private ip |  | todo | 【D】Go IsPrivateIP 只服务于 routing 流分类器（Rust 不提供 flow adapter），Rust 只保留前缀表 translate/mod.rs::PRIVATE_PREFIXES（translate::tests::private_is_gos_list 已校验），按地址匹配由 Sail 的 ip_cidr 完成。 |
 | `profile` `TestMaxIngressesAccepted` | Max ingresses accepted |  | todo | 【C】profile/validate.rs::validate_ingresses 以 len() > MAX_INGRESSES_PER_NODE 判定，golden ingress_count_invalid 覆盖超限，恰好满额的接受用例可切换后补。 |
-| `profile` `TestParseIgnoresUnknownFields` | Parse ignores unknown fields |  | todo | 【B，0.25 人日】profile/model.rs 未设 deny_unknown_fields、parse.rs 走 serde 默认忽略未知字段，但无测试；这是后端加字段时的前向兼容契约，一旦回归所有客户端拒收 profile，需切换前补一个用例。 |
+| `profile` `TestParseIgnoresUnknownFields` | Parse ignores unknown fields | `ppvpn-core` `profile::parse::tests::unknown_fields_are_ignored_at_every_level` | done | 在 multi-ingress 夹具的顶层、节点、exit、入口各加未知字段，parse 与 validate 都通过，旁边的 country_code 照常读到 |
 | `profile` `TestParseRejectsSingBoxConfig` | Parse rejects sing box config |  | todo | 【C】sing-box 配置缺 revision/nodes，profile/validate.rs::validate 返回 FIELD_REQUIRED（golden field_required_revision 同路径），用例可切换后补。 |
 | `profile` `TestProtocolFieldsFailClosed` | Protocol fields fail closed |  | todo | 【C】profile/validate.rs::validate_credentials 与 validate_ingress 已实现，golden 覆盖 shadowsocks_key_invalid、transport_unsupported，VLESS UUID 由 validate::tests::uuids_follow_the_go_pattern 覆盖，字段路径用例可切换后补。 |
-| `profile` `TestRealityServerNameIsBorrowed` | Reality server name is borrowed |  | todo | 【B，0.25 人日】profile/validate.rs::validate_credentials 对 REALITY 只要求合法域名、不要求等于 endpoint 域名，但所有 Rust 夹具的 server_name 都等于 endpoint 域名，借用 SNI 的接受路径无测试；生产 VLESS 都借用 SNI，回归即全部 VLESS 节点被拒，需切换前补。 |
+| `profile` `TestRealityServerNameIsBorrowed` | Reality server name is borrowed | `ppvpn-core` `profile::validate::tests::a_reality_server_name_may_differ_from_the_endpoint_domain` | done | 借用的 SNI 与 endpoint 域名不同时通过；不是合法域名时报 TLS_SERVER_NAME_INVALID 及其 field |
 | `profile` `TestReplicaOrdinalPresenceRequired` | Replica ordinal presence required |  | todo | 【C】profile/parse.rs::require_presence 拒绝缺失或 null 的 replica_ordinal（FIELD_REQUIRED），未知入口字段由 serde 忽略，golden 未覆盖缺失但实现直接，用例可切换后补。 |
 | `profile` `TestReservedEntryIPsRejected` | Reserved entry i ps rejected |  | todo | 【C】profile/addr.rs::is_public_unicast 的保留段表含 Go 全部范围，addr::tests::entry_ips_follow_go 与 golden entry_ip_not_public(_documentation_range) 已测同一函数，补齐 Go 的 IP 列表可切换后做。 |
 | `profile` `TestRoutingActionUnionIsStrict` | Routing action union is strict |  | todo | 【C】profile/validate.rs::validate_action 实现全部分支，golden 覆盖 routing_action_invalid、routing_target_unsupported、routing_node_not_found，剩余组合（selected+node_id 等）可切换后补。 |
 | `profile` `TestRoutingValidationIDNAPortsCIDRAndStrictJSON` | Routing validation idna ports cidr and strict json |  | todo | 【C】profile/validate.rs::validate_match/normalize_domain 已实现，validate::tests::domains_normalise_like_go 测 IDNA，golden 覆盖通配符、CIDR、协议、端口范围，未知 routing 字段由 serde 忽略，可切换后补。 |
 | `profile` `TestRoutingValidationRejectsDuplicateIDsAndUnknownNodes` | Routing validation rejects duplicate i ds and unknown nodes |  | todo | 【C】profile/validate.rs::validate_routing 已实现，golden rule_id_duplicate 与 routing_node_not_found 覆盖（后者在 rule action 上，final 同走 validate_action），可切换后补。 |
-| `profile` `TestRuleSetHostPinning` | Rule set host pinning |  | todo | 【B，0.25 人日】profile/ruleset.rs::validate_rule_set_hosts 已实现，golden 只测 host_not_allowed 与 hosts_invalid 各一例，大小写/默认 443、显式端口不符、子域名 evil.api.example.com、IPv6 等匹配变体无测试；规则集下载钉住 API 主机属安全守卫，需切换前补。 |
+| `profile` `TestRuleSetHostPinning` | Rule set host pinning | `ppvpn-core` `profile::ruleset::tests::a_rule_set_downloads_only_from_the_profile_s_host` | done | Go 的全部变体：大小写、默认 443、多个允许主机、空列表、父域、端口不符、子域 evil.api.example.com、格式不对的允许主机、显式端口、IPv6；断言错误码和 field |
 | `profile` `TestRuleSetUpdateIntervalClamp` | Rule set update interval clamp |  | todo | 【C】profile/ruleset.rs::RuleSet::update_interval 按 [1h,7d] 夹紧、0 取 24h，已实现，非契约非安全，单测可切换后补。 |
 | `profile` `TestRuleSetValidation` | Rule set validation |  | todo | 【C】profile/ruleset.rs::validate_rule_sets/validate_rule_set_refs 已实现，golden 覆盖 id/重复/url/sha256/interval/not_found/ref_duplicate，相对 URL 与 userinfo 由 ruleset::tests::hosts_normalise_like_go 覆盖，可切换后补。 |
 | `profile` `TestSchemaIncompatible` | Schema incompatible |  | todo | 【C】profile/validate.rs::validate 要求 schema_version == 1，golden schema_unsupported 已覆盖，0 和 3 的用例可切换后补。 |
