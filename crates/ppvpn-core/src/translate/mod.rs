@@ -149,7 +149,8 @@ pub(crate) struct Options {
     pub health_check: HealthCheck,
     /// Enhanced mode.
     pub tun: Option<Tun>,
-    /// sail's log level (`info`, `debug`); no log section when empty.
+    /// sail's log level (`warn`, `info`, `debug`); no log section when
+    /// empty.
     pub log_level: String,
 }
 

@@ -429,6 +429,7 @@ pub struct Error {
 
 - **输出方式**：日志行通过 `LogConfig` 交给宿主，可以是写入宿主提供的文件，也可以是一个按行接收的通道。格式与 Go 版一致（logfmt：`level=… msg=… key=value`），lab 和性能检查会解析这些行。
   - 一行是 `<RFC 3339 UTC 时间，纳秒> level=<error|warn|info|debug> msg=<消息> key=value … source=<core|sail>`。`source=core` 是 `ppvpn-core` 自己的行，其余字段是事件的字段；`source=sail` 是 Sail 的行，Sail 的原文整个放在 `msg` 里。
+  - **级别与隐私**：`LogConfig.level` 为 `Info`（默认）时，日志里不出现连接的目的地址或域名，与 Go 版一致。`ppvpn-core` 自己写目的地的行（`connection`、`outbound failed`、DNS 交换）都在 debug 级。Sail 在 info 级会给每条连接写一行 `handled … dst=<目的地>`，所以引擎在 `Info` 下只让 Sail 记 warn 及以上，`Debug` 下让 Sail 记 debug。
   - 一个实例的两种行进同一个有界队列（1024 行），再按 `LogSink` 输出：
     - `None`：不保留任何行，也不计丢弃；
     - `File { path }`：`Engine::new` 时打开文件（不存在就创建，Unix 上权限 0600），只追加；打不开时 `new` 返回 `CORE_OPERATION_FAILED`（field=`log.sink.path`）。写盘在引擎自己的线程里做，不阻塞打日志的一方；写失败的行计入丢弃。只追加，core 不做轮转，也没有大小上限；实例存活期间引擎一直持有这个文件，宿主只能在 `Engine::new` 之前截断或改名；

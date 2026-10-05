@@ -305,3 +305,22 @@ async fn no_line_holds_a_secret() {
         }
     }
 }
+
+/// sail gets `warn` at the default level: its info writes each connection's
+/// destination (runtime::sail::tests::no_destination_in_sail_lines_at_warn),
+/// which #214 keeps out of the log at info. At debug, sail's debug.
+#[tokio::test]
+async fn sail_logs_no_connection_at_the_default_level() {
+    for (level, sail) in [(LogLevel::Info, "warn"), (LogLevel::Debug, "debug")] {
+        let (engine, fake) = engine(level, LogSink::None);
+        engine
+            .apply(ApplyRequest::new(profile_with(R1, |_| {})))
+            .await
+            .unwrap();
+        engine.start().await.unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&fake.config().expect("started")).unwrap();
+        assert_eq!(config["log"]["level"], sail, "{level:?}");
+        engine.stop().await.unwrap();
+    }
+}

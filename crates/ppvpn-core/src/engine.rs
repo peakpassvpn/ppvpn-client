@@ -579,8 +579,12 @@ impl Inner {
             local_proxy: self.local_proxy_options(),
             local_proxy_left_out: self.local_proxy_left_out(),
             system_proxy_port: self.system_proxy_options(),
+            // sail's info writes a line per connection with its
+            // destination (`handled … dst=`); the default level keeps
+            // destinations out of the log (#214), as Go kept sing-box's
+            // log off. Its warnings and errors stay.
             log_level: match self.config.log.level {
-                LogLevel::Info => "info",
+                LogLevel::Info => "warn",
                 LogLevel::Debug => "debug",
             }
             .into(),
