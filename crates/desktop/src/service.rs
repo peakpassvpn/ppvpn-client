@@ -1225,7 +1225,7 @@ mod tests {
         include!("../../service/build_id.rs");
 
         pub(super) fn of_tree() -> String {
-            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../service");
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../service");
             service_build_id(&dir).unwrap()
         }
     }
