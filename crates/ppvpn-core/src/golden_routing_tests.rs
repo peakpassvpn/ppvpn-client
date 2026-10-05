@@ -4,7 +4,7 @@
 //! with the Rust translation. As the Go runner did: the TUN is a SOCKS inbound
 //! carrying the TUN's tag (TLS or HTTP bytes after the CONNECT to sniff),
 //! the local proxy and the system proxy are themselves, and every outbound
-//! that dials is bound to loopback, so a dial fails at once and nothing
+//! that dials fails at once (bind_loopback), so nothing
 //! leaves the host. The decision is sail's Routed event for the
 //! connection. `classifier` (Go's flow adapter, for comparison) has no Rust
 //! counterpart and is not compared.
@@ -33,6 +33,9 @@ use crate::translate::{
 };
 
 const WAIT: Duration = Duration::from_secs(5);
+
+/// How long `direct` tries to connect (sail's `connect_timeout`).
+const DIRECT_CONNECT: &str = "300ms";
 
 /// The time the Go runner built the profile at.
 fn golden_now() -> DateTime<Utc> {
@@ -235,13 +238,24 @@ fn stand_in_for_the_tun(config: &mut Value, port: u16) {
     }
 }
 
-/// Binds every outbound that dials to the loopback interface: a dial to
-/// anywhere else fails at once, after routing has decided.
+/// Makes every dial fail at once, so that sail tells the route (it does
+/// once the dial ends) and nothing leaves the host: a node's outbound
+/// dials a closed port on loopback and is refused; `direct` is bound to
+/// loopback, where a dial elsewhere goes nowhere, and gives up after
+/// DIRECT_CONNECT (sail's default is 5 s, as long as a case waits).
 fn bind_loopback(config: &mut Value) {
+    let closed = free_port();
     for outbound in config["outbounds"].as_array_mut().unwrap() {
-        let kind = outbound["type"].as_str().unwrap_or_default();
-        if !matches!(kind, "selector" | "fallback" | "urltest" | "block" | "dns") {
-            outbound["bind_interface"] = "lo".into();
+        match outbound["type"].as_str().unwrap_or_default() {
+            "selector" | "fallback" | "urltest" | "block" | "dns" => {}
+            "direct" => {
+                outbound["bind_interface"] = "lo".into();
+                outbound["connect_timeout"] = DIRECT_CONNECT.into();
+            }
+            _ => {
+                outbound["server"] = "127.0.0.1".into();
+                outbound["server_port"] = closed.into();
+            }
         }
     }
 }
