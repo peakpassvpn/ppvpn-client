@@ -16,12 +16,14 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/peakpassvpn/ppvpn-core"
 
 [workspace.dependencies]
-# sail by commit (#214: regressions run on named commits, no release needed).
-# Moving it is a commit of its own that also takes sail's [patch.crates-io]
-# below as of that commit (CI runs sail's tools/embed-patch-check.py).
+# sail by release: only a tagged release is taken, pinned by its tag's commit
+# (v0.17.0 here), which a moved tag cannot change. Fixes are tried on sail's
+# master first; the pin moves when a release carries them. Moving it is a
+# commit of its own that also takes sail's [patch.crates-io] below as of that
+# commit (CI runs sail's tools/embed-patch-check.py).
 # auto-reload is not among sail's defaults and must stay on: without it the
 # runtime does not follow certificate files that change on disk.
-sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "31e23a4e784a8582b7d7fd95db62692516cbfcbd", features = ["auto-reload"] }
+sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "ba3480d40766fa76431c5537553d50695209afdb", features = ["auto-reload"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 idna = "1"
