@@ -93,6 +93,7 @@ jobs:
   prepare:
     name: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       channel: ${{ steps.resolve.outputs.channel }}
       version: ${{ steps.resolve.outputs.version }}
@@ -207,6 +208,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && (inputs.channel == 'stable' || inputs.channel == 'site')
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: desktop-release-approval
     steps:
       - run: echo "approved"
@@ -839,6 +841,7 @@ jobs:
     if: inputs.channel == 'stable' && needs.prepare.outputs.publish == 'true'
     needs: [prepare, approve, linux, linux-rpm-smoke, linux-repo, windows, macos]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # For the package repositories' signing key, which signs the rpms here.
     environment: desktop-release-stable
     env:
@@ -932,6 +935,7 @@ jobs:
     # repository's members can see.
     needs: [prepare, approve, release-files]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: desktop-release-stable
     permissions:
       contents: write
@@ -1157,6 +1161,7 @@ jobs:
     if: ${{ !cancelled() && !inputs.rehearsal && needs.pages.result == 'success' }}
     needs: pages
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       pages: write
       id-token: write
