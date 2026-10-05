@@ -7,9 +7,9 @@ Windows 与 macOS 的做法相同：特权 service 以 `--tun` 拉起 core，由
 
 DNS 分两层，归属不同：
 
-- **系统层面的 DNS 设置归 service**：让系统 DNS 指向 TUN 通告的地址，并在退出和异常后清理残留
-  设置。macOS 上 service 用 `scutil` 覆盖；Windows 上 TUN 网卡的 DNS 由 core（sing-tun）设置，
-  service 不另行改写（见下）。
+- **系统层面的 DNS 设置**：让系统 DNS 指向 TUN 通告的地址。macOS 上由 core（Sail 0.17.0 起）在
+  打开 utun 时写一个 supplemental 解析器、停止时撤掉；Windows 上 TUN 网卡的 DNS 由 core 设置。
+  两个平台上 service 都不另行改写（见下）。
 - **TUN 内部的 DNS 归 core**：劫持隧道内的 DNS 查询、按 Profile 解析，以及本地 DNS（`dns-local`）
   读取物理网卡的解析器。
 
@@ -35,8 +35,10 @@ service 不另行改写；TUN 内部的 DNS 由 core 负责（见上）。Profil
 
 macOS 与 Windows 相同，由特权 service 以 `--tun` 拉起 core。service 以 LaunchDaemon 形式运行，
 启动用两个 release 文件 `ppvpn-core-darwin-arm64` 与 `ppvpn-core-darwin-amd64` 经 `lipo` 合成的
-universal 可执行文件；core 打开 utun 设备作为 TUN。系统 DNS 由 service 用 `scutil` 覆盖为 TUN 通告的
-DNS 地址，service 在退出和异常后负责清理残留设置；隧道内的 DNS 劫持与解析由 core 负责。
+universal 可执行文件；core 打开 utun 设备作为 TUN。系统 DNS 由 core（Sail）在打开 utun 时指向 TUN 通告的
+DNS 地址（`State:/Network/Service/<id>/DNS`，supplemental，匹配全部域名），停止时撤掉，进程被强杀时
+由系统删除；隧道内的 DNS 劫持与解析也由 core 负责。service 不写系统 DNS，只在启动和卸载时删除旧版本
+service 用 `scutil` 写下、可能残留的 `State:/Network/Service/com.peakpassvpn.ppvpn.tun/DNS`。
 Desktop 不使用 Network Extension 或 System Extension（没有 Developer ID 与 NE entitlement）。
 
 Desktop 仓库里的 XCFramework 是 `PPVPNClientFFI`（Desktop 自己 crate 的 UniFFI 绑定），不是

@@ -159,10 +159,11 @@ TUN 只看到 IP 包：不嗅探就拿不到域名，Profile 的域名规则全�
   `host_ipv6_route`、`policy`，以及 `switch=kernel`）。重建和 apply 共用同一把锁，期间如果有
   apply，以 apply 的探测结果为准。主机运行中把 IPv6 整个关掉会改变 TUN，这种情况留到下一次 apply
   或 start 处理。
-- **macOS 边界**：Darwin 上 `strict_route` 不起作用，sing-tun 也不改系统 DNS。发往全球单播 IPv6
+- **macOS 边界**：Darwin 上 `strict_route` 不起作用。发往全球单播 IPv6
   解析器（如运营商 `240e:…`）的查询会进入 TUN 被劫持；但在链路上的解析器（`fe80::…%en0`、路由器
-  通告的本地 ULA、局域网 IPv4 网关）命中更具体的直连路由，不进入 TUN。macOS 宿主应把系统 DNS
-  指向 `10.60.159.90`（可再加 `fde2:ec40:9312:c7fd::2`），用 `scutil --dns` 确认首个解析器。
+  通告的本地 ULA、局域网 IPv4 网关）命中更具体的直连路由，不进入 TUN。因此 Sail（0.17.0 起）在打开
+  utun 时把系统 DNS 指向 TUN 通告的地址（supplemental 解析器，匹配全部域名），停止时撤掉；宿主不再
+  另行改写，用 `scutil --dns` 确认首个解析器是它，且只有一份。
 
 移动端的 TUN 配置（不启用 `auto_route`，由宿主建隧道）保持仅 IPv4 地址，生成同样的嗅探、DNS 与
 拒绝规则；宿主应把隧道 DNS 设为隧道内地址（如 `10.60.159.90`），让查询进入 TUN 被劫持。

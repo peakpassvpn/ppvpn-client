@@ -90,9 +90,9 @@ fn main() -> Result<(), anyhow::Error> {
     let _ = Command::new("launchctl")
         .args(["bootout", "system", LAUNCHD_PLIST_PATH])
         .status();
-    // The service removes its system DNS override when it stops; one left
-    // by a service that was killed instead goes here.
-    macdns::TunDns::default().clean_leftover("uninstall");
+    // The system DNS override an older service version left behind (the
+    // service also removes it when it starts).
+    macdns::remove_leftover("uninstall");
 
     let _ = fs::remove_file(LAUNCHD_PLIST_PATH);
     if Path::new(BUNDLE_PATH).exists() {
