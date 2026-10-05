@@ -79,7 +79,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/failover` | 0 | 0 | 1 | 5 |
 | `api` | 0 | 0 | 2 | 5 |
 | `internal/privateacl` | 0 | 0 | 1 | 6 |
-| `internal/proxyinbound` | 1 | 0 | 2 | 2 |
+| `internal/proxyinbound` | 0 | 0 | 2 | 2 |
 | `routing` | 0 | 0 | 0 | 6 |
 | `cmd/ppvpn-core` | 0 | 0 | 1 | 3 |
 | `internal/domaindest` | 0 | 0 | 0 | 2 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 2 | 0 | 71 | 66 |
+| 合计 | 1 | 0 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）、切换时关掉被删节点的连接（约 1.25 人日）、校验错误的脱敏（约 0.5 人日）、规则匹配项的映射与本地代理规则优先（约 0.25 人日）、入口故障转移形态的守卫分支（约 0.5 人日）、忽略未知字段（约 0.25 人日）、借用的 REALITY SNI（约 0.25 人日）、规则集主机钉住的各变体（约 0.25 人日）、流量方向（约 0.5 人日）、HTTP 认证失败回 407 后正常关闭（约 0.5 人日）、共享本地代理按用户名选节点（约 1 人日）、已有连接不受 select-node 与 routing_mode 切换影响（约 0.5 人日）、系统代理计入流量与关闭后监听消失（约 0.5 人日）、TUN 下命中 direct 规则集的域名直连（约 0.75 人日）、反向映射跨 reload 保留（约 0.5 人日）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）、切换时关掉被删节点的连接（约 1.25 人日）、校验错误的脱敏（约 0.5 人日）、规则匹配项的映射与本地代理规则优先（约 0.25 人日）、入口故障转移形态的守卫分支（约 0.5 人日）、忽略未知字段（约 0.25 人日）、借用的 REALITY SNI（约 0.25 人日）、规则集主机钉住的各变体（约 0.25 人日）、流量方向（约 0.5 人日）、HTTP 认证失败回 407 后正常关闭（约 0.5 人日）、共享本地代理按用户名选节点（约 1 人日）、已有连接不受 select-node 与 routing_mode 切换影响（约 0.5 人日）、系统代理计入流量与关闭后监听消失（约 0.5 人日）、TUN 下命中 direct 规则集的域名直连（约 0.75 人日）、反向映射跨 reload 保留（约 0.5 人日）、SOCKS5 认证失败读完再关（约 0.75 人日，Sail 0.17.0）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -254,7 +254,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 
 dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 Sail 的 `local`（2026-10-03 决定）。Sail `local` 的缺口作为 Sail 的通用改进继续推进，**不阻塞切换**：忽略 macOS 手动 DNS、丢弃链路本地 DNS、每个服务器没有独立超时、不处理 TC、不过滤回环、没有默认网卡时不立即失败，以及 split DNS 和日志行。翻译层把 dns-local 渲染成指向监听的 tcp 服务器（`translate::tests::dns_local_listener_is_asked_over_tcp`）。下表的 Rust 用例指 `crate::localdns`。
 
-macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一），实际名字从 `tun_names()` 读。选好的名字在打开前被抢走时，Sail 换名重试，最多 3 个，仍失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true；Linux、Windows 的名字是配置的，被占用时 retryable=false，见 host-integration 第 7 节）。排除隧道网段由 dns-local 自己的隧道地址过滤保证。
+macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一），实际名字从 `tun_names()` 读。选好的名字在打开前被抢走时，Sail 换名重试，最多 3 个，仍失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true；Linux、Windows 的名字是配置的，被占用时 retryable=false，见 host-integration 第 7 节）。排除隧道网段由 dns-local 自己的隧道地址过滤保证。macOS 的系统 DNS 自 Sail 0.17.0（093041df）起由 Sail 负责：utun 打开时写一个临时的 supplemental 键，teardown 时先于路由撤掉；宿主自己开 TUN 时 Sail 不设（host-integration 第 2、9 节）。
 
 已知行为（macOS，Sail `98a5cbf5`，见 Sail 的 routing 文档）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 会替换它并打一行警告；停止时**不恢复**被替换的路由。
 
@@ -424,9 +424,9 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `internal/privateacl` `TestTrusteesDependOnProcessUser` | Trustees depend on process user |  | todo | 【D】按进程用户（普通用户/SYSTEM）选 trustee 是 Go 的 Windows ACL 机制，Rust 不设 ACL，不适用。 |
 | `internal/privateacl` `TestUnixModes` | Unix modes |  | todo | 【C】Unix 0700 目录/0600 文件已由 state_dir.rs one_holder_at_a_time（断言 0700）和 localproxy::tests::weak_state_permissions_renew_the_secret（0644 视为不安全并以 0600 重写）覆盖，可补登记或后补。 |
 | `internal/proxyinbound` `TestBasicProxyAuth` | Basic proxy auth |  | todo | 【D】Proxy-Authorization Basic 解析由 sail http inbound 实现并测试（protocol/http/inbound/stream.rs basic_credentials_name_their_user）。 |
-| `internal/proxyinbound` `TestHTTPAuthFailureReturns407ThenClosesGracefully` | covers CONNECT and plain requests without auth, with a wrong password and with an unknown user: each reads back a complete 407 challenge followed by a clean EOF, never a … | `ppvpn-core` `runtime::sail::tests::a_refused_http_request_reads_a_407_then_a_clean_close`、`ppvpn-core` `runtime::sail::tests::a_refused_http_request_with_a_body_reads_a_407_then_a_clean_close`（ignore） | done | 真 Sail 的 mixed 入站：CONNECT 无凭据、错误密码、未知用户、非 Basic、CONNECT 后同一次写入紧跟 ClientHello，以及 GET 无凭据，都先收到完整的 407（Proxy-Authenticate Basic、Content-Length 0、Connection close）再正常 EOF，不是 RST。realm 不断言：翻译没设 `realm`，Sail 回 `sail`，Go 是 `ppvpn`。带 4096 字节请求体的 POST 一例标 ignore：Sail 只读请求头就关连接，请求体未读，内核会发 RST（按源码推断，待 CI 确认） |
+| `internal/proxyinbound` `TestHTTPAuthFailureReturns407ThenClosesGracefully` | covers CONNECT and plain requests without auth, with a wrong password and with an unknown user: each reads back a complete 407 challenge followed by a clean EOF, never a … | `ppvpn-core` `runtime::sail::tests::a_refused_http_request_reads_a_407_then_a_clean_close`、`ppvpn-core` `runtime::sail::tests::a_refused_http_request_with_a_body_reads_a_407_then_a_clean_close`（ignore） | done | 真 Sail 的 mixed 入站：CONNECT 无凭据、错误密码、未知用户、非 Basic、CONNECT 后同一次写入紧跟 ClientHello，以及 GET 无凭据，都先收到完整的 407（Proxy-Authenticate Basic、Content-Length 0、Connection close）再正常 EOF，不是 RST。realm 不断言：翻译没设 `realm`，Sail 回 `sail`，Go 是 `ppvpn`。带 4096 字节请求体的 POST 也一样：Sail 0.17.0（e97f1673）起拒绝后先关写端、再读掉剩余数据（最多 64 KiB 或 2 s），关闭是 FIN 不是 RST；旧 Sail 上 5 次全被重置 |
 | `internal/proxyinbound` `TestPeekRequestHeadDoesNotConsume` | Peek request head does not consume |  | todo | 【D】peekRequestHead 是 Go 自研入站的实现细节，sail http inbound 用 read_head 自行处理请求头，不适用。 |
-| `internal/proxyinbound` `TestSOCKS5AuthFailureRepliesThenClosesGracefully` | covers a wrong password and an unknown user: the client reads the complete RFC 1929 failure reply and then a clean EOF, never a reset, even with a CONNECT request … |  | todo | 【A，0.75 人日】sail socks/inbound/stream.rs 认证失败写 [1,1] 后直接返回，不读掉客户端随认证一起发来的 CONNECT，带未读数据关闭会 RST（Windows 上回复被丢弃，sail 在 SOCKS4 拒绝处已处理同一问题），需在 sail 补“读完再关”并加测试。 |
+| `internal/proxyinbound` `TestSOCKS5AuthFailureRepliesThenClosesGracefully` | covers a wrong password and an unknown user: the client reads the complete RFC 1929 failure reply and then a clean EOF, never a reset, even with a CONNECT request … | `ppvpn-core` `runtime::sail::tests::a_refused_socks5_user_reads_the_failure_then_a_clean_close` | done | 错误密码、未知用户，认证后同一次写入紧跟 CONNECT 和 ClientHello：先收到认证失败的回复，再正常 EOF。Sail 0.17.0（e97f1673）修好“读完再关”，旧 Sail 上 5 次全被重置 |
 | `internal/proxyinbound` `TestSetUsersReplacesTheUserList` | SetUsers swaps the accepted users atomically: a removed user is refused, an added one accepted, and an empty list is rejected without changing anything. |  | todo | 【C】用户整表替换由 Runtime::replace_inbound_users 实现，runtime/sail_tests.rs runs_sail_through_the_local_proxy 已测旧用户被拒、新用户可用；空表在翻译中不可能出现（总有 routed 用户），可后补。 |
 | `internal/proxyinbound` `TestVerifierRequiresKnownUserAndExactSecret` | Verifier requires known user and exact secret |  | todo | 【C】sail socks/http inbound 按用户名查表并 constant_time_eq 比对密码（socks/inbound/stream.rs another_users_password_is_refused 等），Rust runs_sail_through_the_local_proxy 已断言错误密码被拒，可后补完整表。 |
 | `internal/redact` `TestJSON` | Json |  | todo | 【C】Rust 不把 Profile/配置 JSON 写进日志，等价覆盖为 engine::logs_tests::no_line_holds_a_secret（节点密码等不出现在任何日志行），无需 JSON 脱敏器。 |
