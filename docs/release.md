@@ -12,6 +12,7 @@
   桌面客户端和特权服务用同一个版本，写在根 `Cargo.toml` 的 `[workspace.package] version`，各 crate 用
   `version.workspace = true` 继承；改版本只改这一处，`Cargo.lock` 随之更新。桌面安装包的版本仍来自
   tag `desktop-vX.Y.Z`，发行时应与这里一致（目前没有自动检查）。
+- 每个版本的发行说明在 `docs/releases/<版本>.md`，例如 [0.6.0](releases/0.6.0.md)。
 
 ## CI
 
