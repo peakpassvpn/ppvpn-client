@@ -883,3 +883,44 @@ async fn rules_may_name_an_inbound_that_does_not_run() {
     );
     runtime.stop().await.unwrap();
 }
+
+/// What sail logs of a connection at the level the Engine gives it: at
+/// `warn` (the Engine's info, #214) nothing of where it went; at `info`
+/// its `handled … dst=` line, the control that the check below can see one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_destination_in_sail_lines_at_warn() {
+    let echo = echo().await;
+    for (level, logged) in [("info", true), ("warn", false)] {
+        let port = free_port();
+        let runtime = SailRuntime::new(options(&format!("log-{level}"))).unwrap();
+        let mut logs = runtime.logs();
+        let mut config: serde_json::Value =
+            serde_json::from_str(&config(port, &[], false)).unwrap();
+        config["log"]["level"] = level.into();
+        runtime.start(&config.to_string()).await.unwrap();
+        let mut s = socks_open(port, echo).await.expect("through the proxy");
+        round_trip(&mut s, b"where to").await;
+        drop(s);
+
+        let destination = echo.to_string();
+        // The first line naming it, if one comes within WAIT.
+        let seen = tokio::time::timeout(WAIT, async {
+            while let Some(line) = logs.recv().await {
+                if line.contains(&destination) {
+                    return Some(line);
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten();
+        if logged {
+            let line = seen.expect("info: the connection's line");
+            assert!(line.contains("handled"), "{line}");
+        } else {
+            assert_eq!(seen, None, "warn");
+        }
+        runtime.stop().await.unwrap();
+    }
+}
