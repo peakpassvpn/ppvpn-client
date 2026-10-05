@@ -33,10 +33,9 @@ dotnet build -c Debug -p:Platform=x64
 #    + runtimes\win-x64\native\ppvpn_client.dll (copied from PPVPN.Client)
 ```
 
-The build must stay warning-free. Standard mode (local proxies, speed tests) needs
-`ppvpn-core.exe` next to `ppvpn.exe`; a dev build does not copy it, so copy
-`vendor\ppvpn-core\<CURRENT>\build\ppvpn-core-windows-amd64.exe` there as
-`ppvpn-core.exe` when you need it.
+The build must stay warning-free. Standard mode (local proxies, speed tests)
+runs the engine inside `ppvpn_client.dll`; nothing else is needed next to
+`ppvpn.exe`.
 
 If the XAML compiler fails with `WMC9999` saying it cannot find
 `Microsoft.UI.Xaml.Markup.Compiler.ErrorMessages.resources`, there is a real
@@ -103,7 +102,6 @@ so it never overwrites (or reads) a real session.
 | `ApiBase` | Settings → Developer → API endpoint (`--dev`) if set (restart to apply), else the build property `PPVPN_API_BASE` |
 | `DataDir` | `%LOCALAPPDATA%\PPVPN` (also holds the app's `app-settings.json`; `client-settings.json` there is the crate's) |
 | `LogDir` | `%LOCALAPPDATA%\PPVPN\logs`: the crate's `ppvpn-client.<date>.log` and `ppvpn-core.<date>.log`, the app's `ppvpn-windows.<date>.log` |
-| `CoreBinDir` | the app directory, where the installer puts `ppvpn-core.exe` |
 | `Platform` | `windows` |
 | `AppVersion` | `VersionPrefix` from `Directory.Build.props` |
 
@@ -263,8 +261,7 @@ next to `ppvpn.exe`, and loads the same `runtimes\win-x64\native\ppvpn_client.dl
   `ppvpn_service`, the `SERVICE_NAME` in `service/src/install.rs`.
 - Install and uninstall run `ppvpn-service-install.exe` or
   `ppvpn-service-uninstall.exe` next to `ppvpn.exe` with `Verb=runas`
-  (the names `installer/ppvpn.nsi` ships). The Tauri build's
-  `-x86_64-pc-windows-msvc` names are also accepted. `ERROR_CANCELLED` (1223) becomes `PlatformException.Cancelled`,
+  (the names `installer/ppvpn.nsi` ships). `ERROR_CANCELLED` (1223) becomes `PlatformException.Cancelled`,
   and a non-zero exit code becomes `Failed`.
 
 Also real: launch at sign-in (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PPVPN`
@@ -286,10 +283,9 @@ before exiting.
 Other clients are disconnected at the handshake (`ServiceClientRejected`).
 That is why `AssemblyName` is `ppvpn`, and why the installer must put
 `ppvpn.exe` and its self-contained runtime in the same directory as
-`ppvpn-service.exe`, `ppvpn-core.exe` and the install/uninstall helpers. The
-crate talks to the service over `\\.\pipe\ppvpn-service` and to the
-standard-mode core over `\\.\pipe\ppvpn-core-user-<32hex>`. The app itself
-does not touch either pipe.
+`ppvpn-service.exe`, `wintun.dll` and the install/uninstall helpers. The
+crate talks to the service over `\\.\pipe\ppvpn-service`; the app itself
+does not touch the pipe.
 
 ## Packaging (NSIS installer)
 
@@ -299,7 +295,7 @@ the .NET 8 SDK, Rust (`x86_64-pc-windows-msvc`), MSVC and NSIS 3.08+
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File apps\windows\scripts\package.ps1 `
-  [-CoreExe <ppvpn-core-windows-amd64.exe> [-CoreSha256 <hex>]] [-BuildNumber N] `
+  [-BuildNumber N] `
   [-ApiBase <url>] [-FeedUrl <appcast>] [-PublicKey <base64>] [-UpdateKeyFile <private key>] `
   [-Version x.y.z] [-Channel dev|stable]
 ```
@@ -312,8 +308,8 @@ and build number). `-Channel` is recorded in the release metadata.
    (`dotnet msbuild -getProperty`).
 2. Builds `ppvpn-service`, `ppvpn-service-install` and `ppvpn-service-uninstall`
    from `service/` (`cargo build --release --target x86_64-pc-windows-msvc`).
-   Unsigned builds set `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=1`, as the Tauri CI
-   did; signed builds need `PPVPN_WINDOWS_PUBLISHER_SHA256`.
+   Unsigned builds set `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=1`; signed builds
+   need `PPVPN_WINDOWS_PUBLISHER_SHA256`.
 3. Builds the crate and its bindings (`crates/ppvpn-client/scripts/build-dotnet.ps1 -Release`),
    then `dotnet publish` (Release, win-x64, self-contained) into `staging/windows-native/app`
    with `-p:PPVPN_API_BASE` from `-ApiBase` (else the environment, else the Release
@@ -321,18 +317,17 @@ and build number). `-Channel` is recorded in the release metadata.
    it from; other `runtimes\<rid>` folders are pruned. Then the push agent's NativeAOT
    `dotnet publish`; only `ppvpn-push-agent.exe` is staged (it must have been built
    against the same `ppvpn_client.dll`, which the script checks).
-4. Copies `ppvpn-core.exe`: by default the vendored
-   `vendor/ppvpn-core/<CURRENT>/build/ppvpn-core-windows-amd64.exe`, checked
-   against that release's `manifest.json`. With `-CoreExe`, the sha256 comes
-   from `-CoreSha256` or a `windows-SHA256SUMS` next to the file or in its parent.
-5. Optional Authenticode signing through `sign-file.ps1`: `WINDOWS_SIGN_COMMAND`
+   It also stages `wintun.dll` (the Wintun release sail pins, checked against
+   its sha256) beside the service, which runs the enhanced-mode engine in
+   process.
+4. Optional Authenticode signing through `sign-file.ps1`: `WINDOWS_SIGN_COMMAND`
    (with `%1`) or `WINDOWS_CERTIFICATE` (+ password, timestamp URL) for
    `scripts/sign-windows.ps1`. Nothing is signed when neither is set. makensis
    signs the installer and the uninstaller with `!finalize`/`!uninstfinalize`.
    `ppvpn_client.dll` and `ppvpn-push-agent.exe` are signed with the executables.
-6. Writes `install-files.txt` (what this version installs) and runs makensis:
+5. Writes `install-files.txt` (what this version installs) and runs makensis:
    `dist/windows/PPVPN-<version>-windows-x64-setup.exe` and `.sha256`.
-7. With an EdDSA private key (`-UpdateKeyFile`, `PPVPN_UPDATE_PRIVATE_KEY_FILE`
+6. With an EdDSA private key (`-UpdateKeyFile`, `PPVPN_UPDATE_PRIVATE_KEY_FILE`
    or the base64 key in `PPVPN_UPDATE_PRIVATE_KEY`), prints
    `sparkle:edSignature="…" length="…"` (and verifies it when the public key
    is known), then writes `dist/windows/release-meta-windows-x64.json`
@@ -346,27 +341,22 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
   directory must stay admin-write-only).
 - Everything in one directory: `ppvpn.exe` and its runtime, `WinSparkle.dll`,
   `runtimes\win-x64\native\ppvpn_client.dll`, `ppvpn-push-agent.exe`,
-  `ppvpn-core.exe`, `ppvpn-service.exe`, `ppvpn-service-install.exe`,
+  `ppvpn-service.exe`, `wintun.dll`, `ppvpn-service-install.exe`,
   `ppvpn-service-uninstall.exe`, `install-files.txt`, `uninstall.exe`. The
   helpers use the plain names; `ppvpn-service-install.exe` finds
-  `ppvpn-service.exe` next to itself, and the service starts `ppvpn-core.exe`
-  from its own directory. The service writes `ppvpn-service.log` and
+  `ppvpn-service.exe` next to itself, and the service loads `wintun.dll` from
+  its own directory. The service writes `ppvpn-service.log` and
   `ppvpn-core.log` to `%ProgramData%\PPVPN\logs` (5 MB per file, 3 files
   kept), which uninstalling or reinstalling the service leaves in place.
 - UI in Chinese or English from the Windows UI language (English is the fallback).
 - Install: asks a running `ppvpn.exe` to quit through the named event
   `Local\PPVPN.Desktop.Quit` (the app's normal quit path, backend Shutdown
-  included), waits up to 20 s, then kills what is left (other sessions, the old
-  Tauri app); asks the push agent to quit (`Local\PPVPN.PushAgent.Quit`), waits up to
+  included), waits up to 20 s, then kills what is left (other sessions); asks the push agent to quit (`Local\PPVPN.PushAgent.Quit`), waits up to
   10 s, then kills what is left, so `ppvpn_client.dll` is free; stops `ppvpn_service`; re-registers the service if it points at
-  another binary (the Tauri layout used `ppvpn-service-x86_64-pc-windows-msvc.exe`);
-  removes the files listed in the previous `install-files.txt` and the Tauri
-  sidecar names; copies the files; runs `ppvpn-service-install.exe` (a failure
+  another binary; removes the files listed in the previous `install-files.txt`; copies the files; runs `ppvpn-service-install.exe` (a failure
   shows a localized message and aborts with exit code 2); Start-menu shortcut,
   optional desktop shortcut (a page in the wizard; kept on upgrade;
-  `/DESKTOPSHORTCUT` in silent mode), both stamped with the AppUserModelID `PeakPass.PPVPN`; Apps & features entry (same key as the
-  Tauri build, so it replaces it). It registers no URL scheme and deletes the
-  `ppvpn://` handler the Tauri build left in HKLM.
+  `/DESKTOPSHORTCUT` in silent mode), both stamped with the AppUserModelID `PeakPass.PPVPN`; Apps & features entry. It registers no URL scheme.
 - The finish page's "Run PPVPN" and the relaunch after a silent upgrade start
   the app through Explorer, so it runs as the signed-in user, not elevated.
   A silent install relaunches the app only when it was running in this session.
@@ -376,7 +366,7 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
   files, shortcuts, the Apps & features entry, the launch-at-sign-in value
   `HKCU\…\Run\PPVPN` and the push agent's `HKCU\…\Run\PPVPNPushAgent`, the notification registration
   (`HKCU\Software\Classes\AppUserModelId\PeakPass.PPVPN` and the activator's
-  `HKCU\Software\Classes\CLSID\{FCD3C3FA-…}`) and old `ppvpn://` handlers. Per-user data is kept unless
+  `HKCU\Software\Classes\CLSID\{FCD3C3FA-…}`). Per-user data is kept unless
   "Also remove my sign-in, settings and logs" is ticked (or `/PURGE` with `/S`):
   then `%LOCALAPPDATA%\PPVPN`, the `PPVPN/desktop.credentials` credential (and the
   fake backend's `PPVPN/desktop.credentials.fake`),
@@ -386,20 +376,17 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
 
 ### CI
 
-`.github/workflows/desktop-native-windows.yml` (mirrors `macos-native.yml`)
-runs on pull requests and pushes to main/dev that touch the Windows app, the
-client crate, the service or the vendored core, on `workflow_dispatch`, and as
-a reusable workflow (`workflow_call`: `channel`, `api_base`, optional `version`
-and `build_number`; secret `SPARKLE_PRIVATE_KEY`; output `artifact`).
+Two workflows at the repository root (`desktop/docs/ci.md`):
 
-- `test`: `cargo test` for `crates/ppvpn-client`, its .NET bindings
+- `ci.yml`'s `windows` job, on every pull request: clippy and the platform
+  tests for `crates/ppvpn-client`, its .NET bindings
   (`build-dotnet.ps1 -Release`; `uniffi-bindgen-cs` is installed and cached),
   `dotnet test apps/shared/PPVPN.App.Core.Tests`, then a warning-free
   `dotnet build` of the app (`-warnaserror`; NuGet advisories NU1901/NU1902, low and
   moderate, stay warnings, `Directory.Build.props`), and a warning-free NativeAOT
   `dotnet publish` of the push agent.
-- `package`: `scripts/ci-build.ps1`, which verifies the vendored core with
-  `scripts/verify-vendored-core.mjs` and runs `package.ps1` with `-ApiBase <api_base>`
+- `release.yml`'s `windows` job, on every merge to main and in a release run:
+  `scripts/ci-build.ps1`, which runs `package.ps1` with `-ApiBase <api_base>`
   (the app's backend) and, for a channel build, the feed
   `<PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-windows-x64.xml`,
   the public key from `vars.PPVPN_SPARKLE_PUBLIC_KEY` and the private key from
@@ -408,8 +395,8 @@ and `build_number`; secret `SPARKLE_PRIVATE_KEY`; output `artifact`).
   without both keys. The API base defaults like macOS: pull requests use the
   repository variable `PPVPN_DEV_API_BASE`, everything else `https://www.peakpassvpn.com`.
   The build number defaults to the run number.
-- Uploads the artifact `desktop-native-windows-x64`: the setup exe and
-  `release-meta-windows-x64.json`. The caller's publish job puts them in R2.
+- Uploads the artifact `desktop-windows-x64`: the setup exe and
+  `release-meta-windows-x64.json`; a stable release run publishes it.
 - Authenticode stays off unless `WINDOWS_CERTIFICATE` (+ password secret) and
   `vars.WINDOWS_TIMESTAMP_URL` / `vars.PPVPN_WINDOWS_PUBLISHER_SHA256` are set.
 

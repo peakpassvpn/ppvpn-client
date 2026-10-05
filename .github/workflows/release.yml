@@ -1,223 +1,1363 @@
-name: Release
+name: release
 
-# Tier 2: the full gate. Runs on a vX.Y.Z tag (the release itself), on a
-# pull request that bumps version/version.go (the release PR, so a tag never
-# meets this gate for the first time) or changes this workflow, and by hand.
-# Full tests on Linux and Windows, then every platform's artifacts, assembled
-# into one set of release files. Only a tag publishes them as a GitHub Release.
+# What a merge to main and a release run, the repository's second workflow
+# (ci.yml tests pull requests).
+#
+# On every push to main (a merge):
+#   - the installers, without any secret: Windows (NSIS, unsigned), macOS
+#     (one DMG per architecture, ad-hoc signed) and Linux (deb and rpm), each
+#     with its release metadata, as workflow artifacts; the rpm installed
+#     under dnf, and the apt and dnf repositories built from the packages and
+#     installed from. Nothing is published.
+#   - the build caches ci.yml's jobs restore (pull requests only read
+#     caches), when the merge changed what they are keyed on (Cargo.toml,
+#     Cargo.lock, the toolchain, the shared actions; tools/ci-changes.sh
+#     `deps`): one job per ci.yml cache key.
+#
+# By hand (workflow_dispatch), the release itself, with one version and one
+# build number for the three platforms:
+#   stable: run on the tag desktop-vX.Y.Z, after the approval of the
+#           environment desktop-release-approval. The installers are built
+#           in desktop-release-stable (its signing secrets), checked as a
+#           whole, published as a GitHub Release with SHA256SUMS and build
+#           provenance, and the update site (channel pointer, feeds, apt/dnf
+#           repositories) is rebuilt from the releases and deployed to Pages.
+#   dev:    run on the branch main, in desktop-release-dev. Never published:
+#           no release, no tag; the installers stay workflow artifacts (a dev
+#           build carries the dev backend's address).
+#   site:   rebuild and deploy the update site from the published releases,
+#           as it is, after the same approval (it signs the repositories).
+#
+# A stable release is refused unless the repository variable
+# DESKTOP_STABLE_RELEASES is "enabled". Until then, and to try a change of
+# this workflow, there is the rehearsal: a stable run on main that does
+# everything a release does except what the public can see. It builds,
+# signs and checks the files, makes a draft release (no tag; only the
+# repository's members see a draft), and builds the update site as a
+# workflow artifact instead of deploying it. Build provenance is left out of
+# a rehearsal: an attestation is an entry in a public log.
+#
+# A desktop release is never the repository's "latest" release: that is
+# the Go core's (v0.5.21, its last; tags vX.Y.Z, which the desktop tags do
+# not match). The repository holds no secret itself; only the environments
+# do, and a job reads them only when it runs in one.
 
 on:
   push:
-    tags: ['v*']
-  pull_request:
-    paths:
-      - version/version.go
-      - .github/workflows/release.yml
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      channel:
+        description: dev or stable builds and (stable) publishes; site only rebuilds the update site
+        type: choice
+        options: [dev, stable, site]
+        required: true
+      version:
+        description: Version x.y.z (dev and stable; stable runs must be on the tag desktop-v<version>)
+        required: false
+      allow_downgrade:
+        description: stable only - publish even if not newer than the published release (a deliberate rollback)
+        type: boolean
+        default: false
+      rehearsal:
+        description: stable only - run the whole release without publishing anything (a draft release, no tag, no provenance, no deployment); on main
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# Merges build one at a time and a running build is never cancelled, so
+# every platform's installers finish (merges come faster than the macOS and
+# Windows builds); of the merges that wait, only the newest is built.
+# Releases run one at a time and are never cancelled either.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'release-main' || 'release-dispatch' }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  # The update site (feeds, apt/dnf repositories). A build for a channel
+  # updates from <site>/desktop/<channel>/appcast-<platform>.xml (macOS,
+  # Windows) and <site>/linux/<channel>/latest.json (Linux; builds without
+  # a channel poll stable's); the macOS and Windows builds without a
+  # channel have no feed.
+  PPVPN_UPDATE_SITE: ${{ vars.DESKTOP_SITE_BASE }}
+  # Public half of the update feeds' key; empty disables in-app updates.
+  PPVPN_SPARKLE_PUBLIC_KEY: ${{ vars.PPVPN_SPARKLE_PUBLIC_KEY }}
+
 jobs:
-  test:
+  prepare:
+    name: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      channel: ${{ steps.resolve.outputs.channel }}
+      version: ${{ steps.resolve.outputs.version }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+      environment: ${{ steps.resolve.outputs.environment }}
+      package: ${{ steps.resolve.outputs.package }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go vet ./...
-      - run: GOOS=windows go vet -tags with_utls,with_gvisor,with_dhcp ./...
-      - run: go test ./...
-      - run: go test -tags with_utls ./internal/... ./probe/...
-      - run: go test -tags with_utls,with_gvisor,with_dhcp ./cmd/... ./internal/... ./localproxy/...
-      - run: go test -race ./...
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+      - id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          REHEARSAL: ${{ inputs.rehearsal }}
+          STABLE_RELEASES: ${{ vars.DESKTOP_STABLE_RELEASES }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          # The last build number published before this workflow existed,
+          # so that the counter never goes back (it is the fourth field of
+          # the Windows file version, which updates compare).
+          BUILD_OFFSET: ${{ vars.DESKTOP_BUILD_OFFSET || '0' }}
+        run: |
+          set -eu
+          if ! printf '%s' "$BUILD_OFFSET" | grep -Eq '^[0-9]+$'; then
+            echo "the variable DESKTOP_BUILD_OFFSET must be a number" >&2
+            exit 1
+          fi
+          # One counter for every platform and channel: this workflow's run
+          # number over the offset. It must only ever grow, so no other
+          # workflow may publish.
+          build=$((BUILD_OFFSET + RUN_NUMBER))
+          if [ "$build" -gt 65535 ]; then
+            echo "build number $build exceeds 65535" >&2
+            exit 1
+          fi
+          version="" tag="" publish=false environment="" package=true
+          [ "$EVENT" = push ] && CHANNEL=none
+          case "$CHANNEL" in
+            none)
+              # A merge: test installers, no channel, the projects' version.
+              ;;
+            site)
+              package=false
+              ;;
+            dev|stable)
+              version=${VERSION#v}
+              if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo "version must be x.y.z, got '$VERSION'" >&2
+                exit 1
+              fi
+              environment="desktop-release-$CHANNEL"
+              ;;
+            *) echo "unknown channel $CHANNEL" >&2; exit 1 ;;
+          esac
+          if [ "$CHANNEL" != stable ] && [ "$REHEARSAL" = true ]; then
+            echo "a rehearsal is of the stable release" >&2
+            exit 1
+          fi
+          case "$CHANNEL" in
+            stable)
+              tag="desktop-v$version"
+              publish=true
+              if [ "$REHEARSAL" = true ]; then
+                # Nothing public comes of it, so no tag: the name is only
+                # what the draft release and the site's files carry.
+                if [ "$REF_TYPE" != branch ] || [ "$REF_NAME" != main ]; then
+                  echo "a rehearsal must run on the branch main (got $REF_TYPE $REF_NAME)" >&2
+                  exit 1
+                fi
+              else
+                if [ "$STABLE_RELEASES" != enabled ]; then
+                  echo "stable releases are not enabled (variable DESKTOP_STABLE_RELEASES). Use the rehearsal to try the release." >&2
+                  exit 1
+                fi
+                if [ "$REF_TYPE" != tag ] || [ "$REF_NAME" != "$tag" ]; then
+                  echo "stable releases must run on the tag $tag (got $REF_TYPE $REF_NAME)" >&2
+                  exit 1
+                fi
+              fi
+              ;;
+            dev)
+              # No tag and no release: tags are public too. A second guard
+              # beside the environment's own branch rule.
+              if [ "$REF_TYPE" != branch ] || [ "$REF_NAME" != main ]; then
+                echo "dev releases must run on the branch main (got $REF_TYPE $REF_NAME)" >&2
+                exit 1
+              fi
+              ;;
+          esac
+          {
+            echo "channel=$([ "$CHANNEL" = dev ] || [ "$CHANNEL" = stable ] && echo "$CHANNEL")"
+            echo "version=$version"
+            echo "build_number=$build"
+            echo "tag=$tag"
+            echo "publish=$publish"
+            echo "environment=$environment"
+            echo "package=$package"
+          } >>"$GITHUB_OUTPUT"
+          echo "$CHANNEL ${version:-(the projects version)} build $build, tag ${tag:-none}, publish: $publish" >>"$GITHUB_STEP_SUMMARY"
+          if [ "$REHEARSAL" = true ]; then
+            echo "**Rehearsal**: nothing is published. No tag, no provenance, a draft release, the site as an artifact." >>"$GITHUB_STEP_SUMMARY"
+          fi
 
-  test-windows:
-    # Windows-only code (e.g. *_windows.go) is compiled but never executed on
-    # Linux; run its tests natively.
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go test -tags with_utls,with_gvisor,with_dhcp ./internal/dnstransport/ ./internal/hostipv6/ ./internal/privateacl/ ./localproxy/... ./probe/... ./profile/...
-
-  windows-artifact:
+  # The one approval of a stable or site run, rehearsals included: the
+  # environment has the reviewers and no secret. Every job after it that
+  # reads the stable environment's secrets needs this one, so none of them
+  # runs unapproved. A merge and a dev run need no approval.
+  approve:
+    name: approve
+    if: github.event_name == 'workflow_dispatch' && (inputs.channel == 'stable' || inputs.channel == 'site')
+    needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: desktop-release-approval
+    steps:
+      - run: echo "approved"
+
+  # ---- The installers: on a merge without any secret; for dev and stable
+  # in the channel's environment (after the approval for stable), which
+  # holds the signing secrets and the backend address. Not for a site run.
+
+  # deb and rpm, x86_64, everything native linked against glibc 2.35 by
+  # building on Ubuntu 22.04. See desktop/apps/linux/scripts/build-package.sh.
+  linux:
+    name: linux
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: ubuntu-22.04
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 60
+    env:
+      PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      NFPM_VERSION: '2.47.0'
+      PPVPN_API_BASE: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
-          go-version-file: go.mod
-          cache: true
-      - run: make build-windows-artifact
-      # Properties > Details must show CoreVersion (version/version.go).
-      - name: Windows version resource matches CoreVersion
-        run: make verify-windows-version
+          toolchain: 1.98.1
+          targets: x86_64-unknown-linux-gnu
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install packaging tools
+        run: |
+          # NativeAOT (the push agent) links with clang against zlib.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+          curl -sSfL "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nfpm
+          cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        run: |
+          tools/release-features-check.sh -p ppvpn-client
+          tools/release-features-check.sh --manifest-path desktop/service/Cargo.toml
+      - name: Build packages
+        run: desktop/apps/linux/scripts/build-package.sh
+      # ppvpn-archive-keyring (deb) and ppvpn-release (rpm), which set the
+      # package repository up on a user's machine.
+      - name: Build repository setup packages
+        run: desktop/apps/linux/scripts/build-repo-packages.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ppvpn-core-windows-${{ github.sha }}
+          name: desktop-linux
+          if-no-files-found: error
+          # A release run's packages are not kept long: a stable build's are in the
+          # release, a dev build's are for testing. Other builds: the default.
+          retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
           path: |
-            build/ppvpn-core-windows-amd64.exe
-            build/ppvpn-core-windows-arm64.exe
-            build/windows-SHA256SUMS
+            desktop/dist/linux/*.deb
+            desktop/dist/linux/*.rpm
+            desktop/dist/linux/release-meta-linux-*.json
 
-  linux-artifact:
+  # Install and start the rpm under dnf (the deb is built, and so checked,
+  # on Ubuntu 22.04).
+  linux-rpm-smoke:
+    name: linux-rpm-smoke
+    needs: [prepare, linux]
     runs-on: ubuntu-latest
+    container: fedora:latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
-          cache: true
-      - run: make build-linux-artifact
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ppvpn-core-linux-${{ github.sha }}
-          path: |
-            build/ppvpn-core-linux-amd64
-            build/ppvpn-core-linux-arm64
-            build/linux-SHA256SUMS
-
-  apple-artifacts:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: make bootstrap-mobile
-      # The desktop app ships the CLI binary for its Mac's architecture, not the
-      # xcframework. Separate files, not a universal one, so Intel can be
-      # dropped on its own once Apple ends Intel support.
-      - run: make build-macos-cli-artifact build-macos-artifact build-ios-artifact
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ppvpn-core-apple-${{ github.sha }}
-          path: |
-            build/ppvpn-core-darwin-arm64
-            build/ppvpn-core-darwin-amd64
-            build/PPVPNCore-macos.xcframework.zip
-            build/PPVPNCore-ios.xcframework.zip
-            build/macos-cli-SHA256SUMS
-            build/macos-SHA256SUMS
-            build/ios-SHA256SUMS
-
-  android-artifact:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.0.0
-        with:
-          distribution: temurin
-          java-version: '17'
-      - run: make bootstrap-mobile
-      - run: make build-android-artifact
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ppvpn-core-android-${{ github.sha }}
-          path: |
-            build/ppvpn-core.aar
-            build/android-SHA256SUMS
-
-  release-files:
-    # Collects every platform's files into the flat set a release carries:
-    # the binaries, SHA256SUMS (sha256sum format, bare file names) and
-    # build-info.json. Runs on pull requests too, so the assembly is tested
-    # before a tag depends on it.
-    needs: [test, test-windows, windows-artifact, linux-artifact, apple-artifacts, android-artifact]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
+          sparse-checkout: desktop/apps/linux/scripts
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: ppvpn-core-*-${{ github.sha }}
-          path: artifacts
-      - name: Assemble
+          name: desktop-linux
+          path: dist
+      - name: Install the x64 rpm
         run: |
-          set -euo pipefail
-          mkdir release
-          # Two artifacts carrying the same file name would overwrite each other.
-          duplicates=$(find artifacts -type f ! -name '*SHA256SUMS' -exec basename {} \; | sort | uniq -d)
-          if [ -n "$duplicates" ]; then
-            echo "duplicate file names across artifacts: $duplicates" >&2
-            exit 1
-          fi
-          find artifacts -type f ! -name '*SHA256SUMS' -exec mv {} release/ \;
-          chmod +x release/ppvpn-core-linux-amd64
-          # Lab builds read dns-local's servers from a file (localdns_testsource);
-          # no released file may contain that source or have been built with the tag.
-          if grep -la ppvpn-localdns-testsource-enabled release/*; then
-            echo "release files above contain the localdns test source" >&2
-            exit 1
-          fi
-          for file in release/*; do
-            if go version -m "$file" 2>/dev/null | grep -Eq 'build[[:space:]]+-tags=(.*,)?localdns_testsource(,|$)'; then
-              echo "$file was built with localdns_testsource" >&2
-              exit 1
+          # The app only: ppvpn-release would enable the (production) repository.
+          dnf install -y ./dist/PPVPN-*-linux-x64.rpm xorg-x11-server-Xvfb dbus-daemon
+          rpm -q --scripts ppvpn
+      - name: Start it once
+        run: desktop/apps/linux/scripts/smoke-test.sh rpm
+      - name: Remove it
+        run: dnf remove -y ppvpn && test ! -e /usr/lib/ppvpn/ppvpn
+
+  # The apt and dnf repositories the site serves, built from these packages
+  # as from release assets and installed from with real apt and dnf. No
+  # secret: a key made here signs them. The site and the release downloads
+  # are served from the runner (desktop/scripts/ci/repo-selftest-server.py);
+  # a download answers 302, as a GitHub Release's does, and the rpm is only
+  # reachable that way.
+  linux-repo:
+    name: linux-repo
+    needs: [prepare, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      REPO_PORT: '18080'
+      REPO_URL: http://127.0.0.1:18080
+      # build-linux-repo.sh refuses bases that are not https, except for this test.
+      PKG_ALLOW_HTTP: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            desktop/scripts/ci
+            desktop/apps/linux/packaging
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-linux
+          path: dist
+      - name: Install repository tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends apt-utils createrepo-c rpm gpgv jq
+      - name: Make a throwaway signing key
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/selftest-gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          cat >"$GNUPGHOME/key.conf" <<'EOF'
+          %no-protection
+          Key-Type: RSA
+          Key-Length: 4096
+          Key-Usage: sign
+          Name-Real: PPVPN repository self-test
+          Name-Email: selftest@example.com
+          Expire-Date: 0
+          %commit
+          EOF
+          gpg --batch --quiet --generate-key "$GNUPGHOME/key.conf"
+          fingerprint="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10; exit}')"
+          [[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]]
+          gpg --batch --armor --export-secret-keys "$fingerprint" >"$GNUPGHOME/secret.asc"
+          # Worth nothing, but every later step would print it with its environment.
+          while IFS= read -r line; do
+            if [ "${#line}" -ge 16 ] && [[ "$line" != -----* ]]; then echo "::add-mask::$line"; fi
+          done <"$GNUPGHOME/secret.asc"
+          {
+            echo "PKG_GPG_FINGERPRINT=$fingerprint"
+            echo "PKG_GPG_PRIVATE_KEY<<PPVPN_SELFTEST_KEY_END"
+            cat "$GNUPGHOME/secret.asc"
+            echo "PPVPN_SELFTEST_KEY_END"
+          } >>"$GITHUB_ENV"
+          gpgconf --kill all
+          rm -rf "$GNUPGHOME"
+      - name: Lay the packages out as releases and sign the rpms
+        run: |
+          T="$RUNNER_TEMP/linux-repo"
+          deb_meta=dist/release-meta-linux-x64-deb.json
+          rpm_meta=dist/release-meta-linux-x64-rpm.json
+          version="$(jq -er .version "$deb_meta")"
+          build="$(jq -er .build "$deb_meta")"
+          stable_tag="desktop-v$version"
+          dev_tag="desktop-v$version-dev.${build##*.}"
+          stable="$T/releases/stable/$stable_tag"
+          dev="$T/releases/dev/$dev_tag"
+          mkdir -p "$stable" "$T/releases/dev" "$T/assets" "$T/site/desktop"
+          cp dist/*.deb dist/*.rpm dist/release-meta-linux-*.json "$stable/"
+          # A pull request's build records no channel, and a release's records
+          # its own: in this copy only, the packages are called a stable
+          # release, and below a dev one.
+          channel() {
+            for meta in "$2"/release-meta-linux-x64-deb.json "$2"/release-meta-linux-x64-rpm.json; do
+              jq --arg channel "$1" '.channel = $channel' "$meta" >"$meta.part"
+              mv "$meta.part" "$meta"
+            done
+          }
+          channel stable "$stable"
+
+          rpm_file="$(jq -er .file "$rpm_meta")"
+          unsigned="$(sha256sum "$stable/$rpm_file" | cut -d' ' -f1)"
+          desktop/scripts/ci/sign-linux-rpms.sh "$stable"
+          signed="$(sha256sum "$stable/$rpm_file" | cut -d' ' -f1)"
+          test "$signed" != "$unsigned"
+          test "$(jq -er .sha256 "$stable/release-meta-linux-x64-rpm.json")" = "$signed"
+          test "$(jq -er .length "$stable/release-meta-linux-x64-rpm.json")" = "$(wc -c <"$stable/$rpm_file" | tr -d ' ')"
+          test "$(jq -er .channel "$stable/release-meta-linux-x64-rpm.json")" = stable
+          # A second run leaves a signed release as it is.
+          desktop/scripts/ci/sign-linux-rpms.sh "$stable"
+          test "$(sha256sum "$stable/$rpm_file" | cut -d' ' -f1)" = "$signed"
+          # Another key is refused an rpm that is already signed, and leaves it as it is.
+          (
+            export GNUPGHOME="$RUNNER_TEMP/other-gnupg"
+            mkdir -m 700 "$GNUPGHOME"
+            gpg --batch --quiet --passphrase '' --quick-generate-key \
+              'PPVPN repository self-test (another key) <other@example.com>' rsa2048 sign never
+            other="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10; exit}')"
+            PKG_GPG_PRIVATE_KEY="$(gpg --batch --armor --export-secret-keys "$other")"
+            gpgconf --kill all
+            rm -rf "$GNUPGHOME"
+            unset GNUPGHOME
+            export PKG_GPG_PRIVATE_KEY PKG_GPG_FINGERPRINT="$other"
+            if desktop/scripts/ci/sign-linux-rpms.sh "$stable" 2>"$T/refusal"; then
+              echo "an rpm signed by another key was signed again" >&2; exit 1
             fi
-          done
-          core_version=$(release/ppvpn-core-linux-amd64 version | jq -er .core_version)
-          # A tag must name the version the binaries report.
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$core_version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match core_version $core_version" >&2
-            exit 1
+            cat "$T/refusal"
+            grep -q 'already signed by another key' "$T/refusal"
+          )
+          test "$(sha256sum "$stable/$rpm_file" | cut -d' ' -f1)" = "$signed"
+
+          # The same packages as a dev release.
+          cp -R "$stable" "$dev"
+          channel dev "$dev"
+          ln -s "$stable" "$T/assets/$stable_tag"
+          ln -s "$dev" "$T/assets/$dev_tag"
+          # Another part of the site, which the repositories' build must leave alone.
+          echo other >"$T/site/desktop/other"
+          {
+            echo "T=$T"
+            echo "STABLE_TAG=$stable_tag"
+            echo "DEV_TAG=$dev_tag"
+            echo "RPM_FILE=$rpm_file"
+          } >>"$GITHUB_ENV"
+      - name: Build both channels into one site
+        run: |
+          build() {   # channel, releases, out
+            desktop/scripts/ci/build-linux-repo.sh --channel "$1" --releases "$2" \
+              --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$3" --keep 5
+          }
+          # Refusals write nothing: an http base without the test switch, and
+          # releases of another channel.
+          if env -u PKG_ALLOW_HTTP desktop/scripts/ci/build-linux-repo.sh --channel stable \
+               --releases "$T/releases/stable" --download-base "$REPO_URL/download" \
+               --site-base "$REPO_URL" --out "$T/refused"; then
+            echo "an http base was accepted" >&2; exit 1
           fi
-          go_version=$(go version release/ppvpn-core-linux-amd64 | awk '{print $NF}')
-          desktop_tags=$(go version -m release/ppvpn-core-linux-amd64 | sed -n 's/.*-tags=//p')
-          mobile_tags=$(sed -n 's/^GO_TAGS ?= //p' Makefile)
-          for value in "$go_version" "$desktop_tags" "$mobile_tags"; do
-            [ -n "$value" ] || { echo "build-info.json would have an empty field" >&2; exit 1; }
+          if build dev "$T/releases/stable" "$T/refused"; then
+            echo "stable releases were accepted as dev" >&2; exit 1
+          fi
+          test ! -e "$T/refused"
+
+          stable_files() {
+            (cd "$T/site" && find linux/apt/dists/stable linux/apt/pool linux/rpm/stable linux/stable \
+              -type f -exec sha256sum {} + | sort -k2)
+          }
+          build stable "$T/releases/stable" "$T/site"
+          stable_files >"$T/stable.before"
+          test -s "$T/stable.before"
+          build dev "$T/releases/dev" "$T/site"
+          stable_files >"$T/stable.after"
+          diff -u "$T/stable.before" "$T/stable.after"
+
+          cd "$T/site"
+          test "$(cat desktop/other)" = other
+          deb="$(ls linux/apt/pool/main/p/ppvpn/)"
+          test "$(echo "$deb" | wc -l)" = 1    # the two channels share one pool file
+          for channel in stable dev; do
+            for file in InRelease Release Release.gpg main/binary-amd64/Packages \
+                        main/binary-amd64/Packages.gz main/binary-amd64/Packages.xz; do
+              test -s "linux/apt/dists/$channel/$file"
+            done
+            test -d "linux/apt/dists/$channel/main/binary-amd64/by-hash/SHA256"
+            test -d "linux/apt/dists/$channel/main/binary-amd64/by-hash/SHA512"
+            grep -qxF "Filename: pool/main/p/ppvpn/$deb" "linux/apt/dists/$channel/main/binary-amd64/Packages"
+            test -s "linux/rpm/$channel/x86_64/repodata/repomd.xml"
+            test -s "linux/rpm/$channel/x86_64/repodata/repomd.xml.asc"
+            test -z "$(find "linux/rpm/$channel" -name '*.rpm')"    # referenced, not hosted
+            jq -e --arg channel "$channel" '.schema == 1 and .channel == $channel' "linux/$channel/latest.json"
           done
-          jq -n --arg tag "$GITHUB_REF_NAME" --arg ref_type "$GITHUB_REF_TYPE" --arg commit "$GITHUB_SHA" \
-            --arg core_version "$core_version" --arg go_version "$go_version" \
-            --arg desktop_tags "$desktop_tags" --arg mobile_tags "$mobile_tags" \
-            '{tag: (if $ref_type == "tag" then $tag else null end), commit: $commit, core_version: $core_version, go_version: $go_version, desktop_tags: $desktop_tags, mobile_tags: $mobile_tags}' \
-            > release/build-info.json
-          (cd release && sha256sum -- * > ../SHA256SUMS && mv ../SHA256SUMS . && sha256sum -c SHA256SUMS)
-          cat release/build-info.json release/SHA256SUMS
+          for file in ppvpn.asc ppvpn-archive-keyring.deb ppvpn-archive-keyring.deb.asc \
+                      ppvpn-release.rpm ppvpn-release.rpm.asc; do
+            test -s "linux/$file"
+          done
+          test "$(ls linux/setup | wc -l)" = 4
+          cat linux/stable/latest.json
+          jq -e --arg build "$(jq -er .build "$GITHUB_WORKSPACE/dist/release-meta-linux-x64-deb.json")" \
+            --arg deb_url "$REPO_URL/linux/apt/pool/main/p/ppvpn/$deb" \
+            --arg deb_sha "$(sha256sum "linux/apt/pool/main/p/ppvpn/$deb" | cut -d' ' -f1)" \
+            --arg rpm_url "$REPO_URL/download/$STABLE_TAG/$RPM_FILE" \
+            --arg rpm_sha "$(sha256sum "$T/releases/stable/$STABLE_TAG/$RPM_FILE" | cut -d' ' -f1)" \
+            --argjson rpm_size "$(wc -c <"$T/releases/stable/$STABLE_TAG/$RPM_FILE" | tr -d ' ')" \
+            '.build == $build and .deb.url == $deb_url and .deb.sha256 == $deb_sha
+              and .rpm.file == env.RPM_FILE and .rpm.url == $rpm_url and .rpm.sha256 == $rpm_sha
+              and .rpm.size == $rpm_size' linux/stable/latest.json
+          jq -e --arg rpm_url "$REPO_URL/download/$DEV_TAG/$RPM_FILE" '.rpm.url == $rpm_url' linux/dev/latest.json
+      # What a release does: the production key has a passphrase, handed to
+      # gpg and to rpmsign through a loopback pinentry. A second key made
+      # here, with a random passphrase, signs a fresh copy of the unsigned
+      # packages and a site of its own. Without the passphrase, or with a
+      # wrong one, the scripts must refuse before touching anything, and at
+      # once: a script that waited to be given one would hang a release.
+      - name: Sign and build with a passphrase-protected key
+        run: |
+          P="$T/passphrase"
+          release="$P/releases/$STABLE_TAG"
+          mkdir -p "$release"
+          # dist/ still holds the packages as built: unsigned.
+          cp dist/*.deb dist/*.rpm dist/release-meta-linux-*.json "$release/"
+          for meta in "$release"/release-meta-linux-x64-deb.json "$release"/release-meta-linux-x64-rpm.json; do
+            jq '.channel = "stable"' "$meta" >"$meta.part"
+            mv "$meta.part" "$meta"
+          done
+          rpm_meta="$release/release-meta-linux-x64-rpm.json"
+          digest() { sha256sum "$1" | cut -d' ' -f1; }
+          unsigned="$(digest "$release/$RPM_FILE")"
+          test "$unsigned" = "$(jq -er .sha256 dist/release-meta-linux-x64-rpm.json)"
+
+          passphrase="$(openssl rand -hex 24)"
+          echo "::add-mask::$passphrase"
+          wrong="$(openssl rand -hex 24)"
+          echo "::add-mask::$wrong"
+          test "${#passphrase}" = 48
+          test "$passphrase" != "$wrong"
+
+          export GNUPGHOME="$RUNNER_TEMP/passphrase-gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s' "$passphrase" >"$GNUPGHOME/passphrase"
+          cat >"$GNUPGHOME/key.conf" <<EOF
+          Key-Type: RSA
+          Key-Length: 4096
+          Key-Usage: sign
+          Name-Real: PPVPN repository passphrase self-test
+          Name-Email: passphrase@example.com
+          Expire-Date: 0
+          Passphrase: $passphrase
+          %commit
+          EOF
+          gpg --batch --quiet --generate-key "$GNUPGHOME/key.conf"
+          fingerprints="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10}')"
+          fingerprint="$(head -n 1 <<<"$fingerprints")"
+          [[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]]
+          test "$fingerprint" != "$PKG_GPG_FINGERPRINT"
+          # Kept in this step's shell only: never in the environment file, so never printed.
+          key="$(gpg --batch --pinentry-mode loopback --passphrase-file "$GNUPGHOME/passphrase" \
+            --armor --export-secret-keys "$fingerprint")"
+          [[ "$key" == *"PRIVATE KEY BLOCK"* ]]
+          gpg --batch --armor --export "$fingerprint" >"$P/key.asc"
+          gpg --batch --export "$fingerprint" >"$P/keyring.gpg"
+          test -s "$P/key.asc"
+          test -s "$P/keyring.gpg"
+          gpgconf --kill all
+          rm -rf "$GNUPGHOME"
+          unset GNUPGHOME
+
+          with_key() {   # passphrase, command...
+            PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" PKG_GPG_PASSPHRASE="$1" "${@:2}"
+          }
+          build() {   # passphrase, out
+            with_key "$1" desktop/scripts/ci/build-linux-repo.sh --channel stable --releases "$P/releases" \
+              --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$2"
+          }
+
+          # A refusal: not a success, not the timeout (124, or 137 once killed), and
+          # the script's own message about the passphrase.
+          refused() {   # exit status, what the message says about the passphrase
+            cat "$P/refusal" >&2
+            case "$1" in
+              0|124|137) echo "expected a prompt refusal, got exit status $1" >&2; exit 1 ;;
+            esac
+            if ! grep -q "the signing key cannot be used: PKG_GPG_PASSPHRASE is $2" "$P/refusal"; then
+              echo "the refusal does not say the passphrase is $2" >&2; exit 1
+            fi
+          }
+          as_built() {
+            test "$(digest "$release/$RPM_FILE")" = "$unsigned"
+            test "$(jq -er .sha256 "$rpm_meta")" = "$unsigned"
+            test "$(jq -er .length "$rpm_meta")" = "$(jq -er .length dist/release-meta-linux-x64-rpm.json)"
+          }
+
+          # No passphrase, unset and then empty: nothing is signed, the rpm and its
+          # metadata stay as built.
+          status=0
+          PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" timeout -k 5 60 \
+            env -u PKG_GPG_PASSPHRASE desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+          refused "$status" missing
+          as_built
+          status=0
+          PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" PKG_GPG_PASSPHRASE='' timeout -k 5 60 \
+            desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+          refused "$status" missing
+          as_built
+
+          # The wrong passphrase: the same.
+          status=0
+          with_key "$wrong" timeout -k 5 60 desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+          refused "$status" wrong
+          as_built
+
+          # The right one: signed, verifiable with the key's public half, metadata rewritten.
+          with_key "$passphrase" desktop/scripts/ci/sign-linux-rpms.sh "$release"
+          signed="$(digest "$release/$RPM_FILE")"
+          test "$signed" != "$unsigned"
+          test "$(jq -er .sha256 "$rpm_meta")" = "$signed"
+          test "$(jq -er .length "$rpm_meta")" = "$(wc -c <"$release/$RPM_FILE" | tr -d ' ')"
+          mkdir "$P/rpmdb"
+          rpm --dbpath "$P/rpmdb" --import "$P/key.asc"
+          for rpm in "$release/$RPM_FILE" "$release"/ppvpn-release-*.noarch.rpm; do
+            verdict="$(rpm --dbpath "$P/rpmdb" -K "$rpm")"
+            echo "$verdict"
+            grep -q 'digests signatures OK' <<<"$verdict"
+          done
+
+          # The repositories: no passphrase, or the wrong one, leaves no output directory.
+          status=0
+          PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" timeout -k 5 60 \
+            env -u PKG_GPG_PASSPHRASE desktop/scripts/ci/build-linux-repo.sh --channel stable \
+            --releases "$P/releases" --download-base "$REPO_URL/download" --site-base "$REPO_URL" \
+            --out "$P/refused" 2>"$P/refusal" || status=$?
+          refused "$status" missing
+          test ! -e "$P/refused"
+          status=0
+          build "$wrong" "$P/refused" 2>"$P/refusal" || status=$?
+          refused "$status" wrong
+          test ! -e "$P/refused"
+          build "$passphrase" "$P/site"
+          dist_dir="$P/site/linux/apt/dists/stable"
+          repodata="$P/site/linux/rpm/stable/x86_64/repodata"
+          gpgv --keyring "$P/keyring.gpg" "$dist_dir/InRelease"
+          gpgv --keyring "$P/keyring.gpg" "$dist_dir/Release.gpg" "$dist_dir/Release"
+          gpgv --keyring "$P/keyring.gpg" "$repodata/repomd.xml.asc" "$repodata/repomd.xml"
+          published="$(gpg --batch --show-keys --with-colons "$P/site/linux/ppvpn.asc" | awk -F: '$1=="fpr"{print $10}')"
+          test "$(head -n 1 <<<"$published")" = "$fingerprint"
+          jq -e --arg sha "$signed" '.rpm.sha256 == $sha' "$P/site/linux/stable/latest.json"
+      - name: Serve the site and the downloads
+        run: |
+          nohup python3 desktop/scripts/ci/repo-selftest-server.py --port "$REPO_PORT" \
+            --site "$T/site" --assets "$T/assets" >"$T/server.out" 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /dev/null "$REPO_URL/linux/ppvpn.asc"; then break; fi
+            sleep 1
+          done
+          curl -fsS -o /dev/null "$REPO_URL/linux/ppvpn.asc"
+          # A download is a redirect, and the signed rpm is at its end.
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$REPO_URL/download/$STABLE_TAG/$RPM_FILE")" = 302
+          test "$(curl -fsSL "$REPO_URL/download/$STABLE_TAG/$RPM_FILE" | sha256sum | cut -d' ' -f1)" \
+            = "$(jq -er .sha256 "$T/releases/stable/$STABLE_TAG/release-meta-linux-x64-rpm.json")"
+          # packaging/ppvpn.list and ppvpn.repo, as the setup packages install
+          # them, with the site's address replaced by this server's.
+          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" desktop/apps/linux/packaging/ppvpn.list >"$T/ppvpn.list"
+          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" desktop/apps/linux/packaging/ppvpn.repo >"$T/ppvpn.repo"
+          grep -qxF "deb [signed-by=/usr/share/keyrings/ppvpn-archive-keyring.gpg] $REPO_URL/linux/apt stable main" "$T/ppvpn.list"
+          grep -qxF "baseurl=$REPO_URL/linux/rpm/stable/\$basearch" "$T/ppvpn.repo"
+          grep -qx 'gpgcheck=1' "$T/ppvpn.repo"
+          grep -qx 'repo_gpgcheck=1' "$T/ppvpn.repo"
+          gpg --batch --dearmor <"$T/site/linux/ppvpn.asc" >"$T/ppvpn-archive-keyring.gpg"
+          chmod 644 "$T/ppvpn-archive-keyring.gpg" "$T/ppvpn.list" "$T/ppvpn.repo" "$T/site/linux/ppvpn.asc"
+      - name: Install with apt (Ubuntu 22.04)
+        run: |
+          deb="$(ls "$T/site/linux/apt/pool/main/p/ppvpn/"*.deb)"
+          expected="$(dpkg-deb -f "$deb" Version)"
+          seen="$(wc -l <"$T/server.out")"
+          docker run --rm --network host \
+            -v "$T/ppvpn-archive-keyring.gpg:/usr/share/keyrings/ppvpn-archive-keyring.gpg:ro" \
+            -v "$T/ppvpn.list:/etc/apt/sources.list.d/ppvpn.list:ro" \
+            -e DEBIAN_FRONTEND=noninteractive -e EXPECTED="$expected" \
+            ubuntu:22.04 bash -euxc '
+              apt-get update
+              apt-cache policy ppvpn
+              apt-get install -y --no-install-recommends ppvpn
+              test "$(dpkg-query -W -f "\${Version}" ppvpn)" = "$EXPECTED"
+              test -x /usr/lib/ppvpn/ppvpn
+            '
+          # What apt asked this server for.
+          tail -n "+$((seen + 1))" "$T/server.out" >"$T/apt.requests"
+          grep -E '"GET /linux/apt/dists/stable/InRelease HTTP/[0-9.]+" 200 ' "$T/apt.requests"
+          grep -E '"GET /linux/apt/pool/main/p/ppvpn/[^ ]+\.deb HTTP/[0-9.]+" 200 ' "$T/apt.requests"
+      - name: Install with dnf (Fedora)
+        run: |
+          rpm="$T/releases/stable/$STABLE_TAG/$RPM_FILE"
+          expected="$(rpm -qp --nosignature --qf '%{VERSION}-%{RELEASE}' "$rpm")"
+          test "${expected%%-*}" = "$(jq -er .version dist/release-meta-linux-x64-rpm.json)"
+          seen="$(wc -l <"$T/server.out")"
+          docker run --rm --network host \
+            -v "$T/site/linux/ppvpn.asc:/etc/pki/rpm-gpg/RPM-GPG-KEY-ppvpn:ro" \
+            -v "$T/ppvpn.repo:/etc/yum.repos.d/ppvpn.repo:ro" \
+            -e EXPECTED="$expected" \
+            fedora:latest bash -euxc '
+              rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-ppvpn
+              dnf -y --repo ppvpn makecache
+              dnf install -y ppvpn
+              test "$(rpm -q --qf "%{VERSION}-%{RELEASE}" ppvpn)" = "$EXPECTED"
+              test -x /usr/lib/ppvpn/ppvpn
+            '
+          # dnf fetched the rpm where the metadata's xml:base sent it, through the redirect.
+          tail -n "+$((seen + 1))" "$T/server.out" >"$T/dnf.requests"
+          grep -E '"GET /linux/rpm/stable/x86_64/repodata/repomd\.xml\.asc HTTP/[0-9.]+" 200 ' "$T/dnf.requests"
+          grep -E "\"GET /download/$STABLE_TAG/[^ ]+\.rpm HTTP/[0-9.]+\" 302 " "$T/dnf.requests"
+          grep -E "\"GET /assets/$STABLE_TAG/[^ ]+\.rpm HTTP/[0-9.]+\" 200 " "$T/dnf.requests"
+      - name: Requests served
+        if: always()
+        run: cat "$RUNNER_TEMP/linux-repo/server.out" 2>/dev/null || true
+
+  # The NSIS installer. See desktop/apps/windows/README.md ("Packaging").
+  windows:
+    name: windows
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: windows-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 90
+    env:
+      PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      PPVPN_API_BASE: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      # Optional Authenticode through desktop/scripts/sign-windows.ps1; off
+      # unless these are configured.
+      WINDOWS_CERTIFICATE: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE || '' }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+      PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
+      PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
+      # bindgen's libclang (btls-sys), from the runner's LLVM.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+      - name: Ensure NSIS
+        shell: powershell
+        run: |
+          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
+            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          }
+          & $makensis /VERSION
+      - name: Cache uniffi-bindgen-cs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
+      # build-dotnet.ps1 refuses any other version of the generator.
+      - name: Install uniffi-bindgen-cs
+        shell: bash
+        run: |
+          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
+            cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
+          fi
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-pc-windows-msvc
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        shell: bash
+        run: |
+          tools/release-features-check.sh -p ppvpn-client
+          tools/release-features-check.sh --manifest-path desktop/service/Cargo.toml
+      - name: Build installer and release metadata
+        shell: powershell
+        run: desktop/apps/windows/scripts/ci-build.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-files-${{ github.sha }}
+          name: desktop-windows-x64
+          if-no-files-found: error
+          # A release run's packages are not kept long: a stable build's are in the
+          # release, a dev build's are for testing. Other builds: the default.
+          retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
+          path: |
+            desktop/dist/windows/*-setup.exe
+            desktop/dist/windows/release-meta-windows-x64.json
+
+  # Both DMGs, built on an Apple silicon runner. See
+  # desktop/scripts/ci/build-macos-native.sh.
+  macos:
+    name: macos
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: macos-15
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 90
+    env:
+      # rust-toolchain.toml's version (build-macos-native.sh installs it);
+      # keep them in step. Not workflow-wide: RUST* is part of the cache keys.
+      RUST_TOOLCHAIN: 1.98.1
+      PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      CI_PROJECT_DIR: ${{ github.workspace }}/desktop
+      MACOS_ARCHS: arm64 x86_64
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      # The release signing certificate; without it the build is ad-hoc signed.
+      MACOS_SIGNING_P12_BASE64: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
+      MACOS_SIGNING_P12_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        run: |
+          tools/release-features-check.sh -p ppvpn-client
+          tools/release-features-check.sh --manifest-path desktop/service/Cargo.toml
+      - name: Build DMGs and release metadata
+        run: bash desktop/scripts/ci/build-macos-native.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-macos
+          if-no-files-found: error
+          # A release run's packages are not kept long: a stable build's are in the
+          # release, a dev build's are for testing. Other builds: the default.
+          retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
+          path: desktop/staging/macos-native
+
+  # Stable only (a dev build ends with the package jobs' artifacts). The
+  # release's files: the rpms signed, then everything
+  # checked as a whole before anything is published:
+  # all five platforms, each installer against its metadata, the update
+  # signatures, the tag, and that the channel does not go back.
+  release-files:
+    name: release-files
+    if: inputs.channel == 'stable' && needs.prepare.outputs.publish == 'true'
+    needs: [prepare, approve, linux, linux-rpm-smoke, linux-repo, windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # For the package repositories' signing key, which signs the rpms here.
+    environment: desktop-release-stable
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      CHANNEL: stable
+      SITE_BASE: ${{ vars.DESKTOP_SITE_BASE }}
+      ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            desktop/scripts/ci
+            desktop/apps/linux/packaging
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-*
+          path: artifacts
+      - name: Collect
+        run: |
+          set -eu
+          mkdir release
+          find artifacts -type f | while read -r file; do
+            name=$(basename "$file")
+            [ ! -e "release/$name" ] || { echo "two artifacts carry $name" >&2; exit 1; }
+            mv "$file" "release/$name"
+          done
+          ls -l release
+      # The rpm becomes a release asset signed: the dnf repository points at
+      # the asset. Signing changes the file, so its metadata is rewritten
+      # here, before the checks, the checksums and the provenance below.
+      # The key must be the one whose public half the packages ship
+      # (packaging/ppvpn.asc), which clients already trust.
+      - name: Sign the rpms
+        env:
+          PKG_GPG_PRIVATE_KEY: ${{ secrets.PPVPN_PKG_GPG_PRIVATE_KEY }}
+          PKG_GPG_PASSPHRASE: ${{ secrets.PPVPN_PKG_GPG_PASSPHRASE }}
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rpm gnupg jq
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons desktop/apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
+          export PKG_GPG_FINGERPRINT
+          desktop/scripts/ci/sign-linux-rpms.sh release
+      - name: The channel's published pointer
+        id: current
+        run: |
+          set -eu
+          if [ -z "$SITE_BASE" ]; then
+            echo "the variable DESKTOP_SITE_BASE (the update site's https address) is not set" >&2
+            exit 1
+          fi
+          # 200: compare against it. 404: the channel has no release yet.
+          # Anything else is an error, not "no release".
+          status=$(curl -sS -o current.json -w '%{http_code}' "${SITE_BASE%/}/desktop/channels/$CHANNEL.json")
+          case "$status" in
+            200) echo "args=--current current.json" >>"$GITHUB_OUTPUT" ;;
+            404) echo "args=" >>"$GITHUB_OUTPUT" ;;
+            *) echo "the update site answered $status for the channel pointer" >&2; exit 1 ;;
+          esac
+      - name: Check the release; generate its pointer and feeds
+        env:
+          CURRENT: ${{ steps.current.outputs.args }}
+        run: |
+          set -eu
+          downgrade=""
+          [ "$ALLOW_DOWNGRADE" != true ] || downgrade=--allow-downgrade
+          # shellcheck disable=SC2086
+          python3 desktop/scripts/ci/update_site.py build --assets release --tag "$TAG" --channel "$CHANNEL" \
+            --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download" \
+            --site-base "$SITE_BASE" --out site $CURRENT $downgrade
+      - name: SHA256SUMS
+        run: cd release && sha256sum -- * >../SHA256SUMS && mv ../SHA256SUMS . && cat SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
           path: release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site-preview
+          path: site/
           if-no-files-found: error
 
   publish:
-    # Tags only: attest that this workflow built the files, then publish them.
-    # A file uploaded to the release by hand fails `gh attestation verify`.
-    if: github.ref_type == 'tag'
-    needs: release-files
+    name: publish
+    # Attest that this workflow built the files, then publish them. A file
+    # uploaded to the release by hand fails `gh attestation verify`.
+    # A rehearsal attests nothing (the log of attestations is public) and
+    # leaves a draft release, which has no tag and which only the
+    # repository's members can see.
+    needs: [prepare, approve, release-files]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: desktop-release-stable
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD: ${{ needs.prepare.outputs.build_number }}
+      REHEARSAL: ${{ inputs.rehearsal }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-files-${{ github.sha }}
+          name: release-files
           path: release
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: ${{ !inputs.rehearsal }}
         with:
           subject-path: release/*
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/* \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
-            --notes "Commit \`$GITHUB_SHA\`. Desktop binaries are built with the tags in \`build-info.json\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref $GITHUB_REF\`."
+          set -eu
+          # Releases are immutable: a tag is published once.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "the release $TAG already exists" >&2
+            exit 1
+          fi
+          notes="PPVPN desktop $VERSION (build $BUILD), stable channel. Commit \`$GITHUB_SHA\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml\`."
+          if [ "$REHEARSAL" = true ]; then
+            # A draft: no tag is created, and it is not public. To be deleted
+            # after the rehearsal (gh release delete "$TAG").
+            # No --target: naming a commit made the API refuse the workflow's
+            # token (403), as it does for a tag on a commit that changes
+            # workflow files; a draft makes no tag, so it needs none.
+            url=$(gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" \
+              --draft --latest=false --title "PPVPN desktop $VERSION (rehearsal, build $BUILD)" \
+              --notes "Rehearsal of the release workflow at commit $GITHUB_SHA. Not a release. $notes")
+            echo "Draft release (delete it after the rehearsal): $url" >>"$GITHUB_STEP_SUMMARY"
+          else
+            # On the tag it runs on. Never the repository's latest release.
+            gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --latest=false --title "PPVPN desktop $VERSION" --notes "$notes"
+          fi
+
+  # The update site, deployed to GitHub Pages: the stable channel's pointer
+  # and Sparkle feeds (desktop/…) and its apt and dnf repositories (linux/…).
+  # The whole site is rebuilt from the GitHub Releases on every deployment (a
+  # Pages deployment replaces the site), so the releases are its only source
+  # and a site run restores it. Only the stable channel is deployed; the
+  # directory core/ is reserved (the repository has one Pages site). A
+  # rehearsal deploys nothing: the site is built from the rehearsal's own
+  # files and kept three days as the artifact site-rehearsal.
+  pages:
+    name: pages
+    if: >-
+      !cancelled() && needs.approve.result == 'success' &&
+      (inputs.channel == 'site' || (inputs.channel == 'stable' && needs.publish.result == 'success'))
+    needs: [prepare, approve, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The package repositories' signing key signs the apt and dnf indexes.
+    environment: desktop-release-stable
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SITE_BASE: ${{ vars.DESKTOP_SITE_BASE }}
+      DOWNLOAD_BASE: https://github.com/${{ github.repository }}/releases/download
+      # Releases whose deb stays installable from the apt repository.
+      KEEP: '5'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            desktop/scripts/ci
+            desktop/apps/linux/packaging
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends apt-utils createrepo-c rpm gnupg gpgv jq
+      # Stable releases are the tags desktop-vX.Y.Z that are not prereleases.
+      # "Newest" is the highest version, not the latest published: a release
+      # published again later must not move the channel back.
+      - name: The stable releases, newest first
+        if: ${{ !inputs.rehearsal }}
+        run: |
+          set -eu
+          if [ -z "$SITE_BASE" ]; then
+            echo "the variable DESKTOP_SITE_BASE (the update site's https address) is not set" >&2
+            exit 1
+          fi
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease,isDraft \
+            --jq '.[] | select(.isDraft or .isPrerelease | not) | .tagName' \
+            | grep -E '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -t v -k 2 -V -r | head -n "$KEEP" > tags || true
+          if [ ! -s tags ]; then
+            echo "no stable desktop release: nothing to deploy" >&2
+            exit 1
+          fi
+          cat tags
+      - name: Download their Linux packages, and the newest release's metadata
+        if: ${{ !inputs.rehearsal }}
+        run: |
+          set -eu
+          while read -r tag; do
+            mkdir -p "linux-releases/$tag"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "linux-releases/$tag" \
+              --pattern 'release-meta-linux-x64-*.json' --pattern '*.deb' --pattern '*.rpm'
+          done < tags
+          newest=$(head -n 1 tags)
+          mkdir newest
+          gh release download "$newest" --repo "$GITHUB_REPOSITORY" --dir newest --pattern 'release-meta-*.json'
+          echo "NEWEST=$newest" >> "$GITHUB_ENV"
+      # A rehearsal's files come from the calling run, laid out as the one
+      # release there is.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ inputs.rehearsal }}
+        with:
+          name: release-files
+          path: rehearsal-release
+      - name: The rehearsal's release
+        if: ${{ inputs.rehearsal }}
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -eu
+          if [ -z "$SITE_BASE" ]; then
+            echo "the variable DESKTOP_SITE_BASE (the update site's https address) is not set" >&2
+            exit 1
+          fi
+          printf '%s' "$TAG" | grep -Eq '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a stable tag name: $TAG" >&2; exit 1; }
+          echo "$TAG" > tags
+          mkdir -p "linux-releases/$TAG" newest "sums/$TAG"
+          cp rehearsal-release/release-meta-linux-x64-*.json rehearsal-release/*.deb rehearsal-release/*.rpm "linux-releases/$TAG/"
+          cp rehearsal-release/release-meta-*.json newest/
+          cp rehearsal-release/SHA256SUMS "sums/$TAG/SHA256SUMS"
+          echo "NEWEST=$TAG" >> "$GITHUB_ENV"
+      # The site redistributes only what the release workflow produced: every
+      # downloaded file must be in its release's SHA256SUMS with that hash,
+      # and carry build provenance signed by release.yml in this
+      # repository. One failure and nothing is deployed.
+      # (A rehearsal has no provenance: its files are checked against its
+      # SHA256SUMS only.)
+      - name: Verify the downloads
+        env:
+          REHEARSAL: ${{ inputs.rehearsal }}
+        run: |
+          set -eu
+          verify() {   # tag, directory
+            sums="sums/$1/SHA256SUMS"
+            mkdir -p "sums/$1"
+            [ -f "$sums" ] || gh release download "$1" --repo "$GITHUB_REPOSITORY" --dir "sums/$1" --pattern SHA256SUMS
+            for file in "$2"/*; do
+              name=$(basename "$file")
+              listed=$(awk -v name="$name" '$2 == name || $2 == "*" name { print $1 }' "$sums")
+              [ -n "$listed" ] || { echo "$1: $name is not in SHA256SUMS" >&2; exit 1; }
+              [ "$listed" = "$(sha256sum "$file" | cut -d' ' -f1)" ] || { echo "$1: $name does not have its SHA256SUMS hash" >&2; exit 1; }
+              if [ "$REHEARSAL" != true ]; then
+                gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+                  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" >/dev/null \
+                  || { echo "$1: $name has no provenance from release.yml" >&2; exit 1; }
+              fi
+              echo "verified $1/$name"
+            done
+            if [ "$REHEARSAL" != true ]; then
+              gh attestation verify "$sums" --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" >/dev/null \
+                || { echo "$1: SHA256SUMS has no provenance from release.yml" >&2; exit 1; }
+            fi
+          }
+          while read -r tag; do verify "$tag" "linux-releases/$tag"; done < tags
+          verify "$NEWEST" newest
+      - name: Pointer and feeds
+        run: |
+          set -eu
+          python3 desktop/scripts/ci/update_site.py build --assets newest --tag "$NEWEST" --channel stable \
+            --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site
+          python3 desktop/scripts/ci/update_site.py check site/desktop/channels/stable.json --channel stable
+      - name: apt and dnf repositories
+        env:
+          PKG_GPG_PRIVATE_KEY: ${{ secrets.PPVPN_PKG_GPG_PRIVATE_KEY }}
+          PKG_GPG_PASSPHRASE: ${{ secrets.PPVPN_PKG_GPG_PASSPHRASE }}
+        run: |
+          set -eu
+          # The key must be the one whose public half the packages ship.
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons desktop/apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
+          export PKG_GPG_FINGERPRINT
+          desktop/scripts/ci/build-linux-repo.sh --channel stable --releases linux-releases \
+            --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site --keep "$KEEP"
+      - name: The site
+        run: |
+          set -eu
+          # One version in the pointer, the feeds and the Linux update check.
+          version=$(jq -er .version site/desktop/channels/stable.json)
+          [ "$(jq -er .version site/linux/stable/latest.json)" = "$version" ] \
+            || { echo "latest.json and the channel pointer name different versions" >&2; exit 1; }
+          find site -type f | sort
+          du -sh site
+          # Pages refuses a site over 1 GB.
+          [ "$(du -sm site | cut -f1)" -lt 900 ] || { echo "the site is close to the Pages limit of 1 GB" >&2; exit 1; }
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: ${{ !inputs.rehearsal }}
+        with:
+          path: site
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ inputs.rehearsal }}
+        with:
+          name: site-rehearsal
+          path: site
+          if-no-files-found: error
+          retention-days: 3
+      - name: Rehearsal summary
+        if: ${{ inputs.rehearsal }}
+        run: |
+          echo "The site was built and not deployed. It is the artifact site-rehearsal of this run." >>"$GITHUB_STEP_SUMMARY"
+
+  pages-deploy:
+    name: pages-deploy
+    if: ${{ !cancelled() && !inputs.rehearsal && needs.pages.result == 'success' }}
+    needs: pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # ---- On a merge only: the build caches ci.yml restores. One job per
+  # ci.yml cache key (shared-key), building what the ci.yml jobs on that key
+  # build, so that a pull request after a dependency change does not build
+  # sail cold. rust-cache keeps the dependencies only and saves when its key
+  # is new; ci.yml never saves.
+  changes:
+    name: changes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      deps: ${{ steps.diff.outputs.deps }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+
+  # lint and linux.
+  cache-linux:
+    name: cache-linux
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: what lint and linux build
+        run: |
+          cargo clippy --all-targets --locked
+          cargo test -p ppvpn-core --lib --no-run --locked --features fault-injection
+          cargo build -p ppvpn-core-lab --locked
+          (cd desktop/service && cargo build --locked --bin ppvpn-service)
+          (cd desktop/crates/ppvpn-client && cargo test --locked --features linux-e2e --lib --no-run)
+
+  cache-unit:
+    name: cache-unit
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: unit
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - run: cargo test --locked --no-run
+
+  cache-integration:
+    name: cache-integration
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: integration
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - run: cargo test --locked -p ppvpn-cli --test keystore --no-run
+
+  cache-desktop:
+    name: cache-desktop
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: desktop
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - run: |
+          (cd desktop/service && cargo test --locked --no-run && cargo clippy --locked --all-targets)
+          (cd desktop/crates/ppvpn-client && cargo test --locked --no-run && cargo clippy --locked --all-targets)
+
+  # macos.
+  cache-macos:
+    name: cache-macos
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: macos
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+      - name: what macos builds
+        run: |
+          cargo clippy --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin
+          cargo test -p ppvpn-core -p ppvpn-cli -p ppvpn-client --lib --locked --no-run
+          cargo test -p ppvpn-cli --test keystore --locked --no-run
+
+  # windows.
+  cache-windows:
+    name: cache-windows
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: 0
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: what windows builds
+        run: |
+          cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-client -p ppvpn-engine-host -p ppvpn-service \
+            --all-targets --locked --target x86_64-pc-windows-msvc
+          cargo test -p ppvpn-core -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc --no-run
+          cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run

@@ -311,7 +311,6 @@ mod tests {
                 api_base: base.to_string(),
                 data_dir: data_dir.to_string(),
                 log_dir: data_dir.to_string(),
-                core_bin_dir: data_dir.to_string(),
                 platform: "windows".into(),
                 app_version: "1.2.3".into(),
             },

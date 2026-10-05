@@ -92,6 +92,7 @@ impl Inner {
                 endpoint_key: endpoint_key.unwrap_or_default().to_owned(),
             });
         }
+        self.sync_pinned_checks();
         self.refresh().await;
         Ok(())
     }

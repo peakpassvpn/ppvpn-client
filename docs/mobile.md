@@ -1,5 +1,7 @@
 # 移动端接入
 
+> 本文描述的是 Go 内核（v0.5.21），它已从 main 移除；文中的 Go 源码路径和构建命令以 tag `v0.5.21` 为准。Rust 引擎的接口见 [宿主接入](host-integration.md)，测试见 [测试分层](testing.md)。
+
 移动端通过 gomobile 绑定 [`mobile.Bridge`](../mobile/bridge.go)。所有复杂输入输出都是 JSON 字符串，公开类型不包含 sing-box 值。宿主必须让 Bridge 与系统 VPN 生命周期同生共死，不能在普通 UI 进程里长期运行核心。
 
 ## 公共方法

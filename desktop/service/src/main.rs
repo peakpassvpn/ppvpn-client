@@ -1,5 +1,5 @@
-//! ppvpn-service — Windows service that hosts ppvpn-core with the
-//! privileges required for transparent routing.
+//! ppvpn-service — the privileged service that hosts the TUN instance of
+//! ppvpn-core (in process) with the privileges transparent routing needs.
 //!
 //! Architecture (mirrored from clash-verge-service):
 //!   - Registered as Windows service `ppvpn_service` by install.rs
@@ -11,8 +11,6 @@ mod core;
 mod ipc;
 mod logfile;
 mod macdns;
-#[cfg(any(target_os = "linux", test))]
-mod netclean;
 mod protocol;
 mod watch;
 
@@ -24,7 +22,7 @@ fn setup_logger() {
     }
 }
 
-/// Stops a core whose lease lapsed, and notices a core that exited on its
+/// Stops an instance whose lease lapsed, and notices one that failed on its
 /// own (its watchers learn within a tick).
 fn start_lease_watchdog() {
     std::thread::spawn(|| loop {
@@ -35,28 +33,20 @@ fn start_lease_watchdog() {
     });
 }
 
-/// What a previous service instance killed while connected (kill -9,
-/// crash, systemd's stop timeout) can leave behind, and the core binary's
-/// first run.
+/// What a previous service process killed while connected (kill -9, crash,
+/// a stop timeout) left behind: its instance's policy rules (Linux) and the
+/// system DNS override (macOS), whose TUN went with that process.
 #[cfg(unix)]
 fn clean_up_after_previous_instance() {
     let started = std::time::Instant::now();
-    {
-        // Under the lock: a Connect that came first owns what is there now.
-        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-        let mut manager = core::CORE.lock();
-        if !manager.has_core() {
-            let core_running = core::core_process_running();
-            // Its core's policy rules.
-            #[cfg(target_os = "linux")]
-            netclean::clean_if_no_core(&netclean::SystemRunner, core_running, "service start");
-            // Its system DNS override: the TUN it points at is gone.
-            #[cfg(target_os = "macos")]
-            manager.clean_dns_leftover(core_running);
-        }
-    }
+    // Under the lock: a Connect that came first owns what is there now.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(unused_mut))]
+    let mut manager = core::CORE.lock();
+    #[cfg(target_os = "linux")]
+    manager.sweep_leftovers();
     #[cfg(target_os = "macos")]
-    core::warm_up_core_binary();
+    manager.clean_dns_leftover();
+    drop(manager);
     info!(
         "startup clean-up done in {} ms",
         started.elapsed().as_millis()
@@ -78,10 +68,9 @@ fn main() -> windows_service::Result<()> {
 
 /// Enters the stopping state (Connect and friends are refused from now on,
 /// see `ipc::begin_stopping`), tells every watch connection `stopping` and
-/// closes them, then stops ppvpn-core in order (`/v1/stop`, then closing its
-/// lifetime pipe, then a kill after the grace period) so it removes its TUN
-/// device, routes and DNS settings, and exits. The core lock stays held
-/// until the process is gone.
+/// closes them, then shuts the TUN instance down so it removes its device,
+/// routes and DNS settings, and exits. The core lock stays held until the
+/// process is gone.
 #[cfg(unix)]
 fn stop_data_plane_and_exit() -> ! {
     stop_data_plane();
@@ -121,8 +110,8 @@ fn main() {
     // The IPC server accepts with blocking calls, so it gets a thread of
     // its own: run on this one (inside a select! with the signals, as it
     // was), it never yielded and SIGTERM was never seen. launchd / systemd
-    // then killed the service (and its core) after the stop timeout, and
-    // the core's routes stayed behind.
+    // then killed the service after the stop timeout, and the TUN's routes
+    // stayed behind.
     let handle = rt.handle().clone();
     let server = std::thread::Builder::new()
         .name("ipc-server".into())
@@ -139,7 +128,7 @@ fn main() {
         stop_data_plane_and_exit()
     }
     // After the IPC server: a client that installed or restarted the
-    // service waits for it to answer, and these can take a while.
+    // service waits for it to answer.
     std::thread::spawn(clean_up_after_previous_instance);
     rt.block_on(async {
         use tokio::signal::unix::{signal, SignalKind};
@@ -185,7 +174,8 @@ mod service_module {
 
     const SERVICE_NAME: &str = "ppvpn_service";
     const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
-    /// SCM's patience while stopping (the core's stop takes up to ~17 s).
+    /// SCM's patience while stopping (the TUN instance's shutdown takes up
+    /// to 10 s, the watchers' close a few more).
     const STOP_WAIT_HINT: Duration = Duration::from_secs(30);
 
     static STATUS: OnceLock<ServiceStatusHandle> = OnceLock::new();

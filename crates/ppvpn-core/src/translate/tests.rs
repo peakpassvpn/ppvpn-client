@@ -240,7 +240,25 @@ fn a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses() {
     let fallback = outbound(&config, &auto);
     assert_eq!(fallback["type"], "fallback");
     assert_eq!(fallback["outbounds"], json!(members));
-    assert_eq!(fallback["url"], "http://www.gstatic.com/generate_204");
+    // docs/backend-profile.md, 故障转移语义: two URLs, either passes on
+    // 2xx/3xx; 2 failed rounds down, 3 passed up; 2 s per member's dial;
+    // 60 s on a healthy member after a switch.
+    assert_eq!(
+        fallback["url"],
+        json!([
+            "http://www.gstatic.com/generate_204",
+            "http://cp.cloudflare.com/generate_204"
+        ])
+    );
+    assert_eq!(fallback["url_policy"], "any");
+    assert_eq!(fallback["expected_status"], "200-399");
+    assert_eq!(fallback["interval"], "15s");
+    assert_eq!(fallback["timeout"], "5s");
+    assert_eq!(fallback["dial_timeout"], "2s");
+    assert_eq!(
+        fallback["debounce"],
+        json!({ "fail_after": 2, "recover_after": 3, "min_dwell": "60s" })
+    );
 
     assert_eq!(t.groups[&node], auto);
     assert_eq!(t.members[&node], members);
@@ -643,28 +661,71 @@ fn d4_rejects_udp_to_a_fixed_udp_less_node() {
 
 #[test]
 fn local_dns_servers_as_go_reads_them() {
+    use crate::localdns::Server;
     let read = |v: &[&str]| local_dns_servers(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    let server = |ip: &str, zone: Option<&str>, port| Server {
+        ip: ip.parse().unwrap(),
+        zone: zone.map(str::to_owned),
+        port,
+    };
     assert_eq!(
         read(&[
             " 192.168.50.1 ",
             "192.168.50.2:5353",
             "[2001:db8::1]:53",
-            "::ffff:192.168.50.3"
+            "2001:db8::2",
+            "::ffff:192.168.50.3",
+            // Link-local with its zone, by interface name or index, with
+            // and without a port (Go: TestLocalDNSServers).
+            "[fe80::1%en0]:53",
+            "fe80::2%en0",
+            "[fe80::3%6]:5353",
+            "fe80::4%6",
         ])
         .unwrap(),
         vec![
-            "192.168.50.1:53".parse().unwrap(),
-            "192.168.50.2:5353".parse().unwrap(),
-            "[2001:db8::1]:53".parse().unwrap(),
-            "192.168.50.3:53".parse().unwrap(),
+            server("192.168.50.1", None, 53),
+            server("192.168.50.2", None, 5353),
+            server("2001:db8::1", None, 53),
+            server("2001:db8::2", None, 53),
+            server("192.168.50.3", None, 53),
+            server("fe80::1", Some("en0"), 53),
+            server("fe80::2", Some("en0"), 53),
+            server("fe80::3", Some("6"), 5353),
+            server("fe80::4", Some("6"), 53),
         ]
     );
-    // Inside the tunnel, now or before 0.5.7: left out.
+    // Inside the tunnel, now or before 0.5.7: left out, the rest in order.
     assert_eq!(
-        read(&["10.60.159.90", "172.19.0.2", "fde2:ec40:9312:c7fd::2"]).unwrap(),
-        Vec::<std::net::SocketAddr>::new()
+        read(&[
+            "10.60.159.90",
+            "fe80::1%en0",
+            "172.19.0.2",
+            "fde2:ec40:9312:c7fd::2",
+            "fdfe:dcba:9876::2",
+            "192.168.1.1:5353",
+        ])
+        .unwrap(),
+        vec![
+            server("fe80::1", Some("en0"), 53),
+            server("192.168.1.1", None, 5353),
+        ]
     );
-    for bad in ["dns.example", "0.0.0.0", "192.168.50.1:0", "[::]:53", ""] {
+    for bad in [
+        "dns.example",
+        "0.0.0.0",
+        "192.168.50.1:0",
+        "[::]:53",
+        "[::1]:abc",
+        "",
+        "[fe80::1%en0]",
+        "[fe80::1%en0]:0",
+        "fe80::1%",
+        "[fe80::1%]:53",
+        "192.168.50.1%en0",
+        "[192.168.50.1%en0]:53",
+        "dns.example%en0",
+    ] {
         assert!(read(&[bad]).is_err(), "{bad}");
     }
 }
@@ -835,6 +896,7 @@ fn debug_leaves_credentials_out() {
         rule_ids: Vec::new(),
         dns_members: Default::default(),
         dns_local_listener: false,
+        check_interval: Default::default(),
     };
     let shown = format!("{translation:?}");
     assert!(!shown.contains(&secret), "{shown}");

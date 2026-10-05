@@ -1,8 +1,9 @@
 # deb and rpm for PPVPN, built by ../scripts/build-package.sh (which fills in every $-brace placeholder).
 #
 #   /usr/lib/ppvpn/ppvpn            the apphost; ppvpn-service only talks to this path
-#   /usr/lib/ppvpn/ppvpn-core       plus ppvpn-service{,-install,-uninstall}: copied into
-#                                   /usr/lib/ppvpn-service by the install helper (pkexec)
+#   /usr/lib/ppvpn/ppvpn-service{,-install,-uninstall}
+#                                   the service is copied into /usr/lib/ppvpn-service by
+#                                   the install helper (pkexec)
 #   /usr/lib/ppvpn/package-format   "deb" or "rpm": selects the update feed (BuildInfo.cs)
 #   /usr/lib/ppvpn/ppvpn-push-agent shows backend pushes as notifications; per user session
 #                                   from /etc/xdg/autostart (and started by the app)

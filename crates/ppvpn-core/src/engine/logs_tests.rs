@@ -15,7 +15,8 @@ use futures_util::FutureExt;
 
 use super::*;
 use crate::config::{EngineConfig, LocalProxyConfig, Platform, Role};
-use crate::engine::lifecycle_tests::{profile_with, NODE_2, R1};
+use crate::engine::lifecycle::base64_flavor;
+use crate::engine::lifecycle_tests::{profile_with, NODE_1, NODE_2, R1, R2};
 use crate::engine::Engine;
 use crate::localproxy::{LocalProxyState, STATE_FILE};
 use crate::request::ApplyRequest;
@@ -304,4 +305,168 @@ async fn no_line_holds_a_secret() {
             assert!(!line.contains(secret.as_str()), "a log line holds a secret");
         }
     }
+}
+
+/// sail gets `warn` at the default level: its info writes each connection's
+/// destination (runtime::sail::tests::no_destination_in_sail_lines_at_warn),
+/// which #214 keeps out of the log at info. At debug, sail's debug.
+#[tokio::test]
+async fn sail_logs_no_connection_at_the_default_level() {
+    for (level, sail) in [(LogLevel::Info, "warn"), (LogLevel::Debug, "debug")] {
+        let (engine, fake) = engine(level, LogSink::None);
+        engine
+            .apply(ApplyRequest::new(profile_with(R1, |_| {})))
+            .await
+            .unwrap();
+        engine.start().await.unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&fake.config().expect("started")).unwrap();
+        assert_eq!(config["log"]["level"], sail, "{level:?}");
+        engine.stop().await.unwrap();
+    }
+}
+
+/// Go: internal/runtime TestApplyLogsRealityFingerprintsAtDebug. At debug
+/// level an apply logs fingerprints of each REALITY ingress's parameters,
+/// never the values themselves; at info level no `ingress tls` line.
+#[tokio::test]
+async fn apply_logs_reality_fingerprints_at_debug() {
+    let _subscriber = subscribe();
+    let key = {
+        let mut key = [0u8; 32];
+        getrandom::fill(&mut key).unwrap();
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key)
+    };
+    let short_id = random_hex(8);
+    let with_reality = profile_with(R1, |v| {
+        v["nodes"][0]["ingresses"][0]["tls"]["reality"] =
+            serde_json::json!({ "public_key": key, "short_id": short_id });
+    });
+    let digest = |value: &str| -> String {
+        use sha2::Digest as _;
+        sha2::Sha256::digest(value.as_bytes())[..5]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let encoding = if key.contains(['-', '_']) {
+        "unpadded url"
+    } else {
+        "unpadded url-or-std"
+    };
+
+    for level in [LogLevel::Info, LogLevel::Debug] {
+        let (engine, _fake) = engine(level, LogSink::Channel);
+        let mut rx = engine.logs();
+        engine
+            .apply(ApplyRequest::new(with_reality.clone()))
+            .await
+            .unwrap();
+        engine
+            .inner
+            .log
+            .span()
+            .in_scope(|| tracing::info!("reality-done"));
+        let lines = until(&mut rx, |l| l.contains("msg=reality-done")).await;
+        let tls: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains(" msg=\"ingress tls\" "))
+            .collect();
+        if level == LogLevel::Info {
+            assert!(tls.is_empty(), "logged at info: {tls:?}");
+            continue;
+        }
+        let reality = format!(
+            " msg=\"ingress tls\" node_id={NODE_1} endpoint_key=9001 protocol=vless \
+             server_name=tyo-01.edge.example.com public_key_sha256={} public_key_len=43 \
+             public_key_encoding=\"{encoding}\" short_id_sha256={} short_id_len=16 \
+             fingerprint=chrome flow=xtls-rprx-vision source=core",
+            digest(&key),
+            digest(&short_id),
+        );
+        let plain = format!(
+            " msg=\"ingress tls\" node_id={NODE_2} endpoint_key=9003 protocol=anytls \
+             server_name=sjc-01.edge.example.com insecure=false flow=\"\" source=core"
+        );
+        assert_eq!(tls.len(), 2, "one line per TLS ingress: {tls:?}");
+        assert!(
+            tls[0].ends_with(&reality),
+            "want {reality:?} in {:?}",
+            tls[0]
+        );
+        assert!(tls[1].ends_with(&plain), "want {plain:?} in {:?}", tls[1]);
+        for line in &lines {
+            assert!(
+                !line.contains(&key) && !line.contains(&short_id),
+                "raw REALITY values logged"
+            );
+        }
+    }
+
+    for (value, want) in [
+        ("ab+c=", "padded std"),
+        ("a+b", "unpadded std"),
+        ("a-b", "unpadded url"),
+        ("abc", "unpadded url-or-std"),
+    ] {
+        assert_eq!(base64_flavor(value), want, "{value:?}");
+    }
+}
+
+/// Go: internal/runtime TestLifecycleLogsPhaseTimings. Apply and start each
+/// write one info line with per-phase durations, so a slow start shows
+/// where the time went: an apply while stopped, the start, an apply while
+/// running (a kernel switch) and an apply that fails.
+#[tokio::test]
+async fn apply_and_start_log_phase_timings() {
+    let _subscriber = subscribe();
+    let (engine, _fake) = engine(LogLevel::Info, LogSink::Channel);
+    let mut rx = engine.logs();
+
+    engine
+        .apply(ApplyRequest::new(profile_with(R1, |_| {})))
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    engine
+        .apply(ApplyRequest::new(profile_with(R2, |_| {})))
+        .await
+        .unwrap();
+    let broken = profile_with("2026-09-29T00:00:00Z#9", |v| {
+        v["nodes"] = serde_json::Value::Null;
+    });
+    assert!(engine.apply(ApplyRequest::new(broken)).await.is_err());
+    engine.stop().await.unwrap();
+    tracing::info!("timings-done");
+
+    // Other tests' lines may be here too: each wanted line at least once.
+    let lines = until(&mut rx, |l| l.contains("msg=timings-done")).await;
+    let has = |parts: &[&str]| {
+        lines
+            .iter()
+            .any(|l| l.contains(" level=info ") && parts.iter().all(|p| l.contains(p)))
+    };
+    let ok = "msg=\"apply timing\" outcome=ok tun=false rule_sets_ready=0 rule_sets_stale=0 rule_sets_unavailable=0 validate_ms=";
+    let stopped = [
+        ok,
+        " rule_sets_ms=",
+        " wait_ms=",
+        " host_ipv6_ms=",
+        " build_ms=",
+        " check_ms=",
+        " total_ms=",
+    ];
+    assert!(has(&stopped), "{lines:#?}");
+    let running = [ok, " build_ms=", " kernel_switch_ms=", " total_ms="];
+    assert!(has(&running), "{lines:#?}");
+    let failed = ["msg=\"apply timing\" outcome=failed tun=false rule_sets_ready=0 rule_sets_stale=0 rule_sets_unavailable=0 total_ms="];
+    assert!(has(&failed), "{lines:#?}");
+    let started = [
+        "msg=\"start timing\" outcome=ok tun=false local_proxy_ms=",
+        " host_ipv6_ms=",
+        " build_ms=",
+        " engine_start_ms=",
+        " total_ms=",
+    ];
+    assert!(has(&started), "{lines:#?}");
 }

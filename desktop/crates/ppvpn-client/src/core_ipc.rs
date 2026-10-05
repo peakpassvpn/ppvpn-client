@@ -1,20 +1,14 @@
-//! Client for ppvpn-core's local Core API v1 (ported from
-//! `src-tauri/src/first_party_core.rs` and the transport half of
-//! `standard_core.rs`).
+//! Core API v1 calls: paths with JSON bodies, answered with data or an
+//! error `{"code","message","retryable"}`.
 //!
-//! The Core API is HTTP/1.1 over a Unix socket (macOS/Linux) or a named pipe
-//! (Windows), authenticated with the per-launch session secret the core writes
-//! to `--session-secret-file`. Every response is an envelope
-//! `{"ok":bool,"data":…,"error":{"code","message","retryable"}}`.
-//!
-//! Two transports implement [`CoreTransport`]: [`CoreClient`] talks to a core
-//! directly (the standard-mode core), and `service::ServiceCoreTransport`
-//! forwards through the privileged service (the enhanced-mode core). The typed
-//! helpers and the probe orchestration in this module work over either.
+//! Two transports implement [`CoreTransport`]: `engine::EngineTransport`
+//! calls the in-process engine (standard mode), and
+//! `service::ServiceCoreTransport` forwards through the privileged service
+//! (enhanced mode). The typed helpers and the probe orchestration in this
+//! module work over either.
 
 use std::collections::HashSet;
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,8 +23,6 @@ pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Default per-call deadline for control calls.
 pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(30);
-/// Upper bound on a response we are willing to buffer.
-const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Endpoint fetched through a node's local proxy by the Connect speed test.
 /// Plain HTTP measures proxy RTT without adding a TLS handshake.
@@ -78,7 +70,6 @@ impl CoreCallError {
         let code = match self.code() {
             Some("NODE_NOT_FOUND") => ErrorCode::NodeNotFound,
             Some("PROFILE_EXPIRED") => ErrorCode::ProfileExpired,
-            Some("CORE_API_UNSUPPORTED") => ErrorCode::CoreIncompatible,
             Some(code) if is_profile_error(code) => ErrorCode::ProfileInvalid,
             _ => fallback,
         };
@@ -92,56 +83,7 @@ impl CoreCallError {
 
 /// Core error codes that mean "the backend profile is not acceptable".
 pub(crate) fn is_profile_error(code: &str) -> bool {
-    // The Rust core names its own set; the list below is the Go core's.
-    #[cfg(feature = "rust-core")]
-    if ppvpn_core::codes::PROFILE_VALIDATION.contains(&code) {
-        return true;
-    }
-    matches!(
-        code,
-        "PROFILE_REQUIRED"
-            | "FIELD_REQUIRED"
-            | "SCHEMA_UNSUPPORTED"
-            | "PROFILE_EXPIRED"
-            | "TIME_RANGE_INVALID"
-            | "NODE_ID_INVALID"
-            | "NODE_ID_DUPLICATE"
-            | "ENTRY_IP_NOT_PUBLIC"
-            | "PORT_INVALID"
-            | "CREDENTIALS_INVALID"
-            | "PROTOCOL_UNSUPPORTED"
-            | "TRANSPORT_UNSUPPORTED"
-            | "INGRESS_ROLE_INVALID"
-            | "INGRESS_COUNT_INVALID"
-            | "ENTRY_KEY_INVALID"
-            | "ENDPOINT_KEY_INVALID"
-            | "ENDPOINT_KEY_DUPLICATE"
-            | "REPLICA_ORDINAL_INVALID"
-            | "EXIT_IP_INVALID"
-            | "SHADOWSOCKS_METHOD_UNSUPPORTED"
-            | "SHADOWSOCKS_KEY_INVALID"
-            | "REALITY_REQUIRED"
-            | "REALITY_PUBLIC_KEY_INVALID"
-            | "REALITY_SHORT_ID_INVALID"
-            | "TLS_REQUIRED"
-            | "TLS_SERVER_NAME_MISMATCH"
-            | "TLS_SERVER_NAME_INVALID"
-            | "CAPABILITIES_INVALID"
-            | "DEFAULT_NODE_NOT_FOUND"
-            | "SELECTION_MODE_UNSUPPORTED"
-            // Rule sets (core 0.5.0). HOST_NOT_ALLOWED: a rule set URL outside
-            // the pinned API host, a backend misconfiguration.
-            | "RULE_SET_ID_INVALID"
-            | "RULE_SET_ID_DUPLICATE"
-            | "RULE_SET_COUNT_INVALID"
-            | "RULE_SET_URL_INVALID"
-            | "RULE_SET_SHA256_INVALID"
-            | "RULE_SET_INTERVAL_INVALID"
-            | "RULE_SET_NOT_FOUND"
-            | "RULE_SET_REF_DUPLICATE"
-            | "RULE_SET_HOST_NOT_ALLOWED"
-            | "RULE_SET_HOSTS_INVALID"
-    )
+    ppvpn_core::codes::PROFILE_VALIDATION.contains(&code)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,323 +100,9 @@ pub(crate) trait CoreTransport: Send + Sync {
     ) -> BoxFuture<'a, Result<Value, CoreCallError>>;
 }
 
-/// Address of a directly reachable core.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CoreEndpoint {
-    /// Unix socket path or Windows named pipe path.
-    pub socket: String,
-    pub secret_file: PathBuf,
-    /// Unix only: the uid that must own the socket, so a socket squatted in a
-    /// shared fallback directory never receives the session secret.
-    pub expected_uid: Option<u32>,
-}
-
-/// Direct Core API client (standard-mode core).
-#[derive(Debug, Clone)]
-pub(crate) struct CoreClient {
-    endpoint: CoreEndpoint,
-}
-
-impl CoreClient {
-    pub(crate) fn new(endpoint: CoreEndpoint) -> Self {
-        Self { endpoint }
-    }
-}
-
-impl CoreTransport for CoreClient {
-    fn call<'a>(
-        &'a self,
-        path: &'static str,
-        body: Value,
-        timeout: Duration,
-    ) -> BoxFuture<'a, Result<Value, CoreCallError>> {
-        let endpoint = self.endpoint.clone();
-        Box::pin(async move {
-            let request_body = serde_json::to_vec(&body)
-                .map_err(|error| CoreCallError::Transport(format!("encode request: {error}")))?;
-            let task = tokio::task::spawn_blocking(move || {
-                blocking_exchange(&endpoint, path, &request_body, timeout)
-            });
-            let raw = match tokio::time::timeout(timeout + Duration::from_secs(1), task).await {
-                Err(_) => return Err(CoreCallError::Transport(format!("{path}: timed out"))),
-                Ok(Err(error)) => {
-                    return Err(CoreCallError::Transport(format!(
-                        "{path}: task failed: {error}"
-                    )))
-                }
-                Ok(Ok(result)) => {
-                    result.map_err(|error| CoreCallError::Transport(format!("{path}: {error}")))?
-                }
-            };
-            let (_, body) = parse_http_response(&raw)
-                .map_err(|error| CoreCallError::Transport(format!("{path}: {error}")))?;
-            decode_envelope(&body)
-        })
-    }
-}
-
-fn blocking_exchange(
-    endpoint: &CoreEndpoint,
-    path: &str,
-    body: &[u8],
-    timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    let secret = std::fs::read_to_string(&endpoint.secret_file)
-        .map_err(|error| format!("read core session secret: {error}"))?;
-    let request = build_http_request(path, secret.trim(), body);
-    platform_exchange(endpoint, &request, timeout)
-}
-
-#[cfg(unix)]
-fn platform_exchange(
-    endpoint: &CoreEndpoint,
-    request: &[u8],
-    timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    use std::io::Write;
-    use std::os::unix::fs::MetadataExt;
-    use std::os::unix::net::UnixStream;
-
-    if let Some(uid) = endpoint.expected_uid {
-        let metadata = std::fs::symlink_metadata(&endpoint.socket)
-            .map_err(|error| format!("stat core socket: {error}"))?;
-        if metadata.uid() != uid {
-            return Err("CORE_SOCKET_FOREIGN_OWNER".to_string());
-        }
-    }
-    let mut stream = UnixStream::connect(&endpoint.socket)
-        .map_err(|error| format!("connect core socket: {error}"))?;
-    stream.set_read_timeout(Some(timeout)).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-    stream
-        .write_all(request)
-        .map_err(|error| format!("write request: {error}"))?;
-    stream.flush().ok();
-    let raw = read_limited(&mut stream).map_err(|error| format!("read response: {error}"))?;
-    let _ = stream.shutdown(std::net::Shutdown::Both);
-    Ok(raw)
-}
-
-#[cfg(windows)]
-fn platform_exchange(
-    endpoint: &CoreEndpoint,
-    request: &[u8],
-    _timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    use std::io::Write;
-    let mut pipe = open_pipe(&endpoint.socket)?;
-    pipe.write_all(request)
-        .map_err(|error| format!("write request: {error}"))?;
-    pipe.flush().ok();
-    read_limited(&mut pipe).map_err(|error| format!("read response: {error}"))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn platform_exchange(_: &CoreEndpoint, _: &[u8], _: Duration) -> Result<Vec<u8>, String> {
-    Err("Core API transport unsupported on this OS".to_string())
-}
-
-/// Opens a named pipe, retrying while every server instance is busy.
-#[cfg(windows)]
-pub(crate) fn open_pipe(name: &str) -> Result<std::fs::File, String> {
-    const ERROR_PIPE_BUSY: i32 = 231;
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(name)
-        {
-            Ok(pipe) => return Ok(pipe),
-            Err(error)
-                if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
-                    && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(error) => return Err(format!("open pipe {name}: {error}")),
-        }
-    }
-}
-
-fn read_limited<R: std::io::Read>(reader: &mut R) -> std::io::Result<Vec<u8>> {
-    let mut response = Vec::new();
-    let mut chunk = [0u8; 16 * 1024];
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => return Ok(response),
-            Ok(read) => {
-                response.extend_from_slice(&chunk[..read]);
-                if response.len() > MAX_RESPONSE_BYTES {
-                    return Err(std::io::Error::other("response too large"));
-                }
-                // Stop as soon as a complete message is buffered so a server
-                // that keeps the connection open cannot stall us.
-                if http_response_complete(&response) {
-                    return Ok(response);
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            // A Windows pipe reports a closed server end as BrokenPipe.
-            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(response),
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Minimal HTTP/1.1 framing
-// ---------------------------------------------------------------------------
-
-pub(crate) fn build_http_request(path: &str, secret: &str, body: &[u8]) -> Vec<u8> {
-    let mut request = format!(
-        "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {secret}\r\n\
-         X-Core-API-Version: 1\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    request.extend_from_slice(body);
-    request
-}
-
-struct HttpHead {
-    status: u16,
-    body_start: usize,
-    content_length: Option<usize>,
-    chunked: bool,
-}
-
-fn parse_head(raw: &[u8]) -> Result<Option<HttpHead>, String> {
-    let Some(split) = raw.windows(4).position(|window| window == b"\r\n\r\n") else {
-        return Ok(None);
-    };
-    let head = std::str::from_utf8(&raw[..split]).map_err(|_| "invalid HTTP head".to_string())?;
-    let mut lines = head.split("\r\n");
-    let status_line = lines.next().unwrap_or_default();
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse::<u16>().ok())
-        .filter(|_| status_line.starts_with("HTTP/1."))
-        .ok_or_else(|| "invalid HTTP status line".to_string())?;
-    let mut content_length = None;
-    let mut chunked = false;
-    for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim();
-        if name.eq_ignore_ascii_case("content-length") {
-            content_length = value.parse::<usize>().ok();
-        } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            chunked = value.to_ascii_lowercase().contains("chunked");
-        }
-    }
-    Ok(Some(HttpHead {
-        status,
-        body_start: split + 4,
-        content_length,
-        chunked,
-    }))
-}
-
-fn http_response_complete(raw: &[u8]) -> bool {
-    match parse_head(raw) {
-        Ok(Some(head)) if head.chunked => {
-            matches!(decode_chunked(&raw[head.body_start..]), Ok(Some(_)))
-        }
-        Ok(Some(head)) => match head.content_length {
-            Some(length) => raw.len() >= head.body_start + length,
-            None => false,
-        },
-        _ => false,
-    }
-}
-
-/// Decodes a chunked body; `Ok(None)` while it is still incomplete.
-fn decode_chunked(mut data: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    let mut body = Vec::new();
-    loop {
-        let Some(line_end) = data.windows(2).position(|window| window == b"\r\n") else {
-            return Ok(None);
-        };
-        let size_text =
-            std::str::from_utf8(&data[..line_end]).map_err(|_| "bad chunk size".to_string())?;
-        let size_text = size_text.split(';').next().unwrap_or_default().trim();
-        let size =
-            usize::from_str_radix(size_text, 16).map_err(|_| "bad chunk size".to_string())?;
-        data = &data[line_end + 2..];
-        if size == 0 {
-            return Ok(Some(body));
-        }
-        if data.len() < size.saturating_add(2) {
-            return Ok(None);
-        }
-        body.extend_from_slice(&data[..size]);
-        data = &data[size + 2..];
-    }
-}
-
-/// Splits a complete (or EOF-terminated) HTTP response into status and body.
-/// Handles `Content-Length`, `chunked` and read-to-EOF bodies: Go's HTTP
-/// server chunks any body larger than its 2 KiB buffer even when the request
-/// says `Connection: close`, so large node lists arrive chunked.
-pub(crate) fn parse_http_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
-    let head = parse_head(raw)?.ok_or_else(|| "invalid Core API HTTP response".to_string())?;
-    let rest = &raw[head.body_start..];
-    let body = if head.chunked {
-        decode_chunked(rest)?.ok_or_else(|| "truncated chunked body".to_string())?
-    } else if let Some(length) = head.content_length {
-        if rest.len() < length {
-            return Err("truncated body".to_string());
-        }
-        rest[..length].to_vec()
-    } else {
-        rest.to_vec()
-    };
-    Ok((head.status, body))
-}
-
-pub(crate) fn decode_envelope(body: &[u8]) -> Result<Value, CoreCallError> {
-    let envelope: Value = serde_json::from_slice(body)
-        .map_err(|error| CoreCallError::Transport(format!("decode Core API envelope: {error}")))?;
-    if envelope.get("ok").and_then(Value::as_bool) == Some(true) {
-        return Ok(envelope.get("data").cloned().unwrap_or(Value::Null));
-    }
-    let error = envelope.get("error");
-    let field = |name: &str| {
-        error
-            .and_then(|error| error.get(name))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    };
-    let code = field("code");
-    Err(CoreCallError::Api {
-        code: if code.is_empty() {
-            "CORE_OPERATION_FAILED".to_string()
-        } else {
-            code
-        },
-        message: field("message"),
-        retryable: error
-            .and_then(|error| error.get("retryable"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Typed calls
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct CoreVersion {
-    pub core_version: String,
-    pub core_api_version: u64,
-    pub profile_schema_version: u64,
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CoreStatus {
@@ -610,42 +238,6 @@ pub(crate) fn rule_set_hosts(api_base: &str) -> Vec<String> {
     }
 }
 
-/// The first core release whose `apply-profile` / `validate-profile` accept
-/// `allowed_rule_set_hosts`. Older cores decode request bodies strictly and
-/// reject the unknown field with `REQUEST_INVALID`.
-const RULE_SET_HOSTS_MIN_CORE: (u64, u64, u64) = (0, 5, 0);
-
-/// `core_version` (`GetVersion`) serves the routed local-proxy user
-/// (`get-local-proxy-credential {"kind":"routed"}`, 0.5.12+).
-pub(crate) fn core_accepts_routed_proxy(core_version: &str) -> bool {
-    core_version_at_least(core_version, (0, 5, 12))
-}
-
-/// `core_version` (`GetVersion`) accepts `allowed_rule_set_hosts`. A
-/// pre-release suffix counts as that release (`0.5.0-rc1` qualifies);
-/// anything unparsable does not.
-pub(crate) fn core_accepts_rule_set_hosts(core_version: &str) -> bool {
-    core_version_at_least(core_version, RULE_SET_HOSTS_MIN_CORE)
-}
-
-/// `core_version` is `minimum` or newer. A pre-release suffix counts as that
-/// release (`0.5.0-rc1` qualifies); anything unparsable does not.
-pub(crate) fn core_version_at_least(core_version: &str, minimum: (u64, u64, u64)) -> bool {
-    let core = core_version.trim().trim_start_matches('v');
-    let core = core.split(['-', '+']).next().unwrap_or_default();
-    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
-    let (Some(Some(major)), Some(Some(minor)), patch) = (parts.next(), parts.next(), parts.next())
-    else {
-        return false;
-    };
-    let patch = match patch {
-        None => 0,
-        Some(Some(patch)) => patch,
-        Some(None) => return false,
-    };
-    (major, minor, patch) >= minimum
-}
-
 /// `SystemProxyStatus` of `set-system-proxy` / `get-status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SystemProxyStatus {
@@ -710,27 +302,9 @@ fn opt_string(value: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(crate) async fn get_version_within(
-    core: &dyn CoreTransport,
-    timeout: Duration,
-) -> Result<CoreVersion, CoreCallError> {
-    let data = core.call("/v1/get-version", json!({}), timeout).await?;
-    Ok(CoreVersion {
-        core_version: opt_string(&data, "core_version").unwrap_or_default(),
-        core_api_version: data
-            .get("core_api_version")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        profile_schema_version: data
-            .get("profile_schema_version")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-    })
-}
-
 pub(crate) async fn get_status(core: &dyn CoreTransport) -> Result<CoreStatus, CoreCallError> {
     let data = core.call("/v1/get-status", json!({}), CALL_TIMEOUT).await?;
-    // The Tauri shell accepted a nested `core` object; keep that tolerance.
+    // A status nested in a `core` object is accepted too.
     let status = data.get("core").unwrap_or(&data);
     Ok(CoreStatus {
         state: opt_string(status, "state").unwrap_or_default(),
@@ -784,8 +358,7 @@ pub(crate) fn profile_request(
 }
 
 /// `ApplyProfile`; returns the core's `applied` flag (false = same revision).
-/// Pass `allowed_rule_set_hosts` only to a core that accepts it
-/// ([`core_accepts_rule_set_hosts`]). Rule-set downloads can hold the call
+/// Rule-set downloads can hold the call
 /// for up to 10 s, well inside [`CALL_TIMEOUT`].
 pub(crate) async fn apply_profile(
     core: &dyn CoreTransport,
@@ -938,8 +511,7 @@ pub(crate) async fn local_proxies(
     Ok(proxies)
 }
 
-/// The routed user of the shared local proxy (core 0.5.12+ only: older
-/// cores reject `kind`): Profile rules, then the selected node, following
+/// The routed user of the shared local proxy: Profile rules, then the selected node, following
 /// `routing_mode`. `node_id` is empty.
 pub(crate) async fn routed_local_proxy(
     core: &dyn CoreTransport,
@@ -1332,16 +904,6 @@ pub(crate) mod tests {
         assert!(is_profile_error("RULE_SET_NOT_FOUND"));
     }
 
-    #[test]
-    fn the_routed_proxy_needs_core_0_5_12() {
-        for accepted in ["0.5.12", "v0.5.12", "0.5.13-rc.1", "0.6.0"] {
-            assert!(core_accepts_routed_proxy(accepted), "{accepted}");
-        }
-        for refused in ["0.5.11", "0.5.6", "fake", ""] {
-            assert!(!core_accepts_routed_proxy(refused), "{refused}");
-        }
-    }
-
     fn proxy_core() -> Arc<FakeCore> {
         FakeCore::new(|path, body| {
             let credential = |node: &str, user: &str| {
@@ -1395,16 +957,6 @@ pub(crate) mod tests {
         );
         let calls = core.calls.lock().unwrap();
         assert_eq!(calls[0].1, json!({"kind": "routed"}));
-    }
-
-    #[test]
-    fn rule_set_hosts_need_core_0_5_0() {
-        for accepted in ["0.5.0", "v0.5.0", "0.5.0-rc.1", "0.5.1", "0.6", "1.0.0"] {
-            assert!(core_accepts_rule_set_hosts(accepted), "{accepted}");
-        }
-        for refused in ["0.4.5", "0.4.99", "0.3.0", "", "dev", "0.x.0", "0.5.x"] {
-            assert!(!core_accepts_rule_set_hosts(refused), "{refused}");
-        }
     }
 
     #[tokio::test]
@@ -1530,34 +1082,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn parses_content_length_and_chunked_responses() {
-        let plain = b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}";
-        assert_eq!(
-            parse_http_response(plain).unwrap(),
-            (200, b"{\"ok\":true}".to_vec())
-        );
-        assert!(http_response_complete(plain));
-
-        let chunked = b"HTTP/1.1 400 Bad Request\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{\"ok\"\r\n6\r\n:true}\r\n0\r\n\r\n";
-        assert!(http_response_complete(chunked));
-        assert_eq!(
-            parse_http_response(chunked).unwrap(),
-            (400, b"{\"ok\":true}".to_vec())
-        );
-        assert!(!http_response_complete(&chunked[..chunked.len() - 7]));
-
-        let eof = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{}";
-        assert_eq!(parse_http_response(eof).unwrap().1, b"{}".to_vec());
-        assert!(!http_response_complete(eof));
-        assert!(parse_http_response(b"garbage").is_err());
-    }
-
-    #[test]
-    fn envelope_errors_keep_the_core_code() {
-        let error = decode_envelope(
-            br#"{"ok":false,"error":{"code":"NODE_NOT_FOUND","message":"node not found","retryable":false}}"#,
-        )
-        .unwrap_err();
+    fn api_errors_keep_the_core_code() {
+        let error = CoreCallError::Api {
+            code: "NODE_NOT_FOUND".into(),
+            message: "node not found".into(),
+            retryable: false,
+        };
         assert_eq!(error.code(), Some("NODE_NOT_FOUND"));
         assert_eq!(
             error.info(ErrorCode::ProbeFailed).code,
@@ -1571,24 +1101,6 @@ pub(crate) mod tests {
         let info = profile.info(ErrorCode::StandardCoreFailed);
         assert_eq!(info.code, ErrorCode::ProfileInvalid);
         assert_eq!(info.detail, "ENDPOINT_KEY_DUPLICATE");
-        assert_eq!(
-            decode_envelope(br#"{"ok":true,"data":{"a":1}}"#).unwrap(),
-            json!({"a":1})
-        );
-        assert!(matches!(
-            decode_envelope(b"nope"),
-            Err(CoreCallError::Transport(_))
-        ));
-    }
-
-    #[test]
-    fn request_carries_auth_and_version_headers() {
-        let request =
-            String::from_utf8(build_http_request("/v1/get-status", "s3cret", b"{}")).unwrap();
-        assert!(request.starts_with("POST /v1/get-status HTTP/1.1\r\n"));
-        assert!(request.contains("Authorization: Bearer s3cret\r\n"));
-        assert!(request.contains("X-Core-API-Version: 1\r\n"));
-        assert!(request.ends_with("Content-Length: 2\r\nConnection: close\r\n\r\n{}"));
     }
 
     #[test]

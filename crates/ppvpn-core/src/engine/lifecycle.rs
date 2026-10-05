@@ -3,14 +3,18 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 
 use super::state::{Applied, Switched, TunRoutingSignal};
 use super::{not_applied, now, shut_down, Error, Inner};
+use crate::config::Role;
 use crate::error::codes;
 use crate::event::Event;
+use crate::profile::Profile;
 use crate::request::{
     validate_request, ApplyRequest, ApplyResult, ClearedPin, PinClearReason, SwitchKind,
 };
@@ -24,10 +28,116 @@ const CANDIDATE_FAILED: &str = "candidate validation or build failed";
 /// What it says when the runtime refused the new configuration.
 const RELOAD_REFUSED: &str = "the runtime refused the new configuration";
 
+/// Go's `ingress tls` line (tlsdebug.go `logIngressTLS`): at debug level,
+/// one per REALITY or TLS ingress of an applied profile, with fingerprints
+/// of the values the core will use, so they can be compared with the
+/// server's without logging them: the first 10 hex digits of the SHA-256 of
+/// the public key and short ID strings exactly as received, their lengths
+/// and the key's encoding, plus the server name, uTLS fingerprint and flow.
+fn log_ingress_tls(profile: &Profile) {
+    for node in &profile.nodes {
+        for ingress in &node.ingresses {
+            let Some(tls) = &ingress.tls else {
+                continue;
+            };
+            let flow = ingress
+                .credentials
+                .vless
+                .as_ref()
+                .map_or("", |vless| vless.flow.as_str());
+            match &tls.reality {
+                Some(reality) => tracing::debug!(
+                    node_id = %node.id,
+                    endpoint_key = %ingress.endpoint_key,
+                    protocol = %ingress.protocol,
+                    server_name = %tls.server_name,
+                    public_key_sha256 = %short_digest(&reality.public_key),
+                    public_key_len = reality.public_key.len(),
+                    public_key_encoding = base64_flavor(&reality.public_key),
+                    short_id_sha256 = %short_digest(&reality.short_id),
+                    short_id_len = reality.short_id.len(),
+                    fingerprint = "chrome",
+                    flow,
+                    "ingress tls"
+                ),
+                None => tracing::debug!(
+                    node_id = %node.id,
+                    endpoint_key = %ingress.endpoint_key,
+                    protocol = %ingress.protocol,
+                    server_name = %tls.server_name,
+                    insecure = tls.insecure,
+                    flow,
+                    "ingress tls"
+                ),
+            }
+        }
+    }
+}
+
+fn short_digest(value: &str) -> String {
+    let sum = Sha256::digest(value.as_bytes());
+    sum[..5].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A base64 string's padding and alphabet from the characters it uses:
+/// "unpadded url" is base64 raw-url, the form REALITY keys use; a key
+/// without '-', '_', '+' or '/' fits either alphabet.
+pub(super) fn base64_flavor(value: &str) -> &'static str {
+    let padded = value.ends_with('=');
+    match (
+        padded,
+        value.contains(['+', '/']),
+        value.contains(['-', '_']),
+    ) {
+        (true, true, _) => "padded std",
+        (true, false, true) => "padded url",
+        (true, false, false) => "padded url-or-std",
+        (false, true, _) => "unpadded std",
+        (false, false, true) => "unpadded url",
+        (false, false, false) => "unpadded url-or-std",
+    }
+}
+
 impl Inner {
+    /// Applies `request`, then one info line with how long each phase took
+    /// (Go's `apply timing`); an apply that changes nothing writes none.
     pub(super) async fn apply(
         self: &Arc<Self>,
         request: ApplyRequest,
+    ) -> Result<ApplyResult, Error> {
+        let mut timer = PhaseTimer::new();
+        let mut sets = (0, 0, 0);
+        let result = self.apply_phases(request, &mut timer, &mut sets).await;
+        if !matches!(&result, Ok(r) if !r.applied) {
+            let (ready, stale, unavailable) = sets;
+            tracing::info!(
+                outcome = outcome(&result),
+                tun = self.config.role == Role::Tun,
+                rule_sets_ready = ready,
+                rule_sets_stale = stale,
+                rule_sets_unavailable = unavailable,
+                validate_ms = timer.ms("validate"),
+                rule_sets_ms = timer.ms("rule_sets"),
+                wait_ms = timer.ms("wait"),
+                host_ipv6_ms = timer.ms("host_ipv6"),
+                build_ms = timer.ms("build"),
+                check_ms = timer.ms("check"),
+                kernel_switch_ms = timer.ms("kernel_switch"),
+                full_restart_ms = timer.ms("full_restart"),
+                total_ms = timer.total_ms(),
+                "apply timing"
+            );
+        }
+        result
+    }
+
+    /// `apply`'s work, its phases marked on `timer`; `sets` gets the rule
+    /// sets by state (ready, stale, unavailable).
+    async fn apply_phases(
+        self: &Arc<Self>,
+        request: ApplyRequest,
+        timer: &mut PhaseTimer,
+        sets: &mut (usize, usize, usize),
     ) -> Result<ApplyResult, Error> {
         self.admit()?;
         // D3: the profile as given, before any selection is carried over.
@@ -95,6 +205,7 @@ impl Inner {
             });
         }
 
+        timer.mark("validate");
         // Rule sets never fail an apply: a set that cannot be had degrades
         // its rules. Their downloads (up to PREPARE_TIMEOUT) run before the
         // operation lock, so that a shutdown neither waits for them nor
@@ -109,8 +220,12 @@ impl Inner {
         else {
             return Err(shut_down());
         };
+        timer.mark("rule_sets");
+        *sets = rule_sets.counts();
+        // Another lifecycle call may hold the lock.
         let _op = self.op.lock().await;
         self.admit()?;
+        timer.mark("wait");
         let running = {
             let live = self.live();
             live.running
@@ -118,6 +233,7 @@ impl Inner {
                 .flatten()
         };
         self.probe_host_ipv6();
+        timer.mark("host_ipv6");
         let files = rule_sets.files();
         let build = || {
             let mut options = self.options(request.routing_mode, &selected, &pins);
@@ -125,6 +241,7 @@ impl Inner {
             translate::translate(&profile, &options)
         };
         let mut translation = build().map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
+        timer.mark("build");
         let mut listeners = Vec::new();
         let switch = if let Some(running) = &running {
             let switched = self
@@ -137,6 +254,9 @@ impl Inner {
             if switch == SwitchKind::KernelSwitch {
                 self.kernel_switched(&profile.revision);
                 self.reassert(&translation, &selected, &pins).await;
+                timer.mark("kernel_switch");
+            } else {
+                timer.mark("full_restart");
             }
             Some(switch)
         } else {
@@ -148,10 +268,12 @@ impl Inner {
                     Error::new(codes::CORE_OPERATION_FAILED, false, format!("check: {e}"))
                 })?
                 .map_err(|e| self.reload_failed(e, CANDIDATE_FAILED))?;
+            timer.mark("check");
             None
         };
 
         let revision = profile.revision.clone();
+        self.log.span().in_scope(|| log_ingress_tls(&profile));
         {
             let mut live = self.live();
             live.applied = Some(Applied {
@@ -177,6 +299,8 @@ impl Inner {
             }
         }
         self.activate_rule_sets(rule_sets, request.allowed_rule_set_hosts);
+        // A pin the request added, or one it cleared.
+        self.sync_pinned_checks();
         if running.is_some() {
             self.refresh().await;
         }
@@ -191,15 +315,35 @@ impl Inner {
         })
     }
 
+    /// Starts the applied profile, then one info line with how long each
+    /// phase took (Go's `start timing`); none when already running.
     pub(super) async fn start(self: &Arc<Self>) -> Result<(), Error> {
         self.admit()?;
         let _op = self.op.lock().await;
         self.admit()?;
+        if self.live().running {
+            return Ok(());
+        }
+        let mut timer = PhaseTimer::new();
+        let result = self.start_phases(&mut timer).await;
+        tracing::info!(
+            outcome = outcome(&result),
+            tun = self.config.role == Role::Tun,
+            local_proxy_ms = timer.ms("local_proxy"),
+            host_ipv6_ms = timer.ms("host_ipv6"),
+            build_ms = timer.ms("build"),
+            engine_start_ms = timer.ms("engine_start"),
+            total_ms = timer.total_ms(),
+            "start timing"
+        );
+        result
+    }
+
+    /// `start`'s work under the operation lock, not running, its phases
+    /// marked on `timer`.
+    async fn start_phases(self: &Arc<Self>, timer: &mut PhaseTimer) -> Result<(), Error> {
         let (profile, mode, selected, pins) = {
             let live = self.live();
-            if live.running {
-                return Ok(());
-            }
             let Some(a) = &live.applied else {
                 return Err(not_applied());
             };
@@ -212,10 +356,13 @@ impl Inner {
         };
         // The listeners' ports may have been taken while stopped.
         self.prepare_listeners()?;
+        timer.mark("local_proxy");
         self.probe_host_ipv6();
+        timer.mark("host_ipv6");
         // Translated again: select and pin may have moved since the apply.
         let mut translation =
             translate::translate(&profile, &self.options(mode, &selected, &pins))?;
+        timer.mark("build");
         self.live().needs_stop = true;
         let mut started = self.runtime.start(&translation.json).await;
         if let Err(e) = &started {
@@ -228,6 +375,9 @@ impl Inner {
                 started = self.runtime.start(&translation.json).await;
             }
         }
+        // sail's start: parse, outbounds, DNS, routing, inbounds (the TUN
+        // and its routes included); not divided further.
+        timer.mark("engine_start");
         if let Err(e) = started {
             return Err(self.runtime_error(&e));
         }
@@ -249,6 +399,7 @@ impl Inner {
         }
         self.network_started();
         self.guard_started();
+        self.sync_pinned_checks();
         self.refresh().await;
         Ok(())
     }
@@ -263,11 +414,13 @@ impl Inner {
         }
         // Before the TUN closes: sail's cleanup must not be undone.
         self.guard_stopped();
+        self.stop_pinned_checks();
         self.cancel_dns_queries();
         if let Err(e) = self.runtime.stop().await {
             let error = self.runtime_error(&e);
             // Still running: the TUN stays, and so does its guard.
             self.guard_restarted();
+            self.sync_pinned_checks();
             return Err(error);
         }
         self.network_stopped();
@@ -416,6 +569,7 @@ impl Inner {
         drop(live);
         // The TUN is gone with the runtime.
         self.guard_stopped();
+        self.stop_pinned_checks();
         // What it had opened goes now, not at the host's shutdown.
         self.fatal_cleanup();
     }
@@ -464,6 +618,58 @@ impl Inner {
             }
         }
         self.settle(&mut live);
+    }
+}
+
+/// How long each phase of an apply or a start took, for its one info line
+/// (Go's phaseTimer).
+struct PhaseTimer {
+    started: Instant,
+    last: Instant,
+    phases: Vec<(&'static str, u64)>,
+}
+
+impl PhaseTimer {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            started: now,
+            last: now,
+            phases: Vec::new(),
+        }
+    }
+
+    /// Ends the phase that began at the previous mark (or at creation).
+    fn mark(&mut self, phase: &'static str) {
+        let now = Instant::now();
+        self.phases.push((phase, millis(now - self.last)));
+        self.last = now;
+    }
+
+    /// A phase's milliseconds; None (no field) for a phase that did not
+    /// end.
+    fn ms(&self, phase: &str) -> Option<u64> {
+        self.phases
+            .iter()
+            .find(|(name, _)| *name == phase)
+            .map(|(_, ms)| *ms)
+    }
+
+    fn total_ms(&self) -> u64 {
+        millis(self.started.elapsed())
+    }
+}
+
+fn millis(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// A timing line's `outcome`.
+fn outcome<T>(result: &Result<T, Error>) -> &'static str {
+    if result.is_ok() {
+        "ok"
+    } else {
+        "failed"
     }
 }
 
