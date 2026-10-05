@@ -15,8 +15,9 @@ pub enum Role {
     /// Unprivileged: the shared local proxy, the system proxy listener,
     /// probes, traffic and connections.
     Standard,
-    /// Privileged: the TUN, its routing guard, DNS inside the TUN, hot switch
-    /// and drain. At most one per process (`TUN_INSTANCE_EXISTS`).
+    /// Privileged: the TUN, its routing guard (Linux), DNS inside the TUN
+    /// (dns-local) and the switch in place. At most one per process
+    /// (`TUN_INSTANCE_EXISTS`).
     Tun,
 }
 
