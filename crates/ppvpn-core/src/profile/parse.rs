@@ -29,12 +29,22 @@ pub fn parse(data: &[u8]) -> Result<Profile, Error> {
     serde_json::from_value(value).map_err(malformed)
 }
 
+/// Where the profile did not decode, without what serde quotes of its values
+/// (a credential among them): the host may log or show the message. A
+/// position exists only for a syntax error, not for a type error found after
+/// the bytes were read.
 fn malformed(err: serde_json::Error) -> Error {
-    Error::invalid(
-        codes::PROFILE_MALFORMED,
-        "",
-        format!("decode profile: {err}"),
-    )
+    let message = if err.line() == 0 {
+        format!("decode profile: {:?} error", err.classify())
+    } else {
+        format!(
+            "decode profile: {:?} error at line {} column {}",
+            err.classify(),
+            err.line(),
+            err.column()
+        )
+    };
+    Error::invalid(codes::PROFILE_MALFORMED, "", message)
 }
 
 fn ingresses(value: &Value) -> impl Iterator<Item = (usize, usize, &Value)> {
@@ -97,5 +107,74 @@ fn strip_nulls(value: &mut Value) {
         }
         Value::Array(items) => items.iter_mut().for_each(strip_nulls),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn secret() -> String {
+        let mut buf = [0u8; 12];
+        getrandom::fill(&mut buf).unwrap();
+        buf.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// serde quotes a mistyped value in its error text; the profile carries
+    /// credentials, so the error the host gets names the kind of failure and
+    /// where, never the value.
+    #[test]
+    fn a_malformed_profile_error_never_quotes_a_value() {
+        let secret = secret();
+        let ingress = |credentials: &str| {
+            format!(
+                r#"{{"schema_version": 1, "nodes": [{{"id": "n", "ingresses": [{{"replica_ordinal": 0, "credentials": {credentials}}}]}}]}}"#
+            )
+        };
+        let cases = [
+            (
+                "string for a number",
+                format!(r#"{{"schema_version": "{secret}"}}"#),
+            ),
+            ("string for an array", format!(r#"{{"nodes": "{secret}"}}"#)),
+            (
+                "string for an array of keys",
+                ingress(&format!(
+                    r#"{{"shadowsocks": {{"identity_keys": "{secret}"}}}}"#
+                )),
+            ),
+            (
+                "array for a key",
+                ingress(&format!(
+                    r#"{{"shadowsocks": {{"user_key": ["{secret}"]}}}}"#
+                )),
+            ),
+            (
+                "object for a password",
+                ingress(&format!(
+                    r#"{{"anytls": {{"password": {{"{secret}": 1}}}}}}"#
+                )),
+            ),
+            ("broken JSON", format!(r#"{{"nodes": [{{"id": "{secret}" "#)),
+            ("bare value", format!(r#"{{"nodes": {secret}}}"#)),
+        ];
+        for (case, json) in cases {
+            let err = parse(json.as_bytes()).expect_err(case);
+            assert_eq!(err.code, codes::PROFILE_MALFORMED, "{case}: {err:?}");
+            let shown = format!("{err:?} {err}");
+            assert!(!shown.contains(&secret), "{case}: {shown}");
+            assert!(shown.contains("decode profile: "), "{case}: {shown}");
+        }
+    }
+
+    #[test]
+    fn a_syntax_error_says_where() {
+        let err = parse(b"{\n  \"nodes\": [,]\n}").unwrap_err();
+        assert!(
+            err.message
+                .starts_with("decode profile: Syntax error at line 2 column "),
+            "{}",
+            err.message
+        );
     }
 }
