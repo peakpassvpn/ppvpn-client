@@ -95,12 +95,13 @@ apps/linux/scripts/build-repo-packages.sh  # ppvpn-archive-keyring (deb), ppvpn-
 apps/linux/scripts/smoke-test.sh deb|rpm   # start an installed package once under Xvfb
 ```
 
-Releases publish through `.github/workflows/release.yml` (see `docs/desktop/ci.md`); the
-script below is the older R2 path: after the installers go to R2, `scripts/ci/publish-linux-repo.sh` adds the deb and rpm to the signed repositories in
-the packages bucket (apt `linux/apt`, suites `dev` and `stable`; dnf `linux/rpm/<channel>/x86_64`),
-publishes the setup packages and writes `linux/<channel>/latest.json`. Packages are immutable;
-indexes, signatures and `latest.json` move last. `PKG_STORE=dir:<path>` publishes into a local
-directory instead (with a throwaway key) to try it out.
+Releases publish through `.github/workflows/release.yml` (see `docs/desktop/ci.md` and
+`docs/release.md`): the deb and the signed rpm are assets of the GitHub Release `vX.Y.Z`, and
+`tools/desktop/ci/build-linux-repo.sh` rebuilds the signed repositories from the releases (apt
+`linux/apt`, suite `stable`; dnf `linux/rpm/stable/x86_64`, pointing at the rpm asset), the setup
+packages and `linux/stable/latest.json`. `tools/desktop/ci/upload-site.sh` uploads them to the R2
+bucket behind https://pkg.peakpassvpn.com: packages first, indexes, signatures and `latest.json`
+last. The dev suite is no longer published; `linux/dev/latest.json` is a copy of stable's.
 
 `build-package.sh` documents its inputs (version, build number, channel, API base, update
 feed). The Rust code is linked against glibc 2.35 with cargo-zigbuild; the NativeAOT push

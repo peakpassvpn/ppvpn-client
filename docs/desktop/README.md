@@ -9,8 +9,8 @@ PPVPN 的原生桌面客户端：macOS（SwiftUI）、Windows（WinUI 3）、Lin
 
 - 构建：见 [BUILD.md](BUILD.md) 和各平台的 `apps/<platform>/README.md`。
 - 真机 QA：见 [qa-checklist.md](qa-checklist.md)。
-- CI：见 [ci.md](ci.md)（`ci.yml` 里桌面端的各个 job 与触发条件）。安装包暂时还不从本仓库构建；发布流水线
-  （GitHub Releases，tag `desktop-vX.Y.Z`）尚未迁入。
+- CI：见 [ci.md](ci.md)（`ci.yml` 里桌面端的各个 job 与触发条件）。安装包由 `release.yml` 构建，发行是
+  tag `vX.Y.Z` 的 GitHub Release（与 CLI 同一个），更新站点在 R2：见 [构建与发布](../release.md)。
 - 引擎本身（Core API、Profile、Rust 版行为对照）的文档在 [docs/](../)。
 - 第三方组件：见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

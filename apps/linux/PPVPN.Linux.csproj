@@ -13,7 +13,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
     <UseAppHost>true</UseAppHost>
-    <Version>0.1.0</Version>
+    <Version>0.6.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

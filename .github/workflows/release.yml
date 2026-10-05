@@ -17,18 +17,22 @@ name: release
 #     `deps`): one job per ci.yml cache key.
 #
 # By hand (workflow_dispatch), the release itself, with one version and one
-# build number for the three platforms:
-#   stable: run on the tag desktop-vX.Y.Z, after the approval of the
-#           environment desktop-release-approval. The installers are built
-#           in desktop-release-stable (its signing secrets), checked as a
-#           whole, published as a GitHub Release with SHA256SUMS and build
-#           provenance (the CLI's archives in the same release, its version
-#           checked against crates/cli), and the update site (channel pointer, feeds, apt/dnf
-#           repositories) is rebuilt from the releases and deployed to Pages.
+# build number for the three platforms and the CLI. The desktop app, the CLI
+# and the engine share one version (the workspace's, Cargo.toml) and one
+# release; the first is 0.6.0, after the Go core's last, 0.5.21:
+#   stable: run on the tag vX.Y.Z (X.Y.Z at least 0.6.0), after the approval
+#           of the environment desktop-release-approval. The installers are
+#           built in desktop-release-stable (its signing secrets), checked as
+#           a whole, published as one GitHub Release with SHA256SUMS and
+#           build provenance (the CLI's archives in the same release, its
+#           version checked against crates/cli), and the update site
+#           (channel pointer, feeds, apt/dnf repositories) is rebuilt from
+#           the releases and uploaded to its R2 bucket, served at
+#           https://pkg.peakpassvpn.com (DESKTOP_SITE_BASE).
 #   dev:    run on the branch main, in desktop-release-dev. Never published:
 #           no release, no tag; the installers stay workflow artifacts (a dev
 #           build carries the dev backend's address).
-#   site:   rebuild and deploy the update site from the published releases,
+#   site:   rebuild and upload the update site from the published releases,
 #           as it is, after the same approval (it signs the repositories).
 #
 # A stable release is refused unless the repository variable
@@ -37,13 +41,15 @@ name: release
 # everything a release does except what the public can see. It builds,
 # signs and checks the files, makes a draft release (no tag; only the
 # repository's members see a draft), and builds the update site as a
-# workflow artifact instead of deploying it. Build provenance is left out of
+# workflow artifact instead of uploading it. Build provenance is left out of
 # a rehearsal: an attestation is an entry in a public log.
 #
-# A desktop release is never the repository's "latest" release: that is
-# the Go core's (v0.5.21, its last; tags vX.Y.Z, which the desktop tags do
-# not match). The repository holds no secret itself; only the environments
-# do, and a job reads them only when it runs in one.
+# The Go core's releases share the tag form: v0.5.14 to v0.5.21 (its last).
+# They stay as they are, and nothing here reads them: a stable release must
+# be 0.6.0 or later, and the update site is built from the releases from
+# v0.6.0 on. A stable release becomes the repository's "latest" release
+# (unless allow_downgrade is set). The repository holds no secret itself;
+# only the environments do, and a job reads them only when it runs in one.
 
 on:
   push:
@@ -51,19 +57,19 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: dev or stable builds and (stable) publishes; site only rebuilds the update site
+        description: dev or stable builds and (stable) publishes; site only rebuilds and uploads the update site
         type: choice
         options: [dev, stable, site]
         required: true
       version:
-        description: Version x.y.z (dev and stable; stable runs must be on the tag desktop-v<version>)
+        description: Version x.y.z (dev and stable; stable runs must be on the tag v<version>, 0.6.0 or later)
         required: false
       allow_downgrade:
         description: stable only - publish even if not newer than the published release (a deliberate rollback)
         type: boolean
         default: false
       rehearsal:
-        description: stable only - run the whole release without publishing anything (a draft release, no tag, no provenance, no deployment); on main
+        description: stable only - run the whole release without publishing anything (a draft release, no tag, no provenance, no upload of the site); on main
         type: boolean
         default: false
 
@@ -159,7 +165,13 @@ jobs:
           fi
           case "$CHANNEL" in
             stable)
-              tag="desktop-v$version"
+              # The Go core's releases are v0.5.21 and before, on the same
+              # tag form: a stable release starts at 0.6.0.
+              if [ "$(printf '%s\n' 0.6.0 "$version" | sort -V | head -n 1)" != 0.6.0 ]; then
+                echo "a stable release is 0.6.0 or later (v0.5.x and older are the Go core's tags), got $version" >&2
+                exit 1
+              fi
+              tag="v$version"
               publish=true
               if [ "$REHEARSAL" = true ]; then
                 # Nothing public comes of it, so no tag: the name is only
@@ -376,8 +388,8 @@ jobs:
           rpm_meta=dist/release-meta-linux-x64-rpm.json
           version="$(jq -er .version "$deb_meta")"
           build="$(jq -er .build "$deb_meta")"
-          stable_tag="desktop-v$version"
-          dev_tag="desktop-v$version-dev.${build##*.}"
+          stable_tag="v$version"
+          dev_tag="v$version-dev.${build##*.}"
           stable="$T/releases/stable/$stable_tag"
           dev="$T/releases/dev/$dev_tag"
           mkdir -p "$stable" "$T/releases/dev" "$T/assets" "$T/site/desktop"
@@ -1043,6 +1055,7 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       BUILD: ${{ needs.prepare.outputs.build_number }}
       REHEARSAL: ${{ inputs.rehearsal }}
+      ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1062,7 +1075,7 @@ jobs:
             echo "the release $TAG already exists" >&2
             exit 1
           fi
-          notes="PPVPN desktop $VERSION (build $BUILD), stable channel. Commit \`$GITHUB_SHA\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml\`."
+          notes="PPVPN $VERSION (build $BUILD), stable channel: the desktop installers and the CLI's archives. Commit \`$GITHUB_SHA\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml\`."
           if [ "$REHEARSAL" = true ]; then
             # A draft: no tag is created, and it is not public. To be deleted
             # after the rehearsal (gh release delete "$TAG").
@@ -1070,25 +1083,29 @@ jobs:
             # token (403), as it does for a tag on a commit that changes
             # workflow files; a draft makes no tag, so it needs none.
             url=$(gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" \
-              --draft --latest=false --title "PPVPN desktop $VERSION (rehearsal, build $BUILD)" \
+              --draft --latest=false --title "PPVPN $VERSION (rehearsal, build $BUILD)" \
               --notes "Rehearsal of the release workflow at commit $GITHUB_SHA. Not a release. $notes")
             echo "Draft release (delete it after the rehearsal): $url" >>"$GITHUB_STEP_SUMMARY"
           else
-            # On the tag it runs on. Never the repository's latest release.
+            # On the tag it runs on. The repository's latest release, unless
+            # it may be a rollback (allow_downgrade): an older version must
+            # not take that place from a newer one.
+            latest=true
+            [ "$ALLOW_DOWNGRADE" != true ] || latest=false
             gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --latest=false --title "PPVPN desktop $VERSION" --notes "$notes"
+              --latest="$latest" --title "PPVPN $VERSION" --notes "$notes"
           fi
 
-  # The update site, deployed to GitHub Pages: the stable channel's pointer
-  # and Sparkle feeds (desktop/…) and its apt and dnf repositories (linux/…).
-  # The whole site is rebuilt from the GitHub Releases on every deployment (a
-  # Pages deployment replaces the site), so the releases are its only source
-  # and a site run restores it. Only the stable channel is deployed; the
-  # directory core/ is reserved (the repository has one Pages site). A
-  # rehearsal deploys nothing: the site is built from the rehearsal's own
-  # files and kept three days as the artifact site-rehearsal.
-  pages:
-    name: pages
+  # The update site: the stable channel's pointer and Sparkle feeds
+  # (desktop/…) and its apt and dnf repositories (linux/…). The whole site is
+  # rebuilt from the GitHub Releases on every run, so the releases are its
+  # only source and a site run restores it; site-deploy then uploads it to
+  # the R2 bucket served at DESKTOP_SITE_BASE. Only the stable channel is
+  # built; the retired dev channel's update checks are pointed at it. A
+  # rehearsal uploads nothing: the site is built from the rehearsal's own
+  # files and kept three days as the artifact site, as a release's is.
+  site:
+    name: site
     if: >-
       !cancelled() && needs.approve.result == 'success' &&
       (inputs.channel == 'site' || (inputs.channel == 'stable' && needs.publish.result == 'success'))
@@ -1116,9 +1133,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends apt-utils createrepo-c rpm gnupg gpgv jq
-      # Stable releases are the tags desktop-vX.Y.Z that are not prereleases.
-      # "Newest" is the highest version, not the latest published: a release
-      # published again later must not move the channel back.
+      # Stable releases are the tags vX.Y.Z that are not prereleases, from
+      # v0.6.0 on: v0.5.21 and before are the Go core's releases, which
+      # carry no installer. "Newest" is the highest version, not the latest
+      # published: a release published again later must not move the
+      # channel back.
       - name: The stable releases, newest first
         if: ${{ !inputs.rehearsal }}
         run: |
@@ -1129,10 +1148,11 @@ jobs:
           fi
           gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease,isDraft \
             --jq '.[] | select(.isDraft or .isPrerelease | not) | .tagName' \
-            | grep -E '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sort -t v -k 2 -V -r | head -n "$KEEP" > tags || true
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | awk -F. '{ major = substr($1, 2) + 0 } major > 0 || $2 + 0 >= 6' \
+            | sort -V -r | head -n "$KEEP" > tags || true
           if [ ! -s tags ]; then
-            echo "no stable desktop release: nothing to deploy" >&2
+            echo "no stable release from v0.6.0 on: nothing to upload" >&2
             exit 1
           fi
           cat tags
@@ -1166,7 +1186,7 @@ jobs:
             echo "the variable DESKTOP_SITE_BASE (the update site's https address) is not set" >&2
             exit 1
           fi
-          printf '%s' "$TAG" | grep -Eq '^desktop-v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a stable tag name: $TAG" >&2; exit 1; }
+          printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a stable tag name: $TAG" >&2; exit 1; }
           echo "$TAG" > tags
           mkdir -p "linux-releases/$TAG" newest "sums/$TAG"
           cp rehearsal-release/release-meta-linux-x64-*.json rehearsal-release/*.deb rehearsal-release/*.rpm "linux-releases/$TAG/"
@@ -1226,6 +1246,21 @@ jobs:
           export PKG_GPG_FINGERPRINT
           tools/desktop/ci/build-linux-repo.sh --channel stable --releases linux-releases \
             --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site --keep "$KEEP"
+      # The dev channel is retired (dev builds are never published), but
+      # earlier dev installs still poll its files: the Linux app
+      # linux/dev/latest.json, the macOS and Windows apps
+      # desktop/dev/appcast-<platform>.xml. They get stable's, so that they
+      # are offered the stable release. Nothing else of dev is written: the
+      # apt suite dev and the dnf repository linux/rpm/dev are left as they
+      # are in the bucket (site-deploy deletes nothing).
+      - name: Point the retired dev channel at stable
+        run: |
+          set -eu
+          mkdir -p site/linux/dev site/desktop/dev
+          cp site/linux/stable/latest.json site/linux/dev/latest.json
+          for feed in site/desktop/stable/appcast-*.xml; do
+            cp "$feed" "site/desktop/dev/$(basename "$feed")"
+          done
       - name: The site
         run: |
           set -eu
@@ -1235,39 +1270,61 @@ jobs:
             || { echo "latest.json and the channel pointer name different versions" >&2; exit 1; }
           find site -type f | sort
           du -sh site
-          # Pages refuses a site over 1 GB.
-          [ "$(du -sm site | cut -f1)" -lt 900 ] || { echo "the site is close to the Pages limit of 1 GB" >&2; exit 1; }
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        if: ${{ !inputs.rehearsal }}
-        with:
-          path: site
+          # The order and the caching site-deploy uploads it with.
+          tools/desktop/ci/upload-site.sh --plan site
+      # What site-deploy uploads; for a rehearsal, all there is.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: ${{ inputs.rehearsal }}
         with:
-          name: site-rehearsal
+          name: site
           path: site
           if-no-files-found: error
           retention-days: 3
       - name: Rehearsal summary
         if: ${{ inputs.rehearsal }}
         run: |
-          echo "The site was built and not deployed. It is the artifact site-rehearsal of this run." >>"$GITHUB_STEP_SUMMARY"
+          echo "The site was built and not uploaded. It is the artifact site of this run." >>"$GITHUB_STEP_SUMMARY"
 
-  pages-deploy:
-    name: pages-deploy
-    if: ${{ !cancelled() && !inputs.rehearsal && needs.pages.result == 'success' }}
-    needs: pages
+  # The upload, in its own job: the bucket's keys are not in the job that
+  # holds the signing key, and the reverse. The site is uploaded over what
+  # the bucket holds, in an order safe for a client reading it meanwhile
+  # (tools/desktop/ci/upload-site.sh): the files that never change first
+  # (packages, by-hash indexes, repodata), then the indexes that name them,
+  # the signed ones, and the update checks and the channel pointer last.
+  # Nothing is deleted, so whatever an index already fetched names is still
+  # there. R2's S3 API with the AWS CLI of the runner image.
+  site-deploy:
+    name: site-deploy
+    if: ${{ !cancelled() && !inputs.rehearsal && needs.approve.result == 'success' && needs.site.result == 'success' }}
+    needs: [approve, site]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 30
+    # The bucket's keys.
+    environment: desktop-release-stable
+    env:
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.PPVPN_PKG_R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.PPVPN_PKG_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.PPVPN_PKG_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # Checksums only where an operation requires one: what Cloudflare
+      # advises for R2 with recent AWS CLIs, which add them by default.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
     steps:
-      - id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/desktop/ci
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: site
+          path: site
+      - name: Upload to R2
+        run: tools/desktop/ci/upload-site.sh site
+      - name: Summary
+        env:
+          SITE_BASE: ${{ vars.DESKTOP_SITE_BASE }}
+        run: |
+          echo "The update site was uploaded: ${SITE_BASE%/}/desktop/channels/stable.json" >>"$GITHUB_STEP_SUMMARY"
 
   # ---- On a merge only: the build caches ci.yml restores. One job per
   # ci.yml cache key (shared-key), building what the ci.yml jobs on that key

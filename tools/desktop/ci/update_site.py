@@ -68,7 +68,8 @@ def sha256_file(path):
 
 
 def expected_tag(channel, version, build):
-    return f"desktop-v{version}" if channel == "stable" else f"desktop-v{version}-dev.{build}"
+    """The release's tag: the desktop app, the CLI and the engine share it."""
+    return f"v{version}" if channel == "stable" else f"v{version}-dev.{build}"
 
 
 def load_release(assets):
