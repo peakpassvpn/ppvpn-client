@@ -252,7 +252,7 @@ impl Inner {
             listeners = switched.listeners;
             let switch = switched.kind;
             if switch == SwitchKind::KernelSwitch {
-                self.kernel_switched(&profile.revision);
+                self.kernel_switched(&profile.revision, switched.closed, switched.kept);
                 self.reassert(&translation, &selected, &pins).await;
                 timer.mark("kernel_switch");
             } else {

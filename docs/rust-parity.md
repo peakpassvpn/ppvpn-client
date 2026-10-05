@@ -72,7 +72,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 | Go 包 | A | B | C | D |
 | --- | --- | --- | --- | --- |
-| `internal/runtime` | 2 | 5 | 23 | 17 |
+| `internal/runtime` | 1 | 5 | 23 | 17 |
 | `profile` | 0 | 4 | 18 | 1 |
 | `internal/config` | 0 | 1 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 3 | 13 | 71 | 66 |
+| 合计 | 2 | 13 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）、切换时关掉被删节点的连接（约 1.25 人日）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -154,7 +154,7 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 reload 之后 fallback 组的健康状态从头开始（sail 2f967b1a 读自代码）：每次 reload（apply 的热切换、规则集重建、host IPv6 重探）都会重建出站和组。selector 的选择和 fallback 的 pin 会按 tag 带到新组；fallback 当前用的成员和健康历史则从头开始，新组在首轮检查完成前停在第一个成员（主入口）上。这和 Go 一致：Go 的热切换是换一个新内核，新内核的 failover 组同样从主入口开始，所有成员先算健康。可见的影响两边也一样：主入口不可用时，reload 后的第一条连接先试主入口，失败后在同一次拨号里换到下一个成员；sail 0.16 起只有这一条连接要等拨号超时。随后组切走，引擎发一次 `NodeIngressSwitched`（pin 住的节点不发）。所以不算偏离，引擎不另做处理。开关系统代理监听和本地代理重试走的是只涉及入站的 reload（`inbounds_only`，不碰出站和组），不受影响（#221）。
 
-`draining_kernels`（以及 `kernel switched` 日志行的同名字段）恒为 0：Rust 版没有旧内核排空，Sail 在实例内原地 reload（契约 4.1）。`KernelSwitched` 的 `closed_connections` 和 `kept_connections` 暂时也是 0，要等切换时主动关掉新 Profile 拿走的连接（第 1 组的 A 类项）实现后才有数。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
+`draining_kernels`（以及 `kernel switched` 日志行的同名字段）恒为 0：Rust 版没有旧内核排空，Sail 在实例内原地 reload（契约 4.1）。`KernelSwitched` 的 `closed_connections` 和 `kept_connections` 是这次切换关掉和留下的连接数：reload 之后，经新 Profile 已没有的节点的连接被关掉（`engine::switch::close_on_switch`），其余留在原出站上。新 reject 规则命中的连接还没有关（`TestApplyClosesConnectionsANewRuleRejects`，A）。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
 
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
 
@@ -210,13 +210,13 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
 | `internal/runtime` `TestApplyClosesConnectionsANewRuleRejects` | A new reject rule closes the connections it now matches. |  | todo | 【A，2 人日】Rust 缺：sail reload 原地保留旧连接、不按新规则重判（sail docs/embed.md "connections already open: kept"），engine/switch.rs 切换后没有用 Runtime::connections()/close_connection 关掉新 reject 规则命中的连接，需按新规则重匹配现有连接（sail 接口或自建匹配）。 |
-| `internal/runtime` `TestApplyClosesConnectionsOfRemovedNodes` | Taking a node away closes its connections (and its local proxy user's) on the switch; a connection on a node that stays keeps running. |  | todo | 【A，1 人日】Rust 缺：sail reload 后经被删出站的连接继续存在（sail lib.rs remove_outbound "Connections through it go on"），engine/switch.rs 未调用 close_connection 关闭被移除节点及其本地代理用户的连接，KernelSwitched 的 closed/kept 计数也恒为 0。 |
+| `internal/runtime` `TestApplyClosesConnectionsOfRemovedNodes` | Taking a node away closes its connections (and its local proxy user's) on the switch; a connection on a node that stays keeps running. | `ppvpn-core` `engine::switch_tests::a_switch_closes_the_connections_of_removed_nodes` | done | reload 之后关掉经被删节点（含其任一入口）的连接，留在保留节点或不经节点的连接不动；连接在 reload 之前列出，所以 Sail 自己关掉的（被删本地代理用户的）也计入 closed。kept 是 reload 之后仍在的其余连接。桌面 TUN 上删节点会让它的入口 IP 离开 TUN 的排除路由，是完整重启，连接全部断开 |
 | `internal/runtime` `TestApplyDoesNotDeadlockWithStatusAndAWriter` | An apply in progress must not wedge the core's lock: Status reads the kernel while holding it (activeIngress), and the apply's prepare (pins) takes it. |  | todo | 【C】Rust 结构上已避免：status() 只在短 std 锁下读 state::Live，生命周期操作走独立的 op tokio Mutex（engine.rs Inner.op/live），查询从不等待 apply，用例可切换后补。 |
 | `internal/runtime` `TestApplyKeepsRunningConnections` | An apply while a download runs (new rules, same nodes) switches kernels without touching the download: it completes in full after the switch, new connections use the new … |  | todo | 【C】sail 原地 reload 保留未受影响监听上的连接（sail test_reload*.rs 测试），我们的 netns 用例 runtime::netns_tests::a_reload_moves_new_connections_to_the_new_default_interface 也验证 reload 前的连接继续，专门的下载不中断用例可后补。 |
 | `internal/runtime` `TestApplyKernelStartFailureLeavesTheOldKernel` | A kernel that fails to start is discarded: ApplyProfile fails, the old kernel and its connections are untouched, and the old profile stays. |  | todo | 【C】已覆盖：engine::lifecycle_tests::a_failed_apply_keeps_what_runs_and_says_why（运行时拒绝 reload 时 Profile 与状态不变）和 engine::switch::tests::a_failed_restart_puts_the_running_configuration_back，sail reload 失败不改变任何东西。 |
 | `internal/runtime` `TestApplyReachesConnectionsOfOlderKernels` | A switch applies the new profile to every replaced kernel still draining, not only the one it replaces: a download started two applies earlier is counted as kept, and … |  | todo | 【D】多内核排空是 Go 进程模型：Rust 只有一个 sail 实例原地 reload，没有“旧内核”；对所有现存连接的关闭逻辑由 TestApplyClosesConnectionsOfRemovedNodes 那一行（A）统一覆盖。 |
 | `internal/runtime` `TestAtomicApplyRollback` | Atomic apply rollback | `ppvpn-core` `engine::lifecycle_tests::a_failed_apply_keeps_what_runs_and_says_why` | done | 在 FakeRuntime 上：校验失败、翻译失败、运行时拒绝 reload 时，生效的 Profile 和状态都不变，并发 `ReloadFailed`（带 `code`）；真实 sail 上的回滚由 sail 的 reload 保证（失败不改变任何东西） |
-| `internal/runtime` `TestCloseOnSwitchDecidesByRecordedNode` | closeOnSwitch decides by the node the routing kernel recorded, not by looking the connection's tags up in the previous build, so it holds even if tags stop being stable … |  | todo | 【A，0.25 人日】随“关闭被移除节点的连接”一起实现：按 sail 记录的出站链（Runtime::connections() 的 chain，runtime/sail.rs）判定而不是按旧构建的 tag 查表，目前 Rust 尚无 closeOnSwitch。 |
+| `internal/runtime` `TestCloseOnSwitchDecidesByRecordedNode` | closeOnSwitch decides by the node the routing kernel recorded, not by looking the connection's tags up in the previous build, so it holds even if tags stop being stable … | `ppvpn-core` `engine::switch_tests::a_switch_closes_the_connections_of_removed_nodes` | done | 连接的节点取 Sail 在路由时记下的出站链；节点和入口的 tag 由节点 id 生成（translate 的 `node_tag`），同一个 tag 在任何构建里都指同一个节点，节点在 Profile 里的位置变了 tag 也不变（用例断言了这一点） |
 | `internal/runtime` `TestConcurrentLifecycleOperationsDoNotLeakEngines` | Concurrent lifecycle operations do not leak engines |  | todo | 【C】Rust 生命周期调用由 engine.rs 的 op Mutex 串行化，且只有一个 Runtime 实例（不再按 apply 新建内核），泄漏不可能发生，并发压力用例可切换后补。 |
 | `internal/runtime` `TestDrainClosesIdleConnections` | A keep-alive connection that goes quiet in a draining kernel is closed after drainIdleClose, and the kernel drains instead of waiting for drainLimit. |  | todo | 【D】排空闲置连接属于 Go 的多内核模型；sail reload 原地进行，被替换出站的会话随连接结束而关闭（sail docs/embed.md reload 表），没有排空内核；host-integration 的 KernelDrained/draining_kernels 应注明 Rust 恒为 0/不发。 |
 | `internal/runtime` `TestDrainDeadlineClosesTheRest` | A kernel past drainLimit is closed with what it still carries. |  | todo | 【D】drainLimit 是给旧内核兜底的 Go 机制，Rust 单实例原地 reload 无旧内核（engine/switch.rs draining_kernels 恒 0）；连接按新配置收敛靠关闭被删节点/新 reject 的 A 项。 |

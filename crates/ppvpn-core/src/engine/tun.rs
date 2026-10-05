@@ -366,14 +366,20 @@ impl Inner {
         let Some(running) = self.live().applied.as_ref().map(|a| a.translation.clone()) else {
             return;
         };
-        let (switch, translation) = match self.switch_to(&running, translation, &build).await {
-            Ok(switched) => (switched.kind, switched.translation),
-            Err(error) => {
-                tracing::error!(previous_policy = policy(previous), policy = policy(state),
+        let (switch, translation, closed, kept) =
+            match self.switch_to(&running, translation, &build).await {
+                Ok(switched) => (
+                    switched.kind,
+                    switched.translation,
+                    switched.closed,
+                    switched.kept,
+                ),
+                Err(error) => {
+                    tracing::error!(previous_policy = policy(previous), policy = policy(state),
                     rebuilt = false, error = %error, "host ipv6 changed");
-                return;
-            }
-        };
+                    return;
+                }
+            };
         tracing::info!(
             previous_policy = policy(previous),
             policy = policy(state),
@@ -389,7 +395,7 @@ impl Inner {
             let revision = applied.profile.revision.clone();
             drop(live);
             if switch == crate::request::SwitchKind::KernelSwitch {
-                self.kernel_switched(&revision);
+                self.kernel_switched(&revision, closed, kept);
             }
         }
         self.refresh().await;
