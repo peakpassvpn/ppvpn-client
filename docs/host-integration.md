@@ -36,7 +36,7 @@ CLI 只运行标准实例，而且不开 7891。
 
 标准实例在所有平台上都不需要任何特权。
 
-**系统层面的 DNS 设置不属于本库**，例如 macOS 上用 scutil 覆盖系统 DNS。这部分由 service 负责，包括退出和异常后的清理（见 `docs/desktop.md`）。
+**系统层面的 DNS**：macOS 上由 Sail 负责（Sail 0.17.0 起）。Sail 打开 utun 时写一个临时的 dynamic store 键 `State:/Network/Service/<id>/DNS`（supplemental，匹配全部域名），指向 TUN 通告的 DNS 地址；teardown 时这一项（`LeftKind::Dns`）先于路由撤掉。临时键属于写它的进程，进程退出时由系统删除，被强杀也一样。service 不再用 scutil 覆盖系统 DNS。宿主自己打开 TUN 时（移动端的平台隧道）Sail 不设 DNS，由宿主负责。`ppvpn-core` 自己的 dns-local 读的是默认网卡的 DNS（`State:/Network/Global/DNS` 和该网卡的 scoped 解析器），不含这个键，隧道地址也另有过滤。其他平台上系统层面的 DNS 设置不属于本库，由 service 负责，包括退出和异常后的清理（见 `docs/desktop.md`）。
 
 ## 3. 生命周期
 
@@ -414,7 +414,7 @@ pub struct Error {
 - 多用户和接管；
 - service 的安装；
 - UI 状态的映射；
-- 系统层面的 DNS 设置；
+- 系统层面的 DNS 设置（macOS 除外：TUN 期间由 Sail 设置，见第 2 节）；
 - 拉取 Profile 失败时，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。后端的口径见 proxy-profile 格式文档（ingress-endpoints.md）：
   - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）；
   - **500**：违反客户端契约，或者规则集读不出来。
