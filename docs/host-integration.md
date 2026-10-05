@@ -414,7 +414,7 @@ pub struct Error {
 - 多用户和接管；
 - service 的安装；
 - UI 状态的映射；
-- 系统层面的 DNS 设置；
+- 系统层面的 DNS 设置（macOS 除外：TUN 期间由 Sail 设置，见第 2 节）；
 - 拉取 Profile 失败时，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。后端的口径见 proxy-profile 格式文档（ingress-endpoints.md）：
   - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）；
   - **500**：违反客户端契约，或者规则集读不出来。
