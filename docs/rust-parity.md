@@ -72,7 +72,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 | Go 包 | A | B | C | D |
 | --- | --- | --- | --- | --- |
-| `internal/runtime` | 5 | 5 | 23 | 17 |
+| `internal/runtime` | 4 | 5 | 23 | 17 |
 | `profile` | 0 | 4 | 18 | 1 |
 | `internal/config` | 1 | 1 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 7 | 13 | 71 | 66 |
+| 合计 | 6 | 13 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）。另外，`testdata/golden/routing` 目前没有 Rust 运行器：`TestGoldenRouting` 已从 n-a 改回 todo（A，约 2 人日），在真实 Sail 上跑的运行器合入后，多数路由类的 B 行可以一并转 done。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -368,7 +368,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | --- | --- | --- | --- | --- |
 | `internal/outboundlog` `TestLimiterForgetsOldDestinationsWhenFull` | Limiter forgets old destinations when full | `ppvpn-core` `engine::outbound_log::tests::limiter_forgets_old_destinations_when_full` | done |  |
 | `internal/outboundlog` `TestLimiterLogsOncePerWindowWithSuppressedCount` | Limiter logs once per window with suppressed count | `ppvpn-core` `engine::outbound_log::tests::limiter_logs_once_per_window_with_suppressed_count` | done | sail 会把多次失败合成一个 `DialFailed{count}`：记一行，其余算进下一行的 `suppressed`（`a_batch_logs_one_line`） |
-| `internal/runtime` `TestApplyLogsRealityFingerprintsAtDebug` | At debug level an apply logs fingerprints of each REALITY ingress's parameters, never the values themselves. |  | todo | 【A，0.5 人日】Rust 缺失：docs/quickstart.md 记载的 debug 级 msg="ingress tls"（server_name、flow、public_key/short_id 的 sha256 摘要与长度、base64 形式、uTLS fingerprint）在 crates/ppvpn-core 中无任何实现（engine/ 与 translate/mod.rs 只把 reality 值写进配置）；依据：一个 apply 时的日志函数加 base64 形式判别和不泄露原值的单测。 |
+| `internal/runtime` `TestApplyLogsRealityFingerprintsAtDebug` | At debug level an apply logs fingerprints of each REALITY ingress's parameters, never the values themselves. | `ppvpn-core` `engine::logs::tests::apply_logs_reality_fingerprints_at_debug` | done | 同 Go 的 `msg="ingress tls"`，字段名和顺序一致：每个带 TLS 的入口一行（REALITY 入口为摘要、长度、`public_key_encoding` 和 `fingerprint`，其余为 `insecure`），只在 apply 成功后记，reload/规则集重建不记；用例的密钥运行时随机生成 |
 | `internal/runtime` `TestDirectOutboundFailuresAreLoggedAndLimited` | A failed direct connection logs the same "outbound failed" line as a node (no node_id or endpoint_key), once per destination per DirectLimit; the next line after the … | `ppvpn-core` `engine::outbound_log::tests::chains_name_their_node_and_ingress` | done | 来源是 sail 的 `DialFailed`（#179）。按目的地限流，同 Go 的 DirectLimit 10 s。和 Go 的差异：没有 `network` 和 `ms`，sail 不给；`error` 是 I/O 错误的类别，不是完整文本；多一个 `count` |
 | `internal/runtime` `TestOutboundFailuresAreLoggedAtDebug` | At debug level a failed node connection names the node, the ingress, the protocol, the stage and the error, and never the credentials: a dead port fails at dial; a … | `ppvpn-core` `engine::outbound_log::tests::each_failed_member_names_its_ingress` | done | 来源是 sail 的 `DialFailed`（2eb3fe47 起，chain 在拨号前就含成员，组内每个成员失败各发一个，带 `more_to_try`）：每个入口失败各记一行 `outbound failed`，带 node_id、endpoint_key 和 outbound。和 Go 的差异：没有 `protocol`、`network` 和 `ms`；`error` 是 I/O 错误的类别；另外多了 `count` 和 `more_to_try` |
 
