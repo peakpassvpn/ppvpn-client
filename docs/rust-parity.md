@@ -1,6 +1,6 @@
 # Rust 版与 Go 版的行为对照
 
-Go core 冻结在 v0.5.21（#214）。Rust 版 `ppvpn-core`（`crates/ppvpn-core`）硬切换前，下表每一行都要有结论：
+Go core 冻结在 v0.5.21（#214）。Rust 版 `ppvpn-core`（`crates/core`）硬切换前，下表每一行都要有结论：
 
 - **todo**：还没有对应的 Rust 用例；
 - **done**：`Rust 用例` 一列写明对应的测试（crate 路径和名称），行为与 Go 一致；
@@ -139,7 +139,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 **Go 0.5.21 的已知滞后（Rust 必须修好）**：前端的网卡监视器报告默认网卡变化后，dns-local 和直连拨号用的是**内核自己的**监视器，网络事件连续不断时可能晚几秒才跟上。原因是 sing-tun 每收到一个 netlink 事件，就把 1 秒的检查重新计时；各个盒子的节奏不同，某一个就可能一直被推迟（#214；和 Desktop 在 Linux 实机上恢复慢 5.2 秒（#69）是同一个根源）。CI 里 network-change 对 Go 用 `SWITCH_GRACE_MS=6000`：在 6 秒内跟上才算通过，日志里记下实际滞后和第一次查询的结果。前端监视器自己也会被同样推迟（CI 上见过 5146 ms 才报告变化），所以有宽限时，等待"变化被报告"的上限是 10 秒（`CHANGE_REPORT_MS` 可改），日志里记下实际耗时。Rust 版的 ppvpn-core 必须在 `SWITCH_GRACE_MS=0`（默认）下通过：变化在 2 秒内被报告，变化后的第一次查询就用新网络。做法是全程只用一个监视器（同一个事件源同时用于日志、DNS 和拨号），并且防抖要有上限，不能被持续的事件无限推迟。
 
-**state_dir 持久化（G8）**：`crates/ppvpn-core/tests/state_dir.rs`，在 ci.yml 的 `unit` 作业（Linux，`make test-unit`）里跑；按 `docs/testing.md` 它属于 L2（进程内的真 Sail），随 `it-sail` 的搬迁一起移过去。重启：引擎在自己的进程里对同一个 state_dir 跑两次，本地代理的端口、用户名、密码和节点凭据两次相同。新版本：`testdata/golden/state_dir` 是这一版写出的状态，以后任何一版读它都必须得到同样的凭据和端口（端口被占时只跳过端口这一项），读完写回的内容也不变；状态格式一变，这里先失败，逼着写迁移。不考虑 Go 版到 Rust 版的升级（Go 版客户端没有对外发过）。宿主侧的设置和登录在 Desktop 的 G5 实机检查里。
+**state_dir 持久化（G8）**：`crates/core/tests/state_dir.rs`，在 ci.yml 的 `unit` 作业（Linux，`make test-unit`）里跑；按 `docs/testing.md` 它属于 L2（进程内的真 Sail），随 `it-sail` 的搬迁一起移过去。重启：引擎在自己的进程里对同一个 state_dir 跑两次，本地代理的端口、用户名、密码和节点凭据两次相同。新版本：`testdata/golden/state_dir` 是这一版写出的状态，以后任何一版读它都必须得到同样的凭据和端口（端口被占时只跳过端口这一项），读完写回的内容也不变；状态格式一变，这里先失败，逼着写迁移。不考虑 Go 版到 Rust 版的升级（Go 版客户端没有对外发过）。宿主侧的设置和登录在 Desktop 的 G5 实机检查里。
 
 **不在 CI 里的**（继续在共享测试主机上用 hostq 跑，见 `test/lab/engine`）：
 - 真实节点、弱网（netem）、长时间运行和内存（G4、G6）；
@@ -501,7 +501,7 @@ Rust 版的 dns-remote 是 sail 的 `sequential` server，参数和 Go 的 guard
 | `probe` `TestPingLoopback` | exercises the real unprivileged ICMP implementation. | `ppvpn-core` `probe::icmp::tests::ping_loopback` | done | 不允许无特权 ICMP 的主机上跳过，同 Go |
 | `probe` `TestPingTimeoutAndCancel` | Ping timeout and cancel | `ppvpn-core` `probe::icmp::tests::ping_timeout_and_cancel` | done | 取消即丢弃 future |
 | `profile` `TestEntryIPOptional` | Entry ip optional |  | todo | 【C】入口 IP 为空时 profile/validate.rs::validate_ingress 跳过公网检查，golden contract/profiles/base.json 的无 IP 备用入口经 validation.json valid_base 已覆盖，单测可切换后补。 |
-| `profile` `TestFixtureProfileParsesAndValidates` | Fixture profile parses and validates |  | todo | 【C】testdata/profiles/multi-ingress.json 由 crates/ppvpn-cli/tests/engine.rs 解析并应用，同形的 golden base.json 由 tests/golden_contract.rs::validation_matches_the_go_golden 校验通过，形状断言可切换后补。 |
+| `profile` `TestFixtureProfileParsesAndValidates` | Fixture profile parses and validates |  | todo | 【C】testdata/profiles/multi-ingress.json 由 crates/cli/tests/engine.rs 解析并应用，同形的 golden base.json 由 tests/golden_contract.rs::validation_matches_the_go_golden 校验通过，形状断言可切换后补。 |
 | `profile` `TestIngressFailoverShapes` | Ingress failover shapes | `ppvpn-core` `profile::validate::tests::failover_shapes_fail_with_go_s_code_and_field` | done | Go 表 27 例中的 26 例逐例断言错误码和 field，另有主入口加两个备用入口通过的一例；标签 "\xff" 未移植：Rust 的 String 装不下非法 UTF-8，这样的字节在 parse 就被拒（PROFILE_MALFORMED）。入口 IP 留空（公网地址不在文档网段内，接受规则见 addr::tests） |
 | `profile` `TestIngressLabelIsOptionalDisplayOnly` | Ingress label is optional display only |  | todo | 【C】profile/validate.rs::valid_label 按字符计数（chars().count()，同 Go RuneCount），golden base.json 有 label 的入口已通过且超长 label 被拒，中文边界用例可切换后补。 |
 | `profile` `TestIsPrivateIP` | Is private ip |  | todo | 【D】Go IsPrivateIP 只服务于 routing 流分类器（Rust 不提供 flow adapter），Rust 只保留前缀表 translate/mod.rs::PRIVATE_PREFIXES（translate::tests::private_is_gos_list 已校验），按地址匹配由 Sail 的 ip_cidr 完成。 |

@@ -3,10 +3,7 @@
 *.out
 .DS_Store
 /target/
-# Desktop: the service's own target directory and binaries staged for
-# packaging.
-/desktop/build/
-# Desktop, Windows packaging (desktop/apps/windows/scripts/package.ps1): the
+# Desktop, Windows packaging (apps/windows/scripts/package.ps1): the
 # staging directory and the installer with its release metadata.
-/desktop/staging/
-/desktop/dist/
+/staging/
+/dist/

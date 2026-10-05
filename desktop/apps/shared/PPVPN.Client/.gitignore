@@ -1,6 +1,0 @@
-# Build outputs of crates/ppvpn-client/scripts/build-dotnet.{sh,ps1}
-/Generated/
-/runtimes/
-# dotnet build outputs
-/bin/
-/obj/

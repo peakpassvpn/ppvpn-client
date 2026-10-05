@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    ppvpn-push-agent.exe: the small resident helper that shows backend push notifications while
+    the main app is closed (see README.md, "Push agent"). NativeAOT, no WinUI / Windows App SDK /
+    CsWinRT: toasts go through raw WinRT COM calls (Toasts.cs). It is installed next to ppvpn.exe
+    and loads the same runtimes\win-x64\native\ppvpn_client.dll through PPVPN.Client's NativeLoader.
+
+    Build: dotnet build (JIT, for debugging) or
+           dotnet publish -c Release -r win-x64 (NativeAOT; needs MSVC, like the crate).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64</Platforms>
+    <Platform Condition="'$(Platform)' == '' or '$(Platform)' == 'AnyCPU'">x64</Platform>
+    <AssemblyName>ppvpn-push-agent</AssemblyName>
+    <RootNamespace>PPVPN.PushAgent</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>..\PPVPN.Windows\Assets\AppIcon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Version, Product and Company: ../Directory.Build.props (same as ppvpn.exe). -->
+
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <!-- Resident all day: keep it small. -->
+    <OptimizationPreference>Size</OptimizationPreference>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <StackTraceSupport>false</StackTraceSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <DebuggerSupport>false</DebuggerSupport>
+    <SatelliteResourceLanguages>en-US</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Only the bindings (and runtimes/<rid>/native/ppvpn_client.dll); no App.Core, no UI. -->
+    <ProjectReference Include="..\..\dotnet-shared\PPVPN.Client\PPVPN.Client.csproj" />
+  </ItemGroup>
+</Project>

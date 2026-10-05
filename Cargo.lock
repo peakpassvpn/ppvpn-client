@@ -2568,33 +2568,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ppvpn-client"
-version = "0.1.0"
-dependencies = [
- "base64",
- "hex",
- "hmac",
- "iana-time-zone",
- "ppvpn-account",
- "ppvpn-core",
- "ppvpn-engine-host",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "sys-locale",
- "sysinfo",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "uniffi",
- "uuid",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "ppvpn-core"
 version = "0.0.0"
 dependencies = [
@@ -2644,6 +2617,33 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "ppvpn-desktop"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "hmac",
+ "iana-time-zone",
+ "ppvpn-account",
+ "ppvpn-core",
+ "ppvpn-engine-host",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sys-locale",
+ "sysinfo",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uniffi",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

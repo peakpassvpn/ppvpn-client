@@ -124,7 +124,7 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: |
           tools/release-features-check.sh -p ppvpn-cli
-          tools/release-features-check.sh -p ppvpn-client
+          tools/release-features-check.sh -p ppvpn-desktop
           for features in "-p ppvpn-core --features fault-injection" "-p ppvpn-core --features testing" \
                           "-p ppvpn-core --features lab" "-p ppvpn-cli --features testing"; do
             if tools/release-features-check.sh $features; then
@@ -261,9 +261,9 @@ jobs:
       - name: Build the service, the test client and the fake node
         if: steps.scope.outputs.code == 'true'
         run: |
-          (cd desktop/service && cargo build --locked --bin ppvpn-service)
-          (cd desktop/crates/ppvpn-client && cargo clippy --locked --features linux-e2e --all-targets -- -D warnings)
-          client=$(cd desktop/crates/ppvpn-client && cargo test --locked --features linux-e2e --lib --no-run --message-format=json \
+          (cd crates/service && cargo build --locked --bin ppvpn-service)
+          (cd crates/desktop && cargo clippy --locked --features linux-e2e --all-targets -- -D warnings)
+          client=$(cd crates/desktop && cargo test --locked --features linux-e2e --lib --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and (.target.kind | index("lib"))) | .executable' | tail -n 1)
           test -x "$client"
           echo "CLIENT_TEST=$client" >> "$GITHUB_ENV"
@@ -328,21 +328,21 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - name: Test the privileged service
         if: steps.scope.outputs.code == 'true'
-        working-directory: desktop/service
+        working-directory: crates/service
         run: |
           cargo test --locked
           cargo clippy --locked --all-targets -- -D warnings
       - name: Test the client crate
         if: steps.scope.outputs.code == 'true'
-        working-directory: desktop/crates/ppvpn-client
+        working-directory: crates/desktop
         run: |
           cargo test --locked
           cargo clippy --locked --all-targets -- -D warnings
       - name: Check scripts
         if: steps.scope.outputs.code == 'true'
         run: |
-          bash -n desktop/scripts/*.sh desktop/scripts/ci/*.sh
-          python3 -m unittest discover -s desktop/scripts/ci -p '*_test.py' -v
+          bash -n tools/desktop/*.sh tools/desktop/ci/*.sh
+          python3 -m unittest discover -s tools/desktop/ci -p '*_test.py' -v
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: steps.scope.outputs.code == 'true'
         with:
@@ -365,13 +365,13 @@ jobs:
           fi
       - name: Generate C# bindings
         if: steps.scope.outputs.code == 'true'
-        run: desktop/crates/ppvpn-client/scripts/build-dotnet.sh x86_64-unknown-linux-gnu
+        run: crates/desktop/scripts/build-dotnet.sh x86_64-unknown-linux-gnu
       - name: Test App.Core
         if: steps.scope.outputs.code == 'true'
-        run: dotnet test desktop/apps/shared/PPVPN.App.Core.Tests
+        run: dotnet test apps/dotnet-shared/PPVPN.App.Core.Tests
       - name: Test the Linux app
         if: steps.scope.outputs.code == 'true'
-        run: dotnet test desktop/apps/linux/PPVPN.Linux.Tests
+        run: dotnet test apps/linux/PPVPN.Linux.Tests
       # swift.org's toolchain for the runner's Ubuntu, its signature checked
       # against swift.org's keys; cached per version.
       - name: Cache Swift
@@ -403,10 +403,10 @@ jobs:
           echo "$dir/usr/bin" >> "$GITHUB_PATH"
       - name: Build the Swift bindings
         if: steps.scope.outputs.code == 'true'
-        run: desktop/apps/macos/scripts/build-swift-linux.sh
+        run: apps/macos/scripts/build-swift-linux.sh
       - name: Test AppLogic
         if: steps.scope.outputs.code == 'true'
-        run: swift test --package-path desktop/apps/macos/AppLogic
+        run: swift test --package-path apps/macos/AppLogic
 
   # macOS, for what Linux cannot cover (L1 and L2 run once, on Linux):
   #   - clippy over the whole workspace for aarch64 and x86_64-apple-darwin,
@@ -473,7 +473,7 @@ jobs:
         run: |
           cargo test -p ppvpn-core --lib --locked -- hostipv6::darwin localdns::source probe::icmp runtime::sail_tests
           cargo test -p ppvpn-cli --lib --locked -- identity
-          (cd desktop/crates/ppvpn-client && cargo test --lib --locked -- detect service sysproxy)
+          (cd crates/desktop && cargo test --lib --locked -- detect service sysproxy)
       - name: macOS tests, the Keychain
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5
@@ -484,9 +484,9 @@ jobs:
         if: steps.scope.outputs.desktop == 'true'
         run: |
           brew install xcodegen
-          desktop/apps/macos/scripts/bootstrap.sh
-          xcodebuild -project desktop/apps/macos/PPVPN.xcodeproj -scheme PPVPN -configuration Debug \
-            -derivedDataPath desktop/apps/macos/build -destination 'platform=macOS' build
+          apps/macos/scripts/bootstrap.sh
+          xcodebuild -project apps/macos/PPVPN.xcodeproj -scheme PPVPN -configuration Debug \
+            -derivedDataPath apps/macos/build -destination 'platform=macOS' build
 
   # Windows (MSVC, what the desktop links), for what Linux cannot cover:
   #   - clippy over the crates the desktop links (ppvpn-cli ships for Linux
@@ -550,13 +550,13 @@ jobs:
       - name: clippy
         if: steps.scope.outputs.code == 'true'
         run: |
-          cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-client -p ppvpn-engine-host -p ppvpn-service \
+          cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-desktop -p ppvpn-engine-host -p ppvpn-service \
             --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
       - name: Windows tests
         if: steps.scope.outputs.code == 'true'
         run: |
           cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc -- hostipv6::windows localdns::source probe::icmp
-          cargo test -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc -- detect service sysproxy
+          cargo test -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc -- detect service sysproxy
       - name: L3, build the failure tests
         if: steps.scope.outputs.code == 'true'
         run: cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
@@ -605,22 +605,22 @@ jobs:
       - name: Generate C# bindings
         if: steps.scope.outputs.desktop == 'true'
         shell: powershell
-        run: desktop/crates/ppvpn-client/scripts/build-dotnet.ps1
+        run: crates/desktop/scripts/build-dotnet.ps1
       - name: Test App.Core
         if: steps.scope.outputs.desktop == 'true'
         shell: powershell
         run: |
-          dotnet test desktop/apps/shared/PPVPN.App.Core.Tests
+          dotnet test apps/dotnet-shared/PPVPN.App.Core.Tests
           if ($LASTEXITCODE -ne 0) { throw "dotnet test failed" }
       - name: Build the app
         if: steps.scope.outputs.desktop == 'true'
         shell: powershell
         run: |
-          dotnet build desktop/apps/windows/PPVPN.Windows/PPVPN.Windows.csproj -c Release -p:Platform=x64 -warnaserror
+          dotnet build apps/windows/PPVPN.Windows/PPVPN.Windows.csproj -c Release -p:Platform=x64 -warnaserror
           if ($LASTEXITCODE -ne 0) { throw "dotnet build failed" }
       - name: Build the push agent (NativeAOT)
         if: steps.scope.outputs.desktop == 'true'
         shell: powershell
         run: |
-          dotnet publish desktop/apps/windows/PPVPN.PushAgent/PPVPN.PushAgent.csproj -c Release -r win-x64 -warnaserror -o "$env:RUNNER_TEMP\push-agent"
+          dotnet publish apps/windows/PPVPN.PushAgent/PPVPN.PushAgent.csproj -c Release -r win-x64 -warnaserror -o "$env:RUNNER_TEMP\push-agent"
           if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
