@@ -36,10 +36,7 @@ enum Trigger {
 fn is_standard_error(info: &ClientErrorInfo) -> bool {
     matches!(
         info.code,
-        ErrorCode::StandardCoreFailed
-            | ErrorCode::CoreBinaryMissing
-            | ErrorCode::CoreIncompatible
-            | ErrorCode::ProfileExpired
+        ErrorCode::StandardCoreFailed | ErrorCode::ProfileExpired
     )
 }
 
@@ -588,9 +585,7 @@ pub(crate) mod test_support {
                         "stopped".to_string()
                     }),
                     stop,
-                    rule_set_hosts: Some(vec!["127.0.0.1".into()]),
-                    accepts_routing_mode: true,
-                    accepts_routed_proxy: true,
+                    rule_set_hosts: vec!["127.0.0.1".into()],
                 })
             })
         }
@@ -751,7 +746,6 @@ mod tests {
             api_base: base,
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir.clone(),
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };
@@ -823,7 +817,6 @@ mod tests {
                 api_base: base,
                 data_dir: data_dir.clone(),
                 log_dir: data_dir.clone(),
-                core_bin_dir: data_dir.clone(),
                 platform: "macos".into(),
                 app_version: "0.0.0-test".into(),
             },
@@ -1503,7 +1496,6 @@ mod tests {
                 api_base: "http://127.0.0.1:9".into(),
                 data_dir: data_dir.clone(),
                 log_dir: data_dir.clone(),
-                core_bin_dir: data_dir.clone(),
                 platform: "macos".into(),
                 app_version: "0.0.0-test".into(),
             },
@@ -1858,7 +1850,6 @@ mod tests {
                 api_base,
                 data_dir: data_dir.into(),
                 log_dir: data_dir.into(),
-                core_bin_dir: data_dir.into(),
                 platform: "linux".into(),
                 app_version: "0.0.0-test".into(),
             }

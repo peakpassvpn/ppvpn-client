@@ -39,8 +39,7 @@ rustup default "$RUST_TOOLCHAIN"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 command -v xcodegen >/dev/null || brew install xcodegen
 
-# Universal core and service helpers; package-dmg.sh thins them per build.
-bash scripts/stage-macos-core.sh
+# Universal service helpers; package-dmg.sh thins them per build.
 bash scripts/build-service.sh macos
 
 # A build for a channel updates from that channel's feed; one without has no feed.

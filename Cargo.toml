@@ -2,10 +2,10 @@
 # process by Desktop and the CLI. The Go core it replaces is gone from main;
 # v0.5.21, its last release, keeps its tag and release files.
 [workspace]
-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "crates/ppvpn-core-lab", "desktop/crates/ppvpn-client", "desktop/service"]
+members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "crates/ppvpn-core-lab", "desktop/crates/engine-host", "desktop/crates/ppvpn-client", "desktop/service"]
 # What a bare cargo command at the root builds, and so what ci.yml's
-# required jobs cover; the desktop client and service have their own jobs
-# there (desktop-*).
+# required jobs cover; the desktop crates and the service have their own
+# jobs there (desktop-*).
 default-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "crates/ppvpn-core-lab"]
 resolver = "2"
 

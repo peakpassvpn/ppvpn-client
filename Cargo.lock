@@ -2577,6 +2577,7 @@ dependencies = [
  "iana-time-zone",
  "ppvpn-account",
  "ppvpn-core",
+ "ppvpn-engine-host",
  "reqwest",
  "serde",
  "serde_json",
@@ -2646,6 +2647,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppvpn-engine-host"
+version = "0.1.0"
+dependencies = [
+ "ppvpn-core",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ppvpn-service"
 version = "0.4.0"
 dependencies = [
@@ -2657,6 +2668,8 @@ dependencies = [
  "log4rs",
  "once_cell",
  "parking_lot",
+ "ppvpn-core",
+ "ppvpn-engine-host",
  "serde",
  "serde_json",
  "sha2",

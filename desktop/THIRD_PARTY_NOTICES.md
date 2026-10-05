@@ -2,9 +2,9 @@
 
 Third-party components the desktop apps ship or link, beyond what the engine
 links. For the engine see the root
-[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md): the Go core incorporates
-sing-box; the Rust core (feature `rust-core`, off by default) links sail and,
-through btls, BoringSSL, at the commits pinned in the root `Cargo.toml`.
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md): the Rust core, which the
+client and the privileged service link, links sail and, through btls,
+BoringSSL, at the commits pinned in the root `Cargo.toml`.
 
 The desktop code itself is GPL-3.0-or-later, like the rest of the repository
 ([LICENSE](../LICENSE)). Versions below are the ones the tree pins; where the
@@ -31,6 +31,7 @@ tree pins none, none is given.
 | Microsoft.Windows.SDK.BuildTools (build time only) | 10.0.28000.2705 | licence: see upstream | https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools |
 | H.NotifyIcon.WinUI (tray icon) | 2.3.2 | MIT | https://github.com/HavenDV/H.NotifyIcon |
 | CommunityToolkit.Mvvm | 8.4.2 | MIT | https://github.com/CommunityToolkit/dotnet |
+| Wintun (`wintun.dll`, the TUN driver of enhanced mode; shipped unmodified as published) | 0.14.1 | Wintun Prebuilt Binaries License; text in the release zip's `LICENSE.txt` | https://www.wintun.net |
 
 ## Linux app
 

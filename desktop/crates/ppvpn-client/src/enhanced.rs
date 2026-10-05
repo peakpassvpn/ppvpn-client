@@ -1,6 +1,5 @@
 //! Enhanced mode: transparent routing through the privileged service, which
-//! runs `ppvpn-core serve --tun --local-proxy=false` (ported from
-//! `src-tauri/src/connection.rs`).
+//! runs `ppvpn-core serve --tun --local-proxy=false`.
 //!
 //! Every connection attempt gets a fresh `session_id` and a monotonically
 //! increasing `generation`; the service only accepts calls from that exact
@@ -203,7 +202,7 @@ impl EnhancedConfig {
 // Pure state machine
 // ---------------------------------------------------------------------------
 
-/// Connection bookkeeping (Tauri `ConnectionSnapshot` + desired state).
+/// Connection bookkeeping: the current snapshot plus the desired state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Machine {
     pub phase: ConnectionPhase,
@@ -504,7 +503,7 @@ enum Desired {
     Connected,
 }
 
-/// Same shape as the Tauri shell's `connection/state.json`.
+/// What [`EnhancedConfig::state_file`] holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Persisted {
@@ -1921,7 +1920,7 @@ impl Inner {
         }
     }
 
-    /// Tauri `attempt_automatic_recovery`: one reconnect per episode.
+    /// Automatic recovery: one reconnect per episode.
     /// Never prompts for installation.
     ///
     /// `cause` is what failed while on. Only a network-path failure (see

@@ -42,8 +42,6 @@ pub enum ErrorCode {
     NodeNotFound,
 
     // --- standard mode (user-level core) -------------------------------------
-    /// The bundled `ppvpn-core` binary is missing or not executable.
-    CoreBinaryMissing,
     /// The standard-mode core did not start or exited unexpectedly.
     StandardCoreFailed,
 
@@ -89,9 +87,6 @@ pub enum ErrorCode {
     /// verification URL, token for another audience, invalid device
     /// transaction); sign-in was aborted.
     AuthUntrustedResponse,
-    /// The bundled `ppvpn-core` speaks an unsupported Core API version;
-    /// reinstall or update the app.
-    CoreIncompatible,
     /// The core rejected the proxy profile as expired; it is refetched
     /// automatically, or check the subscription.
     ProfileExpired,

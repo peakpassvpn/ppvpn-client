@@ -398,13 +398,6 @@ What the crate does (nothing for the apps to call):
   path). The standard core gets it directly; the enhanced core through the
   privileged service (Connect / UpdateProfile carry the list; service 0.4.0
   forwards it, older services ignore it and apply the bare profile).
-- **Version gate.** Core 0.4.x decodes request bodies strictly
-  (`DisallowUnknownFields`) and rejects the new field with `REQUEST_INVALID`,
-  so the crate (standard core) and the service (enhanced core) send it only
-  when `GetVersion.core_version` is 0.5.0 or later (a pre-release such as
-  `0.5.0-rc.1` counts). The vendored core is 0.5.0, so the hosts go out;
-  an older core (a local override, a stale install) gets the bare
-  `{"profile": …}` and its rule sets report `RULE_SET_HOST_NOT_PINNED`.
 - `GetStatus.rule_sets` of the core in use (the enhanced core's while it is
   on, otherwise the standard core's) is read every 5 s by the connection
   monitor; the ids in state `unavailable` become

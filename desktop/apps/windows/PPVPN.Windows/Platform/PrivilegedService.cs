@@ -16,10 +16,8 @@ public static class PrivilegedService
     /// <summary>SERVICE_NAME in service/src/install.rs.</summary>
     public const string ServiceName = "ppvpn_service";
 
-    // installer/ppvpn.nsi ships the plain names; the Tauri build shipped the
-    // target-triple suffixed ones.
-    static readonly string[] InstallHelpers = ["ppvpn-service-install.exe", "ppvpn-service-install-x86_64-pc-windows-msvc.exe"];
-    static readonly string[] UninstallHelpers = ["ppvpn-service-uninstall.exe", "ppvpn-service-uninstall-x86_64-pc-windows-msvc.exe"];
+    const string InstallHelper = "ppvpn-service-install.exe";
+    const string UninstallHelper = "ppvpn-service-uninstall.exe";
 
     public static bool IsInstalled()
     {
@@ -38,20 +36,20 @@ public static class PrivilegedService
         }
     }
 
-    public static (ServiceActionResult Result, string Message) Install() => RunElevated(InstallHelpers);
+    public static (ServiceActionResult Result, string Message) Install() => RunElevated(InstallHelper);
 
-    public static (ServiceActionResult Result, string Message) Uninstall() => RunElevated(UninstallHelpers);
+    public static (ServiceActionResult Result, string Message) Uninstall() => RunElevated(UninstallHelper);
 
     /// <summary>
     /// Launch the helper next to the app exe through the UAC prompt and wait
     /// for it. Blocks; call from a background thread.
     /// </summary>
-    static (ServiceActionResult, string) RunElevated(string[] candidates)
+    static (ServiceActionResult, string) RunElevated(string name)
     {
         var directory = AppContext.BaseDirectory;
-        var helper = candidates.Select(name => Path.Combine(directory, name)).FirstOrDefault(File.Exists);
-        if (helper is null)
-            return (ServiceActionResult.Failed, $"{candidates[0]} not found next to {Environment.ProcessPath}");
+        var helper = Path.Combine(directory, name);
+        if (!File.Exists(helper))
+            return (ServiceActionResult.Failed, $"{name} not found next to {Environment.ProcessPath}");
 
         try
         {

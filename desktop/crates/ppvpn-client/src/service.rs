@@ -1,8 +1,7 @@
-//! Client for the privileged `ppvpn-service` (ported from
-//! `src-tauri/src/service_client.rs`). The wire types must stay byte-identical
-//! to `service/src/protocol.rs`: requests and responses are HMAC-signed over
-//! their canonical JSON (signature field empty), so any drift in field order
-//! or naming fails verification.
+//! Client for the privileged `ppvpn-service`. The wire types must stay
+//! byte-identical to `service/src/protocol.rs`: requests and responses are
+//! HMAC-signed over their canonical JSON (signature field empty), so any
+//! drift in field order or naming fails verification.
 //!
 //! Wire format: `[u32 BE length][JSON]`, one request per connection (a
 //! `Watch` keeps its connection open for events, see [`ServiceApi::watch`]).
@@ -597,7 +596,7 @@ fn blocking_watch(
     key: &[u8],
     cancel: &AtomicBool,
 ) -> WatchEnd {
-    match crate::core_ipc::open_pipe(endpoint) {
+    match open_pipe(endpoint) {
         Ok(pipe) => run_watch(&mut PolledPipe(pipe), body, request_id, key, cancel),
         Err(error) => WatchEnd::Lost(error),
     }
@@ -868,7 +867,7 @@ fn verify_response(
 }
 
 /// Writes `[u32 BE length]` and the body as two writes (what the service
-/// and the Tauri shell always used), then reads the framed response.
+/// expects), then reads the framed response.
 fn exchange<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     body: &[u8],
@@ -957,7 +956,7 @@ fn blocking_transact(
     _timeout: Duration,
     handshake: bool,
 ) -> Result<Vec<u8>, ServiceError> {
-    let mut pipe = crate::core_ipc::open_pipe(endpoint).map_err(ServiceError::Unavailable)?;
+    let mut pipe = open_pipe(endpoint).map_err(ServiceError::Unavailable)?;
     exchange(&mut pipe, body, handshake)
 }
 
@@ -1182,6 +1181,29 @@ pub(crate) fn forwarded_core_error(error: ServiceError) -> CoreCallError {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// Opens a named pipe, retrying while every server instance is busy.
+#[cfg(windows)]
+fn open_pipe(name: &str) -> Result<std::fs::File, String> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+        {
+            Ok(pipe) => return Ok(pipe),
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(format!("open pipe {name}: {error}")),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

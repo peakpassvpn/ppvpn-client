@@ -15,8 +15,6 @@
 //! the order of putting back), built everywhere; the netlink side and the
 //! guard are Linux only.
 
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
-
 use std::collections::HashMap;
 use std::fmt::{self, Write as _};
 use std::net::IpAddr;

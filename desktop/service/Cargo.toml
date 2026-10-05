@@ -30,6 +30,9 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 parking_lot = "0.12"
+# The TUN instance runs in this process (src/core.rs).
+ppvpn-core = { path = "../../crates/ppvpn-core" }
+ppvpn-engine-host = { path = "../crates/engine-host" }
 sysinfo = "0.32"
 uuid = { version = "1", features = ["v4"] }
 

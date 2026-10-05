@@ -22,7 +22,7 @@ use crate::{
     AuthState, Client, ClientSnapshot, DeviceCode, Node, ProfileStatus, StandardState, Team,
 };
 
-/// Profile refresh period while signed in (the Tauri web UI used the same).
+/// Profile refresh period while signed in.
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Retry period after a failed background refresh, e.g. offline at launch.
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
@@ -1239,7 +1239,6 @@ mod tests {
             api_base: base.to_string(),
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir.clone(),
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };
@@ -1564,7 +1563,6 @@ mod tests {
             api_base: "http://127.0.0.1:9".into(),
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir,
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };

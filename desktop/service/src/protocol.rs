@@ -1,6 +1,6 @@
 //! IPC protocol shared by main app and service. Kept byte-identical on both
 //! sides — if you change this, mirror the change in
-//! `../../src-tauri/src/service_client.rs`.
+//! `crates/ppvpn-client/src/service.rs`.
 //!
 //! Wire format:
 //!   [u32 BE: length of JSON payload] [JSON bytes]

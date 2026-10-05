@@ -18,7 +18,7 @@ if [[ -n "$FORMAT" ]]; then
 fi
 for file in /usr/share/applications/com.peakpassvpn.ppvpn.desktop.desktop \
     /usr/share/icons/hicolor/128x128/apps/com.peakpassvpn.ppvpn.desktop.png \
-    /usr/lib/ppvpn/ppvpn-core /usr/lib/ppvpn/ppvpn-service /usr/lib/ppvpn/ppvpn-service-install \
+    /usr/lib/ppvpn/ppvpn-service /usr/lib/ppvpn/ppvpn-service-install \
     /usr/lib/ppvpn/ppvpn-push-agent /etc/xdg/autostart/com.peakpassvpn.ppvpn.push-agent.desktop; do
   [[ -e "$file" ]] || { echo "FAIL: missing $file" >&2; exit 1; }
 done

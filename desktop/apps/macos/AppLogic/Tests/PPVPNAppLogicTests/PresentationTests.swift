@@ -165,7 +165,7 @@ final class PresentationTests: LogicTestCase {
         backend.routedProxy = routed
         backend.push(.fixture(standard: .ready(revision: "r1")))
         await settle { self.state.routedProxy != nil }
-        backend.push(.fixture(standard: .failed(error: ClientErrorInfo(code: .coreIncompatible, detail: "bind"))))
+        backend.push(.fixture(standard: .failed(error: ClientErrorInfo(code: .standardCoreFailed, detail: "bind"))))
         XCTAssertFalse(state.offersProxyScope)
         XCTAssertNil(state.shownProxy)
     }
@@ -178,7 +178,7 @@ final class PresentationTests: LogicTestCase {
     // MARK: Failed standard core
 
     func testFailedStandardCoreShowsTheLocalProxyUnavailable() async {
-        let failure = ClientErrorInfo(code: .coreIncompatible, detail: "bind")
+        let failure = ClientErrorInfo(code: .standardCoreFailed, detail: "bind")
         backend.proxyList = [LocalProxy(nodeId: "hk-1", host: "127.0.0.1", port: 17890, username: "u", password: "p")]
         backend.push(.fixture(standard: .ready(revision: "r1")))
         await settle { self.state.currentProxy != nil }
