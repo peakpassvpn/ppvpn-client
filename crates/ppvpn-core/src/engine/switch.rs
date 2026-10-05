@@ -1,8 +1,10 @@
-//! Taking a new translation while running (#150). sail's reload keeps
-//! every listener as it is: it neither adds nor removes an inbound, and of
-//! an existing one it replaces only the users. A change it cannot take is
-//! a stop and a start (`SwitchKind::FullRestart`), as Go's
-//! `fullRestartReasons`, whose whitelist and words this keeps.
+//! Taking a new translation while running (#150). sail's reload takes it
+//! in place: it diffs the inbounds by tag (adds, removes, replaces or
+//! keeps each) and leaves the other connections where they are. What only
+//! a stop and a start can take, a TUN's change, is a full restart
+//! (`SwitchKind::FullRestart`), as is a reload sail refuses with
+//! `needs_restart` or ends with `inbound_lost`. The reasons keep the words
+//! of Go's `fullRestartReasons`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
