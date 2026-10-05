@@ -20,7 +20,7 @@
 #                              CFBundleVersion / sparkle:version = <version>.<n>
 #
 # Everything in the app (our code, the shared PPVPNClientFFI framework,
-# Sparkle, ppvpn-core and the service helpers) is thinned to the one
+# Sparkle and the service helpers) is thinned to the one
 # architecture and re-signed inside out.
 #
 # Output (dist/macos), <platform> = macos-arm64 | macos-x64:
@@ -121,7 +121,7 @@ sign() {
   codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp=none \
     --preserve-metadata=identifier,entitlements ${req[@]+"${req[@]}"} "$1"
 }
-# Loose helpers first (ppvpn-core, Sparkle's Autoupdate, ...), then bundles.
+# Loose helpers first (the service helpers, Sparkle's Autoupdate, ...), then bundles.
 while IFS= read -r file; do
   real="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
   grep -Fxq "$real" <<< "$MAINS" || [[ "$file" == "$APP/Contents/MacOS/PPVPN" ]] || sign "$file"
@@ -147,7 +147,7 @@ for exe in "$APP/Contents/MacOS/PPVPN" "$APP/Contents/Library/LoginItems/PPVPN A
   otool -L "$exe" | grep -q '@rpath/PPVPNClientFFI.framework/Versions/A/PPVPNClientFFI' \
     || { echo "error: $exe does not link the shared PPVPNClientFFI" >&2; exit 1; }
 done
-for bin in ppvpn-core ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
+for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   [[ -f "$APP/Contents/MacOS/$bin" ]] || { echo "error: $bin missing" >&2; exit 1; }
 done
 

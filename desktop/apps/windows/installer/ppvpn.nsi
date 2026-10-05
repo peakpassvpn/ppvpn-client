@@ -11,10 +11,10 @@
 ;
 ; Layout: everything in one directory, because ppvpn-service only accepts
 ; clients named ppvpn.exe that run from the service's own directory, and it
-; starts ppvpn-core.exe from that directory too:
+; loads wintun.dll from that directory too:
 ;   $PROGRAMFILES64\PPVPN\ppvpn.exe (+ .NET/Windows App SDK runtime, WinSparkle.dll)
 ;   ppvpn-push-agent.exe (NativeAOT; shares runtimes\win-x64\native\ppvpn_client.dll)
-;   ppvpn-core.exe, ppvpn-service.exe, ppvpn-service-install.exe, ppvpn-service-uninstall.exe
+;   ppvpn-service.exe, ppvpn-service-install.exe, ppvpn-service-uninstall.exe, wintun.dll
 ;   install-files.txt (what this version installed; used to clean up on upgrade)
 ;   uninstall.exe
 ;
@@ -58,13 +58,11 @@ RequestExecutionLevel admin
 !define APP_NAME "PPVPN"
 !define PUBLISHER "PeakPass VPN LLC"
 !define APP_EXE "ppvpn.exe"
-!define CORE_EXE "ppvpn-core.exe"
 ; PPVPN.PushAgent (Program.cs) and PPVPN.Windows/Platform/PushAgentAutostart.cs
 !define AGENT_EXE "ppvpn-push-agent.exe"
 !define AGENT_QUIT_EVENT "Local\PPVPN.PushAgent.Quit"
 !define AGENT_RUN_VALUE "PPVPNPushAgent"
 !define SERVICE_NAME "ppvpn_service"
-; Same key as the Tauri build, so this installer replaces it in Apps & features.
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\PPVPN"
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 ; Platform/LaunchAtLogin.cs
@@ -143,7 +141,7 @@ VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductVersion" "${VERSION}"
 ; ───────────────────────────── shared helpers ─────────────────────────────
 
 ; Ask ppvpn.exe to quit through its normal path (backend Shutdown), wait for
-; it, then terminate whatever is left (other sessions, the old Tauri app).
+; it, then terminate whatever is left (other sessions).
 !macro DEFINE_STOP_APP UN
 Function ${UN}StopApp
   StrCpy $AppWasRunning 0
@@ -347,8 +345,7 @@ Section "PPVPN" SecMain
   Call StopApp
   Call StopAgent
   Call StopService
-  ; A service registered by another layout (the Tauri build used
-  ; ppvpn-service-x86_64-pc-windows-msvc.exe) is re-registered: the install
+  ; A service registered from another directory is re-registered: the install
   ; helper only starts an existing service and never changes its path.
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\${SERVICE_NAME}" "ImagePath"
   ${If} $0 != ""
@@ -358,17 +355,10 @@ Section "PPVPN" SecMain
     nsExec::ExecToLog 'sc.exe delete ${SERVICE_NAME}'
     Pop $0
   ${EndIf}
-  ; Standard-mode cores started by the app, if any survived it.
-  nsExec::Exec 'taskkill.exe /f /im ${CORE_EXE}'
-  Pop $0
 
   ; 2. Replace the files. Remove what the previous version installed first so
-  ; stale runtime files do not pile up; drop the Tauri sidecar names.
+  ; stale runtime files do not pile up.
   Call RemoveListedFiles
-  Delete "$INSTDIR\ppvpn-core-x86_64-pc-windows-msvc.exe"
-  Delete "$INSTDIR\ppvpn-service-x86_64-pc-windows-msvc.exe"
-  Delete "$INSTDIR\ppvpn-service-install-x86_64-pc-windows-msvc.exe"
-  Delete "$INSTDIR\ppvpn-service-uninstall-x86_64-pc-windows-msvc.exe"
   File /r "${STAGE_DIR}\*.*"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -381,10 +371,6 @@ Section "PPVPN" SecMain
     MessageBox MB_ICONSTOP|MB_OK "$(ServiceInstallFailed)" /SD IDOK
     Abort
   ${EndIf}
-
-  ; The native app signs in by device-code polling and registers no URL
-  ; scheme. Remove the ppvpn:// handler the Tauri build registered.
-  DeleteRegKey HKLM "Software\Classes\ppvpn"
 
   ; 4. Shortcuts.
   ; The shortcuts carry the app's AppUserModelID (System.AppUserModel.ID), so notifications
@@ -474,13 +460,7 @@ Section "Uninstall"
     nsExec::ExecToLog 'sc.exe delete ${SERVICE_NAME}'
     Pop $0
   ${EndIf}
-  nsExec::Exec 'taskkill.exe /f /im ${CORE_EXE}'
-  Pop $0
 
-  ; Leftovers of the Tauri build: the HKLM ppvpn:// handler and the per-user
-  ; one tauri-plugin-deep-link wrote.
-  DeleteRegKey HKLM "Software\Classes\ppvpn"
-  DeleteRegKey HKCU "Software\Classes\ppvpn"
   ; Launch at sign-in and the push agent's autostart (per user).
   DeleteRegValue HKCU "${RUN_KEY}" "${RUN_VALUE}"
   DeleteRegValue HKCU "${RUN_KEY}" "${AGENT_RUN_VALUE}"

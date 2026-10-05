@@ -56,6 +56,7 @@ public sealed class FfiClientBackend : IClientBackend
     public Task SetRoutingMode(RoutingMode mode) => _client.SetRoutingMode(mode);
     public Task PinIngress(string nodeId, string? endpointKey) => _client.PinIngress(nodeId, endpointKey);
     public void DismissClearedIngressPins() => _client.DismissClearedIngressPins();
+    public void DismissLocalProxyCredentialsReset() => _client.DismissLocalProxyCredentialsReset();
     public Task Connect() => _client.Connect();
     public Task Disconnect() => _client.Disconnect();
     public Task Retry() => _client.Retry();

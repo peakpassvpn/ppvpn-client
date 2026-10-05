@@ -12,10 +12,10 @@ use super::servers::{Interface, Server};
 use super::Discovered;
 
 /// Fed to scutil: the primary interfaces of IPv4 and IPv6, then the primary
-/// service's DNS. The desktop's own entry (a supplemental resolver pointing
-/// at the tunnel, State:/Network/Service/com.peakpassvpn.ppvpn.tun/DNS) is
-/// a separate service and not part of it; tunnel addresses are filtered
-/// anyway.
+/// service's DNS. The tunnel's own entry, which sail writes while its utun
+/// is open (a supplemental resolver matching every domain, at
+/// State:/Network/Service/<id>/DNS), is a separate service and not part of
+/// it; tunnel addresses are filtered anyway.
 pub const SCRIPT: &str = "show State:/Network/Global/IPv4\nshow State:/Network/Global/IPv6\nshow State:/Network/Global/DNS\nquit\n";
 
 const TIMEOUT: Duration = Duration::from_secs(2);

@@ -142,6 +142,12 @@ public interface IClientBackend : IDisposable
     void DismissClearedIngressPins();
 
     /// <summary>
+    /// The user saw snapshot.local_proxy_credentials_reset (the standard core rebuilt the local
+    /// proxy's user names and passwords; apps holding the old ones must copy them again).
+    /// </summary>
+    void DismissLocalProxyCredentialsReset();
+
+    /// <summary>
     /// Connect in the current mode. Enhanced: when the privileged service is missing it is
     /// installed first (phase WaitingPermission); a dismissed OS prompt ends in Error with reason
     /// ServiceInstallCancelled (retryable, suggest_compatible) and fails with that code.
@@ -210,7 +216,8 @@ public static class ClientSnapshots
         RuleSetsUnavailable: [],
         IngressPins: [],
         NodeIngresses: [],
-        ClearedIngressPins: []);
+        ClearedIngressPins: [],
+        LocalProxyCredentialsReset: false);
 }
 
 

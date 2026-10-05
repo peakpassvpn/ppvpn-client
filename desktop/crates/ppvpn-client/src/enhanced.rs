@@ -1,6 +1,5 @@
 //! Enhanced mode: transparent routing through the privileged service, which
-//! runs `ppvpn-core serve --tun --local-proxy=false` (ported from
-//! `src-tauri/src/connection.rs`).
+//! runs `ppvpn-core serve --tun --local-proxy=false`.
 //!
 //! Every connection attempt gets a fresh `session_id` and a monotonically
 //! increasing `generation`; the service only accepts calls from that exact
@@ -183,8 +182,12 @@ pub(crate) struct EnhancedConfig {
     pub expected_service_build_id: Option<String>,
     /// Sent with every Connect / UpdateProfile (shared with the client).
     pub routing: crate::routing::RoutingModeCell,
-    /// Ingress pins, sent after every connect (shared with the client).
+    /// Ingress pins, sent with every Connect / UpdateProfile (shared with
+    /// the client).
     pub ingress_pins: crate::ingress::PinsCell,
+    /// The selected node, sent with every Connect / UpdateProfile (the
+    /// client's).
+    pub selection: crate::session::SelectionSource,
 }
 
 impl EnhancedConfig {
@@ -195,6 +198,7 @@ impl EnhancedConfig {
             expected_service_build_id: crate::service::expected_service_build_id(),
             routing: Default::default(),
             ingress_pins: Default::default(),
+            selection: Default::default(),
         }
     }
 }
@@ -203,7 +207,7 @@ impl EnhancedConfig {
 // Pure state machine
 // ---------------------------------------------------------------------------
 
-/// Connection bookkeeping (Tauri `ConnectionSnapshot` + desired state).
+/// Connection bookkeeping: the current snapshot plus the desired state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Machine {
     pub phase: ConnectionPhase,
@@ -504,7 +508,7 @@ enum Desired {
     Connected,
 }
 
-/// Same shape as the Tauri shell's `connection/state.json`.
+/// What [`EnhancedConfig::state_file`] holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Persisted {
@@ -580,7 +584,6 @@ struct Profile {
 struct Data {
     machine: Machine,
     profile: Option<Arc<Profile>>,
-    selected_node: Option<String>,
     service_installed: bool,
     /// An outdated service was already reinstalled (or the attempt declined
     /// or failed) in this session: never again, whatever it reports now.
@@ -854,7 +857,7 @@ impl Enhanced {
         let routing_mode: RoutingMode = inner.config.routing.get();
         match inner
             .service
-            .update_profile(&session, &profile.value, routing_mode)
+            .update_profile(&session, &profile.value, routing_mode, &inner.choices())
             .await
         {
             Ok(_) => {
@@ -988,19 +991,15 @@ impl Enhanced {
             .map_err(ClientError::from)
     }
 
-    /// Selects the exit node; applied immediately while on, otherwise right
-    /// after the next connect.
+    /// Selects the exit node live while on. Every connect and profile
+    /// update carries the selection anyway ([`EnhancedConfig::selection`]).
     pub(crate) async fn select_node(&self, node_id: &str) -> Result<(), ClientError> {
         let inner = &self.inner;
         if inner.off_while_uninstalling() {
-            inner.with_data(|data| data.selected_node = Some(node_id.to_string()));
             return Ok(());
         }
         let _operation = inner.operation.lock().await;
-        let machine = inner.with_data(|data| {
-            data.selected_node = Some(node_id.to_string());
-            data.machine.clone()
-        });
+        let machine = inner.with_data(|data| data.machine.clone());
         if machine.phase != ConnectionPhase::On {
             return Ok(());
         }
@@ -1014,27 +1013,6 @@ impl Enhanced {
         core_ipc::select_node(&core, node_id)
             .await
             .map_err(|error| error.into_client_error(ErrorCode::ConnectFailed))
-    }
-
-    /// Sends `pins` to the enhanced-mode core while it is on (see
-    /// [`crate::ingress::push`]); nothing otherwise (the next connect does).
-    pub(crate) async fn push_ingress_pins(
-        &self,
-        pins: &crate::ingress::Pins,
-        reported: Option<&[crate::NodeIngresses]>,
-    ) {
-        let machine = self.inner.with_data(|data| data.machine.clone());
-        if machine.phase != ConnectionPhase::On {
-            return;
-        }
-        let Some(session) = machine.session() else {
-            return;
-        };
-        let core = ServiceCoreTransport {
-            service: self.inner.service.clone(),
-            session,
-        };
-        crate::ingress::push(&core, pins, reported, "enhanced core").await;
     }
 
     /// Pins (or unpins) one node on the enhanced-mode core while it is on.
@@ -1173,6 +1151,11 @@ impl Inner {
             tracing::warn!(?info, "persist enhanced-mode state failed");
             (self.on_error)(info);
         }
+    }
+
+    /// The selection and the pins every Connect / UpdateProfile carries.
+    fn choices(&self) -> core_ipc::ApplyChoices {
+        core_ipc::ApplyChoices::new(self.config.selection.get(), &self.config.ingress_pins.get())
     }
 
     fn with_data<T>(&self, change: impl FnOnce(&mut Data) -> T) -> T {
@@ -1648,6 +1631,8 @@ impl Inner {
                 }
             };
 
+            // The selection and the pins go with the profile: the new core
+            // needs no SelectNode / PinIngress afterwards.
             let connected = self
                 .service
                 .connect(
@@ -1655,6 +1640,7 @@ impl Inner {
                     &profile.value,
                     take_over,
                     self.config.routing.get(),
+                    &self.choices(),
                 )
                 .await;
             steps.done("service Connect (core spawn, profile, TUN start)");
@@ -1689,27 +1675,6 @@ impl Inner {
                 service: self.service.clone(),
                 session: session.clone(),
             };
-            if let Some(node_id) = self.with_data(|data| data.selected_node.clone()) {
-                let selected = core_ipc::select_node(&core, &node_id).await;
-                steps.done("select node");
-                match selected {
-                    Ok(()) => {}
-                    // A selection from an older profile: keep the default.
-                    Err(error) if error.code() == Some("NODE_NOT_FOUND") => {
-                        tracing::warn!(%node_id, "selected node not in profile; using default");
-                    }
-                    Err(error) => return failed(error.info(ErrorCode::ConnectFailed), true).await,
-                }
-            }
-            // The core keeps pins only in memory: every new core gets them.
-            crate::ingress::push(
-                &core,
-                &self.config.ingress_pins.get(),
-                None,
-                "enhanced core",
-            )
-            .await;
-
             let mut healthy = self
                 .run_health(&core, &profile.revision, true, ENTRANCE_PROBE_TIMEOUT_MS)
                 .await;
@@ -1921,7 +1886,7 @@ impl Inner {
         }
     }
 
-    /// Tauri `attempt_automatic_recovery`: one reconnect per episode.
+    /// Automatic recovery: one reconnect per episode.
     /// Never prompts for installation.
     ///
     /// `cause` is what failed while on. Only a network-path failure (see
@@ -2693,6 +2658,9 @@ mod tests {
         disconnect_times_out: Mutex<Option<bool>>,
         /// The routing mode of every `connect` / `update_profile`, in order.
         routing_modes: Mutex<Vec<RoutingMode>>,
+        /// The selection and pins of every `connect` / `update_profile`, in
+        /// order.
+        choices: Mutex<Vec<core_ipc::ApplyChoices>>,
         /// Every core API call first waits this long (a slow health check).
         core_api_delay: Mutex<Option<Duration>>,
         /// This many entrance probes fail before they succeed again.
@@ -2763,6 +2731,16 @@ mod tests {
         }
     }
 
+    impl FakeService {
+        /// The core applies the selection with the profile.
+        fn applied(&self, choices: &core_ipc::ApplyChoices) {
+            self.choices.lock().unwrap().push(choices.clone());
+            if let Some(node_id) = &choices.selected_node_id {
+                *self.selected.lock().unwrap() = Some(node_id.clone());
+            }
+        }
+    }
+
     impl ServiceApi for FakeService {
         fn get_version(&self) -> BoxFuture<'_, Result<VersionInfo, ServiceError>> {
             Box::pin(async move {
@@ -2788,6 +2766,7 @@ mod tests {
             profile: &'a Value,
             take_over: bool,
             routing_mode: RoutingMode,
+            choices: &'a core_ipc::ApplyChoices,
         ) -> BoxFuture<'a, Result<u32, ServiceError>> {
             Box::pin(async move {
                 self.connects.fetch_add(1, Ordering::SeqCst);
@@ -2814,6 +2793,7 @@ mod tests {
                 }
                 let revision = profile["revision"].as_str().unwrap_or_default().to_string();
                 *self.owner.lock().unwrap() = Some((session.clone(), revision));
+                self.applied(choices);
                 Ok(4242)
             })
         }
@@ -2823,6 +2803,7 @@ mod tests {
             session: &'a SessionRef,
             profile: &'a Value,
             routing_mode: RoutingMode,
+            choices: &'a core_ipc::ApplyChoices,
         ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
             Box::pin(async move {
                 self.check()?;
@@ -2832,6 +2813,7 @@ mod tests {
                 }
                 let revision = profile["revision"].as_str().unwrap_or_default().to_string();
                 *self.owner.lock().unwrap() = Some((session.clone(), revision));
+                self.applied(choices);
                 Ok(self.status())
             })
         }
@@ -3063,6 +3045,8 @@ mod tests {
         service: Arc<FakeService>,
         hooks: Arc<FakeHooks>,
         phases: Arc<Mutex<Vec<ConnectionPhase>>>,
+        /// The client's selected node ([`EnhancedConfig::selection`]).
+        selection: Arc<Mutex<Option<String>>>,
         dir: PathBuf,
     }
 
@@ -3093,12 +3077,17 @@ mod tests {
             std::env::temp_dir().join(format!("ppvpn-enh-test-{}", uuid::Uuid::new_v4().simple()));
         let phases = Arc::new(Mutex::new(Vec::new()));
         let sink = phases.clone();
+        let selection: Arc<Mutex<Option<String>>> = Arc::default();
         let config = EnhancedConfig {
             api_base: "http://localhost:8080".into(),
             state_file: dir.join(crate::storage::ENHANCED_STATE_FILE),
             expected_service_build_id: expected_build.map(String::from),
             routing: Default::default(),
             ingress_pins: Default::default(),
+            selection: crate::session::SelectionSource::new({
+                let selection = selection.clone();
+                move || selection.lock().unwrap().clone()
+            }),
         };
         let enhanced = Enhanced::new(
             config,
@@ -3118,6 +3107,7 @@ mod tests {
             service,
             hooks,
             phases,
+            selection,
             dir,
         }
     }
@@ -3562,6 +3552,7 @@ mod tests {
         // What switching to compatible mode and connecting there calls.
         let started = Instant::now();
         h.enhanced.disable().await.unwrap();
+        *h.selection.lock().unwrap() = Some("n2".into());
         h.enhanced.select_node("n2").await.unwrap();
         let took = started.elapsed();
         assert!(took < Duration::from_millis(300), "waited {took:?}");
@@ -3974,7 +3965,7 @@ mod tests {
     async fn enable_connects_through_an_installed_service() {
         let h = harness(true);
         h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
-        h.enhanced.select_node("n1").await.unwrap();
+        *h.selection.lock().unwrap() = Some("n1".into());
         h.enhanced.enable().await.unwrap();
         let state = h.enhanced.state();
         assert_eq!(state.phase, ConnectionPhase::On);
@@ -4478,41 +4469,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ingress_pins_reach_every_new_enhanced_core() {
+    async fn every_connect_and_update_carries_the_selection_and_the_pins() {
         let h = harness(true);
+        let pins = || crate::ingress::Pins::from([("n1".to_string(), "k2".to_string())]);
+        *h.selection.lock().unwrap() = Some("n2".into());
+        h.enhanced.inner.config.ingress_pins.set(pins());
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        assert_eq!(
+            *h.service.choices.lock().unwrap(),
+            vec![core_ipc::ApplyChoices::new(Some("n2".into()), &pins())]
+        );
+        assert_eq!(h.service.selected.lock().unwrap().as_deref(), Some("n2"));
+        assert!(
+            h.service.pins.lock().unwrap().is_empty(),
+            "no pin-ingress after connect"
+        );
+
+        // Changed live since: the next update carries the current ones.
+        *h.selection.lock().unwrap() = Some("n1".into());
         h.enhanced
             .inner
             .config
             .ingress_pins
-            .set(crate::ingress::Pins::from([(
-                "n1".to_string(),
-                "k2".to_string(),
-            )]));
-        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
-        h.enhanced.enable().await.unwrap();
+            .set(crate::ingress::Pins::new());
+        h.enhanced.set_profile(PROFILE_R2, "r2").await.unwrap();
         assert_eq!(
-            *h.service.pins.lock().unwrap(),
-            vec![("n1".to_string(), Some("k2".to_string()))]
+            h.service.choices.lock().unwrap().last(),
+            Some(&core_ipc::ApplyChoices::new(
+                Some("n1".into()),
+                &crate::ingress::Pins::new()
+            ))
         );
-        // Live while on: back to automatic.
-        h.enhanced
-            .push_ingress_pins(&crate::ingress::Pins::new(), None)
-            .await;
-        assert_eq!(h.service.pins.lock().unwrap().len(), 1, "no pins, no calls");
-        h.enhanced
-            .push_ingress_pins(
-                &crate::ingress::Pins::new(),
-                Some(&[crate::NodeIngresses {
-                    node_id: "n1".into(),
-                    pinned_endpoint_key: Some("k2".into()),
-                    ingresses: Vec::new(),
-                }]),
-            )
-            .await;
-        assert_eq!(
-            h.service.pins.lock().unwrap().last(),
-            Some(&("n1".to_string(), None))
-        );
+        assert!(h.service.pins.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

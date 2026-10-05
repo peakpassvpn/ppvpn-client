@@ -254,15 +254,40 @@ mod tests {
     use super::*;
     use std::process::{Child, Command};
 
-    fn sleeper() -> (Child, ProcessRecord) {
-        let child = Command::new("sleep").arg("60").spawn().unwrap();
-        let record = ProcessRecord::of(child.id()).unwrap();
-        (child, record)
+    /// A `sleep` child, killed and reaped when dropped, so no test path
+    /// leaves it behind.
+    struct Sleeper(Child);
+
+    impl Drop for Sleeper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 
-    fn end(mut child: Child) {
-        child.kill().unwrap();
-        child.wait().unwrap();
+    /// A `sleep` child and its record, taken once the child runs `sleep`:
+    /// right after `spawn` it can still be the forked test binary, and a
+    /// record taken then names the wrong executable. (The daemon writes its
+    /// own record, after its exec.)
+    fn sleeper() -> (Sleeper, ProcessRecord) {
+        let child = Sleeper(Command::new("sleep").arg("60").spawn().unwrap());
+        let this = std::env::current_exe().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let record = ProcessRecord::of(child.0.id()).unwrap();
+            if !same_file(&record.executable, &this) {
+                return (child, record);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child did not exec sleep within 5 s"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn end(child: Sleeper) {
+        drop(child);
     }
 
     #[test]
@@ -279,7 +304,7 @@ mod tests {
 
     #[test]
     fn live_processes_match_their_records_every_time() {
-        for round in 0..300 {
+        for round in 0..1000 {
             let (child, record) = sleeper();
             let mismatch = record.mismatch();
             end(child);

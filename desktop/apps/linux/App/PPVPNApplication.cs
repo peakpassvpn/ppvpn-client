@@ -73,7 +73,6 @@ public sealed class PPVPNApplication
             ApiBase: string.IsNullOrWhiteSpace(settings.ApiBaseOverride) ? services.DefaultApiBase : settings.ApiBaseOverride,
             DataDir: LinuxPaths.DataDir,
             LogDir: LinuxPaths.LogDir,
-            CoreBinDir: LinuxPaths.AppDir,
             Platform: "linux",
             AppVersion: services.AppVersion);
         Directory.CreateDirectory(config.DataDir);

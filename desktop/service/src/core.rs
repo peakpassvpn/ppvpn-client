@@ -1,44 +1,40 @@
-//! Privileged ppvpn-core lifecycle and authenticated Core API forwarding.
+//! The privileged TUN instance: the Rust ppvpn-core engine
+//! (`Role::Tun`, docs/host-integration.md) in this process, and the
+//! client's Core API calls on it.
 //!
-//! One core instance at a time. Every instance shares the same socket,
-//! session-secret and state paths, so two rules keep an old instance from
-//! hurting its successor:
+//! One instance at a time, owned by one client session: the session that
+//! connected, under the OS user that connected it, for as long as its lease
+//! is renewed. Two rules keep an old instance from hurting its successor:
 //!
-//! - **Keyed to the instance.** The session secret is read once, when the
-//!   instance first answers, and every later Core API call (including the
-//!   `/v1/stop` sent while stopping) authenticates with that instance's own
-//!   secret. A call meant for an older instance can never be accepted by a
-//!   newer one.
-//! - **Stopped means exited.** [`CoreManager::stop`] waits until the process
-//!   has exited (and reaps it) before it returns. ppvpn-core removes the
-//!   socket and secret paths on its way out (its listener unlinks the socket,
-//!   and the secret file is removed when `serve` returns), and tears down its
-//!   TUN routes; an instance still shutting down while the next one starts
-//!   would delete the new instance's files and routes.
+//! - **Keyed to the instance.** A Core API call is bound to the instance it
+//!   was authorized for (it holds that instance, not the slot), so a call
+//!   meant for an older instance never reaches a newer one.
+//! - **Stopped means shut down.** [`CoreManager::stop_because`] returns only
+//!   once the engine's `shutdown` did (bounded, 10 s): its TUN, routes and
+//!   rules are gone before the next instance starts.
 //!
-//! Core API framing (see [`exchange_http`]): ppvpn-core is a Go `net/http`
-//! server. With `Connection: close` it answers as soon as it has the request
-//! head, never drains a body its handler did not read (`/v1/start`,
-//! `/v1/get-status`, … ignore theirs), and closes the connection right after
-//! the response. A request written in several pieces could therefore be
-//! answered before its body arrived: writing the rest failed with EPIPE, and
-//! closing with the body unread made Linux report ECONNRESET to our read
-//! even though the whole response was already queued. The request is now one
-//! write, and the response is read up to its length instead of to EOF.
+//! An instance that reaches `Fatal` is stopped like one whose lease lapsed
+//! (the watchdog's [`CoreManager::reap_exited`]); its session's watchers
+//! hear `exited`, and the client connects again. On Windows a shutdown that
+//! leaves WFP filters (or anything it cannot classify) behind ends the
+//! process: the filters belong to the process, and the service manager
+//! restarts the service.
 
 use crate::logfile::RotatingLog;
-use crate::protocol::{ConnectPayload, SessionRef, Status, UpdateProfilePayload};
-use anyhow::{anyhow, Context, Result};
+use crate::protocol::{ApplyChoices, ConnectPayload, SessionRef, Status, UpdateProfilePayload};
+use anyhow::{anyhow, Result};
 use log::info;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use serde::Deserialize;
+use ppvpn_core::{
+    Engine, EngineConfig, EngineState, Event, EventItem, EventKind, LogConfig, LogLevel, LogSink,
+    Platform, Role,
+};
 use serde_json::Value;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 pub static CORE: Lazy<Mutex<CoreManager>> = Lazy::new(|| {
     Mutex::new(CoreManager {
@@ -47,7 +43,19 @@ pub static CORE: Lazy<Mutex<CoreManager>> = Lazy::new(|| {
     })
 });
 
-/// Why a core stopped, as told to the session's watchers (`core_stopped`).
+/// The engine's tasks run here; the service's own threads call into it with
+/// `block_on` (the IPC handlers run on blocking threads, the watchdog on a
+/// plain one).
+static ENGINE_RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name("ppvpn-engine")
+        .enable_all()
+        .build()
+        .expect("engine runtime")
+});
+
+/// Why an instance stopped, as told to the session's watchers
+/// (`core_stopped`).
 pub mod stop_reason {
     /// Its session disconnected.
     pub const DISCONNECTED: &str = "disconnected";
@@ -55,95 +63,271 @@ pub mod stop_reason {
     pub const LEASE_EXPIRED: &str = "lease_expired";
     /// Another session of the same OS user took the connection over.
     pub const TAKEN_OVER: &str = "taken_over";
-    /// A new core replaced it (a new Connect).
+    /// A new instance replaced it (a new Connect).
     pub const REPLACED: &str = "replaced";
     /// It failed to start.
     pub const START_FAILED: &str = "start_failed";
     /// A profile update and its rollback both failed.
     pub const PROFILE_FAILED: &str = "profile_failed";
-    /// The process exited on its own (crashed, killed).
+    /// It failed on its own (the engine reached `Fatal`).
     pub const EXITED: &str = "exited";
     /// The service is shutting down.
     pub const SERVICE_STOPPING: &str = "service_stopping";
 }
 pub const LEASE_DURATION: Duration = Duration::from_secs(45);
-/// How long a stopping core may take to exit before it is killed. ppvpn-core
-/// gives its IPC server 5 s to shut down after the data plane has stopped.
-const STOP_GRACE: Duration = Duration::from_secs(7);
-/// How long a freshly spawned core may take to answer `/v1/get-version`.
-/// The first run of a newly installed binary waits for the macOS code
-/// assessment (syspolicyd) before any of its code runs: 5 s and more were
-/// seen, and every retry killed at an 8 s budget paid it again.
-const READY_TIMEOUT: Duration = Duration::from_secs(25);
 /// How long the service waits at exit for its system DNS changes (launchd
 /// kills it 30 s after SIGTERM).
 const DNS_FLUSH_TIMEOUT: Duration = Duration::from_secs(15);
-/// Largest Core API response accepted.
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+/// The process exit code that asks the service manager for a restart.
+#[cfg(windows)]
+const RESTART_EXIT_CODE: i32 = 3;
 
-#[cfg(target_os = "macos")]
-const CORE_SOCKET: &str = "/Library/Application Support/PPVPN/core/core.sock";
-#[cfg(target_os = "macos")]
-const CORE_SECRET: &str = "/Library/Application Support/PPVPN/core/session.secret";
 #[cfg(target_os = "macos")]
 const CORE_STATE: &str = "/Library/Application Support/PPVPN/core/state";
-
-#[cfg(windows)]
-const CORE_SOCKET: &str = r"\\.\pipe\ppvpn-core";
-#[cfg(windows)]
-const CORE_SECRET: &str = r"C:\ProgramData\PPVPN\core\session.secret";
 #[cfg(windows)]
 const CORE_STATE: &str = r"C:\ProgramData\PPVPN\core\state";
-
-// /run/ppvpn and /var/lib/ppvpn are created by the systemd unit
-// (RuntimeDirectory= / StateDirectory=, see install.rs).
-#[cfg(not(any(windows, target_os = "macos")))]
-const CORE_SOCKET: &str = "/run/ppvpn/core/core.sock";
-#[cfg(not(any(windows, target_os = "macos")))]
-const CORE_SECRET: &str = "/run/ppvpn/core/session.secret";
+// /var/lib/ppvpn is created by the systemd unit (StateDirectory=, see
+// install.rs).
 #[cfg(not(any(windows, target_os = "macos")))]
 const CORE_STATE: &str = "/var/lib/ppvpn/core/state";
 
-/// Builds the command that launches a fake core (tests only).
-#[cfg(test)]
-type FakeCoreCommand = Box<dyn Fn(&CoreLayout) -> Command + Send>;
+// ---------------------------------------------------------------------------
+// Instances
+// ---------------------------------------------------------------------------
 
-/// Where the privileged core lives and how it is launched.
-struct CoreLayout {
-    socket: String,
-    secret: PathBuf,
-    state: PathBuf,
-    /// `None`: `ppvpn-core.log` in [`crate::logfile::log_dir`].
-    log: Option<PathBuf>,
-    /// How long a stopping core may take to exit before it is killed.
-    stop_grace: Duration,
-    /// Tests launch a fake core instead of the installed binary.
-    #[cfg(test)]
-    command: Option<FakeCoreCommand>,
+/// What a shutdown could not undo (`ShutdownReport.leftovers`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leftover {
+    /// `runtime`, `task`, `tun`, `route`, `dns`, `wfp`, `rule`, `steps`.
+    pub kind: String,
+    pub name: String,
+    pub detail: String,
 }
 
-impl Default for CoreLayout {
-    fn default() -> Self {
-        Self {
-            socket: CORE_SOCKET.to_string(),
-            secret: PathBuf::from(CORE_SECRET),
-            state: PathBuf::from(CORE_STATE),
-            log: None,
-            stop_grace: STOP_GRACE,
-            #[cfg(test)]
-            command: None,
+/// One TUN instance as the manager drives it. Every call blocks the calling
+/// thread; none is made while holding [`CORE`] except at bring-up and stop.
+pub trait Instance: Send + Sync {
+    /// One Core API v1 call; errors read `"CODE: message"`.
+    fn call(&self, path: &str, body: Value, timeout: Duration) -> Result<Value>;
+    /// The reason (JSON) once the instance is `Fatal`.
+    fn fatal(&self) -> Option<String>;
+    /// Stops and releases everything; what could not be undone.
+    fn shutdown(&self) -> Vec<Leftover>;
+}
+
+/// Creates instances.
+pub trait Launcher: Send {
+    /// A new instance keeping its state in `state`; `debug` turns on the
+    /// debug log (visited domains included).
+    fn launch(&self, state: &Path, debug: bool) -> Result<Arc<dyn Instance>>;
+}
+
+/// [`Instance`] on the engine.
+struct EngineInstance {
+    engine: Engine,
+    /// Set once the engine reached `Fatal` (see [`watch_state`]).
+    fatal: Arc<Mutex<Option<String>>>,
+}
+
+impl Instance for EngineInstance {
+    fn call(&self, path: &str, body: Value, timeout: Duration) -> Result<Value> {
+        ENGINE_RT.block_on(async {
+            match tokio::time::timeout(
+                timeout,
+                ppvpn_engine_host::dispatch(&self.engine, path, body),
+            )
+            .await
+            {
+                Ok(Ok(data)) => Ok(data),
+                Ok(Err(error)) => Err(anyhow!("{}: {}", error.code, error.message)),
+                Err(_) => Err(anyhow!("CORE_IPC_TIMEOUT: {path} after {timeout:?}")),
+            }
+        })
+    }
+
+    fn fatal(&self) -> Option<String> {
+        self.fatal.lock().clone()
+    }
+
+    fn shutdown(&self) -> Vec<Leftover> {
+        match ENGINE_RT.block_on(self.engine.shutdown()) {
+            Ok(report) => report
+                .leftovers
+                .into_iter()
+                .map(|leftover| Leftover {
+                    kind: serde_json::to_value(leftover.kind)
+                        .ok()
+                        .and_then(|kind| kind.as_str().map(str::to_string))
+                        .unwrap_or_default(),
+                    name: leftover.name,
+                    detail: leftover.detail,
+                })
+                .collect(),
+            // Already shut down (by an earlier call).
+            Err(error) => {
+                log::warn!("engine shutdown: {}: {}", error.code, error.message);
+                Vec::new()
+            }
         }
     }
 }
 
+/// Creates engines, writing their log lines into `ppvpn-core.log` beside
+/// the service log (capped and rolled over like it).
 #[derive(Default)]
+struct EngineLauncher {
+    /// Opened on first use and shared by every instance.
+    log: Mutex<Option<Arc<Mutex<RotatingLog>>>>,
+}
+
+impl EngineLauncher {
+    fn log(&self) -> Option<Arc<Mutex<RotatingLog>>> {
+        let mut slot = self.log.lock();
+        if slot.is_none() {
+            let path = match crate::logfile::prepare_log_dir() {
+                Ok(dir) => dir.join(crate::logfile::CORE_LOG),
+                Err(error) => {
+                    log::warn!("core log directory unavailable: {error}");
+                    return None;
+                }
+            };
+            match RotatingLog::open(&path, crate::logfile::MAX_BYTES, crate::logfile::KEEP_FILES) {
+                Ok(opened) => *slot = Some(Arc::new(Mutex::new(opened))),
+                Err(error) => {
+                    log::warn!("cannot open core log {}: {error}", path.display());
+                    return None;
+                }
+            }
+        }
+        slot.clone()
+    }
+}
+
+impl Launcher for EngineLauncher {
+    fn launch(&self, state: &Path, debug: bool) -> Result<Arc<dyn Instance>> {
+        prepare_state_dir(state)?;
+        let level = if debug {
+            LogLevel::Debug
+        } else {
+            LogLevel::Info
+        };
+        let sink = if self.log().is_some() {
+            LogSink::Channel
+        } else {
+            LogSink::None
+        };
+        let config = EngineConfig::new(Role::Tun, platform(), state.to_path_buf())
+            .with_log(LogConfig::new(level, sink));
+        // The wintun.dll the installer puts beside the service.
+        #[cfg(windows)]
+        let config = config.with_tun(
+            ppvpn_core::TunConfig::new()
+                .with_wintun_dll(service_exe_dir().unwrap_or_default().join("wintun.dll")),
+        );
+        let engine = ENGINE_RT
+            .block_on(Engine::new(config))
+            .map_err(|error| anyhow!("{}: {}", error.code, error.message))?;
+        if let Some(log) = self.log() {
+            let mut lines = engine.logs();
+            ENGINE_RT.spawn(async move {
+                while let Some(mut line) = lines.recv().await {
+                    if !line.ends_with('\n') {
+                        line.push('\n');
+                    }
+                    // A full disk must not stall the engine: drop the line.
+                    let _ = log.lock().write(line.as_bytes());
+                }
+            });
+        }
+        let fatal = Arc::new(Mutex::new(None));
+        ENGINE_RT.spawn(watch_state(engine.clone(), fatal.clone()));
+        info!(
+            "ppvpn-core {} created (TUN instance, log level {level:?})",
+            Engine::version().core_version
+        );
+        Ok(Arc::new(EngineInstance { engine, fatal }))
+    }
+}
+
+/// Follows the engine's state until it shuts down: records the reason of a
+/// `Fatal` in `fatal` (the watchdog stops the instance) and logs `Degraded`
+/// (the engine heals that itself). Reading the state from the events keeps
+/// the engine's status refresher idle: `status()` would wake it.
+async fn watch_state(engine: Engine, fatal: Arc<Mutex<Option<String>>>) {
+    let mut states = engine.subscribe(&[EventKind::StateChanged]);
+    // A Fatal between Engine::new and the subscription has no event.
+    let mut state = Some(engine.status().state);
+    loop {
+        match state.take() {
+            Some(EngineState::Fatal { reason }) => {
+                let reason = serde_json::to_string(&reason).unwrap_or_default();
+                log::warn!("ppvpn-core fatal: {reason}");
+                *fatal.lock() = Some(reason);
+                return;
+            }
+            Some(EngineState::Degraded { reasons }) => {
+                log::info!(
+                    "ppvpn-core degraded: {}",
+                    serde_json::to_string(&reasons).unwrap_or_default()
+                );
+            }
+            _ => {}
+        }
+        state = match states.recv().await {
+            Some(EventItem::Event {
+                event: Event::StateChanged { state, .. },
+            }) => Some(state),
+            // Fell behind: the current state is what counts.
+            Some(EventItem::Lagged { .. }) => Some(engine.status().state),
+            Some(_) => None,
+            // Shut down.
+            None => return,
+        };
+    }
+}
+
+fn platform() -> Platform {
+    if cfg!(windows) {
+        Platform::Windows
+    } else if cfg!(target_os = "macos") {
+        Platform::Macos
+    } else {
+        Platform::Linux
+    }
+}
+
+/// `kind/name: detail; …` for the log.
+fn describe_leftovers(leftovers: &[Leftover]) -> String {
+    leftovers
+        .iter()
+        .map(|leftover| format!("{}/{}: {}", leftover.kind, leftover.name, leftover.detail))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The leftovers after which only ending the process cleans up: WFP filters
+/// (strict route), or a runtime leftover that could be one. Windows only;
+/// elsewhere the next instance's sweep takes care of what is left.
+fn needs_process_restart(leftovers: &[Leftover], windows: bool) -> bool {
+    windows
+        && leftovers
+            .iter()
+            .any(|leftover| leftover.kind == "wfp" || leftover.kind == "runtime")
+}
+
+// ---------------------------------------------------------------------------
+// Manager
+// ---------------------------------------------------------------------------
+
 pub struct CoreManager {
-    layout: CoreLayout,
+    launcher: Box<dyn Launcher>,
+    state_dir: PathBuf,
     state: Option<RunningCore>,
-    /// `ppvpn-core.log`, shared by every instance (opened on first use).
-    core_log: Option<std::sync::Arc<Mutex<RotatingLog>>>,
-    /// Watch connections, told when a session's core stops.
-    watchers: std::sync::Arc<crate::watch::Hub>,
+    /// Numbers instances, so a call can tell whether its instance is still
+    /// the current one.
+    launched: u64,
+    /// Watch connections, told when a session's instance stops.
+    watchers: Arc<crate::watch::Hub>,
     /// macOS system DNS override (see [`crate::macdns`]); a no-op elsewhere.
     dns: crate::macdns::DnsWorker,
     /// The override was (or may have been) published and is still to be
@@ -151,51 +335,41 @@ pub struct CoreManager {
     dns_applied: bool,
 }
 
-struct RunningCore {
-    pid: u32,
-    /// Kept (never detached) so the process is reaped when it exits: a
-    /// zombie would otherwise still look alive to a pid lookup.
-    child: Child,
-    /// This instance's Core API session secret; empty until it answered.
-    secret: String,
-    bin_path: String,
-    session: SessionRef,
-    /// OS user of the client that started this core (uid on Unix, user SID
-    /// on Windows); `None` when it could not be resolved.
-    owner_user: Option<String>,
-    profile_revision: String,
-    profile: Value,
-    /// `allowed_rule_set_hosts` `profile` was applied with (empty when the
-    /// core predates the field), reused for a rollback.
-    rule_set_hosts: Vec<String>,
-    /// `routing_mode` `profile` was applied with (`None`: the core predates
-    /// it, or the client sent none), reused for a rollback.
-    routing_mode: Option<String>,
-    lease_deadline: Instant,
-    /// Closing it makes the core exit (`--exit-on-stdin-close`).
-    stdin: Option<std::process::ChildStdin>,
-    #[cfg(windows)]
-    _job: std::os::windows::io::OwnedHandle,
-}
-
-impl RunningCore {
-    fn alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+impl Default for CoreManager {
+    fn default() -> Self {
+        Self {
+            launcher: Box::<EngineLauncher>::default(),
+            state_dir: PathBuf::from(CORE_STATE),
+            state: None,
+            launched: 0,
+            watchers: Default::default(),
+            dns: Default::default(),
+            dns_applied: false,
+        }
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct CoreEnvelope {
-    ok: bool,
-    #[serde(default)]
-    data: Value,
-    error: Option<CoreError>,
+struct RunningCore {
+    id: u64,
+    instance: Arc<dyn Instance>,
+    session: SessionRef,
+    /// OS user of the client that started this instance (uid on Unix, user
+    /// SID on Windows); `None` when it could not be resolved.
+    owner_user: Option<String>,
+    profile_revision: String,
+    profile: Value,
+    /// `allowed_rule_set_hosts` `profile` was applied with, reused for a
+    /// rollback.
+    rule_set_hosts: Vec<String>,
+    /// `routing_mode` `profile` was applied with, reused for a rollback.
+    routing_mode: Option<String>,
+    lease_deadline: Instant,
 }
 
-#[derive(Debug, Deserialize)]
-struct CoreError {
-    code: String,
-    message: String,
+impl RunningCore {
+    fn alive(&self) -> bool {
+        self.instance.fatal().is_none()
+    }
 }
 
 impl CoreManager {
@@ -210,11 +384,10 @@ impl CoreManager {
     fn status_for(&mut self, caller_user: Option<&str>) -> Status {
         let live = self
             .state
-            .as_mut()
+            .as_ref()
             .is_some_and(|core| core.lease_deadline > Instant::now() && core.alive());
         let view = self.state.as_ref().filter(|_| live).map(|core| CoreView {
-            pid: core.pid,
-            bin_path: &core.bin_path,
+            pid: std::process::id(),
             session: &core.session,
             owner_user: core.owner_user.as_deref(),
             profile_revision: &core.profile_revision,
@@ -225,12 +398,13 @@ impl CoreManager {
         describe(view, caller_user)
     }
 
-    /// Start (or keep) the TUN core for `body.session`. `client_pid` is the
-    /// authenticated caller, used for the same-user takeover check.
+    /// Start (or keep) the TUN instance for `body.session`. `client_pid` is
+    /// the authenticated caller, used for the same-user takeover check.
+    /// Returns the service's pid (the instance runs inside it).
     pub fn connect(&mut self, body: ConnectPayload, client_pid: u32) -> Result<u32> {
         validate_session(&body.session)?;
         let caller_user = process_user(client_pid);
-        let decision = match self.state.as_mut() {
+        let decision = match self.state.as_ref() {
             None => Ownership::Free,
             Some(current) => {
                 let live = current.lease_deadline > Instant::now() && current.alive();
@@ -255,7 +429,7 @@ impl CoreManager {
             Ownership::Same => {
                 if let Some(current) = self.state.as_mut() {
                     current.lease_deadline = Instant::now() + LEASE_DURATION;
-                    return Ok(current.pid);
+                    return Ok(std::process::id());
                 }
             }
             Ownership::TakeOver => {
@@ -275,18 +449,19 @@ impl CoreManager {
         let started = self.start_core(body, caller_user);
         if let Err(error) = &started {
             if taking_over {
-                // Two TUN cores cannot coexist, so the previous session was
-                // stopped first; now nobody is connected.
+                // Two TUN instances cannot coexist, so the previous session
+                // was stopped first; now nobody is connected.
                 log::error!(
-                    "takeover: the new session's core failed after the previous session was stopped: {error:#}"
+                    "takeover: the new session's instance failed after the previous session was stopped: {error:#}"
                 );
             }
         }
         started
     }
 
-    /// Spawns a new instance and brings it up. Any failure after the spawn
-    /// stops the instance again, so a failed attempt leaves nothing behind.
+    /// Creates a new instance and brings it up. Any failure after the
+    /// creation stops the instance again, so a failed attempt leaves nothing
+    /// behind.
     fn start_core(&mut self, body: ConnectPayload, caller_user: Option<String>) -> Result<u32> {
         let profile_revision = body
             .profile
@@ -301,31 +476,52 @@ impl CoreManager {
             .and_then(Value::as_u64)
             .ok_or_else(|| anyhow!("PROFILE_SCHEMA_REQUIRED"))?;
         check_routing_mode(body.routing_mode.as_deref())?;
-        // Whatever ran before must be gone: it shares our paths.
+        // Whatever ran before must be gone: it shares our state directory.
         self.stop_because(stop_reason::REPLACED).ok();
-        // Rules a killed core left would misroute the new one's traffic.
-        #[cfg(all(target_os = "linux", not(test)))]
-        crate::netclean::clean_if_no_core(
-            &crate::netclean::SystemRunner,
-            core_process_running(),
-            "before starting ppvpn-core",
+
+        let debug = debug_log_flag(&self.state_dir);
+        if let Some(flag) = &debug {
+            // One line per routed connection, with the domain: for
+            // troubleshooting only, never left on.
+            log::warn!(
+                "{} exists: ppvpn-core logs at debug level (includes visited domains)",
+                flag.display()
+            );
+        }
+        let created = Instant::now();
+        let instance = self.launcher.launch(&self.state_dir, debug.is_some())?;
+        info!(
+            "ppvpn-core start: create took {} ms",
+            created.elapsed().as_millis()
         );
-        self.spawn_core(&body, caller_user, profile_revision)?;
-        let pid = self.state.as_ref().map(|core| core.pid).unwrap_or_default();
-        let brought_up = self.bring_up(
+        self.launched += 1;
+        self.state = Some(RunningCore {
+            id: self.launched,
+            instance: instance.clone(),
+            session: body.session.clone(),
+            owner_user: caller_user,
+            profile_revision,
+            profile: body.profile.clone(),
+            rule_set_hosts: body.allowed_rule_set_hosts.clone(),
+            routing_mode: body.routing_mode.clone(),
+            lease_deadline: Instant::now() + LEASE_DURATION,
+        });
+        let brought_up = bring_up(
+            instance.as_ref(),
             &body.profile,
             requested_schema,
-            body.allowed_rule_set_hosts.clone(),
-            body.routing_mode.clone(),
+            &body.allowed_rule_set_hosts,
+            body.routing_mode.as_deref(),
+            &body.choices,
         );
         if let Err(error) = brought_up {
-            log::error!("ppvpn-core pid {pid} failed to start: {error:#}");
+            log::error!("ppvpn-core failed to start: {error:#}");
             self.stop_because(stop_reason::START_FAILED).ok();
             return Err(error);
         }
-        info!("ppvpn-core TUN started, pid {pid}");
+        info!("ppvpn-core TUN started");
         self.apply_dns();
-        Ok(pid)
+        Ok(std::process::id())
     }
 
     /// Points the macOS system resolver at the TUN. A failure is logged and
@@ -336,19 +532,35 @@ impl CoreManager {
         self.dns.apply();
     }
 
-    /// A core of ours was started (and not stopped since).
-    #[cfg_attr(windows, allow(dead_code))]
-    pub fn has_core(&self) -> bool {
-        self.state.is_some()
+    /// At service start: removes the override a killed service left behind
+    /// (its instance died with it).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn clean_dns_leftover(&mut self) {
+        self.dns.clean_leftover();
     }
 
-    /// At service start: removes the override a killed service left behind,
-    /// or, while a core (an orphan of that service) still runs, keeps it
-    /// until [`Self::reap_exited`] sees no core left. An override a core of
-    /// ours publishes meanwhile is ours.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub fn clean_dns_leftover(&mut self, core_running: bool) {
-        self.dns.clean_leftover(core_running);
+    /// At service start (Linux): sweeps what the instance of a killed
+    /// service left (policy rules that would misroute or block traffic until
+    /// the next connection) by creating an instance and shutting it down
+    /// again: the engine sweeps when it is created. macOS and Windows remove
+    /// a dead process's TUN with everything on it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn sweep_leftovers(&mut self) {
+        if self.state.is_some() {
+            return;
+        }
+        match self.launcher.launch(&self.state_dir, false) {
+            Ok(instance) => {
+                let leftovers = instance.shutdown();
+                if !leftovers.is_empty() {
+                    log::warn!(
+                        "startup sweep left behind: {}",
+                        describe_leftovers(&leftovers)
+                    );
+                }
+            }
+            Err(error) => log::warn!("startup sweep failed: {error:#}"),
+        }
     }
 
     /// Removes the macOS system DNS override if it is in place.
@@ -364,237 +576,6 @@ impl CoreManager {
             log::error!(
                 "system DNS changes did not finish within {DNS_FLUSH_TIMEOUT:?}; exiting anyway"
             );
-        }
-    }
-
-    fn spawn_core(
-        &mut self,
-        body: &ConnectPayload,
-        caller_user: Option<String>,
-        profile_revision: String,
-    ) -> Result<()> {
-        prepare_runtime_dir(&self.layout)?;
-        let _ = std::fs::remove_file(&self.layout.secret);
-        #[cfg(unix)]
-        let _ = std::fs::remove_file(&self.layout.socket);
-
-        let (mut cmd, bin_path) = self.core_command()?;
-        // The core's output goes through the service, which caps the file
-        // (see crate::logfile); without a log file it is discarded.
-        let core_log = self.core_log();
-        if core_log.is_some() {
-            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        } else {
-            cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        }
-        cmd.stdin(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000);
-        }
-        let mut child = cmd.spawn().context("failed to spawn ppvpn-core")?;
-        let pid = child.id();
-        if let Some(log) = core_log {
-            if let Some(stdout) = child.stdout.take() {
-                crate::logfile::forward_output(stdout, log.clone());
-            }
-            if let Some(stderr) = child.stderr.take() {
-                crate::logfile::forward_output(stderr, log);
-            }
-        }
-        let Some(stdin) = child.stdin.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(anyhow!("failed to retain ppvpn-core lifetime pipe"));
-        };
-        #[cfg(windows)]
-        let job = match assign_kill_on_close_job(&child) {
-            Ok(job) => job,
-            Err(error) => {
-                drop(stdin);
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        };
-        self.state = Some(RunningCore {
-            pid,
-            child,
-            secret: String::new(),
-            bin_path,
-            session: body.session.clone(),
-            owner_user: caller_user,
-            profile_revision,
-            profile: body.profile.clone(),
-            rule_set_hosts: Vec::new(),
-            routing_mode: None,
-            lease_deadline: Instant::now() + LEASE_DURATION,
-            stdin: Some(stdin),
-            #[cfg(windows)]
-            _job: job,
-        });
-        Ok(())
-    }
-
-    /// The shared core log, opened on first use; `None` when it cannot be
-    /// opened (the core then runs without a log).
-    fn core_log(&mut self) -> Option<std::sync::Arc<Mutex<RotatingLog>>> {
-        if self.core_log.is_none() {
-            let path = match self.layout.log.clone() {
-                Some(path) => path,
-                None => match crate::logfile::prepare_log_dir() {
-                    Ok(dir) => dir.join(crate::logfile::CORE_LOG),
-                    Err(error) => {
-                        log::warn!("core log directory unavailable: {error}");
-                        return None;
-                    }
-                },
-            };
-            match RotatingLog::open(&path, crate::logfile::MAX_BYTES, crate::logfile::KEEP_FILES) {
-                Ok(log) => self.core_log = Some(std::sync::Arc::new(Mutex::new(log))),
-                Err(error) => {
-                    log::warn!("cannot open core log {}: {error}", path.display());
-                    return None;
-                }
-            }
-        }
-        self.core_log.clone()
-    }
-
-    fn core_command(&self) -> Result<(Command, String)> {
-        #[cfg(test)]
-        if let Some(command) = &self.layout.command {
-            return Ok((command(&self.layout), "fake-core".to_string()));
-        }
-        let bin_path = installed_core_binary()
-            .ok_or_else(|| anyhow!("installed ppvpn-core binary is unavailable"))?;
-        let platform = if cfg!(windows) {
-            "windows"
-        } else if cfg!(target_os = "linux") {
-            "linux"
-        } else {
-            "macos"
-        };
-        let mut cmd = Command::new(&bin_path);
-        cmd.arg("serve")
-            .arg("--socket")
-            .arg(&self.layout.socket)
-            .arg("--session-secret-file")
-            .arg(&self.layout.secret)
-            .arg("--state-dir")
-            .arg(&self.layout.state)
-            .args([
-                "--platform",
-                platform,
-                // Local proxies come from the unprivileged standard core;
-                // this core only provides TUN.
-                "--local-proxy=false",
-                "--tun",
-                "--tun-stack=mixed",
-                "--exit-on-stdin-close",
-            ]);
-        // macOS: the override points the system resolver at the TUN; the
-        // core (0.5.20+) resolves direct domains with the physical default
-        // interface's servers itself, re-read on every interface change, so
-        // nothing is passed (a fixed list went stale on a Wi-Fi switch).
-        if let Some(flag) = debug_log_flag(&self.layout) {
-            // One line per routed connection, with the domain: for
-            // troubleshooting only, never left on.
-            log::warn!(
-                "{} exists: ppvpn-core logs at debug level (includes visited domains)",
-                flag.display()
-            );
-            cmd.args(["--log-level", "debug"]);
-        }
-        Ok((cmd, bin_path.to_string_lossy().to_string()))
-    }
-
-    /// Waits for the new instance, then checks the schema, applies the
-    /// profile and starts the data plane.
-    fn bring_up(
-        &mut self,
-        profile: &Value,
-        requested_schema: u64,
-        requested_hosts: Vec<String>,
-        requested_mode: Option<String>,
-    ) -> Result<()> {
-        // Per-phase durations at info level: a slow first connect after an
-        // install (binary first launch, TUN creation, rule-set downloads)
-        // shows which step took the time.
-        let mut phase = Instant::now();
-        let mut lap = |name: &str| {
-            info!(
-                "ppvpn-core start: {name} took {} ms",
-                phase.elapsed().as_millis()
-            );
-            phase = Instant::now();
-        };
-        let ready = self.wait_until_ready();
-        lap("spawn until ready");
-        ready?;
-        let version = self.call_api_unchecked("/v1/get-version", serde_json::json!({}))?;
-        let supported_schema = version
-            .get("profile_schema_version")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| anyhow!("CORE_SCHEMA_CAPABILITY_MISSING"))?;
-        if requested_schema != supported_schema {
-            return Err(anyhow!("PROFILE_SCHEMA_UNSUPPORTED"));
-        }
-        let hosts = pinned_hosts(&version, requested_hosts);
-        let mode = routing_mode_for(&version, requested_mode);
-        lap("get-version");
-        let applied = self.call_api_unchecked(
-            "/v1/apply-profile",
-            apply_body(profile, &hosts, mode.as_deref()),
-        );
-        lap("apply-profile");
-        applied?;
-        if let Some(core) = self.state.as_mut() {
-            core.rule_set_hosts = hosts;
-            core.routing_mode = mode;
-        }
-        let started = self.call_api_unchecked("/v1/start", serde_json::json!({}));
-        lap("start (TUN, routes)");
-        started?;
-        Ok(())
-    }
-
-    /// Waits until the new instance published its secret and answers with
-    /// it, and binds that secret to the instance.
-    fn wait_until_ready(&mut self) -> Result<()> {
-        let deadline = Instant::now() + READY_TIMEOUT;
-        let mut last = None;
-        loop {
-            let Some(core) = self.state.as_mut() else {
-                return Err(anyhow!("ppvpn-core is not running"));
-            };
-            if !core.alive() {
-                return Err(anyhow!("ppvpn-core exited during startup"));
-            }
-            if let Ok(secret) = std::fs::read_to_string(&self.layout.secret) {
-                let secret = secret.trim();
-                if !secret.is_empty() {
-                    match send_http(
-                        &self.layout.socket,
-                        "/v1/get-version",
-                        secret,
-                        b"{}",
-                        Duration::from_secs(2),
-                    ) {
-                        Ok(response) if response.ok => {
-                            core.secret = secret.to_string();
-                            return Ok(());
-                        }
-                        Ok(response) => last = Some(envelope_error(response)),
-                        Err(error) => last = Some(error),
-                    }
-                }
-            }
-            if Instant::now() >= deadline {
-                return Err(last.unwrap_or_else(|| anyhow!("ppvpn-core startup timed out")));
-            }
-            std::thread::sleep(Duration::from_millis(50));
         }
     }
 
@@ -627,57 +608,41 @@ impl CoreManager {
             .map_err(|code| anyhow!(code))
     }
 
-    #[cfg(all(test, unix))]
-    fn lease_deadline_for_test(&mut self, remaining: Duration) {
-        if let Some(core) = self.state.as_mut() {
-            core.lease_deadline = Instant::now() + remaining;
-        }
-    }
-
     pub fn expire_lease(&mut self) {
         let expired = self
             .state
             .as_ref()
             .is_some_and(|core| core.lease_deadline <= Instant::now());
         if expired {
-            info!("connection lease expired; stopping privileged core");
+            info!("connection lease expired; stopping the TUN instance");
             self.stop_because(stop_reason::LEASE_EXPIRED).ok();
         }
     }
 
+    // Only ipc's unix tests use it.
     #[cfg(all(test, unix))]
-    pub fn watchers(&self) -> std::sync::Arc<crate::watch::Hub> {
+    pub fn watchers(&self) -> Arc<crate::watch::Hub> {
         self.watchers.clone()
     }
 
-    /// A core that exited on its own (crashed, killed) is reaped and its
+    /// An instance that failed on its own (`Fatal`) is stopped and its
     /// session's watchers are told right away, instead of when the client
     /// next renews its lease.
     pub fn reap_exited(&mut self) {
-        let exited = self
-            .state
-            .as_mut()
-            .and_then(|core| match core.child.try_wait() {
-                Ok(Some(status)) => Some((core.pid, status.to_string())),
-                Ok(None) => None,
-                Err(error) => Some((core.pid, format!("unknown status ({error})"))),
-            });
-        if let Some((pid, status)) = exited {
-            log::warn!("ppvpn-core pid {pid} exited on its own: {status}");
+        let fatal = self.state.as_ref().and_then(|core| core.instance.fatal());
+        if let Some(reason) = fatal {
+            log::warn!("ppvpn-core failed on its own (fatal: {reason}); stopping it");
             self.stop_because(stop_reason::EXITED).ok();
         } else if self.dns_applied && self.state.is_none() {
-            // No core left to take the override down with it.
-            log::warn!("no ppvpn-core running; restoring the system DNS");
+            // No instance left to take the override down with it.
+            log::warn!("no TUN instance running; restoring the system DNS");
             self.restore_dns();
-        }
-        if self.state.is_none() {
-            self.dns.check_orphan(core_process_running);
         }
     }
 
     /// One Core API call for the owner's session. Holds `self` for the
     /// whole exchange; the IPC path uses [`call_api`], which does not.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub fn call_api(
         &mut self,
         session: &SessionRef,
@@ -685,48 +650,26 @@ impl CoreManager {
         body: Value,
         client_pid: u32,
     ) -> Result<Value> {
-        self.prepare_call(session, path, client_pid)?.send(body)
+        let (_, instance) = self.prepare_call(session, path, client_pid)?;
+        let timeout = call_timeout(path, &body);
+        instance.call(path, body, timeout)
     }
 
     /// Authorizes a Core API call for the owner's session (renewing its
-    /// lease) and returns what it needs, bound to the current instance.
+    /// lease) and returns the instance it is bound to.
     fn prepare_call(
         &mut self,
         session: &SessionRef,
         path: &str,
         client_pid: u32,
-    ) -> Result<CoreCall> {
-        let caller_user = process_user(client_pid);
-        let core = self.authorize(session, caller_user.as_deref())?;
-        core.lease_deadline = Instant::now() + LEASE_DURATION;
-        self.target(path)
-    }
-
-    /// A Core API call to the current instance, with its own secret.
-    fn target(&mut self, path: &str) -> Result<CoreCall> {
+    ) -> Result<(u64, Arc<dyn Instance>)> {
         if !ALLOWED_PATHS.contains(&path) {
             return Err(anyhow!("Core API path is not allowed"));
         }
-        let core = self
-            .state
-            .as_mut()
-            .filter(|core| !core.secret.is_empty())
-            .ok_or_else(|| anyhow!("ppvpn-core is not running"))?;
-        if !core.alive() {
-            return Err(anyhow!("ppvpn-core is not running"));
-        }
-        Ok(CoreCall {
-            socket: self.layout.socket.clone(),
-            secret: core.secret.clone(),
-            pid: core.pid,
-            path: path.to_string(),
-        })
-    }
-
-    /// One Core API call to the current instance while holding `self`
-    /// (bring-up only: nothing else can use the instance yet).
-    fn call_api_unchecked(&mut self, path: &str, body: Value) -> Result<Value> {
-        self.target(path)?.send(body)
+        let caller_user = process_user(client_pid);
+        let core = self.authorize(session, caller_user.as_deref())?;
+        core.lease_deadline = Instant::now() + LEASE_DURATION;
+        Ok((core.id, core.instance.clone()))
     }
 
     /// The caller must run as the owner's OS user *and* present the owner's
@@ -754,94 +697,106 @@ impl CoreManager {
         Ok(core)
     }
 
-    /// Stops the current instance and returns once its process has exited:
-    /// `/v1/stop` (routes are removed while the core is still healthy), then
-    /// SIGTERM and closing its lifetime pipe, then a kill after
-    /// the grace period ([`STOP_GRACE`]). Only then are the shared paths cleared for the next
-    /// instance.
-    #[cfg(all(test, unix))]
+    /// The current instance is `id`.
+    fn is_current(&self, id: u64) -> bool {
+        self.state.as_ref().is_some_and(|core| core.id == id)
+    }
+
+    /// Stops the current instance and returns once the engine's shutdown
+    /// did (bounded): the TUN, its routes and rules are gone.
+    #[cfg(test)]
     pub fn stop(&mut self) -> Result<()> {
         self.stop_because("stopped")
     }
 
     /// [`Self::stop`], telling the session's watchers `reason` (see
-    /// [`stop_reason`]) before the core is asked to stop.
+    /// [`stop_reason`]) before the instance is shut down.
     pub fn stop_because(&mut self, reason: &str) -> Result<()> {
-        if let Some(mut core) = self.state.take() {
+        if let Some(core) = self.state.take() {
             self.watchers.core_stopped(&core.session, reason);
             // Queued first: the system DNS goes back while the TUN still
             // answers, not seconds after it is gone (scutil can be slow).
             self.restore_dns();
             let started = Instant::now();
-            if core.alive() {
-                if !core.secret.is_empty() {
-                    let stopped = send_http(
-                        &self.layout.socket,
-                        "/v1/stop",
-                        &core.secret,
-                        b"{}",
-                        STOP_REQUEST_TIMEOUT,
-                    );
-                    info!(
-                        "ppvpn-core pid {} /v1/stop answered in {} ms ({})",
-                        core.pid,
-                        started.elapsed().as_millis(),
-                        match &stopped {
-                            Ok(response) if response.ok => "ok".to_string(),
-                            Ok(_) => "error".to_string(),
-                            Err(error) => format!("{error:#}"),
-                        }
-                    );
-                }
-                info!("stopping ppvpn-core pid {}", core.pid);
-                terminate(&core.child);
-            }
-            drop(core.stdin.take());
-            let grace = self.layout.stop_grace;
-            if !wait_for_exit(&mut core.child, grace) {
+            info!("stopping ppvpn-core ({reason})");
+            let leftovers = core.instance.shutdown();
+            info!("ppvpn-core stopped in {} ms", started.elapsed().as_millis());
+            if !leftovers.is_empty() {
                 log::warn!(
-                    "ppvpn-core pid {} did not exit within {:?}; killing it",
-                    core.pid,
-                    grace
+                    "ppvpn-core shutdown left behind: {}",
+                    describe_leftovers(&leftovers)
                 );
-                let _ = core.child.kill();
-                let _ = core.child.wait();
             }
-            info!(
-                "ppvpn-core pid {} stopped in {} ms",
-                core.pid,
-                started.elapsed().as_millis()
-            );
-            // A killed core (on its own, or after the grace period) could
-            // not remove its policy rules; left in place they break the next
-            // connection's direct path. Runs under the core lock: `ip` is
-            // quick, and the time is logged.
-            #[cfg(all(target_os = "linux", not(test)))]
+            if reason != stop_reason::SERVICE_STOPPING
+                && needs_process_restart(&leftovers, cfg!(windows))
             {
-                let cleaning = Instant::now();
-                crate::netclean::clean_if_no_core(
-                    &crate::netclean::SystemRunner,
-                    core_process_running(),
-                    "after ppvpn-core stopped",
-                );
-                info!(
-                    "routing cleanup after ppvpn-core stopped took {} ms",
-                    cleaning.elapsed().as_millis()
-                );
+                restart_process();
             }
         }
-        #[cfg(unix)]
-        let _ = std::fs::remove_file(&self.layout.socket);
-        let _ = std::fs::remove_file(&self.layout.secret);
         self.restore_dns();
         Ok(())
     }
 }
 
+/// Ends the service so the service manager restarts it: the WFP filters a
+/// shutdown left go with the process.
+#[cfg(windows)]
+fn restart_process() {
+    log::error!("leftovers only a process exit removes; exiting for a restart");
+    log::logger().flush();
+    std::process::exit(RESTART_EXIT_CODE)
+}
+
+#[cfg(not(windows))]
+fn restart_process() {}
+
+/// Checks the schema, applies the profile and starts the data plane.
+fn bring_up(
+    instance: &dyn Instance,
+    profile: &Value,
+    requested_schema: u64,
+    hosts: &[String],
+    mode: Option<&str>,
+    choices: &ApplyChoices,
+) -> Result<()> {
+    // Per-phase durations at info level: a slow first connect (TUN
+    // creation, rule-set downloads) shows which step took the time.
+    let mut phase = Instant::now();
+    let mut lap = |name: &str| {
+        info!(
+            "ppvpn-core start: {name} took {} ms",
+            phase.elapsed().as_millis()
+        );
+        phase = Instant::now();
+    };
+    let none = serde_json::json!({});
+    let version = instance.call(
+        "/v1/get-version",
+        none.clone(),
+        call_timeout("/v1/get-version", &none),
+    )?;
+    let supported_schema = version
+        .get("profile_schema_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("CORE_SCHEMA_CAPABILITY_MISSING"))?;
+    if requested_schema != supported_schema {
+        return Err(anyhow!("PROFILE_SCHEMA_UNSUPPORTED"));
+    }
+    let body = apply_body(profile, hosts, mode, choices);
+    let timeout = call_timeout("/v1/apply-profile", &body);
+    let applied = instance.call("/v1/apply-profile", body, timeout);
+    lap("apply-profile");
+    applied?;
+    let started = instance.call("/v1/start", none.clone(), call_timeout("/v1/start", &none));
+    lap("start (TUN, routes)");
+    started?;
+    Ok(())
+}
+
 /// The first steps of the service's shutdown, once `ipc::begin_stopping`
 /// refuses new work: every watch connection is told `stopping` and closed
 /// (within about `grace`, whatever its client does), and only then is the
-/// core lock taken for the core's stop, which the caller does with the
+/// core lock taken for the instance's stop, which the caller does with the
 /// returned guard.
 pub fn stop_sequence<'a>(
     core: &'a Mutex<CoreManager>,
@@ -863,7 +818,7 @@ const ALLOWED_PATHS: &[&str] = &[
     "/v1/list-nodes",
     "/v1/select-node",
     "/v1/get-selected-node",
-    // Core 0.5.7+: a node fixed to one ingress (live, no engine rebuild).
+    // A node fixed to one ingress (live, no engine rebuild).
     "/v1/pin-ingress",
     "/v1/probe-entrances",
     "/v1/probe-availability",
@@ -873,10 +828,10 @@ const ALLOWED_PATHS: &[&str] = &[
     "/v1/get-connections",
 ];
 
-/// Upper bound for the whole exchange of one Core API call. Status-type
-/// calls are answered from memory; probes run for the `timeout_ms` the
-/// client asked for (per ingress, up to two waves, as the client's own
-/// deadline in crates/ppvpn-client/src/core_ipc.rs).
+/// Upper bound for one Core API call. Status-type calls are answered from
+/// memory; probes run for the `timeout_ms` the client asked for (per
+/// ingress, up to two waves, as the client's own deadline in
+/// crates/ppvpn-client/src/core_ipc.rs).
 fn call_timeout(path: &str, body: &Value) -> Duration {
     match path {
         "/v1/get-version" | "/v1/get-status" | "/v1/get-traffic" | "/v1/get-selected-node" => {
@@ -895,46 +850,15 @@ fn call_timeout(path: &str, body: &Value) -> Duration {
                 .min(60_000);
             Duration::from_millis(asked.saturating_mul(2)) + Duration::from_secs(5)
         }
-        "/v1/stop" => STOP_REQUEST_TIMEOUT,
+        "/v1/stop" => Duration::from_secs(10),
         // validate / apply profile, start.
         _ => Duration::from_secs(30),
     }
 }
 
-/// How long `/v1/stop` may take before the core is stopped by force.
-const STOP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// One Core API call, bound to the instance it was prepared for: it
-/// authenticates with that instance's secret, so it can never reach a later
-/// one. Sent without holding [`CORE`], so a slow call never delays
-/// Disconnect, a lease renewal or a status query.
-#[derive(Clone)]
-struct CoreCall {
-    socket: String,
-    secret: String,
-    pid: u32,
-    path: String,
-}
-
-impl CoreCall {
-    fn send(&self, body: Value) -> Result<Value> {
-        let timeout = call_timeout(&self.path, &body);
-        let request_body = serde_json::to_vec(&body)?;
-        let response = send_http(
-            &self.socket,
-            &self.path,
-            &self.secret,
-            &request_body,
-            timeout,
-        )?;
-        if response.ok {
-            return Ok(response.data);
-        }
-        Err(envelope_error(response))
-    }
-}
-
-/// `CoreApi`: authorizes under `core`, then forwards the call without it.
+/// `CoreApi`: authorizes under `core`, then calls the instance without it,
+/// so a slow call (a probe) never delays Disconnect, a lease renewal or a
+/// status query.
 pub fn call_api(
     core: &Mutex<CoreManager>,
     session: &SessionRef,
@@ -942,17 +866,14 @@ pub fn call_api(
     body: Value,
     client_pid: u32,
 ) -> Result<Value> {
-    let call = core.lock().prepare_call(session, path, client_pid)?;
-    let data = call.send(body)?;
+    let (id, instance) = core.lock().prepare_call(session, path, client_pid)?;
+    let timeout = call_timeout(path, &body);
+    let data = instance.call(path, body, timeout)?;
     // The data plane of the same instance was started or stopped without
     // Connect / Disconnect: the system DNS follows it.
     if path == "/v1/start" || path == "/v1/stop" {
         let mut manager = core.lock();
-        if manager
-            .state
-            .as_ref()
-            .is_some_and(|current| current.pid == call.pid)
-        {
+        if manager.is_current(id) {
             if path == "/v1/start" {
                 manager.apply_dns();
             } else {
@@ -963,82 +884,9 @@ pub fn call_api(
     Ok(data)
 }
 
-/// A privileged ppvpn-core is running: the installed binary, run by root
-/// (ours, or an orphan of an earlier service instance). The app's standard
-/// core has the same name but runs as the user, and never counts: it runs
-/// whenever the app does.
-#[cfg_attr(windows, allow(dead_code))]
-pub fn core_process_running() -> bool {
-    let Some(binary) = installed_core_binary() else {
-        return false;
-    };
-    let started = Instant::now();
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::new()
-            .with_exe(UpdateKind::OnlyIfNotSet)
-            .with_user(UpdateKind::OnlyIfNotSet),
-    );
-    let running = system.processes().values().any(|process| {
-        process
-            .exe()
-            .is_some_and(|exe| is_core_binary(exe, &binary))
-            && runs_as_root(process)
-    });
-    info!(
-        "privileged ppvpn-core running: {running} (checked in {} ms)",
-        started.elapsed().as_millis()
-    );
-    running
-}
-
-/// `exe` is `binary`, also once replaced by an upgrade (Linux shows the old
-/// inode as "… (deleted)").
-fn is_core_binary(exe: &Path, binary: &Path) -> bool {
-    let exe = exe.to_string_lossy();
-    let exe = exe.strip_suffix(" (deleted)").unwrap_or(&exe);
-    Path::new(exe) == binary
-}
-
-#[cfg(unix)]
-fn runs_as_root(process: &sysinfo::Process) -> bool {
-    process.user_id().is_some_and(|uid| **uid == 0)
-}
-
-#[cfg(not(unix))]
-fn runs_as_root(_: &sysinfo::Process) -> bool {
-    true
-}
-
-/// Runs the installed core once (`ppvpn-core version`) so the first launch
-/// of a newly installed binary pays the macOS code assessment here, at
-/// service start, and not inside the first Connect's startup budget.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn warm_up_core_binary() {
-    let Some(binary) = installed_core_binary() else {
-        return;
-    };
-    let started = Instant::now();
-    let result = Command::new(&binary)
-        .arg("version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    match result {
-        Ok(status) => info!(
-            "ppvpn-core warm-up run ({status}) took {} ms",
-            started.elapsed().as_millis()
-        ),
-        Err(error) => log::warn!("ppvpn-core warm-up run failed: {error}"),
-    }
-}
-
 /// `UpdateProfile`: checks the schema and applies the new profile (rolling
-/// back on failure) without holding `core` during the Core API calls, then
-/// records the new revision if the same instance is still the session's.
+/// back on failure) without holding `core` during the calls, then records
+/// the new revision if the same instance is still the session's.
 pub fn update_profile(
     core: &Mutex<CoreManager>,
     body: UpdateProfilePayload,
@@ -1058,25 +906,24 @@ pub fn update_profile(
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow!("PROFILE_SCHEMA_REQUIRED"))?;
     check_routing_mode(body.routing_mode.as_deref())?;
-    let (call, previous, previous_hosts, previous_mode) = {
+    let (id, instance, previous, previous_hosts, previous_mode) = {
         let mut manager = core.lock();
         let current = manager.authorize(&body.session, caller_user.as_deref())?;
-        let previous = current.profile.clone();
-        let previous_hosts = current.rule_set_hosts.clone();
-        let previous_mode = current.routing_mode.clone();
         (
-            manager.target("/v1/get-version")?,
-            previous,
-            previous_hosts,
-            previous_mode,
+            current.id,
+            current.instance.clone(),
+            current.profile.clone(),
+            current.rule_set_hosts.clone(),
+            current.routing_mode.clone(),
         )
     };
-    let on = |path: &str| CoreCall {
-        path: path.to_string(),
-        ..call.clone()
-    };
 
-    let version = on("/v1/get-version").send(serde_json::json!({}))?;
+    let none = serde_json::json!({});
+    let version = instance.call(
+        "/v1/get-version",
+        none.clone(),
+        call_timeout("/v1/get-version", &none),
+    )?;
     let supported_schema = version
         .get("profile_schema_version")
         .and_then(Value::as_u64)
@@ -1084,32 +931,29 @@ pub fn update_profile(
     if requested_schema != supported_schema {
         return Err(anyhow!("PROFILE_SCHEMA_UNSUPPORTED"));
     }
-    let hosts = pinned_hosts(&version, body.allowed_rule_set_hosts.clone());
-    let mode = routing_mode_for(&version, body.routing_mode.clone());
-    // ApplyProfile is already transactional while the core is running: it
-    // replaces the live runtime and rolls the previous one back if the
-    // candidate cannot start. Calling Reload afterwards would restart the
-    // successfully applied revision a second time.
-    let apply = on("/v1/apply-profile").send(apply_body(&body.profile, &hosts, mode.as_deref()));
-    if let Err(error) = apply {
-        // Re-apply the previous revision once to cover an ambiguous local
-        // IPC failure where the core committed the candidate but the
-        // response was lost. If ApplyProfile itself rejected the
+    let apply = |profile: &Value, hosts: &[String], mode: Option<&str>| {
+        let request = apply_body(profile, hosts, mode, &body.choices);
+        let timeout = call_timeout("/v1/apply-profile", &request);
+        instance.call("/v1/apply-profile", request, timeout)
+    };
+    // ApplyProfile is transactional while the instance runs: it replaces
+    // the live runtime and rolls the previous one back if the candidate
+    // cannot start. Both carry the client's current selection and pins.
+    let applied = apply(
+        &body.profile,
+        &body.allowed_rule_set_hosts,
+        body.routing_mode.as_deref(),
+    );
+    if let Err(error) = applied {
+        // Re-apply the previous revision once, in case the candidate was
+        // committed after all. If ApplyProfile itself rejected the
         // candidate, this is an idempotent no-op.
-        let rollback = on("/v1/apply-profile").send(apply_body(
-            &previous,
-            &previous_hosts,
-            previous_mode.as_deref(),
-        ));
+        let rollback = apply(&previous, &previous_hosts, previous_mode.as_deref());
         return match rollback {
             Ok(_) => Err(anyhow!("PROFILE_UPDATE_ROLLED_BACK: {error}")),
             Err(rollback_error) => {
                 let mut manager = core.lock();
-                if manager
-                    .state
-                    .as_ref()
-                    .is_some_and(|current| current.pid == call.pid)
-                {
+                if manager.is_current(id) {
                     manager.stop_because(stop_reason::PROFILE_FAILED).ok();
                 }
                 Err(anyhow!(
@@ -1120,83 +964,15 @@ pub fn update_profile(
     }
     let mut manager = core.lock();
     let current = manager.authorize(&body.session, caller_user.as_deref())?;
-    if current.pid != call.pid {
+    if current.id != id {
         return Err(anyhow!("CONNECTION_NOT_ACTIVE"));
     }
     current.profile = body.profile;
-    current.rule_set_hosts = hosts;
-    current.routing_mode = mode;
+    current.rule_set_hosts = body.allowed_rule_set_hosts;
+    current.routing_mode = body.routing_mode;
     current.profile_revision = revision;
     current.lease_deadline = Instant::now() + LEASE_DURATION;
     Ok(manager.status_for(caller_user.as_deref()))
-}
-
-/// Asks the core to shut down gracefully: SIGTERM on Unix. Windows has no
-/// equivalent; closing the lifetime pipe does it there.
-#[cfg(unix)]
-fn terminate(child: &Child) {
-    // SAFETY: plain kill(2). The child has not been reaped (we own its
-    // `Child`), so its pid cannot have been reused.
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-#[cfg(not(unix))]
-fn terminate(_: &Child) {}
-
-/// Polls until `child` has exited (reaping it); `false` on timeout.
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return true,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Ok(None) => return false,
-            // Not our child any more (cannot happen for a `Child` we own).
-            Err(_) => return true,
-        }
-    }
-}
-
-fn envelope_error(response: CoreEnvelope) -> anyhow::Error {
-    let error = response
-        .error
-        .map(|e| format!("{}: {}", e.code, e.message))
-        .unwrap_or_else(|| "core operation failed".to_string());
-    anyhow!(error)
-}
-
-/// First core release whose `apply-profile` accepts `allowed_rule_set_hosts`;
-/// older cores decode strictly and reject the unknown field.
-const RULE_SET_HOSTS_MIN_CORE: (u64, u64, u64) = (0, 5, 0);
-
-/// `core_version` (from `GetVersion`) accepts `allowed_rule_set_hosts`. A
-/// pre-release suffix counts as that release. Mirrors
-/// `ppvpn-client` `core_ipc::core_accepts_rule_set_hosts`.
-fn core_accepts_rule_set_hosts(core_version: &str) -> bool {
-    core_version_at_least(core_version, RULE_SET_HOSTS_MIN_CORE)
-}
-
-/// First core release whose `apply-profile` accepts `routing_mode`.
-const ROUTING_MODE_MIN_CORE: (u64, u64, u64) = (0, 5, 6);
-
-/// `core_version` is `minimum` or newer (a pre-release counts as that
-/// release; anything unparsable does not).
-fn core_version_at_least(core_version: &str, minimum: (u64, u64, u64)) -> bool {
-    let core = core_version.trim().trim_start_matches('v');
-    let core = core.split(['-', '+']).next().unwrap_or_default();
-    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
-    let (Some(Some(major)), Some(Some(minor)), patch) = (parts.next(), parts.next(), parts.next())
-    else {
-        return false;
-    };
-    let patch = match patch {
-        None => 0,
-        Some(Some(patch)) => patch,
-        Some(None) => return false,
-    };
-    (major, minor, patch) >= minimum
 }
 
 /// Rejects a `routing_mode` other than `rules` / `global` before anything
@@ -1208,40 +984,12 @@ fn check_routing_mode(requested: Option<&str>) -> Result<()> {
     }
 }
 
-/// The client's routing mode when the core accepts it, otherwise none (the
-/// core then routes by the profile's rules, as before the mode existed).
-fn routing_mode_for(version: &Value, requested: Option<String>) -> Option<String> {
-    let core_version = version
-        .get("core_version")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let requested = requested?;
-    if core_version_at_least(core_version, ROUTING_MODE_MIN_CORE) {
-        return Some(requested);
-    }
-    info!("ppvpn-core {core_version} predates routing_mode; applying the profile's rules");
-    None
-}
-
-/// The client's hosts when the core (its `GetVersion` data) accepts them,
-/// otherwise none: the profile then applies without rule-set downloads.
-fn pinned_hosts(version: &Value, requested: Vec<String>) -> Vec<String> {
-    let core_version = version
-        .get("core_version")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if requested.is_empty() || core_accepts_rule_set_hosts(core_version) {
-        return requested;
-    }
-    info!("ppvpn-core {core_version} predates allowed_rule_set_hosts; rule sets stay unpinned");
-    Vec::new()
-}
-
 /// `apply-profile` request body.
 fn apply_body(
     profile: &Value,
     allowed_rule_set_hosts: &[String],
     routing_mode: Option<&str>,
+    choices: &ApplyChoices,
 ) -> Value {
     let mut body = serde_json::json!({ "profile": profile });
     if !allowed_rule_set_hosts.is_empty() {
@@ -1249,6 +997,12 @@ fn apply_body(
     }
     if let Some(mode) = routing_mode {
         body["routing_mode"] = serde_json::json!(mode);
+    }
+    if let Some(node_id) = &choices.selected_node_id {
+        body["selected_node_id"] = serde_json::json!(node_id);
+    }
+    if !choices.pins.is_empty() {
+        body["pins"] = serde_json::json!(choices.pins);
     }
     body
 }
@@ -1263,256 +1017,27 @@ fn validate_session(session: &SessionRef) -> Result<()> {
     Ok(())
 }
 
-/// One Core API exchange that gives up after `timeout` in total, whatever
-/// the core does. It runs on its own thread: a named pipe has no read
-/// timeout, and a Unix socket's applies per read. A thread left behind ends
-/// when the core answers, closes the connection or exits (Unix: at the
-/// latest one second after `timeout` without data).
-fn send_http(
-    socket: &str,
-    path: &str,
-    secret: &str,
-    body: &[u8],
-    timeout: Duration,
-) -> Result<CoreEnvelope> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let (socket, owned_path, secret, body) = (
-        socket.to_string(),
-        path.to_string(),
-        secret.to_string(),
-        body.to_vec(),
-    );
-    std::thread::Builder::new()
-        .name("core-api".to_string())
-        .spawn(move || {
-            let _ = sender.send(open_and_exchange(
-                &socket,
-                &owned_path,
-                &secret,
-                &body,
-                timeout,
-            ));
-        })
-        .context("spawn Core API thread")?;
-    match receiver.recv_timeout(timeout) {
-        Ok(result) => result,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
-            "CORE_IPC_TIMEOUT: {path}: no answer within {timeout:?}"
-        )),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err(anyhow!("CORE_IPC_FAILED: {path}: exchange thread ended"))
-        }
-    }
-}
-
-#[cfg(unix)]
-fn open_and_exchange(
-    socket: &str,
-    path: &str,
-    secret: &str,
-    body: &[u8],
-    timeout: Duration,
-) -> Result<CoreEnvelope> {
-    use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(socket).context("connect privileged core socket")?;
-    // Only a backstop that ends the thread: `send_http` enforces `timeout`.
-    stream
-        .set_read_timeout(Some(timeout + Duration::from_secs(1)))
-        .ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-    exchange_http(&mut stream, path, secret, body)
-}
-
-#[cfg(windows)]
-fn open_and_exchange(
-    socket: &str,
-    path: &str,
-    secret: &str,
-    body: &[u8],
-    _timeout: Duration,
-) -> Result<CoreEnvelope> {
-    let mut pipe = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(socket)
-        .context("open privileged core named pipe")?;
-    exchange_http(&mut pipe, path, secret, body)
-}
-
-/// One Core API request/response on a fresh connection.
-///
-/// The request goes out in a single write. ppvpn-core may answer (and close)
-/// before it read a body its handler ignores, so a failed write is not
-/// final: the answer can already be waiting. The response is read up to its
-/// `Content-Length` (or last chunk), not to EOF, so a reset that follows a
-/// complete response (Linux reports ECONNRESET when the core closes with our
-/// body unread) cannot discard it.
-fn exchange_http<T: Read + Write>(
-    stream: &mut T,
-    path: &str,
-    secret: &str,
-    body: &[u8],
-) -> Result<CoreEnvelope> {
-    let mut request = format!(
-        "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {secret}\r\n\
-         X-Core-API-Version: 1\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    request.extend_from_slice(body);
-    let written = stream.write_all(&request).and_then(|()| stream.flush());
-    let response = match (read_http_response(stream), written) {
-        (Ok(response), _) => response,
-        (Err(read_error), Err(write_error)) => {
-            return Err(anyhow!(
-                "CORE_IPC_FAILED: {path}: write request: {write_error}; read response: {read_error}"
-            ))
-        }
-        (Err(read_error), Ok(())) => {
-            return Err(anyhow!(
-                "CORE_IPC_FAILED: {path}: read response: {read_error}"
-            ))
-        }
-    };
-    serde_json::from_slice(&response)
-        .map_err(|error| anyhow!("CORE_IPC_FAILED: {path}: decode Core API envelope: {error}"))
-}
-
-/// Reads one HTTP response and returns its (de-chunked) body.
-fn read_http_response<R: Read>(reader: &mut R) -> std::io::Result<Vec<u8>> {
-    let mut raw = Vec::new();
-    let mut chunk = [0u8; 16 * 1024];
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => {
-                return match http_body(&raw, true) {
-                    Ok(Some(body)) => Ok(body),
-                    Ok(None) => Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        format!("connection closed after {} response bytes", raw.len()),
-                    )),
-                    Err(error) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
-                }
-            }
-            Ok(read) => {
-                raw.extend_from_slice(&chunk[..read]);
-                if raw.len() > MAX_RESPONSE_BYTES {
-                    return Err(std::io::Error::other("response too large"));
-                }
-                match http_body(&raw, false) {
-                    Ok(Some(body)) => return Ok(body),
-                    Ok(None) => {}
-                    Err(error) => {
-                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-/// The body of the response in `raw` once it is complete; `Ok(None)` while
-/// more bytes are needed. `eof`: the connection has closed, which completes a
-/// response delimited by the close.
-fn http_body(raw: &[u8], eof: bool) -> std::result::Result<Option<Vec<u8>>, String> {
-    let Some(split) = raw.windows(4).position(|window| window == b"\r\n\r\n") else {
-        return Ok(None);
-    };
-    let head = std::str::from_utf8(&raw[..split]).map_err(|_| "invalid HTTP head".to_string())?;
-    let mut lines = head.split("\r\n");
-    if !lines.next().unwrap_or_default().starts_with("HTTP/1.") {
-        return Err("invalid HTTP status line".to_string());
-    }
-    let mut content_length = None;
-    let mut chunked = false;
-    for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim();
-        if name.eq_ignore_ascii_case("content-length") {
-            content_length = Some(
-                value
-                    .parse::<usize>()
-                    .map_err(|_| "invalid Content-Length".to_string())?,
-            );
-        } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            chunked = value.to_ascii_lowercase().contains("chunked");
-        }
-    }
-    let rest = &raw[split + 4..];
-    if chunked {
-        // Go chunks any body larger than its 2 KiB buffer, even when the
-        // request says `Connection: close`.
-        return decode_chunked(rest);
-    }
-    match content_length {
-        Some(length) if rest.len() >= length => Ok(Some(rest[..length].to_vec())),
-        Some(_) => Ok(None),
-        None if eof => Ok(Some(rest.to_vec())),
-        None => Ok(None),
-    }
-}
-
-/// Decodes a chunked body; `Ok(None)` while it is still incomplete.
-fn decode_chunked(mut data: &[u8]) -> std::result::Result<Option<Vec<u8>>, String> {
-    let mut body = Vec::new();
-    loop {
-        let Some(line_end) = data.windows(2).position(|window| window == b"\r\n") else {
-            return Ok(None);
-        };
-        let size_text =
-            std::str::from_utf8(&data[..line_end]).map_err(|_| "bad chunk size".to_string())?;
-        let size_text = size_text.split(';').next().unwrap_or_default().trim();
-        let size =
-            usize::from_str_radix(size_text, 16).map_err(|_| "bad chunk size".to_string())?;
-        data = &data[line_end + 2..];
-        if size == 0 {
-            return Ok(Some(body));
-        }
-        if data.len() < size.saturating_add(2) {
-            return Ok(None);
-        }
-        body.extend_from_slice(&data[..size]);
-        data = &data[size + 2..];
-    }
-}
-
-/// `debug-log` next to the core's state directory (only an administrator
-/// can create it there) turns on ppvpn-core's debug log for the next
-/// connection.
-fn debug_log_flag(layout: &CoreLayout) -> Option<PathBuf> {
-    let flag = layout.state.parent()?.join("debug-log");
+/// `debug-log` next to the state directory (only an administrator can
+/// create it there) turns on the debug log for the next connection.
+fn debug_log_flag(state_dir: &Path) -> Option<PathBuf> {
+    let flag = state_dir.parent()?.join("debug-log");
     flag.is_file().then_some(flag)
 }
 
-fn installed_core_binary() -> Option<PathBuf> {
-    let dir = service_exe_dir()?;
-    let candidates = if cfg!(windows) {
-        vec![dir.join("ppvpn-core.exe")]
-    } else {
-        vec![dir.join("ppvpn-core")]
-    };
-    candidates.into_iter().find(|path| path.is_file())
-}
-
-fn prepare_runtime_dir(layout: &CoreLayout) -> Result<()> {
-    let secret_parent = layout
-        .secret
+/// Creates the state directory, its parent private to the administrators.
+fn prepare_state_dir(state: &Path) -> Result<()> {
+    let parent = state
         .parent()
-        .ok_or_else(|| anyhow!("invalid core secret path"))?;
-    std::fs::create_dir_all(secret_parent)?;
-    std::fs::create_dir_all(&layout.state)?;
-    harden_runtime_permissions(secret_parent)?;
+        .ok_or_else(|| anyhow!("invalid core state path"))?;
+    std::fs::create_dir_all(state)?;
+    harden_permissions(parent)?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn harden_runtime_permissions(path: &Path) -> Result<()> {
-    let status = Command::new("icacls.exe")
+fn harden_permissions(path: &Path) -> Result<()> {
+    use anyhow::Context;
+    let status = std::process::Command::new("icacls.exe")
         .arg(path)
         .args([
             "/inheritance:r",
@@ -1521,7 +1046,7 @@ fn harden_runtime_permissions(path: &Path) -> Result<()> {
             "*S-1-5-32-544:(OI)(CI)F",
         ])
         .status()
-        .context("apply private core runtime ACL")?;
+        .context("apply private core state ACL")?;
     if !status.success() {
         return Err(anyhow!(
             "CORE_STATE_ACL_FAILED:{}",
@@ -1532,7 +1057,7 @@ fn harden_runtime_permissions(path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn harden_runtime_permissions(path: &Path) -> Result<()> {
+fn harden_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = std::fs::metadata(path)?.permissions();
     permissions.set_mode(0o700);
@@ -1540,6 +1065,7 @@ fn harden_runtime_permissions(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn service_exe_dir() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
@@ -1550,7 +1076,7 @@ fn service_exe_dir() -> Option<PathBuf> {
 struct Owner<'a> {
     session: &'a SessionRef,
     user: Option<&'a str>,
-    /// Lease valid and core process alive.
+    /// Lease valid and instance not failed.
     live: bool,
 }
 
@@ -1558,19 +1084,18 @@ struct Owner<'a> {
 enum Ownership {
     /// No core yet.
     Free,
-    /// The previous owner's lease lapsed or its core died: replace it.
+    /// The previous owner's lease lapsed or its instance failed: replace it.
     Expired,
     /// The caller already owns the core: renew and reuse it.
     Same,
-    /// Same OS user asked to take over: stop the other session's core.
+    /// Same OS user asked to take over: stop the other session's instance.
     TakeOver,
     Refused(&'static str),
 }
 
-/// A live core, as `GetStatus` may describe it.
+/// A live instance, as `GetStatus` may describe it.
 struct CoreView<'a> {
     pid: u32,
-    bin_path: &'a str,
     session: &'a SessionRef,
     owner_user: Option<&'a str>,
     profile_revision: &'a str,
@@ -1605,7 +1130,6 @@ fn describe(core: Option<CoreView<'_>>, caller_user: Option<&str>) -> Status {
     Status {
         running: true,
         pid: core.pid as i64,
-        bin_path: core.bin_path.to_string(),
         mode: "transparent".to_string(),
         session_id: Some(core.session.session_id.clone()),
         generation: core.session.generation,
@@ -1677,49 +1201,6 @@ fn process_user(pid: u32) -> Option<String> {
     sys.process(Pid::from_u32(pid))
         .and_then(|process| process.user_id())
         .map(|user| user.to_string())
-}
-
-#[cfg(windows)]
-fn assign_kill_on_close_job(
-    child: &std::process::Child,
-) -> Result<std::os::windows::io::OwnedHandle> {
-    use std::mem::{size_of, zeroed};
-    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use std::ptr::null_mut;
-    use winapi::shared::ntdef::HANDLE;
-    use winapi::um::jobapi2::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    };
-    use winapi::um::winnt::{
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
-
-    // The job object is a last-resort crash boundary. Normal Stop/Shutdown
-    // still calls /v1/stop first so the core can remove routes gracefully.
-    let raw_job = unsafe { CreateJobObjectW(null_mut(), null_mut()) };
-    if raw_job.is_null() {
-        return Err(std::io::Error::last_os_error()).context("create core job object");
-    }
-    let job = unsafe { OwnedHandle::from_raw_handle(raw_job.cast()) };
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    let configured = unsafe {
-        SetInformationJobObject(
-            raw_job,
-            JobObjectExtendedLimitInformation,
-            (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        )
-    };
-    if configured == 0 {
-        return Err(std::io::Error::last_os_error()).context("configure core job object");
-    }
-    let assigned = unsafe { AssignProcessToJobObject(raw_job, child.as_raw_handle() as HANDLE) };
-    if assigned == 0 {
-        return Err(std::io::Error::last_os_error()).context("assign core process to job object");
-    }
-    Ok(job)
 }
 
 #[cfg(test)]
@@ -1874,47 +1355,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn apply_body_pins_hosts_only_for_cores_that_accept_them() {
+    fn apply_bodies_carry_the_hosts_and_the_routing_mode_when_given() {
         let hosts = || vec!["api.example.com".to_string()];
-        let v = |core: &str| serde_json::json!({ "core_version": core });
-        assert_eq!(pinned_hosts(&v("0.5.0"), hosts()), hosts());
-        assert_eq!(pinned_hosts(&v("0.5.0-rc.1"), hosts()), hosts());
-        assert_eq!(pinned_hosts(&v("1.2"), hosts()), hosts());
-        assert!(pinned_hosts(&v("0.4.5"), hosts()).is_empty());
-        assert!(pinned_hosts(&serde_json::json!({}), hosts()).is_empty());
-        assert!(pinned_hosts(&v("0.5.0"), Vec::new()).is_empty());
-
         let profile = serde_json::json!({ "revision": "r1" });
+        let none = ApplyChoices::default();
         assert_eq!(
-            apply_body(&profile, &hosts(), None),
+            apply_body(&profile, &hosts(), None, &none),
             serde_json::json!({ "profile": { "revision": "r1" },
                 "allowed_rule_set_hosts": ["api.example.com"] })
         );
         assert_eq!(
-            apply_body(&profile, &[], None),
+            apply_body(&profile, &[], None, &none),
             serde_json::json!({ "profile": { "revision": "r1" } })
         );
-    }
-
-    #[test]
-    fn the_routing_mode_goes_only_to_cores_that_accept_it() {
-        let v = |core: &str| serde_json::json!({ "core_version": core });
-        let global = || Some("global".to_string());
-        assert_eq!(routing_mode_for(&v("0.5.6"), global()), global());
-        assert_eq!(routing_mode_for(&v("0.6.0-rc.1"), global()), global());
-        assert_eq!(routing_mode_for(&v("0.5.5"), global()), None);
-        assert_eq!(routing_mode_for(&v("0.5.6"), None), None);
+        assert_eq!(
+            apply_body(&profile, &[], Some("global"), &none),
+            serde_json::json!({ "profile": { "revision": "r1" }, "routing_mode": "global" })
+        );
         assert!(check_routing_mode(None).is_ok());
         assert!(check_routing_mode(Some("rules")).is_ok());
         assert!(check_routing_mode(Some("global")).is_ok());
         assert_eq!(
             check_routing_mode(Some("direct")).unwrap_err().to_string(),
             "ROUTING_MODE_INVALID"
-        );
-        let profile = serde_json::json!({ "revision": "r1" });
-        assert_eq!(
-            apply_body(&profile, &[], Some("global")),
-            serde_json::json!({ "profile": { "revision": "r1" }, "routing_mode": "global" })
         );
         let old: UpdateProfilePayload = serde_json::from_value(serde_json::json!({
             "session_id": "a", "generation": 1, "profile": {}
@@ -1929,11 +1392,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn apply_bodies_carry_the_clients_selection_and_pins() {
+        let profile = serde_json::json!({ "revision": "r1" });
+        let choices = ApplyChoices {
+            selected_node_id: Some("n2".into()),
+            pins: vec![crate::protocol::IngressPin {
+                node_id: "n1".into(),
+                endpoint_key: "k2".into(),
+            }],
+        };
+        assert_eq!(
+            apply_body(&profile, &[], Some("rules"), &choices),
+            serde_json::json!({ "profile": { "revision": "r1" }, "routing_mode": "rules",
+                "selected_node_id": "n2", "pins": [{ "node_id": "n1", "endpoint_key": "k2" }] })
+        );
+
+        // Both payloads read them, and default to none (older clients).
+        let connect: ConnectPayload = serde_json::from_value(serde_json::json!({
+            "session_id": "a", "generation": 1, "profile": {}, "take_over": false,
+            "selected_node_id": "n2", "pins": [{ "node_id": "n1", "endpoint_key": "k2" }]
+        }))
+        .unwrap();
+        assert_eq!(connect.choices, choices);
+        assert_eq!(connect.session.generation, 1);
+        let update: UpdateProfilePayload = serde_json::from_value(serde_json::json!({
+            "session_id": "a", "generation": 1, "profile": {},
+            "selected_node_id": "n2", "pins": [{ "node_id": "n1", "endpoint_key": "k2" }]
+        }))
+        .unwrap();
+        assert_eq!(update.choices, choices);
+        let old: UpdateProfilePayload = serde_json::from_value(serde_json::json!({
+            "session_id": "a", "generation": 1, "profile": {}
+        }))
+        .unwrap();
+        assert_eq!(old.choices, ApplyChoices::default());
+    }
+
+    #[test]
     fn status_hides_the_session_from_other_users() {
         let owned = session("a", 3);
         let view = || CoreView {
             pid: 42,
-            bin_path: "/x/ppvpn-core",
             session: &owned,
             owner_user: Some("501"),
             profile_revision: "r1",
@@ -1972,389 +1471,199 @@ pub(crate) mod tests {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
     }
 
-    // --- Core API framing ---------------------------------------------------
-
-    /// A connection to ppvpn-core as Go's `net/http` treats it, worst case:
-    /// the request head is answered as soon as it is complete, the body of a
-    /// handler that ignores it is never read, and the connection is closed
-    /// right after the response. Writes after that fail with EPIPE; once the
-    /// response has been read, the close reports ECONNRESET when our body
-    /// was left unread (Linux), instead of EOF.
-    struct GoLikeCore {
-        received: Vec<u8>,
-        answered: bool,
-        body_unread: bool,
-        response: std::io::Cursor<Vec<u8>>,
-    }
-
-    impl GoLikeCore {
-        fn new(response: &str) -> Self {
-            Self {
-                received: Vec::new(),
-                answered: false,
-                body_unread: false,
-                response: std::io::Cursor::new(response.as_bytes().to_vec()),
-            }
-        }
-    }
-
-    impl Write for GoLikeCore {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            if self.answered {
-                return Err(std::io::ErrorKind::BrokenPipe.into());
-            }
-            self.received.extend_from_slice(buf);
-            if let Some(end) = self.received.windows(4).position(|w| w == b"\r\n\r\n") {
-                self.answered = true;
-                self.body_unread = self.received.len() > end + 4;
-            }
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl Read for GoLikeCore {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            if !self.answered {
-                return Err(std::io::ErrorKind::WouldBlock.into());
-            }
-            // Hand the response out in small pieces, like a socket might.
-            let limit = buf.len().min(7);
-            match self.response.read(&mut buf[..limit])? {
-                0 if self.body_unread => Err(std::io::ErrorKind::ConnectionReset.into()),
-                read => Ok(read),
-            }
-        }
-    }
-
-    const OK_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-        Content-Length: 32\r\nConnection: close\r\n\r\n{\"ok\":true,\"data\":{\"state\":\"x\"}}";
-
     #[test]
-    fn a_response_before_the_body_was_read_still_counts() {
-        // `/v1/start` succeeded in the core, which closed without reading
-        // `{}`: the service used to report EPIPE / ECONNRESET and tear the
-        // freshly started core down.
-        let mut core = GoLikeCore::new(OK_RESPONSE);
-        let envelope = exchange_http(&mut core, "/v1/start", "s", b"{}").unwrap();
-        assert!(envelope.ok);
-        assert_eq!(envelope.data["state"], "x");
-        assert!(core.body_unread, "the fake left the body unread");
-        let request = String::from_utf8(core.received).unwrap();
-        assert!(request.starts_with("POST /v1/start HTTP/1.1\r\n"));
-        assert!(request.contains("Authorization: Bearer s\r\n"));
-        assert!(request.ends_with("Content-Length: 2\r\nConnection: close\r\n\r\n{}"));
-    }
-
-    #[test]
-    fn chunked_and_close_delimited_responses_are_read() {
-        let body = "{\"ok\":true,\"data\":[1,2,3]}";
-        let chunked = format!(
-            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n{:x}\r\n{}\r\n0\r\n\r\n",
-            10,
-            &body[..10],
-            body.len() - 10,
-            &body[10..]
-        );
-        let envelope =
-            exchange_http(&mut GoLikeCore::new(&chunked), "/v1/list-nodes", "s", b"{}").unwrap();
-        assert_eq!(envelope.data, serde_json::json!([1, 2, 3]));
-
-        let until_eof = format!("HTTP/1.1 200 OK\r\n\r\n{body}");
-        let mut reader = std::io::Cursor::new(until_eof.into_bytes());
-        assert_eq!(read_http_response(&mut reader).unwrap(), body.as_bytes());
-    }
-
-    #[test]
-    fn a_truncated_response_is_an_error() {
-        let truncated = "HTTP/1.1 200 OK\r\nContent-Length: 32\r\n\r\n{\"ok\":true";
-        let mut reader = std::io::Cursor::new(truncated.as_bytes().to_vec());
-        assert_eq!(
-            read_http_response(&mut reader).unwrap_err().kind(),
-            std::io::ErrorKind::UnexpectedEof
-        );
-        let error = exchange_http(&mut GoLikeCore::new(truncated), "/v1/start", "s", b"{}")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.starts_with("CORE_IPC_FAILED: /v1/start: read response"),
-            "{error}"
-        );
-    }
-
-    // --- lifecycle against a fake core process --------------------------------
-
-    /// Re-run of this test binary acting as ppvpn-core (see `fake_core`);
-    /// a no-op in a normal test run.
-    #[cfg(unix)]
-    #[test]
-    fn fake_core_process() {
-        if let Ok(socket) = std::env::var("PPVPN_FAKE_CORE_SOCKET") {
-            fake_core::run(&socket);
-        }
-    }
-
-    /// A stand-in for `ppvpn-core serve --exit-on-stdin-close`: same paths,
-    /// same secret handshake, the same Go-like connection handling as
-    /// [`GoLikeCore`] on a real socket, and the same shutdown (on SIGTERM or
-    /// stdin EOF: finish, then remove the socket and secret paths).
-    #[cfg(unix)]
-    mod fake_core {
-        use std::io::{Read, Write};
-        use std::os::unix::net::{UnixListener, UnixStream};
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::time::Duration;
-
-        static STOP: AtomicBool = AtomicBool::new(false);
-
-        extern "C" fn on_term(_: libc::c_int) {
-            STOP.store(true, Ordering::SeqCst);
-        }
-
-        fn env(name: &str) -> String {
-            std::env::var(name).unwrap_or_default()
-        }
-
-        fn event(line: &str) {
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(env("PPVPN_FAKE_CORE_EVENTS"))
-                .unwrap();
-            writeln!(file, "{} {line}", env("PPVPN_FAKE_CORE_INSTANCE")).unwrap();
-        }
-
-        pub(super) fn run(socket: &str) -> ! {
-            // SAFETY: installs an async-signal-safe handler (one atomic store).
-            unsafe {
-                libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t);
-            }
-            let secret_path = env("PPVPN_FAKE_CORE_SECRET");
-            let instance = env("PPVPN_FAKE_CORE_INSTANCE");
-            let secret = format!("secret-of-instance-{instance}-{}", uuid::Uuid::new_v4());
-            let staging = format!("{secret_path}.tmp");
-            std::fs::write(&staging, &secret).unwrap();
-            std::fs::rename(&staging, &secret_path).unwrap();
-            let _ = std::fs::remove_file(socket);
-            let listener = UnixListener::bind(socket).unwrap();
-            listener.set_nonblocking(true).unwrap();
-            std::thread::spawn(|| {
-                let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
-                STOP.store(true, Ordering::SeqCst);
-            });
-            event("ready");
-            while !STOP.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        let secret = secret.clone();
-                        std::thread::spawn(move || serve(stream, &secret));
-                    }
-                    Err(_) => std::thread::sleep(Duration::from_millis(5)),
-                }
-            }
-            event("stopping");
-            // The data plane and the IPC server take a while to shut down;
-            // only then do the listener and `serve` remove their paths.
-            let linger = env("PPVPN_FAKE_CORE_LINGER_MS").parse().unwrap_or(0);
-            std::thread::sleep(Duration::from_millis(linger));
-            if env("PPVPN_FAKE_CORE_HANG") == "1" {
-                loop {
-                    std::thread::sleep(Duration::from_secs(60));
-                }
-            }
-            drop(listener);
-            let _ = std::fs::remove_file(socket);
-            let _ = std::fs::remove_file(&secret_path);
-            event("exited");
-            std::process::exit(0)
-        }
-
-        fn serve(mut stream: UnixStream, secret: &str) {
-            stream.set_nonblocking(false).unwrap();
-            // Read the head byte by byte: never more than the head.
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") {
-                match stream.read(&mut byte) {
-                    Ok(1) => head.push(byte[0]),
-                    _ => return,
-                }
-            }
-            let head = String::from_utf8_lossy(&head).to_string();
-            let path = head.split(' ').nth(1).unwrap_or_default().to_string();
-            let header = |name: &str| {
-                head.lines()
-                    .find_map(|line| line.strip_prefix(name))
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
-            };
-            let authorized = header("Authorization:") == format!("Bearer {secret}");
-            if authorized && path == "/v1/apply-profile" {
-                // Handlers that decode the request read their body.
-                let length = header("Content-Length:").parse().unwrap_or(0);
-                let mut body = vec![0u8; length];
-                let _ = stream.read_exact(&mut body);
-            }
-            let instance = env("PPVPN_FAKE_CORE_INSTANCE");
-            if authorized && path == env("PPVPN_FAKE_CORE_SLOW_PATH") {
-                event(&format!("{path} begun"));
-                let delay = env("PPVPN_FAKE_CORE_SLOW_MS").parse().unwrap_or(0);
-                std::thread::sleep(Duration::from_millis(delay));
-            }
-            let data = match path.as_str() {
-                _ if !authorized => None,
-                "/v1/get-version" => Some(serde_json::json!({
-                    "core_version": "fake", "profile_schema_version": 1
-                })),
-                "/v1/start" if env("PPVPN_FAKE_CORE_FAIL_START") == "1" => None,
-                "/v1/get-status" => Some(serde_json::json!({
-                    "state": "running", "instance": instance
-                })),
-                _ => Some(serde_json::json!({})),
-            };
-            event(&format!(
-                "{path}{}",
-                if authorized { "" } else { " unauthenticated" }
-            ));
-            let envelope = match data {
-                Some(data) => serde_json::json!({ "ok": true, "data": data }),
-                None if !authorized => serde_json::json!({
-                    "ok": false,
-                    "error": { "code": "UNAUTHENTICATED", "message": "valid session authentication is required" }
-                }),
-                None => serde_json::json!({
-                    "ok": false,
-                    "error": { "code": "CORE_OPERATION_FAILED", "message": "core operation failed" }
-                }),
-            };
-            let body = envelope.to_string();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            // Closed right away, whatever of the request was left unread.
-        }
-    }
-
-    /// How each fake core instance behaves, by launch order.
-    #[cfg(unix)]
-    #[derive(Clone, Copy, Default)]
-    pub(crate) struct FakePlan {
-        fail_start: bool,
-        linger_ms: u64,
-        hang: bool,
-        /// This Core API path answers only after `slow_ms`.
-        slow_path: &'static str,
-        slow_ms: u64,
-    }
-
-    #[cfg(unix)]
-    pub(crate) struct FakeCores {
-        dir: PathBuf,
-        events: PathBuf,
-    }
-
-    #[cfg(unix)]
-    impl Drop for FakeCores {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
-
-    #[cfg(unix)]
-    impl FakeCores {
-        fn events(&self) -> Vec<String> {
-            std::fs::read_to_string(&self.events)
-                .unwrap_or_default()
-                .lines()
-                .map(str::to_string)
-                .collect()
-        }
-    }
-
-    /// A manager whose cores are fake-core processes in a private directory
-    /// (short path: Unix socket paths are limited to ~100 bytes).
-    #[cfg(unix)]
-    pub(crate) fn fake_manager(
-        plans: Vec<FakePlan>,
-        stop_grace: Duration,
-    ) -> (CoreManager, FakeCores) {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+    fn a_debug_log_flag_file_turns_on_the_debug_log() {
         let dir = std::env::temp_dir().join(format!(
             "pc-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..8]
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let events = dir.join("events");
-        let launched = AtomicUsize::new(0);
-        let events_path = events.clone();
-        let layout = CoreLayout {
-            socket: dir.join("c.sock").to_string_lossy().to_string(),
-            secret: dir.join("run").join("session.secret"),
-            state: dir.join("state"),
-            log: Some(dir.join("core.log")),
-            stop_grace,
-            command: Some(Box::new(move |layout: &CoreLayout| {
-                let index = launched.fetch_add(1, Ordering::SeqCst);
-                let plan = plans.get(index).copied().unwrap_or_default();
-                let mut command = Command::new(std::env::current_exe().unwrap());
-                command
-                    .args([
-                        "--exact",
-                        "core::tests::fake_core_process",
-                        "--nocapture",
-                        "--test-threads=1",
-                    ])
-                    .env("PPVPN_FAKE_CORE_SOCKET", &layout.socket)
-                    .env("PPVPN_FAKE_CORE_SECRET", &layout.secret)
-                    .env("PPVPN_FAKE_CORE_EVENTS", &events_path)
-                    .env("PPVPN_FAKE_CORE_INSTANCE", (index + 1).to_string())
-                    .env("PPVPN_FAKE_CORE_LINGER_MS", plan.linger_ms.to_string())
-                    .env(
-                        "PPVPN_FAKE_CORE_FAIL_START",
-                        if plan.fail_start { "1" } else { "0" },
-                    )
-                    .env("PPVPN_FAKE_CORE_HANG", if plan.hang { "1" } else { "0" })
-                    .env("PPVPN_FAKE_CORE_SLOW_PATH", plan.slow_path)
-                    .env("PPVPN_FAKE_CORE_SLOW_MS", plan.slow_ms.to_string());
-                command
-            })),
-        };
-        let manager = CoreManager {
-            layout,
-            state: None,
-            core_log: None,
-            watchers: Default::default(),
-            dns: crate::macdns::DnsWorker::default(),
-            dns_applied: false,
-        };
-        (manager, FakeCores { dir, events })
+        let state = dir.join("state");
+        assert_eq!(debug_log_flag(&state), None);
+        std::fs::write(dir.join("debug-log"), "").unwrap();
+        assert_eq!(debug_log_flag(&state), Some(dir.join("debug-log")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The system DNS override follows the core: published only once its
-    /// TUN started, removed when it stops, is stopped over the Core API, or
-    /// dies on its own.
-    #[cfg(unix)]
     #[test]
-    fn the_system_dns_override_follows_the_tun_core() {
+    fn only_wfp_or_unclassified_leftovers_on_windows_end_the_process() {
+        let leftover = |kind: &str| Leftover {
+            kind: kind.to_string(),
+            name: "x".to_string(),
+            detail: String::new(),
+        };
+        assert!(needs_process_restart(&[leftover("wfp")], true));
+        assert!(needs_process_restart(
+            &[leftover("route"), leftover("runtime")],
+            true
+        ));
+        assert!(!needs_process_restart(&[leftover("route")], true));
+        assert!(!needs_process_restart(&[], true));
+        assert!(!needs_process_restart(&[leftover("wfp")], false));
+    }
+
+    // --- Lifecycle, on fake instances ---------------------------------------
+
+    /// How each fake instance behaves, by launch order.
+    #[derive(Clone, Copy, Default)]
+    pub(crate) struct FakePlan {
+        /// `/v1/start` fails.
+        pub(crate) fail_start: bool,
+        /// This Core API path answers only after `slow_ms` (or once the
+        /// instance shut down, or at the call's timeout).
+        pub(crate) slow_path: &'static str,
+        pub(crate) slow_ms: u64,
+    }
+
+    #[derive(Default)]
+    struct FakeShared {
+        plans: Vec<FakePlan>,
+        events: Vec<String>,
+        instances: Vec<Arc<FakeInstance>>,
+    }
+
+    /// The instances a [`fake_manager`] launched, and what they were asked.
+    #[derive(Clone, Default)]
+    pub(crate) struct FakeEngines(Arc<Mutex<FakeShared>>);
+
+    impl FakeEngines {
+        pub(crate) fn events(&self) -> Vec<String> {
+            self.0.lock().events.clone()
+        }
+
+        /// The newest instance reaches `Fatal`.
+        pub(crate) fn fail_last(&self) {
+            if let Some(instance) = self.0.lock().instances.last() {
+                *instance.fatal.lock() = Some("\"kernel_unrecoverable\"".to_string());
+            }
+        }
+
+        fn record(&self, event: String) {
+            self.0.lock().events.push(event);
+        }
+    }
+
+    struct FakeInstance {
+        index: usize,
+        plan: FakePlan,
+        engines: FakeEngines,
+        fatal: Mutex<Option<String>>,
+        shut_down: std::sync::atomic::AtomicBool,
+    }
+
+    impl FakeInstance {
+        fn is_shut_down(&self) -> bool {
+            self.shut_down.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Instance for FakeInstance {
+        fn call(&self, path: &str, _body: Value, timeout: Duration) -> Result<Value> {
+            let index = self.index;
+            if self.is_shut_down() {
+                return Err(anyhow!("ENGINE_SHUT_DOWN: engine is shut down"));
+            }
+            if path == self.plan.slow_path {
+                self.engines.record(format!("{index} {path} begun"));
+                let started = Instant::now();
+                let wait = Duration::from_millis(self.plan.slow_ms);
+                while started.elapsed() < wait {
+                    if self.is_shut_down() {
+                        return Err(anyhow!("ENGINE_SHUT_DOWN: engine is shut down"));
+                    }
+                    if started.elapsed() >= timeout {
+                        return Err(anyhow!("CORE_IPC_TIMEOUT: {path} after {timeout:?}"));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            self.engines.record(format!("{index} {path}"));
+            match path {
+                "/v1/get-version" => Ok(serde_json::json!({
+                    "core_version": "fake", "core_api_version": 1, "profile_schema_version": 1
+                })),
+                "/v1/start" if self.plan.fail_start => {
+                    Err(anyhow!("CORE_OPERATION_FAILED: core operation failed"))
+                }
+                "/v1/get-status" => Ok(serde_json::json!({ "instance": index.to_string() })),
+                _ => Ok(serde_json::json!({})),
+            }
+        }
+
+        fn fatal(&self) -> Option<String> {
+            self.fatal.lock().clone()
+        }
+
+        fn shutdown(&self) -> Vec<Leftover> {
+            self.shut_down
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.engines.record(format!("{} shutdown", self.index));
+            Vec::new()
+        }
+    }
+
+    struct FakeLauncher(FakeEngines);
+
+    impl Launcher for FakeLauncher {
+        fn launch(&self, _state: &Path, _debug: bool) -> Result<Arc<dyn Instance>> {
+            let mut shared = self.0 .0.lock();
+            let index = shared.instances.len() + 1;
+            let plan = shared.plans.get(index - 1).copied().unwrap_or_default();
+            let instance = Arc::new(FakeInstance {
+                index,
+                plan,
+                engines: self.0.clone(),
+                fatal: Mutex::new(None),
+                shut_down: Default::default(),
+            });
+            shared.instances.push(instance.clone());
+            shared.events.push(format!("{index} created"));
+            Ok(instance)
+        }
+    }
+
+    /// A manager whose instances are fakes that follow `plans`.
+    pub(crate) fn fake_manager(plans: Vec<FakePlan>) -> (CoreManager, FakeEngines) {
+        let engines = FakeEngines::default();
+        engines.0.lock().plans = plans;
+        let manager = CoreManager {
+            launcher: Box::new(FakeLauncher(engines.clone())),
+            state_dir: std::env::temp_dir().join("ppvpn-service-test-unused"),
+            dns: crate::macdns::DnsWorker::inline(crate::macdns::TunDns::new(
+                Box::new(crate::macdns::FakeSystem::default()),
+                false,
+            )),
+            ..CoreManager::default()
+        };
+        (manager, engines)
+    }
+
+    pub(crate) fn connect_payload(session: &SessionRef) -> ConnectPayload {
+        ConnectPayload {
+            session: session.clone(),
+            profile: serde_json::json!({ "revision": "r1", "schema_version": 1 }),
+            take_over: false,
+            allowed_rule_set_hosts: vec!["api.example.com".into()],
+            routing_mode: Some("rules".into()),
+            choices: ApplyChoices::default(),
+        }
+    }
+
+    pub(crate) fn new_session(generation: u64) -> SessionRef {
+        session(&uuid::Uuid::new_v4().to_string(), generation)
+    }
+
+    /// The system DNS override follows the TUN: published only once it
+    /// started, removed when it stops, is stopped over the Core API, or
+    /// fails on its own.
+    #[test]
+    fn the_system_dns_override_follows_the_tun_instance() {
         use crate::macdns::{DnsWorker, FakeSystem, TunDns};
         let failing = FakePlan {
             fail_start: true,
             ..FakePlan::default()
         };
-        let (mut manager, _cores) = fake_manager(
-            vec![
-                failing,
-                FakePlan::default(),
-                FakePlan::default(),
-                FakePlan::default(),
-            ],
-            Duration::from_secs(5),
-        );
+        let (mut manager, engines) = fake_manager(vec![failing]);
         let system = FakeSystem::default();
         manager.dns = DnsWorker::inline(TunDns::new(Box::new(system.clone()), true));
         let published = || system.store.lock().unwrap().is_some();
@@ -2362,39 +1671,25 @@ pub(crate) mod tests {
 
         let first = new_session(1);
         assert!(manager.connect(connect_payload(&first), me).is_err());
-        assert!(!published(), "a core that failed to start gets no DNS");
+        assert!(!published(), "an instance that failed to start gets no DNS");
         assert!(!system
             .calls()
             .iter()
             .any(|call| call.contains("set State:")));
 
         let second = new_session(2);
-        let pid = manager.connect(connect_payload(&second), me).unwrap();
+        manager.connect(connect_payload(&second), me).unwrap();
         assert!(published(), "published once the TUN started");
         manager.disconnect(&second, me).unwrap();
-        assert!(!process_exists(pid));
         assert!(!published(), "removed on disconnect");
 
         let third = new_session(3);
-        let pid = manager.connect(connect_payload(&third), me).unwrap();
+        manager.connect(connect_payload(&third), me).unwrap();
         assert!(published());
-        manager.lease_deadline_for_test(Duration::from_secs(30));
-        // SAFETY: plain kill(2) of our own child.
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
-        }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while manager.state.as_mut().is_some_and(RunningCore::alive) {
-            assert!(Instant::now() < deadline, "the killed core never exited");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        engines.fail_last();
         manager.reap_exited();
-        assert!(
-            !published(),
-            "a dead core's override is removed by the watchdog"
-        );
-        manager.stop().unwrap();
-        assert!(!published());
+        assert!(manager.state.is_none(), "a failed instance is stopped");
+        assert!(!published(), "and its override removed by the watchdog");
 
         // The data plane stopped / started again over the Core API.
         let fourth = new_session(4);
@@ -2410,108 +1705,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_debug_log_flag_file_turns_on_the_core_debug_log() {
-        let dir = std::env::temp_dir().join(format!(
-            "pc-{}",
-            &uuid::Uuid::new_v4().simple().to_string()[..8]
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let layout = CoreLayout {
-            state: dir.join("state"),
-            ..CoreLayout::default()
-        };
-        assert_eq!(debug_log_flag(&layout), None);
-        std::fs::write(dir.join("debug-log"), "").unwrap();
-        assert_eq!(debug_log_flag(&layout), Some(dir.join("debug-log")));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn only_the_installed_core_binary_counts() {
-        let binary = Path::new("/opt/ppvpn/ppvpn-core");
-        assert!(is_core_binary(Path::new("/opt/ppvpn/ppvpn-core"), binary));
-        assert!(is_core_binary(
-            Path::new("/opt/ppvpn/ppvpn-core (deleted)"),
-            binary
-        ));
-        // The app's standard core: same name, another path.
-        assert!(!is_core_binary(
-            Path::new("/Applications/PPVPN.app/Contents/MacOS/ppvpn-core"),
-            binary
-        ));
-    }
-
-    /// An override left by a killed service while its core was still
-    /// shutting down goes once that core is gone, not only at startup.
-    #[cfg(unix)]
-    #[test]
-    fn an_orphaned_dns_override_is_removed_once_no_core_runs() {
-        use crate::macdns::{apply_script, DnsWorker, FakeSystem, TunDns};
-        let (mut manager, _cores) = fake_manager(vec![FakePlan::default()], Duration::from_secs(5));
-        let system = FakeSystem::default();
-        *system.store.lock().unwrap() = Some(apply_script(true));
-        manager.dns = DnsWorker::inline(TunDns::new(Box::new(system.clone()), true));
-        let published = || system.store.lock().unwrap().is_some();
-
-        manager.clean_dns_leftover(true);
-        assert!(published(), "kept while the orphan still runs");
-        manager.dns.check_orphan(|| true);
-        assert!(published());
-        manager.dns.check_orphan(|| false);
-        assert!(!published(), "removed once no core runs");
-
-        // A core of ours that publishes its own takes the entry over.
-        *system.store.lock().unwrap() = Some(apply_script(true));
-        manager.clean_dns_leftover(true);
-        let me = std::process::id();
-        let session = new_session(1);
-        manager.connect(connect_payload(&session), me).unwrap();
-        manager.dns.check_orphan(|| false);
-        assert!(published(), "ours now");
-        manager.stop().unwrap();
-        assert!(!published());
-
-        // Nothing running at startup: removed right away.
-        *system.store.lock().unwrap() = Some(apply_script(true));
-        manager.clean_dns_leftover(false);
-        assert!(!published());
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn connect_payload(session: &SessionRef) -> ConnectPayload {
-        ConnectPayload {
-            session: session.clone(),
-            profile: serde_json::json!({ "revision": "r1", "schema_version": 1 }),
-            take_over: false,
-            // The fake core reports "fake" as its version: not pinned.
-            allowed_rule_set_hosts: vec!["api.example.com".into()],
-            routing_mode: Some("rules".into()),
-        }
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn new_session(generation: u64) -> SessionRef {
-        session(&uuid::Uuid::new_v4().to_string(), generation)
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn process_exists(pid: u32) -> bool {
-        // SAFETY: signal 0 only checks that the pid exists.
-        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn retry_after_a_failed_start_gets_a_core_that_stays_up() {
-        // The failed instance takes 300 ms to shut down and then removes the
-        // shared socket and secret paths, as ppvpn-core does.
+    fn a_failed_start_leaves_nothing_and_the_retry_gets_its_own_instance() {
         let failing = FakePlan {
             fail_start: true,
-            linger_ms: 300,
             ..FakePlan::default()
         };
-        let (mut manager, cores) =
-            fake_manager(vec![failing, FakePlan::default()], Duration::from_secs(5));
+        let (mut manager, engines) = fake_manager(vec![failing]);
         let me = std::process::id();
         let first = new_session(1);
         let error = manager
@@ -2520,18 +1719,14 @@ pub(crate) mod tests {
             .to_string();
         assert_eq!(error, "CORE_OPERATION_FAILED: core operation failed");
         assert!(manager.state.is_none(), "the failed instance is gone");
-        assert!(cores.events().contains(&"1 exited".to_string()));
+        assert!(engines.events().contains(&"1 shutdown".to_string()));
 
         let retry = new_session(2);
-        let pid = manager.connect(connect_payload(&retry), me).unwrap();
-        // Longer than the failed instance's shutdown: had it still been
-        // running, it would have removed the new instance's paths by now.
-        std::thread::sleep(Duration::from_millis(600));
+        manager.connect(connect_payload(&retry), me).unwrap();
         let status = manager
             .call_api(&retry, "/v1/get-status", serde_json::json!({}), me)
             .unwrap();
         assert_eq!(status["instance"], "2", "calls reach the new instance");
-        assert!(process_exists(pid));
 
         // The failed attempt's session can neither use nor stop it.
         assert_eq!(
@@ -2542,79 +1737,42 @@ pub(crate) mod tests {
             "STALE_OR_FOREIGN_SESSION"
         );
         assert!(manager.disconnect(&first, me).is_err());
-        assert!(manager.state.as_mut().is_some_and(RunningCore::alive));
-        let events = cores.events();
-        assert!(!events.iter().any(|line| line.starts_with("2 /v1/stop")));
-        assert!(!events.iter().any(|line| line.contains("unauthenticated")));
+        assert!(!engines.events().contains(&"2 shutdown".to_string()));
 
         manager.disconnect(&retry, me).unwrap();
-        assert!(!process_exists(pid), "stopped and reaped");
-        let events = cores.events();
-        assert!(events.contains(&"2 /v1/stop".to_string()));
-        assert!(events.contains(&"2 exited".to_string()));
+        let events = engines.events();
+        assert_eq!(
+            &events[events.len() - 5..],
+            [
+                "2 /v1/get-version",
+                "2 /v1/apply-profile",
+                "2 /v1/start",
+                "2 /v1/get-status",
+                "2 shutdown"
+            ]
+        );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn a_restarted_service_starts_over_whatever_the_previous_one_left() {
-        let (mut manager, cores) = fake_manager(vec![FakePlan::default()], Duration::from_secs(5));
-        // What a previous service process may leave: its core's socket, still
-        // bound by an orphaned listener, and that core's secret.
-        std::fs::create_dir_all(manager.layout.secret.parent().unwrap()).unwrap();
-        std::fs::write(
-            &manager.layout.secret,
-            "secret-of-a-core-that-is-gone-000000",
-        )
-        .unwrap();
-        let orphan = std::os::unix::net::UnixListener::bind(&manager.layout.socket).unwrap();
-        orphan.set_nonblocking(true).unwrap();
-
+    fn a_failed_instance_reads_as_expired_and_is_replaced() {
+        let (mut manager, engines) = fake_manager(vec![]);
         let me = std::process::id();
-        let session = new_session(9);
-        manager.connect(connect_payload(&session), me).unwrap();
-        let status = manager
-            .call_api(&session, "/v1/get-status", serde_json::json!({}), me)
-            .unwrap();
-        assert_eq!(status["instance"], "1");
-        assert!(orphan.accept().is_err(), "nothing went to the old socket");
+        let first = new_session(1);
+        manager.connect(connect_payload(&first), me).unwrap();
+        engines.fail_last();
+        assert!(!manager.status(me).running);
+        assert_eq!(
+            manager.renew_lease(&first, me).unwrap_err().to_string(),
+            "CONNECTION_LEASE_EXPIRED"
+        );
+        // Another session (even without take_over) replaces it.
+        let second = new_session(2);
+        manager.connect(connect_payload(&second), me).unwrap();
+        assert!(engines.events().contains(&"1 shutdown".to_string()));
+        assert!(manager.status(me).running);
         manager.stop().unwrap();
-        assert!(cores.events().contains(&"1 exited".to_string()));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn a_core_that_does_not_exit_is_killed_before_stop_returns() {
-        let hanging = FakePlan {
-            hang: true,
-            ..FakePlan::default()
-        };
-        let (mut manager, cores) = fake_manager(vec![hanging], Duration::from_millis(300));
-        let me = std::process::id();
-        let session = new_session(1);
-        let pid = manager.connect(connect_payload(&session), me).unwrap();
-        let started = Instant::now();
-        manager.stop().unwrap();
-        assert!(started.elapsed() < Duration::from_secs(3));
-        assert!(!process_exists(pid), "killed and reaped");
-        assert!(cores.events().contains(&"1 stopping".to_string()));
-        assert!(!Path::new(&manager.layout.socket).exists());
-        assert!(!manager.layout.secret.exists());
-    }
-
-    #[cfg(unix)]
-    fn wait_for_event(cores: &FakeCores, line: &str) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !cores.events().iter().any(|event| event == line) {
-            assert!(
-                Instant::now() < deadline,
-                "no {line:?} in {:?}",
-                cores.events()
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    #[cfg(unix)]
     #[test]
     fn disconnect_does_not_wait_for_a_slow_core_call() {
         // A speed test in flight when the user turns enhanced mode off.
@@ -2623,11 +1781,11 @@ pub(crate) mod tests {
             slow_ms: 20_000,
             ..FakePlan::default()
         };
-        let (manager, cores) = fake_manager(vec![slow], Duration::from_secs(5));
+        let (manager, engines) = fake_manager(vec![slow]);
         let core = Mutex::new(manager);
         let me = std::process::id();
         let session = new_session(1);
-        let pid = core.lock().connect(connect_payload(&session), me).unwrap();
+        core.lock().connect(connect_payload(&session), me).unwrap();
 
         std::thread::scope(|scope| {
             let probe = scope.spawn(|| {
@@ -2639,7 +1797,14 @@ pub(crate) mod tests {
                     me,
                 )
             });
-            wait_for_event(&cores, "1 /v1/probe-entrances begun");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !engines
+                .events()
+                .contains(&"1 /v1/probe-entrances begun".to_string())
+            {
+                assert!(Instant::now() < deadline, "the probe never began");
+                std::thread::sleep(Duration::from_millis(10));
+            }
 
             // Status and lease renewal are not held up either.
             let started = Instant::now();
@@ -2651,39 +1816,34 @@ pub(crate) mod tests {
                 "disconnect took {:?}",
                 started.elapsed()
             );
-            assert!(cores.events().contains(&"1 /v1/stop".to_string()));
-            assert!(!process_exists(pid));
-            // The probe fails with its core gone instead of hanging.
+            assert!(engines.events().contains(&"1 shutdown".to_string()));
+            // The probe fails with its instance gone instead of hanging.
             assert!(probe.join().unwrap().is_err());
         });
     }
 
-    #[cfg(unix)]
     #[test]
-    fn a_core_call_gives_up_after_its_timeout() {
-        let slow = FakePlan {
-            slow_path: "/v1/get-status",
-            slow_ms: 10_000,
-            ..FakePlan::default()
-        };
-        let (manager, _cores) = fake_manager(vec![slow], Duration::from_secs(1));
+    fn a_profile_update_reaches_only_the_instance_it_was_authorized_for() {
+        let (manager, engines) = fake_manager(vec![]);
         let core = Mutex::new(manager);
         let me = std::process::id();
         let session = new_session(1);
         core.lock().connect(connect_payload(&session), me).unwrap();
-        let started = Instant::now();
-        let error = call_api(&core, &session, "/v1/get-status", serde_json::json!({}), me)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.starts_with("CORE_IPC_TIMEOUT: /v1/get-status"),
-            "{error}"
-        );
-        let took = started.elapsed();
-        assert!(
-            took >= Duration::from_secs(2) && took < Duration::from_secs(3),
-            "{took:?}"
-        );
+        let update = UpdateProfilePayload {
+            session: session.clone(),
+            profile: serde_json::json!({ "revision": "r2", "schema_version": 1 }),
+            allowed_rule_set_hosts: vec!["api.example.com".into()],
+            routing_mode: Some("global".into()),
+            choices: ApplyChoices::default(),
+        };
+        let status = update_profile(&core, update, me).unwrap();
+        assert_eq!(status.profile_revision.as_deref(), Some("r2"));
+        let applies = engines
+            .events()
+            .iter()
+            .filter(|event| *event == "1 /v1/apply-profile")
+            .count();
+        assert_eq!(applies, 2, "connect and update");
         core.lock().stop().unwrap();
     }
 

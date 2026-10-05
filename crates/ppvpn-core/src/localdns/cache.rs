@@ -16,8 +16,8 @@ pub const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 pub const SOFT_REFRESH: Duration = Duration::from_secs(60);
 
 /// A read whose outcome differs from the previous one: the host logs it as
-/// `msg="local dns servers" source=… interface=… servers=…` (warn with the
-/// error when there are none).
+/// `msg="local dns servers" source=… interface=… servers=…` at info
+/// (`servers=none` with the error when there are none).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Change {
     pub interface: String,

@@ -1,54 +1,626 @@
-name: CI
+name: ci
 
-# Tier 1: every pull request and push to main. Fast checks only: vet and the
-# unit/integration tests under the tag sets the products build with. The
-# race detector, govulncheck, Windows-native tests and all artifact builds run
-# in release.yml.
+# Every test of the repository, on every pull request (docs/testing.md):
+#   L1 unit         no external dependency (make test-unit)
+#   L2 integration  a real dependency outside the process, no privileges
+#                   (make test-integration)
+#   L3 system       a real TUN, routes, rules and DNS, privileged
+#                   (make test-system), and the desktop end to end
+# Seven jobs, all in parallel, all on every pull request. A job that does not
+# depend on the platform is named for what it checks (it runs on ubuntu, as
+# an implementation detail); a platform job is named for its OS and covers
+# only that OS's own code. L1 and L2 run once (docs/testing.md, "Platform
+# tests"):
+#   lint         the sensitive check, format, clippy, sail's pins, the
+#                release feature check
+#   unit         L1
+#   integration  L2
+#   desktop      the desktop layers: the service and the client, the
+#                scripts, the C# and Swift bindings with their tests
+#   linux        Linux's own: L3 in network namespaces (tun with G7,
+#                network-change) and the desktop's enhanced mode end to end
+#   macos        clippy for aarch64 and x86_64, the macOS-only tests, the
+#                Debug app build
+#   windows      clippy (MSVC), the Windows-only tests, G7 on Windows, the
+#                C# bindings, App.Core, the app and push agent builds
+# A pull request that changes only docs/ or Markdown runs every job, and each
+# skips its build and test steps (tools/ci-changes.sh `code`); lint still runs
+# the sensitive check.
+#
+# Merges to main run release.yml, not this: it builds the installers and
+# keeps the build caches this workflow restores. A pull request only reads
+# caches, so the cache keys here (shared-key) are the ones release.yml saves.
+# By hand: gh workflow run ci.yml --ref <branch>.
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "windows: runs of the runtime's failure tests (twenty on the pull request that adds one)"
+        type: number
+        default: 5
 
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Line numbers in a failing test's backtrace without full debug info. Part
+  # of the cache key: release.yml's cache jobs set the same.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 jobs:
-  test:
+  lint:
+    name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: gofmt
+          fetch-depth: 0
+      # The tree, then the commits the pull request adds (lines, file paths,
+      # messages, authors), with the generic rules only: the local patterns
+      # file never exists here. Findings print as path:line.
+      - name: sensitive check, tree
+        run: tools/sensitive-check.sh tree
+      - name: sensitive check, added commits
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "gofmt needed on:" >&2
-            echo "$unformatted" >&2
-            exit 1
+          set -eu
+          if [ -n "$PR_BASE" ]; then base=$PR_BASE head=$PR_HEAD
+          else head=$HEAD_SHA; base=$(git merge-base origin/main "$head"); fi
+          if [ "$(git rev-parse "$base")" = "$(git rev-parse "$head")" ]; then
+            echo "sensitive-check: no new commits"
+            exit 0
           fi
-      - run: go vet ./...
-      - run: GOOS=windows go vet -tags with_utls,with_gvisor,with_dhcp ./...
-      # Type checks for targets the fast tier does not build: 32-bit (int
-      # overflows) and Android (linux-tagged files reach the aar).
-      - run: GOOS=linux GOARCH=386 go vet ./...
-      - run: GOOS=android GOARCH=arm64 go vet ./...
-      - run: go test ./...
-      - run: go test -tags with_utls ./internal/... ./probe/...
-      # Desktop cores are built with gVisor for the TUN "mixed" stack.
-      - run: go test -tags with_utls,with_gvisor,with_dhcp ./cmd/... ./internal/... ./localproxy/...
-      # Lab builds (localdns_testsource) read dns-local's servers from a file;
-      # the source must exist only there: tested with the tag, and absent from
-      # a build with the release tags (release.yml also checks every release file).
-      - run: go test -tags localdns_testsource ./internal/localdns/
-      - name: Release builds carry no localdns test source
+          tools/sensitive-check.sh range "$base" "$head"
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      # The version is rust-toolchain.toml's (sail's); keep them in step.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.code == 'true'
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.code == 'true'
+        with:
+          shared-key: linux
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.code == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: fetch
+        if: steps.scope.outputs.code == 'true'
+        run: cargo fetch --locked
+      # sail's own check, from the checkout of the sail commit Cargo.lock pins.
+      - name: sail's [patch.crates-io], as of the pinned sail commit
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          manifest=$(cargo metadata --format-version 1 --locked --offline |
+            python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "sail"))')
+          python3 "$(dirname "$(dirname "$manifest")")/tools/embed-patch-check.py"
+      # Reports (never fails) shared packages our lock resolves otherwise
+      # than sail's: a lock regenerated for a new crate can drift.
+      - name: Cargo.lock against sail's
+        if: steps.scope.outputs.code == 'true'
+        run: tools/sail-lock-compare.py
+      # tools/release-features-check.sh, which the release builds run: it
+      # passes the shipped crates and refuses a test-only feature.
+      - name: release feature check
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          tools/release-features-check.sh -p ppvpn-cli
+          tools/release-features-check.sh -p ppvpn-client
+          for features in "-p ppvpn-core --features fault-injection" "-p ppvpn-core --features testing" \
+                          "-p ppvpn-core --features lab" "-p ppvpn-cli --features testing"; do
+            if tools/release-features-check.sh $features; then
+              echo "::error::the check let $features through"; exit 1
+            fi
+          done
+      - name: format
+        if: steps.scope.outputs.code == 'true'
+        run: cargo fmt --all --check
+      # The workspace's default members (crates/); the desktop crates are
+      # desktop's.
+      - name: clippy
+        if: steps.scope.outputs.code == 'true'
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: scripts
+        if: steps.scope.outputs.code == 'true'
+        run: bash -n tools/*.sh test/netns/*.sh
+
+  # L1 on Linux.
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.code == 'true'
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.code == 'true'
+        with:
+          shared-key: unit
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.code == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: L1 (make test-unit)
+        if: steps.scope.outputs.code == 'true'
+        run: make test-unit
+
+  # L2 on Linux, beside L1: the CLI's Secret Service store against a real
+  # keyring, in a D-Bus session of its own with an unlocked login keyring
+  # (no desktop session).
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.code == 'true'
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.code == 'true'
+        with:
+          shared-key: integration
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.code == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: L2 (make test-integration)
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus gnome-keyring
+          make test-integration
+
+  # L3 on Linux, as root inside network namespaces of their own
+  # (test/netns/run.sh, which also checks the runner's own network state is
+  # unchanged afterwards). No backend, no internet.
+  #   tun             the TUN guard, the runtime's reload and failures, G7's
+  #                   killed instance
+  #   network-change  dns-local and the host-IPv6 re-probe across network
+  #                   changes on the Rust engine, strictly
+  #   enhanced mode   the privileged service with the engine in process, the
+  #                   client crate connecting and disconnecting through it
+  #                   (src/e2e_linux.rs, feature linux-e2e), a mock backend
+  #                   and a local Shadowsocks node (test/fakenode): the TUN,
+  #                   the policy rules and routing table, traffic through the
+  #                   node, the cleanup after a disconnect and after kill -9
+  linux:
+    name: linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.scope.outputs.code == 'true'
+        with:
+          go-version-file: test/go.mod
+          cache-dependency-path: test/go.sum
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.code == 'true'
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.code == 'true'
+        with:
+          shared-key: linux
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.code == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: tcpdump
+        if: steps.scope.outputs.code == 'true'
+        run: command -v tcpdump || { sudo apt-get update -qq && sudo apt-get install -y -qq tcpdump; }
+      - name: L3 tun (make test-system PART=tun)
+        if: steps.scope.outputs.code == 'true'
+        run: make test-system PART=tun
+      - name: L3 network-change (make test-system PART=network-change)
+        if: steps.scope.outputs.code == 'true'
+        run: make test-system PART=network-change
+      - name: Build the service, the test client and the fake node
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          (cd desktop/service && cargo build --locked --bin ppvpn-service)
+          (cd desktop/crates/ppvpn-client && cargo clippy --locked --features linux-e2e --all-targets -- -D warnings)
+          client=$(cd desktop/crates/ppvpn-client && cargo test --locked --features linux-e2e --lib --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and (.target.kind | index("lib"))) | .executable' | tail -n 1)
+          test -x "$client"
+          echo "CLIENT_TEST=$client" >> "$GITHUB_ENV"
+          make test-tools
+      - name: Install the packages' layout
+        if: steps.scope.outputs.code == 'true'
+        # Where the deb puts them: the service accepts only /usr/lib/ppvpn/ppvpn
+        # as a client.
+        run: |
+          sudo install -D -o root -g root -m 0755 "$CLIENT_TEST" /usr/lib/ppvpn/ppvpn
+          sudo install -D -o root -g root -m 0755 target/debug/ppvpn-service /usr/lib/ppvpn-service/ppvpn-service
+      - name: L3 desktop enhanced mode end to end
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          sudo NETNS_TIMEOUT=600 NETNS_ENV="PPVPN_E2E_FAKENODE=$PWD/build/test-tools/fakenode" \
+            test/netns/run.sh --libtest /usr/lib/ppvpn/ppvpn e2e_linux::enhanced_mode_routes_and_cleanup
+      - name: Service log
+        if: always() && steps.scope.outputs.code == 'true'
+        run: sudo tail -n 200 /var/log/ppvpn/ppvpn-service.log || true
+
+  # The desktop on Linux, in one build of the client crate (CARGO_BUILD_TARGET
+  # pins the target directory to the one triple the binding scripts use):
+  #   - the privileged service (a workspace member, shipped with the
+  #     "service" profile; it hosts the TUN engine): tests and clippy;
+  #   - the client crate: tests and clippy;
+  #   - the desktop scripts: bash -n and their Python tests;
+  #   - C# bindings, then App.Core's and the Linux app's tests (.NET 8, no
+  #     GTK runtime needed);
+  #   - Swift bindings, then the macOS app's AppLogic tests (no AppKit), with
+  #     the Swift the macOS app is developed with.
+  desktop:
+    name: desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+      UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
+      SWIFT_VERSION: 6.4.0
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.code == 'true'
+        with:
+          toolchain: 1.98.1
+          components: clippy
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.code == 'true'
+        with:
+          shared-key: desktop
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.code == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Test the privileged service
+        if: steps.scope.outputs.code == 'true'
+        working-directory: desktop/service
+        run: |
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Test the client crate
+        if: steps.scope.outputs.code == 'true'
+        working-directory: desktop/crates/ppvpn-client
+        run: |
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Check scripts
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          bash -n desktop/scripts/*.sh desktop/scripts/ci/*.sh
+          python3 -m unittest discover -s desktop/scripts/ci -p '*_test.py' -v
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: steps.scope.outputs.code == 'true'
+        with:
+          dotnet-version: '8.0.x'
+      - name: Cache uniffi-bindgen-cs
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs
+          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
+      # Either cache (this one or rust-cache, which keeps ~/.cargo/bin) may
+      # have restored the binary: install only when it is missing or of
+      # another version, and then over whatever is there. Not for the target
+      # triple the job builds: a host tool.
+      - name: Install uniffi-bindgen-cs
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
+            env -u CARGO_BUILD_TARGET cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
+          fi
+      - name: Generate C# bindings
+        if: steps.scope.outputs.code == 'true'
+        run: desktop/crates/ppvpn-client/scripts/build-dotnet.sh x86_64-unknown-linux-gnu
+      - name: Test App.Core
+        if: steps.scope.outputs.code == 'true'
+        run: dotnet test desktop/apps/shared/PPVPN.App.Core.Tests
+      - name: Test the Linux app
+        if: steps.scope.outputs.code == 'true'
+        run: dotnet test desktop/apps/linux/PPVPN.Linux.Tests
+      # swift.org's toolchain for the runner's Ubuntu, its signature checked
+      # against swift.org's keys; cached per version.
+      - name: Cache Swift
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/swift
+          key: swift-${{ env.SWIFT_VERSION }}-ubuntu24.04-${{ runner.arch }}
+      - name: Install Swift
+        if: steps.scope.outputs.code == 'true'
         run: |
           set -euo pipefail
-          marker=ppvpn-localdns-testsource-enabled
-          go build -tags "$(make -s print-desktop-tags)" -trimpath -o "$RUNNER_TEMP/core-release" ./cmd/ppvpn-core
-          go build -tags "$(make -s print-desktop-tags),localdns_testsource" -trimpath -o "$RUNNER_TEMP/core-lab" ./cmd/ppvpn-core
-          grep -qa "$marker" "$RUNNER_TEMP/core-lab" || { echo "lab build lacks the marker: the check below would prove nothing" >&2; exit 1; }
-          if grep -qa "$marker" "$RUNNER_TEMP/core-release"; then echo "release build contains the localdns test source" >&2; exit 1; fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev libedit2 libncurses-dev \
+            libpython3-dev libsqlite3-0 libxml2-dev libz3-dev
+          dir="$RUNNER_TEMP/swift"
+          if [ ! -x "$dir/usr/bin/swift" ]; then
+            name="swift-$SWIFT_VERSION-RELEASE-ubuntu24.04"
+            url="https://download.swift.org/swift-$SWIFT_VERSION-release/ubuntu2404/swift-$SWIFT_VERSION-RELEASE/$name.tar.gz"
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/swift.tar.gz" "$url"
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/swift.tar.gz.sig" "$url.sig"
+            export GNUPGHOME="$RUNNER_TEMP/gnupg"
+            install -d -m 700 "$GNUPGHOME"
+            curl -fsSL --retry 3 --compressed https://www.swift.org/keys/all-keys.asc | gpg --batch --import
+            gpg --batch --verify "$RUNNER_TEMP/swift.tar.gz.sig" "$RUNNER_TEMP/swift.tar.gz"
+            mkdir -p "$dir"
+            tar -xzf "$RUNNER_TEMP/swift.tar.gz" -C "$dir" --strip-components=1
+          fi
+          echo "$dir/usr/bin" >> "$GITHUB_PATH"
+      - name: Build the Swift bindings
+        if: steps.scope.outputs.code == 'true'
+        run: desktop/apps/macos/scripts/build-swift-linux.sh
+      - name: Test AppLogic
+        if: steps.scope.outputs.code == 'true'
+        run: swift test --package-path desktop/apps/macos/AppLogic
+
+  # macOS, for what Linux cannot cover (L1 and L2 run once, on Linux):
+  #   - clippy over the whole workspace for aarch64 and x86_64-apple-darwin,
+  #     so that every cfg'd macOS path compiles; and that btls-sys links the
+  #     prebuilt BoringSSL (Desktop ships an Intel package, the one target
+  #     btls's own CI does not use);
+  #   - the macOS-only tests, by filter (docs/testing.md, "Platform tests");
+  #   - a Debug build of the app against the client (ad-hoc signed; without
+  #     the staged core and service, which a Debug build does not need).
+  macos:
+    name: macos
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.code == 'true'
+        with:
+          toolchain: 1.98.1
+          components: clippy
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.code == 'true'
+        with:
+          shared-key: macos
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.code == 'true'
+        with:
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+      - name: clippy, aarch64
+        if: steps.scope.outputs.code == 'true'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: clippy, x86_64
+        if: steps.scope.outputs.code == 'true'
+        run: cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin -- -D warnings
+      # btls-sys's build script points the linker at the downloaded library
+      # (BORING_BSSL_PATH_<target>/lib), and no BoringSSL build tree exists.
+      - name: x86_64, the prebuilt BoringSSL is the one linked
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          target=x86_64-apple-darwin
+          prebuilt="$BORING_BSSL_PATH_x86_64_apple_darwin"
+          test -n "$prebuilt" && test -f "$prebuilt/lib/libssl.a"
+          out=$(ls target/$target/debug/build/btls-sys-*/output)
+          grep -H "rustc-link-search=native=$prebuilt/lib" $out
+          if find target/$target/debug/build -path '*btls-sys-*/out/build' -maxdepth 4 | grep -q .; then
+            echo "::error::btls-sys compiled BoringSSL instead of linking the prebuilt one"; exit 1
+          fi
+          for f in "$prebuilt/lib/libssl.a" "$prebuilt/lib/libcrypto.a"; do
+            echo "$f: $(lipo -archs "$f")"
+            lipo "$f" -verify_arch x86_64
+          done
+      # The Keychain store against the runner's login keychain has its own
+      # timeout: a keychain prompt would wait for a person.
+      - name: macOS tests
+        if: steps.scope.outputs.code == 'true'
+        timeout-minutes: 20
+        run: |
+          cargo test -p ppvpn-core --lib --locked -- hostipv6::darwin localdns::source probe::icmp runtime::sail_tests
+          cargo test -p ppvpn-cli --lib --locked -- identity
+          (cd desktop/crates/ppvpn-client && cargo test --lib --locked -- detect service sysproxy)
+      - name: macOS tests, the Keychain
+        if: steps.scope.outputs.code == 'true'
+        timeout-minutes: 5
+        run: PPVPN_TEST_KEYSTORE=1 cargo test -p ppvpn-cli --test keystore --locked -- --nocapture
+      # Only when the desktop or what it builds from changed: the app
+      # compiles the client for both architectures.
+      - name: Build the Debug app against the client
+        if: steps.scope.outputs.desktop == 'true'
+        run: |
+          brew install xcodegen
+          desktop/apps/macos/scripts/bootstrap.sh
+          xcodebuild -project desktop/apps/macos/PPVPN.xcodeproj -scheme PPVPN -configuration Debug \
+            -derivedDataPath desktop/apps/macos/build -destination 'platform=macOS' build
+
+  # Windows (MSVC, what the desktop links), for what Linux cannot cover:
+  #   - clippy over the crates the desktop links (ppvpn-cli ships for Linux
+  #     and macOS only), so that every cfg'd Windows path compiles;
+  #   - the Windows-only tests, by filter (docs/testing.md, "Platform
+  #     tests"), then L3 on Windows (G7): a failing instance leaves the
+  #     system as it was while the host lives on (runtime::windows_tests):
+  #     our MSVC build of sail, with a TUN, auto_route and strict_route
+  #     (198.18.0.0/16 alone, the runner's own traffic stays out), failed by
+  #     a fault the test arms (the test build's fault-injection feature,
+  #     never a release's). The runner is administrator; wintun.dll, sail's
+  #     pinned one, goes beside the test;
+  #   - the app: the client's C# bindings, App.Core's tests, warning-free
+  #     builds of the WinUI app and the push agent (NativeAOT). No installer
+  #     and no signing (release.yml builds the installer).
+  windows:
+    name: windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: 0
+      # bindgen's libclang (btls-sys), from the runner's LLVM: still needed
+      # with the prebuilt BoringSSL (NASM and CMake are not).
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # Runs of the failure tests, the system compared before and after
+      # each: one per pull request, `runs` by hand (5 unless told; twenty
+      # on the pull request that adds a test there).
+      RUNS: ${{ github.event_name == 'workflow_dispatch' && inputs.runs || 1 }}
+      UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The runner's git checks text out with CRLF; fixtures compared byte
+      # for byte (localdns/testdata) must stay as committed.
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.code == 'true'
+        with:
+          toolchain: 1.98.1
+          components: clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.code == 'true'
+        with:
+          shared-key: windows
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.code == 'true'
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: clippy
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-client -p ppvpn-engine-host -p ppvpn-service \
+            --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
+      - name: Windows tests
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc -- hostipv6::windows localdns::source probe::icmp
+          cargo test -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc -- detect service sysproxy
+      - name: L3, build the failure tests
+        if: steps.scope.outputs.code == 'true'
+        run: cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
+      - name: L3, the runtime's failures (administrator)
+        if: steps.scope.outputs.code == 'true'
+        shell: pwsh
+        env:
+          WINTUN_VERSION: 0.14.1
+          WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+        run: |
+          $zip = "$env:RUNNER_TEMP\wintun.zip"
+          Invoke-WebRequest "https://www.wintun.net/builds/wintun-$env:WINTUN_VERSION.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:WINTUN_SHA256) { throw "wintun zip: not the pinned hash" }
+          Expand-Archive $zip "$env:RUNNER_TEMP\wintun"
+          $deps = "target\x86_64-pc-windows-msvc\debug\deps"
+          New-Item -ItemType Directory -Force $deps | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\wintun\wintun\bin\amd64\wintun.dll" $deps
+          foreach ($i in 1..[int]$env:RUNS) {
+            Write-Output "::group::run $i"
+            cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc -- --ignored --test-threads 1 --nocapture runtime::windows_tests:: | Tee-Object -Variable out
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # None skipped quietly: all three tests ran.
+            if (-not ($out -match "test result: ok\. 3 passed")) { throw "runtime::windows_tests: not all three tests ran" }
+            Write-Output "::endgroup::"
+          }
+
+      # The C# bindings, App.Core and the app: only when the desktop or what
+      # it builds from changed. Debug bindings, as the engine's tests build.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: steps.scope.outputs.desktop == 'true'
+        with:
+          dotnet-version: '8.0.x'
+      - name: Cache uniffi-bindgen-cs
+        if: steps.scope.outputs.desktop == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
+      # build-dotnet.ps1 refuses any other version of the generator.
+      - name: Install uniffi-bindgen-cs
+        if: steps.scope.outputs.desktop == 'true'
+        run: |
+          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
+            cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
+          fi
+      - name: Generate C# bindings
+        if: steps.scope.outputs.desktop == 'true'
+        shell: powershell
+        run: desktop/crates/ppvpn-client/scripts/build-dotnet.ps1
+      - name: Test App.Core
+        if: steps.scope.outputs.desktop == 'true'
+        shell: powershell
+        run: |
+          dotnet test desktop/apps/shared/PPVPN.App.Core.Tests
+          if ($LASTEXITCODE -ne 0) { throw "dotnet test failed" }
+      - name: Build the app
+        if: steps.scope.outputs.desktop == 'true'
+        shell: powershell
+        run: |
+          dotnet build desktop/apps/windows/PPVPN.Windows/PPVPN.Windows.csproj -c Release -p:Platform=x64 -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw "dotnet build failed" }
+      - name: Build the push agent (NativeAOT)
+        if: steps.scope.outputs.desktop == 'true'
+        shell: powershell
+        run: |
+          dotnet publish desktop/apps/windows/PPVPN.PushAgent/PPVPN.PushAgent.csproj -c Release -r win-x64 -warnaserror -o "$env:RUNNER_TEMP\push-agent"
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }

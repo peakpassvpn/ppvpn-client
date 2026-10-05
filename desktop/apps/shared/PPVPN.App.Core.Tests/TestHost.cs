@@ -329,7 +329,7 @@ sealed class Harness : IDisposable
     public Harness(FakeOptions? options = null, MemoryHooks? hooks = null, TimeProvider? time = null, ILocalizer? strings = null)
     {
         Hooks = hooks ?? new MemoryHooks();
-        Config = new ClientConfig(ApiBase, Path.Combine(_root, "data"), Path.Combine(_root, "logs"), Path.Combine(_root, "bin"), "linux", "0.0.0-test");
+        Config = new ClientConfig(ApiBase, Path.Combine(_root, "data"), Path.Combine(_root, "logs"), "linux", "0.0.0-test");
         var opts = (options ?? new FakeOptions()) with
         {
             Browser = options?.Browser ?? FakeBrowserMode.Pretend,
@@ -486,6 +486,7 @@ sealed class ScriptedBackend : IClientBackend
     public Task SetRoutingMode(RoutingMode mode) => Record($"routing {mode}");
     public Task PinIngress(string nodeId, string? endpointKey) => Record($"pin {nodeId} {endpointKey ?? "auto"}");
     public void DismissClearedIngressPins() => Calls.Add("dismiss_cleared_pins");
+    public void DismissLocalProxyCredentialsReset() => Calls.Add("dismiss_proxy_reset");
     public Task Connect() => Record("connect");
     public Task Disconnect() => Record("disconnect");
     public Task Retry() => Record("retry");

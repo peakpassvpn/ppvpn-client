@@ -1,8 +1,7 @@
-//! Client for the privileged `ppvpn-service` (ported from
-//! `src-tauri/src/service_client.rs`). The wire types must stay byte-identical
-//! to `service/src/protocol.rs`: requests and responses are HMAC-signed over
-//! their canonical JSON (signature field empty), so any drift in field order
-//! or naming fails verification.
+//! Client for the privileged `ppvpn-service`. The wire types must stay
+//! byte-identical to `service/src/protocol.rs`: requests and responses are
+//! HMAC-signed over their canonical JSON (signature field empty), so any
+//! drift in field order or naming fails verification.
 //!
 //! Wire format: `[u32 BE length][JSON]`, one request per connection (a
 //! `Watch` keeps its connection open for events, see [`ServiceApi::watch`]).
@@ -21,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 
-use crate::core_ipc::{BoxFuture, CoreCallError, CoreTransport};
+use crate::core_ipc::{ApplyChoices, BoxFuture, CoreCallError, CoreTransport};
 use crate::errors::{ClientErrorInfo, ErrorCode};
 use crate::RoutingMode;
 
@@ -119,6 +118,10 @@ struct ProfilePayload<'a> {
     /// `rules` / `global`; the service passes it to cores that accept it
     /// (0.5.6+); older services ignore the field.
     routing_mode: &'static str,
+    /// `selected_node_id` and `pins`, passed on with the profile to the
+    /// core's `apply-profile`; older services ignore them.
+    #[serde(flatten)]
+    choices: &'a ApplyChoices,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -597,7 +600,7 @@ fn blocking_watch(
     key: &[u8],
     cancel: &AtomicBool,
 ) -> WatchEnd {
-    match crate::core_ipc::open_pipe(endpoint) {
+    match open_pipe(endpoint) {
         Ok(pipe) => run_watch(&mut PolledPipe(pipe), body, request_id, key, cancel),
         Err(error) => WatchEnd::Lost(error),
     }
@@ -626,23 +629,25 @@ impl Drop for CancelOnDrop {
 pub(crate) trait ServiceApi: Send + Sync {
     fn get_version(&self) -> BoxFuture<'_, Result<VersionInfo, ServiceError>>;
     fn get_status(&self) -> BoxFuture<'_, Result<ServiceStatus, ServiceError>>;
-    /// Start the TUN core for `session` with `profile`; returns its pid.
-    /// `take_over` replaces a core owned by another session of the same OS
-    /// user (service capability `take_over`).
+    /// Start the TUN core for `session` with `profile` (applied with
+    /// `choices`); returns its pid. `take_over` replaces a core owned by
+    /// another session of the same OS user (service capability `take_over`).
     fn connect<'a>(
         &'a self,
         session: &'a SessionRef,
         profile: &'a Value,
         take_over: bool,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<u32, ServiceError>>;
     /// Apply `profile` (or the same profile in another `routing_mode`) to
-    /// the running core without a reconnect.
+    /// the running core without a reconnect, with `choices`.
     fn update_profile<'a>(
         &'a self,
         session: &'a SessionRef,
         profile: &'a Value,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>>;
     fn renew_lease<'a>(
         &'a self,
@@ -868,7 +873,7 @@ fn verify_response(
 }
 
 /// Writes `[u32 BE length]` and the body as two writes (what the service
-/// and the Tauri shell always used), then reads the framed response.
+/// expects), then reads the framed response.
 fn exchange<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     body: &[u8],
@@ -957,7 +962,7 @@ fn blocking_transact(
     _timeout: Duration,
     handshake: bool,
 ) -> Result<Vec<u8>, ServiceError> {
-    let mut pipe = crate::core_ipc::open_pipe(endpoint).map_err(ServiceError::Unavailable)?;
+    let mut pipe = open_pipe(endpoint).map_err(ServiceError::Unavailable)?;
     exchange(&mut pipe, body, handshake)
 }
 
@@ -1006,6 +1011,7 @@ impl ServiceApi for ServiceClient {
         profile: &'a Value,
         take_over: bool,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<u32, ServiceError>> {
         Box::pin(async move {
             let payload = encode(ProfilePayload {
@@ -1014,6 +1020,7 @@ impl ServiceApi for ServiceClient {
                 take_over,
                 allowed_rule_set_hosts: &self.rule_set_hosts,
                 routing_mode: crate::routing::wire_name(routing_mode),
+                choices,
             })?;
             let data = self.call(Command::Connect, payload, LONG_CALL).await?;
             data.get("pid")
@@ -1028,6 +1035,7 @@ impl ServiceApi for ServiceClient {
         session: &'a SessionRef,
         profile: &'a Value,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
         Box::pin(async move {
             let payload = encode(ProfilePayload {
@@ -1036,6 +1044,7 @@ impl ServiceApi for ServiceClient {
                 take_over: false,
                 allowed_rule_set_hosts: &self.rule_set_hosts,
                 routing_mode: crate::routing::wire_name(routing_mode),
+                choices,
             })?;
             decode(
                 self.call(Command::UpdateProfile, payload, LONG_CALL)
@@ -1183,6 +1192,29 @@ pub(crate) fn forwarded_core_error(error: ServiceError) -> CoreCallError {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Opens a named pipe, retrying while every server instance is busy.
+#[cfg(windows)]
+fn open_pipe(name: &str) -> Result<std::fs::File, String> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+        {
+            Ok(pipe) => return Ok(pipe),
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(format!("open pipe {name}: {error}")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1275,12 +1307,14 @@ mod tests {
             generation: 3,
         };
         let profile = serde_json::json!({"revision":"r1"});
+        let none = ApplyChoices::default();
         let value = encode(ProfilePayload {
             session: &session,
             profile: &profile,
             take_over: false,
             allowed_rule_set_hosts: &[],
             routing_mode: "rules",
+            choices: &none,
         })
         .unwrap();
         assert_eq!(
@@ -1293,6 +1327,7 @@ mod tests {
             take_over: true,
             allowed_rule_set_hosts: &[],
             routing_mode: "rules",
+            choices: &none,
         })
         .unwrap();
         assert_eq!(value["take_over"], true);
@@ -1303,6 +1338,7 @@ mod tests {
             take_over: false,
             allowed_rule_set_hosts: &hosts,
             routing_mode: "global",
+            choices: &none,
         })
         .unwrap();
         assert_eq!(
@@ -1310,6 +1346,26 @@ mod tests {
             serde_json::json!({"session_id":"abc","generation":3,"profile":{"revision":"r1"},
                 "take_over":false,"allowed_rule_set_hosts":["api.example.com:8443"],
                 "routing_mode":"global"})
+        );
+        // The selection and the pins, as service/src/protocol.rs reads them.
+        let choices = ApplyChoices::new(
+            Some("n2".into()),
+            &crate::ingress::Pins::from([("n1".to_string(), "k2".to_string())]),
+        );
+        let value = encode(ProfilePayload {
+            session: &session,
+            profile: &profile,
+            take_over: false,
+            allowed_rule_set_hosts: &[],
+            routing_mode: "rules",
+            choices: &choices,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"session_id":"abc","generation":3,"profile":{"revision":"r1"},
+                "take_over":false,"routing_mode":"rules","selected_node_id":"n2",
+                "pins":[{"node_id":"n1","endpoint_key":"k2"}]})
         );
         assert_eq!(
             ServiceError::Failed("CONNECTION_OWNED_BY_ANOTHER_USER".into())

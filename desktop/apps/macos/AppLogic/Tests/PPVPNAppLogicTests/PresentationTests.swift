@@ -116,6 +116,17 @@ final class PresentationTests: LogicTestCase {
         XCTAssertEqual(notice?.action, .dismissClearedPins)
     }
 
+    func testRebuiltProxyCredentialsNoticeDismisses() {
+        XCTAssertNil(show(.fixture()).notices.first { $0.id == "proxyReset" })
+        let notice = show(.fixture(proxyReset: true)).notices.first { $0.id == "proxyReset" }
+        XCTAssertEqual(notice?.tone, .warn)
+        XCTAssertEqual(notice?.title, tr("proxyResetT"))
+        XCTAssertEqual(notice?.message, tr("proxyResetD"))
+        XCTAssertEqual(notice?.actionTitle, tr("ok"))
+        XCTAssertEqual(notice?.action, .dismissProxyReset)
+        XCTAssertTrue(show(.fixture(profileStatus: .noSubscription, proxyReset: true)).notices.isEmpty)
+    }
+
     func testRoutesTextUsesLabelsThenPositions() {
         XCTAssertEqual(node("n", "N", replicas: ["HKG-A", "HKG-B"]).routesText, "HKG-A → HKG-B")
         XCTAssertEqual(node("n", "N", replicas: ["HKG-A", nil, ""]).routesText,
@@ -165,7 +176,7 @@ final class PresentationTests: LogicTestCase {
         backend.routedProxy = routed
         backend.push(.fixture(standard: .ready(revision: "r1")))
         await settle { self.state.routedProxy != nil }
-        backend.push(.fixture(standard: .failed(error: ClientErrorInfo(code: .coreIncompatible, detail: "bind"))))
+        backend.push(.fixture(standard: .failed(error: ClientErrorInfo(code: .standardCoreFailed, detail: "bind"))))
         XCTAssertFalse(state.offersProxyScope)
         XCTAssertNil(state.shownProxy)
     }
@@ -178,7 +189,7 @@ final class PresentationTests: LogicTestCase {
     // MARK: Failed standard core
 
     func testFailedStandardCoreShowsTheLocalProxyUnavailable() async {
-        let failure = ClientErrorInfo(code: .coreIncompatible, detail: "bind")
+        let failure = ClientErrorInfo(code: .standardCoreFailed, detail: "bind")
         backend.proxyList = [LocalProxy(nodeId: "hk-1", host: "127.0.0.1", port: 17890, username: "u", password: "p")]
         backend.push(.fixture(standard: .ready(revision: "r1")))
         await settle { self.state.currentProxy != nil }

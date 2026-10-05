@@ -5,7 +5,7 @@
 //! (tests/test_teardown.rs) covers its build; this one ours.
 //!
 //! As administrator, with wintun.dll beside the test binary and the test
-//! build's `fault-injection` feature (rust.yml's windows-msvc job):
+//! build's `fault-injection` feature (ci.yml's windows job):
 //!
 //!   cargo test -p ppvpn-core --features fault-injection -- --ignored runtime::windows_tests:: --test-threads 1
 //!
@@ -183,7 +183,7 @@ async fn a_killed_instance_leaves_the_system_as_it_was() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs administrator and wintun.dll beside the test: rust.yml's windows-msvc job"]
+#[ignore = "needs administrator and wintun.dll beside the test: ci.yml's windows job"]
 async fn a_failed_instance_leaves_the_system_as_it_was() {
     let _one = ONE_AT_A_TIME.lock().await;
     fault::disarm();
@@ -216,7 +216,7 @@ async fn a_failed_instance_leaves_the_system_as_it_was() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs administrator and wintun.dll beside the test: rust.yml's windows-msvc job"]
+#[ignore = "needs administrator and wintun.dll beside the test: ci.yml's windows job"]
 async fn a_start_that_fails_once_routed_leaves_the_system_as_it_was() {
     let _one = ONE_AT_A_TIME.lock().await;
     fault::disarm();

@@ -19,6 +19,7 @@ mod detect;
 mod device;
 #[cfg(all(test, target_os = "linux", feature = "linux-e2e"))]
 mod e2e_linux;
+mod engine;
 mod enhanced;
 mod errors;
 mod ingress;
@@ -56,11 +57,9 @@ pub struct ClientConfig {
     pub data_dir: String,
     /// Directory for the daily-rotated logs (UTC dates, 7 days kept):
     /// `ppvpn-client.YYYY-MM-DD.log` written by this library and
-    /// `ppvpn-core.YYYY-MM-DD.log` written by the standard-mode core. Level
+    /// `ppvpn-core.YYYY-MM-DD.log` written by the standard-mode engine. Level
     /// `info`; override with the `PPVPN_LOG` environment variable.
     pub log_dir: String,
-    /// Directory holding the bundled `ppvpn-core` binary.
-    pub core_bin_dir: String,
     /// `macos` | `windows` | `linux`; sent to the core and the device-login request.
     pub platform: String,
     /// App version shown on the web authorization page.
@@ -184,10 +183,16 @@ pub struct ClientSnapshot {
     /// ingress (the node is back on automatic failover). Shown once; cleared
     /// by `Client::dismiss_cleared_ingress_pins`.
     pub cleared_ingress_pins: Vec<IngressPin>,
+    /// The standard-mode core rebuilt the local proxy credentials when it
+    /// was created (its saved credentials were damaged, or other users
+    /// could read them): apps that use the local proxy with the old user
+    /// name and password (e.g. a browser extension) must copy them again.
+    /// Shown once; cleared by `Client::dismiss_local_proxy_credentials_reset`.
+    pub local_proxy_credentials_reset: bool,
 }
 
 /// A node fixed to one of its ingresses (`Replica::endpoint_key`).
-#[derive(uniffi::Record, Clone, Debug, PartialEq, Eq)]
+#[derive(uniffi::Record, serde::Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct IngressPin {
     pub node_id: String,
     pub endpoint_key: String,
@@ -447,7 +452,7 @@ pub(crate) struct EnhancedState {
     pub competitors: Vec<String>,
 }
 
-/// Phase of the connection (the Tauri shell's `ConnectionPhase`).
+/// Phase of the connection.
 #[derive(uniffi::Enum, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConnectionPhase {
     #[default]
@@ -598,21 +603,7 @@ impl Client {
         logging::install(&config.log_dir);
         tracing::info!(app_version = %config.app_version, api = %config.api_base, "client created");
         let launcher: Arc<dyn standard::CoreLauncher> =
-            Arc::new(standard::ProcessLauncher::new(&config));
-        #[cfg(feature = "rust-core")]
-        let launcher = match rust_core::launcher(
-            &config,
-            std::env::var_os(rust_core::RUST_CORE_ENV).as_deref(),
-        ) {
-            Some(engine) => {
-                tracing::info!("standard core: in-process Rust ppvpn-core");
-                engine
-            }
-            None => {
-                tracing::info!("standard core: Go ppvpn-core process");
-                launcher
-            }
-        };
+            Arc::new(engine::EngineLauncher::new(&config));
         let rule_set_hosts = core_ipc::rule_set_hosts(&config.api_base);
         Self::with_parts(
             config,
@@ -756,6 +747,11 @@ impl Client {
     /// The user saw `snapshot.cleared_ingress_pins`: empty it.
     pub fn dismiss_cleared_ingress_pins(&self) {
         self.clear_cleared_ingress_pins();
+    }
+
+    /// The user saw `snapshot.local_proxy_credentials_reset`: clear it.
+    pub fn dismiss_local_proxy_credentials_reset(&self) {
+        self.clear_local_proxy_credentials_reset();
     }
 
     /// Run a speed test through the standard-mode core; results stream
@@ -1077,6 +1073,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(feature = "rust-core")]
-mod rust_core;

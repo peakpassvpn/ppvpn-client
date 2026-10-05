@@ -1,119 +1,39 @@
-//! Standard mode: an unprivileged `ppvpn-core serve --tun=false
-//! --local-proxy=true` child process owned by this app (ported from
-//! `src-tauri/src/standard_core.rs`).
+//! Standard mode: the in-process Rust engine ([`crate::engine`],
+//! `Role::Standard`) owned by this app.
 //!
 //! It serves the per-node local HTTP/SOCKS5 proxies and every speed test
 //! (ICMP/TCP entrance probes and Connect availability probes). It starts when
 //! the first profile is applied and lives until sign-out or exit, independent
-//! of enhanced mode: the privileged core runs TUN only (`--local-proxy=false`),
-//! so local proxy ports stay stable while enhanced mode is toggled.
+//! of enhanced mode: the privileged service runs the TUN instance only, so
+//! local proxy ports stay stable while enhanced mode is toggled.
 //!
-//! The child is supervised: an unexpected exit restarts it with backoff (at
-//! most [`RestartBudget::MAX_RESTARTS`] times per minute) and re-applies the
-//! last profile; state changes go to the `on_state` sink.
+//! The engine is supervised: an unexpected end (a Fatal state) recreates it
+//! with backoff (at most [`RestartBudget::MAX_RESTARTS`] times per minute)
+//! and re-applies the last profile; state changes go to the `on_state` sink.
+//! Every apply carries the routing mode, the selected node and the ingress
+//! pins ([`StandardSettings`]), so a recreated engine starts with the user's
+//! choices.
 
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::core_ipc::{self, BoxFuture, CoreCallError, CoreClient, CoreEndpoint, CoreTransport};
+use crate::core_ipc::{self, ApplyChoices, BoxFuture, CoreTransport};
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
+use crate::ingress::PinsCell;
 use crate::routing::RoutingModeCell;
-use crate::{ClientConfig, LocalProxy, ProbeMethod, ProbeResult, RoutingMode, StandardState};
+use crate::session::SelectionSource;
+use crate::{LocalProxy, ProbeMethod, ProbeResult, RoutingMode, StandardState};
 
-const READY_TIMEOUT: Duration = Duration::from_secs(8);
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
 /// Receives every standard-mode state change.
 pub(crate) type StateSink = Arc<dyn Fn(StandardState) + Send + Sync>;
-
-// ---------------------------------------------------------------------------
-// IPC path selection
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HostOs {
-    MacOs,
-    Linux,
-    Windows,
-}
-
-impl HostOs {
-    pub(crate) fn current() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::MacOs
-        } else if cfg!(windows) {
-            Self::Windows
-        } else {
-            Self::Linux
-        }
-    }
-
-    /// Longest usable Unix socket path in bytes (`sun_path` minus the NUL).
-    fn max_socket_path(self) -> usize {
-        match self {
-            Self::MacOs => 104 - 1,
-            Self::Linux => 108 - 1,
-            Self::Windows => usize::MAX,
-        }
-    }
-}
-
-/// Picks the private IPC endpoint for one core launch. `token` is 32 random
-/// hex characters. macOS: `$TMPDIR` (per-user, 0700); Linux:
-/// `$XDG_RUNTIME_DIR/ppvpn`, then `<data_dir>/ppvpn-core/run`; either falls back to
-/// `/tmp` when the path would overflow `sun_path` (the socket's owner is
-/// verified before every call). Windows: an unguessable named pipe.
-pub(crate) fn select_ipc_path(
-    os: HostOs,
-    tmpdir: Option<&str>,
-    xdg_runtime_dir: Option<&str>,
-    data_dir: &str,
-    token: &str,
-) -> String {
-    if os == HostOs::Windows {
-        return format!(r"\\.\pipe\ppvpn-core-user-{token}");
-    }
-    let short = &token[..token.len().min(12)];
-    let name = format!("ppvpn-core-{short}.sock");
-    // Joined with '/' by hand (not `Path::join`) so the result does not
-    // depend on the host the code runs on.
-    let join = |dir: &str, parts: &[&str]| {
-        let mut path = dir.trim_end_matches('/').to_string();
-        for part in parts {
-            path.push('/');
-            path.push_str(part);
-        }
-        path
-    };
-    let non_empty = |dir: Option<&str>| dir.filter(|dir| !dir.is_empty()).map(str::to_string);
-    let candidates: Vec<String> = match os {
-        HostOs::MacOs => non_empty(tmpdir)
-            .map(|dir| join(&dir, &[&name]))
-            .into_iter()
-            .collect(),
-        _ => non_empty(xdg_runtime_dir)
-            .map(|dir| join(&dir, &["ppvpn", &name]))
-            .into_iter()
-            .chain(
-                non_empty(Some(data_dir))
-                    .map(|dir| join(&dir, &[crate::storage::CORE_DIR, "run", &name])),
-            )
-            .collect(),
-    };
-    candidates
-        .into_iter()
-        .find(|path| path.len() <= os.max_socket_path())
-        .unwrap_or_else(|| format!("/tmp/{name}"))
-}
 
 // ---------------------------------------------------------------------------
 // Restart policy
@@ -165,171 +85,35 @@ impl RestartBudget {
 /// A launched core as seen by the controller.
 pub(crate) struct Launched {
     pub transport: Arc<dyn CoreTransport>,
-    /// Resolves with a status text once the core has exited, for any reason.
+    /// Resolves with a status text once the core has ended, for any reason.
     pub exited: BoxFuture<'static, String>,
-    /// Asks the core to go away (lifetime pipe closed, killed after a grace
-    /// period). Dropping it has the same effect.
+    /// Asks the core to shut down. Dropping it has the same effect.
     pub stop: oneshot::Sender<()>,
-    /// `allowed_rule_set_hosts` for every `apply-profile` on this instance;
-    /// `None` when the core predates the field (it would reject the body).
-    pub rule_set_hosts: Option<Vec<String>>,
-    /// The core accepts `routing_mode` (0.5.6+); older ones reject it.
-    pub accepts_routing_mode: bool,
-    /// The core serves the routed local-proxy user (0.5.12+); older ones
-    /// reject the `kind` field.
-    pub accepts_routed_proxy: bool,
+    /// `allowed_rule_set_hosts` for every `apply-profile` on this instance.
+    pub rule_set_hosts: Vec<String>,
+    /// The engine rebuilt the local proxy credentials when it was created
+    /// (`status.local_proxy.credentials_reset`): apps holding the old ones
+    /// must copy them again.
+    pub credentials_reset: bool,
 }
 
-/// Starts one core instance and waits until it answers. The production
-/// implementation spawns `ppvpn-core`; tests substitute a fake.
+/// Starts one core instance. The production implementation creates the
+/// engine ([`crate::engine::EngineLauncher`]); tests substitute a fake.
 pub(crate) trait CoreLauncher: Send + Sync {
     fn launch(&self) -> BoxFuture<'_, Result<Launched, ClientErrorInfo>>;
 }
 
-/// Spawns the bundled `ppvpn-core serve --tun=false --local-proxy=true`.
-pub(crate) struct ProcessLauncher {
-    binary: PathBuf,
-    runtime_dir: PathBuf,
-    log_dir: PathBuf,
-    data_dir: String,
-    platform: String,
-    /// Authority of the API the profile comes from (`allowed_rule_set_hosts`).
-    rule_set_hosts: Vec<String>,
-}
-
-impl ProcessLauncher {
-    pub(crate) fn new(config: &ClientConfig) -> Self {
-        let binary_name = if cfg!(windows) {
-            "ppvpn-core.exe"
-        } else {
-            "ppvpn-core"
-        };
-        Self {
-            binary: Path::new(&config.core_bin_dir).join(binary_name),
-            runtime_dir: Path::new(&config.data_dir).join(crate::storage::CORE_DIR),
-            log_dir: PathBuf::from(&config.log_dir),
-            data_dir: config.data_dir.clone(),
-            platform: config.platform.clone(),
-            rule_set_hosts: core_ipc::rule_set_hosts(&config.api_base),
-        }
-    }
-
-    async fn spawn(&self) -> Result<Launched, ClientErrorInfo> {
-        let binary = self.binary.clone();
-        let runtime_dir = self.runtime_dir.clone();
-        let log_dir = self.log_dir.clone();
-        let data_dir = self.data_dir.clone();
-        let prepared = tokio::task::spawn_blocking(move || {
-            prepare_launch(&binary, &runtime_dir, &log_dir, &data_dir)
-        })
-        .await
-        .map_err(|error| {
-            ClientErrorInfo::new(ErrorCode::Internal, format!("prepare core task: {error}"))
-        })??;
-
-        let mut command = Command::new(&self.binary);
-        command
-            .arg("serve")
-            .arg("--socket")
-            .arg(&prepared.endpoint.socket)
-            .arg("--session-secret-file")
-            .arg(&prepared.endpoint.secret_file)
-            .arg("--state-dir")
-            .arg(self.runtime_dir.join("state"))
-            .arg("--platform")
-            .arg(&self.platform)
-            .arg("--local-proxy=true")
-            .arg("--tun=false")
-            .arg("--exit-on-stdin-close")
-            .stdin(Stdio::piped())
-            .kill_on_drop(true);
-        match prepared
-            .log
-            .and_then(|file| Some((file.try_clone().ok()?, file)))
-        {
-            Some((out, err)) => {
-                command.stdout(Stdio::from(out)).stderr(Stdio::from(err));
-            }
-            None => {
-                command.stdout(Stdio::null()).stderr(Stdio::null());
-            }
-        }
-        #[cfg(windows)]
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-
-        let mut child = command.spawn().map_err(|error| {
-            ClientErrorInfo::new(
-                ErrorCode::StandardCoreFailed,
-                format!("STANDARD_CORE_SPAWN_FAILED: {error}"),
-            )
-        })?;
-        let stdin = child.stdin.take();
-        let client = Arc::new(CoreClient::new(prepared.endpoint.clone()));
-
-        let version = match wait_until_ready(&mut child, client.as_ref()).await {
-            Ok(version) => version,
-            Err(error) => {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-                cleanup_files(prepared.endpoint.clone()).await;
-                return Err(error);
-            }
-        };
-        let rule_set_hosts = core_ipc::core_accepts_rule_set_hosts(&version.core_version)
-            .then(|| self.rule_set_hosts.clone());
-        if rule_set_hosts.is_none() {
-            tracing::info!(
-                core = %version.core_version,
-                "standard core predates allowed_rule_set_hosts; rule sets stay unpinned"
-            );
-        }
-        let accepts_routing_mode = crate::routing::core_accepts_routing_mode(&version.core_version);
-        let accepts_routed_proxy = core_ipc::core_accepts_routed_proxy(&version.core_version);
-        let (stop, stop_rx) = oneshot::channel();
-        let exited = Box::pin(watch_child(child, stdin, stop_rx, prepared.endpoint));
-        Ok(Launched {
-            transport: client,
-            exited,
-            stop,
-            rule_set_hosts,
-            accepts_routing_mode,
-            accepts_routed_proxy,
-        })
-    }
-}
-
-impl CoreLauncher for ProcessLauncher {
-    fn launch(&self) -> BoxFuture<'_, Result<Launched, ClientErrorInfo>> {
-        Box::pin(self.spawn())
-    }
-}
-
-/// Owns the child until it exits; a stop request (or a dropped sender)
-/// closes the lifetime pipe — `--exit-on-stdin-close` then stops the core,
-/// even if this process dies without cleanup — and kills it after a grace
-/// period.
-async fn watch_child(
-    mut child: Child,
-    stdin: Option<ChildStdin>,
-    stop_rx: oneshot::Receiver<()>,
-    endpoint: CoreEndpoint,
-) -> String {
-    let status = tokio::select! {
-        status = child.wait() => match status {
-            Ok(status) => status.to_string(),
-            Err(error) => format!("wait failed: {error}"),
-        },
-        _ = stop_rx => {
-            drop(stdin);
-            if tokio::time::timeout(STOP_GRACE, child.wait()).await.is_err() {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-            }
-            "stopped".to_string()
-        }
-    };
-    cleanup_files(endpoint).await;
-    status
+/// Shared with the client.
+#[derive(Clone, Default)]
+pub(crate) struct StandardSettings {
+    /// Sent with every `apply-profile`.
+    pub routing: RoutingModeCell,
+    /// Sent with every `apply-profile`.
+    pub ingress_pins: PinsCell,
+    /// Sent with every `apply-profile`.
+    pub selection: SelectionSource,
+    /// Told when a new engine reports [`Launched::credentials_reset`].
+    pub on_credentials_reset: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Clone)]
@@ -341,12 +125,9 @@ struct Desired {
 struct Running {
     instance: u64,
     transport: Arc<dyn CoreTransport>,
-    rule_set_hosts: Option<Vec<String>>,
-    accepts_routing_mode: bool,
-    accepts_routed_proxy: bool,
+    rule_set_hosts: Vec<String>,
     applied_revision: Option<String>,
-    /// `routing_mode` `applied_revision` was applied with (`None`: the core
-    /// predates it).
+    /// `routing_mode` `applied_revision` was applied with.
     applied_mode: Option<RoutingMode>,
     started: bool,
     stop: Option<oneshot::Sender<()>>,
@@ -369,8 +150,7 @@ struct Inner {
     /// two cores.
     operation: tokio::sync::Mutex<()>,
     slot: Mutex<Slot>,
-    /// Sent with every `apply-profile` (shared with the client).
-    routing: RoutingModeCell,
+    settings: StandardSettings,
 }
 
 /// Handle to the standard-mode core; cheap to clone.
@@ -384,14 +164,14 @@ impl StandardCore {
     /// [`Self::apply_profile`].
     #[cfg(test)]
     pub(crate) fn with_launcher(launcher: Arc<dyn CoreLauncher>, on_state: StateSink) -> Self {
-        Self::with_routing(launcher, on_state, RoutingModeCell::default())
+        Self::with_settings(launcher, on_state, StandardSettings::default())
     }
 
-    /// [`Self::with_launcher`], applying profiles in `routing`'s mode.
-    pub(crate) fn with_routing(
+    /// [`Self::with_launcher`], applying profiles with `settings`.
+    pub(crate) fn with_settings(
         launcher: Arc<dyn CoreLauncher>,
         on_state: StateSink,
-        routing: RoutingModeCell,
+        settings: StandardSettings,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -399,7 +179,7 @@ impl StandardCore {
                 on_state,
                 operation: tokio::sync::Mutex::new(()),
                 slot: Mutex::new(Slot::default()),
-                routing,
+                settings,
             }),
         }
     }
@@ -490,8 +270,8 @@ impl StandardCore {
         }
     }
 
-    /// Non-blocking stop for app exit: closes the lifetime pipe (the core
-    /// exits on its own) and kills it after a grace period. Does not wait.
+    /// Non-blocking stop for app exit: asks the core to shut down. Does not
+    /// wait.
     pub(crate) fn shutdown(&self) {
         let running = self.inner.slot.lock().ok().and_then(|mut slot| {
             slot.desired = None;
@@ -538,25 +318,9 @@ impl StandardCore {
             .map_err(|error| error.into_client_error(ErrorCode::StandardCoreFailed))
     }
 
-    /// The routed local-proxy user (Profile rules, then the selected node);
-    /// `None` when this core predates it (0.5.12).
+    /// The routed local-proxy user (Profile rules, then the selected node).
     pub(crate) async fn routed_local_proxy(&self) -> Result<Option<LocalProxy>, ClientError> {
-        let (transport, supported) = {
-            let slot = self
-                .inner
-                .slot
-                .lock()
-                .map_err(|_| ClientError::StandardNotReady)?;
-            match slot.running.as_ref() {
-                Some(running) if running.started => {
-                    (running.transport.clone(), running.accepts_routed_proxy)
-                }
-                _ => return Err(ClientError::StandardNotReady),
-            }
-        };
-        if !supported {
-            return Ok(None);
-        }
+        let transport = self.transport()?;
         core_ipc::routed_local_proxy(transport.as_ref())
             .await
             .map_err(|error| error.into_client_error(ErrorCode::StandardCoreFailed))
@@ -607,7 +371,7 @@ impl Inner {
                         r.rule_set_hosts.clone(),
                         r.applied_revision.clone(),
                         r.applied_mode,
-                        r.accepts_routing_mode.then(|| self.routing.get()),
+                        Some(self.settings.routing.get()),
                         r.started,
                     )
                 })
@@ -627,10 +391,21 @@ impl Inner {
         }
 
         // ApplyProfile swaps a running runtime atomically and rolls back on
-        // failure, so only the first revision needs an explicit start.
-        if let Err(error) =
-            core_ipc::apply_profile(transport.as_ref(), &desired.profile, hosts.as_deref(), mode)
-                .await
+        // failure, so only the first revision needs an explicit start. The
+        // selection and pins go with it: a new engine needs no SelectNode or
+        // PinIngress afterwards.
+        let choices = ApplyChoices::new(
+            self.settings.selection.get(),
+            &self.settings.ingress_pins.get(),
+        );
+        if let Err(error) = core_ipc::apply_profile(
+            transport.as_ref(),
+            &desired.profile,
+            Some(hosts.as_slice()),
+            mode,
+            &choices,
+        )
+        .await
         {
             let info = error.info(ErrorCode::StandardCoreFailed);
             return Err(match (started, applied) {
@@ -663,6 +438,11 @@ impl Inner {
 
     async fn spawn_instance(self: &Arc<Self>) -> Result<Running, ClientErrorInfo> {
         let launched = self.launcher.launch().await?;
+        if launched.credentials_reset {
+            if let Some(notify) = &self.settings.on_credentials_reset {
+                notify();
+            }
+        }
         let instance = self
             .slot
             .lock()
@@ -683,8 +463,6 @@ impl Inner {
             instance,
             transport: launched.transport,
             rule_set_hosts: launched.rule_set_hosts,
-            accepts_routing_mode: launched.accepts_routing_mode,
-            accepts_routed_proxy: launched.accepts_routed_proxy,
             applied_revision: None,
             applied_mode: None,
             started: false,
@@ -710,7 +488,7 @@ impl Inner {
                 None
             }
         };
-        tracing::warn!(%status, "standard core exited unexpectedly");
+        tracing::warn!(%status, "standard core ended unexpectedly");
         let Some(delay) = delay else {
             self.publish(StandardState::Failed {
                 error: ClientErrorInfo::new(
@@ -739,103 +517,6 @@ impl Inner {
     }
 }
 
-struct Prepared {
-    endpoint: CoreEndpoint,
-    log: Option<std::fs::File>,
-}
-
-/// Blocking launch preparation: binary check, private runtime directory,
-/// endpoint choice and log file.
-fn prepare_launch(
-    binary: &Path,
-    runtime_dir: &Path,
-    log_dir: &Path,
-    data_dir: &str,
-) -> Result<Prepared, ClientErrorInfo> {
-    if !binary.is_file() {
-        return Err(ClientErrorInfo::new(
-            ErrorCode::CoreBinaryMissing,
-            format!("STANDARD_CORE_BINARY_MISSING: {}", binary.display()),
-        ));
-    }
-    std::fs::create_dir_all(runtime_dir.join("state")).map_err(|error| {
-        ClientErrorInfo::new(
-            ErrorCode::StandardCoreFailed,
-            format!("create core dir: {error}"),
-        )
-    })?;
-    #[cfg(unix)]
-    let expected_uid = {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let _ = std::fs::set_permissions(runtime_dir, std::fs::Permissions::from_mode(0o700));
-        std::fs::metadata(runtime_dir)
-            .ok()
-            .map(|metadata| metadata.uid())
-    };
-    #[cfg(not(unix))]
-    let expected_uid = None;
-
-    let secret_file = runtime_dir.join("session.secret");
-    let _ = std::fs::remove_file(&secret_file);
-    let token = uuid::Uuid::new_v4().simple().to_string();
-    let tmpdir = std::env::temp_dir();
-    let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
-    let socket = select_ipc_path(
-        HostOs::current(),
-        tmpdir.to_str(),
-        xdg.as_deref(),
-        data_dir,
-        &token,
-    );
-    let log = std::fs::create_dir_all(log_dir).ok().and_then(|_| {
-        std::fs::File::options()
-            .create(true)
-            .append(true)
-            .open(log_dir.join(format!("ppvpn-core.{}.log", utc_date(SystemTime::now()))))
-            .ok()
-    });
-    Ok(Prepared {
-        endpoint: CoreEndpoint {
-            socket,
-            secret_file,
-            expected_uid,
-        },
-        log,
-    })
-}
-
-/// Polls `GetVersion` until the core answers, it exits, or the timeout hits.
-async fn wait_until_ready(
-    child: &mut Child,
-    client: &CoreClient,
-) -> Result<core_ipc::CoreVersion, ClientErrorInfo> {
-    let deadline = Instant::now() + READY_TIMEOUT;
-    let mut last = "STANDARD_CORE_START_TIMEOUT".to_string();
-    while Instant::now() < deadline {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(ClientErrorInfo::new(
-                ErrorCode::StandardCoreFailed,
-                format!("STANDARD_CORE_EXITED: {status}"),
-            ));
-        }
-        match core_ipc::get_version_within(client, Duration::from_secs(2)).await {
-            Ok(version) if version.core_api_version > 1 => {
-                return Err(ClientErrorInfo::new(
-                    ErrorCode::CoreIncompatible,
-                    format!("CORE_API_UNSUPPORTED: {}", version.core_api_version),
-                ));
-            }
-            Ok(version) => return Ok(version),
-            Err(CoreCallError::Api { code, .. }) if code == "CORE_API_UNSUPPORTED" => {
-                return Err(ClientErrorInfo::new(ErrorCode::CoreIncompatible, code));
-            }
-            Err(error) => last = format!("STANDARD_CORE_START_TIMEOUT: {}", error.detail()),
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    Err(ClientErrorInfo::new(ErrorCode::StandardCoreFailed, last))
-}
-
 async fn stop_instance(mut running: Running) {
     let _ = core_ipc::stop(running.transport.as_ref(), Duration::from_secs(2)).await;
     if let Some(stop) = running.stop.take() {
@@ -844,21 +525,6 @@ async fn stop_instance(mut running: Running) {
     if let Some(supervisor) = running.supervisor.take() {
         let _ = tokio::time::timeout(STOP_GRACE + Duration::from_secs(2), supervisor).await;
     }
-}
-
-async fn cleanup_files(endpoint: CoreEndpoint) {
-    let _ = tokio::task::spawn_blocking(move || {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::FileTypeExt;
-            if std::fs::symlink_metadata(&endpoint.socket).is_ok_and(|m| m.file_type().is_socket())
-            {
-                let _ = std::fs::remove_file(&endpoint.socket);
-            }
-        }
-        let _ = std::fs::remove_file(&endpoint.secret_file);
-    })
-    .await;
 }
 
 /// `YYYY-MM-DD` in UTC (log file names; no date crate needed).
@@ -884,68 +550,6 @@ pub(crate) fn utc_date(now: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
-
-    #[test]
-    fn macos_uses_tmpdir_and_falls_back_when_sun_path_overflows() {
-        let tmp = "/var/folders/xy/abcdefghijklmnopqrstuvwx0000gn/T/";
-        let path = select_ipc_path(HostOs::MacOs, Some(tmp), None, "/unused", TOKEN);
-        assert_eq!(path, format!("{tmp}ppvpn-core-0123456789ab.sock"));
-        assert!(path.len() <= 103);
-
-        let long = format!("/Users/{}/T", "x".repeat(80));
-        let path = select_ipc_path(HostOs::MacOs, Some(&long), None, "/unused", TOKEN);
-        assert_eq!(path, "/tmp/ppvpn-core-0123456789ab.sock");
-
-        // Exactly at the limit is still accepted.
-        let name_len = "/ppvpn-core-0123456789ab.sock".len();
-        let edge = format!("/{}", "d".repeat(103 - name_len - 1));
-        let path = select_ipc_path(HostOs::MacOs, Some(&edge), None, "/unused", TOKEN);
-        assert_eq!(path.len(), 103);
-        assert!(path.starts_with(&edge));
-        let over = format!("{edge}e");
-        assert!(
-            select_ipc_path(HostOs::MacOs, Some(&over), None, "/unused", TOKEN)
-                .starts_with("/tmp/")
-        );
-
-        assert!(select_ipc_path(HostOs::MacOs, None, None, "/unused", TOKEN).starts_with("/tmp/"));
-    }
-
-    #[test]
-    fn linux_prefers_xdg_runtime_dir_then_data_dir() {
-        let path = select_ipc_path(
-            HostOs::Linux,
-            Some("/tmp"),
-            Some("/run/user/1000"),
-            "/data/u/.local/share/ppvpn",
-            TOKEN,
-        );
-        assert_eq!(path, "/run/user/1000/ppvpn/ppvpn-core-0123456789ab.sock");
-        let path = select_ipc_path(
-            HostOs::Linux,
-            None,
-            None,
-            "/data/u/.local/share/ppvpn",
-            TOKEN,
-        );
-        assert_eq!(
-            path,
-            "/data/u/.local/share/ppvpn/ppvpn-core/run/ppvpn-core-0123456789ab.sock"
-        );
-        let path = select_ipc_path(HostOs::Linux, None, Some(""), "/data/u/data", TOKEN);
-        assert!(path.starts_with("/data/u/data/ppvpn-core/run/"));
-        let deep = format!("/home/{}", "y".repeat(120));
-        let path = select_ipc_path(HostOs::Linux, None, None, &deep, TOKEN);
-        assert_eq!(path, "/tmp/ppvpn-core-0123456789ab.sock");
-    }
-
-    #[test]
-    fn windows_uses_a_random_named_pipe() {
-        let path = select_ipc_path(HostOs::Windows, None, None, r"C:\data", TOKEN);
-        assert_eq!(path, format!(r"\\.\pipe\ppvpn-core-user-{TOKEN}"));
-    }
 
     #[test]
     fn restart_budget_backs_off_and_refills_after_the_window() {
@@ -976,47 +580,25 @@ mod tests {
         );
     }
 
-    fn test_config(bin_dir: &str, data_dir: &str) -> ClientConfig {
-        ClientConfig {
-            api_base: "http://localhost".into(),
-            data_dir: data_dir.into(),
-            log_dir: format!("{data_dir}/logs"),
-            core_bin_dir: bin_dir.into(),
-            platform: "macos".into(),
-            app_version: "0.0.0".into(),
-        }
-    }
-
-    fn process_launcher(config: &ClientConfig) -> Arc<dyn CoreLauncher> {
-        Arc::new(ProcessLauncher::new(config))
-    }
-
     /// Launches fake cores whose exit can be triggered to simulate a crash.
     struct CrashyLauncher {
         core: Arc<crate::core_ipc::tests::FakeCore>,
         crash: Mutex<Vec<oneshot::Sender<()>>>,
-        /// The next launches fail (like a missing binary).
+        /// The next launches fail.
         fail: std::sync::atomic::AtomicBool,
+        /// The next launches report rebuilt local proxy credentials.
+        reset: std::sync::atomic::AtomicBool,
         launches: std::sync::atomic::AtomicUsize,
-        /// What [`Launched::rule_set_hosts`] reports for each instance.
-        rule_set_hosts: Option<Vec<String>>,
     }
 
     impl CrashyLauncher {
         fn new(core: Arc<crate::core_ipc::tests::FakeCore>) -> Arc<Self> {
-            Self::with_hosts(core, None)
-        }
-
-        fn with_hosts(
-            core: Arc<crate::core_ipc::tests::FakeCore>,
-            rule_set_hosts: Option<Vec<String>>,
-        ) -> Arc<Self> {
             Arc::new(Self {
                 core,
                 crash: Mutex::new(Vec::new()),
                 fail: Default::default(),
+                reset: Default::default(),
                 launches: Default::default(),
-                rule_set_hosts,
             })
         }
 
@@ -1039,7 +621,7 @@ mod tests {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
                     return Err(ClientErrorInfo::new(
-                        ErrorCode::CoreBinaryMissing,
+                        ErrorCode::StandardCoreFailed,
                         "test launch failure",
                     ));
                 }
@@ -1055,17 +637,15 @@ mod tests {
                         }
                     }),
                     stop,
-                    rule_set_hosts: self.rule_set_hosts.clone(),
-                    // A core that pins hosts stands for a current one.
-                    accepts_routing_mode: self.rule_set_hosts.is_some(),
-                    accepts_routed_proxy: self.rule_set_hosts.is_some(),
+                    rule_set_hosts: vec!["api.example.com".to_string()],
+                    credentials_reset: self.reset.load(std::sync::atomic::Ordering::SeqCst),
                 })
             })
         }
     }
 
     #[tokio::test]
-    async fn the_routed_proxy_is_asked_only_of_a_core_that_serves_it() {
+    async fn the_routed_proxy_comes_from_the_ready_core() {
         let core = crate::core_ipc::tests::FakeCore::new(|path, _| {
             let value = match path {
                 "/v1/get-local-proxy-credential" => serde_json::json!({
@@ -1076,39 +656,19 @@ mod tests {
             };
             (Duration::ZERO, Ok(value))
         });
-        let asked = |core: &crate::core_ipc::tests::FakeCore| {
-            core.calls
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(path, _)| path == "/v1/get-local-proxy-credential")
-        };
-
-        // An older core (no pinned hosts here stands for one): no request.
-        let old = StandardCore::with_launcher(CrashyLauncher::new(core.clone()), Arc::new(|_| {}));
+        let standard =
+            StandardCore::with_launcher(CrashyLauncher::new(core.clone()), Arc::new(|_| {}));
         assert!(matches!(
-            old.routed_local_proxy().await,
+            standard.routed_local_proxy().await,
             Err(ClientError::StandardNotReady)
         ));
-        old.apply_profile(br#"{"revision":"r1"}"#, "r1")
-            .await
-            .unwrap();
-        assert!(old.routed_local_proxy().await.unwrap().is_none());
-        assert!(!asked(&core));
-        old.stop().await;
-
-        let current = StandardCore::with_launcher(
-            CrashyLauncher::with_hosts(core.clone(), Some(vec!["127.0.0.1".into()])),
-            Arc::new(|_| {}),
-        );
-        current
+        standard
             .apply_profile(br#"{"revision":"r1"}"#, "r1")
             .await
             .unwrap();
-        let routed = current.routed_local_proxy().await.unwrap().unwrap();
+        let routed = standard.routed_local_proxy().await.unwrap().unwrap();
         assert_eq!((routed.username.as_str(), routed.port), ("abc", 7890));
-        assert!(asked(&core));
-        current.stop().await;
+        standard.stop().await;
     }
 
     #[tokio::test]
@@ -1223,13 +783,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_pins_the_api_host_when_the_core_accepts_it() {
+    async fn apply_pins_the_api_host() {
         let core = crate::core_ipc::tests::FakeCore::new(|_, _| {
             (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
         });
-        let launcher =
-            CrashyLauncher::with_hosts(core.clone(), Some(vec!["api.example.com".into()]));
-        let standard = StandardCore::with_launcher(launcher, Arc::new(|_| {}));
+        let standard =
+            StandardCore::with_launcher(CrashyLauncher::new(core.clone()), Arc::new(|_| {}));
         standard
             .apply_profile(br#"{"revision":"r1"}"#, "r1")
             .await
@@ -1254,10 +813,13 @@ mod tests {
         let core = crate::core_ipc::tests::FakeCore::new(|_, _| {
             (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
         });
-        let launcher =
-            CrashyLauncher::with_hosts(core.clone(), Some(vec!["api.example.com".into()]));
+        let launcher = CrashyLauncher::new(core.clone());
         let routing = RoutingModeCell::default();
-        let standard = StandardCore::with_routing(launcher, Arc::new(|_| {}), routing.clone());
+        let settings = StandardSettings {
+            routing: routing.clone(),
+            ..StandardSettings::default()
+        };
+        let standard = StandardCore::with_settings(launcher, Arc::new(|_| {}), settings);
         // Nothing running yet: nothing to re-apply.
         standard.reapply().await.unwrap();
         assert!(apply_bodies(&core).is_empty());
@@ -1285,77 +847,94 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_sends_the_bare_profile_to_an_older_core() {
+    async fn every_apply_carries_the_selection_and_the_pins() {
         let core = crate::core_ipc::tests::FakeCore::new(|_, _| {
             (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
         });
-        let standard =
-            StandardCore::with_launcher(CrashyLauncher::new(core.clone()), Arc::new(|_| {}));
+        let launcher = CrashyLauncher::new(core.clone());
+        let selected = Arc::new(Mutex::new(Some("n1".to_string())));
+        let pins = PinsCell::new([("n2".to_string(), "k3".to_string())].into());
+        let settings = StandardSettings {
+            ingress_pins: pins.clone(),
+            selection: SelectionSource::new({
+                let selected = selected.clone();
+                move || selected.lock().unwrap().clone()
+            }),
+            ..StandardSettings::default()
+        };
+        let standard = StandardCore::with_settings(launcher.clone(), Arc::new(|_| {}), settings);
         standard
             .apply_profile(br#"{"revision":"r1"}"#, "r1")
             .await
             .unwrap();
+        // Changed live since (SelectNode / PinIngress): a recreated engine
+        // gets the current ones with the profile.
+        *selected.lock().unwrap() = Some("n2".to_string());
+        pins.set(Default::default());
+        launcher.crash_last();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(matches!(standard.state(), StandardState::Ready { .. }));
+
+        let bodies = apply_bodies(&core);
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0]["selected_node_id"], "n1");
         assert_eq!(
-            apply_bodies(&core),
-            vec![serde_json::json!({"profile": {"revision": "r1"}})]
+            bodies[0]["pins"],
+            serde_json::json!([{"node_id": "n2", "endpoint_key": "k3"}])
+        );
+        assert_eq!(bodies[1]["selected_node_id"], "n2");
+        assert!(bodies[1].get("pins").is_none(), "no pins left");
+        let calls = core.calls.lock().unwrap().clone();
+        assert!(
+            calls
+                .iter()
+                .all(|(path, _)| path != "/v1/select-node" && path != "/v1/pin-ingress"),
+            "nothing re-sent after an apply: {calls:?}"
         );
         standard.stop().await;
     }
 
-    #[test]
-    fn the_process_launcher_pins_the_configured_api_host() {
-        let mut config = test_config("/nonexistent", "/nonexistent");
-        config.api_base = "https://api.example.com".into();
-        assert_eq!(
-            ProcessLauncher::new(&config).rule_set_hosts,
-            vec!["api.example.com".to_string()]
-        );
-        config.api_base = "https://api.example.com:8443/api/v1".into();
-        assert_eq!(
-            ProcessLauncher::new(&config).rule_set_hosts,
-            vec!["api.example.com:8443".to_string()]
-        );
-    }
-
     #[tokio::test]
-    async fn missing_binary_reports_core_binary_missing() {
-        let dir =
-            std::env::temp_dir().join(format!("ppvpn-std-test-{}", uuid::Uuid::new_v4().simple()));
-        let states = Arc::new(Mutex::new(Vec::new()));
-        let sink = states.clone();
-        let core = StandardCore::with_launcher(
-            process_launcher(&test_config("/nonexistent/bin", dir.to_str().unwrap())),
-            Arc::new(move |state| sink.lock().unwrap().push(state)),
-        );
-        let error = core
+    async fn an_engine_that_rebuilt_the_credentials_says_so() {
+        let core = crate::core_ipc::tests::FakeCore::new(|_, _| {
+            (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
+        });
+        let launcher = CrashyLauncher::new(core);
+        let resets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let settings = StandardSettings {
+            on_credentials_reset: Some(Arc::new({
+                let resets = resets.clone();
+                move || {
+                    resets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            })),
+            ..StandardSettings::default()
+        };
+        let standard = StandardCore::with_settings(launcher.clone(), Arc::new(|_| {}), settings);
+        standard
             .apply_profile(br#"{"revision":"r1"}"#, "r1")
             .await
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            ClientError::Failed {
-                code: ErrorCode::CoreBinaryMissing,
-                ..
-            }
-        ));
-        assert!(matches!(core.state(), StandardState::Failed { .. }));
-        assert!(matches!(
-            states.lock().unwrap().first(),
-            Some(StandardState::Starting)
-        ));
-        assert!(matches!(
-            core.transport(),
-            Err(ClientError::StandardNotReady)
-        ));
-        let _ = std::fs::remove_dir_all(dir);
+            .unwrap();
+        assert_eq!(resets.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // The recreated engine rebuilt them.
+        launcher
+            .reset
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        launcher.crash_last();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(matches!(standard.state(), StandardState::Ready { .. }));
+        assert_eq!(resets.load(std::sync::atomic::Ordering::SeqCst), 1);
+        standard.stop().await;
     }
 
     #[tokio::test]
-    async fn invalid_profile_json_is_rejected_before_spawning() {
-        let core = StandardCore::with_launcher(
-            process_launcher(&test_config("/nonexistent", "/nonexistent")),
-            Arc::new(|_| {}),
-        );
+    async fn invalid_profile_json_is_rejected_before_launching() {
+        let fake = crate::core_ipc::tests::FakeCore::new(|_, _| {
+            (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
+        });
+        let launcher = CrashyLauncher::new(fake);
+        let core = StandardCore::with_launcher(launcher.clone(), Arc::new(|_| {}));
         let error = core.apply_profile(b"not json", "r1").await.unwrap_err();
         assert!(matches!(
             error,
@@ -1365,5 +944,6 @@ mod tests {
             }
         ));
         assert!(matches!(core.state(), StandardState::Stopped));
+        assert_eq!(launcher.launches(), 0);
     }
 }

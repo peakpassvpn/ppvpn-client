@@ -37,6 +37,7 @@ mod lifecycle_tests;
 mod logs;
 mod network;
 mod outbound_log;
+mod pinned;
 mod probes;
 #[cfg(test)]
 mod probes_tests;
@@ -102,6 +103,7 @@ struct Inner {
     kernel_gen: std::sync::atomic::AtomicU64,
     /// The Linux desktop TUN's routing guard while it runs.
     routing: routing::RoutingGuard,
+    pinned: pinned::PinnedChecks,
     /// The profile's rule sets: cache, downloads, refresh.
     rule_sets: crate::rulesets::Manager,
     /// Set when `shutdown` begins: rule set downloads under way give up.
@@ -174,7 +176,10 @@ impl Engine {
         let log = Logs::new(&config.log)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         log.span().in_scope(|| cleanup::sweep(&config))?;
-        let options = sail::embed::Options::new().run_dir(cleanup::run_dir(&config));
+        give_back_freed_memory();
+        let options = sail::embed::Options::new()
+            .run_dir(cleanup::run_dir(&config))
+            .runtime(sail_runtime());
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error_on(config.platform))?;
         let engine = Engine::assemble(config, Arc::new(runtime), log)?;
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
@@ -209,6 +214,7 @@ impl Engine {
             reads: reads::Reads::new(),
             kernel_gen: std::sync::atomic::AtomicU64::new(0),
             routing: routing::RoutingGuard::default(),
+            pinned: pinned::PinnedChecks::default(),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),
@@ -269,6 +275,7 @@ impl Engine {
         inner.local_proxy_stopped();
         // Before the TUN closes: sail's cleanup must not be undone.
         inner.guard_stopped();
+        inner.stop_pinned_checks();
         inner.cancel_dns_queries();
         inner.rule_sets.close();
         let report = cleanup::cleanup(parts, left).await;
@@ -558,6 +565,7 @@ impl Inner {
             self.settle(&mut live);
             drop(live);
             self.guard_stopped();
+            self.stop_pinned_checks();
             self.fatal_cleanup();
         }
         error.to_error_on(self.config.platform)
@@ -579,8 +587,12 @@ impl Inner {
             local_proxy: self.local_proxy_options(),
             local_proxy_left_out: self.local_proxy_left_out(),
             system_proxy_port: self.system_proxy_options(),
+            // sail's info writes a line per connection with its
+            // destination (`handled … dst=`); the default level keeps
+            // destinations out of the log (#214), as Go kept sing-box's
+            // log off. Its warnings and errors stay.
             log_level: match self.config.log.level {
-                LogLevel::Info => "info",
+                LogLevel::Info => "warn",
                 LogLevel::Debug => "debug",
             }
             .into(),
@@ -605,6 +617,34 @@ fn not_applied() -> Error {
 
 fn now() -> DateTime<Utc> {
     Utc::now()
+}
+
+/// Where sail runs the instance's tasks: on the host's runtime when `new`
+/// is awaited on a multi-thread tokio runtime (one runtime for the
+/// process, and memory a stopped instance freed is reused: sail
+/// embed.md, "Memory"), else on a runtime of sail's own. sail refuses a
+/// current-thread runtime, so that one keeps sail's own too.
+fn sail_runtime() -> sail::embed::Runtime {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            sail::embed::Runtime::Host(handle)
+        }
+        _ => sail::embed::Runtime::Own,
+    }
+}
+
+/// glibc's malloc keeps what a load freed (a start, a reload, a rule
+/// set's update parse a document and drop it) until later allocations;
+/// sail runs this after each such load, so an idle instance gives the
+/// peak back. Once per process; other allocators need nothing.
+fn give_back_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    sail::runtime::memory::on_memory_freed(|| {
+        // SAFETY: malloc_trim only walks glibc's own arenas.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    });
 }
 
 #[cfg(test)]

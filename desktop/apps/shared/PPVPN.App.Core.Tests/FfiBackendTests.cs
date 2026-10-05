@@ -37,7 +37,7 @@ public sealed class FfiBackendTests
         {
             var root = Path.Combine(Path.GetTempPath(), "ppvpn-app-core-tests", Guid.NewGuid().ToString("N"));
             var config = new ClientConfig("http://127.0.0.1:9", Path.Combine(root, "data"), Path.Combine(root, "logs"),
-                Path.Combine(root, "bin"), "linux", "0.0.0-test");
+                "linux", "0.0.0-test");
             IClientBackend? backend = null;
             var main = new MainViewModel(
                 listener => backend = new FfiClientBackend(config, new MemoryHooks(), listener),

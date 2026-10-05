@@ -18,13 +18,14 @@
 //!   order), a rejected domain is refused; dns.final follows route.final.
 
 use std::collections::HashSet;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use serde_json::{json, Map, Value};
 
 use super::{failed, Builder, DIRECT_TAG, PRIVATE_PREFIXES, SELECTED_TAG};
 use crate::config::Platform;
 use crate::error::Error;
+use crate::localdns::Server;
 use crate::profile::{normalize_domain, Profile};
 
 pub(crate) const TUN_INBOUND_TAG: &str = "tun";
@@ -130,35 +131,74 @@ pub(crate) enum LocalDns {
 }
 
 /// Host-supplied physical resolvers: an IP, IP:port or [IPv6]:port each
-/// (port 53 by default), in order, less those inside the tunnel (a stale
-/// system entry: asking it would loop). Go's config.LocalDNSServers.
-pub(crate) fn local_dns_servers(entries: &[String]) -> Result<Vec<SocketAddr>, String> {
+/// (port 53 by default; an IPv6 may carry its zone, by interface name or
+/// index: `fe80::1%en0`, `[fe80::1%en0]:53`), in order, less those inside
+/// the tunnel (a stale system entry: asking it would loop). Go's
+/// config.LocalDNSServers.
+pub(crate) fn local_dns_servers(entries: &[String]) -> Result<Vec<Server>, String> {
     let mut out = Vec::new();
     for entry in entries {
         let entry = entry.trim();
-        let address = match entry.parse::<SocketAddr>() {
-            Ok(address) => address,
-            Err(_) => match entry.parse::<IpAddr>() {
-                Ok(ip) => SocketAddr::new(ip, 53),
-                Err(_) => {
-                    return Err(format!(
-                        "invalid local DNS server {entry:?}: want an IP, IP:port or [IPv6]:port"
-                    ))
-                }
-            },
+        let Some(server) = local_dns_server(entry) else {
+            return Err(format!(
+                "invalid local DNS server {entry:?}: want an IP, IP:port or [IPv6]:port"
+            ));
         };
-        if address.port() == 0 || address.ip().is_unspecified() {
+        if server.port == 0 || server.ip.is_unspecified() {
             return Err(format!("invalid local DNS server {entry:?}"));
         }
-        let ip = match address.ip() {
-            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
-            ip => ip,
+        let (ip, zone) = match server.ip {
+            IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+                Some(v4) => (IpAddr::V4(v4), None),
+                None => (IpAddr::V6(v6), server.zone),
+            },
+            ip => (ip, None),
         };
         if !in_tunnel(ip) {
-            out.push(SocketAddr::new(ip, address.port()));
+            out.push(Server {
+                ip,
+                zone,
+                port: server.port,
+            });
         }
     }
     Ok(out)
+}
+
+/// One entry as Go's netip.ParseAddrPort, else netip.ParseAddr, reads it.
+/// std's parsers take a zone only as a number and only with a port
+/// (`[fe80::1%6]:53`), so an IPv6 with any other zone is split here.
+fn local_dns_server(entry: &str) -> Option<Server> {
+    if let Ok(address) = entry.parse::<SocketAddr>() {
+        let zone = match address {
+            SocketAddr::V6(v6) if v6.scope_id() != 0 => Some(v6.scope_id().to_string()),
+            _ => None,
+        };
+        return Some(Server {
+            ip: address.ip(),
+            zone,
+            port: address.port(),
+        });
+    }
+    if let Ok(ip) = entry.parse::<IpAddr>() {
+        return Some(Server::new(ip, 53));
+    }
+    let (host, port) = match entry.strip_prefix('[') {
+        Some(rest) => {
+            let (host, port) = rest.split_once("]:")?;
+            (host, port.parse().ok()?)
+        }
+        None => (entry, 53),
+    };
+    let (ip, zone) = host.split_once('%')?;
+    if zone.is_empty() || zone.contains(['%', '[', ']']) {
+        return None;
+    }
+    Some(Server {
+        ip: IpAddr::V6(ip.parse::<Ipv6Addr>().ok()?),
+        zone: Some(zone.to_owned()),
+        port,
+    })
 }
 
 fn in_tunnel(ip: IpAddr) -> bool {

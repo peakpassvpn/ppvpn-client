@@ -2,9 +2,10 @@
 // service/build.rs; crates/ppvpn-client/build.rs carries an identical copy
 // (it must build without this directory) and its tests check the two agree.
 //
-// Inputs, in sorted path order with `/` separators: Cargo.toml, Cargo.lock
-// (when present), every file under src/ and the current vendored core's
-// manifest.json (as "vendor/ppvpn-core/manifest.json"). Each file contributes its
+// Inputs, in sorted path order with `/` separators: Cargo.toml, the
+// workspace's Cargo.lock (as "Cargo.lock", when present), every file under
+// src/, and the Cargo.toml and src/ files of the engine it links (as
+// "engine-host/..." and "ppvpn-core/..."). Each file contributes its
 // relative path, a NUL, its length (u64 LE) and its bytes.
 
 /// The files that make up the service build id, relative to `service_dir`.
@@ -36,20 +37,31 @@ fn service_build_inputs(
     }
 
     let mut inputs = Vec::new();
-    for name in ["Cargo.toml", "Cargo.lock"] {
-        let path = service_dir.join(name);
+    // The service's manifest, and the workspace's lock it builds with.
+    for (name, path) in [
+        ("Cargo.toml", service_dir.join("Cargo.toml")),
+        ("Cargo.lock", service_dir.join("../../Cargo.lock")),
+    ] {
         if path.is_file() {
             inputs.push((name.to_string(), path));
         }
     }
     walk(service_dir, &service_dir.join("src"), &mut inputs)?;
-    // The privileged core ships with the service: a new vendored core must
-    // reinstall it as well. Its manifest names every binary's SHA-256.
-    let vendor = service_dir.join("../vendor/ppvpn-core");
-    if let Ok(current) = std::fs::read_to_string(vendor.join("CURRENT")) {
-        let manifest = vendor.join(current.trim()).join("manifest.json");
-        if manifest.is_file() {
-            inputs.push(("vendor/ppvpn-core/manifest.json".to_string(), manifest));
+    // The engine the service links: a change to it must reinstall the
+    // service as well (the lock above covers sail and the other crates).
+    for (prefix, dir) in [
+        ("engine-host", service_dir.join("../crates/engine-host")),
+        ("ppvpn-core", service_dir.join("../../crates/ppvpn-core")),
+    ] {
+        if dir.join("Cargo.toml").is_file() {
+            inputs.push((format!("{prefix}/Cargo.toml"), dir.join("Cargo.toml")));
+            let mut sources = Vec::new();
+            walk(&dir, &dir.join("src"), &mut sources)?;
+            inputs.extend(
+                sources
+                    .into_iter()
+                    .map(|(name, path)| (format!("{prefix}/{name}"), path)),
+            );
         }
     }
     inputs.sort_by(|a, b| a.0.cmp(&b.0));

@@ -406,7 +406,9 @@ async fn dns_local_dials_through_the_direct_outbound() {
 
 // The network as sail sees it (instance.network()), and its changes as
 // sail::embed's network events (here a wake, which sail announces whatever
-// the state: the same interface, another network, so `moved`).
+// the state: the same interface, another network, so `moved`). A change
+// right after start is told (sail 1b90c92f: the subscription is there from
+// the start, through stops and starts), in every run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_changes_are_sails_own() {
     use sail::net::network::ChangeReason;
@@ -414,45 +416,47 @@ async fn network_changes_are_sails_own() {
     let runtime = SailRuntime::new(options("network")).unwrap();
     let mut changes = runtime.network_changes();
     assert_eq!(runtime.network(), None, "not running");
-    runtime
-        .start(&config(free_port(), &[], false))
-        .await
-        .unwrap();
-    // Settled at start (sail b3533615): the default interface, or offline,
-    // at generation 1, told by no event.
-    assert!(runtime.network().is_some());
-    assert_eq!(*changes.borrow_and_update(), None, "no change yet");
+    for run in 1..=2 {
+        runtime
+            .start(&config(free_port(), &[], false))
+            .await
+            .unwrap();
+        // Settled at start (sail b3533615): the default interface, or
+        // offline, at generation 1, told by no event.
+        assert!(runtime.network().is_some(), "run {run}: settled at start");
+        let settled = runtime.instance.network().unwrap().generation;
+        assert_eq!(settled, 1, "run {run}: each run starts at 1");
+        changes.borrow_and_update();
 
-    // The subscription follows the start (sail subscribes once the run is
-    // up): announce until a change comes through.
-    tokio::time::timeout(WAIT, async {
-        loop {
-            runtime
-                .instance
-                .manager()
-                .unwrap()
-                .network()
-                .announce(ChangeReason::Wake);
-            if tokio::time::timeout(Duration::from_millis(200), changes.changed())
-                .await
-                .is_ok()
-            {
-                return;
-            }
-        }
-    })
-    .await
-    .expect("a change");
-    let change = changes.borrow_and_update().clone().expect("the change");
-    assert_eq!(
-        (change.change.as_str(), change.reason.as_str()),
-        ("moved", "wake")
-    );
-    assert!(change.generation >= 2, "after the start's: {change:?}");
-    assert_eq!(change.old, change.new, "announced: the state did not move");
+        // Once, right after the start: no retry.
+        runtime
+            .instance
+            .manager()
+            .unwrap()
+            .network()
+            .announce(ChangeReason::Wake);
+        tokio::time::timeout(WAIT, changes.changed())
+            .await
+            .unwrap_or_else(|_| panic!("run {run}: the change right after start"))
+            .unwrap();
+        let change = changes.borrow_and_update().clone().expect("the change");
+        assert_eq!(
+            (change.change.as_str(), change.reason.as_str()),
+            ("moved", "wake"),
+            "run {run}"
+        );
+        assert_eq!(
+            change.generation, 2,
+            "run {run}: the one after the start's: {change:?}"
+        );
+        assert_eq!(
+            change.old, change.new,
+            "run {run}: announced, the state did not move"
+        );
 
-    runtime.stop().await.unwrap();
-    assert_eq!(runtime.network(), None);
+        runtime.stop().await.unwrap();
+        assert_eq!(runtime.network(), None);
+    }
 }
 
 /// A SOCKS5 connection without authentication through `port` to `to`.
@@ -511,10 +515,15 @@ async fn a_listener_toggled_by_an_inbounds_only_reload() {
             .contains(&("extra".into(), "removed".into())),
         "{report:?}"
     );
-    assert!(
-        TcpStream::connect(("127.0.0.1", extra_port)).await.is_err(),
-        "no longer listening"
-    );
+    // sail aborts a removed inbound's listener task without waiting for it
+    // (commit_reload), so the socket closes shortly after reload returns.
+    tokio::time::timeout(WAIT, async {
+        while TcpStream::connect(("127.0.0.1", extra_port)).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("no longer listening");
     let mut buf = [0u8; 1];
     let read = tokio::time::timeout(WAIT, through_extra.read(&mut buf))
         .await
@@ -876,5 +885,373 @@ async fn rules_may_name_an_inbound_that_does_not_run() {
             .contains(&("extra".into(), "removed".into())),
         "{report:?}"
     );
+    runtime.stop().await.unwrap();
+}
+
+/// What sail logs of a connection at the level the Engine gives it: at
+/// `warn` (the Engine's info, #214) nothing of where it went; at `info`
+/// its `handled … dst=` line, the control that the check below can see one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_destination_in_sail_lines_at_warn() {
+    let echo = echo().await;
+    for (level, logged) in [("info", true), ("warn", false)] {
+        let port = free_port();
+        let runtime = SailRuntime::new(options(&format!("log-{level}"))).unwrap();
+        let mut logs = runtime.logs();
+        let mut config: serde_json::Value =
+            serde_json::from_str(&config(port, &[], false)).unwrap();
+        config["log"]["level"] = level.into();
+        runtime.start(&config.to_string()).await.unwrap();
+        let mut s = socks_open(port, echo).await.expect("through the proxy");
+        round_trip(&mut s, b"where to").await;
+        drop(s);
+
+        let destination = echo.to_string();
+        // The first line naming it, if one comes within WAIT.
+        let seen = tokio::time::timeout(WAIT, async {
+            while let Some(line) = logs.recv().await {
+                if line.contains(&destination) {
+                    return Some(line);
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten();
+        if logged {
+            let line = seen.expect("info: the connection's line");
+            assert!(line.contains("handled"), "{line}");
+        } else {
+            assert_eq!(seen, None, "warn");
+        }
+        runtime.stop().await.unwrap();
+    }
+}
+
+/// What a client sends, and the answer it is sent, in
+/// `traffic_is_counted_from_the_client_s_side`.
+const REQUEST: usize = 100;
+const RESPONSE: usize = 64 * 1024;
+const DATAGRAM: usize = 1000;
+const DATAGRAMS: usize = 64;
+
+/// A server on loopback that answers REQUEST bytes with RESPONSE bytes,
+/// then holds the connection open until the client goes.
+async fn large_answers() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = [0u8; REQUEST];
+                if stream.read_exact(&mut request).await.is_err()
+                    || stream.write_all(&b"d".repeat(RESPONSE)).await.is_err()
+                {
+                    return;
+                }
+                let mut rest = [0u8; 64];
+                while matches!(stream.read(&mut rest).await, Ok(n) if n > 0) {}
+            });
+        }
+    });
+    addr
+}
+
+/// A UDP server on loopback that answers each datagram with DATAGRAMS
+/// datagrams of DATAGRAM bytes.
+async fn large_udp_answers() -> SocketAddr {
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut buffer = [0u8; 2048];
+        let reply = [b'u'; DATAGRAM];
+        while let Ok((_, from)) = socket.recv_from(&mut buffer).await {
+            for _ in 0..DATAGRAMS {
+                let _ = socket.send_to(&reply, from).await;
+            }
+        }
+    });
+    addr
+}
+
+/// Go: internal/runtime TestTrafficDirection.
+///
+/// Upload is what the client sent, download what it received, in
+/// `traffic()` and on the connection in `connections()`: a small request
+/// for a large answer counts mostly download, over TCP and over UDP (a
+/// SOCKS5 UDP ASSOCIATE through the mixed inbound).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn traffic_is_counted_from_the_client_s_side() {
+    let server = large_answers().await;
+    let udp_server = large_udp_answers().await;
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("traffic-direction")).unwrap();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+
+    // TCP: REQUEST bytes up, RESPONSE bytes down.
+    let before = runtime.traffic().await.unwrap();
+    let mut proxied = socks(port, "u1", &p1, server)
+        .await
+        .expect("through the proxy");
+    proxied.write_all(&[b'r'; REQUEST]).await.unwrap();
+    let mut answer = vec![0u8; RESPONSE];
+    tokio::time::timeout(WAIT, proxied.read_exact(&mut answer))
+        .await
+        .expect("the answer in time")
+        .unwrap();
+    let destination = server.to_string();
+    // sail counts as it relays: the connection's download may trail what
+    // the client has read by a write.
+    let connection =
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let found =
+                    runtime.connections().await.unwrap().into_iter().find(|c| {
+                        c.destination == destination && c.download_bytes >= RESPONSE as u64
+                    });
+                if let Some(c) = found {
+                    return c;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the connection with its download counted");
+    assert_eq!(connection.network, "tcp");
+    assert!(
+        (REQUEST as u64..=4096).contains(&connection.upload_bytes),
+        "the connection's upload is the small request: {connection:?}"
+    );
+    let after = runtime.traffic().await.unwrap();
+    let (up, down) = (
+        after.upload_bytes - before.upload_bytes,
+        after.download_bytes - before.download_bytes,
+    );
+    assert!(
+        down >= RESPONSE as u64 && (REQUEST as u64..=4096).contains(&up),
+        "tcp: up {up}, down {down}"
+    );
+    drop(proxied);
+
+    // UDP: one small datagram up, DATAGRAMS of DATAGRAM bytes down.
+    let before = runtime.traffic().await.unwrap();
+    let mut control = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    control.write_all(&[5, 1, 2]).await.unwrap();
+    let mut reply = [0u8; 2];
+    control.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, [5, 2], "username/password method");
+    let mut auth = vec![1, 2];
+    auth.extend_from_slice(b"u1");
+    auth.push(p1.len() as u8);
+    auth.extend_from_slice(p1.as_bytes());
+    control.write_all(&auth).await.unwrap();
+    control.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, [1, 0], "authenticated");
+    // UDP ASSOCIATE, from whatever address the client sends from.
+    control
+        .write_all(&[5, 3, 0, 1, 0, 0, 0, 0, 0, 0])
+        .await
+        .unwrap();
+    let mut head = [0u8; 10];
+    tokio::time::timeout(WAIT, control.read_exact(&mut head))
+        .await
+        .expect("the associate's reply in time")
+        .unwrap();
+    assert_eq!((head[1], head[3]), (0, 1), "an IPv4 relay: {head:?}");
+    let relay = SocketAddr::from((
+        [head[4], head[5], head[6], head[7]],
+        u16::from_be_bytes([head[8], head[9]]),
+    ));
+    let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let SocketAddr::V4(to) = udp_server else {
+        unreachable!("loopback v4")
+    };
+    let mut datagram = vec![0, 0, 0, 1];
+    datagram.extend_from_slice(&to.ip().octets());
+    datagram.extend_from_slice(&to.port().to_be_bytes());
+    datagram.extend_from_slice(b"ping");
+    client.send_to(&datagram, relay).await.unwrap();
+    // UDP may drop some: half of them is plenty.
+    let mut received = 0usize;
+    let mut buffer = [0u8; 2048];
+    while received < DATAGRAMS * DATAGRAM / 2 {
+        let (n, _) = tokio::time::timeout(WAIT, client.recv_from(&mut buffer))
+            .await
+            .unwrap_or_else(|_| panic!("datagrams in time, {received} bytes so far"))
+            .unwrap();
+        // RSV FRAG ATYP(IPv4) ADDR PORT, then the data.
+        received += n.saturating_sub(10);
+    }
+    let after = runtime.traffic().await.unwrap();
+    let (up, down) = (
+        after.upload_bytes - before.upload_bytes,
+        after.download_bytes - before.download_bytes,
+    );
+    assert!(
+        down >= received as u64 && (1..=1024).contains(&up),
+        "udp: up {up}, down {down}, received {received}"
+    );
+    drop(control);
+    runtime.stop().await.unwrap();
+}
+
+/// Writes `request` to the proxy on `port` and reads all it answers until
+/// it closes: the answer, or the error that ended the read (a reset).
+async fn answer_to(port: u16, request: &[u8]) -> Result<String, std::io::Error> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).await?;
+    s.write_all(request).await?;
+    let mut answer = Vec::new();
+    tokio::time::timeout(WAIT, s.read_to_end(&mut answer))
+        .await
+        .expect("closed in time")?;
+    Ok(String::from_utf8_lossy(&answer).into_owned())
+}
+
+/// A complete 407 challenge, and nothing after it.
+fn assert_challenge(name: &str, answer: &str) {
+    let (head, body) = answer
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("{name}: a whole head: {answer:?}"));
+    let lower = head.to_ascii_lowercase();
+    assert!(
+        head.starts_with("HTTP/1.1 407 ")
+            && lower.contains("\r\nproxy-authenticate: basic realm=")
+            && lower.contains("\r\ncontent-length: 0")
+            && lower.contains("\r\nconnection: close"),
+        "{name}: {head:?}"
+    );
+    assert_eq!(body, "", "{name}");
+}
+
+fn proxy_authorization(user: &str, password: &str) -> String {
+    use base64::Engine as _;
+    format!(
+        "Proxy-Authorization: Basic {}\r\n",
+        base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
+    )
+}
+
+/// Go: internal/proxyinbound TestHTTPAuthFailureReturns407ThenClosesGracefully.
+///
+/// An HTTP request the mixed inbound refuses (no credentials, a wrong
+/// password, an unknown user, not Basic) reads back a complete 407 and then
+/// a clean EOF, not a reset, also when the client sent its TLS ClientHello
+/// right behind the CONNECT. Go's realm (`ppvpn`) is not asserted: the
+/// translation sets no `realm`, so sail names its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_http_request_reads_a_407_then_a_clean_close() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("http-407")).unwrap();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    let connect = "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n";
+    // A TLS record header and a body, as an optimistic client sends its
+    // ClientHello before the CONNECT is answered.
+    let mut hello = vec![0x16, 3, 1, 2, 0];
+    hello.extend([1u8; 512]);
+    let cases = [
+        ("CONNECT no auth", format!("{connect}\r\n").into_bytes()),
+        (
+            "CONNECT wrong password",
+            format!("{connect}{}\r\n", proxy_authorization("u1", &password())).into_bytes(),
+        ),
+        (
+            "CONNECT unknown user",
+            format!("{connect}{}\r\n", proxy_authorization("u9", &p1)).into_bytes(),
+        ),
+        (
+            "CONNECT not basic",
+            format!("{connect}Proxy-Authorization: Bearer x\r\n\r\n").into_bytes(),
+        ),
+        (
+            "CONNECT pipelined",
+            [format!("{connect}\r\n").into_bytes(), hello].concat(),
+        ),
+        (
+            "GET no auth",
+            b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n".to_vec(),
+        ),
+    ];
+    for (name, request) in cases {
+        let answer = answer_to(port, &request)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: a clean EOF, not {e}"));
+        assert_challenge(name, &answer);
+    }
+    runtime.stop().await.unwrap();
+}
+
+/// Go: internal/proxyinbound TestHTTPAuthFailureReturns407ThenClosesGracefully.
+///
+/// Its `POST wrong password` case, a refused request with a body behind
+/// its head: Go drained the body before closing, and so does sail since
+/// e97f1673 (a refusal reads what is left, up to 64 KiB or 2 s, so the
+/// close is a FIN, not a reset).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_http_request_with_a_body_reads_a_407_then_a_clean_close() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("http-407-body")).unwrap();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    let mut request = format!(
+        "POST http://example.com/ HTTP/1.1\r\nHost: example.com\r\nContent-Length: 4096\r\n{}\r\n",
+        proxy_authorization("u1", &password())
+    )
+    .into_bytes();
+    request.extend([b'b'; 4096]);
+    let answer = answer_to(port, &request)
+        .await
+        .unwrap_or_else(|e| panic!("a clean EOF, not {e}"));
+    assert_challenge("POST wrong password", &answer);
+    runtime.stop().await.unwrap();
+}
+
+/// Go: internal/proxyinbound TestSOCKS5AuthFailureRepliesThenClosesGracefully.
+///
+/// A wrong password and an unknown user, each with the CONNECT and the
+/// first bytes of a ClientHello behind the credentials in the same write:
+/// the client reads the method, RFC 1929's failure, and then a clean EOF,
+/// not a reset (sail e97f1673).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_socks5_user_reads_the_failure_then_a_clean_close() {
+    let port = free_port();
+    let p1 = password();
+    let runtime = SailRuntime::new(options("socks-refusal")).unwrap();
+    runtime
+        .start(&config(port, &[("u1", &p1)], false))
+        .await
+        .unwrap();
+    for (name, user) in [("wrong password", "u1"), ("unknown user", "u9")] {
+        let wrong = password();
+        let mut request = vec![5, 1, 2, 1, user.len() as u8];
+        request.extend_from_slice(user.as_bytes());
+        request.push(wrong.len() as u8);
+        request.extend_from_slice(wrong.as_bytes());
+        // CONNECT example.com:443, then a TLS record header and a body.
+        request.extend_from_slice(&[5, 1, 0, 3, 11]);
+        request.extend_from_slice(b"example.com");
+        request.extend_from_slice(&443u16.to_be_bytes());
+        request.extend_from_slice(&[0x16, 3, 1, 2, 0]);
+        request.extend([1u8; 512]);
+        let answer = answer_to(port, &request)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: a clean EOF, not {e}"));
+        assert_eq!(
+            answer.as_bytes(),
+            [5, 2, 1, 1],
+            "{name}: the method, then the failure, then EOF"
+        );
+    }
     runtime.stop().await.unwrap();
 }

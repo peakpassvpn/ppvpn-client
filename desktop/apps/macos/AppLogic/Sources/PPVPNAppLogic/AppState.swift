@@ -197,6 +197,11 @@ open class AppState: ClientEvents {
         backend.dismissClearedIngressPins()
     }
 
+    /// The proxyReset notice's 好.
+    public func dismissLocalProxyCredentialsReset() {
+        backend.dismissLocalProxyCredentialsReset()
+    }
+
     public func installService() {
         perform(failureTitle: tr("installFailT")) { try await self.backend.serviceInstall() }
     }

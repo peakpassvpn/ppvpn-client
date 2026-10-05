@@ -193,26 +193,12 @@ impl TunDns {
         true
     }
 
-    /// Removes an override a killed service left behind, unless a core is
-    /// running (it could be a live core's). `when` names the moment. True
-    /// when an entry is there and was left for later (a core runs).
-    pub fn clean_leftover(&self, core_running: bool, when: &str) -> bool {
-        if !self.enabled {
-            return false;
-        }
-        if core_running {
-            if !self.published() {
-                return false;
-            }
-            log::info!(
-                "{when}: a ppvpn-core process is running; keeping the system DNS until it exits"
-            );
-            return true;
-        }
-        if self.remove() {
+    /// Removes an override a killed service left behind (its TUN went with
+    /// it). `when` names the moment.
+    pub fn clean_leftover(&self, when: &str) {
+        if self.enabled && self.remove() {
             log::warn!("{when}: removed the TUN DNS override a killed service left behind");
         }
-        false
     }
 }
 
@@ -220,28 +206,20 @@ impl TunDns {
 enum Op {
     Apply,
     Remove,
-    /// At service start: `bool` = a privileged core runs.
-    CleanLeftover(bool),
-    /// No core of ours runs: remove an orphaned override once `fn` says no
-    /// privileged core is left.
-    CheckOrphan(fn() -> bool),
+    /// At service start.
+    CleanLeftover,
     Flush(std::sync::mpsc::Sender<()>),
 }
 
-/// [`TunDns`] plus the override an earlier instance left for a core that
-/// was still running.
 struct DnsState {
     dns: TunDns,
-    orphaned: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DnsState {
     fn run(&mut self, op: Op) {
-        use std::sync::atomic::Ordering;
         let started = std::time::Instant::now();
         let name = match op {
             Op::Apply => {
-                self.orphaned.store(false, Ordering::SeqCst);
                 if let Err(error) = self.dns.apply() {
                     log::error!("cannot point the system DNS at the TUN: {error:#}");
                 }
@@ -251,20 +229,9 @@ impl DnsState {
                 self.dns.remove();
                 "remove"
             }
-            Op::CleanLeftover(core_running) => {
-                let left = self.dns.clean_leftover(core_running, "service start");
-                self.orphaned.store(left, Ordering::SeqCst);
+            Op::CleanLeftover => {
+                self.dns.clean_leftover("service start");
                 "startup clean-up"
-            }
-            Op::CheckOrphan(core_running) => {
-                if !self.orphaned.load(Ordering::SeqCst) || core_running() {
-                    return;
-                }
-                self.orphaned.store(false, Ordering::SeqCst);
-                if self.dns.remove() {
-                    log::warn!("removed the TUN DNS override an orphaned ppvpn-core left behind");
-                }
-                "orphan clean-up"
             }
             Op::Flush(done) => {
                 let _ = done.send(());
@@ -286,7 +253,6 @@ impl DnsState {
 /// lease watchdog and Disconnect all waited for them. Inline (on the
 /// caller's thread) in tests and where the override is disabled.
 pub struct DnsWorker {
-    orphaned: std::sync::Arc<std::sync::atomic::AtomicBool>,
     mode: Mode,
 }
 
@@ -308,23 +274,13 @@ impl Default for DnsWorker {
 
 impl DnsWorker {
     pub fn inline(dns: TunDns) -> Self {
-        let orphaned = std::sync::Arc::default();
-        let state = DnsState {
-            dns,
-            orphaned: std::sync::Arc::clone(&orphaned),
-        };
         Self {
-            orphaned,
-            mode: Mode::Inline(Box::new(state)),
+            mode: Mode::Inline(Box::new(DnsState { dns })),
         }
     }
 
     fn threaded(dns: TunDns) -> Self {
-        let orphaned = std::sync::Arc::default();
-        let mut state = DnsState {
-            dns,
-            orphaned: std::sync::Arc::clone(&orphaned),
-        };
+        let mut state = DnsState { dns };
         let (sender, receiver) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("system-dns".into())
@@ -337,7 +293,6 @@ impl DnsWorker {
             log::error!("cannot start the system DNS thread: {error}");
         }
         Self {
-            orphaned,
             mode: Mode::Thread(sender),
         }
     }
@@ -361,19 +316,9 @@ impl DnsWorker {
         self.send(Op::Remove);
     }
 
-    /// See [`TunDns::clean_leftover`]; an entry left for a running core is
-    /// removed by a later [`Self::check_orphan`].
-    pub fn clean_leftover(&mut self, core_running: bool) {
-        self.send(Op::CleanLeftover(core_running));
-    }
-
-    /// No core of ours runs: removes an orphaned override once
-    /// `core_running` says no privileged core is left. Queued only while
-    /// one is pending.
-    pub fn check_orphan(&mut self, core_running: fn() -> bool) {
-        if self.orphaned.load(std::sync::atomic::Ordering::SeqCst) {
-            self.send(Op::CheckOrphan(core_running));
-        }
+    /// See [`TunDns::clean_leftover`] (queued).
+    pub fn clean_leftover(&mut self) {
+        self.send(Op::CleanLeftover);
     }
 
     /// Waits (up to `timeout`) until everything queued so far ran: the
@@ -522,13 +467,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_leftover_key_is_removed_at_startup_unless_a_core_runs() {
+    fn a_leftover_key_is_removed_at_startup() {
         let system = FakeSystem::default();
         *system.store.lock().unwrap() = Some(apply_script(true));
         let dns = dns(&system, true);
-        assert!(dns.clean_leftover(true, "test"), "left for later");
-        assert!(system.store.lock().unwrap().is_some());
-        assert!(!dns.clean_leftover(false, "test"));
+        dns.clean_leftover("test");
         assert!(system.store.lock().unwrap().is_none());
         assert!(system
             .calls()
@@ -568,7 +511,7 @@ pub(crate) mod tests {
             "<dictionary> {\n  ServerAddresses : <array> {\n    0 : 172.19.0.2\n  }\n}\n".into(),
         );
         let dns = dns(&system, true);
-        assert!(!dns.clean_leftover(false, "test"));
+        dns.clean_leftover("test");
         assert!(system.store.lock().unwrap().is_none(), "removed");
     }
 
@@ -579,7 +522,7 @@ pub(crate) mod tests {
         let dns = dns(&system, false);
         dns.apply().unwrap();
         assert!(!dns.remove());
-        dns.clean_leftover(false, "test");
+        dns.clean_leftover("test");
         assert!(system.calls().is_empty());
     }
 

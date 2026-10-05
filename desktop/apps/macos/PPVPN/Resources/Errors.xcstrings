@@ -120,40 +120,6 @@
         }
       }
     },
-    "CoreBinaryMissing": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "应用组件缺失，请重新安装 PPVPN。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A required component is missing. Please reinstall PPVPN."
-          }
-        }
-      }
-    },
-    "CoreIncompatible": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "应用组件版本不匹配，请重新安装 PPVPN。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A component version doesn't match. Please reinstall PPVPN."
-          }
-        }
-      }
-    },
     "CredentialStoreFailed": {
       "extractionState": "manual",
       "localizations": {

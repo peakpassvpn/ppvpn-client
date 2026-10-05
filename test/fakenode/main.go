@@ -1,8 +1,8 @@
 // Command fakenode is the proxy node of the desktop's Linux enhanced-mode
 // end-to-end test (desktop/crates/ppvpn-client/src/e2e_linux.rs): a
-// Shadowsocks 2022 server, the way internal/runtime's integration tests start
-// one, plus a plain HTTP target. It runs in run.sh's uplink namespace
-// (ppvpn-w); nothing in it reaches beyond the machine.
+// Shadowsocks 2022 server (sing-box's stock registries), plus a plain HTTP
+// target. It runs in run.sh's uplink namespace (ppvpn-w); nothing in it
+// reaches beyond the machine.
 //
 // It prints one line per event on stdout:
 //
@@ -24,8 +24,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/peakpassvpn/ppvpn-core/internal/failover"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -87,7 +87,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	listen := badoption.Addr(ss.Addr())
-	server, err := box.New(box.Options{Context: failover.Context(ctx), Options: option.Options{
+	server, err := box.New(box.Options{Context: box.Context(ctx, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry()), Options: option.Options{
 		Log: &option.LogOptions{Disabled: true},
 		Inbounds: []option.Inbound{{
 			Type: C.TypeShadowsocks,

@@ -212,9 +212,7 @@ fn serves_core_api_v1_as_the_go_core() {
         .expect("serve starting");
     for field in [
         " level=info ",
-        " platform=desktop ",
         " tun=false ",
-        " tun_stack=mixed ",
         " local_proxy=true ",
         " log_level=info ",
     ] {
