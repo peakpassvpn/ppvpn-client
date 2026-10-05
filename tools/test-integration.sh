@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # L2 entry (make test-integration, docs/testing.md): the CLI's secret store
-# against the platform's real one. crates/ppvpn-cli/tests/keystore.rs does
+# against the platform's real one. crates/cli/tests/keystore.rs does
 # nothing without PPVPN_TEST_KEYSTORE.
 #   Linux: Secret Service, in a D-Bus session of its own with an unlocked
 #          login keyring (needs dbus and gnome-keyring; no desktop session)

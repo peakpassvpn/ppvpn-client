@@ -218,7 +218,7 @@ jobs:
   # holds the signing secrets and the backend address. Not for a site run.
 
   # deb and rpm, x86_64, everything native linked against glibc 2.35 by
-  # building on Ubuntu 22.04. See desktop/apps/linux/scripts/build-package.sh.
+  # building on Ubuntu 22.04. See apps/linux/scripts/build-package.sh.
   linux:
     name: linux
     needs: [prepare, approve]
@@ -257,14 +257,14 @@ jobs:
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
         run: |
-          tools/release-features-check.sh -p ppvpn-client
-          tools/release-features-check.sh --manifest-path desktop/service/Cargo.toml
+          tools/release-features-check.sh -p ppvpn-desktop
+          tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
       - name: Build packages
-        run: desktop/apps/linux/scripts/build-package.sh
+        run: apps/linux/scripts/build-package.sh
       # ppvpn-archive-keyring (deb) and ppvpn-release (rpm), which set the
       # package repository up on a user's machine.
       - name: Build repository setup packages
-        run: desktop/apps/linux/scripts/build-repo-packages.sh
+        run: apps/linux/scripts/build-repo-packages.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-linux
@@ -273,9 +273,9 @@ jobs:
           # release, a dev build's are for testing. Other builds: the default.
           retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
           path: |
-            desktop/dist/linux/*.deb
-            desktop/dist/linux/*.rpm
-            desktop/dist/linux/release-meta-linux-*.json
+            dist/linux/*.deb
+            dist/linux/*.rpm
+            dist/linux/release-meta-linux-*.json
 
   # Install and start the rpm under dnf (the deb is built, and so checked,
   # on Ubuntu 22.04).
@@ -288,7 +288,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: desktop/apps/linux/scripts
+          sparse-checkout: apps/linux/scripts
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: desktop-linux
@@ -299,14 +299,14 @@ jobs:
           dnf install -y ./dist/PPVPN-*-linux-x64.rpm xorg-x11-server-Xvfb dbus-daemon
           rpm -q --scripts ppvpn
       - name: Start it once
-        run: desktop/apps/linux/scripts/smoke-test.sh rpm
+        run: apps/linux/scripts/smoke-test.sh rpm
       - name: Remove it
         run: dnf remove -y ppvpn && test ! -e /usr/lib/ppvpn/ppvpn
 
   # The apt and dnf repositories the site serves, built from these packages
   # as from release assets and installed from with real apt and dnf. No
   # secret: a key made here signs them. The site and the release downloads
-  # are served from the runner (desktop/scripts/ci/repo-selftest-server.py);
+  # are served from the runner (tools/desktop/ci/repo-selftest-server.py);
   # a download answers 302, as a GitHub Release's does, and the rpm is only
   # reachable that way.
   linux-repo:
@@ -326,8 +326,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
-            desktop/scripts/ci
-            desktop/apps/linux/packaging
+            tools/desktop/ci
+            apps/linux/packaging
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: desktop-linux
@@ -392,14 +392,14 @@ jobs:
 
           rpm_file="$(jq -er .file "$rpm_meta")"
           unsigned="$(sha256sum "$stable/$rpm_file" | cut -d' ' -f1)"
-          desktop/scripts/ci/sign-linux-rpms.sh "$stable"
+          tools/desktop/ci/sign-linux-rpms.sh "$stable"
           signed="$(sha256sum "$stable/$rpm_file" | cut -d' ' -f1)"
           test "$signed" != "$unsigned"
           test "$(jq -er .sha256 "$stable/release-meta-linux-x64-rpm.json")" = "$signed"
           test "$(jq -er .length "$stable/release-meta-linux-x64-rpm.json")" = "$(wc -c <"$stable/$rpm_file" | tr -d ' ')"
           test "$(jq -er .channel "$stable/release-meta-linux-x64-rpm.json")" = stable
           # A second run leaves a signed release as it is.
-          desktop/scripts/ci/sign-linux-rpms.sh "$stable"
+          tools/desktop/ci/sign-linux-rpms.sh "$stable"
           test "$(sha256sum "$stable/$rpm_file" | cut -d' ' -f1)" = "$signed"
           # Another key is refused an rpm that is already signed, and leaves it as it is.
           (
@@ -413,7 +413,7 @@ jobs:
             rm -rf "$GNUPGHOME"
             unset GNUPGHOME
             export PKG_GPG_PRIVATE_KEY PKG_GPG_FINGERPRINT="$other"
-            if desktop/scripts/ci/sign-linux-rpms.sh "$stable" 2>"$T/refusal"; then
+            if tools/desktop/ci/sign-linux-rpms.sh "$stable" 2>"$T/refusal"; then
               echo "an rpm signed by another key was signed again" >&2; exit 1
             fi
             cat "$T/refusal"
@@ -437,12 +437,12 @@ jobs:
       - name: Build both channels into one site
         run: |
           build() {   # channel, releases, out
-            desktop/scripts/ci/build-linux-repo.sh --channel "$1" --releases "$2" \
+            tools/desktop/ci/build-linux-repo.sh --channel "$1" --releases "$2" \
               --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$3" --keep 5
           }
           # Refusals write nothing: an http base without the test switch, and
           # releases of another channel.
-          if env -u PKG_ALLOW_HTTP desktop/scripts/ci/build-linux-repo.sh --channel stable \
+          if env -u PKG_ALLOW_HTTP tools/desktop/ci/build-linux-repo.sh --channel stable \
                --releases "$T/releases/stable" --download-base "$REPO_URL/download" \
                --site-base "$REPO_URL" --out "$T/refused"; then
             echo "an http base was accepted" >&2; exit 1
@@ -559,7 +559,7 @@ jobs:
             PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" PKG_GPG_PASSPHRASE="$1" "${@:2}"
           }
           build() {   # passphrase, out
-            with_key "$1" desktop/scripts/ci/build-linux-repo.sh --channel stable --releases "$P/releases" \
+            with_key "$1" tools/desktop/ci/build-linux-repo.sh --channel stable --releases "$P/releases" \
               --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$2"
           }
 
@@ -584,23 +584,23 @@ jobs:
           # metadata stay as built.
           status=0
           PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" timeout -k 5 60 \
-            env -u PKG_GPG_PASSPHRASE desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+            env -u PKG_GPG_PASSPHRASE tools/desktop/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
           refused "$status" missing
           as_built
           status=0
           PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" PKG_GPG_PASSPHRASE='' timeout -k 5 60 \
-            desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+            tools/desktop/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
           refused "$status" missing
           as_built
 
           # The wrong passphrase: the same.
           status=0
-          with_key "$wrong" timeout -k 5 60 desktop/scripts/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
+          with_key "$wrong" timeout -k 5 60 tools/desktop/ci/sign-linux-rpms.sh "$release" 2>"$P/refusal" || status=$?
           refused "$status" wrong
           as_built
 
           # The right one: signed, verifiable with the key's public half, metadata rewritten.
-          with_key "$passphrase" desktop/scripts/ci/sign-linux-rpms.sh "$release"
+          with_key "$passphrase" tools/desktop/ci/sign-linux-rpms.sh "$release"
           signed="$(digest "$release/$RPM_FILE")"
           test "$signed" != "$unsigned"
           test "$(jq -er .sha256 "$rpm_meta")" = "$signed"
@@ -616,7 +616,7 @@ jobs:
           # The repositories: no passphrase, or the wrong one, leaves no output directory.
           status=0
           PKG_GPG_PRIVATE_KEY="$key" PKG_GPG_FINGERPRINT="$fingerprint" timeout -k 5 60 \
-            env -u PKG_GPG_PASSPHRASE desktop/scripts/ci/build-linux-repo.sh --channel stable \
+            env -u PKG_GPG_PASSPHRASE tools/desktop/ci/build-linux-repo.sh --channel stable \
             --releases "$P/releases" --download-base "$REPO_URL/download" --site-base "$REPO_URL" \
             --out "$P/refused" 2>"$P/refusal" || status=$?
           refused "$status" missing
@@ -636,7 +636,7 @@ jobs:
           jq -e --arg sha "$signed" '.rpm.sha256 == $sha' "$P/site/linux/stable/latest.json"
       - name: Serve the site and the downloads
         run: |
-          nohup python3 desktop/scripts/ci/repo-selftest-server.py --port "$REPO_PORT" \
+          nohup python3 tools/desktop/ci/repo-selftest-server.py --port "$REPO_PORT" \
             --site "$T/site" --assets "$T/assets" >"$T/server.out" 2>&1 &
           for _ in $(seq 1 30); do
             if curl -fsS -o /dev/null "$REPO_URL/linux/ppvpn.asc"; then break; fi
@@ -649,8 +649,8 @@ jobs:
             = "$(jq -er .sha256 "$T/releases/stable/$STABLE_TAG/release-meta-linux-x64-rpm.json")"
           # packaging/ppvpn.list and ppvpn.repo, as the setup packages install
           # them, with the site's address replaced by this server's.
-          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" desktop/apps/linux/packaging/ppvpn.list >"$T/ppvpn.list"
-          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" desktop/apps/linux/packaging/ppvpn.repo >"$T/ppvpn.repo"
+          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" apps/linux/packaging/ppvpn.list >"$T/ppvpn.list"
+          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" apps/linux/packaging/ppvpn.repo >"$T/ppvpn.repo"
           grep -qxF "deb [signed-by=/usr/share/keyrings/ppvpn-archive-keyring.gpg] $REPO_URL/linux/apt stable main" "$T/ppvpn.list"
           grep -qxF "baseurl=$REPO_URL/linux/rpm/stable/\$basearch" "$T/ppvpn.repo"
           grep -qx 'gpgcheck=1' "$T/ppvpn.repo"
@@ -703,7 +703,7 @@ jobs:
         if: always()
         run: cat "$RUNNER_TEMP/linux-repo/server.out" 2>/dev/null || true
 
-  # The NSIS installer. See desktop/apps/windows/README.md ("Packaging").
+  # The NSIS installer. See apps/windows/README.md ("Packaging").
   windows:
     name: windows
     needs: [prepare, approve]
@@ -718,7 +718,7 @@ jobs:
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       PPVPN_API_BASE: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
       SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
-      # Optional Authenticode through desktop/scripts/sign-windows.ps1; off
+      # Optional Authenticode through tools/desktop/sign-windows.ps1; off
       # unless these are configured.
       WINDOWS_CERTIFICATE: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE || '' }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
@@ -769,11 +769,11 @@ jobs:
       - name: No test-only features
         shell: bash
         run: |
-          tools/release-features-check.sh -p ppvpn-client
-          tools/release-features-check.sh --manifest-path desktop/service/Cargo.toml
+          tools/release-features-check.sh -p ppvpn-desktop
+          tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
       - name: Build installer and release metadata
         shell: powershell
-        run: desktop/apps/windows/scripts/ci-build.ps1
+        run: apps/windows/scripts/ci-build.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-windows-x64
@@ -782,11 +782,11 @@ jobs:
           # release, a dev build's are for testing. Other builds: the default.
           retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
           path: |
-            desktop/dist/windows/*-setup.exe
-            desktop/dist/windows/release-meta-windows-x64.json
+            dist/windows/*-setup.exe
+            dist/windows/release-meta-windows-x64.json
 
   # Both DMGs, built on an Apple silicon runner. See
-  # desktop/scripts/ci/build-macos-native.sh.
+  # tools/desktop/ci/build-macos-native.sh.
   macos:
     name: macos
     needs: [prepare, approve]
@@ -802,7 +802,7 @@ jobs:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      CI_PROJECT_DIR: ${{ github.workspace }}/desktop
+      CI_PROJECT_DIR: ${{ github.workspace }}
       MACOS_ARCHS: arm64 x86_64
       PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
       SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
@@ -818,10 +818,10 @@ jobs:
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
         run: |
-          tools/release-features-check.sh -p ppvpn-client
-          tools/release-features-check.sh --manifest-path desktop/service/Cargo.toml
+          tools/release-features-check.sh -p ppvpn-desktop
+          tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
       - name: Build DMGs and release metadata
-        run: bash desktop/scripts/ci/build-macos-native.sh
+        run: bash tools/desktop/ci/build-macos-native.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-macos
@@ -829,7 +829,7 @@ jobs:
           # A release run's packages are not kept long: a stable build's are in the
           # release, a dev build's are for testing. Other builds: the default.
           retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
-          path: desktop/staging/macos-native
+          path: staging/macos-native
 
   # Stable only (a dev build ends with the package jobs' artifacts). The
   # release's files: the rpms signed, then everything
@@ -853,8 +853,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
-            desktop/scripts/ci
-            desktop/apps/linux/packaging
+            tools/desktop/ci
+            apps/linux/packaging
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: desktop-*
@@ -882,10 +882,10 @@ jobs:
           set -eu
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rpm gnupg jq
-          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons desktop/apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
           [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
           export PKG_GPG_FINGERPRINT
-          desktop/scripts/ci/sign-linux-rpms.sh release
+          tools/desktop/ci/sign-linux-rpms.sh release
       - name: The channel's published pointer
         id: current
         run: |
@@ -910,7 +910,7 @@ jobs:
           downgrade=""
           [ "$ALLOW_DOWNGRADE" != true ] || downgrade=--allow-downgrade
           # shellcheck disable=SC2086
-          python3 desktop/scripts/ci/update_site.py build --assets release --tag "$TAG" --channel "$CHANNEL" \
+          python3 tools/desktop/ci/update_site.py build --assets release --tag "$TAG" --channel "$CHANNEL" \
             --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download" \
             --site-base "$SITE_BASE" --out site $CURRENT $downgrade
       - name: SHA256SUMS
@@ -1013,8 +1013,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
-            desktop/scripts/ci
-            desktop/apps/linux/packaging
+            tools/desktop/ci
+            apps/linux/packaging
       - name: Tools
         run: |
           sudo apt-get update -qq
@@ -1114,9 +1114,9 @@ jobs:
       - name: Pointer and feeds
         run: |
           set -eu
-          python3 desktop/scripts/ci/update_site.py build --assets newest --tag "$NEWEST" --channel stable \
+          python3 tools/desktop/ci/update_site.py build --assets newest --tag "$NEWEST" --channel stable \
             --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site
-          python3 desktop/scripts/ci/update_site.py check site/desktop/channels/stable.json --channel stable
+          python3 tools/desktop/ci/update_site.py check site/desktop/channels/stable.json --channel stable
       - name: apt and dnf repositories
         env:
           PKG_GPG_PRIVATE_KEY: ${{ secrets.PPVPN_PKG_GPG_PRIVATE_KEY }}
@@ -1124,10 +1124,10 @@ jobs:
         run: |
           set -eu
           # The key must be the one whose public half the packages ship.
-          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons desktop/apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
           [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
           export PKG_GPG_FINGERPRINT
-          desktop/scripts/ci/build-linux-repo.sh --channel stable --releases linux-releases \
+          tools/desktop/ci/build-linux-repo.sh --channel stable --releases linux-releases \
             --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site --keep "$KEEP"
       - name: The site
         run: |
@@ -1221,8 +1221,8 @@ jobs:
           cargo clippy --all-targets --locked
           cargo test -p ppvpn-core --lib --no-run --locked --features fault-injection
           cargo build -p ppvpn-core-lab --locked
-          (cd desktop/service && cargo build --locked --bin ppvpn-service)
-          (cd desktop/crates/ppvpn-client && cargo test --locked --features linux-e2e --lib --no-run)
+          (cd crates/service && cargo build --locked --bin ppvpn-service)
+          (cd crates/desktop && cargo test --locked --features linux-e2e --lib --no-run)
 
   cache-unit:
     name: cache-unit
@@ -1292,8 +1292,8 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
       - run: |
-          (cd desktop/service && cargo test --locked --no-run && cargo clippy --locked --all-targets)
-          (cd desktop/crates/ppvpn-client && cargo test --locked --no-run && cargo clippy --locked --all-targets)
+          (cd crates/service && cargo test --locked --no-run && cargo clippy --locked --all-targets)
+          (cd crates/desktop && cargo test --locked --no-run && cargo clippy --locked --all-targets)
 
   # macos.
   cache-macos:
@@ -1327,9 +1327,9 @@ jobs:
           # artifacts would not be reused.
           cargo test -p ppvpn-core --lib --locked --no-run
           cargo test -p ppvpn-cli --lib --locked --no-run
-          (cd desktop/crates/ppvpn-client && cargo test --lib --locked --no-run)
+          (cd crates/desktop && cargo test --lib --locked --no-run)
           cargo test -p ppvpn-cli --test keystore --locked --no-run
-          (cd desktop/crates/ppvpn-client && for t in aarch64-apple-darwin x86_64-apple-darwin; do cargo build --lib --locked --target "$t"; done)
+          (cd crates/desktop && for t in aarch64-apple-darwin x86_64-apple-darwin; do cargo build --lib --locked --target "$t"; done)
 
   # windows.
   cache-windows:
@@ -1363,10 +1363,10 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - name: what windows builds
         run: |
-          cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-client -p ppvpn-engine-host -p ppvpn-service \
+          cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-desktop -p ppvpn-engine-host -p ppvpn-service \
             --all-targets --locked --target x86_64-pc-windows-msvc
           # As ci.yml's windows job runs them, one package at a time.
           cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc --no-run
-          cargo test -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc --no-run
-          cargo build -p ppvpn-client --lib --locked --target x86_64-pc-windows-msvc
+          cargo test -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc --no-run
+          cargo build -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc
           cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run

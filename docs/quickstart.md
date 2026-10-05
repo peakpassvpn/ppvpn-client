@@ -1,6 +1,6 @@
 # 五分钟快速开始
 
-本指南用于本地验证和宿主接入。引擎是 Rust 库 `ppvpn-core`（`crates/ppvpn-core`，内嵌 Sail），没有单独发行的核心进程：Desktop 和 CLI 在自己的进程里链接它。接口契约见 [宿主接入](host-integration.md)，测试见 [测试分层](testing.md)。
+本指南用于本地验证和宿主接入。引擎是 Rust 库 `ppvpn-core`（`crates/core`，内嵌 Sail），没有单独发行的核心进程：Desktop 和 CLI 在自己的进程里链接它。接口契约见 [宿主接入](host-integration.md)，测试见 [测试分层](testing.md)。
 
 本机试用有三条路：
 

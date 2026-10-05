@@ -1,5 +1,5 @@
 // Command fakenode is the proxy node of the desktop's Linux enhanced-mode
-// end-to-end test (desktop/crates/ppvpn-client/src/e2e_linux.rs): a
+// end-to-end test (crates/desktop/src/e2e_linux.rs): a
 // Shadowsocks 2022 server (sing-box's stock registries), plus a plain HTTP
 // target. It runs in run.sh's uplink namespace (ppvpn-w); nothing in it
 // reaches beyond the machine.

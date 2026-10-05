@@ -1,0 +1,23 @@
+[package]
+name = "ppvpn-core-lab"
+version = "0.0.0"
+description = "The Rust ppvpn-core behind Core API v1, for the lab and the netns CI (not a product)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+ppvpn-core = { path = "../core" }
+base64.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+# The versions sail resolves (Cargo.lock), so nothing is built twice.
+bytes = "1"
+futures-core = "0.3"
+getrandom = "0.2"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }

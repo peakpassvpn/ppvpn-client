@@ -4,7 +4,8 @@
 #   code  anything outside docs/ and Markdown. ci.yml's jobs skip their
 #         build and test steps when it is false (the jobs still run and
 #         report, so a docs-only pull request passes quickly).
-#   desktop  desktop/, the dependencies or the workflows: what the desktop
+#   desktop  apps/, crates/{desktop,engine-host,service}, tools/desktop/,
+#         the dependencies or the workflows: what the desktop
 #         app builds (the macOS Debug app, the Windows C# bindings and app)
 #         depend on. ci.yml skips those builds when it is false.
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
@@ -36,7 +37,8 @@ while IFS= read -r f; do
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | \
     .github/workflows/ci.yml | .github/workflows/release.yml)
       deps=true desktop=true code=true ;;
-    desktop/*) desktop=true code=true ;;
+    apps/* | crates/desktop/* | crates/engine-host/* | crates/service/* | tools/desktop/*)
+      desktop=true code=true ;;
     *) code=true ;;
   esac
 done <<<"$files"

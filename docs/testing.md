@@ -13,7 +13,7 @@
 **过渡期说明。** 现有测试还没有按层打标记（引擎组负责搬迁）。在那之前：
 
 - `make test-unit` 就是 `cargo test --locked`，其中也包括今天已有的、在进程内起真 Sail 的测试（例如 `runtime::sail_tests`、`ppvpn-core-lab` 的测试），它们按定义属于 L2；
-- `make test-integration` 目前只有 CLI 的密钥存储测试（`crates/ppvpn-cli/tests/keystore.rs`，Linux 的 Secret Service、macOS 的登录钥匙串）；
+- `make test-integration` 目前只有 CLI 的密钥存储测试（`crates/cli/tests/keystore.rs`，Linux 的 Secret Service、macOS 的登录钥匙串）；
 - `make test-system` 是 `tools/test-system-linux.sh`，跑的是已经用 `#[ignore]` 隔开的 netns 测试和网络变化脚本。
 
 搬迁完成后，`cargo test` 只剩 L1，`it-sail` 打开 L2，`system` 打开 L3，入口不变。
@@ -58,7 +58,7 @@
 
 ## L3 系统
 
-**位置：** `runtime/netns_tests.rs`、`tunrules/linux_tests.rs`、`runtime/windows_tests.rs`，桌面端的 `desktop/crates/ppvpn-client/src/e2e_linux.rs`；脚本在 `test/netns/` 和 `test/lab/localdns/`。代码用 `#[cfg(feature = "system")]` 圈起来，测试本身 `#[ignore]`，所以普通的 `cargo test` 永远不碰宿主的路由。
+**位置：** `runtime/netns_tests.rs`、`tunrules/linux_tests.rs`、`runtime/windows_tests.rs`，桌面端的 `crates/desktop/src/e2e_linux.rs`；脚本在 `test/netns/` 和 `test/lab/localdns/`。代码用 `#[cfg(feature = "system")]` 圈起来，测试本身 `#[ignore]`，所以普通的 `cargo test` 永远不碰宿主的路由。
 
 **约束：**
 - Linux：每个测试在自己的网络命名空间里跑（`test/netns/run.sh`），前后核对宿主的路由、规则、网卡、nftables 和 DNS，任何差异都算失败；
@@ -129,12 +129,12 @@ PR 只读缓存，不写。缓存在合入 main 时由 `release.yml` 的 `cache-
 
 `make test-tools` 把前两个构建到 `build/test-tools/`。
 
-`crates/ppvpn-core/src/rulesets/testdata/gen.go` 生成规则集测试用的 `.srs` 文件（已提交，很少需要重新生成）。它不在这个 module 的目录里，而且按当前目录写出 `crates/ppvpn-core/src/rulesets/testdata/<名字>`，所以在 `test/` 里用这个 module 的依赖运行，再把生成的文件移回去：
+`crates/core/src/rulesets/testdata/gen.go` 生成规则集测试用的 `.srs` 文件（已提交，很少需要重新生成）。它不在这个 module 的目录里，而且按当前目录写出 `crates/core/src/rulesets/testdata/<名字>`，所以在 `test/` 里用这个 module 的依赖运行，再把生成的文件移回去：
 
 ```sh
 cd test
-mkdir -p crates/ppvpn-core/src/rulesets/testdata
-go run ../crates/ppvpn-core/src/rulesets/testdata/gen.go
-mv crates/ppvpn-core/src/rulesets/testdata/*.srs ../crates/ppvpn-core/src/rulesets/testdata/
+mkdir -p crates/core/src/rulesets/testdata
+go run crates/core/src/rulesets/testdata/gen.go
+mv crates/core/src/rulesets/testdata/*.srs crates/core/src/rulesets/testdata/
 rm -r crates
 ```

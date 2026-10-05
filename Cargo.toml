@@ -2,11 +2,11 @@
 # process by Desktop and the CLI. The Go core it replaces is gone from main;
 # v0.5.21, its last release, keeps its tag and release files.
 [workspace]
-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "crates/ppvpn-core-lab", "desktop/crates/engine-host", "desktop/crates/ppvpn-client", "desktop/service"]
+members = ["crates/core", "crates/cli", "crates/account", "crates/core-lab", "crates/engine-host", "crates/desktop", "crates/service"]
 # What a bare cargo command at the root builds, and so what ci.yml's
 # required jobs cover; the desktop crates and the service have their own
 # jobs there (desktop-*).
-default-members = ["crates/ppvpn-core", "crates/ppvpn-cli", "crates/ppvpn-account", "crates/ppvpn-core-lab"]
+default-members = ["crates/core", "crates/cli", "crates/account", "crates/core-lab"]
 resolver = "2"
 
 [workspace.package]
@@ -43,7 +43,7 @@ quinn-proto = { git = "https://github.com/peakpassvpn/quinn.git", rev = "ac0737d
 netconfig-rs = { git = "https://github.com/peakpassvpn/netconfig-rs.git", rev = "a5caf848a0e0f18bc9810c1fa854f3ac6a903443" }
 route_manager = { git = "https://github.com/peakpassvpn/route_manager.git", rev = "5703367f56a7b4fed9fd02e216f2f110b4186eda" }
 
-# The privileged service as it ships (desktop/scripts/build-service.sh and the
+# The privileged service as it ships (tools/desktop/build-service.sh and the
 # Windows package.ps1): small and stripped. Panics unwind, the default: sail
 # contains a task's panic only then, once the service hosts the engine.
 [profile.service]

@@ -37,13 +37,13 @@ flowchart LR
 
 一个进程里最多一个 TUN 实例（`TUN_INSTANCE_EXISTS`），标准实例不限数量。每个实例独占自己的 `state_dir`（`STATE_DIR_IN_USE`）。
 
-桌面端的 `desktop/crates/engine-host` 把 Core API v1 的请求路径和 JSON 形状映射成 `Engine` 调用：客户端直接调用它驱动标准实例，service 用它应答客户端转发来的、发给 TUN 实例的请求。
+桌面端的 `crates/engine-host` 把 Core API v1 的请求路径和 JSON 形状映射成 `Engine` 调用：客户端直接调用它驱动标准实例，service 用它应答客户端转发来的、发给 TUN 实例的请求。
 
 ## 模块边界
 
 | 位置 | 职责 | 是否公开稳定契约 |
 | --- | --- | --- |
-| `crates/ppvpn-core` 根导出：`Engine`、`config`、`request`、`status`、`types`、`event`、`error` | 实例句柄和值类型：配置、apply 请求与结果、状态、事件、错误码 | 是（`#[non_exhaustive]`，只增不改） |
+| `crates/core` 根导出：`Engine`、`config`、`request`、`status`、`types`、`event`、`error` | 实例句柄和值类型：配置、apply 请求与结果、状态、事件、错误码 | 是（`#[non_exhaustive]`，只增不改） |
 | `profile` | Profile DTO、严格解析、语义校验 | 否（Profile Schema 本身是契约，解析代码不是） |
 | `translate` | Profile 到 Sail 配置的纯函数翻译，经 `translate::check` 做配置检查 | 否 |
 | `runtime` | 引擎对 Sail 的全部需求，放在一个内部 trait 后面：`sail.rs` 接 `sail::embed`，`fake.rs` 给单元测试用 | 否 |
@@ -59,10 +59,10 @@ flowchart LR
 
 | crate | 作用 |
 | --- | --- |
-| `crates/ppvpn-cli` | `ppvpn` 命令行客户端，daemon 里运行一个标准实例，见 [CLI](cli.md) |
-| `crates/ppvpn-account` | 登录和拉取 Profile |
-| `crates/ppvpn-core-lab` | 测试宿主：以 `ppvpn-core serve` 的参数和日志格式、经 Unix socket 提供 lab 用到的 Core API v1，不是产品 |
-| `desktop/crates/engine-host` | 桌面端的 Core API v1 到 `Engine` 的映射 |
+| `crates/cli` | `ppvpn` 命令行客户端，daemon 里运行一个标准实例，见 [CLI](cli.md) |
+| `crates/account` | 登录和拉取 Profile |
+| `crates/core-lab` | 测试宿主：以 `ppvpn-core serve` 的参数和日志格式、经 Unix socket 提供 lab 用到的 Core API v1，不是产品 |
+| `crates/engine-host` | 桌面端的 Core API v1 到 `Engine` 的映射 |
 
 ## 生命周期状态机
 

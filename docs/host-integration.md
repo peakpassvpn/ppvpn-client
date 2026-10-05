@@ -1,6 +1,6 @@
 # 宿主接入：Rust `ppvpn-core` 的公开 API
 
-状态：**设计稿，待评审**（先由 core 审，再交 Desktop、CLI 评审）。依据：#214 的"宿主对 `ppvpn-core` 的接口要求""engine 与 desktop 的运行时边界"两节，以及 Desktop 给出的大纲（[评论](https://github.com/peakpassvpn/ppvpn-core/issues/45#issuecomment-5958856823)）。本文和 `crates/ppvpn-core` 在同一个 PR 里维护、随 crate 版本一起发布。切换到 Rust 版以后，它取代 `docs/desktop.md` 和 `docs/core-api.md`。
+状态：**设计稿，待评审**（先由 core 审，再交 Desktop、CLI 评审）。依据：#214 的"宿主对 `ppvpn-core` 的接口要求""engine 与 desktop 的运行时边界"两节，以及 Desktop 给出的大纲（[评论](https://github.com/peakpassvpn/ppvpn-core/issues/45#issuecomment-5958856823)）。本文和 `crates/core` 在同一个 PR 里维护、随 crate 版本一起发布。切换到 Rust 版以后，它取代 `docs/desktop.md` 和 `docs/core-api.md`。
 
 下文的签名是 Rust 草案，用来说明形状和语义。字段名以最终代码为准，但这里写下的语义就是契约。
 

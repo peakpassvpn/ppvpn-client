@@ -8,8 +8,8 @@
 #
 # Usage: run it before the build, with the build's own package and feature
 # options (and --manifest-path for a crate outside the root workspace):
-#   tools/release-features-check.sh -p ppvpn-client
-#   tools/release-features-check.sh --manifest-path desktop/service/Cargo.toml
+#   tools/release-features-check.sh -p ppvpn-desktop
+#   tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
 #   tools/release-features-check.sh -p ppvpn-core --features fault-injection   # fails
 set -euo pipefail
 

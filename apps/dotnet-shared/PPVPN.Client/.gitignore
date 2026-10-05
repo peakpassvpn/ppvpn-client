@@ -1,0 +1,6 @@
+# Build outputs of crates/desktop/scripts/build-dotnet.{sh,ps1}
+/Generated/
+/runtimes/
+# dotnet build outputs
+/bin/
+/obj/

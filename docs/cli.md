@@ -1,6 +1,6 @@
 # `ppvpn` command-line client
 
-`crates/ppvpn-cli` builds the `ppvpn` binary: a terminal client that logs in through the browser and runs
+`crates/cli` builds the `ppvpn` binary: a terminal client that logs in through the browser and runs
 ppvpn-core's standard instance in its own process, exposing the authenticated local HTTP/SOCKS5 proxy. It
 does not create a TUN device or change system network settings.
 
