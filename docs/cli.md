@@ -192,3 +192,8 @@ Release builds connect to the production API and ignore overrides. A build made 
 `PPVPN_BUILD_PROFILE=dev` reads `PPVPN_API_BASE` at run time (HTTPS only; plain HTTP only for loopback) and
 may set a compile-time default with `PPVPN_DEFAULT_API_BASE`. `PPVPN_VERSION` sets the reported version.
 Static Linux (musl) builds use mimalloc as the global allocator.
+
+Releases carry the CLI as tar.gz archives beside the desktop installers, in the same GitHub Release (tag
+`vX.Y.Z`, the crate's version): Linux x86_64 and aarch64 (static, musl) and macOS universal, built by
+`tools/cli/build-release.sh` in `release.yml`. `crates/cli/README.md`, shipped in each archive, covers
+installing and verifying them.
