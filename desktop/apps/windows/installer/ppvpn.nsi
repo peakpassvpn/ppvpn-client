@@ -64,7 +64,6 @@ RequestExecutionLevel admin
 !define AGENT_QUIT_EVENT "Local\PPVPN.PushAgent.Quit"
 !define AGENT_RUN_VALUE "PPVPNPushAgent"
 !define SERVICE_NAME "ppvpn_service"
-; Same key as the Tauri build, so this installer replaces it in Apps & features.
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\PPVPN"
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 ; Platform/LaunchAtLogin.cs
@@ -143,7 +142,7 @@ VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductVersion" "${VERSION}"
 ; ───────────────────────────── shared helpers ─────────────────────────────
 
 ; Ask ppvpn.exe to quit through its normal path (backend Shutdown), wait for
-; it, then terminate whatever is left (other sessions, the old Tauri app).
+; it, then terminate whatever is left (other sessions).
 !macro DEFINE_STOP_APP UN
 Function ${UN}StopApp
   StrCpy $AppWasRunning 0
@@ -347,8 +346,7 @@ Section "PPVPN" SecMain
   Call StopApp
   Call StopAgent
   Call StopService
-  ; A service registered by another layout (the Tauri build used
-  ; ppvpn-service-x86_64-pc-windows-msvc.exe) is re-registered: the install
+  ; A service registered from another directory is re-registered: the install
   ; helper only starts an existing service and never changes its path.
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\${SERVICE_NAME}" "ImagePath"
   ${If} $0 != ""
@@ -363,12 +361,8 @@ Section "PPVPN" SecMain
   Pop $0
 
   ; 2. Replace the files. Remove what the previous version installed first so
-  ; stale runtime files do not pile up; drop the Tauri sidecar names.
+  ; stale runtime files do not pile up.
   Call RemoveListedFiles
-  Delete "$INSTDIR\ppvpn-core-x86_64-pc-windows-msvc.exe"
-  Delete "$INSTDIR\ppvpn-service-x86_64-pc-windows-msvc.exe"
-  Delete "$INSTDIR\ppvpn-service-install-x86_64-pc-windows-msvc.exe"
-  Delete "$INSTDIR\ppvpn-service-uninstall-x86_64-pc-windows-msvc.exe"
   File /r "${STAGE_DIR}\*.*"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -381,10 +375,6 @@ Section "PPVPN" SecMain
     MessageBox MB_ICONSTOP|MB_OK "$(ServiceInstallFailed)" /SD IDOK
     Abort
   ${EndIf}
-
-  ; The native app signs in by device-code polling and registers no URL
-  ; scheme. Remove the ppvpn:// handler the Tauri build registered.
-  DeleteRegKey HKLM "Software\Classes\ppvpn"
 
   ; 4. Shortcuts.
   ; The shortcuts carry the app's AppUserModelID (System.AppUserModel.ID), so notifications
@@ -477,10 +467,6 @@ Section "Uninstall"
   nsExec::Exec 'taskkill.exe /f /im ${CORE_EXE}'
   Pop $0
 
-  ; Leftovers of the Tauri build: the HKLM ppvpn:// handler and the per-user
-  ; one tauri-plugin-deep-link wrote.
-  DeleteRegKey HKLM "Software\Classes\ppvpn"
-  DeleteRegKey HKCU "Software\Classes\ppvpn"
   ; Launch at sign-in and the push agent's autostart (per user).
   DeleteRegValue HKCU "${RUN_KEY}" "${RUN_VALUE}"
   DeleteRegValue HKCU "${RUN_KEY}" "${AGENT_RUN_VALUE}"

@@ -447,7 +447,7 @@ pub(crate) struct EnhancedState {
     pub competitors: Vec<String>,
 }
 
-/// Phase of the connection (the Tauri shell's `ConnectionPhase`).
+/// Phase of the connection.
 #[derive(uniffi::Enum, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConnectionPhase {
     #[default]

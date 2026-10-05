@@ -81,16 +81,11 @@ fn main() -> windows_service::Result<()> {
 
     let exe = env::current_exe().expect("current_exe");
     let dir = exe.parent().expect("current_exe parent");
-    let bin = [
-        dir.join("ppvpn-service.exe"),
-        dir.join("ppvpn-service-x86_64-pc-windows-msvc.exe"),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
-    .unwrap_or_else(|| {
+    let bin = dir.join("ppvpn-service.exe");
+    if !bin.exists() {
         eprintln!("ppvpn-service.exe not found next to {}", exe.display());
         std::process::exit(2);
-    });
+    }
 
     let info = ServiceInfo {
         name: OsString::from(SERVICE_NAME),

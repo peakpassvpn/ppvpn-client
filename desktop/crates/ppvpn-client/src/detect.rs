@@ -1,6 +1,5 @@
-//! Detects other proxy / VPN clients that compete for the network path
-//! (ported from the unused Tauri `detect.rs`). Offline and cheap; it only
-//! reports, never blocks.
+//! Detects other proxy / VPN clients that compete for the network path.
+//! Offline and cheap; it only reports, never blocks.
 //!
 //! Signals:
 //! 1. Running processes matching a keyword table (sysinfo).

@@ -1,6 +1,4 @@
-//! Client for ppvpn-core's local Core API v1 (ported from
-//! `src-tauri/src/first_party_core.rs` and the transport half of
-//! `standard_core.rs`).
+//! Client for ppvpn-core's local Core API v1.
 //!
 //! The Core API is HTTP/1.1 over a Unix socket (macOS/Linux) or a named pipe
 //! (Windows), authenticated with the per-launch session secret the core writes
@@ -730,7 +728,7 @@ pub(crate) async fn get_version_within(
 
 pub(crate) async fn get_status(core: &dyn CoreTransport) -> Result<CoreStatus, CoreCallError> {
     let data = core.call("/v1/get-status", json!({}), CALL_TIMEOUT).await?;
-    // The Tauri shell accepted a nested `core` object; keep that tolerance.
+    // A status nested in a `core` object is accepted too.
     let status = data.get("core").unwrap_or(&data);
     Ok(CoreStatus {
         state: opt_string(status, "state").unwrap_or_default(),

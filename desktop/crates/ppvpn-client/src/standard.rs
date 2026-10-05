@@ -1,6 +1,5 @@
 //! Standard mode: an unprivileged `ppvpn-core serve --tun=false
-//! --local-proxy=true` child process owned by this app (ported from
-//! `src-tauri/src/standard_core.rs`).
+//! --local-proxy=true` child process owned by this app.
 //!
 //! It serves the per-node local HTTP/SOCKS5 proxies and every speed test
 //! (ICMP/TCP entrance probes and Connect availability probes). It starts when

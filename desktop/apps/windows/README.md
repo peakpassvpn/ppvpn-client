@@ -263,8 +263,7 @@ next to `ppvpn.exe`, and loads the same `runtimes\win-x64\native\ppvpn_client.dl
   `ppvpn_service`, the `SERVICE_NAME` in `service/src/install.rs`.
 - Install and uninstall run `ppvpn-service-install.exe` or
   `ppvpn-service-uninstall.exe` next to `ppvpn.exe` with `Verb=runas`
-  (the names `installer/ppvpn.nsi` ships). The Tauri build's
-  `-x86_64-pc-windows-msvc` names are also accepted. `ERROR_CANCELLED` (1223) becomes `PlatformException.Cancelled`,
+  (the names `installer/ppvpn.nsi` ships). `ERROR_CANCELLED` (1223) becomes `PlatformException.Cancelled`,
   and a non-zero exit code becomes `Failed`.
 
 Also real: launch at sign-in (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PPVPN`
@@ -312,8 +311,8 @@ and build number). `-Channel` is recorded in the release metadata.
    (`dotnet msbuild -getProperty`).
 2. Builds `ppvpn-service`, `ppvpn-service-install` and `ppvpn-service-uninstall`
    from `service/` (`cargo build --release --target x86_64-pc-windows-msvc`).
-   Unsigned builds set `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=1`, as the Tauri CI
-   did; signed builds need `PPVPN_WINDOWS_PUBLISHER_SHA256`.
+   Unsigned builds set `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=1`; signed builds
+   need `PPVPN_WINDOWS_PUBLISHER_SHA256`.
 3. Builds the crate and its bindings (`crates/ppvpn-client/scripts/build-dotnet.ps1 -Release`),
    then `dotnet publish` (Release, win-x64, self-contained) into `staging/windows-native/app`
    with `-p:PPVPN_API_BASE` from `-ApiBase` (else the environment, else the Release
@@ -356,17 +355,12 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
 - UI in Chinese or English from the Windows UI language (English is the fallback).
 - Install: asks a running `ppvpn.exe` to quit through the named event
   `Local\PPVPN.Desktop.Quit` (the app's normal quit path, backend Shutdown
-  included), waits up to 20 s, then kills what is left (other sessions, the old
-  Tauri app); asks the push agent to quit (`Local\PPVPN.PushAgent.Quit`), waits up to
+  included), waits up to 20 s, then kills what is left (other sessions); asks the push agent to quit (`Local\PPVPN.PushAgent.Quit`), waits up to
   10 s, then kills what is left, so `ppvpn_client.dll` is free; stops `ppvpn_service`; re-registers the service if it points at
-  another binary (the Tauri layout used `ppvpn-service-x86_64-pc-windows-msvc.exe`);
-  removes the files listed in the previous `install-files.txt` and the Tauri
-  sidecar names; copies the files; runs `ppvpn-service-install.exe` (a failure
+  another binary; removes the files listed in the previous `install-files.txt`; copies the files; runs `ppvpn-service-install.exe` (a failure
   shows a localized message and aborts with exit code 2); Start-menu shortcut,
   optional desktop shortcut (a page in the wizard; kept on upgrade;
-  `/DESKTOPSHORTCUT` in silent mode), both stamped with the AppUserModelID `PeakPass.PPVPN`; Apps & features entry (same key as the
-  Tauri build, so it replaces it). It registers no URL scheme and deletes the
-  `ppvpn://` handler the Tauri build left in HKLM.
+  `/DESKTOPSHORTCUT` in silent mode), both stamped with the AppUserModelID `PeakPass.PPVPN`; Apps & features entry. It registers no URL scheme.
 - The finish page's "Run PPVPN" and the relaunch after a silent upgrade start
   the app through Explorer, so it runs as the signed-in user, not elevated.
   A silent install relaunches the app only when it was running in this session.
@@ -376,7 +370,7 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
   files, shortcuts, the Apps & features entry, the launch-at-sign-in value
   `HKCU\…\Run\PPVPN` and the push agent's `HKCU\…\Run\PPVPNPushAgent`, the notification registration
   (`HKCU\Software\Classes\AppUserModelId\PeakPass.PPVPN` and the activator's
-  `HKCU\Software\Classes\CLSID\{FCD3C3FA-…}`) and old `ppvpn://` handlers. Per-user data is kept unless
+  `HKCU\Software\Classes\CLSID\{FCD3C3FA-…}`). Per-user data is kept unless
   "Also remove my sign-in, settings and logs" is ticked (or `/PURGE` with `/S`):
   then `%LOCALAPPDATA%\PPVPN`, the `PPVPN/desktop.credentials` credential (and the
   fake backend's `PPVPN/desktop.credentials.fake`),

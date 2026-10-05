@@ -1,8 +1,7 @@
-//! Client for the privileged `ppvpn-service` (ported from
-//! `src-tauri/src/service_client.rs`). The wire types must stay byte-identical
-//! to `service/src/protocol.rs`: requests and responses are HMAC-signed over
-//! their canonical JSON (signature field empty), so any drift in field order
-//! or naming fails verification.
+//! Client for the privileged `ppvpn-service`. The wire types must stay
+//! byte-identical to `service/src/protocol.rs`: requests and responses are
+//! HMAC-signed over their canonical JSON (signature field empty), so any
+//! drift in field order or naming fails verification.
 //!
 //! Wire format: `[u32 BE length][JSON]`, one request per connection (a
 //! `Watch` keeps its connection open for events, see [`ServiceApi::watch`]).
@@ -868,7 +867,7 @@ fn verify_response(
 }
 
 /// Writes `[u32 BE length]` and the body as two writes (what the service
-/// and the Tauri shell always used), then reads the framed response.
+/// expects), then reads the framed response.
 fn exchange<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     body: &[u8],
