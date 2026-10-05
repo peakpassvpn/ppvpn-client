@@ -46,8 +46,8 @@ type result struct {
 	BytesReceived  int64 `json:"bytes_received"`
 	Connections    int64 `json:"connections"`
 	FailedConnects int64 `json:"failed_connections"`
-	// stream: connections whose write was still blocked 10 s after the
-	// load's end (the proxy had stopped reading); closed then.
+	// stream: connections where one write made no progress for 10 s (the
+	// proxy took none of it); closed then.
 	Stalled   int64 `json:"stalled_connections"`
 	ElapsedMs int64 `json:"elapsed_ms"`
 	Samples   int   `json:"samples,omitempty"`
@@ -183,10 +183,11 @@ func stream(dial func() (net.Conn, error), conns int, rateMbit float64, duration
 				defer ticker.Stop()
 				tick = ticker.C
 			}
-			// A write the proxy never takes ends 10 s after the load: a
-			// stalled connection, counted, rather than a run that hangs.
-			_ = conn.SetWriteDeadline(deadline.Add(10 * time.Second))
 			for time.Now().Before(deadline) {
+				// A chunk the proxy takes none of for 10 s: a stalled
+				// connection, counted, rather than a run that hangs. A slow
+				// link still moves a chunk well within it.
+				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				n, err := conn.Write(buf)
 				atomic.AddInt64(&r.BytesSent, int64(n))
 				if err != nil {

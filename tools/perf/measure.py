@@ -96,9 +96,9 @@ for each node, <cond>.<proto>.:
     connect_failed                 new connections that failed
     stream_failed                  round-trip and throughput connections
                                    that failed
-    stream_stalled                 throughput connections whose write was
-                                   still blocked 10 s after the load (the
-                                   engine had stopped reading)
+    stream_stalled                 throughput connections where one 16 KiB
+                                   write made no progress for 10 s (the
+                                   engine took none of it)
 each load --c-load-seconds (20). Connections that fail are counted, not an
 error. The ENV line says whether segmentation offload could be turned off
 on the loopback (offload_off; ethtool): with it on, a lost packet can be
