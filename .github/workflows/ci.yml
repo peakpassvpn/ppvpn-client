@@ -35,6 +35,11 @@ name: ci
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      runs:
+        description: "windows: runs of the runtime's failure tests (twenty on the pull request that adds one)"
+        type: number
+        default: 5
 
 permissions:
   contents: read
@@ -507,9 +512,9 @@ jobs:
       # with the prebuilt BoringSSL (NASM and CMake are not).
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
       # Runs of the failure tests, the system compared before and after
-      # each: one per pull request, five by hand (twenty on the pull request
-      # that adds a test there).
-      RUNS: ${{ github.event_name == 'workflow_dispatch' && 5 || 1 }}
+      # each: one per pull request, `runs` by hand (5 unless told; twenty
+      # on the pull request that adds a test there).
+      RUNS: ${{ github.event_name == 'workflow_dispatch' && inputs.runs || 1 }}
       UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
       DOTNET_NOLOGO: '1'
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
@@ -573,8 +578,8 @@ jobs:
             Write-Output "::group::run $i"
             cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc -- --ignored --test-threads 1 --nocapture runtime::windows_tests:: | Tee-Object -Variable out
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            # None skipped quietly: both tests ran.
-            if (-not ($out -match "test result: ok\. 2 passed")) { throw "runtime::windows_tests: not both tests ran" }
+            # None skipped quietly: all three tests ran.
+            if (-not ($out -match "test result: ok\. 3 passed")) { throw "runtime::windows_tests: not all three tests ran" }
             Write-Output "::endgroup::"
           }
 

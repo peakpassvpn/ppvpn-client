@@ -108,7 +108,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 | # | 行为 | 已有依据 | 复测方法 |
 | --- | --- | --- | --- |
-| R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：tun + auto_route，以及 `strict_route` 加排除段（6 个 WFP 过滤器和 sail 子层，强杀后约 0.5 秒内全部消失），都是 windows-gnu 构建；唯一的局限是没有用 MSVC 构建测（见下文"过渡实现"里的清扫表） | windows-latest（管理员）能用我们的 MSVC 构建建 Wintun 适配器和 WFP 会话，已由 `runtime::windows_tests` 证实（实例失败的用例）。还缺强杀这一项：在同一作业里用我们的构建和配置（开 `strict_route`）起 Tun 实例，强杀进程，再检查 Wintun 适配器、它的路由、DNS 和 WFP 过滤器都不在 |
+| R1 | Windows 强杀后不留残留（host-integration 第 3 节） | Sail 的 VM 实测：tun + auto_route，以及 `strict_route` 加排除段（6 个 WFP 过滤器和 sail 子层，强杀后约 0.5 秒内全部消失），都是 windows-gnu 构建；唯一的局限是没有用 MSVC 构建测（见下文"过渡实现"里的清扫表） | 我们的 MSVC 构建已在 CI 里验证（ci.yml 的 windows 作业，`runtime::windows_tests::a_killed_instance_leaves_the_system_as_it_was`）：子进程起 Tun 实例（auto_route 加 `strict_route`），TerminateProcess 强杀，之后适配器、路由、TUN 的 DNS 和名为 sail 的 WFP 过滤器都回到启动前，再次启动成功。局限：用的是测试配置（`strict_route` 只路由 198.18.0.0/16，运行器自己的流量不进 TUN），不是我们翻译出的全量配置；全量配置下的强杀留给 G5 实机 |
 
 已知缺口：
 
@@ -176,7 +176,7 @@ Engine 侧（`engine/network.rs`）：watcher 订阅 `network_changes()`，每�
 | --- | --- | --- |
 | Linux | done | Sail 在 run_dir 的台账记下改动，强杀后由下一次 `new` 的 `sweep` 撤销：ip rule、没有设备的 throw 路由、nft 表、fw4 drop-in；另有 tunrules 按我们的优先级段和表清扫 |
 | macOS | done（不靠台账） | 强杀后 utun 和经它的路由随进程消失，由内核回收；Sail 接受 run_dir 但不写台账；Sail 的常驻 CI 每次都验证 |
-| Windows | done（不靠台账），待我们自己的配置复测 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：tun + auto_route 时，强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录；`strict_route` 加排除段时，适配器、路由、DNS、6 个 WFP 过滤器和 sail 子层在强杀后约 0.5 秒内全部消失，物理默认路由不受影响。未覆盖 MSVC 构建，见"切换前要复测的项目"；实例 Failed 而宿主还在时由谁撤，见 Q1 |
+| Windows | done（不靠台账），我们的 MSVC 构建已复测（测试配置），全量配置待 G5 实机 | Wintun 在创建进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。Sail 的 VM 实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：tun + auto_route 时，强杀后 3 秒内适配器、默认路由（v4、v6）和 DNS 都消失，运行中重启后也没有适配器和 PnP 记录；`strict_route` 加排除段时，适配器、路由、DNS、6 个 WFP 过滤器和 sail 子层在强杀后约 0.5 秒内全部消失，物理默认路由不受影响。未覆盖 MSVC 构建，见"切换前要复测的项目"；实例 Failed 而宿主还在时由谁撤，见 Q1 |
 
 Sail E2：任务作用域已完成（sail 7da87ccd）：实例启动的每一个任务都在作用域里，不在任何作用域里的任务会让运行失败，越过作用域的 spawn 是静态检查错误；协议、传输、DNS、入站、API、TUN、平台各模块的任务，以及宿主经 `dial_tcp`/`dial_udp` 发起的拨号（2f967b1a），都随 stop 在 `stop_within`（默认 2 秒）内结束。
 - 已有：任务作用域；两类 panic（任务自己结束，或实例失败）都不会带崩宿主，根任务的 panic 也让实例失败而不是展开到 `run()`（f25d1a79），`Engine::new` 在编译期断言 `sail::embed::PANICS_ARE_CAUGHT`（以 `panic = "unwind"` 构建）；有界的 stop；挂住的拨号不会拖住 stop（`runtime::sail_tests::a_hanging_dial_does_not_hold_the_stop`）。

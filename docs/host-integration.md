@@ -77,7 +77,7 @@ impl Drop for Engine { /* 最后一个句柄：交给清理线程，见下文 */
     - Windows：不需要清扫。强杀后 Wintun 适配器及其路由、DNS 随进程一起消失：Wintun 在创建它的进程的句柄关闭时删除适配器，路由和 DNS 挂在适配器上。依据是 Sail 在 VM 上的两次实测（Win11，sail 0.16.0 windows-gnu，Wintun 0.14.1，双栈）：
       - tun + auto_route：`Stop-Process -Force` 后 3 秒内，适配器、它的 `0.0.0.0/0` 和 `::/0` 路由、它的 DNS 都没有了；运行中重启 VM 后也没有适配器和 PnP 记录；再次启动用同一 GUID 重建正常。
       - 再加 `strict_route` 和排除段（绕开 `10.0.0.0/8`、`192.168.0.0/16`，加 `::/0`）：运行时有 Wintun 适配器、metric 0 的路由、TUN 的 DNS、6 个 WFP 过滤器和 1 个名为 sail 的子层；强杀后约 0.5 秒内全部消失，+1、+3、+10 秒都没有回来；物理默认路由没有被改动，之后出口和 DNS 正常；第二次启动再强杀，结果相同。WFP 过滤器属于动态会话，随进程一起撤掉。
-      - 局限只剩一项：强杀测的是 windows-gnu 构建（Windows 的 TUN 和 WFP 代码与当前 master 相同），没有用我们的 MSVC 构建测。所以用我们自己的构建复测之前，这一条不算验收（`docs/rust-parity.md` R1）。实例失败而进程还在的情形不同，我们的 MSVC 构建已在 CI 里验证（第 9 节）。
+      - 我们的 MSVC 构建也在 CI 里验证了强杀（ci.yml 的 windows 作业）：Tun 实例加 auto_route 和 `strict_route`，进程被强杀后，适配器、路由、TUN 的 DNS 和 WFP 过滤器都回到启动前，再次启动成功。局限：CI 用的是测试配置（`strict_route` 只路由 198.18.0.0/16），不是翻译出的全量配置；全量配置下的强杀由 G5 实机验收（`docs/rust-parity.md` R1）。实例失败而进程还在的情形见第 9 节。
   - 清扫的结果记一行 info 日志。
 - **运行时**：`new` 可以在 tokio 运行时上下文里调用，也可以不在。
   - 在**多线程**的 tokio 运行时里调用 `new` 时，实例跑在这个运行时上（Sail 的 `Runtime::Host`），每个实例只另占 Sail 的一个线程；在单线程运行时里或不在 tokio 里调用时，实例用 Sail 自带的运行时。用多线程运行时的宿主，要让它启用 I/O 和定时器（`enable_all()`），并一直活到 `shutdown` 返回；运行时先没了，实例会失败（`Fatal`），系统改动仍由 Sail 自己的线程撤销。Sail 会用这个运行时的 blocking 线程池（系统解析器的查询等），宿主自己的阻塞任务接近上限时要调大 `max_blocking_threads`。
