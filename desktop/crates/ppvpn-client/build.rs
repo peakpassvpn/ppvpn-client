@@ -28,8 +28,11 @@ fn service_build_inputs(
     }
 
     let mut inputs = Vec::new();
-    for name in ["Cargo.toml", "Cargo.lock"] {
-        let path = service_dir.join(name);
+    // The service's manifest, and the workspace's lock it builds with.
+    for (name, path) in [
+        ("Cargo.toml", service_dir.join("Cargo.toml")),
+        ("Cargo.lock", service_dir.join("../../Cargo.lock")),
+    ] {
         if path.is_file() {
             inputs.push((name.to_string(), path));
         }
@@ -79,7 +82,7 @@ fn main() {
     let id = if service_dir.join("src").is_dir() {
         for input in [
             "Cargo.toml",
-            "Cargo.lock",
+            "../../Cargo.lock",
             "src",
             "build_id.rs",
             "../vendor/ppvpn-core",
