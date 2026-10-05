@@ -16,7 +16,7 @@ use futures_util::FutureExt;
 use super::*;
 use crate::config::{EngineConfig, LocalProxyConfig, Platform, Role};
 use crate::engine::lifecycle::base64_flavor;
-use crate::engine::lifecycle_tests::{profile_with, NODE_1, NODE_2, R1};
+use crate::engine::lifecycle_tests::{profile_with, NODE_1, NODE_2, R1, R2};
 use crate::engine::Engine;
 use crate::localproxy::{LocalProxyState, STATE_FILE};
 use crate::request::ApplyRequest;
@@ -411,4 +411,62 @@ async fn apply_logs_reality_fingerprints_at_debug() {
     ] {
         assert_eq!(base64_flavor(value), want, "{value:?}");
     }
+}
+
+/// Go: internal/runtime TestLifecycleLogsPhaseTimings. Apply and start each
+/// write one info line with per-phase durations, so a slow start shows
+/// where the time went: an apply while stopped, the start, an apply while
+/// running (a kernel switch) and an apply that fails.
+#[tokio::test]
+async fn apply_and_start_log_phase_timings() {
+    let _subscriber = subscribe();
+    let (engine, _fake) = engine(LogLevel::Info, LogSink::Channel);
+    let mut rx = engine.logs();
+
+    engine
+        .apply(ApplyRequest::new(profile_with(R1, |_| {})))
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    engine
+        .apply(ApplyRequest::new(profile_with(R2, |_| {})))
+        .await
+        .unwrap();
+    let broken = profile_with("2026-09-29T00:00:00Z#9", |v| {
+        v["nodes"] = serde_json::Value::Null;
+    });
+    assert!(engine.apply(ApplyRequest::new(broken)).await.is_err());
+    engine.stop().await.unwrap();
+    tracing::info!("timings-done");
+
+    // Other tests' lines may be here too: each wanted line at least once.
+    let lines = until(&mut rx, |l| l.contains("msg=timings-done")).await;
+    let has = |parts: &[&str]| {
+        lines
+            .iter()
+            .any(|l| l.contains(" level=info ") && parts.iter().all(|p| l.contains(p)))
+    };
+    let ok = "msg=\"apply timing\" outcome=ok tun=false rule_sets_ready=0 rule_sets_stale=0 rule_sets_unavailable=0 validate_ms=";
+    let stopped = [
+        ok,
+        " rule_sets_ms=",
+        " wait_ms=",
+        " host_ipv6_ms=",
+        " build_ms=",
+        " check_ms=",
+        " total_ms=",
+    ];
+    assert!(has(&stopped), "{lines:#?}");
+    let running = [ok, " build_ms=", " kernel_switch_ms=", " total_ms="];
+    assert!(has(&running), "{lines:#?}");
+    let failed = ["msg=\"apply timing\" outcome=failed tun=false rule_sets_ready=0 rule_sets_stale=0 rule_sets_unavailable=0 total_ms="];
+    assert!(has(&failed), "{lines:#?}");
+    let started = [
+        "msg=\"start timing\" outcome=ok tun=false local_proxy_ms=",
+        " host_ipv6_ms=",
+        " build_ms=",
+        " engine_start_ms=",
+        " total_ms=",
+    ];
+    assert!(has(&started), "{lines:#?}");
 }

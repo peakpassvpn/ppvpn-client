@@ -94,9 +94,11 @@ sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun
   详见 [security.md](security.md#ipv6)。
 
 - `info`：另外每次 apply 与 start 各记一行分段耗时（毫秒），用于定位慢启动：
-  - `msg="apply timing"`：`validate_ms`、`rule_sets_ms`（规则集校验/下载）、`local_proxy_ms`、
-    `host_ipv6_ms`（主机 IPv6 探测）、`build_ms`、`routing_ms`，运行中 apply 还有 `kernel_switch_ms`
-    （0.5.18 起：新内核创建、启动与切换），走「停止再启动」路径时为 `engine_create_ms`/`engine_start_ms`；
+  - `msg="apply timing"`：`outcome`（`ok`/`failed`）、`tun`、`rule_sets_ready`/`rule_sets_stale`/
+    `rule_sets_unavailable`，然后各分段的毫秒数，没跑到的分段不写：`validate_ms`、`rule_sets_ms`（规则集
+    校验/下载）、`wait_ms`（等另一个生命周期调用释放操作锁）、`host_ipv6_ms`（主机 IPv6 探测）、`build_ms`
+    （翻译），停止时 `check_ms`（配置交给 Sail 校验），运行中 `kernel_switch_ms`（reload 与恢复选择/固定）
+    或 `full_restart_ms`，最后 `total_ms`。内容未变的 apply 不记；
   - 运行中 apply（0.5.18 起）：`msg="kernel switched"`（`gen`、`previous`、`closed_connections`、
     `kept_connections`，0.5.19 起统计所有仍在排空的旧内核；`draining_kernels`，切换后正在排空的旧内核数）；旧内核关闭时 `msg="kernel drained"`（`gen`、`reason`=`idle`/`deadline`、
     `closed_connections`、`idle_closed`（0.5.19 起：排空期间因空闲 60 秒被关闭的连接数））；
@@ -105,9 +107,9 @@ sing-box 的 local 解析器。详见 [安全模型](security.md#增强模式tun
     `open`（仍在的连接）、`idle_candidates`（空闲已超过阈值一半）、`oldest_idle_s`、`low_traffic`（这一分钟双向合计
     不足 4 KB 的连接）。`open` 一直不降、`idle_candidates` 为 0 而 `low_traffic` 等于 `open`，说明旧内核被只有
     心跳的长连接拖住，会等到 10 分钟上限；
-  - `msg="start timing"`：`system_proxy_ms`（启用时）、`engine_create_ms`（sing-box 解析与构造）、
-    `engine_start_ms`（sing-box 启动：出站、DNS、路由与规则集、入站，含打开 TUN 与安装 `auto_route`
-    路由）、`total_ms`。sing-box 内部各组件不再细分：其计时只在上游日志里，而上游日志保持关闭。
+  - `msg="start timing"`：`outcome`、`tun`、`local_proxy_ms`（检查监听端口）、`host_ipv6_ms`、`build_ms`、
+    `engine_start_ms`（Sail 解析、构造与启动：出站、DNS、路由与规则集、入站，含打开 TUN 与安装路由，不再
+    细分）、`total_ms`。已在运行时 start 不记。
 - `debug`：再为每条被路由的连接记一行 `msg=connection`：`inbound`、`network`、`destination`、
   `route_domain`（路由规则匹配用的域名：嗅探所得或 DNS 反查；HTTP 嗅探可能留下地址本身）、`protocol`、
   `rule`、`outbound`（实际节点）、`target`（交给节点的目标）与 `target_kind`（`domain`/`ip`）。
