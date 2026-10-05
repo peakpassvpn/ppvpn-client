@@ -1036,3 +1036,60 @@ fn a_left_out_local_proxy_keeps_its_rules() {
     left_out.as_object_mut().unwrap().remove("inbounds");
     assert_eq!(open, left_out, "the rest, rules included, is the same");
 }
+
+/// Go: internal/config TestRuleMappingAndFixedPriority. A profile rule's
+/// matchers reach the engine normalised (an IDN to its A-label and the
+/// trailing dot dropped, a suffix lowercased and also matching the domain
+/// itself, a CIDR masked, a port range as start:end), and the local proxy's
+/// rules always come before it.
+#[test]
+fn a_rule_maps_its_matchers_and_comes_after_the_local_proxy_rules() {
+    let mut profile = contract();
+    profile.routing.rules = vec![crate::profile::RoutingRule {
+        id: "ordered".into(),
+        matcher: RoutingMatch {
+            domains: vec!["例子.测试.".into()],
+            domain_suffixes: vec!["Example.COM".into()],
+            ip_cidrs: vec!["2001:db8:1::5/32".into()],
+            protocols: vec!["tcp".into()],
+            ports: vec![443],
+            port_ranges: vec!["8000-9000".into()],
+            ..RoutingMatch::default()
+        },
+        action: RoutingAction {
+            kind: "reject".into(),
+            target: String::new(),
+            node_id: String::new(),
+        },
+        baseline: false,
+    }];
+    let options = Options {
+        local_proxy: Some(local_proxy()),
+        ..Options::default()
+    };
+    let config = value(&translate(&profile, &options).unwrap());
+    let rules = config["route"]["rules"].as_array().unwrap();
+    let (mapped, before) = rules.split_last().unwrap();
+    assert_eq!(
+        mapped,
+        &json!({
+            "domain": ["xn--fsqu00a.xn--0zwm56d", "example.com"],
+            "domain_suffix": [".example.com"],
+            "ip_cidr": ["2001:db8::/32"],
+            "network": ["tcp"],
+            "port": [443],
+            "port_range": ["8000:9000"],
+            "action": "reject",
+            "method": "default",
+        })
+    );
+    // Every rule before it is the local proxy's: its users' routes and the
+    // catch-all for any other user.
+    assert!(!before.is_empty());
+    for rule in before {
+        assert!(
+            rule.get("inbound").is_some() || rule["type"] == "logical",
+            "{rule}"
+        );
+    }
+}

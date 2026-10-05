@@ -177,4 +177,26 @@ mod tests {
             err.message
         );
     }
+
+    /// Go: profile TestParseIgnoresUnknownFields. A backend that adds a
+    /// field must not break the clients already out: unknown fields at the
+    /// top level, in a node, its exit and an ingress are ignored, and the
+    /// known ones beside them still read.
+    #[test]
+    fn unknown_fields_are_ignored_at_every_level() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/profiles/multi-ingress.json");
+        let data = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut doc: Value = serde_json::from_slice(&data).unwrap();
+        doc["future_top_level"] = serde_json::json!({"x": 1});
+        let node = &mut doc["nodes"][0];
+        node["future_node_field"] = "x".into();
+        node["exit"]["country_code"] = "CN".into();
+        node["exit"]["future_exit_field"] = true.into();
+        node["ingresses"][0]["future_ingress_field"] = serde_json::json!([1]);
+
+        let p = parse(&serde_json::to_vec(&doc).unwrap()).expect("unknown fields are ignored");
+        assert_eq!(p.nodes[0].exit.country_code, "CN");
+        crate::profile::validate(&p, chrono::Utc::now()).expect("and the profile validates");
+    }
 }
