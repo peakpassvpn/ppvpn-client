@@ -585,9 +585,7 @@ pub(crate) mod test_support {
                         "stopped".to_string()
                     }),
                     stop,
-                    rule_set_hosts: Some(vec!["127.0.0.1".into()]),
-                    accepts_routing_mode: true,
-                    accepts_routed_proxy: true,
+                    rule_set_hosts: vec!["127.0.0.1".into()],
                 })
             })
         }
