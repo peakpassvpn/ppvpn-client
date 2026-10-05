@@ -1,6 +1,6 @@
 [package]
 name = "ppvpn-cli"
-version = "0.0.0"
+version.workspace = true
 description = "PeakPass VPN command-line client: a local HTTP/SOCKS5 proxy driven by ppvpn-core"
 edition.workspace = true
 rust-version.workspace = true

@@ -8,6 +8,10 @@
 - 原来的 Go 内核已从 main 移除。它的最后一版是 v0.5.21：tag `v0.5.21` 和同名 GitHub Release 的文件保留，
   Desktop 已改用 Rust 引擎，不再 vendor 它；需要 Go 基线的验收（例如 G4、G6）用这些 Release 文件，
   不再从源码构建。
+- 版本号接着 Go 版往上走：Rust 的第一个对外版本是 **0.6.0**（Go 的最后一版是 0.5.21）。引擎、账号、CLI、
+  桌面客户端和特权服务用同一个版本，写在根 `Cargo.toml` 的 `[workspace.package] version`，各 crate 用
+  `version.workspace = true` 继承；改版本只改这一处，`Cargo.lock` 随之更新。桌面安装包的版本仍来自
+  tag `desktop-vX.Y.Z`，发行时应与这里一致（目前没有自动检查）。
 
 ## CI
 
