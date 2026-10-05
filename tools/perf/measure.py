@@ -142,7 +142,7 @@ class Engine:
         self.secret_file = os.path.join(self.work, "session.secret")
         self.log_path = os.path.join(self.work, "core.log")
         command = [binary, "serve", "--socket", self.socket, "--session-secret-file", self.secret_file,
-                   "--state-dir", os.path.join(self.work, "state"), "--platform", "linux",
+                   "--state-dir", os.path.join(self.work, "state"),
                    "--log-file", self.log_path, *extra]
         if netns:
             # ip netns exec execs the command: the child's pid is the engine's.

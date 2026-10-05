@@ -58,17 +58,11 @@ fn serve_flags() -> flags::FlagSet {
         "private file used to exchange the random session secret",
     );
     f.string("state-dir", "", "private directory for device-local state");
-    f.string("platform", "desktop", "platform capability name");
     f.bool("local-proxy", true, "enable the shared authenticated local HTTP/SOCKS5 proxy (one port, node chosen by username)");
     f.bool(
         "tun",
         false,
-        "enable sing-box TUN inbound (requires host-provided privileges)",
-    );
-    f.string(
-        "tun-stack",
-        "mixed",
-        "sing-box TUN stack: mixed, system, or gvisor",
+        "run a TUN instance (requires host-provided privileges)",
     );
     f.string("local-dns-servers", "", "with --tun: comma-separated physical-network resolvers (IP, IP:port or [IPv6]:port) read before system DNS was pointed at the tunnel; the first outside the tunnel answers direct-routed names over UDP");
     f.bool(
@@ -111,10 +105,8 @@ struct Settings {
     socket: String,
     secret_file: String,
     state_dir: String,
-    platform: String,
     local_proxy: bool,
     tun: bool,
-    tun_stack: String,
     local_dns: Vec<String>,
     exit_on_stdin_close: bool,
 }
@@ -124,10 +116,8 @@ async fn serve_with_log(log: &Logger, f: &flags::FlagSet) -> Result<(), String> 
         socket: f.get("socket"),
         secret_file: f.get("session-secret-file"),
         state_dir: f.get("state-dir"),
-        platform: f.get("platform"),
         local_proxy: f.get_bool("local-proxy"),
         tun: f.get_bool("tun"),
-        tun_stack: f.get("tun-stack"),
         local_dns: split_list(&f.get("local-dns-servers")),
         exit_on_stdin_close: f.get_bool("exit-on-stdin-close"),
     };
@@ -139,9 +129,7 @@ async fn serve_with_log(log: &Logger, f: &flags::FlagSet) -> Result<(), String> 
             ("os", &go_os()),
             ("arch", &go_arch()),
             ("log_level", &log.level()),
-            ("platform", &s.platform),
             ("tun", &s.tun),
-            ("tun_stack", &s.tun_stack),
             ("local_proxy", &s.local_proxy),
             ("state_dir", &s.state_dir),
             ("socket", &s.socket),
@@ -152,12 +140,6 @@ async fn serve_with_log(log: &Logger, f: &flags::FlagSet) -> Result<(), String> 
     }
     if s.socket.is_empty() || s.secret_file.is_empty() || s.state_dir.is_empty() {
         return Err("serve requires --socket, --session-secret-file and --state-dir".into());
-    }
-    if !["mixed", "system", "gvisor"].contains(&s.tun_stack.as_str()) {
-        return Err(format!(
-            "unknown TUN stack {:?} (want mixed, system or gvisor)",
-            s.tun_stack
-        ));
     }
     create_private_dir(Path::new(&s.state_dir)).map_err(|e| format!("create state dir: {e}"))?;
     let secret = rotate_session_secret(Path::new(&s.secret_file))
