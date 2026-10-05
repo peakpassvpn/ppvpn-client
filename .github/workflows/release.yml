@@ -191,7 +191,7 @@ jobs:
             echo "environment=$environment"
             echo "package=$package"
           } >>"$GITHUB_OUTPUT"
-          echo "$CHANNEL ${version:-(projects' version)} build $build, tag ${tag:-none}, publish: $publish" >>"$GITHUB_STEP_SUMMARY"
+          echo "$CHANNEL ${version:-(the projects version)} build $build, tag ${tag:-none}, publish: $publish" >>"$GITHUB_STEP_SUMMARY"
           if [ "$REHEARSAL" = true ]; then
             echo "**Rehearsal**: nothing is published. No tag, no provenance, a draft release, the site as an artifact." >>"$GITHUB_STEP_SUMMARY"
           fi
