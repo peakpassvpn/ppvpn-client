@@ -47,9 +47,9 @@ desktop/
 - `crates/ppvpn-client` 和 `crates/engine-host` 是仓库根 Cargo workspace 的成员，按路径依赖
   `crates/ppvpn-account` 和 `crates/ppvpn-core`；它们不在 workspace 的 default-members 里，
   要在各自目录下或用 `-p` 构建。
-- `service/` 不在 workspace 里，有自己的 `Cargo.lock`。
+- `service/` 是仓库根 Cargo workspace 的成员，用根的 `Cargo.lock`。
 - 工具链版本由仓库根的 `rust-toolchain.toml` 固定（1.98.1）。
-- 测试在仓库根的 `.github/workflows/ci.yml`（`desktop-*` job），发行在 `desktop-release.yml`。
+- 测试在仓库根的 `.github/workflows/ci.yml`（`desktop`、`linux`、`macos`、`windows` job），安装包和发行在 `release.yml`。
 
 ## 许可证
 

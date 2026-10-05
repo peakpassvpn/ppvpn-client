@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Release build of the native Windows app, as run by the package-windows job of
-  .github/workflows/desktop-package.yml. Also runs locally.
+  Release build of the native Windows app, as run by the windows job of
+  .github/workflows/release.yml. Also runs locally.
 
 .DESCRIPTION
   Runs package.ps1 (which also builds the ppvpn-client crate and bindings with -Release)

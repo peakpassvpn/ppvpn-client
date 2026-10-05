@@ -1,4 +1,4 @@
-//! Linux enhanced mode end to end (CI job `desktop-linux-enhanced`): the real
+//! Linux enhanced mode end to end (ci.yml's `linux` job): the real
 //! privileged service (the engine in process), this crate's [`Client`] in
 //! enhanced mode, a mock backend and a local Shadowsocks node. Checks that
 //! connecting brings up the TUN with the engine's policy rules (priorities

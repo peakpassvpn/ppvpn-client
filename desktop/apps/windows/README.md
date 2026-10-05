@@ -376,19 +376,17 @@ The installer (about 78 MB; the Windows App SDK runtime is most of it):
 
 ### CI
 
-`.github/workflows/desktop-native-windows.yml` (mirrors `macos-native.yml`)
-runs on pull requests and pushes to main/dev that touch the Windows app, the
-client crate or the service, on `workflow_dispatch`, and as
-a reusable workflow (`workflow_call`: `channel`, `api_base`, optional `version`
-and `build_number`; secret `SPARKLE_PRIVATE_KEY`; output `artifact`).
+Two workflows at the repository root (`desktop/docs/ci.md`):
 
-- `test`: `cargo test` for `crates/ppvpn-client`, its .NET bindings
+- `ci.yml`'s `windows` job, on every pull request: clippy and the platform
+  tests for `crates/ppvpn-client`, its .NET bindings
   (`build-dotnet.ps1 -Release`; `uniffi-bindgen-cs` is installed and cached),
   `dotnet test apps/shared/PPVPN.App.Core.Tests`, then a warning-free
   `dotnet build` of the app (`-warnaserror`; NuGet advisories NU1901/NU1902, low and
   moderate, stay warnings, `Directory.Build.props`), and a warning-free NativeAOT
   `dotnet publish` of the push agent.
-- `package`: `scripts/ci-build.ps1`, which runs `package.ps1` with `-ApiBase <api_base>`
+- `release.yml`'s `windows` job, on every merge to main and in a release run:
+  `scripts/ci-build.ps1`, which runs `package.ps1` with `-ApiBase <api_base>`
   (the app's backend) and, for a channel build, the feed
   `<PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-windows-x64.xml`,
   the public key from `vars.PPVPN_SPARKLE_PUBLIC_KEY` and the private key from
@@ -397,8 +395,8 @@ and `build_number`; secret `SPARKLE_PRIVATE_KEY`; output `artifact`).
   without both keys. The API base defaults like macOS: pull requests use the
   repository variable `PPVPN_DEV_API_BASE`, everything else `https://www.peakpassvpn.com`.
   The build number defaults to the run number.
-- Uploads the artifact `desktop-native-windows-x64`: the setup exe and
-  `release-meta-windows-x64.json`. The caller's publish job puts them in R2.
+- Uploads the artifact `desktop-windows-x64`: the setup exe and
+  `release-meta-windows-x64.json`; a stable release run publishes it.
 - Authenticode stays off unless `WINDOWS_CERTIFICATE` (+ password secret) and
   `vars.WINDOWS_TIMESTAMP_URL` / `vars.PPVPN_WINDOWS_PUBLISHER_SHA256` are set.
 
