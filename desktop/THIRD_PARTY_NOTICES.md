@@ -2,9 +2,10 @@
 
 Third-party components the desktop apps ship or link, beyond what the engine
 links. For the engine see the root
-[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md): the Go core incorporates
-sing-box; the Rust core (feature `rust-core`, off by default) links sail and,
-through btls, BoringSSL, at the commits pinned in the root `Cargo.toml`.
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md): the Rust core, which the
+client links, links sail and, through btls, BoringSSL, at the commits pinned in
+the root `Cargo.toml`; the Go core, which the privileged service still runs,
+incorporates sing-box.
 
 The desktop code itself is GPL-3.0-or-later, like the rest of the repository
 ([LICENSE](../LICENSE)). Versions below are the ones the tree pins; where the

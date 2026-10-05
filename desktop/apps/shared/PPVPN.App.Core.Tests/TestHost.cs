@@ -329,7 +329,7 @@ sealed class Harness : IDisposable
     public Harness(FakeOptions? options = null, MemoryHooks? hooks = null, TimeProvider? time = null, ILocalizer? strings = null)
     {
         Hooks = hooks ?? new MemoryHooks();
-        Config = new ClientConfig(ApiBase, Path.Combine(_root, "data"), Path.Combine(_root, "logs"), Path.Combine(_root, "bin"), "linux", "0.0.0-test");
+        Config = new ClientConfig(ApiBase, Path.Combine(_root, "data"), Path.Combine(_root, "logs"), "linux", "0.0.0-test");
         var opts = (options ?? new FakeOptions()) with
         {
             Browser = options?.Browser ?? FakeBrowserMode.Pretend,

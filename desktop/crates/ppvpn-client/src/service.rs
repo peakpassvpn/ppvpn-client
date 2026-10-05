@@ -597,7 +597,7 @@ fn blocking_watch(
     key: &[u8],
     cancel: &AtomicBool,
 ) -> WatchEnd {
-    match crate::core_ipc::open_pipe(endpoint) {
+    match open_pipe(endpoint) {
         Ok(pipe) => run_watch(&mut PolledPipe(pipe), body, request_id, key, cancel),
         Err(error) => WatchEnd::Lost(error),
     }
@@ -957,7 +957,7 @@ fn blocking_transact(
     _timeout: Duration,
     handshake: bool,
 ) -> Result<Vec<u8>, ServiceError> {
-    let mut pipe = crate::core_ipc::open_pipe(endpoint).map_err(ServiceError::Unavailable)?;
+    let mut pipe = open_pipe(endpoint).map_err(ServiceError::Unavailable)?;
     exchange(&mut pipe, body, handshake)
 }
 
@@ -1182,6 +1182,29 @@ pub(crate) fn forwarded_core_error(error: ServiceError) -> CoreCallError {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// Opens a named pipe, retrying while every server instance is busy.
+#[cfg(windows)]
+fn open_pipe(name: &str) -> Result<std::fs::File, String> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+        {
+            Ok(pipe) => return Ok(pipe),
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(format!("open pipe {name}: {error}")),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

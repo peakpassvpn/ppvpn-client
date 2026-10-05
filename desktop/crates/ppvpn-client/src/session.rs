@@ -1239,7 +1239,6 @@ mod tests {
             api_base: base.to_string(),
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir.clone(),
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };
@@ -1564,7 +1563,6 @@ mod tests {
             api_base: "http://127.0.0.1:9".into(),
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir,
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };

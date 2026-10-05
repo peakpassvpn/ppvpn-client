@@ -146,7 +146,6 @@ fn client_role() {
         api_base,
         data_dir: data_dir.clone(),
         log_dir: data_dir,
-        core_bin_dir: APP_DIR.into(),
         platform: "linux".into(),
         app_version: "0.0.0-e2e".into(),
     };

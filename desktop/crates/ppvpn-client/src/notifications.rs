@@ -268,7 +268,6 @@ mod tests {
                 api_base: base.to_string(),
                 data_dir: data_dir.to_string(),
                 log_dir: data_dir.to_string(),
-                core_bin_dir: data_dir.to_string(),
                 platform: "macos".into(),
                 app_version: "0.0.0-test".into(),
             },

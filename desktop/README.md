@@ -2,10 +2,8 @@
 
 PPVPN 的原生桌面客户端：macOS（SwiftUI）、Windows（WinUI 3）、Linux（GTK 4），
 共用 Rust 客户端核心 `crates/ppvpn-client`（UniFFI 绑定）和特权服务 `service/`。
-网络引擎目前是 Go 版 `ppvpn-core`（冻结在 0.5.21），以独立进程运行、经 IPC 调用；
-切换到进程内的 Rust `ppvpn-core`（仓库根的 `crates/ppvpn-core`）见
-[#214](https://github.com/peakpassvpn/ppvpn-core/issues/45)，在 `ppvpn-client` 里是默认关闭的
-feature `rust-core`。
+网络引擎是 Rust `ppvpn-core`（仓库根的 `crates/ppvpn-core`）：标准模式在应用进程内运行；
+增强模式在切换期间仍由特权服务托管 Go 版 `ppvpn-core`（0.5.21）进程。
 
 本目录里的路径和命令都以 `desktop/` 为根（脚本也是）。
 
@@ -37,6 +35,7 @@ desktop/
 │   ├── linux/        # GTK 4 app、deb/rpm
 │   └── shared/       # PPVPN.App.Core（Windows 与 Linux 共用的视图模型）、PPVPN.Client
 ├── crates/ppvpn-client/  # 共享客户端核心（账号、Profile、连接状态机、健康检查、UniFFI）
+├── crates/engine-host/   # 进程内引擎上的 Core API v1（客户端与特权服务共用）
 ├── service/              # 特权服务：托管增强模式 core、client↔service IPC、系统 DNS
 ├── vendor/ppvpn-core/    # Go core 的 CURRENT 与 manifest；二进制不入库，由脚本下载
 ├── assets/icons/         # 品牌与托盘图标
@@ -46,9 +45,9 @@ desktop/
 
 与仓库其余部分的关系：
 
-- `crates/ppvpn-client` 是仓库根 Cargo workspace 的成员，按路径依赖 `crates/ppvpn-account`
-  和（feature `rust-core` 打开时）`crates/ppvpn-core`；它不在 workspace 的 default-members 里，
-  要在它自己的目录下或用 `-p ppvpn-client` 构建。
+- `crates/ppvpn-client` 和 `crates/engine-host` 是仓库根 Cargo workspace 的成员，按路径依赖
+  `crates/ppvpn-account` 和 `crates/ppvpn-core`；它们不在 workspace 的 default-members 里，
+  要在各自目录下或用 `-p` 构建。
 - `service/` 不在 workspace 里，有自己的 `Cargo.lock`。
 - 工具链版本由仓库根的 `rust-toolchain.toml` 固定（1.98.1）。
 - 工作流在仓库根的 `.github/workflows/desktop.yml`。

@@ -36,10 +36,7 @@ enum Trigger {
 fn is_standard_error(info: &ClientErrorInfo) -> bool {
     matches!(
         info.code,
-        ErrorCode::StandardCoreFailed
-            | ErrorCode::CoreBinaryMissing
-            | ErrorCode::CoreIncompatible
-            | ErrorCode::ProfileExpired
+        ErrorCode::StandardCoreFailed | ErrorCode::ProfileExpired
     )
 }
 
@@ -751,7 +748,6 @@ mod tests {
             api_base: base,
             data_dir: data_dir.clone(),
             log_dir: data_dir.clone(),
-            core_bin_dir: data_dir.clone(),
             platform: "macos".into(),
             app_version: "0.0.0-test".into(),
         };
@@ -823,7 +819,6 @@ mod tests {
                 api_base: base,
                 data_dir: data_dir.clone(),
                 log_dir: data_dir.clone(),
-                core_bin_dir: data_dir.clone(),
                 platform: "macos".into(),
                 app_version: "0.0.0-test".into(),
             },
@@ -1503,7 +1498,6 @@ mod tests {
                 api_base: "http://127.0.0.1:9".into(),
                 data_dir: data_dir.clone(),
                 log_dir: data_dir.clone(),
-                core_bin_dir: data_dir.clone(),
                 platform: "macos".into(),
                 app_version: "0.0.0-test".into(),
             },
@@ -1858,7 +1852,6 @@ mod tests {
                 api_base,
                 data_dir: data_dir.into(),
                 log_dir: data_dir.into(),
-                core_bin_dir: data_dir.into(),
                 platform: "linux".into(),
                 app_version: "0.0.0-test".into(),
             }

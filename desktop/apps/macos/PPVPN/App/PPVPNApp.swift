@@ -210,7 +210,6 @@ extension ClientConfig {
             apiBase: apiBase,
             dataDir: support.path,
             logDir: logs.path,
-            coreBinDir: bundle.executableURL?.deletingLastPathComponent().path ?? bundle.bundlePath,
             platform: "macos",
             appVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0")
     }

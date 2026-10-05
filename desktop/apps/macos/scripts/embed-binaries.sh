@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Xcode pre-build phase (so the final app signature seals them): copy ppvpn-core and the privileged-service helpers into
-# Contents/MacOS, where ppvpn-client (core_bin_dir) and ppvpn-service-install
-# (current_exe siblings) look for them, and ad-hoc sign each one.
+# Contents/MacOS, where ppvpn-service-install (current_exe siblings) looks for
+# them, and ad-hoc sign each one.
 #
 # Inputs are the universal binaries staged by the repo scripts:
 #   scripts/stage-macos-core.sh && scripts/build-service.sh macos

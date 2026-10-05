@@ -103,7 +103,6 @@ so it never overwrites (or reads) a real session.
 | `ApiBase` | Settings → Developer → API endpoint (`--dev`) if set (restart to apply), else the build property `PPVPN_API_BASE` |
 | `DataDir` | `%LOCALAPPDATA%\PPVPN` (also holds the app's `app-settings.json`; `client-settings.json` there is the crate's) |
 | `LogDir` | `%LOCALAPPDATA%\PPVPN\logs`: the crate's `ppvpn-client.<date>.log` and `ppvpn-core.<date>.log`, the app's `ppvpn-windows.<date>.log` |
-| `CoreBinDir` | the app directory, where the installer puts `ppvpn-core.exe` |
 | `Platform` | `windows` |
 | `AppVersion` | `VersionPrefix` from `Directory.Build.props` |
 

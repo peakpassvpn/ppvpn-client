@@ -15,10 +15,8 @@ Xcode、XcodeGen 和 Swift 6.4。
 scripts/fetch-vendored-core.sh                 # 全部平台
 scripts/fetch-vendored-core.sh linux-x86_64    # 只取一个（manifest 里的 key）
 
-# 客户端 crate（仓库根 workspace 的成员，默认经 IPC 驱动 Go core）
+# 客户端 crate（仓库根 workspace 的成员，在进程内链接 Rust ppvpn-core 和 sail）
 (cd crates/ppvpn-client && cargo test --locked)
-# 链接 Rust ppvpn-core 的构建（feature rust-core，默认关闭）
-(cd crates/ppvpn-client && cargo test --locked --features rust-core --lib rust_core)
 
 # 特权服务（不在 workspace 里，有自己的 Cargo.lock）
 (cd service && cargo build --release --locked --bins)

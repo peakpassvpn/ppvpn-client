@@ -19,6 +19,7 @@ mod detect;
 mod device;
 #[cfg(all(test, target_os = "linux", feature = "linux-e2e"))]
 mod e2e_linux;
+mod engine;
 mod enhanced;
 mod errors;
 mod ingress;
@@ -56,11 +57,9 @@ pub struct ClientConfig {
     pub data_dir: String,
     /// Directory for the daily-rotated logs (UTC dates, 7 days kept):
     /// `ppvpn-client.YYYY-MM-DD.log` written by this library and
-    /// `ppvpn-core.YYYY-MM-DD.log` written by the standard-mode core. Level
+    /// `ppvpn-core.YYYY-MM-DD.log` written by the standard-mode engine. Level
     /// `info`; override with the `PPVPN_LOG` environment variable.
     pub log_dir: String,
-    /// Directory holding the bundled `ppvpn-core` binary.
-    pub core_bin_dir: String,
     /// `macos` | `windows` | `linux`; sent to the core and the device-login request.
     pub platform: String,
     /// App version shown on the web authorization page.
@@ -598,21 +597,7 @@ impl Client {
         logging::install(&config.log_dir);
         tracing::info!(app_version = %config.app_version, api = %config.api_base, "client created");
         let launcher: Arc<dyn standard::CoreLauncher> =
-            Arc::new(standard::ProcessLauncher::new(&config));
-        #[cfg(feature = "rust-core")]
-        let launcher = match rust_core::launcher(
-            &config,
-            std::env::var_os(rust_core::RUST_CORE_ENV).as_deref(),
-        ) {
-            Some(engine) => {
-                tracing::info!("standard core: in-process Rust ppvpn-core");
-                engine
-            }
-            None => {
-                tracing::info!("standard core: Go ppvpn-core process");
-                launcher
-            }
-        };
+            Arc::new(engine::EngineLauncher::new(&config));
         let rule_set_hosts = core_ipc::rule_set_hosts(&config.api_base);
         Self::with_parts(
             config,
@@ -1077,6 +1062,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(feature = "rust-core")]
-mod rust_core;
