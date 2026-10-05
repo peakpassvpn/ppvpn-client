@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 pub(crate) use ppvpn_account::auth::{AccessToken, Auth, AuthError, SignedIn};
-use ppvpn_account::auth::{AuthConfig, CredentialStore, StoreError, StoreFailure};
+use ppvpn_account::auth::{
+    AuthConfig, CredentialStore, StoreError, StoreFailure, VERIFICATION_PATHS,
+};
 
 use crate::api::{Api, ApiErrorExt, PRODUCT_AUDIENCE};
 use crate::errors::{ClientError, ErrorCode};
@@ -13,7 +15,6 @@ use crate::{PlatformError, PlatformHooks};
 /// Production verification page; any other host is rejected outside debug
 /// builds (the configured API base's own host aside).
 const VERIFICATION_HOST: &str = "www.peakpassvpn.com";
-const VERIFICATION_PATH: &str = "/dashboard/cli/authorize";
 
 /// Device name shown in the user's device list (and the admin broadcast
 /// picker): the app and the OS, so a user's machines can be told apart
@@ -35,7 +36,7 @@ pub(crate) fn client_auth(api: Arc<Api>, platform: Arc<dyn PlatformHooks>) -> Au
         Arc::new(PlatformStore(platform)),
         AuthConfig {
             verification_host: VERIFICATION_HOST.to_string(),
-            verification_path: VERIFICATION_PATH.to_string(),
+            verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
         },
     )
 }

@@ -26,9 +26,16 @@ pub struct AuthConfig {
     /// The production host of the verification page (HTTPS, port 443).
     /// The configured API base's own host is trusted as well.
     pub verification_host: String,
-    /// The page's path; the URL must carry exactly one `user_code` query.
-    pub verification_path: String,
+    /// The page's accepted paths; the URL must carry exactly one
+    /// `user_code` query.
+    pub verification_paths: Vec<String>,
 }
+
+/// The backend's browser authorization page, for every client. The page
+/// moved from the old path to the new one; both are accepted while
+/// backends in the field still return the old one.
+pub const VERIFICATION_PATHS: &[&str] =
+    &["/dashboard/device/authorize", "/dashboard/cli/authorize"];
 
 /// The host's secret store for the credential blob (Keychain, Credential
 /// Manager, Secret Service, ...). Called from any thread; may block briefly.
@@ -810,7 +817,10 @@ fn validate_verification_url(
         });
     let query = url.query_pairs().collect::<Vec<_>>();
     if (!prod && !configured)
-        || url.path() != config.verification_path
+        || !config
+            .verification_paths
+            .iter()
+            .any(|path| url.path() == path)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -1052,7 +1062,7 @@ mod tests {
     fn config() -> AuthConfig {
         AuthConfig {
             verification_host: "www.example.com".into(),
-            verification_path: "/device/authorize".into(),
+            verification_paths: vec!["/device/authorize".into(), "/old/authorize".into()],
         }
     }
 
@@ -1220,6 +1230,40 @@ mod tests {
             );
         }
         assert!(validate_verification_url(&config(), valid, "ZZZZ-ZZZZ", base, false).is_err());
+    }
+
+    #[test]
+    fn every_accepted_verification_path_is_trusted() {
+        let base = "https://api.example.com";
+        for valid in [
+            "https://www.example.com/device/authorize?user_code=ABCD-EFGH",
+            "https://www.example.com/old/authorize?user_code=ABCD-EFGH",
+        ] {
+            assert!(
+                validate_verification_url(&config(), valid, "ABCD-EFGH", base, false).is_ok(),
+                "{valid}"
+            );
+        }
+        let other = "https://www.example.com/dashboard/authorize?user_code=ABCD-EFGH";
+        assert!(validate_verification_url(&config(), other, "ABCD-EFGH", base, false).is_err());
+    }
+
+    #[test]
+    fn the_backend_page_is_accepted_at_its_new_and_old_paths() {
+        let config = AuthConfig {
+            verification_host: "www.example.com".into(),
+            verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
+        };
+        let base = "https://api.example.com";
+        for path in ["/dashboard/device/authorize", "/dashboard/cli/authorize"] {
+            let url = format!("https://www.example.com{path}?user_code=ABCD-EFGH");
+            assert!(
+                validate_verification_url(&config, &url, "ABCD-EFGH", base, false).is_ok(),
+                "{url}"
+            );
+        }
+        let bad = "https://www.example.com/dashboard/authorize?user_code=ABCD-EFGH";
+        assert!(validate_verification_url(&config, bad, "ABCD-EFGH", base, false).is_err());
     }
 
     #[test]
