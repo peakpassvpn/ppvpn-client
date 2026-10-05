@@ -248,6 +248,27 @@ struct SelectionFile {
     node_id: String,
 }
 
+/// The selected node (`snapshot.selected_node_id`) as both cores read it
+/// for every `apply-profile`; reads `None` when unset (tests).
+#[derive(Clone, Default)]
+pub(crate) struct SelectionSource(Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>);
+
+impl SelectionSource {
+    pub(crate) fn new(read: impl Fn() -> Option<String> + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(read)))
+    }
+
+    pub(crate) fn get(&self) -> Option<String> {
+        self.0.as_ref().and_then(|read| read())
+    }
+}
+
+impl std::fmt::Debug for SelectionSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SelectionSource")
+    }
+}
+
 /// The node chosen in an earlier run, if any.
 pub(crate) fn load_selection(data_dir: &str) -> Option<String> {
     let raw = std::fs::read(Path::new(data_dir).join(SELECTION_FILE)).ok()?;
@@ -1147,8 +1168,8 @@ impl Client {
         if !applied {
             return Err(ClientError::NotSignedIn);
         }
-        // Applied to the standard core, and live while enhanced mode is on
-        // (stored for the next connect otherwise).
+        // Applied to the standard core, and live while enhanced mode is on;
+        // every later apply and connect carries it.
         self.apply_selection(&node_id)
             .await
             .map_err(|error| self.report(error))

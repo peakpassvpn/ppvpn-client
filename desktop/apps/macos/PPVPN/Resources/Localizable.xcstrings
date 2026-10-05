@@ -3265,6 +3265,40 @@
         }
       }
     },
+    "proxyResetD": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本地代理的用户名和密码已重新生成。使用它的应用（如浏览器扩展）需要重新复制。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local proxy's user names and passwords were regenerated. Apps that use it, such as a browser extension, need them copied again."
+          }
+        }
+      }
+    },
+    "proxyResetT": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本地代理凭据已重置"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Proxy Credentials Reset"
+          }
+        }
+      }
+    },
     "proxyRouted": {
       "extractionState": "manual",
       "localizations": {

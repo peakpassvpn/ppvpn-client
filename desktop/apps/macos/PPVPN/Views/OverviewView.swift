@@ -225,6 +225,7 @@ private struct NoticeCard: View {
         case .retryLocalProxy?: model.refreshProfile()
         case .backToAuto?: model.unpinCurrentNode()
         case .dismissClearedPins?: model.dismissClearedIngressPins()
+        case .dismissProxyReset?: model.dismissLocalProxyCredentialsReset()
         case nil: break
         }
     }

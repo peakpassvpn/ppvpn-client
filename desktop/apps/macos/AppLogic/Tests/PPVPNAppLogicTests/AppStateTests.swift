@@ -126,8 +126,10 @@ final class AppStateTests: LogicTestCase {
         backend.push(.fixture(pins: [IngressPin(nodeId: "hk-1", endpointKey: "hk-1-1")]))
         state.unpinCurrentNode()
         state.dismissClearedIngressPins()
+        state.dismissLocalProxyCredentialsReset()
         await settle { self.backend.calls.contains("pin hk-1 auto") }
         XCTAssertTrue(backend.calls.contains("dismissClearedPins"))
+        XCTAssertTrue(backend.calls.contains("dismissProxyReset"))
     }
 
     // MARK: Service install explanation

@@ -9,8 +9,12 @@
 //!   fresh even when the user never runs a speed test, costs one handshake
 //!   per replica per minute, and works with enhanced mode on because the TUN
 //!   core excludes ingress addresses.
-//! - Self-heal: if the standard core's selection drifted (e.g. after a
-//!   restart), the current node is selected again.
+//! - Self-heal: if the standard core's selection drifted (e.g. a live
+//!   `select-node` failed), the current node is selected again. A new or
+//!   recreated core needs no repair: every apply carries the selection and
+//!   the pins.
+//! - Ingresses: each node's pin and ingress health from the same
+//!   `GetStatus` (`nodes`), for `snapshot.node_ingresses`.
 //! - Rule sets: the unavailable routing rule sets of the core in use (the
 //!   enhanced core's while it is on, otherwise the standard core's), from
 //!   the same `GetStatus` (`rule_sets`, core 0.5.0+).
@@ -95,14 +99,9 @@ impl Client {
             .as_ref()
             .map(|status| core_ipc::unavailable_rule_sets(&status.rule_sets))
             .unwrap_or_default();
-        let pins = self.ingress_pins.get();
         let standard_nodes = standard_status
             .as_ref()
             .and_then(|status| status.nodes.clone());
-        // Only cores that report pins (0.5.7+) get them re-sent.
-        if let (Some(transport), Some(nodes)) = (standard.as_ref(), standard_nodes.as_deref()) {
-            crate::ingress::push(transport.as_ref(), &pins, Some(nodes), "standard core").await;
-        }
         if let (Some(status), Some(node)) = (standard_status, selected.as_deref()) {
             if status.selected_node_id.as_deref() == Some(node) {
                 standard_detail = ConnectionDetail {
@@ -159,9 +158,6 @@ impl Client {
         let enhanced_nodes = enhanced_status
             .as_ref()
             .and_then(|status| status.nodes.clone());
-        if let Some(nodes) = enhanced_nodes.as_deref() {
-            self.enhanced.push_ingress_pins(&pins, Some(nodes)).await;
-        }
         let node_ingresses = match enhanced_status.as_ref() {
             Some(_) => enhanced_nodes,
             None => standard_nodes,
