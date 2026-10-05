@@ -4,28 +4,19 @@ name: desktop-package
 # and Linux (deb and rpm), each with its release metadata, uploaded as
 # workflow artifacts. Builds only: nothing is published from here.
 #
-# - A pull request that touches the packaging (this workflow, the packaging
-#   scripts and files) builds all three without any secret: unsigned on
-#   Windows, ad-hoc signed on macOS, no update signature.
+# - Called by ci.yml in a full run (merge queue, by hand, ci:full) whose
+#   change touches the packaging (this workflow, the packaging scripts and
+#   files; tools/ci-changes.sh `packaging`): all three without any secret,
+#   unsigned on Windows, ad-hoc signed on macOS, no update signature.
 # - By hand, for a test build of any ref: as a pull request's, without
 #   secrets, against the production backend.
 # - Called by the release workflow with an environment: the jobs then run
 #   in it and read the signing secrets and the backend address from it.
 #
 # None of these jobs is a required check, and none may share a name with
-# one (rust.yml's `macos`): a required check is matched by job name.
+# one (ci.yml's `macos`): a required check is matched by job name.
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/desktop-package.yml
-      - tools/release-features-check.sh
-      - desktop/scripts/**
-      - desktop/apps/*/scripts/**
-      - desktop/apps/linux/packaging/**
-      - desktop/apps/windows/installer/**
-      - desktop/crates/ppvpn-client/scripts/**
-      - desktop/vendor/**
   workflow_dispatch:
     inputs:
       channel:
@@ -44,7 +35,7 @@ on:
   workflow_call:
     inputs:
       channel:
-        description: dev or stable
+        description: dev or stable; none from ci.yml (a test build)
         type: string
         required: true
       environment:
@@ -55,11 +46,11 @@ on:
         type: string
         required: false
       version:
-        description: x.y.z from the release tag
+        description: x.y.z from the release tag (empty from ci.yml)
         type: string
         required: true
       build_number:
-        description: Release-wide build counter shared by all platforms (0-65535)
+        description: Release-wide build counter shared by all platforms, 0-65535 (empty from ci.yml = run number)
         type: string
         required: true
     # Secrets of the environment above. A job reads them only when an

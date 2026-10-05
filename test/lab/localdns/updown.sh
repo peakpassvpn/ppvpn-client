@@ -2,13 +2,14 @@
 # Link down/up through the core's TUN: how fast direct traffic comes back, and
 # that the host-IPv6 re-probe does not switch kernels while offline (#69).
 #
-#   [CORE_ENGINE=go|rust] updown.sh <core> <ldnslab> <profile.json> <mode> <out dir>
+#   [CORE_ENGINE=rust|go] updown.sh <core> <ldnslab> <profile.json> <mode> <out dir>
 #
-# go (default): the Go lab build (make build-lab-linux: localdns_testsource),
-# resolvers from $PPVPN_LOCALDNS_TEST_FILE, kernel switches from its log.
-# rust: ppvpn-core-lab; resolvers from the namespace's resolv.conf
+# rust (default): ppvpn-core-lab; resolvers from the namespace's resolv.conf
 # (/etc/netns/ud-c/resolv.conf), kernel switches from its KernelSwitched
 # events (watch-events). As run.sh.
+# go: a Go 0.5.21 lab build (built from the v0.5.21 tag with the
+# localdns_testsource tag; the Go core is no longer on main), resolvers from
+# $PPVPN_LOCALDNS_TEST_FILE, kernel switches from its log.
 # Needs root, iproute2 (with netns) and curl; everything runs in two network
 # namespaces of its own (ud-c client, ud-a network), removed on exit.
 #
@@ -42,7 +43,7 @@ R=$OUT/run; mkdir -p "$R"
 # and the log keeps the time taken (recovered_ms).
 GRACE=${SWITCH_GRACE_MS:-0}
 if [ "$GRACE" -gt 0 ]; then LIMIT_MS=${LIMIT_MS:-15000}; else LIMIT_MS=${LIMIT_MS:-2500}; fi
-ENGINE=${CORE_ENGINE:-go}
+ENGINE=${CORE_ENGINE:-rust}
 case $ENGINE in go|rust) ;; *) echo "CORE_ENGINE must be go or rust, not $ENGINE" >&2; exit 2 ;; esac
 NETNS_ETC=/etc/netns/ud-c
 now() { "$LAB" now; }
