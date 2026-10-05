@@ -409,6 +409,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/lib/ppvpn-service/ppvpn-service
+# glibc keeps freed memory in per-thread malloc arenas: engine instances
+# started and stopped in this process otherwise grow its RSS for good.
+Environment=MALLOC_ARENA_MAX=2
 Restart=always
 RestartSec=5
 # On SIGTERM the service shuts its TUN instance down (at most 10 s).
