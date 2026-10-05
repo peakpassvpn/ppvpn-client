@@ -152,7 +152,7 @@ jobs:
       - name: release feature check
         run: |
           tools/release-features-check.sh -p ppvpn-cli
-          tools/release-features-check.sh -p ppvpn-client --features rust-core
+          tools/release-features-check.sh -p ppvpn-client
           for features in "-p ppvpn-core --features fault-injection" "-p ppvpn-core --features testing" \
                           "-p ppvpn-core --features lab" "-p ppvpn-cli --features testing"; do
             if tools/release-features-check.sh $features; then
@@ -450,7 +450,7 @@ jobs:
   # ---- The desktop client (desktop/). None of these is a required check.
 
   # The privileged service (a workspace member, shipped with the "service"
-  # profile), the vendored Go core and the scripts.
+  # profile; it hosts the TUN engine) and the scripts.
   desktop-rust:
     needs: changes
     if: >-
@@ -468,10 +468,9 @@ jobs:
         with:
           key: desktop-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The Go core's binaries are not in git: download them from the release
-      # the manifest names and check each against the manifest.
-      - name: Fetch and verify the vendored core
-        run: desktop/scripts/fetch-vendored-core.sh
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
       - name: Test the privileged service
         working-directory: desktop/service
         run: |
@@ -483,7 +482,7 @@ jobs:
           python3 -m unittest discover -s desktop/scripts/ci -p '*_test.py' -v
 
   # The shared layers every app depends on: the client crate as the apps link
-  # it (the Go core over IPC), the C# view models (App.Core) used by Windows
+  # it (with the Rust engine), the C# view models (App.Core) used by Windows
   # and Linux, and the Linux app's own unit tests (no GTK runtime needed).
   desktop-client:
     needs: changes
@@ -570,115 +569,8 @@ jobs:
       - name: Test AppLogic
         run: swift test --package-path desktop/apps/macos/AppLogic
 
-  # The client with the Rust ppvpn-core linked in (feature `rust-core`, off
-  # in releases until the switch): clippy and tests on Linux. On a pull
-  # request when desktop/ changed; in a full run also when the engine did
-  # (the engine's API is what this links).
-  desktop-rust-core:
-    needs: changes
-    if: >-
-      (needs.changes.outputs.desktop == 'true' && github.event_name != 'push') ||
-      (needs.changes.outputs.engine == 'true' && needs.changes.outputs.full == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-          components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: desktop-rust-core
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - name: Clippy and test with the Rust core
-        working-directory: desktop/crates/ppvpn-client
-        run: |
-          cargo clippy --locked --features rust-core --all-targets -- -D warnings
-          cargo test --locked --features rust-core --lib rust_core
-
-  # The client library the apps link, with the Rust engine (feature
-  # rust-core), built for every target the apps ship: both macOS
-  # architectures (the app's universal library) and Windows x64 (MSVC).
-  # Compile and link only; the engine's own tests are the macos and
-  # windows-msvc jobs. BoringSSL comes prebuilt per target, as there.
-  desktop-rust-core-macos:
-    needs: changes
-    if: >-
-      (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.engine == 'true') &&
-      needs.changes.outputs.full == 'true'
-    runs-on: macos-15
-    timeout-minutes: 60
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: desktop-rust-core-macos
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: prebuilt BoringSSL
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
-            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
-          for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock "$target" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
-          done
-      - name: Build the client library with the Rust core
-        run: |
-          for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --locked -p ppvpn-client --features rust-core --lib --target "$target"
-          done
-
-  desktop-rust-core-windows:
-    needs: changes
-    if: >-
-      (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.engine == 'true') &&
-      needs.changes.outputs.full == 'true'
-    runs-on: windows-latest
-    timeout-minutes: 60
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      # bindgen's libclang (btls-sys), from the runner's LLVM: still needed
-      # with the prebuilt BoringSSL (NASM and CMake are not).
-      LIBCLANG_PATH: C:\Program Files\LLVM\bin
-    steps:
-      - name: LF checkout
-        run: git config --global core.autocrlf false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-          targets: x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: desktop-rust-core-windows
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: prebuilt BoringSSL
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/prebuilt-boringssl.sh" \
-            https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
-          bash "$RUNNER_TEMP/prebuilt-boringssl.sh" Cargo.lock x86_64-pc-windows-msvc | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
-      - name: Build the client library with the Rust core
-        shell: bash
-        run: cargo build --locked -p ppvpn-client --features rust-core --lib --target x86_64-pc-windows-msvc
-
   # L3 for the desktop on Linux: enhanced mode end to end, as root on the
-  # runner: the privileged service with the vendored Go core, the client
+  # runner: the privileged service with the engine in process, the client
   # crate connecting and disconnecting through it (src/e2e_linux.rs, feature
   # linux-e2e), a mock backend and a local Shadowsocks node (test/fakenode).
   # Checks the TUN, the core's policy rules and routing table, traffic
@@ -710,8 +602,6 @@ jobs:
         with:
           go-version-file: test/go.mod
           cache-dependency-path: test/go.sum
-      - name: Fetch and verify the vendored core
-        run: desktop/scripts/fetch-vendored-core.sh linux-x86_64
       - uses: ./.github/actions/prebuilt-boringssl
         with:
           targets: x86_64-unknown-linux-gnu
@@ -726,13 +616,10 @@ jobs:
           make test-tools
       - name: Install the packages' layout
         # Where the deb puts them: the service accepts only /usr/lib/ppvpn/ppvpn
-        # as a client, and runs the ppvpn-core next to itself.
+        # as a client.
         run: |
-          core="desktop/vendor/ppvpn-core/$(cat desktop/vendor/ppvpn-core/CURRENT)/build/ppvpn-core-linux-amd64"
           sudo install -D -o root -g root -m 0755 "$CLIENT_TEST" /usr/lib/ppvpn/ppvpn
-          sudo install -D -o root -g root -m 0755 "$core" /usr/lib/ppvpn/ppvpn-core
           sudo install -D -o root -g root -m 0755 target/debug/ppvpn-service /usr/lib/ppvpn-service/ppvpn-service
-          sudo install -D -o root -g root -m 0755 "$core" /usr/lib/ppvpn-service/ppvpn-core
       - name: Enhanced mode end to end
         run: |
           sudo NETNS_TIMEOUT=600 NETNS_ENV="PPVPN_E2E_FAKENODE=$PWD/build/test-tools/fakenode" \

@@ -6,8 +6,8 @@
 - Rust `ppvpn-core` 不单独发布二进制：Desktop 和 CLI 从本仓库的源码编译它（#214），桌面端的发行流程是
   `desktop-release.yml`。
 - 原来的 Go 内核已从 main 移除。它的最后一版是 v0.5.21：tag `v0.5.21` 和同名 GitHub Release 的文件保留，
-  切换前 Desktop 仍 vendor 这个版本（`desktop/vendor/ppvpn-core`），需要 Go 基线的验收（例如 G4、G6）
-  也用这些 Release 文件，不再从源码构建。
+  Desktop 已改用 Rust 引擎，不再 vendor 它；需要 Go 基线的验收（例如 G4、G6）用这些 Release 文件，
+  不再从源码构建。
 
 ## CI
 
