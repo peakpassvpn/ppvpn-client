@@ -1,13 +1,13 @@
 # Performance checks, tiers A and B
 
-`.github/workflows/perf.yml` measures, at each main push, the numbers that barely depend on the machine:
+By hand on the test host (no workflow runs it since the Go core left main; see `docs/testing.md`), these scripts measure the numbers that barely depend on the machine:
 
 - release binary sizes;
 - the engine process's RSS, both idle and under a fixed load;
 - allocations;
 - apply and kernel-switch time.
 
-It compares them with the last main run and with the Go 0.5.21 baseline in `testdata/perf/`. A crossed threshold turns the workflow red. Nothing is blocked, because the workflow is not a required check.
+`report.py compare` compares them with an earlier run and with the Go 0.5.21 baseline in `testdata/perf/`; the Go engine to measure against is the v0.5.21 release file.
 
 | File | Role |
 | --- | --- |
@@ -15,7 +15,7 @@ It compares them with the last main run and with the Go 0.5.21 baseline in `test
 | `report.py` | `collect` (`PERF` lines and sizes into JSON), `merge`, `check` (numbers only, since the file is public) and `compare` (thresholds). Adapted from Sail's. |
 | `../../test/perf/fakenode` | The stand-in node, on loopback: Shadowsocks 2022, AnyTLS (with a certificate generated at start, trusted through `SSL_CERT_FILE`) and an echo sink. |
 | `../../test/perf/loadgen` | The fixed loads through the local proxy. |
-| `../../internal/runtime/perf_alloc_test.go` | The Go engine's allocation counts. They compare only with the same engine. |
+| `internal/runtime/perf_alloc_test.go` at tag v0.5.21 | The Go engine's allocation counts (the Go core is no longer on main). They compare only with the same engine. |
 
 ## Metrics
 
@@ -30,7 +30,7 @@ All metrics use the same profile: one Shadowsocks 2022 node and one AnyTLS node,
 - **alloc** (Go engine only):
   - `<proto>.allocations_per_mib` and `allocated_bytes_per_mib` over a 64 MiB stream;
   - `allocations_per_connection` over 500 connections.
-- **size**: the six desktop release binaries, built as `release.yml` builds them.
+- **size**: the six desktop release binaries of v0.5.21 (built by that tag's `release.yml`).
 
 ## Caveats
 

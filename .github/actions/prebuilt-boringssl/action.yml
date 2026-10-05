@@ -1,0 +1,40 @@
+name: prebuilt BoringSSL
+description: >-
+  BoringSSL as btls publishes it for the btls-sys that Cargo.lock pins
+  (checked against the release's SHA256SUMS and build attestation), instead
+  of compiling it; btls's script at a fixed commit. Exports the per-target
+  BORING_BSSL_* variables to the job's environment, so several targets can
+  be set up in one job. Installs gh first where the job has none (the swift
+  container); gh verifies the attestation.
+inputs:
+  targets:
+    description: Rust target triples, separated by spaces
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TARGETS: ${{ inputs.targets }}
+      run: |
+        set -euo pipefail
+        if ! command -v gh >/dev/null; then
+          # Ubuntu's own gh predates `gh attestation`: GitHub's apt repository.
+          apt-get update
+          apt-get install -y --no-install-recommends curl ca-certificates
+          install -d -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            > /etc/apt/sources.list.d/github-cli.list
+          apt-get update
+          apt-get install -y --no-install-recommends gh
+        fi
+        script="$RUNNER_TEMP/prebuilt-boringssl.sh"
+        curl -fsSL --retry 3 -o "$script" \
+          https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+        for target in $TARGETS; do
+          bash "$script" Cargo.lock "$target" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+        done
