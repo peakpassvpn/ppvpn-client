@@ -1544,7 +1544,7 @@ mod tests {
             vec![(
                 "200 OK",
                 format!(
-                    r#"{{"device_code":"{}","user_code":"ABCD-EFGH","verification_uri_complete":"{base}/dashboard/cli/authorize?user_code=ABCD-EFGH","expires_in":600,"interval":5}}"#,
+                    r#"{{"device_code":"{}","user_code":"ABCD-EFGH","verification_uri_complete":"{base}/dashboard/device/authorize?user_code=ABCD-EFGH","expires_in":600,"interval":5}}"#,
                     "d".repeat(43)
                 ),
             )]
@@ -1623,7 +1623,7 @@ mod tests {
                 (
                     "200 OK",
                     format!(
-                        r#"{{"device_code":"{}","user_code":"ABCD-EFGH","verification_uri":"{base}/dashboard/cli/authorize","verification_uri_complete":"{base}/dashboard/cli/authorize?user_code=ABCD-EFGH","expires_in":600,"interval":1}}"#,
+                        r#"{{"device_code":"{}","user_code":"ABCD-EFGH","verification_uri":"{base}/dashboard/device/authorize","verification_uri_complete":"{base}/dashboard/device/authorize?user_code=ABCD-EFGH","expires_in":600,"interval":1}}"#,
                         "d".repeat(43)
                     ),
                 ),
@@ -1678,7 +1678,7 @@ mod tests {
             vec![(
                 "200 OK",
                 format!(
-                    r#"{{"device_code":"{}","user_code":"ABCD-EFGH","verification_uri_complete":"{base}/dashboard/cli/authorize?user_code=ABCD-EFGH","expires_in":600,"interval":5}}"#,
+                    r#"{{"device_code":"{}","user_code":"ABCD-EFGH","verification_uri_complete":"{base}/dashboard/device/authorize?user_code=ABCD-EFGH","expires_in":600,"interval":5}}"#,
                     "d".repeat(43)
                 ),
             )]

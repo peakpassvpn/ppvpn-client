@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ppvpn_account::api::{Api, ApiConfig, ApiError};
-use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore};
+use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore, VERIFICATION_PATHS};
 
 use crate::buildinfo::{BuildConfig, Profile, PRODUCTION_API_BASE};
 use crate::env::Env;
@@ -13,10 +13,6 @@ use crate::error::{CliError, Exit, Result};
 /// that carries no product header (it rejects `cli` as a header value on
 /// purpose), so the CLI sends none and requires this audience.
 pub const TOKEN_AUDIENCE: &str = "cli";
-
-/// The browser authorization page. Its production host is the API's own;
-/// a dev build's page is trusted because it is on the configured API base.
-pub const VERIFICATION_PATH: &str = "/dashboard/device/authorize";
 
 pub fn auth(config: &BuildConfig, env: &Env, store: Arc<dyn CredentialStore>) -> Auth {
     let api = Api::new(ApiConfig {
@@ -35,7 +31,9 @@ pub fn auth(config: &BuildConfig, env: &Env, store: Arc<dyn CredentialStore>) ->
         store,
         AuthConfig {
             verification_host: host,
-            verification_path: VERIFICATION_PATH.to_string(),
+            // The page's production host is the API's own; a dev build's page
+            // is trusted because it is on the configured API base.
+            verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
         },
     )
 }
