@@ -9,6 +9,8 @@ name: release
 #     with its release metadata, as workflow artifacts; the rpm installed
 #     under dnf, and the apt and dnf repositories built from the packages and
 #     installed from. Nothing is published.
+#   - the CLI's archives (tar.gz): Linux x86_64 and aarch64, static, and
+#     macOS universal, ad-hoc signed; tools/cli/build-release.sh.
 #   - the build caches ci.yml's jobs restore (pull requests only read
 #     caches), when the merge changed what they are keyed on (Cargo.toml,
 #     Cargo.lock, the toolchain, the shared actions; tools/ci-changes.sh
@@ -20,7 +22,8 @@ name: release
 #           environment desktop-release-approval. The installers are built
 #           in desktop-release-stable (its signing secrets), checked as a
 #           whole, published as a GitHub Release with SHA256SUMS and build
-#           provenance, and the update site (channel pointer, feeds, apt/dnf
+#           provenance (the CLI's archives in the same release, its version
+#           checked against crates/cli), and the update site (channel pointer, feeds, apt/dnf
 #           repositories) is rebuilt from the releases and deployed to Pages.
 #   dev:    run on the branch main, in desktop-release-dev. Never published:
 #           no release, no tag; the installers stay workflow artifacts (a dev
@@ -831,6 +834,94 @@ jobs:
           retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
           path: staging/macos-native
 
+  # The CLI (crates/cli, the binary ppvpn) as tar.gz archives, built by
+  # tools/cli/build-release.sh: Linux x86_64 and aarch64, static (musl), and
+  # macOS universal. No Windows. The channels are the installers': a merge
+  # builds for the production API without any secret; dev builds for the dev
+  # backend (an artifact, never published); stable goes into the release
+  # beside the installers. A stable run fails unless its version is the
+  # CLI's (Cargo.toml).
+  cli-linux:
+    name: cli-linux (${{ matrix.arch }})
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: ubuntu-latest
+    # Only dev reads its environment (the dev backend's address); nothing
+    # here is signed.
+    environment: ${{ needs.prepare.outputs.channel == 'dev' && needs.prepare.outputs.environment || '' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-musl
+          - arch: aarch64
+            target: aarch64-unknown-linux-musl
+    env:
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      DEV_API_BASE: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: ${{ matrix.target }}
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        run: tools/release-features-check.sh -p ppvpn-cli
+      - name: Build the archive
+        run: tools/cli/build-release.sh linux ${{ matrix.target }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
+          path: dist/cli/*.tar.gz
+
+  cli-macos:
+    name: cli-macos
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: macos-15
+    # The desktop app's signing certificate (and, for dev, the backend).
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 60
+    env:
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      DEV_API_BASE: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || '' }}
+      MACOS_SIGNING_P12_BASE64: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
+      MACOS_SIGNING_P12_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        run: tools/release-features-check.sh -p ppvpn-cli
+      - name: Build the archive
+        run: tools/cli/build-release.sh macos
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-macos-universal
+          if-no-files-found: error
+          retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
+          path: dist/cli/*.tar.gz
+
   # Stable only (a dev build ends with the package jobs' artifacts). The
   # release's files: the rpms signed, then everything
   # checked as a whole before anything is published:
@@ -839,7 +930,7 @@ jobs:
   release-files:
     name: release-files
     if: inputs.channel == 'stable' && needs.prepare.outputs.publish == 'true'
-    needs: [prepare, approve, linux, linux-rpm-smoke, linux-repo, windows, macos]
+    needs: [prepare, approve, linux, linux-rpm-smoke, linux-repo, windows, macos, cli-linux, cli-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # For the package repositories' signing key, which signs the rpms here.
@@ -858,6 +949,12 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: desktop-*
+          path: artifacts
+      # The CLI's archives: in the release (its SHA256SUMS and provenance),
+      # not in the update site, which takes only the installers' metadata.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cli-*
           path: artifacts
       - name: Collect
         run: |
