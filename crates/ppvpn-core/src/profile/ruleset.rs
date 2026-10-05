@@ -250,4 +250,70 @@ mod tests {
         assert!(rule_set_host("https://rules.example.com:0443/x").is_err());
         assert!(normalize_rule_set_host("https://bad/").is_err());
     }
+
+    /// `validate_rule_set_hosts` for one rule set at `url`: the code and
+    /// field of the rejection, if any.
+    fn pin(url: &str, allowed: &[&str]) -> Option<(&'static str, String)> {
+        let mut p = Profile::default();
+        p.routing.rule_sets.push(RuleSet {
+            id: "cn-ip".into(),
+            url: url.into(),
+            sha256: "0123456789abcdef".repeat(4),
+            update_interval_seconds: 86400,
+        });
+        let allowed: Vec<String> = allowed.iter().map(|&host| host.to_owned()).collect();
+        validate_rule_set_hosts(&p, &allowed)
+            .err()
+            .map(|e| (e.code, e.field.unwrap_or_default()))
+    }
+
+    /// Go: profile TestRuleSetHostPinning. A rule set downloads only from the
+    /// host the profile came from: compared without case and with the
+    /// default port, never by suffix.
+    #[test]
+    fn a_rule_set_downloads_only_from_the_profile_s_host() {
+        const URL: &str = "https://api.example.com/api/v1/proxy-profile/rule-sets/cn-ip.srs";
+        let accepted: [&[&str]; 3] = [
+            &["api.example.com"],
+            &["API.example.com:443"],
+            &["other.example", "api.example.com"],
+        ];
+        for allowed in accepted {
+            assert_eq!(pin(URL, allowed), None, "{allowed:?}");
+        }
+        let not_allowed = Some((
+            codes::RULE_SET_HOST_NOT_ALLOWED,
+            "routing.rule_sets[0].url".to_owned(),
+        ));
+        // No host, the parent domain, another port, a subdomain.
+        let refused: [&[&str]; 4] = [
+            &[],
+            &["example.com"],
+            &["api.example.com:8443"],
+            &["evil.api.example.com"],
+        ];
+        for allowed in refused {
+            assert_eq!(pin(URL, allowed), not_allowed, "{allowed:?}");
+        }
+        assert_eq!(
+            pin(URL, &["https://api.example.com/"]),
+            Some((
+                codes::RULE_SET_HOSTS_INVALID,
+                "allowed_rule_set_hosts".to_owned()
+            ))
+        );
+        assert_eq!(
+            pin(
+                "https://api.example.com:8443/x.srs",
+                &["api.example.com:8443"]
+            ),
+            None,
+            "explicit port"
+        );
+        assert_eq!(
+            pin("https://[2001:DB8::1]/x.srs", &["[2001:db8::1]:443"]),
+            None,
+            "IPv6"
+        );
+    }
 }
