@@ -67,11 +67,13 @@ on:
 permissions:
   contents: read
 
-# A newer merge replaces the older one's builds; a release run is never
-# cancelled, and releases run one at a time.
+# Merges build one at a time and a running build is never cancelled, so
+# every platform's installers finish (merges come faster than the macOS and
+# Windows builds); of the merges that wait, only the newest is built.
+# Releases run one at a time and are never cancelled either.
 concurrency:
   group: ${{ github.event_name == 'push' && 'release-main' || 'release-dispatch' }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
