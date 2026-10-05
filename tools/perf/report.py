@@ -55,6 +55,7 @@ THRESHOLDS = [
     ("idle_switches_per_s", None, None, False, "record only: wakeups, roughly"),
     # Tier C (G4): under loss, delay and jitter, against Go the same way.
     ("_failed", None, 0, False, "G4: no more failed connections than Go", "abs"),
+    ("_stalled", None, 0, False, "G4: no more stalled connections than Go", "abs"),
     ("_cpu_pct", None, None, False, "record only: where the throughput's bottleneck was"),
     ("_load_limited", None, None, False, "1: the throughput beside it is the load side's"),
     ("_us", None, None, False, "record only"),

@@ -96,6 +96,9 @@ for each node, <cond>.<proto>.:
     connect_failed                 new connections that failed
     stream_failed                  round-trip and throughput connections
                                    that failed
+    stream_stalled                 throughput connections whose write was
+                                   still blocked 10 s after the load (the
+                                   engine had stopped reading)
 each load --c-load-seconds (20). Connections that fail are counted, not an
 error. The ENV line says whether segmentation offload could be turned off
 on the loopback (offload_off; ethtool): with it on, a lost packet can be
@@ -266,8 +269,9 @@ def loadgen(args, credential, ports, mode, *extra, failures_ok=False):
     else:
         command += ["-proxy", f"{credential['listen']}:{credential['port']}",
                     "-user", credential["username"], "-pass", credential["password"]]
+    # A backstop: loadgen ends its own loads, stalled ones included.
     result = json.loads(subprocess.run(pinned(args.load_cpus, command), check=True,
-                                       capture_output=True, text=True).stdout)
+                                       capture_output=True, text=True, timeout=600).stdout)
     if result["failed_connections"] and not failures_ok:
         raise RuntimeError(f"{mode}: {result['failed_connections']} connections failed: {result}")
     return result
@@ -445,6 +449,7 @@ def measure_tier_c(args, work, ports, env, name, binary, condition):
                         row[f"{key}.{metric}_{p}_us"] = result[f"{p}_us"]
             row[f"{key}.connect_failed"] = setup["failed_connections"]
             row[f"{key}.stream_failed"] = rtt["failed_connections"] + tput["failed_connections"]
+            row[f"{key}.stream_stalled"] = tput.get("stalled_connections", 0)
         return row
     finally:
         engine.stop()

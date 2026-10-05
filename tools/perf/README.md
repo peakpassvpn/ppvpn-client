@@ -77,15 +77,18 @@ tools/perf/report.py compare rust.json --baseline go.json
 
 ## Tier C: a weak network (G4)
 
-`measure.py --tier c` runs the engines as tier B does, Go and Rust in turn, under one level each of loss, delay and jitter (#214's G4). It needs root: it runs itself again inside a network namespace of its own, and the host's networking is not touched.
+`measure.py --tier c` runs the engines as tier B does, Go and Rust in turn, under one level each of loss, delay and jitter (#214's G4). It needs root: it runs itself again inside a network namespace of its own, and the host's networking is not touched. It is a one-off acceptance check before the switch, run by hand on a Linux host, never in CI; the results go into #214.
 
 - **The impaired link.** The namespace's loopback has a 1500-byte MTU, segmentation offload off (when `ethtool` can turn it off: `offload_off` in the `ENV` line), and a netem qdisc for the packets to and from the fake node's proxy ports only, both ways. The engine-to-node link is impaired. Loadgen's link to the local proxy and the node's to the sink are not.
 - **Conditions** (`--netem`, default all): `none`; `loss`, 1% each way; `delay`, 50 ms each way (100 ms more per round trip); `jitter`, 50 ms ± 20 ms each way, normally distributed, which reorders packets.
-- **What**, per condition and node, each load `--c-load-seconds` (20 s): round trips (`rtt_p50_us`, `rtt_p99_us`), throughput with 8 unpaced connections (`tput8_mbit`), new connections until their first byte comes back (`connect_p50_us`, `connect_p99_us`), and the connections that failed (`connect_failed`, `stream_failed`). Failures are counted rather than stopping the run.
-- **Thresholds** (`report.py`, against Go in the same run): the tier B ones that apply (throughput at least 95%, connection p50 at most 110%), and no more failed connections than Go. Round trips are recorded only: under netem they are mostly the link's.
+- **What**, per condition and node, each load `--c-load-seconds` (20 s): round trips (`rtt_p50_us`, `rtt_p99_us`), throughput with 8 unpaced connections (`tput8_mbit`), new connections until their first byte comes back (`connect_p50_us`, `connect_p99_us`), the connections that failed (`connect_failed`, `stream_failed`), and the throughput connections whose write was still blocked 10 s after the load, as the engine had stopped reading (`stream_stalled`). Failures and stalls are counted rather than stopping the run.
+- **Thresholds** (`report.py`, against Go in the same run): the tier B ones that apply (throughput at least 95%, connection p50 at most 110%), and no more failed or stalled connections than Go. Round trips are recorded only: under netem they are mostly the link's.
 
 ```sh
-C="--tier c --rounds 3 --engine go=build/ppvpn-core --engine rust=target/release/ppvpn-core-lab --fakenode $FAKENODE --loadgen $LOADGEN"
+# Go 0.5.21 as released, checked against the release's SHA256SUMS.
+curl -fsSL -o ppvpn-core-0.5.21 https://github.com/peakpassvpn/ppvpn-core/releases/download/v0.5.21/ppvpn-core-linux-amd64
+echo "04e00bbb526d85350814413432acf2bc6bd5efe2abc00de56cfa2da05da7896a  ppvpn-core-0.5.21" | sha256sum -c - && chmod +x ppvpn-core-0.5.21
+C="--tier c --rounds 3 --engine go=./ppvpn-core-0.5.21 --engine rust=target/release/ppvpn-core-lab --fakenode $FAKENODE --loadgen $LOADGEN"
 sudo -E tools/perf/measure.py $C --engine-cpus 2,3 --load-cpus 4,5 --node-cpus 6,7 --label job=<id> | tee netem.log
 for e in go rust; do tools/perf/report.py collect --sha "$(git rev-parse HEAD)" --engine $e netem.log > $e.json; done
 tools/perf/report.py compare rust.json --baseline go.json
