@@ -83,7 +83,8 @@ extension ClientSnapshot {
         serviceInstalled: Bool = true,
         pins: [IngressPin] = [],
         ingresses: [NodeIngresses] = [],
-        clearedPins: [IngressPin] = []
+        clearedPins: [IngressPin] = [],
+        proxyReset: Bool = false
     ) -> ClientSnapshot {
         ClientSnapshot(
             auth: auth, account: nil, team: Team(id: "t-1", name: "Acme", personal: false, active: true),
@@ -96,7 +97,8 @@ extension ClientSnapshot {
                                          previousEndpointKey: previousEndpoint, latencyMs: latency)),
             serviceInstalled: serviceInstalled, selectedNodeId: selected, lastError: nil, unreadNotifications: unread,
             ruleSetsUnavailable: ruleSetsUnavailable,
-            ingressPins: pins, nodeIngresses: ingresses, clearedIngressPins: clearedPins)
+            ingressPins: pins, nodeIngresses: ingresses, clearedIngressPins: clearedPins,
+            localProxyCredentialsReset: proxyReset)
     }
 }
 
@@ -167,6 +169,7 @@ final class StubBackend: ClientBackend {
         try record("pin \(nodeId) \(endpointKey ?? "auto")")
     }
     func dismissClearedIngressPins() { calls.append("dismissClearedPins") }
+    func dismissLocalProxyCredentialsReset() { calls.append("dismissProxyReset") }
     func networkChanged() { calls.append("networkChanged") }
     /// What the system check finds (an admin may have installed the service).
     var serviceOnSystem = false

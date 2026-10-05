@@ -10,6 +10,9 @@
 //! The engine is supervised: an unexpected end (a Fatal state) recreates it
 //! with backoff (at most [`RestartBudget::MAX_RESTARTS`] times per minute)
 //! and re-applies the last profile; state changes go to the `on_state` sink.
+//! Every apply carries the routing mode, the selected node and the ingress
+//! pins ([`StandardSettings`]), so a recreated engine starts with the user's
+//! choices.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};
@@ -20,9 +23,11 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::core_ipc::{self, BoxFuture, CoreTransport};
+use crate::core_ipc::{self, ApplyChoices, BoxFuture, CoreTransport};
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
+use crate::ingress::PinsCell;
 use crate::routing::RoutingModeCell;
+use crate::session::SelectionSource;
 use crate::{LocalProxy, ProbeMethod, ProbeResult, RoutingMode, StandardState};
 
 const STOP_GRACE: Duration = Duration::from_secs(3);
@@ -86,12 +91,29 @@ pub(crate) struct Launched {
     pub stop: oneshot::Sender<()>,
     /// `allowed_rule_set_hosts` for every `apply-profile` on this instance.
     pub rule_set_hosts: Vec<String>,
+    /// The engine rebuilt the local proxy credentials when it was created
+    /// (`status.local_proxy.credentials_reset`): apps holding the old ones
+    /// must copy them again.
+    pub credentials_reset: bool,
 }
 
 /// Starts one core instance. The production implementation creates the
 /// engine ([`crate::engine::EngineLauncher`]); tests substitute a fake.
 pub(crate) trait CoreLauncher: Send + Sync {
     fn launch(&self) -> BoxFuture<'_, Result<Launched, ClientErrorInfo>>;
+}
+
+/// Shared with the client.
+#[derive(Clone, Default)]
+pub(crate) struct StandardSettings {
+    /// Sent with every `apply-profile`.
+    pub routing: RoutingModeCell,
+    /// Sent with every `apply-profile`.
+    pub ingress_pins: PinsCell,
+    /// Sent with every `apply-profile`.
+    pub selection: SelectionSource,
+    /// Told when a new engine reports [`Launched::credentials_reset`].
+    pub on_credentials_reset: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Clone)]
@@ -128,8 +150,7 @@ struct Inner {
     /// two cores.
     operation: tokio::sync::Mutex<()>,
     slot: Mutex<Slot>,
-    /// Sent with every `apply-profile` (shared with the client).
-    routing: RoutingModeCell,
+    settings: StandardSettings,
 }
 
 /// Handle to the standard-mode core; cheap to clone.
@@ -143,14 +164,14 @@ impl StandardCore {
     /// [`Self::apply_profile`].
     #[cfg(test)]
     pub(crate) fn with_launcher(launcher: Arc<dyn CoreLauncher>, on_state: StateSink) -> Self {
-        Self::with_routing(launcher, on_state, RoutingModeCell::default())
+        Self::with_settings(launcher, on_state, StandardSettings::default())
     }
 
-    /// [`Self::with_launcher`], applying profiles in `routing`'s mode.
-    pub(crate) fn with_routing(
+    /// [`Self::with_launcher`], applying profiles with `settings`.
+    pub(crate) fn with_settings(
         launcher: Arc<dyn CoreLauncher>,
         on_state: StateSink,
-        routing: RoutingModeCell,
+        settings: StandardSettings,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -158,7 +179,7 @@ impl StandardCore {
                 on_state,
                 operation: tokio::sync::Mutex::new(()),
                 slot: Mutex::new(Slot::default()),
-                routing,
+                settings,
             }),
         }
     }
@@ -350,7 +371,7 @@ impl Inner {
                         r.rule_set_hosts.clone(),
                         r.applied_revision.clone(),
                         r.applied_mode,
-                        Some(self.routing.get()),
+                        Some(self.settings.routing.get()),
                         r.started,
                     )
                 })
@@ -370,12 +391,19 @@ impl Inner {
         }
 
         // ApplyProfile swaps a running runtime atomically and rolls back on
-        // failure, so only the first revision needs an explicit start.
+        // failure, so only the first revision needs an explicit start. The
+        // selection and pins go with it: a new engine needs no SelectNode or
+        // PinIngress afterwards.
+        let choices = ApplyChoices::new(
+            self.settings.selection.get(),
+            &self.settings.ingress_pins.get(),
+        );
         if let Err(error) = core_ipc::apply_profile(
             transport.as_ref(),
             &desired.profile,
             Some(hosts.as_slice()),
             mode,
+            &choices,
         )
         .await
         {
@@ -410,6 +438,11 @@ impl Inner {
 
     async fn spawn_instance(self: &Arc<Self>) -> Result<Running, ClientErrorInfo> {
         let launched = self.launcher.launch().await?;
+        if launched.credentials_reset {
+            if let Some(notify) = &self.settings.on_credentials_reset {
+                notify();
+            }
+        }
         let instance = self
             .slot
             .lock()
@@ -553,6 +586,8 @@ mod tests {
         crash: Mutex<Vec<oneshot::Sender<()>>>,
         /// The next launches fail.
         fail: std::sync::atomic::AtomicBool,
+        /// The next launches report rebuilt local proxy credentials.
+        reset: std::sync::atomic::AtomicBool,
         launches: std::sync::atomic::AtomicUsize,
     }
 
@@ -562,6 +597,7 @@ mod tests {
                 core,
                 crash: Mutex::new(Vec::new()),
                 fail: Default::default(),
+                reset: Default::default(),
                 launches: Default::default(),
             })
         }
@@ -602,6 +638,7 @@ mod tests {
                     }),
                     stop,
                     rule_set_hosts: vec!["api.example.com".to_string()],
+                    credentials_reset: self.reset.load(std::sync::atomic::Ordering::SeqCst),
                 })
             })
         }
@@ -778,7 +815,11 @@ mod tests {
         });
         let launcher = CrashyLauncher::new(core.clone());
         let routing = RoutingModeCell::default();
-        let standard = StandardCore::with_routing(launcher, Arc::new(|_| {}), routing.clone());
+        let settings = StandardSettings {
+            routing: routing.clone(),
+            ..StandardSettings::default()
+        };
+        let standard = StandardCore::with_settings(launcher, Arc::new(|_| {}), settings);
         // Nothing running yet: nothing to re-apply.
         standard.reapply().await.unwrap();
         assert!(apply_bodies(&core).is_empty());
@@ -802,6 +843,88 @@ mod tests {
             modes,
             vec![serde_json::json!("rules"), serde_json::json!("global")]
         );
+        standard.stop().await;
+    }
+
+    #[tokio::test]
+    async fn every_apply_carries_the_selection_and_the_pins() {
+        let core = crate::core_ipc::tests::FakeCore::new(|_, _| {
+            (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
+        });
+        let launcher = CrashyLauncher::new(core.clone());
+        let selected = Arc::new(Mutex::new(Some("n1".to_string())));
+        let pins = PinsCell::new([("n2".to_string(), "k3".to_string())].into());
+        let settings = StandardSettings {
+            ingress_pins: pins.clone(),
+            selection: SelectionSource::new({
+                let selected = selected.clone();
+                move || selected.lock().unwrap().clone()
+            }),
+            ..StandardSettings::default()
+        };
+        let standard = StandardCore::with_settings(launcher.clone(), Arc::new(|_| {}), settings);
+        standard
+            .apply_profile(br#"{"revision":"r1"}"#, "r1")
+            .await
+            .unwrap();
+        // Changed live since (SelectNode / PinIngress): a recreated engine
+        // gets the current ones with the profile.
+        *selected.lock().unwrap() = Some("n2".to_string());
+        pins.set(Default::default());
+        launcher.crash_last();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(matches!(standard.state(), StandardState::Ready { .. }));
+
+        let bodies = apply_bodies(&core);
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0]["selected_node_id"], "n1");
+        assert_eq!(
+            bodies[0]["pins"],
+            serde_json::json!([{"node_id": "n2", "endpoint_key": "k3"}])
+        );
+        assert_eq!(bodies[1]["selected_node_id"], "n2");
+        assert!(bodies[1].get("pins").is_none(), "no pins left");
+        let calls = core.calls.lock().unwrap().clone();
+        assert!(
+            calls
+                .iter()
+                .all(|(path, _)| path != "/v1/select-node" && path != "/v1/pin-ingress"),
+            "nothing re-sent after an apply: {calls:?}"
+        );
+        standard.stop().await;
+    }
+
+    #[tokio::test]
+    async fn an_engine_that_rebuilt_the_credentials_says_so() {
+        let core = crate::core_ipc::tests::FakeCore::new(|_, _| {
+            (Duration::ZERO, Ok(serde_json::json!({"applied": true})))
+        });
+        let launcher = CrashyLauncher::new(core);
+        let resets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let settings = StandardSettings {
+            on_credentials_reset: Some(Arc::new({
+                let resets = resets.clone();
+                move || {
+                    resets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            })),
+            ..StandardSettings::default()
+        };
+        let standard = StandardCore::with_settings(launcher.clone(), Arc::new(|_| {}), settings);
+        standard
+            .apply_profile(br#"{"revision":"r1"}"#, "r1")
+            .await
+            .unwrap();
+        assert_eq!(resets.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // The recreated engine rebuilt them.
+        launcher
+            .reset
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        launcher.crash_last();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(matches!(standard.state(), StandardState::Ready { .. }));
+        assert_eq!(resets.load(std::sync::atomic::Ordering::SeqCst), 1);
         standard.stop().await;
     }
 

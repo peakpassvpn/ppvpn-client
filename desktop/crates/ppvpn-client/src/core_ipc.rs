@@ -339,13 +339,37 @@ pub(crate) async fn get_status(core: &dyn CoreTransport) -> Result<CoreStatus, C
     })
 }
 
+/// The user's choices every `ApplyProfile` carries with the profile
+/// (docs/host-integration.md 4.1): the engine applies them together, so a
+/// new or recreated core needs no `SelectNode` / `PinIngress` afterwards.
+/// Live changes still go through those calls.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ApplyChoices {
+    /// `None`: the profile's `default_node_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_node_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<crate::IngressPin>,
+}
+
+impl ApplyChoices {
+    pub(crate) fn new(selected_node_id: Option<String>, pins: &crate::ingress::Pins) -> Self {
+        Self {
+            selected_node_id,
+            pins: crate::ingress::records(pins),
+        }
+    }
+}
+
 /// Request body of `ApplyProfile` / `ValidateProfile`. `allowed_rule_set_hosts`
 /// is sent only when given and non-empty: without it the core applies the
 /// profile but downloads no rule set (`RULE_SET_HOST_NOT_PINNED`).
+/// `selected_node_id` and `pins` are sent when set.
 pub(crate) fn profile_request(
     profile: &Value,
     allowed_rule_set_hosts: Option<&[String]>,
     routing_mode: Option<crate::RoutingMode>,
+    choices: &ApplyChoices,
 ) -> Value {
     let mut body = json!({ "profile": profile });
     if let Some(hosts) = allowed_rule_set_hosts.filter(|hosts| !hosts.is_empty()) {
@@ -353,6 +377,12 @@ pub(crate) fn profile_request(
     }
     if let Some(mode) = routing_mode {
         body["routing_mode"] = json!(crate::routing::wire_name(mode));
+    }
+    if let Some(node_id) = &choices.selected_node_id {
+        body["selected_node_id"] = json!(node_id);
+    }
+    if !choices.pins.is_empty() {
+        body["pins"] = json!(choices.pins);
     }
     body
 }
@@ -365,11 +395,12 @@ pub(crate) async fn apply_profile(
     profile: &Value,
     allowed_rule_set_hosts: Option<&[String]>,
     routing_mode: Option<crate::RoutingMode>,
+    choices: &ApplyChoices,
 ) -> Result<bool, CoreCallError> {
     let data = core
         .call(
             "/v1/apply-profile",
-            profile_request(profile, allowed_rule_set_hosts, routing_mode),
+            profile_request(profile, allowed_rule_set_hosts, routing_mode, choices),
             CALL_TIMEOUT,
         )
         .await?;
@@ -964,13 +995,14 @@ pub(crate) mod tests {
         let core = FakeCore::new(|_, _| (Duration::ZERO, Ok(json!({"applied": true}))));
         let profile = json!({"revision": "r1"});
         let hosts = rule_set_hosts("https://api.example.com:8443");
-        apply_profile(core.as_ref(), &profile, Some(&hosts), None)
+        let none = ApplyChoices::default();
+        apply_profile(core.as_ref(), &profile, Some(&hosts), None, &none)
             .await
             .unwrap();
-        apply_profile(core.as_ref(), &profile, None, None)
+        apply_profile(core.as_ref(), &profile, None, None, &none)
             .await
             .unwrap();
-        apply_profile(core.as_ref(), &profile, Some(&[]), None)
+        apply_profile(core.as_ref(), &profile, Some(&[]), None, &none)
             .await
             .unwrap();
         let bodies: Vec<Value> = core
@@ -987,6 +1019,33 @@ pub(crate) mod tests {
                 json!({"profile": {"revision": "r1"}}),
                 json!({"profile": {"revision": "r1"}}),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_body_carries_the_selection_and_the_pins() {
+        let core = FakeCore::new(|_, _| (Duration::ZERO, Ok(json!({"applied": true}))));
+        let profile = json!({"revision": "r1"});
+        let pins = crate::ingress::Pins::from([
+            ("n2".to_string(), "k3".to_string()),
+            ("n1".to_string(), "k2".to_string()),
+        ]);
+        let choices = ApplyChoices::new(Some("n2".into()), &pins);
+        apply_profile(
+            core.as_ref(),
+            &profile,
+            None,
+            Some(crate::RoutingMode::Global),
+            &choices,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            core.calls.lock().unwrap()[0].1,
+            json!({"profile": {"revision": "r1"}, "routing_mode": "global",
+                   "selected_node_id": "n2",
+                   "pins": [{"node_id": "n1", "endpoint_key": "k2"},
+                            {"node_id": "n2", "endpoint_key": "k3"}]})
         );
     }
 

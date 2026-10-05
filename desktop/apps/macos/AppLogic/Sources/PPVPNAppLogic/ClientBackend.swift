@@ -50,6 +50,8 @@ public protocol ClientBackend: AnyObject {
     func pinIngress(nodeId: String, endpointKey: String?) async throws
     /// The user saw `snapshot.clearedIngressPins`: empty it.
     func dismissClearedIngressPins()
+    /// The user saw `snapshot.localProxyCredentialsReset`: clear it.
+    func dismissLocalProxyCredentialsReset()
     /// The OS reported a network change: enhanced mode checks its data path
     /// soon, a waiting reconnect retries now. Safe in any state.
     func networkChanged()
@@ -121,6 +123,7 @@ public final class RustBackend: ClientBackend {
         try await client.pinIngress(nodeId: nodeId, endpointKey: endpointKey)
     }
     public func dismissClearedIngressPins() { client.dismissClearedIngressPins() }
+    public func dismissLocalProxyCredentialsReset() { client.dismissLocalProxyCredentialsReset() }
     public func networkChanged() { client.networkChanged() }
     public func refreshServiceInstalled() async -> Bool { await client.refreshServiceInstalled() }
     public func enhancedTakeOver() async throws { try await client.enhancedTakeOver() }

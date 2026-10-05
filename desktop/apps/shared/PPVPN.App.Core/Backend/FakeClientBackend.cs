@@ -229,6 +229,7 @@ public sealed class FakeClientBackend : IClientBackend
         return Task.CompletedTask;
     });
     public void DismissClearedIngressPins() => Update(s => s with { ClearedIngressPins = [] });
+    public void DismissLocalProxyCredentialsReset() => Update(s => s with { LocalProxyCredentialsReset = false });
     public Task Connect() => Delivered(() => ConnectCore(takeOver: false, retry: false));
     public Task Retry() => Delivered(() => ConnectCore(takeOver: false, retry: true));
     public Task EnhancedTakeOver() => Delivered(() => ConnectCore(takeOver: true, retry: true));

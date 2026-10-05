@@ -227,6 +227,8 @@ public static class OverviewPage
             NoticeKind.RulesUnavailable => "dialog-warning-symbolic",
             // The pinned line is down, or a profile refresh dropped a pinned line.
             NoticeKind.IngressUnavailable or NoticeKind.IngressPinCleared => "dialog-warning-symbolic",
+            // The local proxy got new credentials: apps using it must copy them again.
+            NoticeKind.LocalProxyCredentialsReset => "dialog-password-symbolic",
             _ => "dialog-error-symbolic",
         });
         icon.SetValign(Gtk.Align.Start);

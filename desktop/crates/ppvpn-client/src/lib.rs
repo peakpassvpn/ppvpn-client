@@ -183,10 +183,16 @@ pub struct ClientSnapshot {
     /// ingress (the node is back on automatic failover). Shown once; cleared
     /// by `Client::dismiss_cleared_ingress_pins`.
     pub cleared_ingress_pins: Vec<IngressPin>,
+    /// The standard-mode core rebuilt the local proxy credentials when it
+    /// was created (its saved credentials were damaged, or other users
+    /// could read them): apps that use the local proxy with the old user
+    /// name and password (e.g. a browser extension) must copy them again.
+    /// Shown once; cleared by `Client::dismiss_local_proxy_credentials_reset`.
+    pub local_proxy_credentials_reset: bool,
 }
 
 /// A node fixed to one of its ingresses (`Replica::endpoint_key`).
-#[derive(uniffi::Record, Clone, Debug, PartialEq, Eq)]
+#[derive(uniffi::Record, serde::Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct IngressPin {
     pub node_id: String,
     pub endpoint_key: String,
@@ -741,6 +747,11 @@ impl Client {
     /// The user saw `snapshot.cleared_ingress_pins`: empty it.
     pub fn dismiss_cleared_ingress_pins(&self) {
         self.clear_cleared_ingress_pins();
+    }
+
+    /// The user saw `snapshot.local_proxy_credentials_reset`: clear it.
+    pub fn dismiss_local_proxy_credentials_reset(&self) {
+        self.clear_local_proxy_credentials_reset();
     }
 
     /// Run a speed test through the standard-mode core; results stream

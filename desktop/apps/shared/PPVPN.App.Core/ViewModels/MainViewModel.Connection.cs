@@ -22,9 +22,11 @@ public enum SwitchVisual { Off, On, Indeterminate }
 /// Warn, no action): some routing rule sets have not loaded, so that traffic goes through the proxy.
 /// <c>IngressUnavailable</c>: the current node is pinned to a line the core reports down (it stays
 /// pinned; action <c>backToAuto</c>). <c>IngressPinCleared</c>: a profile refresh dropped a pinned
-/// line, the node is back on automatic (action <c>ok</c> dismisses).
+/// line, the node is back on automatic (action <c>ok</c> dismisses). <c>LocalProxyCredentialsReset</c>:
+/// the local proxy got new user names and passwords, apps using it must copy them again (action
+/// <c>ok</c> dismisses).
 /// </summary>
-public enum NoticeKind { Failed, Occupied, ProxyFailed, Conflict, RulesUnavailable, IngressUnavailable, IngressPinCleared }
+public enum NoticeKind { Failed, Occupied, ProxyFailed, Conflict, RulesUnavailable, IngressUnavailable, IngressPinCleared, LocalProxyCredentialsReset }
 
 /// <summary>
 /// One anomaly row under the connection card (design ③; InfoBar Error/Warning with buttons):
@@ -245,6 +247,14 @@ public sealed partial class MainViewModel
     Task DismissClearedPinsAsync()
     {
         Backend.DismissClearedIngressPins();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The <c>LocalProxyCredentialsReset</c> notice's <c>ok</c>.</summary>
+    [RelayCommand]
+    Task DismissProxyResetAsync()
+    {
+        Backend.DismissLocalProxyCredentialsReset();
         return Task.CompletedTask;
     }
 
@@ -565,6 +575,13 @@ public sealed partial class MainViewModel
                 Nodes.Items.FirstOrDefault(i => i.Id == p.NodeId)?.Name ?? p.NodeId).Distinct());
             notices.Add(new(NoticeKind.IngressPinCleared, ConnectionTone.Warn, _strings.Get("pinClearedT"),
                 _strings.Format("pinClearedD", ("n", names)), _strings.Get("ok"), DismissClearedPinsCommand));
+        }
+        // The standard core rebuilt the local proxy credentials: apps holding the old ones (a browser
+        // extension) fail until the user copies the new ones. Said once.
+        if (usable && next.LocalProxyCredentialsReset)
+        {
+            notices.Add(new(NoticeKind.LocalProxyCredentialsReset, ConnectionTone.Warn, _strings.Get("proxyResetT"),
+                _strings.Get("proxyResetD"), _strings.Get("ok"), DismissProxyResetCommand));
         }
         if (notices.SequenceEqual(Notices)) return;
         Notices.Clear();

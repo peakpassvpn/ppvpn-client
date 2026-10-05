@@ -21,7 +21,7 @@
 //! restarts the service.
 
 use crate::logfile::RotatingLog;
-use crate::protocol::{ConnectPayload, SessionRef, Status, UpdateProfilePayload};
+use crate::protocol::{ApplyChoices, ConnectPayload, SessionRef, Status, UpdateProfilePayload};
 use anyhow::{anyhow, Result};
 use log::info;
 use once_cell::sync::Lazy;
@@ -512,6 +512,7 @@ impl CoreManager {
             requested_schema,
             &body.allowed_rule_set_hosts,
             body.routing_mode.as_deref(),
+            &body.choices,
         );
         if let Err(error) = brought_up {
             log::error!("ppvpn-core failed to start: {error:#}");
@@ -756,6 +757,7 @@ fn bring_up(
     requested_schema: u64,
     hosts: &[String],
     mode: Option<&str>,
+    choices: &ApplyChoices,
 ) -> Result<()> {
     // Per-phase durations at info level: a slow first connect (TUN
     // creation, rule-set downloads) shows which step took the time.
@@ -780,7 +782,7 @@ fn bring_up(
     if requested_schema != supported_schema {
         return Err(anyhow!("PROFILE_SCHEMA_UNSUPPORTED"));
     }
-    let body = apply_body(profile, hosts, mode);
+    let body = apply_body(profile, hosts, mode, choices);
     let timeout = call_timeout("/v1/apply-profile", &body);
     let applied = instance.call("/v1/apply-profile", body, timeout);
     lap("apply-profile");
@@ -930,13 +932,13 @@ pub fn update_profile(
         return Err(anyhow!("PROFILE_SCHEMA_UNSUPPORTED"));
     }
     let apply = |profile: &Value, hosts: &[String], mode: Option<&str>| {
-        let request = apply_body(profile, hosts, mode);
+        let request = apply_body(profile, hosts, mode, &body.choices);
         let timeout = call_timeout("/v1/apply-profile", &request);
         instance.call("/v1/apply-profile", request, timeout)
     };
     // ApplyProfile is transactional while the instance runs: it replaces
     // the live runtime and rolls the previous one back if the candidate
-    // cannot start.
+    // cannot start. Both carry the client's current selection and pins.
     let applied = apply(
         &body.profile,
         &body.allowed_rule_set_hosts,
@@ -987,6 +989,7 @@ fn apply_body(
     profile: &Value,
     allowed_rule_set_hosts: &[String],
     routing_mode: Option<&str>,
+    choices: &ApplyChoices,
 ) -> Value {
     let mut body = serde_json::json!({ "profile": profile });
     if !allowed_rule_set_hosts.is_empty() {
@@ -994,6 +997,12 @@ fn apply_body(
     }
     if let Some(mode) = routing_mode {
         body["routing_mode"] = serde_json::json!(mode);
+    }
+    if let Some(node_id) = &choices.selected_node_id {
+        body["selected_node_id"] = serde_json::json!(node_id);
+    }
+    if !choices.pins.is_empty() {
+        body["pins"] = serde_json::json!(choices.pins);
     }
     body
 }
@@ -1349,17 +1358,18 @@ pub(crate) mod tests {
     fn apply_bodies_carry_the_hosts_and_the_routing_mode_when_given() {
         let hosts = || vec!["api.example.com".to_string()];
         let profile = serde_json::json!({ "revision": "r1" });
+        let none = ApplyChoices::default();
         assert_eq!(
-            apply_body(&profile, &hosts(), None),
+            apply_body(&profile, &hosts(), None, &none),
             serde_json::json!({ "profile": { "revision": "r1" },
                 "allowed_rule_set_hosts": ["api.example.com"] })
         );
         assert_eq!(
-            apply_body(&profile, &[], None),
+            apply_body(&profile, &[], None, &none),
             serde_json::json!({ "profile": { "revision": "r1" } })
         );
         assert_eq!(
-            apply_body(&profile, &[], Some("global")),
+            apply_body(&profile, &[], Some("global"), &none),
             serde_json::json!({ "profile": { "revision": "r1" }, "routing_mode": "global" })
         );
         assert!(check_routing_mode(None).is_ok());
@@ -1379,6 +1389,43 @@ pub(crate) mod tests {
         }))
         .unwrap();
         assert_eq!(new.routing_mode.as_deref(), Some("global"));
+    }
+
+    #[test]
+    fn apply_bodies_carry_the_clients_selection_and_pins() {
+        let profile = serde_json::json!({ "revision": "r1" });
+        let choices = ApplyChoices {
+            selected_node_id: Some("n2".into()),
+            pins: vec![crate::protocol::IngressPin {
+                node_id: "n1".into(),
+                endpoint_key: "k2".into(),
+            }],
+        };
+        assert_eq!(
+            apply_body(&profile, &[], Some("rules"), &choices),
+            serde_json::json!({ "profile": { "revision": "r1" }, "routing_mode": "rules",
+                "selected_node_id": "n2", "pins": [{ "node_id": "n1", "endpoint_key": "k2" }] })
+        );
+
+        // Both payloads read them, and default to none (older clients).
+        let connect: ConnectPayload = serde_json::from_value(serde_json::json!({
+            "session_id": "a", "generation": 1, "profile": {}, "take_over": false,
+            "selected_node_id": "n2", "pins": [{ "node_id": "n1", "endpoint_key": "k2" }]
+        }))
+        .unwrap();
+        assert_eq!(connect.choices, choices);
+        assert_eq!(connect.session.generation, 1);
+        let update: UpdateProfilePayload = serde_json::from_value(serde_json::json!({
+            "session_id": "a", "generation": 1, "profile": {},
+            "selected_node_id": "n2", "pins": [{ "node_id": "n1", "endpoint_key": "k2" }]
+        }))
+        .unwrap();
+        assert_eq!(update.choices, choices);
+        let old: UpdateProfilePayload = serde_json::from_value(serde_json::json!({
+            "session_id": "a", "generation": 1, "profile": {}
+        }))
+        .unwrap();
+        assert_eq!(old.choices, ApplyChoices::default());
     }
 
     #[test]
@@ -1598,6 +1645,7 @@ pub(crate) mod tests {
             take_over: false,
             allowed_rule_set_hosts: vec!["api.example.com".into()],
             routing_mode: Some("rules".into()),
+            choices: ApplyChoices::default(),
         }
     }
 
@@ -1786,6 +1834,7 @@ pub(crate) mod tests {
             profile: serde_json::json!({ "revision": "r2", "schema_version": 1 }),
             allowed_rule_set_hosts: vec!["api.example.com".into()],
             routing_mode: Some("global".into()),
+            choices: ApplyChoices::default(),
         };
         let status = update_profile(&core, update, me).unwrap();
         assert_eq!(status.profile_revision.as_deref(), Some("r2"));

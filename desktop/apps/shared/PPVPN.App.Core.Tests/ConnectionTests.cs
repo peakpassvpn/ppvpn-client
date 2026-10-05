@@ -552,6 +552,41 @@ public sealed class ConnectionTests
     }
 
     [Fact]
+    public async Task RebuiltLocalProxyCredentialsAreSaidOnceUntilDismissed()
+    {
+        using var ui = new UiContext();
+        await ui.RunAsync(async () =>
+        {
+            var t = new Scripted();
+            await t.SignedInAsync();
+            var main = t.Main;
+            Assert.Empty(main.Notices);
+
+            await t.PushAsync(main.Snapshot with { LocalProxyCredentialsReset = true });
+            var notice = Assert.Single(main.Notices);
+            Assert.Equal((NoticeKind.LocalProxyCredentialsReset, ConnectionTone.Warn, "proxyResetT", "proxyResetD", "ok"),
+                (notice.Kind, notice.Tone, notice.Title, notice.Message, notice.ActionText));
+            // Informational: the connection itself is unaffected.
+            Assert.Equal(("h_idle", "d_idle", ConnectionTone.Idle), (main.ConnectionTitle, main.ConnectionDetail, main.ConnectionTone));
+            await notice.Action!.ExecuteAsync(null);
+            Assert.Contains("dismiss_proxy_reset", t.Backend.Calls);
+
+            // Dismissed: the crate clears the flag.
+            await t.PushAsync(main.Snapshot with { LocalProxyCredentialsReset = false });
+            Assert.Empty(main.Notices);
+
+            // Not while restricted.
+            await t.PushAsync(main.Snapshot with
+            {
+                LocalProxyCredentialsReset = true,
+                Profile = null,
+                ProfileStatus = new ProfileStatus.NoSubscription(),
+            }, Conn(ConnectionPhase.Off));
+            Assert.Empty(main.Notices);
+        });
+    }
+
+    [Fact]
     public async Task UnavailableRoutingRulesShowALowKeyNoticeUntilTheyLoad()
     {
         using var ui = new UiContext();

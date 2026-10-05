@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 
-use crate::core_ipc::{BoxFuture, CoreCallError, CoreTransport};
+use crate::core_ipc::{ApplyChoices, BoxFuture, CoreCallError, CoreTransport};
 use crate::errors::{ClientErrorInfo, ErrorCode};
 use crate::RoutingMode;
 
@@ -118,6 +118,10 @@ struct ProfilePayload<'a> {
     /// `rules` / `global`; the service passes it to cores that accept it
     /// (0.5.6+); older services ignore the field.
     routing_mode: &'static str,
+    /// `selected_node_id` and `pins`, passed on with the profile to the
+    /// core's `apply-profile`; older services ignore them.
+    #[serde(flatten)]
+    choices: &'a ApplyChoices,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -625,23 +629,25 @@ impl Drop for CancelOnDrop {
 pub(crate) trait ServiceApi: Send + Sync {
     fn get_version(&self) -> BoxFuture<'_, Result<VersionInfo, ServiceError>>;
     fn get_status(&self) -> BoxFuture<'_, Result<ServiceStatus, ServiceError>>;
-    /// Start the TUN core for `session` with `profile`; returns its pid.
-    /// `take_over` replaces a core owned by another session of the same OS
-    /// user (service capability `take_over`).
+    /// Start the TUN core for `session` with `profile` (applied with
+    /// `choices`); returns its pid. `take_over` replaces a core owned by
+    /// another session of the same OS user (service capability `take_over`).
     fn connect<'a>(
         &'a self,
         session: &'a SessionRef,
         profile: &'a Value,
         take_over: bool,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<u32, ServiceError>>;
     /// Apply `profile` (or the same profile in another `routing_mode`) to
-    /// the running core without a reconnect.
+    /// the running core without a reconnect, with `choices`.
     fn update_profile<'a>(
         &'a self,
         session: &'a SessionRef,
         profile: &'a Value,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>>;
     fn renew_lease<'a>(
         &'a self,
@@ -1005,6 +1011,7 @@ impl ServiceApi for ServiceClient {
         profile: &'a Value,
         take_over: bool,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<u32, ServiceError>> {
         Box::pin(async move {
             let payload = encode(ProfilePayload {
@@ -1013,6 +1020,7 @@ impl ServiceApi for ServiceClient {
                 take_over,
                 allowed_rule_set_hosts: &self.rule_set_hosts,
                 routing_mode: crate::routing::wire_name(routing_mode),
+                choices,
             })?;
             let data = self.call(Command::Connect, payload, LONG_CALL).await?;
             data.get("pid")
@@ -1027,6 +1035,7 @@ impl ServiceApi for ServiceClient {
         session: &'a SessionRef,
         profile: &'a Value,
         routing_mode: RoutingMode,
+        choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
         Box::pin(async move {
             let payload = encode(ProfilePayload {
@@ -1035,6 +1044,7 @@ impl ServiceApi for ServiceClient {
                 take_over: false,
                 allowed_rule_set_hosts: &self.rule_set_hosts,
                 routing_mode: crate::routing::wire_name(routing_mode),
+                choices,
             })?;
             decode(
                 self.call(Command::UpdateProfile, payload, LONG_CALL)
@@ -1297,12 +1307,14 @@ mod tests {
             generation: 3,
         };
         let profile = serde_json::json!({"revision":"r1"});
+        let none = ApplyChoices::default();
         let value = encode(ProfilePayload {
             session: &session,
             profile: &profile,
             take_over: false,
             allowed_rule_set_hosts: &[],
             routing_mode: "rules",
+            choices: &none,
         })
         .unwrap();
         assert_eq!(
@@ -1315,6 +1327,7 @@ mod tests {
             take_over: true,
             allowed_rule_set_hosts: &[],
             routing_mode: "rules",
+            choices: &none,
         })
         .unwrap();
         assert_eq!(value["take_over"], true);
@@ -1325,6 +1338,7 @@ mod tests {
             take_over: false,
             allowed_rule_set_hosts: &hosts,
             routing_mode: "global",
+            choices: &none,
         })
         .unwrap();
         assert_eq!(
@@ -1332,6 +1346,26 @@ mod tests {
             serde_json::json!({"session_id":"abc","generation":3,"profile":{"revision":"r1"},
                 "take_over":false,"allowed_rule_set_hosts":["api.example.com:8443"],
                 "routing_mode":"global"})
+        );
+        // The selection and the pins, as service/src/protocol.rs reads them.
+        let choices = ApplyChoices::new(
+            Some("n2".into()),
+            &crate::ingress::Pins::from([("n1".to_string(), "k2".to_string())]),
+        );
+        let value = encode(ProfilePayload {
+            session: &session,
+            profile: &profile,
+            take_over: false,
+            allowed_rule_set_hosts: &[],
+            routing_mode: "rules",
+            choices: &choices,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"session_id":"abc","generation":3,"profile":{"revision":"r1"},
+                "take_over":false,"routing_mode":"rules","selected_node_id":"n2",
+                "pins":[{"node_id":"n1","endpoint_key":"k2"}]})
         );
         assert_eq!(
             ServiceError::Failed("CONNECTION_OWNED_BY_ANOTHER_USER".into())

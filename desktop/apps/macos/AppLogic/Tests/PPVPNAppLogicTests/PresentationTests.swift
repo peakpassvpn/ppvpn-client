@@ -116,6 +116,17 @@ final class PresentationTests: LogicTestCase {
         XCTAssertEqual(notice?.action, .dismissClearedPins)
     }
 
+    func testRebuiltProxyCredentialsNoticeDismisses() {
+        XCTAssertNil(show(.fixture()).notices.first { $0.id == "proxyReset" })
+        let notice = show(.fixture(proxyReset: true)).notices.first { $0.id == "proxyReset" }
+        XCTAssertEqual(notice?.tone, .warn)
+        XCTAssertEqual(notice?.title, tr("proxyResetT"))
+        XCTAssertEqual(notice?.message, tr("proxyResetD"))
+        XCTAssertEqual(notice?.actionTitle, tr("ok"))
+        XCTAssertEqual(notice?.action, .dismissProxyReset)
+        XCTAssertTrue(show(.fixture(profileStatus: .noSubscription, proxyReset: true)).notices.isEmpty)
+    }
+
     func testRoutesTextUsesLabelsThenPositions() {
         XCTAssertEqual(node("n", "N", replicas: ["HKG-A", "HKG-B"]).routesText, "HKG-A → HKG-B")
         XCTAssertEqual(node("n", "N", replicas: ["HKG-A", nil, ""]).routesText,

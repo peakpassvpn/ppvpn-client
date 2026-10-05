@@ -486,6 +486,7 @@ sealed class ScriptedBackend : IClientBackend
     public Task SetRoutingMode(RoutingMode mode) => Record($"routing {mode}");
     public Task PinIngress(string nodeId, string? endpointKey) => Record($"pin {nodeId} {endpointKey ?? "auto"}");
     public void DismissClearedIngressPins() => Calls.Add("dismiss_cleared_pins");
+    public void DismissLocalProxyCredentialsReset() => Calls.Add("dismiss_proxy_reset");
     public Task Connect() => Record("connect");
     public Task Disconnect() => Record("disconnect");
     public Task Retry() => Record("retry");

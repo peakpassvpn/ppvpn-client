@@ -82,7 +82,8 @@ impl EngineLauncher {
             "standard core: in-process Rust engine created"
         );
         // Only `new` resets the local proxy credentials; the reason stays in
-        // the status for the instance's lifetime (section 4.6).
+        // the status for the instance's lifetime (section 4.6). The client
+        // shows it once (`snapshot.local_proxy_credentials_reset`).
         let reset = engine
             .status()
             .local_proxy
@@ -118,6 +119,7 @@ impl EngineLauncher {
             exited,
             stop,
             rule_set_hosts: self.rule_set_hosts.clone(),
+            credentials_reset: reset.is_some(),
         })
     }
 }
@@ -267,6 +269,7 @@ mod tests {
             launched.rule_set_hosts,
             vec!["api.example.test".to_string()]
         );
+        assert!(!launched.credentials_reset, "first credentials");
         let version = call(&launched, "/v1/get-version", json!({})).await.unwrap();
         assert_eq!(
             version["core_version"],
@@ -279,6 +282,25 @@ mod tests {
         assert_eq!(launched.exited.await, "stopped");
         let after = core_ipc::start(transport.as_ref()).await.unwrap_err();
         assert_eq!(after.code(), Some("ENGINE_SHUT_DOWN"));
+    }
+
+    #[tokio::test]
+    async fn rebuilt_local_proxy_credentials_are_reported() {
+        let dir = TempDir::new();
+        let state_dir = dir.path().join(crate::storage::CORE_DIR).join("engine");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        // The engine's local proxy state file, damaged.
+        std::fs::write(state_dir.join("local-proxies.json"), "{").unwrap();
+        let first = launched(dir.path()).await;
+        assert!(first.credentials_reset);
+        first.stop.send(()).unwrap();
+        assert_eq!(first.exited.await, "stopped");
+
+        // The next engine reads the rebuilt file.
+        let second = launched(dir.path()).await;
+        assert!(!second.credentials_reset);
+        second.stop.send(()).unwrap();
+        assert_eq!(second.exited.await, "stopped");
     }
 
     #[tokio::test]
@@ -301,7 +323,8 @@ mod tests {
         let core = launched.transport.as_ref();
 
         // No profile at all.
-        let error = core_ipc::apply_profile(core, &Value::Null, None, None)
+        let none = core_ipc::ApplyChoices::default();
+        let error = core_ipc::apply_profile(core, &Value::Null, None, None, &none)
             .await
             .unwrap_err();
         assert_eq!(error.code(), Some("PROFILE_REQUIRED"));
@@ -315,7 +338,7 @@ mod tests {
         let profile = json!({ "schema_version": 1, "nodes": [] });
         let expected = Engine::validate(&ApplyRequest::new(serde_json::to_vec(&profile).unwrap()))
             .unwrap_err();
-        let applied = core_ipc::apply_profile(core, &profile, None, None)
+        let applied = core_ipc::apply_profile(core, &profile, None, None, &none)
             .await
             .unwrap_err();
         assert_eq!(applied.code(), Some(expected.code));

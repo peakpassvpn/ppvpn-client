@@ -5,8 +5,8 @@
 //! forwarded calls for the TUN instance with it.
 
 use ppvpn_core::{
-    ApplyRequest, Engine, EngineState, Event, EventItem, EventReceiver, ProbeAvailabilityRequest,
-    ProbeEntrancesRequest, RoutingMode,
+    ApplyRequest, Engine, EngineState, Event, EventItem, EventReceiver, Pin,
+    ProbeAvailabilityRequest, ProbeEntrancesRequest, RoutingMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -159,7 +159,9 @@ fn status(engine: &Engine) -> Result<Value, ApiError> {
     Ok(status)
 }
 
-/// The `apply-profile` / `validate-profile` body as an [`ApplyRequest`].
+/// The `apply-profile` / `validate-profile` body as an [`ApplyRequest`]:
+/// `profile`, `routing_mode`, `allowed_rule_set_hosts`, and the host's
+/// persisted `selected_node_id` and `pins` (`[{node_id, endpoint_key}]`).
 fn apply_request(body: &Value) -> Result<ApplyRequest, ApiError> {
     // A missing profile stays empty: the engine reports PROFILE_REQUIRED.
     let profile = match body.get("profile") {
@@ -180,9 +182,29 @@ fn apply_request(body: &Value) -> Result<ApplyRequest, ApiError> {
         .filter_map(Value::as_str)
         .map(str::to_string)
         .collect();
-    Ok(ApplyRequest::new(profile)
+    // Absent or null: the profile's `default_node_id`.
+    let selected = match body.get("selected_node_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(node_id)) => Some(node_id.clone()),
+        Some(_) => {
+            return Err(ApiError::request_invalid(
+                "selected_node_id must be a string",
+            ))
+        }
+    };
+    let pins: Vec<Pin> = match body.get("pins") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(pins) => serde_json::from_value(pins.clone())
+            .map_err(|error| ApiError::request_invalid(format!("pins: {error}")))?,
+    };
+    let request = ApplyRequest::new(profile)
         .with_routing_mode(mode)
-        .with_allowed_rule_set_hosts(hosts))
+        .with_pins(pins)
+        .with_allowed_rule_set_hosts(hosts);
+    Ok(match selected {
+        Some(node_id) => request.with_selected_node_id(node_id),
+        None => request,
+    })
 }
 
 fn reply<T: Serialize>(result: Result<T, ppvpn_core::Error>) -> Result<Value, ApiError> {
@@ -220,6 +242,55 @@ mod tests {
                 retryable: false,
             }
         );
+    }
+
+    #[test]
+    fn apply_bodies_carry_the_selection_and_the_pins() {
+        let request = apply_request(&json!({
+            "profile": { "schema_version": 1 },
+            "routing_mode": "global",
+            "selected_node_id": "n2",
+            "pins": [
+                { "node_id": "n1", "endpoint_key": "k2" },
+                { "node_id": "n2", "endpoint_key": "k3" }
+            ],
+            "allowed_rule_set_hosts": ["api.example.com"]
+        }))
+        .unwrap();
+        assert_eq!(request.profile, br#"{"schema_version":1}"#.to_vec());
+        assert_eq!(request.routing_mode, RoutingMode::Global);
+        assert_eq!(request.selected_node_id.as_deref(), Some("n2"));
+        assert_eq!(
+            request.pins,
+            vec![Pin::new("n1", "k2"), Pin::new("n2", "k3")]
+        );
+        assert_eq!(request.allowed_rule_set_hosts, ["api.example.com"]);
+    }
+
+    #[test]
+    fn apply_bodies_without_a_selection_or_pins_use_the_defaults() {
+        for body in [
+            json!({ "profile": {} }),
+            json!({ "profile": {}, "selected_node_id": null, "pins": null }),
+            json!({ "profile": {}, "pins": [] }),
+        ] {
+            let request = apply_request(&body).unwrap();
+            assert_eq!(request.selected_node_id, None, "{body}");
+            assert!(request.pins.is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn malformed_selections_and_pins_are_refused() {
+        for body in [
+            json!({ "profile": {}, "selected_node_id": 7 }),
+            json!({ "profile": {}, "pins": { "n1": "k1" } }),
+            json!({ "profile": {}, "pins": [{ "node_id": "n1" }] }),
+            json!({ "profile": {}, "pins": [{ "node_id": "n1", "endpoint_key": 1 }] }),
+        ] {
+            let error = apply_request(&body).unwrap_err();
+            assert_eq!(error.code, "REQUEST_INVALID", "{body}");
+        }
     }
 
     #[test]

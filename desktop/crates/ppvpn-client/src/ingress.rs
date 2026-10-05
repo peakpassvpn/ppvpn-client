@@ -3,11 +3,10 @@
 //!
 //! - The pins are this device's choice: persisted in `client-settings.json`
 //!   (`ingress_pins`: node id → endpoint key), never synced.
-//! - ppvpn-core 0.5.7+ applies a pin live (`/v1/pin-ingress`) and keeps it
-//!   across applies of the same process only, so the client sends the pins
-//!   after every apply and connect, and the monitor re-sends any pin a core
-//!   does not report (`GetStatus.nodes[].pinned_endpoint_key`), e.g. after a
-//!   restart. Older cores (and services) refuse the call; that is ignored.
+//! - Every `apply-profile` of both cores carries the full set (`pins`,
+//!   docs/host-integration.md 4.1), so a new or recreated core starts with
+//!   them. A pin the user changes is applied live (`/v1/pin-ingress`) to the
+//!   running cores, best effort.
 //! - A pinned ingress that fails stays pinned (the core never switches away);
 //!   the apps tell the user from `snapshot.node_ingresses` (`healthy`).
 //! - A profile refresh without the pinned endpoint key drops the pin (back
@@ -98,38 +97,8 @@ pub(crate) fn prune(pins: &mut Pins, nodes: &[Node]) -> Vec<IngressPin> {
     cleared
 }
 
-/// Sends the pins a core does not have yet. `reported` is the core's
-/// `GetStatus.nodes` (`None`: unknown, every pin is sent). Nodes the core
-/// reports pinned without a pin here are set back to automatic. Best effort:
-/// a core or service without `/v1/pin-ingress`, or a node the core does not
-/// know, is logged and skipped.
-pub(crate) async fn push(
-    core: &dyn CoreTransport,
-    pins: &Pins,
-    reported: Option<&[NodeIngresses]>,
-    label: &str,
-) {
-    let mut wanted: Vec<(String, Option<String>)> = Vec::new();
-    match reported {
-        None => wanted.extend(
-            pins.iter()
-                .map(|(node, key)| (node.clone(), Some(key.clone()))),
-        ),
-        Some(nodes) => {
-            for node in nodes {
-                let desired = pins.get(&node.node_id);
-                if desired != node.pinned_endpoint_key.as_ref() {
-                    wanted.push((node.node_id.clone(), desired.cloned()));
-                }
-            }
-        }
-    }
-    for (node_id, endpoint_key) in wanted {
-        pin_one(core, &node_id, endpoint_key.as_deref(), label).await;
-    }
-}
-
-/// One `/v1/pin-ingress` call, best effort (see [`push`]).
+/// One `/v1/pin-ingress` call, best effort: a node the core does not know
+/// is logged and skipped.
 pub(crate) async fn pin_one(
     core: &dyn CoreTransport,
     node_id: &str,
@@ -207,19 +176,6 @@ impl Client {
             .pin_ingress_live(&node_id, endpoint_key.as_deref())
             .await;
         Ok(())
-    }
-
-    /// Sends the pins to the standard core (after an apply).
-    pub(crate) async fn push_standard_pins(&self) {
-        if let Ok(transport) = self.standard.transport() {
-            push(
-                transport.as_ref(),
-                &self.ingress_pins.get(),
-                None,
-                "standard core",
-            )
-            .await;
-        }
     }
 
     /// A new profile: pins of ingresses it no longer has go back to
