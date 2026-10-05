@@ -100,7 +100,6 @@ mkdir -m 700 "$APP_STATE"
 - `--local-dns-servers <list>` 只能和 `--tun` 一起用：逗号分隔的物理网络 DNS 服务器，作为 dns-local 的静态覆盖，不跟随网络变化。不传时 dns-local 自己读默认网卡的 DNS（Windows 读适配器，macOS 读 scutil，Linux 读 resolv.conf 或 systemd-resolved），网卡变化后重读。
 - `--log-file <path>` 追加到文件，默认写 stderr；`--log-level info|debug`，默认 `info`（见第 6 节）。
 - `--exit-on-stdin-close`：父进程持有的 stdin 关闭时退出。
-- `--platform` 和 `--tun-stack` 只为兼容旧脚本而接受，不起作用：平台取自构建目标。
 - 只有 Unix socket；Windows 的 Named Pipe 还没有实现。
 
 `serve` 每次启动生成新的会话密钥，退出时删除密钥文件，并在 10 秒内关闭实例。在另一个终端：
