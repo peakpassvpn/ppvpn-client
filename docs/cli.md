@@ -134,6 +134,8 @@ between 1 ms and 2 minutes, and a concurrency between 1 and 32.
   `{"ok": false, "code": "<CODE>", "message": "<text>", "retryable": <bool>}`. Progress and warnings go to
   stderr.
 - `code` is stable and upper-case; `message` is for people and may change.
+- Byte counts in text output use decimal units, as the backend counts traffic: 1 KB = 1000 bytes, 1 MB = 10⁶,
+  1 GB = 10⁹, 1 TB = 10¹² (`traffic` prints `400.0 GB (400000000000 bytes)`). JSON always has the exact byte count.
 
 ## Exit codes
 
