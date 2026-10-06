@@ -1,0 +1,16 @@
+<dictionary> {
+  PrimaryInterface : en0
+  PrimaryService : 342E7885-5FC1-47A4-85BC-BDCA6D7687C7
+  Router : 192.168.50.1
+}
+  No such key
+<dictionary> {
+  SearchOrder : 101200
+  ServerAddresses : <array> {
+    0 : 10.60.159.90
+    1 : fde2:ec40:9312:c7fd::2
+  }
+  __CONFIGURATION_ID__ : Supplemental: 5A11D0E5-E346-4CB7-8775-CB777531E6C1 0
+  __FLAGS__ : 16386
+  __ORDER__ : 0
+}
