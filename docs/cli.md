@@ -197,3 +197,11 @@ Releases carry the CLI as tar.gz archives beside the desktop installers, in the 
 `vX.Y.Z`, the crate's version): Linux x86_64 and aarch64 (static, musl) and macOS universal, built by
 `tools/cli/build-release.sh` in `release.yml`. `crates/cli/README.md`, shipped in each archive, covers
 installing and verifying them.
+
+The shipped binary has no symbols, so a backtrace shows addresses only. Each platform's symbols are a separate
+file in the same release, `ppvpn-cli-<version>-<platform>.symbols.tar.gz`, under the same SHA256SUMS and build
+provenance: `ppvpn.debug` (Linux) and `ppvpn.dSYM` (macOS). To turn a frame's address into a function name,
+subtract the binary's load address (Linux: the first mapping of `ppvpn` in `/proc/<pid>/maps`) and run
+`addr2line -f -e ppvpn.debug <offset>`; on macOS, `atos -arch <arm64|x86_64> -o
+ppvpn.dSYM/Contents/Resources/DWARF/ppvpn -l <load address> <address>`. The names are Rust-mangled;
+`rustfilt` demangles them.

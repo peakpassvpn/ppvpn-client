@@ -3,6 +3,11 @@
 #
 #   ppvpn-cli-<version>-<platform>.tar.gz
 #     ppvpn-cli-<version>-<platform>/ppvpn, README.md (crates/cli/README.md), LICENSE
+#   ppvpn-cli-<version>-<platform>.symbols.tar.gz
+#     ppvpn-cli-<version>-<platform>.symbols/ppvpn.debug (Linux) or ppvpn.dSYM (macOS)
+#
+# The shipped binary has no symbols; its symbols go into the second archive,
+# which turns a backtrace's addresses into function names (docs/cli.md).
 #
 #   tools/cli/build-release.sh linux x86_64-unknown-linux-musl     # linux-x86_64
 #   tools/cli/build-release.sh linux aarch64-unknown-linux-musl    # linux-aarch64
@@ -28,6 +33,7 @@ set -euo pipefail
 os=${1:?usage: $0 linux <target> | macos}
 cd "$(dirname "$0")/../.."
 root=$(pwd)
+work=$(mktemp -d)
 
 fail() {
 	echo "build-release: $*" >&2
@@ -76,8 +82,16 @@ linux)
 	git -C "$sail" checkout --quiet "$rev"
 	(cd "$sail" && bash scripts/install_cross_toolchain.sh "$target" >/dev/null)
 	bash "$sail/scripts/cross.sh" "$target" build --release --locked -p ppvpn-cli
-	bin=$root/target/$target/release/ppvpn
 	rm -rf "$sail"
+	# The toolchain's binutils know the target's ELF.
+	tools=$(echo "${SAIL_CROSS_DIR:-$HOME/.sail-cross}"/musl-*/"$target"/bin)
+	[ -x "$tools/$target-objcopy" ] || fail "no $target-objcopy in the cross toolchain"
+	symbols=$work/ppvpn.debug
+	bin=$work/ppvpn
+	"$tools/$target-objcopy" --only-keep-debug "$root/target/$target/release/ppvpn" "$symbols"
+	"$tools/$target-objcopy" --strip-all --add-gnu-debuglink="$symbols" "$root/target/$target/release/ppvpn" "$bin"
+	"$tools/$target-nm" "$symbols" | grep 'ppvpn_cli8commands3run' >/dev/null || fail "ppvpn.debug lacks the CLI's symbols"
+	! "$tools/$target-nm" "$bin" 2>/dev/null | grep . >/dev/null || fail "the shipped ppvpn still has symbols"
 	# Static: it runs on any Linux of its architecture, glibc or not.
 	info=$(file -b "$bin")
 	echo "$info"
@@ -102,6 +116,16 @@ macos)
 	lipo -create -output "$bin" \
 		target/aarch64-apple-darwin/release/ppvpn target/x86_64-apple-darwin/release/ppvpn
 	lipo "$bin" -verify_arch arm64 x86_64
+	# Symbols out before signing: a dSYM (the symbol tables of both slices;
+	# release builds carry no DWARF, which dsymutil warns about), then strip.
+	symbols=$work/ppvpn.dSYM
+	dsymutil "$bin" -o "$symbols" 2>&1 | grep -v 'no debug symbols in executable' || true
+	for arch in arm64 x86_64; do
+		nm -arch "$arch" "$symbols/Contents/Resources/DWARF/ppvpn" | grep 'ppvpn_cli8commands3run' >/dev/null \
+			|| fail "the dSYM lacks the CLI's symbols ($arch)"
+	done
+	strip "$bin"
+	! nm -arch arm64 "$bin" 2>/dev/null | grep 'ppvpn_cli8commands3run' >/dev/null || fail "the shipped ppvpn still has symbols"
 	# The desktop app's certificate (tools/desktop/ci/build-macos-native.sh):
 	# self-signed, so the designated requirement is pinned to the identifier
 	# and the certificate, and the Keychain item's access carries across
@@ -148,23 +172,29 @@ macos)
 *) fail "unknown os $os" ;;
 esac
 
+# pack <directory under $stage>: dist/cli/<directory>.tar.gz
+pack() {
+	if [ "$os" = linux ]; then
+		# GNU tar: sorted names, no owner, the commit's time.
+		tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
+			-cf - "$1" | gzip -n >"dist/cli/$1.tar.gz"
+	else
+		# bsdtar: no AppleDouble (._*) files.
+		COPYFILE_DISABLE=1 tar -C "$stage" --uid 0 --gid 0 --uname root --gname root -cf - "$1" |
+			gzip -n >"dist/cli/$1.tar.gz"
+	fi
+	tar -tzvf "dist/cli/$1.tar.gz" | head -20
+}
+
 name=ppvpn-cli-$name_version-$platform
 stage=$(mktemp -d)
-mkdir "$stage/$name"
+mkdir -p dist/cli "$stage/$name" "$stage/$name.symbols"
 cp "$bin" "$stage/$name/ppvpn"
 chmod 755 "$stage/$name/ppvpn"
 cp crates/cli/README.md "$stage/$name/README.md"
 cp LICENSE "$stage/$name/LICENSE"
-mkdir -p dist/cli
-if [ "$os" = linux ]; then
-	# GNU tar: sorted names, no owner, the commit's time.
-	tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
-		-cf - "$name" | gzip -n >"dist/cli/$name.tar.gz"
-else
-	# bsdtar: no AppleDouble (._*) files.
-	COPYFILE_DISABLE=1 tar -C "$stage" --uid 0 --gid 0 --uname root --gname root -cf - "$name" |
-		gzip -n >"dist/cli/$name.tar.gz"
-fi
-rm -rf "$stage"
-tar -tzvf "dist/cli/$name.tar.gz"
+cp -R "$symbols" "$stage/$name.symbols/"
+pack "$name"
+pack "$name.symbols"
+rm -rf "$stage" "$work"
 ls -l dist/cli
