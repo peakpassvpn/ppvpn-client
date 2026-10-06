@@ -1904,10 +1904,19 @@ impl Inner {
         let before = traffic("HEALTH_TRAFFIC_FAILED").await?;
         let direct = direct_health_request(target.clone()).await;
         steps.done("direct request");
-        direct?;
+        let remote = direct?;
         tokio::time::sleep(Duration::from_millis(100)).await;
         let after = traffic("HEALTH_TRAFFIC_FAILED").await?;
         if after <= before {
+            // The request did not show in the TUN's counters: it left
+            // another way. Name where it went for the investigation.
+            tracing::warn!(
+                remote = ?remote,
+                host = target.host_str().unwrap_or(""),
+                before,
+                after,
+                "enhanced health: the direct request bypassed the TUN"
+            );
             return Err(service_unreachable("HEALTH_CAPTURE_PATH_FAILED"));
         }
 
@@ -2254,7 +2263,9 @@ fn health_url(api_base: &str) -> Option<reqwest::Url> {
 
 /// The DIRECT step of the health transaction: a bare GET (no cookies, no
 /// credentials, no proxy, no redirects, no caches) that must answer 2xx.
-async fn direct_health_request(target: reqwest::Url) -> Result<(), ClientErrorInfo> {
+async fn direct_health_request(
+    target: reqwest::Url,
+) -> Result<Option<std::net::SocketAddr>, ClientErrorInfo> {
     let client = reqwest::Client::builder()
         .timeout(HEALTH_REQUEST_TIMEOUT)
         .connect_timeout(HEALTH_REQUEST_TIMEOUT)
@@ -2275,8 +2286,10 @@ async fn direct_health_request(target: reqwest::Url) -> Result<(), ClientErrorIn
             response.status().as_u16()
         )));
     }
+    // Where the request went: what to look at when the capture check fails.
+    let remote = response.remote_addr();
     let _ = response.bytes().await;
-    Ok(())
+    Ok(remote)
 }
 
 async fn lease_loop(inner: Arc<Inner>, session: SessionRef) {
