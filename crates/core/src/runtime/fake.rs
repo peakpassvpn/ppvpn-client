@@ -70,6 +70,14 @@ pub(crate) struct FakeRuntime {
         mpsc::Sender<DnsExchange>,
         Mutex<Option<mpsc::Receiver<DnsExchange>>>,
     ),
+    systems_seen: (
+        mpsc::Sender<SystemChange>,
+        Mutex<Option<mpsc::Receiver<SystemChange>>>,
+    ),
+    /// What the next reload's recheck closes (`recheck_next`).
+    recheck: Mutex<Vec<(u64, Option<u32>)>>,
+    /// What `replaced_routes` says while running.
+    replaced: Mutex<Vec<String>>,
     /// What stop_leftovers says after the next stops.
     leftovers: Mutex<Vec<crate::types::Leftover>>,
     dropped: AtomicU64,
@@ -105,6 +113,7 @@ impl Default for FakeRuntime {
         let (dial_tx, dial_rx) = mpsc::channel(64);
         let (route_tx, route_rx) = mpsc::channel(64);
         let (dns_tx, dns_rx) = mpsc::channel(64);
+        let (system_tx, system_rx) = mpsc::channel(64);
         Self {
             calls: Mutex::default(),
             config: Mutex::default(),
@@ -123,6 +132,9 @@ impl Default for FakeRuntime {
             failures_seen: (dial_tx, Mutex::new(Some(dial_rx))),
             routes_seen: (route_tx, Mutex::new(Some(route_rx))),
             dns_seen: (dns_tx, Mutex::new(Some(dns_rx))),
+            systems_seen: (system_tx, Mutex::new(Some(system_rx))),
+            recheck: Mutex::default(),
+            replaced: Mutex::default(),
             leftovers: Mutex::default(),
             dropped: AtomicU64::new(0),
             // Known at the start, as sail's start returns with its first
@@ -317,6 +329,29 @@ impl FakeRuntime {
         let _ = self.dns_seen.0.try_send(exchange);
     }
 
+    /// As if another program changed what sail set up for the TUN.
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn system_changed(&self, kind: &str, resource: &str) {
+        let _ = self.systems_seen.0.try_send(SystemChange {
+            kind: kind.into(),
+            resource: resource.into(),
+        });
+    }
+
+    /// The next successful reload's recheck closes these connections (id,
+    /// rule index), as sail's would those the new rules reject: they leave
+    /// the connection list and the report lists them.
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn recheck_next(&self, closed: Vec<(u64, Option<u32>)>) {
+        *self.recheck.lock().unwrap() = closed;
+    }
+
+    /// The routes of others the TUN replaced, while running.
+    #[allow(dead_code)] // for the Engine's tests
+    pub(crate) fn set_replaced_routes(&self, routes: Vec<String>) {
+        *self.replaced.lock().unwrap() = routes;
+    }
+
     /// As if sail's stops left these tasks running.
     #[allow(dead_code)] // for the Engine's tests
     pub(crate) fn leave_after_stop(&self, leftovers: Vec<crate::types::Leftover>) {
@@ -474,10 +509,12 @@ impl Runtime for FakeRuntime {
             .into_iter()
             .filter(|t| !wanted.iter().any(|(w, _)| w == t))
             .collect();
+        report.recheck_closed = std::mem::take(&mut *self.recheck.lock().unwrap());
         {
             let mut connections = self.connections.lock().unwrap();
             connections.retain(|c| {
-                !gone.contains(&c.inbound)
+                !report.recheck_closed.iter().any(|(id, _)| *id == c.id)
+                    && !gone.contains(&c.inbound)
                     && !report
                         .inbounds
                         .iter()
@@ -675,6 +712,22 @@ impl Runtime for FakeRuntime {
             return None;
         }
         super::configured_tun_name(self.config.lock().unwrap().as_deref()?)
+    }
+
+    fn system_changes(&self) -> mpsc::Receiver<SystemChange> {
+        self.systems_seen
+            .1
+            .lock()
+            .unwrap()
+            .take()
+            .expect("taken once")
+    }
+
+    fn replaced_routes(&self) -> Vec<String> {
+        match self.running() {
+            Ok(()) => self.replaced.lock().unwrap().clone(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 

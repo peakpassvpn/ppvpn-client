@@ -19,7 +19,9 @@
 //!   that do not fit are dropped and counted, never waited for;
 //! - network: sail's network events (`instance.events(Kinds::NETWORK)`,
 //!   through stops and starts) as [`NetworkChange`]s; a subscriber that
-//!   fell behind reads the snapshot again.
+//!   fell behind reads the snapshot again;
+//! - system changes: sail's `events(Kinds::SYSTEM)` (a TUN's route or
+//!   address changed by another program) as [`SystemChange`]s.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,7 +37,7 @@ use tokio::task::JoinHandle;
 use super::{
     AsyncReadWrite, Datagram, DialFailed, DnsExchange, GroupInfo, GroupSwitch, MemberInfo,
     NetworkChange, NetworkSnapshot, ReloadReport, Routed, Runtime, RuntimeConnection, RuntimeError,
-    RuntimeState, RuntimeTraffic, Target,
+    RuntimeState, RuntimeTraffic, SystemChange, Target,
 };
 use crate::logfmt;
 use crate::types::{Leftover, LeftoverKind};
@@ -52,6 +54,9 @@ const ROUTE_BUFFER: usize = 1024;
 /// DNS exchanges that wait for the Engine before new ones are dropped
 /// (queries come in bursts at start).
 const DNS_BUFFER: usize = 256;
+/// System changes that wait for the Engine before new ones are dropped
+/// (sail tells a break once).
+const SYSTEM_BUFFER: usize = 16;
 
 /// Each group's member as last told, by tag: what a switch is from, and
 /// what the groups are compared with after falling behind.
@@ -65,6 +70,7 @@ pub(crate) struct SailRuntime {
     switch_tx: mpsc::Sender<GroupSwitch>,
     members: Members,
     failures: Mutex<Option<mpsc::Receiver<DialFailed>>>,
+    systems: Mutex<Option<mpsc::Receiver<SystemChange>>>,
     /// The routes' follower, started by the first `routes()`.
     route_task: Mutex<Option<JoinHandle<()>>>,
     /// The DNS exchanges' follower, started by the first `dns_exchanges()`.
@@ -133,6 +139,9 @@ impl SailRuntime {
         let (dial_tx, dial_rx) = mpsc::channel(DIAL_BUFFER);
         tasks.push(tokio::spawn(follow_dials(instance.clone(), dial_tx)));
 
+        let (system_tx, system_rx) = mpsc::channel(SYSTEM_BUFFER);
+        tasks.push(tokio::spawn(follow_system(instance.clone(), system_tx)));
+
         let (log_tx, log_rx) = mpsc::channel(LOG_BUFFER);
         let dropped = Arc::new(AtomicU64::new(0));
         let mut batches = Box::pin(instance.logs(LogFilter::default().backlog(false)));
@@ -164,6 +173,7 @@ impl SailRuntime {
             switch_tx,
             members,
             failures: Mutex::new(Some(dial_rx)),
+            systems: Mutex::new(Some(system_rx)),
             route_task: Mutex::new(None),
             dns_task: Mutex::new(None),
             logs: Mutex::new(Some(log_rx)),
@@ -477,6 +487,44 @@ async fn follow_dials(instance: Instance, tx: mpsc::Sender<DialFailed>) {
     }
 }
 
+/// sail's kind of what someone else changed, by its name in lower case
+/// (sail's `LeftKind` has none of its own).
+fn system_kind(kind: embed::LeftKind) -> &'static str {
+    use embed::LeftKind as K;
+    match kind {
+        K::Tun => "tun",
+        K::Route => "route",
+        K::Rule => "rule",
+        K::Dns => "dns",
+        K::Nft => "nft",
+        K::Wfp => "wfp",
+        K::File => "file",
+        K::Task => "task",
+        _ => "other",
+    }
+}
+
+/// sail's changes of what it set up for a TUN, made by another program,
+/// through every run. Behind (`Lagged`): those missed are gone, and how
+/// many is logged.
+async fn follow_system(instance: Instance, tx: mpsc::Sender<SystemChange>) {
+    let mut events = Box::pin(instance.events(embed::Kinds::SYSTEM));
+    while let Some(event) = events.next().await {
+        match event {
+            embed::Event::SystemChanged { kind, resource } => {
+                let _ = tx.try_send(SystemChange {
+                    kind: system_kind(kind).into(),
+                    resource,
+                });
+            }
+            embed::Event::Lagged { kind, missed } if kind.contains(embed::Kinds::SYSTEM) => {
+                tracing::warn!(missed, "system changes dropped: the reader fell behind");
+            }
+            _ => {}
+        }
+    }
+}
+
 /// A member's health from its delay history, newest last: alive by the last
 /// test, failures counted back from it.
 fn member(tag: &str, outbounds: &HashMap<String, embed::OutboundInfo>) -> MemberInfo {
@@ -520,14 +568,24 @@ impl Runtime for SailRuntime {
             .map_err(error)
     }
 
+    /// Each reload rechecks the connections open against the new rules and
+    /// closes those they reject or drop (embed.md, Rechecking the
+    /// connections open).
     async fn reload(&self, config: &str) -> Result<ReloadReport, RuntimeError> {
         use embed::{InboundChange as C, ReloadPath as P};
+        let options = embed::ReloadOptions::new().recheck_open(embed::RecheckOpen::CloseRejected);
         let report = self
             .instance
-            .reload(Some(Config::Json(config.into())))
+            .reload_rechecking(Some(Config::Json(config.into())), options)
             .await
             .map_err(error)?;
+        let recheck_closed = report
+            .recheck
+            .as_ref()
+            .map(|r| r.closed.iter().map(|c| (c.id, c.rule)).collect())
+            .unwrap_or_default();
         Ok(ReloadReport {
+            recheck_closed,
             path: match report.path {
                 P::Full => "full",
                 P::InboundsOnly => "inbounds_only",
@@ -831,6 +889,18 @@ impl Runtime for SailRuntime {
 
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>> {
         self.network.subscribe()
+    }
+
+    fn system_changes(&self) -> mpsc::Receiver<SystemChange> {
+        self.systems
+            .lock()
+            .expect("systems")
+            .take()
+            .expect("system_changes is taken once")
+    }
+
+    fn replaced_routes(&self) -> Vec<String> {
+        self.instance.replaced_routes().unwrap_or_default()
     }
 }
 

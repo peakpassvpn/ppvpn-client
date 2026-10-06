@@ -242,6 +242,24 @@ pub(crate) struct ReloadReport {
     /// What the reload took and did not reach everywhere (an endpoint that
     /// runs keeps the dial defaults it was built with), as sail says it.
     pub notes: Vec<String>,
+    /// The connections open that the new rules reject or drop, closed by
+    /// sail's recheck (`RecheckOpen::CloseRejected`): each id, as
+    /// `connections()` lists it, with the index in `route.rules` of the
+    /// rule that rejects it. A UDP session is rechecked by its first
+    /// destination.
+    pub recheck_closed: Vec<(u64, Option<u32>)>,
+}
+
+/// Someone else changed what sail set up on the system for a TUN (sail's
+/// `SystemChanged`; macOS, Windows later): sail leaves it as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SystemChange {
+    /// What it is, as sail's `LeftKind` in lower case: `route`, `tun`
+    /// (its address), `dns`, ...
+    pub kind: String,
+    /// What and how, the TUN's name first: "route 128.0.0.0/1 into utun9:
+    /// gone".
+    pub resource: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,6 +443,16 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// None until the first since the runtime started. The receiver lives
     /// across starts and stops.
     fn network_changes(&self) -> watch::Receiver<Option<NetworkChange>>;
+
+    /// What someone else changed of a TUN's routes or address, as it
+    /// happens, through starts and stops; those that do not fit while the
+    /// reader is behind are dropped. Taken once (by the Engine, at new).
+    fn system_changes(&self) -> mpsc::Receiver<SystemChange>;
+    /// The routes of others (another VPN's) that the TUN's auto_route
+    /// replaced, a line each; sail puts them back when it stops. Read after
+    /// a start or a reload; macOS only, empty elsewhere and while not
+    /// running.
+    fn replaced_routes(&self) -> Vec<String>;
 }
 
 /// An inbound's tag in sing-box JSON: `tag`, else its `type`.
