@@ -1070,10 +1070,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          # Releases are immutable: a tag is published once.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "the release $TAG already exists" >&2
-            exit 1
+          # Releases are immutable: a tag is published once. A rehearsal
+          # replaces an earlier rehearsal's draft of the same version (a
+          # draft has no tag and nobody sees it); anything published stays.
+          if existing=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$REHEARSAL" = true ] && [ "$existing" = true ]; then
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+              echo "replaced an earlier rehearsal's draft of $TAG" >&2
+            else
+              echo "the release $TAG already exists" >&2
+              exit 1
+            fi
           fi
           notes="PPVPN $VERSION (build $BUILD), stable channel: the desktop installers and the CLI's archives. Commit \`$GITHUB_SHA\`. Verify a file with \`sha256sum -c SHA256SUMS\` and \`gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml\`."
           if [ "$REHEARSAL" = true ]; then
