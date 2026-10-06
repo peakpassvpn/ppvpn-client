@@ -5,6 +5,8 @@ name: ${PPVPN_REPO_PACKAGE}
 arch: all
 platform: linux
 version: ${PPVPN_REPO_PACKAGE_VERSION}
+# Fixed per version (build-repo-packages.sh): every build of a version is byte for byte the same.
+mtime: ${PPVPN_REPO_PACKAGE_TIME}
 section: misc
 priority: optional
 maintainer: ${PPVPN_PACKAGE_MAINTAINER}
@@ -41,3 +43,7 @@ contents:
     packager: rpm
     file_info:
       mode: 0644
+
+rpm:
+  # A fixed build host: the runner's name differs on every run, and so would the rpm.
+  buildhost: pkg.peakpassvpn.com
