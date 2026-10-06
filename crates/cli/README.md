@@ -13,6 +13,7 @@ Each release (tag `vX.Y.Z`) of <https://github.com/peakpassvpn/ppvpn-client/rele
 | `ppvpn-cli-<version>-linux-x86_64.tar.gz` | Linux on x86_64, any distribution (static binary) |
 | `ppvpn-cli-<version>-linux-aarch64.tar.gz` | Linux on ARM64, any distribution (static binary) |
 | `ppvpn-cli-<version>-macos-universal.tar.gz` | macOS on Apple silicon and Intel |
+| `ppvpn-cli-<version>-<platform>.symbols.tar.gz` | the binary's symbols, only to read a crash report (not needed to run it) |
 | `SHA256SUMS` | the SHA-256 of every file in the release |
 
 ## Verify
