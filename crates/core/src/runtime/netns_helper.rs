@@ -1,7 +1,9 @@
 //! Processes the netns tests start from this test binary: a TCP echo in the
 //! uplink namespace (`ip netns exec ppvpn-w <this test binary> --exact
 //! runtime::netns_helper::echo --ignored`, the address in PPVPN_NETNS_ECHO),
-//! and an Engine to kill (`runtime::netns_helper::engine`). Outside that
+//! a client that connects from there (`runtime::netns_helper::connect`, the
+//! address in PPVPN_NETNS_CONNECT), and an Engine to kill
+//! (`runtime::netns_helper::engine`). Outside that
 //! each returns at once. Kept apart from runtime::netns_tests so that their
 //! filter does not run them.
 
@@ -27,6 +29,29 @@ fn echo() {
             }
         });
     }
+}
+
+/// Connects to PPVPN_NETNS_CONNECT, sends four bytes and reads them back,
+/// all within 10 s; panics (a failed exit) otherwise. Outside that it
+/// returns at once.
+#[test]
+#[ignore = "started by runtime::netns_tests in the uplink namespace"]
+fn connect() {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let Ok(addr) = std::env::var("PPVPN_NETNS_CONNECT") else {
+        return;
+    };
+    let addr: SocketAddr = addr.parse().expect("connect: an address");
+    let timeout = Duration::from_secs(10);
+    let mut conn = TcpStream::connect_timeout(&addr, timeout).expect("connect: connected");
+    conn.set_read_timeout(Some(timeout)).unwrap();
+    conn.write_all(b"ping").expect("connect: sent");
+    let mut back = [0u8; 4];
+    conn.read_exact(&mut back).expect("connect: echoed");
+    assert_eq!(&back, b"ping");
+    println!("connect: done");
 }
 
 /// An Engine with a TUN, started on the contract golden's profile with its
