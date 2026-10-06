@@ -374,7 +374,10 @@ mod tests {
             core_ipc::list_node_ids(core).await.unwrap(),
             Vec::<String>::new()
         );
-        assert_eq!(core_ipc::get_traffic(core).await.unwrap(), (0, 0));
+        let traffic = core_ipc::get_traffic(core).await.unwrap();
+        assert_eq!(traffic.totals(), (0, 0));
+        // The engine dates its counters (`Traffic::measured_at`, RFC 3339).
+        assert!(traffic.measured_at.is_some());
         assert_eq!(
             call(&launched, "/v1/get-selected-node", json!({})).await,
             Ok(Value::Null)

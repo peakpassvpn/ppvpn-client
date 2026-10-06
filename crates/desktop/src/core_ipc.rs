@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -488,19 +488,49 @@ pub(crate) async fn pin_ingress(
     .map(|_| ())
 }
 
-/// Cumulative `(upload_bytes, download_bytes)` of the running instance.
-pub(crate) async fn get_traffic(core: &dyn CoreTransport) -> Result<(u64, u64), CoreCallError> {
+/// The running instance's cumulative counters, as the engine last read them
+/// from its runtime (`Traffic`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CoreTraffic {
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    /// When the engine read them (`Traffic::measured_at`). The engine reads
+    /// its runtime about once a second while a host reads and stops 10 s
+    /// after the last read, so the counters can be older than the call
+    /// (docs/host-integration.md 4.4). `None` when missing or unreadable.
+    pub measured_at: Option<SystemTime>,
+}
+
+impl CoreTraffic {
+    fn parse(data: &Value) -> Self {
+        let count = |key: &str| data.get(key).and_then(Value::as_u64).unwrap_or(0);
+        CoreTraffic {
+            upload_bytes: count("upload_bytes"),
+            download_bytes: count("download_bytes"),
+            measured_at: serde_json::from_value::<ppvpn_core::Traffic>(data.clone())
+                .ok()
+                .map(|traffic| SystemTime::from(traffic.measured_at)),
+        }
+    }
+
+    /// `(upload_bytes, download_bytes)`.
+    pub(crate) fn totals(&self) -> (u64, u64) {
+        (self.upload_bytes, self.download_bytes)
+    }
+
+    /// Both directions together.
+    pub(crate) fn total(&self) -> u64 {
+        self.upload_bytes.saturating_add(self.download_bytes)
+    }
+}
+
+/// Cumulative counters of the running instance, and when the engine read
+/// them (see [`CoreTraffic::measured_at`]).
+pub(crate) async fn get_traffic(core: &dyn CoreTransport) -> Result<CoreTraffic, CoreCallError> {
     let data = core
         .call("/v1/get-traffic", json!({}), Duration::from_secs(5))
         .await?;
-    Ok((
-        data.get("upload_bytes")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        data.get("download_bytes")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-    ))
+    Ok(CoreTraffic::parse(&data))
 }
 
 /// Raw `ProbeEntrances` for the given nodes (`EntranceResult[]`).
@@ -1385,5 +1415,46 @@ pub(crate) mod tests {
         assert_eq!(small.deadline, Duration::from_millis(8_000));
         let huge = ProbeOptions::for_method(ProbeMethod::Connect, 500);
         assert_eq!(huge.deadline, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn traffic_carries_when_the_engine_read_it() {
+        let core = FakeCore::new(|_, _| {
+            (
+                Duration::ZERO,
+                Ok(json!({
+                    "upload_bytes": 3,
+                    "download_bytes": 4,
+                    "measured_at": "2026-10-07T08:00:01.500Z"
+                })),
+            )
+        });
+        let traffic = get_traffic(core.as_ref()).await.unwrap();
+        assert_eq!(traffic.totals(), (3, 4));
+        assert_eq!(traffic.total(), 7);
+        let days = crate::logging::days_from_civil(2026, 10, 7) as u64;
+        assert_eq!(
+            traffic.measured_at,
+            Some(
+                std::time::UNIX_EPOCH
+                    + Duration::from_secs(days * 86_400 + 8 * 3_600 + 1)
+                    + Duration::from_millis(500)
+            )
+        );
+        assert_eq!(core.calls.lock().unwrap()[0].0, "/v1/get-traffic");
+
+        // Undated (or not RFC 3339): the counters still count, the date is unknown.
+        for measured_at in [Value::Null, json!("yesterday")] {
+            let core = FakeCore::new(move |_, _| {
+                (
+                    Duration::ZERO,
+                    Ok(
+                        json!({"upload_bytes": 1, "download_bytes": 2, "measured_at": measured_at.clone()}),
+                    ),
+                )
+            });
+            let traffic = get_traffic(core.as_ref()).await.unwrap();
+            assert_eq!((traffic.totals(), traffic.measured_at), ((1, 2), None));
+        }
     }
 }
