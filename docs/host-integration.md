@@ -272,7 +272,9 @@ pub struct Status {
                                             // Broken：macOS、Windows 上别的程序改动了路由，见 4.4）
     pub replaced_routes: Vec<String>,       // 仅 macOS：TUN 接管的其他 VPN 的路由，每条一行，如
                                             // "route 128.0.0.0/1 via 192.0.2.1 on utun4"；Sail 停止时放回。
-                                            // start、重启、热切换后读取，停止后清空；为空时 JSON 省略
+                                            // start、完整重启、每次热切换时取的快照，两次之间可能已过时；
+                                            // 停止后清空；为空时 JSON 省略。与 tun_routing（broken）互相独立，
+                                            // 可以同时出现：接管别人的路由是正常行为，不是故障
     pub dropped_log_lines: u64,             // 日志接收端阻塞而丢弃的行数，见第 10 节
 }
 #[non_exhaustive]
@@ -297,6 +299,8 @@ Core API v1 的 `get-status`、`list-nodes`、`get-selected-node` 里 CLI 直接
 {"state":"fatal","reason":{"kind":"tun_routing_broken","missing":["9093/v4 iif tun0 goto 9101"]}}
 ```
 
+宿主按结构化字段判断，不从别的地方推断：`state` 是 `degraded` 时看 `reasons` 里的每个 `kind`（例如有没有 `tun_routing_broken`），`state` 是 `fatal` 时看 `reason.kind`。只要有任何一个 `Degraded` 原因，`state` 就是 `"degraded"`，不是 `"running"`；Core API v1 的 `get-status`（engine-host）也照此给出，不会出现 `"running"` 加 `reasons` 的组合。
+
 ### 状态机
 
 ```
@@ -306,7 +310,7 @@ Stopped ──apply──▶ Configured ──start──▶ Running ⇄ Degrade
                     任意状态 ──不可恢复──▶ Fatal（只能 drop 重建）
 ```
 
-- **`Degraded`**：引擎正在自愈，宿主**不需要重建**，只需要把原因映射成提示。原因可以同时有多个，都是可枚举的：
+- **`Degraded`**：除 `TunRoutingBroken` 外，所有原因都会由引擎自愈，宿主**不需要重建**，只需要把原因映射成提示。`TunRoutingBroken`（macOS、Windows）不会自愈，持续到实例下一次 start；宿主可以重建实例，建议 10 分钟内最多自动重建 3 次，之后提示用户（见表中这一行）。原因可以同时有多个，都是可枚举的：
 
   | `DegradedReason` | 含义 |
   | --- | --- |
@@ -320,13 +324,13 @@ Stopped ──apply──▶ Configured ──start──▶ Running ⇄ Degrade
   | `LocalProxyUnavailable` | 本地代理端口监听失败，正在按退避重试 |
   | `ProfileExpired { expires_at }` | 已生效的 Profile 越过了 `expires_at`。转发照常；之后的重建都会因 `PROFILE_EXPIRED` 失败；apply 一份未过期的 Profile 后清除。宿主据此提示用户，或者去刷新 Profile（第 9 节） |
   | `DefaultRouteOverridden` | 其他 VPN 抢走了默认路由，流量不再进入本 TUN；对方撤走后自动恢复 |
-  | `TunRoutingBroken { missing }` | macOS、Windows：别的程序（通常是另一个 VPN）改动了 TUN 的路由或地址，Sail 只报告、不补回，部分流量可能绕过 TUN。`missing` 是 Sail 对每处改动的描述，以 TUN 名开头。这是 `Degraded` 里唯一不会自愈的原因：持续到实例下一次 start。宿主可以重建实例（stop 再 start 即可重新装上路由），但另一个 VPN 可能马上又改，所以**建议限制自动重连**：桌面端 10 分钟内最多自动重连 3 次，之后提示用户（例如“另一个 VPN 正在改动路由”），由用户决定。Linux 不出现这个原因（守护会补回，补不回进入 `Fatal{TunRoutingBroken}`） |
+  | `TunRoutingBroken { missing }` | macOS、Windows：别的程序（通常是另一个 VPN）改动了 TUN 的路由或地址，Sail 只报告、不补回，部分流量可能绕过 TUN。`missing` 是 Sail 对每处改动的描述，以 TUN 名开头。这是 `Degraded` 里唯一不会自愈的原因：持续到实例下一次 start。宿主可以重建实例（stop 再 start 即可重新装上路由），但另一个 VPN 可能马上又改，所以**建议限制自动重连**：桌面端 10 分钟内最多自动重连 3 次，之后提示用户（例如“另一个 VPN 正在改动路由”），由用户决定。Linux 不出现这个原因（守护会补回，补不回进入 `Fatal{TunRoutingBroken}`）。与 `Fatal` 里的同名原因同名不同义：宿主按所在的状态（`Degraded` 还是 `Fatal`）处理，不按名字 |
 
 - **`Fatal`**：引擎无法自愈。宿主**丢弃并重建**实例；这是宿主重建实例的唯一理由，另外两个是 panic 和会话丢失。
 
   | `FatalReason` | 含义 |
   | --- | --- |
-  | `TunRoutingBroken { missing }` | 路由被删后补不回来，流量可能绕过 TUN（对应 Go 的 `TunRoutingBroken`）。只在 Linux 上出现；macOS、Windows 上别的程序改动路由时是 `Degraded{TunRoutingBroken}`，不是 `Fatal` |
+  | `TunRoutingBroken { missing }` | 路由被删后补不回来，流量可能绕过 TUN（对应 Go 的 `TunRoutingBroken`）。只在 Linux 上出现；macOS、Windows 上别的程序改动路由时是 `Degraded{TunRoutingBroken}`，不是 `Fatal`。宿主按所在的状态处理，不按名字 |
   | `TunDeviceLost` | TUN 设备消失，例如适配器被外部删除，并且重建失败 |
   | `Panic` | 公开方法里兜住了一次 panic |
   | `KernelUnrecoverable` | 内核启动失败，也恢复不到上一个内核 |
@@ -358,7 +362,7 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 | `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
 | `KernelSwitched`、`KernelDrained` | 是 | 热切换；Rust 版不发 `KernelDrained`（没有旧内核排空，第 4.1 节） |
 | `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
-| `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有。Rust 版 `TunRoutingBroken` 在 Linux、macOS 和 Windows 上都有：Linux 上是补不回（随后 `Fatal`），macOS、Windows 上是别的程序改动了路由（随后 `Degraded`，`error` 是“<类别> changed by another program”，`missing` 以 TUN 名开头）；`TunRoutingRestored` 只在 Linux 上有（只有那里补回路由）。同时会反映在 `StateChanged` 里 |
+| `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有。Rust 版 `TunRoutingBroken` 在 Linux、macOS 和 Windows 上都有：Linux 上是补不回（随后 `Fatal`），macOS、Windows 上是别的程序改动了路由（随后 `Degraded`，`error` 是“<类别> changed by another program”，`missing` 以 TUN 名开头）；`TunRoutingRestored` 只在 Linux 上有（只有那里补回路由）。同时会反映在 `StateChanged` 里。宿主不按事件名决定怎么处理，而按随后的状态（`Fatal` 还是 `Degraded`）。 |
 
 ## 7. 错误
 
@@ -405,8 +409,9 @@ pub struct Error {
 - 入口故障转移和 pin 的生效；
 - 网卡变化后：重新选默认网卡、重新探测 IPv6 出口、重新读本地 DNS，以及离线期间的处理。对此引擎保证两点：
   - 网络变化期间（包括断网、切换网卡）**不会进入 `Fatal`**，只会出现 `Degraded`，网络稳定后自动回到 `Running`；
-  - 流量一旦绕过 TUN，**立即处理**：先尝试补回路由，补不回来就进入 `Fatal{TunRoutingBroken}`。
-  - `Fatal{TunRoutingBroken}` 时运行时和 TUN 照常运行，引擎不会自己停止（同 Go 0.5.20）：这时流量绕过 TUN 直连，用户的流量**正在泄露**到隧道之外，但没有断网。宿主**必须立即**丢弃并重建实例（先 `shutdown`，再 `new`、`apply`、`start`），由新实例重新装上路由，期间不要套用“网络正在稳定”的宽限。重建失败时，宿主告诉用户保护已经中断，由用户决定是否继续。Go 版宿主就是这样做的：Desktop 增强模式的健康检查读到 `tun_routing` 为 broken，就按泄露处理，不等宽限，立刻重连。
+  - **Linux**：流量一旦绕过 TUN，**立即处理**：先尝试补回路由，补不回来就进入 `Fatal{TunRoutingBroken}`。
+  - **macOS、Windows**：Sail 只检测、不补回。别的程序改动了 TUN 的路由或地址时进入 `Degraded{TunRoutingBroken}`，实例继续运行，由宿主按第 5 节 `Degraded` 的说明处理（可以重建，建议 10 分钟内最多 3 次）。下面关于 `Fatal{TunRoutingBroken}` 的要求只适用于 Linux。
+  - （Linux）`Fatal{TunRoutingBroken}` 时运行时和 TUN 照常运行，引擎不会自己停止（同 Go 0.5.20）：这时流量绕过 TUN 直连，用户的流量**正在泄露**到隧道之外，但没有断网。宿主**必须立即**丢弃并重建实例（先 `shutdown`，再 `new`、`apply`、`start`），由新实例重新装上路由，期间不要套用“网络正在稳定”的宽限。重建失败时，宿主告诉用户保护已经中断，由用户决定是否继续。Go 版宿主就是这样做的：Desktop 增强模式的健康检查读到 `tun_routing` 为 broken，就按泄露处理，不等宽限，立刻重连。
   - 运行时失败或 panic 进入的 `Fatal`（`KernelUnrecoverable`、`Panic`）不一样：运行时已经失效，留着只剩系统里的残留（Windows 上 strict_route 的过滤器会挡住所有不走 TUN 的流量）。进入这类 `Fatal` 时，引擎立即停止运行时（有界，至多 10 秒），不等宿主：Sail 先撤路由、规则、过滤器和 DNS，再关设备。撤不掉的记下来，宿主之后 `shutdown`（或 drop）时列在 `ShutdownReport.leftovers` 里，每项带类别和手工清除的说明。三个平台上 Sail 都保证这一清理，并有 CI 测试（Linux、macOS 自 sail dddc2d1c，Windows 自 sail 99b8daef：先撤 WFP 过滤器，再撤 DNS、路由，最后关 Wintun 会话）。我们自己的构建也验证：Linux 在 netns CI，Windows 在 CI 的 `windows` 作业（MSVC 构建、管理员、strict_route）；运行时失败后、宿主还没 shutdown，系统已经回到启动前，再次启动成功。正常情况下引擎已经撤干净，leftovers 为空。leftovers 里出现 `wfp`，或者 Windows 上出现无法归类的 `runtime` 残留，说明清理没有成功、过滤器可能还挡着流量：宿主应当退出进程，由服务管理器重启，进程退出时系统会回收这些过滤器。这是清理失败时唯一的恢复手段。局限：清理步骤自身 panic 的用例只在 Linux 上有；进程被强杀的情形在我们的 MSVC 构建上还没有测；Sail 的 Windows 测试跑在 Windows Server 的 CI 机器上，不是桌面版实机。宿主看到这类 `Fatal`，仍应 `shutdown` 并重建实例。
 - 路由规则守护，以及 Wintun、utun 的自愈；
 - 热切换，以及切换时关掉新 Profile 拿走的连接；
