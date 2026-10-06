@@ -9,7 +9,11 @@
 # Environment:
 #   PPVPN_REPO_KEY              ASCII-armored public key of the repository signing key
 #                               (default: apps/linux/packaging/ppvpn.asc)
-#   PPVPN_REPO_PACKAGE_VERSION  bump when the key or the source entry changes (default 1.0.0)
+#   PPVPN_REPO_PACKAGE_VERSION  bump when the key, the source entry or anything else in the
+#                               packages changes (default 1.0.1). The update site keeps every
+#                               published file under its name for good and refuses to replace one
+#                               with other bytes, so a version is built byte for byte the same
+#                               every time: its timestamp is fixed (PACKAGE_TIME below).
 #   PPVPN_PACKAGE_MAINTAINER    deb Maintainer / rpm Packager (default: PeakPass VPN LLC <support@peakpassvpn.com>)
 #   PPVPN_DIST_DIR              output directory (default: dist/linux)
 #
@@ -21,7 +25,15 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$APP_DIR/../.." && pwd)"
 OUT_DIR="${PPVPN_DIST_DIR:-$REPO_DIR/dist/linux}"
 KEY="${PPVPN_REPO_KEY:-$APP_DIR/packaging/ppvpn.asc}"
-VERSION="${PPVPN_REPO_PACKAGE_VERSION:-1.0.0}"
+VERSION="${PPVPN_REPO_PACKAGE_VERSION:-1.0.1}"
+# The packages' timestamp (file times, archive headers, rpm build time): fixed per version so
+# that each build of a version is identical. 1.0.0 was built by an older pipeline with the build
+# time, and its maintainer spelled differently; 1.0.1 has the same key and source entry.
+case "$VERSION" in
+  1.0.1) PACKAGE_TIME="2026-10-06T00:00:00Z" ;;
+  *) echo "error: no fixed timestamp for repository package version $VERSION (add one)" >&2; exit 1 ;;
+esac
+export SOURCE_DATE_EPOCH="$(date -u -d "$PACKAGE_TIME" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$PACKAGE_TIME" +%s)"
 [[ -f "$KEY" ]] || { echo "error: missing repository public key $KEY (set PPVPN_REPO_KEY)" >&2; exit 1; }
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
@@ -70,6 +82,7 @@ PY
 
 mkdir -p "$OUT_DIR"
 export PPVPN_REPO_PACKAGE_VERSION="$VERSION" PPVPN_REPO_KEY="$KEY" PPVPN_REPO_STAGE="$STAGE"
+export PPVPN_REPO_PACKAGE_TIME="$PACKAGE_TIME"
 export PPVPN_REPO_DIR="$APP_DIR/packaging"
 export PPVPN_PACKAGE_MAINTAINER="${PPVPN_PACKAGE_MAINTAINER:-PeakPass VPN LLC <support@peakpassvpn.com>}"
 PPVPN_REPO_PACKAGE=ppvpn-archive-keyring expand_config "$APP_DIR/packaging/nfpm-keyring.yaml" "$STAGE/keyring-deb.yaml"

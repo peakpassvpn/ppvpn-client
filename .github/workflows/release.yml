@@ -1357,7 +1357,7 @@ jobs:
         run: tools/desktop/ci/upload-site.sh --check site | tee check.txt
       - name: Summary
         run: |
-          { echo '```'; grep -v '^[0-9]  ' check.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+          { echo '```'; grep -v '^[0-9]  ' check.txt || true; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
 
   # ---- On a merge only: the build caches ci.yml restores. One job per
   # ci.yml cache key (shared-key), building what the ci.yml jobs on that key
