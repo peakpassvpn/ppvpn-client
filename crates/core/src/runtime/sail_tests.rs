@@ -860,10 +860,20 @@ async fn rules_may_name_an_inbound_that_does_not_run() {
         .await
         .is_ok());
 
-    let report = runtime
-        .reload(&with_extra(&base, ghost_port))
-        .await
-        .expect("the inbound back");
+    // free_port releases the port before sail binds it: another test may
+    // take it meanwhile. Another port then.
+    let mut ghost_port = ghost_port;
+    let mut tries = 0;
+    let report = loop {
+        match runtime.reload(&with_extra(&base, ghost_port)).await {
+            Ok(report) => break report,
+            Err(e) if tries < 3 && e.message.contains("Address already in use") => {
+                tries += 1;
+                ghost_port = free_port();
+            }
+            Err(e) => panic!("the inbound back: {e:?}"),
+        }
+    };
     assert_eq!(report.path, "inbounds_only", "{report:?}");
     assert!(
         report.inbounds.contains(&("extra".into(), "added".into())),
