@@ -499,9 +499,15 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
     assert_eq!(tun["strict_route"], true);
     assert_eq!(tun["iproute2_table_index"], 2091);
     assert_eq!(tun["iproute2_rule_index"], 9091);
+    let excluded: Vec<&str> = tun["route_exclude_address"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
     assert_eq!(
-        tun["route_exclude_address"],
-        json!([
+        excluded[..7],
+        [
             "8.8.8.8/32",
             "1.1.1.1/32",
             "224.0.0.0/4",
@@ -509,8 +515,19 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
             "169.254.0.0/16",
             "fe80::/10",
             "ff00::/8"
-        ])
+        ]
     );
+    // Then the private networks, less the TUN's own (#317).
+    for private in ["172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"] {
+        assert!(excluded.contains(&private), "{private}: {excluded:?}");
+    }
+    assert!(
+        !excluded.contains(&"10.0.0.0/8"),
+        "the TUN's /30 is in 10/8"
+    );
+    assert!(excluded
+        .iter()
+        .any(|p| p.contains(':') && p.starts_with("fc")));
     assert!(tun.get("stack").is_none(), "sail warns on stack");
 
     let no_ipv6 = Options {
@@ -523,16 +540,22 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
     let config = value(&translate(&contract(), &no_ipv6).unwrap());
     let tun = &config["inbounds"][0];
     assert_eq!(tun["address"], json!(["10.60.159.89/30"]));
+    let excluded = tun["route_exclude_address"].as_array().unwrap();
     assert_eq!(
-        tun["route_exclude_address"],
-        json!([
+        excluded[..5],
+        [
             "8.8.8.8/32",
             "1.1.1.1/32",
             "224.0.0.0/4",
             "255.255.255.255/32",
             "169.254.0.0/16"
-        ])
+        ]
     );
+    assert!(
+        excluded.iter().all(|p| !p.as_str().unwrap().contains(':')),
+        "no IPv6 without the TUN's IPv6: {excluded:?}"
+    );
+    assert!(excluded.contains(&json!("192.168.0.0/16")));
 
     let mobile = Options {
         tun: Some(Tun {
@@ -1091,5 +1114,41 @@ fn a_rule_maps_its_matchers_and_comes_after_the_local_proxy_rules() {
             rule.get("inbound").is_some() || rule["type"] == "logical",
             "{rule}"
         );
+    }
+}
+
+/// #317: the desktop TUN keeps the private networks, the LAN among them,
+/// out of its routes (a LAN host's connection to this one gets its replies
+/// on the LAN), all but its own addresses.
+#[test]
+fn the_desktop_tun_routes_no_private_network_but_its_own() {
+    let config = value(&translate(&contract(), &tun_options()).unwrap());
+    let excluded: Vec<String> = config["inbounds"][0]["route_exclude_address"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_owned())
+        .collect();
+    let covered = |ip: &str| {
+        let ip: std::net::IpAddr = ip.parse().unwrap();
+        excluded.iter().any(|p| super::tun::prefix_contains(p, ip))
+    };
+    for lan in [
+        "10.1.2.3",
+        "10.60.159.87",
+        "10.60.159.92",
+        "172.20.0.1",
+        "192.168.1.1",
+        "100.64.0.1",
+        "fd00::1",
+        "fde2:ec40:9312:c7fd::4",
+    ] {
+        assert!(covered(lan), "{lan} goes into the TUN");
+    }
+    for own in ["10.60.159.89", "10.60.159.90", "fde2:ec40:9312:c7fd::1"] {
+        assert!(!covered(own), "the TUN's own {own} is excluded");
+    }
+    for public in ["8.8.4.4", "2001:db8::1"] {
+        assert!(!covered(public), "{public} is excluded");
     }
 }

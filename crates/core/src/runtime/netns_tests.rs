@@ -219,6 +219,72 @@ async fn a_reload_moves_new_connections_to_the_new_default_interface() {
 /// An instance made to fail on purpose (sail's fault points, feature
 /// `fault-injection`) undoes what it changed in the system while this
 /// process lives on: the host's side of #208.
+/// #317: while the TUN runs, a TCP connection another host of the LAN
+/// opens to this one completes. Its replies are for a directly connected,
+/// private address: they leave by the LAN link, not into the TUN. (Before
+/// the fix the SYN-ACK went into the tunnel and an SSH from the LAN timed
+/// out.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs root in a network namespace of its own: test/netns/run.sh"]
+async fn an_inbound_connection_from_the_lan_completes_while_the_tun_runs() {
+    use std::io::{Read, Write};
+
+    use crate::config::{EngineConfig, Platform, Role};
+    use crate::engine::Engine;
+    use crate::request::ApplyRequest;
+
+    if let Some(why) = skip_reason() {
+        eprintln!("SKIP: {why}");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("ppvpn-netns-inbound-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let engine = Engine::new(EngineConfig::new(Role::Tun, Platform::Linux, &dir))
+        .await
+        .expect("an engine");
+    let profile = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../testdata/golden/contract/profiles/base.json"
+    ))
+    .unwrap();
+    engine.apply(ApplyRequest::new(profile)).await.unwrap();
+    engine.start().await.unwrap();
+
+    // This host's LAN address (run.sh's pt0); the client is the uplink.
+    let listener = std::net::TcpListener::bind("10.243.0.1:0").expect("listen on the LAN");
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { continue };
+            let mut buf = [0u8; 4];
+            if conn.read_exact(&mut buf).is_ok() {
+                let _ = conn.write_all(&buf);
+            }
+        }
+    });
+    let client = Command::new("ip")
+        .args(["netns", "exec", UPLINK])
+        .arg(std::env::current_exe().expect("this binary"))
+        .args([
+            "--exact",
+            "runtime::netns_helper::connect",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("PPVPN_NETNS_CONNECT", addr.to_string())
+        .output();
+    let report = engine.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let client = client.expect("the client");
+    assert!(
+        client.status.success(),
+        "a connection from the LAN did not complete: {}",
+        String::from_utf8_lossy(&client.stdout)
+    );
+    assert!(report.leftovers.is_empty(), "{report:?}");
+}
+
 #[cfg(feature = "fault-injection")]
 mod failures {
     use std::time::{Duration, Instant};

@@ -73,6 +73,21 @@ const TUN_ROUTE_EXCLUDED: &[&str] = &[
     "fe80::/10",
     "ff00::/8",
 ];
+/// Never into the desktop tunnel either: the private networks, the LAN
+/// among them (#317). On Linux the TUN's routes are everything but the
+/// excluded, so with any exclusion its table has no default route and the
+/// rule ahead of main (`lookup 2091 suppress_prefixlength 0`) takes all:
+/// the replies of a connection a LAN host opens went into the tunnel. Left
+/// out of the TUN's routes, private destinations fall through to the main
+/// table, as the routing rules send them direct anyway (the private
+/// floor). The TUN's own networks are carved out ([`TUN_PREFIXES`]).
+const TUN_ROUTE_EXCLUDED_PRIVATE: &[&str] = &[
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+    "fc00::/7",
+];
 /// Our own Linux policy-routing table and rule range, apart from sing-tun's
 /// defaults (shared by mihomo, Clash Verge, ...), Tailscale and wg-quick.
 /// The guard (`tunrules::Scope::desktop`) watches the same.
@@ -208,6 +223,76 @@ fn in_tunnel(ip: IpAddr) -> bool {
         .any(|prefix| contains(prefix, ip))
 }
 
+/// `prefix` less every one of `holes` inside it, as the fewest prefixes:
+/// halves are split off toward each hole and the hole itself dropped.
+fn without(prefix: &str, holes: &[&str]) -> Vec<String> {
+    let mut parts = vec![parse_prefix(prefix)];
+    for hole in holes {
+        let hole = parse_prefix(hole);
+        parts = parts
+            .into_iter()
+            .flat_map(|part| split_around(part, hole))
+            .collect();
+    }
+    parts
+        .into_iter()
+        .map(|(net, bits)| format_prefix(net, bits))
+        .collect()
+}
+
+/// A prefix as (network address widened to 128 bits, family, length).
+type Prefix = ((u128, bool), u32);
+
+fn parse_prefix(prefix: &str) -> Prefix {
+    let (net, bits) = prefix.split_once('/').expect("a prefix");
+    let bits: u32 = bits.parse().expect("prefix bits");
+    match net.parse::<IpAddr>().expect("a prefix") {
+        IpAddr::V4(net) => ((u128::from(u32::from(net)), false), bits),
+        IpAddr::V6(net) => ((u128::from(net), true), bits),
+    }
+}
+
+fn format_prefix((net, v6): (u128, bool), bits: u32) -> String {
+    if v6 {
+        format!("{}/{bits}", Ipv6Addr::from(net))
+    } else {
+        format!("{}/{bits}", std::net::Ipv4Addr::from(net as u32))
+    }
+}
+
+/// `part` less `hole`: `part` itself when they do not overlap.
+fn split_around(part: Prefix, hole: Prefix) -> Vec<Prefix> {
+    let ((net, v6), bits) = part;
+    let ((hole_net, hole_v6), hole_bits) = hole;
+    let width = if v6 { 128 } else { 32 };
+    let mask = |b: u32| -> u128 {
+        if b == 0 {
+            0
+        } else {
+            (u128::MAX << (128 - b)) >> (128 - width)
+        }
+    };
+    if v6 != hole_v6 || hole_bits < bits || hole_net & mask(bits) != net {
+        return vec![part];
+    }
+    let mut out = Vec::new();
+    let mut current = net;
+    for b in bits..hole_bits {
+        // The half of `current` (length b + 1) without the hole.
+        let bit = 1u128 << (width - b - 1);
+        let toward = hole_net & bit;
+        out.push(((current | (bit ^ toward), v6), b + 1));
+        current |= toward;
+    }
+    out
+}
+
+/// Whether `prefix` holds `ip` (tests).
+#[cfg(test)]
+pub(super) fn prefix_contains(prefix: &str, ip: IpAddr) -> bool {
+    contains(prefix, ip)
+}
+
 fn contains(prefix: &str, ip: IpAddr) -> bool {
     let (net, bits) = prefix.split_once('/').expect("a prefix");
     let bits: u32 = bits.parse().expect("prefix bits");
@@ -335,6 +420,11 @@ impl Builder {
                     .filter(|p| tun.ipv6 || !p.contains(':'))
                     .map(|p| (*p).to_owned()),
             );
+            for private in TUN_ROUTE_EXCLUDED_PRIVATE {
+                if tun.ipv6 || !private.contains(':') {
+                    excluded.extend(without(private, TUN_PREFIXES));
+                }
+            }
             inbound["auto_route"] = true.into();
             inbound["strict_route"] = true.into();
             inbound["route_exclude_address"] = json!(excluded);
