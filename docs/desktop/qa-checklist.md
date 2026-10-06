@@ -12,6 +12,17 @@ core 进程：标准模式的引擎日志是应用日志目录里的 `ppvpn-core
 和 systemd-networkd 各一台。每个平台测标准模式和增强模式，增强模式下 rules 和 global 两种路由都测。
 需要 Go 0.5.21 作对照的项，在同一台机器、同一个节点上用 Go 内核的最后一个版本（dev 0.2.90）测基线。
 
+**远程测试机上的增强模式**：只能通过网络登录的机器（虚拟机、共享测试机），开增强模式前先挂一个自救定时任务，
+TUN 或路由出问题、机器连不上时能自己恢复；确认还能登录后再取消。
+
+- Linux：`systemd-run --on-active=5min --unit=ppvpn-rescue systemctl stop ppvpn-service`，取消用
+  `systemctl stop ppvpn-rescue.timer`。
+- Windows：`schtasks /Create /TN ppvpn-rescue /SC ONCE /ST <5 分钟后的时刻> /RU SYSTEM /TR "sc stop ppvpn_service"`，
+  取消用 `schtasks /Delete /TN ppvpn-rescue /F`。
+- macOS：`sudo sh -c 'sleep 300; launchctl bootout system/com.peakpassvpn.ppvpn.service' &`，取消就结束这个后台进程。
+
+停服务会撤掉 TUN、路由和规则；客户端随后显示连接失败，重新连接即可。
+
 ## 安装与更新
 
 - [ ] 从 Go 内核的版本（0.2.90）升级到 Rust 版：登录、设置、选中的节点、入口 pin、路由模式和本地代理凭据都保留
