@@ -27,12 +27,21 @@ impl StateDirLock {
             .create(dir)
             .map_err(|e| failed("create the state directory", dir, e))?;
         let path = dir.join(".lock");
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(false).write(true);
+        // Private like everything else in the directory; a lock file left
+        // by an older version (0644) is made private too.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options
             .open(&path)
             .map_err(|e| failed("open the state directory's lock", &path, e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| failed("make the state directory's lock private", &path, e))?;
+        }
         match file.try_lock() {
             Ok(()) => Ok(StateDirLock { _file: file }),
             Err(TryLockError::WouldBlock) => Err(Error::new(
@@ -83,6 +92,22 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o700);
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_lock_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let dir = dir("lock-mode");
+        let lock = dir.join(".lock");
+        drop(StateDirLock::acquire(&dir).expect("created and locked"));
+        assert_eq!(mode(&lock), 0o600);
+        // One an older version left readable by others.
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(StateDirLock::acquire(&dir).expect("locked again"));
+        assert_eq!(mode(&lock), 0o600);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
