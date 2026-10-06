@@ -27,11 +27,26 @@ fn build_config(env: &Env, hooks: &Hooks) -> Result<BuildConfig> {
 }
 
 fn auth(config: &BuildConfig, env: &Env, hooks: &Hooks) -> ppvpn_account::auth::Auth {
-    let store = hooks
+    account::auth(config, env, store(hooks))
+}
+
+fn store(hooks: &Hooks) -> std::sync::Arc<dyn ppvpn_account::auth::CredentialStore> {
+    hooks
         .store
         .clone()
-        .unwrap_or_else(crate::keystore::platform_store);
-    account::auth(config, env, store)
+        .unwrap_or_else(crate::keystore::platform_store)
+}
+
+/// The saved credential, or why the secret store cannot be read.
+fn load_saved(store: &dyn ppvpn_account::auth::CredentialStore) -> Result<Option<Vec<u8>>> {
+    store.load().map_err(|failure| {
+        let code = if failure.locked {
+            "CREDENTIAL_STORE_LOCKED"
+        } else {
+            "CREDENTIAL_STORE_UNAVAILABLE"
+        };
+        CliError::environment(code, failure.message)
+    })
 }
 
 pub fn run(cli: &Cli, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
@@ -459,7 +474,12 @@ fn open_browser(os: Os, url: &str) {
 
 fn login(env: &Env, hooks: &Hooks, out: &mut Printer, no_browser: bool) -> Result<()> {
     let config = build_config(env, hooks)?;
-    let auth = auth(&config, env, hooks);
+    // A login is only worth starting when it can be saved: without a
+    // usable secret store, say so now rather than after the user has
+    // confirmed the code in the browser.
+    let store = store(hooks);
+    load_saved(store.as_ref())?;
+    let auth = account::auth(&config, env, store);
     let platform = match env.os {
         Os::Macos => "macos",
         Os::Linux => "linux",
@@ -515,19 +535,8 @@ fn account_command(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
 
 fn logout(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
     let config = build_config(env, hooks)?;
-    let store = hooks
-        .store
-        .clone()
-        .unwrap_or_else(crate::keystore::platform_store);
-    let saved = store.load().map_err(|failure| {
-        let code = if failure.locked {
-            "CREDENTIAL_STORE_LOCKED"
-        } else {
-            "CREDENTIAL_STORE_UNAVAILABLE"
-        };
-        CliError::environment(code, failure.message)
-    })?;
-    if saved.is_none() {
+    let store = store(hooks);
+    if load_saved(store.as_ref())?.is_none() {
         return Err(account::not_logged_in());
     }
     let auth = account::auth(&config, env, store);
