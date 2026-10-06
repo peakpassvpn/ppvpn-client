@@ -258,7 +258,7 @@ dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 
 
 macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一），实际名字从 `tun_names()` 读。选好的名字在打开前被抢走时，Sail 换名重试，最多 3 个，仍失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true；Linux、Windows 的名字是配置的，被占用时 retryable=false，见 host-integration 第 7 节）。排除隧道网段由 dns-local 自己的隧道地址过滤保证。macOS 的系统 DNS 自 Sail 0.17.0（093041df）起由 Sail 负责：utun 打开时写一个临时的 supplemental 键，teardown 时先于路由撤掉；宿主自己开 TUN 时 Sail 不设（host-integration 第 2、9 节）。
 
-已知行为（macOS，Sail `98a5cbf5`，见 Sail 的 routing 文档）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 会替换它并打一行警告；停止时**不恢复**被替换的路由。
+已知行为（macOS，Sail 0.18 起，见 Sail 的 `docs/releases/0.18.0.md`）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 替换它并记下来，引擎经 `Runtime::replaced_routes` 放进 `status.replaced_routes`。Sail 撤掉自己的路由时（停止，或规则集重填），把被替换的路由放回去，前提是 Sail 自己的路由还在、原来的网卡还在；放不回的列在停止报告的残留里，附手工恢复的 `route add` 命令。实例被强杀后，同一次开机里下一次启动时按记录放回。
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
