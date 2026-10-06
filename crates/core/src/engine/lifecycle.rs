@@ -608,6 +608,19 @@ impl Inner {
                 live.tun_routing = None;
                 self.publish(Event::TunRoutingRestored { at: now(), missing });
             }
+            TunRoutingSignal::Changed { missing, error } => {
+                self.publish(Event::TunRoutingBroken {
+                    at: now(),
+                    missing: missing.clone(),
+                    error,
+                });
+                live.tun_routing = Some(TunRouting::Broken);
+                for resource in missing {
+                    if !live.tun_routing_missing.contains(&resource) {
+                        live.tun_routing_missing.push(resource);
+                    }
+                }
+            }
             TunRoutingSignal::Broken { missing, error } => {
                 self.publish(Event::TunRoutingBroken {
                     at: now(),

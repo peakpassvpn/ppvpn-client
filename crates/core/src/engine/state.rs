@@ -49,6 +49,9 @@ pub(crate) enum TunRoutingSignal {
     Restored { missing: Vec<String> },
     /// Could not be put back; traffic may bypass the TUN: Fatal.
     Broken { missing: Vec<String>, error: String },
+    /// Another program changed it and nothing puts it back (sail's
+    /// `SystemChanged`, macOS and Windows): Degraded until the next start.
+    Changed { missing: Vec<String>, error: String },
 }
 
 /// The last failover switch of a node's group.
@@ -81,6 +84,9 @@ pub(crate) struct Live {
     pub needs_stop: bool,
     /// The TUN's routing when not in place (None: ok).
     pub tun_routing: Option<TunRouting>,
+    /// What another program changed of the TUN's routing (`Broken`), as
+    /// sail named it.
+    pub tun_routing_missing: Vec<String>,
     /// This run goes without the shared local proxy listener.
     pub local_proxy_unavailable: bool,
     /// The state last reported (StateChanged).
@@ -123,6 +129,9 @@ impl Live {
         match self.tun_routing {
             Some(TunRouting::Restoring) => reasons.push(DegradedReason::TunRoutingRestoring),
             Some(TunRouting::Unguarded) => reasons.push(DegradedReason::TunRoutingUnguarded),
+            Some(TunRouting::Broken) => reasons.push(DegradedReason::TunRoutingBroken {
+                missing: self.tun_routing_missing.clone(),
+            }),
             _ => {}
         }
         if self.local_proxy_unavailable {
@@ -146,6 +155,7 @@ impl Live {
         self.connections.clear();
         self.replaced_routes.clear();
         self.tun_routing = None;
+        self.tun_routing_missing.clear();
         self.local_proxy_unavailable = false;
         self.switched.clear();
     }

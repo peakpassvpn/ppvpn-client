@@ -81,6 +81,10 @@ pub enum DegradedReason {
     TunRoutingRestoring,
     /// The routing guard did not start; routing is as installed.
     TunRoutingUnguarded,
+    /// Another program changed the TUN's routes or address (macOS,
+    /// Windows); sail reports it and does not put it back. Traffic may go
+    /// around the TUN until the instance starts again.
+    TunRoutingBroken { missing: Vec<String> },
     /// The rule set is unavailable; its rules are degraded.
     RuleSetUnavailable { rule_set_id: String },
     /// No DNS servers on the default interface: direct names get SERVFAIL.
@@ -114,6 +118,9 @@ pub enum TunRouting {
     Ok,
     Restoring,
     Unguarded,
+    /// Another program changed what the TUN's routing set up, and nothing
+    /// puts it back (macOS, Windows): until the next start.
+    Broken,
 }
 
 /// The ingress a node is actually using (`get-status.selected_ingress`).

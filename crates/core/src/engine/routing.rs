@@ -6,8 +6,9 @@
 //!
 //! Elsewhere (macOS; Windows once sail reports it) sail itself tells when
 //! another program changed the TUN's routes or address (its
-//! `SystemChanged`). sail does not put them back: each is `Broken`, and
-//! the host rebuilds the instance, as on Linux.
+//! `SystemChanged`). sail does not put them back: the routing is broken
+//! (Degraded, not Fatal) until the next start; the host decides whether
+//! to rebuild.
 
 use std::sync::{Arc, Mutex};
 
@@ -133,8 +134,11 @@ impl Inner {
     }
 
     /// Another program changed what sail set up for the TUN, while
-    /// running: `TunRoutingBroken` and Fatal, as the Linux guard's Broken.
-    /// The Engine does not rebuild by itself.
+    /// running: `TunRoutingBroken`, `tun_routing` broken and Degraded
+    /// until the next start. Not Fatal: sail puts nothing back here, and
+    /// another VPN changing a route would otherwise end the instance while
+    /// traffic goes around the TUN all the same. Whether and how often to
+    /// rebuild is the host's (host-integration 4.4).
     pub(super) fn on_system_change(&self, change: SystemChange) {
         if !self.live().running {
             return;
@@ -144,7 +148,7 @@ impl Inner {
             resource = %change.resource,
             "tun routing changed by another program"
         );
-        self.on_tun_routing(TunRoutingSignal::Broken {
+        self.on_tun_routing(TunRoutingSignal::Changed {
             missing: vec![change.resource],
             error: format!("{} changed by another program", change.kind),
         });
