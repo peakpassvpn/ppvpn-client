@@ -85,7 +85,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         option is null ? Task.CompletedTask : Main.SetRoutingModeAsync(option.Mode);
 
     /// <summary>About › <c>aboutSource</c>: where the GPL source is published.</summary>
-    public const string SourceUrl = "https://github.com/peakpassvpn/ppvpn-core";
+    public const string SourceUrl = "https://github.com/peakpassvpn/ppvpn-client";
 
     /// <summary>About › <c>aboutViewLicense</c>: the GNU GPL version 3.</summary>
     public const string LicenseUrl = "https://www.gnu.org/licenses/gpl-3.0.html";

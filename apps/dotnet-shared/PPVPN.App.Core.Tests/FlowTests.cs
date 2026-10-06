@@ -531,13 +531,13 @@ public sealed class ConnectionFlowTests
             var t = new Scripted();
             t.Main.Settings.OpenSourceCommand.Execute(null);
             t.Main.Settings.OpenLicenseCommand.Execute(null);
-            Assert.Equal(["https://github.com/peakpassvpn/ppvpn-core", "https://www.gnu.org/licenses/gpl-3.0.html"], t.Services.Opened);
+            Assert.Equal(["https://github.com/peakpassvpn/ppvpn-client", "https://www.gnu.org/licenses/gpl-3.0.html"], t.Services.Opened);
             Assert.Empty(t.Services.Copied);
 
             // Without a browser the link is copied instead.
             t.Services.OpenFails = true;
             t.Main.Settings.OpenSourceCommand.Execute(null);
-            Assert.Equal(["https://github.com/peakpassvpn/ppvpn-core"], t.Services.Copied);
+            Assert.Equal(["https://github.com/peakpassvpn/ppvpn-client"], t.Services.Copied);
             Assert.Equal("© 2026 PeakPass VPN LLC", SettingsViewModel.Copyright);
             await Task.CompletedTask;
         });

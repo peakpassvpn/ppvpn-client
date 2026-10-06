@@ -16,7 +16,7 @@ version = "0.6.0"
 edition = "2021"
 rust-version = "1.98.1"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/peakpassvpn/ppvpn-core"
+repository = "https://github.com/peakpassvpn/ppvpn-client"
 
 [workspace.dependencies]
 # sail by release: only a tagged release is taken. Cargo.lock holds the

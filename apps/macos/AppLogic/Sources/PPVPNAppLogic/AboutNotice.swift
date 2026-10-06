@@ -5,7 +5,7 @@ import Foundation
 /// line (the same as App.Core's SettingsViewModel on Windows and Linux).
 public enum AboutNotice {
     /// `aboutSource`: where the GPL source is published.
-    public static let sourceURL = URL(string: "https://github.com/peakpassvpn/ppvpn-core")!
+    public static let sourceURL = URL(string: "https://github.com/peakpassvpn/ppvpn-client")!
     /// `aboutViewLicense`: the GNU GPL version 3.
     public static let licenseURL = URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!
     /// The copyright line, the same in every language (also the bundles'
