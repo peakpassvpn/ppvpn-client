@@ -34,3 +34,20 @@ async fn the_runtime_is_read_while_the_host_reads() {
         "stopped once the host stopped reading"
     );
 }
+
+/// The first read after a start is not empty nor older than it: the start
+/// reads the runtime once as it ends (a host's check that compares the
+/// traffic before and after a request starts from a measured figure).
+#[tokio::test]
+async fn the_first_read_after_a_start_is_measured_by_it() {
+    let (engine, fake) = engine();
+    fake.set_traffic(RuntimeTraffic {
+        upload_bytes: 3,
+        download_bytes: 4,
+    });
+    let before = chrono::Utc::now();
+    running(&engine).await;
+    let traffic = engine.traffic();
+    assert_eq!((traffic.upload_bytes, traffic.download_bytes), (3, 4));
+    assert!(traffic.measured_at >= before, "{traffic:?}");
+}
