@@ -1855,7 +1855,7 @@ impl Inner {
         // A degraded engine still forwards: engine-host reports it as
         // `running` (reasons kept), the engine itself as `degraded`. Its
         // reasons heal themselves, all but broken TUN routing below.
-        if !matches!(status.state.as_str(), "running" | "degraded") {
+        if !status.is_serving() {
             return Err(health_error("HEALTH_CORE_NOT_RUNNING"));
         }
         if status.revision.as_deref() != Some(expected_revision) {

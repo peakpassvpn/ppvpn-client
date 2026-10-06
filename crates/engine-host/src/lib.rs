@@ -149,14 +149,11 @@ pub fn fatal_reason(state: &EngineState) -> Option<String> {
     }
 }
 
-/// `get-status`. A degraded engine still forwards, so it reads `running`;
-/// `fatal` stays as is.
+/// `get-status`: the engine's status as docs/host-integration.md shows it.
+/// A degraded engine reads `degraded` with its `reasons` (it still
+/// forwards; hosts treat it as serving, see the desktop's `is_serving`).
 fn status(engine: &Engine) -> Result<Value, ApiError> {
-    let mut status = data(engine.status())?;
-    if status["state"] == "degraded" {
-        status["state"] = json!("running");
-    }
-    Ok(status)
+    data(engine.status())
 }
 
 /// The `apply-profile` / `validate-profile` body as an [`ApplyRequest`]:

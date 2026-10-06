@@ -112,7 +112,7 @@ impl Client {
                     previous_endpoint_key: status.previous_endpoint_key,
                     latency_ms: None,
                 };
-            } else if status.state == "running" {
+            } else if status.is_serving() {
                 self.select_standard_node(node).await;
             }
         }

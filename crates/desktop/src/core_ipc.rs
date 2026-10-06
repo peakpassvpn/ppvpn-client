@@ -106,7 +106,8 @@ pub(crate) trait CoreTransport: Send + Sync {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CoreStatus {
-    /// `stopped` | `configured` | `running`.
+    /// `stopped` | `configured` | `running` | `degraded` | `fatal`; see
+    /// [`CoreStatus::is_serving`].
     pub state: String,
     pub revision: Option<String>,
     pub selected_node_id: Option<String>,
@@ -137,6 +138,14 @@ pub(crate) struct CoreStatus {
     /// `replaced_routes` (macOS TUN): another VPN's routes the TUN replaced
     /// for now; they are put back when the TUN stops. Empty when none.
     pub replaced_routes: Vec<String>,
+}
+
+impl CoreStatus {
+    /// The core forwards traffic: `running`, or `degraded` (it keeps
+    /// forwarding; its `reasons` say what is wrong).
+    pub(crate) fn is_serving(&self) -> bool {
+        matches!(self.state.as_str(), "running" | "degraded")
+    }
 }
 
 /// One entry of `GetStatus.nodes`.
