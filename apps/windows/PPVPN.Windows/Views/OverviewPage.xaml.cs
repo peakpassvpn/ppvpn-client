@@ -40,16 +40,6 @@ public sealed partial class OverviewPage : Page
     /// <summary>Combo items show a measured latency only.</summary>
     public static string ComboLatency(LatencyKind kind, string text) => kind == LatencyKind.Value ? text : "";
 
-    /// <summary>
-    /// Writes the picked scope back only when it changed (like the line picker on Nodes); a two-way
-    /// binding crashed with a stack overflow on switching scopes.
-    /// </summary>
-    void OnProxyScopeChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (e.AddedItems.FirstOrDefault() is LocalProxyScopeOption scope && scope != ViewModel.SelectedProxyScope)
-            ViewModel.SelectedProxyScope = scope;
-    }
-
     void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainViewModel.IsConnectionBusy) || e.PropertyName == nameof(MainViewModel.ConnectionTone)) UpdateSpin();

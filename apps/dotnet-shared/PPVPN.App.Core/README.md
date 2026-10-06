@@ -171,12 +171,17 @@ and only signs in when no restore is pending.
   named: then the conflict notice), `retry` and `useCompatible`. Retry or a
   new connect starts the count afresh.
 - **Traffic:** `ShowTraffic`, `UpRate`, `DownRate` ("8.6 MB/s", bytes).
-- **Local proxy:** `CurrentNodeProxy` (`ProxyInfo`: `HttpDisplay`,
+- **Local proxy:** the card shows only the routed user, `RoutedProxy`
+  (`ProxyInfo`: `HttpDisplay`,
   `SocksDisplay`, `Username`, `MaskedPassword`, `PasswordDisplay` / `PasswordRevealed` (eye toggle `TogglePasswordRevealedCommand`, masked by default), `CopyUsernameCommand`, `CopyPasswordCommand`, `CopyHttpCommand`,
-  `CopySocksCommand` copying the full URL; the ✓ is view-local) or
-  `ProxyUnavailableText` (`proxyStarting`, or `proxyFailed {reason}` while the
-  standard core has failed; `CurrentNodeProxy` is then null even if the node
-  still lists a proxy, since nothing listens on the port).
+  `CopySocksCommand` copying the full URL; the ✓ is view-local), noted
+  `ProxyNote` (`proxyNoteRouted`): the bare prefix, Profile rules then the
+  selected node, following Rules / Global; its SOCKS URLs are `socks5h://`. A
+  node's own user is on the Nodes page (each row's `Proxy`), not here.
+  Otherwise `ProxyUnavailableText` (`proxyStarting`, or `proxyFailed {reason}`
+  while the standard core has failed; `RoutedProxy` and `CurrentNodeProxy` are
+  then null even if the node still lists a proxy, since nothing listens on the
+  port).
 - **Restricted** (replaces card, notices, traffic, proxy): `IsRestricted`,
   `Access`, `RestrictedTitle`, `RestrictedMessage`, `CanBuy` →
   `OpenPurchaseCommand` (`buy` ↗) + `RefreshAccessCommand` (shows "…" while

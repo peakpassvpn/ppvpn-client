@@ -288,26 +288,13 @@ public static class OverviewPage
 
     private static Gtk.Widget LocalProxy(MainViewModel vm)
     {
-        // The note follows the shown user (routed: by the rules; node: this node on its own).
+        // The routed user of the shared port: by the rules (or global); a node's own user is on Nodes.
         var group = Group(T("localProxy"), vm.ProxyNote);
-        // Which user the card shows: follow the routing rules (default) or this node only. Hidden
-        // while the core serves no routed user. The choices are fixed, so the model is set once.
-        var scope = Gtk.DropDown.NewFromStrings(vm.ProxyScopes.Select(o => o.Title).ToArray());
-        scope.SetValign(Gtk.Align.Center);
-        scope.SetListFactory(ScopeFactory(vm.ProxyScopes));
-        var updatingScope = false;
-        scope.OnNotify += (_, args) =>
-        {
-            if (updatingScope || args.Pspec.GetName() != "selected") return;
-            var index = (int)scope.GetSelected();
-            if (index >= 0 && index < vm.ProxyScopes.Count) vm.SelectedProxyScope = vm.ProxyScopes[index];
-        };
-        group.SetHeaderSuffix(scope);
         var (http, httpValue) = ValueRow("HTTP", monospace: true);
-        http.AddSuffix(CopyButton(() => vm.ShownProxy?.CopyHttpCommand));
+        http.AddSuffix(CopyButton(() => vm.RoutedProxy?.CopyHttpCommand));
         var (socks, socksValue) = ValueRow("SOCKS5", monospace: true);
-        socks.AddSuffix(CopyButton(() => vm.ShownProxy?.CopySocksCommand));
-        var (user, password, refreshCredentials) = CredentialRows(() => vm.ShownProxy);
+        socks.AddSuffix(CopyButton(() => vm.RoutedProxy?.CopySocksCommand));
+        var (user, password, refreshCredentials) = CredentialRows(() => vm.RoutedProxy);
         var unavailable = Row("");
         unavailable.AddCssClass("dim-label");
         group.Add(http);
@@ -317,18 +304,7 @@ public static class OverviewPage
         group.Add(unavailable);
         vm.Bind(() =>
         {
-            scope.SetVisible(vm.HasRoutedProxy);
-            var index = Math.Max(0, vm.ProxyScopes.ToList().IndexOf(vm.SelectedProxyScope));
-            if (scope.GetSelected() != (uint)index)
-            {
-                updatingScope = true;
-                scope.SetSelected((uint)index);
-                updatingScope = false;
-            }
-        }, nameof(vm.HasRoutedProxy), nameof(vm.SelectedProxyScope));
-        vm.Bind(() =>
-        {
-            var proxy = vm.ShownProxy;
+            var proxy = vm.RoutedProxy;
             http.SetVisible(proxy is not null);
             socks.SetVisible(proxy is not null);
             user.SetVisible(proxy is not null);
@@ -339,51 +315,7 @@ public static class OverviewPage
             refreshCredentials();
             unavailable.SetTitle(vm.ProxyUnavailableText ?? "");
             group.SetVisible(proxy is not null || vm.ProxyUnavailableText is not null);
-            group.SetDescription(vm.ProxyNote);
-        }, nameof(vm.ShownProxy), nameof(vm.HasShownProxy), nameof(vm.ProxyUnavailableText), nameof(vm.ProxyNote));
+        }, nameof(vm.RoutedProxy), nameof(vm.ProxyUnavailableText));
         return group;
-    }
-
-    /// <summary>The proxy user picker's list rows: the choice, its description in small type below.</summary>
-    private static Gtk.SignalListItemFactory ScopeFactory(IReadOnlyList<LocalProxyScopeOption> options)
-    {
-        var factory = Gtk.SignalListItemFactory.New();
-        factory.OnSetup += (_, args) =>
-        {
-            var row = (Gtk.ListItem)args.Object;
-            var text = Gtk.Box.New(Gtk.Orientation.Vertical, 2);
-            text.SetHexpand(true);
-            var title = Label(null);
-            title.SetXalign(0);
-            var description = Label(null, "dim-label", "caption");
-            description.SetXalign(0);
-            description.SetWrap(true);
-            // Wide enough for a description to read as one or two lines, not a narrow column.
-            description.SetWidthChars(34);
-            description.SetMaxWidthChars(40);
-            text.Append(title);
-            text.Append(description);
-            var check = Gtk.Image.NewFromIconName("object-select-symbolic");
-            check.SetValign(Gtk.Align.Center);
-            row.OnNotify += (_, notify) =>
-            {
-                if (notify.Pspec.GetName() == "selected") check.SetOpacity(row.GetSelected() ? 1 : 0);
-            };
-            var box = Gtk.Box.New(Gtk.Orientation.Horizontal, 8);
-            box.Append(text);
-            box.Append(check);
-            row.SetChild(box);
-        };
-        factory.OnBind += (_, args) =>
-        {
-            var row = (Gtk.ListItem)args.Object;
-            var value = ((Gtk.StringObject)row.GetItem()!).GetString();
-            var box = (Gtk.Box)row.GetChild()!;
-            var text = (Gtk.Box)box.GetFirstChild()!;
-            ((Gtk.Label)text.GetFirstChild()!).SetText(value);
-            ((Gtk.Label)text.GetLastChild()!).SetText(options.FirstOrDefault(o => o.Title == value)?.Description ?? "");
-            box.GetLastChild()!.SetOpacity(row.GetSelected() ? 1 : 0);
-        };
-        return factory;
     }
 }

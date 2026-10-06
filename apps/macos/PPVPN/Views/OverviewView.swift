@@ -270,18 +270,6 @@ private struct LocalProxySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeader(title: tr("localProxy"))
-            if model.offersProxyScope {
-                Picker(tr("localProxy"), selection: $model.proxyScope) {
-                    ForEach(LocalProxyScope.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                Text(model.proxyScope.detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 2)
-            }
             if let proxy = model.shownProxy {
                 LocalProxyCard(proxy: proxy)
             } else {

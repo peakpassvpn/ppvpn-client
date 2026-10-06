@@ -256,12 +256,11 @@
                         </Border>
                     </Grid>
 
-                    <!-- ⑤ Local proxy (shared port; the username picks the routed user or the current node). -->
+                    <!-- ⑤ Local proxy: the routed user of the shared port (rules / global); a node's own user is on Nodes. -->
                     <Grid Margin="1,24,0,8" ColumnSpacing="10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock VerticalAlignment="Bottom" FontWeight="SemiBold" Text="{loc:S Key=localProxy}" />
                         <TextBlock
@@ -272,26 +271,6 @@
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                             Text="{x:Bind ViewModel.ProxyNote, Mode=OneWay}"
                             TextTrimming="CharacterEllipsis" />
-                        <ComboBox
-                            Grid.Column="2"
-                            MinWidth="140"
-                            Padding="8,2,4,2"
-                            MinHeight="28"
-                            VerticalAlignment="Bottom"
-                            AutomationProperties.AutomationId="ProxyScopePicker"
-                            AutomationProperties.Name="{loc:S Key=localProxy}"
-                            FontSize="12"
-                            ItemsSource="{x:Bind ViewModel.ProxyScopes}"
-                            SelectedItem="{x:Bind ViewModel.SelectedProxyScope, Mode=OneWay}"
-                            SelectionChanged="OnProxyScopeChanged"
-                            ToolTipService.ToolTip="{x:Bind ViewModel.SelectedProxyScope.Description, Mode=OneWay}"
-                            Visibility="{x:Bind ViewModel.HasRoutedProxy, Mode=OneWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:LocalProxyScopeOption">
-                                    <TextBlock Text="{x:Bind Title}" ToolTipService.ToolTip="{x:Bind Description}" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
                     </Grid>
                     <Border Padding="0,6,0,6" Style="{StaticResource CardStyle}">
                         <Grid>
@@ -299,8 +278,8 @@
                                 Margin="20,10,20,10"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Text="{x:Bind ViewModel.ProxyUnavailableText, Mode=OneWay}"
-                                Visibility="{x:Bind local:Ui.Collapsed(ViewModel.HasShownProxy), Mode=OneWay}" />
-                            <StackPanel Visibility="{x:Bind ViewModel.HasShownProxy, Mode=OneWay}">
+                                Visibility="{x:Bind local:Ui.Collapsed(ViewModel.HasRoutedProxy), Mode=OneWay}" />
+                            <StackPanel Visibility="{x:Bind ViewModel.HasRoutedProxy, Mode=OneWay}">
                                 <Grid Padding="20,10,20,10" ColumnSpacing="12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="72" />
@@ -314,8 +293,8 @@
                                         FontFamily="{StaticResource MonoFontFamily}"
                                         FontSize="13"
                                         IsReadOnly="True"
-                                        Text="{x:Bind ViewModel.ShownProxy.HttpDisplay, Mode=OneWay}" />
-                                    <controls:CopyButton Grid.Column="2" MinWidth="84" CopyCommand="{x:Bind ViewModel.ShownProxy.CopyHttpCommand, Mode=OneWay}" />
+                                        Text="{x:Bind ViewModel.RoutedProxy.HttpDisplay, Mode=OneWay}" />
+                                    <controls:CopyButton Grid.Column="2" MinWidth="84" CopyCommand="{x:Bind ViewModel.RoutedProxy.CopyHttpCommand, Mode=OneWay}" />
                                 </Grid>
                                 <Grid Padding="20,10,20,10" ColumnSpacing="12">
                                     <Grid.ColumnDefinitions>
@@ -330,8 +309,8 @@
                                         FontFamily="{StaticResource MonoFontFamily}"
                                         FontSize="13"
                                         IsReadOnly="True"
-                                        Text="{x:Bind ViewModel.ShownProxy.SocksDisplay, Mode=OneWay}" />
-                                    <controls:CopyButton Grid.Column="2" MinWidth="84" CopyCommand="{x:Bind ViewModel.ShownProxy.CopySocksCommand, Mode=OneWay}" />
+                                        Text="{x:Bind ViewModel.RoutedProxy.SocksDisplay, Mode=OneWay}" />
+                                    <controls:CopyButton Grid.Column="2" MinWidth="84" CopyCommand="{x:Bind ViewModel.RoutedProxy.CopySocksCommand, Mode=OneWay}" />
                                 </Grid>
                                 <Grid Padding="20,6,20,2" ColumnSpacing="12">
                                     <Grid.ColumnDefinitions>
@@ -345,16 +324,16 @@
                                         VerticalAlignment="Center"
                                         FontFamily="{StaticResource MonoFontFamily}"
                                         IsTextSelectionEnabled="True"
-                                        Text="{x:Bind ViewModel.ShownProxy.Username, Mode=OneWay}"
+                                        Text="{x:Bind ViewModel.RoutedProxy.Username, Mode=OneWay}"
                                         TextTrimming="CharacterEllipsis"
-                                        ToolTipService.ToolTip="{x:Bind ViewModel.ShownProxy.Username, Mode=OneWay}" />
+                                        ToolTipService.ToolTip="{x:Bind ViewModel.RoutedProxy.Username, Mode=OneWay}" />
                                     <controls:CopyButton
                                         Grid.Column="2"
                                         Width="32"
                                         Height="32"
                                         Padding="0"
                                         AutomationProperties.Name="{loc:S Key=copy}"
-                                        CopyCommand="{x:Bind ViewModel.ShownProxy.CopyUsernameCommand, Mode=OneWay}"
+                                        CopyCommand="{x:Bind ViewModel.RoutedProxy.CopyUsernameCommand, Mode=OneWay}"
                                         IconOnly="True"
                                         Style="{StaticResource SubtleButtonStyle}"
                                         ToolTipService.ToolTip="{loc:S Key=copy}" />
@@ -371,19 +350,19 @@
                                         Grid.Column="1"
                                         VerticalAlignment="Center"
                                         FontFamily="{StaticResource MonoFontFamily}"
-                                        IsTextSelectionEnabled="{x:Bind ViewModel.ShownProxy.PasswordRevealed, Mode=OneWay}"
-                                        Text="{x:Bind ViewModel.ShownProxy.PasswordDisplay, Mode=OneWay}"
+                                        IsTextSelectionEnabled="{x:Bind ViewModel.RoutedProxy.PasswordRevealed, Mode=OneWay}"
+                                        Text="{x:Bind ViewModel.RoutedProxy.PasswordDisplay, Mode=OneWay}"
                                         TextTrimming="CharacterEllipsis" />
                                     <Button
                                         Grid.Column="2"
                                         Width="32"
                                         Height="32"
                                         Padding="0"
-                                        AutomationProperties.Name="{x:Bind local:Ui.EyeText(ViewModel.ShownProxy.PasswordRevealed), Mode=OneWay}"
-                                        Command="{x:Bind ViewModel.ShownProxy.TogglePasswordRevealedCommand, Mode=OneWay}"
+                                        AutomationProperties.Name="{x:Bind local:Ui.EyeText(ViewModel.RoutedProxy.PasswordRevealed), Mode=OneWay}"
+                                        Command="{x:Bind ViewModel.RoutedProxy.TogglePasswordRevealedCommand, Mode=OneWay}"
                                         Style="{StaticResource SubtleButtonStyle}"
-                                        ToolTipService.ToolTip="{x:Bind local:Ui.EyeText(ViewModel.ShownProxy.PasswordRevealed), Mode=OneWay}">
-                                        <FontIcon FontSize="14" Glyph="{x:Bind local:Ui.EyeGlyph(ViewModel.ShownProxy.PasswordRevealed), Mode=OneWay}" />
+                                        ToolTipService.ToolTip="{x:Bind local:Ui.EyeText(ViewModel.RoutedProxy.PasswordRevealed), Mode=OneWay}">
+                                        <FontIcon FontSize="14" Glyph="{x:Bind local:Ui.EyeGlyph(ViewModel.RoutedProxy.PasswordRevealed), Mode=OneWay}" />
                                     </Button>
                                     <controls:CopyButton
                                         Grid.Column="3"
@@ -391,7 +370,7 @@
                                         Height="32"
                                         Padding="0"
                                         AutomationProperties.Name="{loc:S Key=copy}"
-                                        CopyCommand="{x:Bind ViewModel.ShownProxy.CopyPasswordCommand, Mode=OneWay}"
+                                        CopyCommand="{x:Bind ViewModel.RoutedProxy.CopyPasswordCommand, Mode=OneWay}"
                                         IconOnly="True"
                                         Style="{StaticResource SubtleButtonStyle}"
                                         ToolTipService.ToolTip="{loc:S Key=copy}" />

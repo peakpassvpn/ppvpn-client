@@ -22,10 +22,8 @@ open class AppState: ClientEvents {
     public private(set) var teams: [Team] = [] { willSet { willChange() } }
     public private(set) var probes: [String: ProbeOutcome] = [:] { willSet { willChange() } }
     public private(set) var proxies: [String: LocalProxy] = [:] { willSet { willChange() } }
-    /// The routed user of the shared port; nil before core 0.5.12.
+    /// The routed user of the shared port (the overview card); nil before core 0.5.12.
     public private(set) var routedProxy: LocalProxy? { willSet { willChange() } }
-    /// Which user the local proxy card shows; not persisted.
-    public var proxyScope = LocalProxyScope.routed { willSet { willChange() } }
     public private(set) var traffic = TrafficSample(upBps: 0, downBps: 0, upTotal: 0, downTotal: 0) { willSet { willChange() } }
     /// Absolute expiry of the pending device code; the snapshot only carries
     /// a relative lifetime.
@@ -525,7 +523,7 @@ open class AppState: ClientEvents {
         Task {
             do {
                 let proxies = try await backend.localProxies()
-                // Optional (core 0.5.12): without it the card shows the node's user.
+                // Optional (core 0.5.12): without it the card says the proxy is unavailable.
                 var routed: LocalProxy?
                 do {
                     routed = try await backend.routedLocalProxy()

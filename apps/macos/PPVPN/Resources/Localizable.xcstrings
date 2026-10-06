@@ -3197,40 +3197,6 @@
         }
       }
     },
-    "proxyNode": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "固定当前节点"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pin to this node"
-          }
-        }
-      }
-    },
-    "proxyNodeD": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "全部经当前节点，不看分流规则。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Everything through the current node, regardless of the rules."
-          }
-        }
-      }
-    },
     "proxyNote": {
       "extractionState": "manual",
       "localizations": {
@@ -3312,40 +3278,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Local Proxy Credentials Reset"
-          }
-        }
-      }
-    },
-    "proxyRouted": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "按规则分流"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Follow routing rules"
-          }
-        }
-      }
-    },
-    "proxyRoutedD": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "按分流规则直连或经当前节点，跟随规则/全局模式。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Direct or through the current node as the routing rules say; follows Rules / Global."
           }
         }
       }

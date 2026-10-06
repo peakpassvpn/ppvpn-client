@@ -34,7 +34,7 @@ public class StringCatalogTests
                 "routingMode", "routingRules", "routingRulesD", "routingGlobal", "routingGlobalD",
                 "expiresIn", "errExpiredT", "errExpiredD", "errDeniedT", "errDeniedD", "errNetT", "errNetD", "signInAgain", "tryAgain", "errorT", "errLockedT",
                 "noSubT", "noSubD", "expiredT", "expiredD", "teamOffT", "teamOffD", "expiredOn", "serviceExpiresOn", "personal", "disabled",
-                "nodeCount", "nodeProxyT", "routeN", "testingWith", "timeout", "failed", "proxyStarting", "proxyRouted", "proxyNoteRouted", "editRoutingRules", "editRoutingRulesD", "proxyRoutedD", "proxyNode", "proxyNodeD", "proxyFailed", "proxyFailedT",
+                "nodeCount", "nodeProxyT", "routeN", "testingWith", "timeout", "failed", "proxyStarting", "proxyNoteRouted", "editRoutingRules", "editRoutingRulesD", "proxyFailed", "proxyFailedT",
                 "rulesT", "rulesUnavailableD", "lineAuto", "d_switched", "ingressDownT", "ingressDownD", "backToAuto", "pinClearedT", "pinClearedD", "proxyResetT", "proxyResetD", "routesReplacedT", "routesReplacedD",
                 "client", "core", "today", "yesterday",
                 "logAllLevels", "logDebugUp", "logInfoUp", "logWarnUp", "logErrorOnly", "logSearch", "logNoMatches", "copyShownLogs",
