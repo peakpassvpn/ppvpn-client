@@ -135,16 +135,18 @@ pub fn traffic(env: &Env, out: &mut Printer) -> Result<()> {
     out.success(&ok_with(data), &human).map_err(output_error)
 }
 
-/// `1.5 MiB (1572864 bytes)`; plain bytes below 1 KiB.
+/// Decimal units, as the backend counts traffic: 1 KB = 1000 bytes, up to
+/// 1 TB = 10^12. `1.5 MB (1500000 bytes)`; plain bytes below 1 KB.
 fn bytes_text(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
-    if bytes < 1024 {
-        return format!("{bytes} bytes");
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1000 {
+        return format!("{bytes} B");
     }
-    let mut value = bytes as f64 / 1024.0;
+    let mut value = bytes as f64 / 1000.0;
     let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
+    // Shown to one decimal: 999.96 KB would read "1000.0 KB", so it is 1.0 MB.
+    while value >= 999.95 && unit + 1 < UNITS.len() {
+        value /= 1000.0;
         unit += 1;
     }
     format!("{value:.1} {} ({bytes} bytes)", UNITS[unit])
@@ -513,10 +515,20 @@ mod tests {
 
     #[test]
     fn byte_counts_are_readable_and_exact() {
-        assert_eq!(bytes_text(0), "0 bytes");
-        assert_eq!(bytes_text(1023), "1023 bytes");
-        assert_eq!(bytes_text(1_572_864), "1.5 MiB (1572864 bytes)");
-        assert_eq!(bytes_text(u64::MAX).split(' ').nth(1), Some("TiB"));
+        assert_eq!(bytes_text(0), "0 B");
+        assert_eq!(bytes_text(999), "999 B");
+        assert_eq!(bytes_text(1000), "1.0 KB (1000 bytes)");
+        assert_eq!(bytes_text(1024), "1.0 KB (1024 bytes)");
+        assert_eq!(bytes_text(1_500_000), "1.5 MB (1500000 bytes)");
+        // Not "1000.0 KB": the next unit.
+        assert_eq!(bytes_text(999_999), "1.0 MB (999999 bytes)");
+        assert_eq!(bytes_text(999_949), "999.9 KB (999949 bytes)");
+        assert_eq!(bytes_text(400_000_000_000), "400.0 GB (400000000000 bytes)");
+        assert_eq!(
+            bytes_text(1_000_000_000_000),
+            "1.0 TB (1000000000000 bytes)"
+        );
+        assert_eq!(bytes_text(u64::MAX).split(' ').nth(1), Some("TB"));
     }
 
     #[test]
