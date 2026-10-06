@@ -111,3 +111,46 @@ async fn a_failed_stop_keeps_the_tun_guarded() {
     tun.stop().await.unwrap();
     assert!(!tun.inner.guard_running());
 }
+
+/// macOS: sail tells that another program changed the TUN's routing
+/// (`SystemChanged`). sail does not put it back: `TunRoutingBroken` and
+/// Fatal, the host rebuilds the instance. (The Engine takes it on any
+/// platform sail tells it on; the TUN here is the Linux one, unguarded.)
+#[tokio::test]
+async fn a_change_by_another_program_breaks_the_tun_routing() {
+    use super::super::lifecycle_tests::next_event;
+    use crate::event::{Event, EventKind};
+    use crate::status::FatalReason;
+    let fake = Arc::new(FakeRuntime::default());
+    let tun = Engine::with_runtime(
+        EngineConfig::new(Role::Tun, Platform::Linux, "/nonexistent"),
+        fake.clone(),
+    );
+    tun.inner
+        .set_host_ipv6_probe(|| super::super::tun::HostIpv6 {
+            available: true,
+            route: Ok(true),
+        });
+    running(&tun).await;
+    let mut rx = tun.subscribe(&[EventKind::TunRoutingBroken]);
+    let resource = "route 128.0.0.0/1 into utun9: 128.0.0.0/2 on utun4 wins";
+    fake.system_changed("route", resource);
+
+    match next_event(&mut rx).await {
+        Event::TunRoutingBroken { missing, error, .. } => {
+            assert_eq!(missing, [resource]);
+            assert_eq!(error, "route changed by another program");
+        }
+        other => panic!("not TunRoutingBroken: {other:?}"),
+    }
+    assert_eq!(
+        tun.status().state,
+        EngineState::Fatal {
+            reason: FatalReason::TunRoutingBroken {
+                missing: vec![resource.into()]
+            }
+        }
+    );
+    let json = serde_json::to_value(tun.status()).unwrap();
+    assert_eq!(json["reason"]["kind"], "tun_routing_broken");
+}

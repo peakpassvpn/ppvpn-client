@@ -33,6 +33,11 @@ pub struct Status {
     /// TUN instances (Linux, macOS, Windows).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tun_routing: Option<TunRouting>,
+    /// macOS only: the routes of other VPNs that the TUN took over, a line
+    /// each ("route 128.0.0.0/1 via 192.0.2.1 on utun4"); sail puts them
+    /// back when it stops. Empty elsewhere and while not running.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_routes: Vec<String>,
     /// Log lines dropped because the sink blocked (section 10).
     pub dropped_log_lines: u64,
 }

@@ -124,8 +124,9 @@ pub(super) struct Switched {
     pub translation: Translation,
     /// The listeners a hot switch changed (none for a full restart).
     pub listeners: Vec<ListenerChange>,
-    /// A hot switch's connections: closed (their node is gone) and kept.
-    /// A full restart closes them all and counts none.
+    /// A hot switch's connections: closed (their node is gone, or the new
+    /// rules reject them) and kept. A full restart closes them all and
+    /// counts none.
     pub closed: u32,
     pub kept: u32,
 }
@@ -136,8 +137,9 @@ pub(super) struct Switched {
 /// node and ingress tags are made from the node's id (translate's
 /// `node_tag`), so a tag names the same node in every build. A connection
 /// through no node (direct, a rejected one) and one on a node that stays,
-/// whatever its ingress, rule or selection now, is kept: sail's reload
-/// leaves it on the outbound it was routed through. A removed local proxy
+/// whatever its ingress or selection now, is kept: sail's reload leaves it
+/// on the outbound it was routed through, unless its recheck finds that the
+/// new rules reject it (`ReloadReport::recheck_closed`). A removed local proxy
 /// user's connections are among these (its node went); sail itself closes
 /// those of a listener or user it removes.
 pub(super) fn close_on_switch(
@@ -160,6 +162,18 @@ pub(super) fn close_on_switch(
         })
         .map(|c| c.id)
         .collect()
+}
+
+/// One debug line for each connection sail's recheck closed (the new
+/// rules reject it): its id and the profile rule's id (`final` for none
+/// known). No destination, at any level.
+fn log_rechecked(next: &Translation, closed: &[(u64, Option<u32>)]) {
+    for &(id, rule) in closed {
+        let rule = rule
+            .and_then(|i| next.rule_ids.get(i as usize))
+            .map_or("final", String::as_str);
+        tracing::debug!(id, rule, "connection closed by a new rule");
+    }
 }
 
 /// Builds the configuration again from the current inputs (the listeners'
@@ -194,12 +208,23 @@ impl Inner {
             match self.runtime.reload(&next.json).await {
                 Ok(report) => {
                     self.guard_check("kernel switch");
+                    let replaced_routes = self.runtime.replaced_routes();
+                    self.live().replaced_routes = replaced_routes;
+                    log_rechecked(&next, &report.recheck_closed);
                     let doomed = close_on_switch(running, &next, &connections);
                     for id in &doomed {
                         if let Err(e) = self.runtime.close_connection(*id).await {
                             tracing::warn!(id, error = %e, "cannot close a connection of a removed node");
                         }
                     }
+                    // Closed: those of a removed node, and those sail's
+                    // recheck closed as the new rules reject them; one that
+                    // is both counts once.
+                    let closed: BTreeSet<u64> = doomed
+                        .iter()
+                        .copied()
+                        .chain(report.recheck_closed.iter().map(|(id, _)| *id))
+                        .collect();
                     // Kept: those still open, less the closed. sail has
                     // already closed a removed or replaced listener's own.
                     let kept = self
@@ -208,9 +233,9 @@ impl Inner {
                         .await
                         .unwrap_or_default()
                         .iter()
-                        .filter(|c| !doomed.contains(&c.id))
+                        .filter(|c| !closed.contains(&c.id))
                         .count();
-                    let closed = u32::try_from(doomed.len()).unwrap_or(u32::MAX);
+                    let closed = u32::try_from(closed.len()).unwrap_or(u32::MAX);
                     let kept = u32::try_from(kept).unwrap_or(u32::MAX);
                     return Ok(Switched {
                         kind: SwitchKind::KernelSwitch,
@@ -283,12 +308,14 @@ impl Inner {
             }
         };
         self.kernel_started();
+        let replaced_routes = self.runtime.replaced_routes();
         let retry = {
             // A new run of sail: what was read of the old one goes. A local
             // proxy listener still left out is retried in the new run.
             let mut live = self.live();
             live.run += 1;
             live.clear_runtime();
+            live.replaced_routes = replaced_routes;
             live.local_proxy_unavailable = self.local_proxy_left_out();
             self.settle(&mut live);
             live.local_proxy_unavailable.then_some(live.run)
@@ -337,7 +364,7 @@ impl Inner {
 
     /// A reload switched kernels for `revision` (Go's `kernel switched`
     /// line and `KernelSwitched`), closing `closed` connections and keeping
-    /// `kept` ([`close_on_switch`]). No kernel drains: sail reloads in
+    /// `kept` ([`close_on_switch`] and sail's recheck). No kernel drains: sail reloads in
     /// place, so `draining_kernels` is 0.
     pub(super) fn kernel_switched(&self, revision: &str, closed: u32, kept: u32) {
         let gen = self.kernel_gen.fetch_add(1, Ordering::SeqCst) + 1;

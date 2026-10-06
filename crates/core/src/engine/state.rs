@@ -36,8 +36,9 @@ impl Applied {
     }
 }
 
-/// What the TUN routing guard reports (Linux tunrules; macOS and Windows
-/// later). Its source is the guard (engine/routing.rs).
+/// What the TUN routing guard reports (Linux tunrules), and `Broken` for
+/// what sail tells another program changed elsewhere (macOS; Windows once
+/// sail does). Its sources are in engine/routing.rs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TunRoutingSignal {
     /// Routing was deleted and is being put back: Degraded.
@@ -93,6 +94,9 @@ pub(crate) struct Live {
     pub traffic_at: Option<DateTime<Utc>>,
     /// While running: the connections as last read.
     pub connections: Vec<RuntimeConnection>,
+    /// While running: the routes of others the TUN replaced (macOS), as
+    /// read after the last start or reload.
+    pub replaced_routes: Vec<String>,
 }
 
 impl Live {
@@ -140,6 +144,7 @@ impl Live {
     pub(crate) fn clear_runtime(&mut self) {
         self.groups.clear();
         self.connections.clear();
+        self.replaced_routes.clear();
         self.tun_routing = None;
         self.local_proxy_unavailable = false;
         self.switched.clear();
