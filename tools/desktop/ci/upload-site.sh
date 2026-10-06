@@ -4,6 +4,10 @@
 #
 #   upload-site.sh <site dir>           upload
 #   upload-site.sh --plan <site dir>    print what would be uploaded, in order; touches nothing
+#   upload-site.sh --check <site dir>   with the bucket's keys, read only: the plan, the
+#                                       immutable files checked against the bucket as an upload
+#                                       would, and the files an upload would overwrite; writes
+#                                       nothing (the rehearsal runs it)
 #
 # The site is uploaded over what the bucket holds, while clients read it, so in an order in
 # which every file a client can fetch names only files that are already there:
@@ -27,7 +31,7 @@
 # anything is uploaded; one with the same content is left as it is. Cache-Control is
 # "public, max-age=31536000, immutable" for tier 1 and "no-cache" for the rest.
 #
-# Environment (upload only):
+# Environment (upload and --check):
 #   R2_ACCOUNT_ID          the Cloudflare account: https://<id>.r2.cloudflarestorage.com
 #   R2_BUCKET              the bucket
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY   an R2 API token with write access to it
@@ -36,12 +40,12 @@ set -euo pipefail
 
 die() { echo "upload-site: $*" >&2; exit 1; }
 
-PLAN_ONLY=0
-if [[ "${1:-}" == --plan ]]; then
-  PLAN_ONLY=1
-  shift
-fi
-[[ $# -eq 1 ]] || die "usage: upload-site.sh [--plan] <site dir>"
+PLAN_ONLY=0 CHECK_ONLY=0
+case "${1:-}" in
+  --plan) PLAN_ONLY=1; shift ;;
+  --check) CHECK_ONLY=1; shift ;;
+esac
+[[ $# -eq 1 ]] || die "usage: upload-site.sh [--plan|--check] <site dir>"
 SITE="${1%/}"
 [[ -d "$SITE" ]] || die "$SITE is not a directory"
 
@@ -105,9 +109,13 @@ s3api() { aws s3api --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.
 sha256() { sha256sum "$1" | cut -d' ' -f1; }
 
 # --- 1. the immutable files already in the bucket: the same, or refused -------------------
-# One listing of the prefixes, rather than a request per file.
-s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix linux/ --query 'Contents[].Key' --output text \
-  | tr '\t' '\n' | grep -v '^None$' >"$PLAN.objects" || true
+# One listing of each prefix, rather than a request per file. A listing that fails (no
+# access) stops the run: nothing is uploaded blind.
+for prefix in linux/ desktop/; do
+  s3api list-objects-v2 --bucket "$R2_BUCKET" --prefix "$prefix" --query 'Contents[].Key' --output text \
+    | tr '\t' '\n' | grep -v '^None$' || true
+done >"$PLAN.objects"
+s3api head-bucket --bucket "$R2_BUCKET" >/dev/null || die "cannot read the bucket $R2_BUCKET"
 declare -A SKIP=()
 while IFS=$'\t' read -r t path; do
   [[ "$t" == 1 ]] || continue
@@ -123,6 +131,16 @@ while IFS=$'\t' read -r t path; do
   [[ "$have" == "$want" ]] || die "$path is in the bucket with other content (sha256 $have, not $want): an immutable file is never replaced"
   SKIP["$path"]=1
 done <"$PLAN"
+
+if [[ "$CHECK_ONLY" == 1 ]]; then
+  echo "bucket $R2_BUCKET: $(wc -l <"$PLAN.objects" | tr -d ' ') objects under linux/ and desktop/"
+  echo "immutable files already there with the same content: ${#SKIP[@]}"
+  while IFS=$'\t' read -r t path; do
+    [[ "$t" != 1 ]] && grep -qxF "$path" "$PLAN.objects" && echo "would overwrite  $path"
+  done <"$PLAN" || true
+  echo "check only: wrote nothing"
+  exit 0
+fi
 
 # --- 2. the upload, in order -----------------------------------------------------------------
 uploaded=0 kept=0
