@@ -1423,7 +1423,7 @@ async fn slow_link(to: SocketAddr, bytes_per_second: usize) -> SocketAddr {
 /// still sending, behind it on the session. The next connection must not
 /// take that session: there its SYNACK waits behind the backlog, and the
 /// AnyTLS client closes a reused session that answers in no SYNACK_TIMEOUT
-/// (3 s), and the connection with it, nothing received (sail 147c177b8:
+/// (3 s), and the connection with it, nothing received (sail 0.18.1, 6c32ebae:
 /// such a session is retired, and a stuck stream opened again on a new one).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_connection_after_a_download_cut_short_on_a_slow_link_goes_through() {
