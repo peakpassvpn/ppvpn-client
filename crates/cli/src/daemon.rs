@@ -394,13 +394,13 @@ impl Daemon {
 
     /// Core reads the runtime only while a host reads (host-integration.md,
     /// 4.4): the first read after a pause returns what was read before the
-    /// pause and makes core read again, about once a second. The CLI asks
-    /// once and exits, so the daemon waits for that next reading before it
-    /// answers with ingress health, traffic or connections.
+    /// pause and makes core read again, about once a second while reads go
+    /// on. The CLI asks once and exits, so the daemon waits for a reading
+    /// taken after the request came in before it answers with ingress
+    /// health, traffic or connections: one from before can miss what the
+    /// caller did just now (a transfer that just ended), however recent it is.
     async fn refresh(&self) {
         use ppvpn_core::EngineState;
-        /// As fresh as core's own pace gives.
-        const FRESH_MS: i64 = 2_000;
         /// Core reads again within about a second of the first read.
         const WAIT: Duration = Duration::from_millis(1_500);
 
@@ -411,22 +411,21 @@ impl Daemon {
         ) {
             return;
         }
-        let now_ms = SystemTime::now()
+        let asked_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        let before = self.engine.traffic().measured_at.timestamp_millis();
-        if now_ms - before <= FRESH_MS {
-            return;
-        }
         let deadline = Instant::now() + WAIT;
-        while Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            if self.engine.traffic().measured_at.timestamp_millis() != before {
+        loop {
+            if self.engine.traffic().measured_at.timestamp_millis() >= asked_ms {
                 return;
             }
+            if Instant::now() >= deadline {
+                // Core did not read in time: answer with what it has, which
+                // `measured_at` dates.
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        // Core did not read in time: answer with what it has, which
-        // `measured_at` dates.
     }
 
     fn remember(&self, change: impl FnOnce(&mut ppvpn_core::ApplyRequest)) {

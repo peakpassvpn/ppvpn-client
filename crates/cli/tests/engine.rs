@@ -456,3 +456,52 @@ fn probes_keep_core_s_preconditions_and_a_failed_probe_is_a_result() {
         "{probed}"
     );
 }
+
+/// Milliseconds since the epoch of an RFC 3339 UTC time
+/// (`YYYY-MM-DDTHH:MM:SS[.fraction]Z`).
+fn unix_millis(rfc3339: &str) -> i64 {
+    let num = |range: std::ops::Range<usize>| rfc3339[range].parse::<i64>().unwrap();
+    let (year, month, day) = (num(0..4), num(5..7), num(8..10));
+    // Days since 1970-01-01 from a civil date (Howard Hinnant's algorithm).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let seconds = days * 86_400 + num(11..13) * 3_600 + num(14..16) * 60 + num(17..19);
+    let fraction = rfc3339[19..].trim_start_matches('.').trim_end_matches('Z');
+    let millis = format!("{fraction:0<3}")[..3].parse::<i64>().unwrap();
+    seconds * 1_000 + millis
+}
+
+#[test]
+fn unix_millis_reads_rfc3339() {
+    assert_eq!(unix_millis("1970-01-01T00:00:00Z"), 0);
+    assert_eq!(unix_millis("2000-02-29T00:00:00.5Z"), 951_782_400_500);
+    assert_eq!(unix_millis("2026-10-06T04:36:44.942912422Z") % 1_000, 942);
+    assert_eq!(unix_millis(&rfc3339(4_102_444_799)), 4_102_444_799_000);
+}
+
+#[test]
+fn traffic_answers_with_a_reading_taken_after_the_question() {
+    let session = Session::new();
+    session.write_profile(&fixture());
+    session.ok(&["start"]);
+
+    // The first question starts core's readings. Each later one, a moment
+    // after the last, must not be answered with a reading from before it:
+    // a transfer that ended just before would be missing.
+    session.ok(&["traffic"]);
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(300));
+        let asked = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let traffic = session.ok(&["traffic"]);
+        let measured = unix_millis(traffic["measured_at"].as_str().unwrap());
+        assert!(measured >= asked, "{traffic} predates {asked} ms");
+    }
+}
