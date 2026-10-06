@@ -626,3 +626,28 @@ async fn a_switch_counts_the_connections_a_new_rule_rejects() {
         .collect();
     assert_eq!(left, [2, 4]);
 }
+
+/// After a full restart the first read is of the new run, measured as it
+/// started (the apply reads the runtime once it switched).
+#[tokio::test]
+async fn the_first_read_after_a_full_restart_is_of_the_new_run() {
+    use crate::runtime::RuntimeTraffic;
+    let (engine, fake) = tun_instance();
+    running(&engine).await;
+    fake.set_traffic(RuntimeTraffic {
+        upload_bytes: 8,
+        download_bytes: 9,
+    });
+    let before = chrono::Utc::now();
+    let result = engine
+        .apply(ApplyRequest::new(moved_entry(R2)))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.switch, Some(SwitchKind::FullRestart { .. })),
+        "{result:?}"
+    );
+    let traffic = engine.traffic();
+    assert_eq!((traffic.upload_bytes, traffic.download_bytes), (8, 9));
+    assert!(traffic.measured_at >= before, "{traffic:?}");
+}
