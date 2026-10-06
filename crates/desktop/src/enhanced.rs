@@ -12,8 +12,13 @@
 //! the service is gone). A failed renewal or health check, or such a watch
 //! event, triggers one automatic reconnect per episode, after which the
 //! phase becomes `Contended` until the user retries. With a service that
-//! predates the watch, only the renewal notices a lost core.
+//! predates the watch, only the renewal notices a lost core. TUN routing
+//! another program changed (macOS, Windows) is reconnected at most
+//! [`TUN_ROUTING_RECONNECTS`] times in [`TUN_ROUTING_WINDOW`]; after that
+//! the phase is `Contended` (`TUN_ROUTING_TAKEN_OVER`) until the user
+//! retries.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -142,6 +147,14 @@ const NETWORK_RECHECK: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(2)
 };
+/// Automatic reconnects for TUN routing another program changed (another
+/// VPN taking the routes): at most this many in any [`TUN_ROUTING_WINDOW`]
+/// (docs/host-integration.md, `Degraded{TunRoutingBroken}`). Past that the
+/// client stops fighting the other program and asks the user.
+const TUN_ROUTING_RECONNECTS: usize = 3;
+const TUN_ROUTING_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// Detail of the `Contended` that ends those reconnects.
+const TUN_ROUTING_TAKEN_OVER: &str = "TUN_ROUTING_TAKEN_OVER";
 const PREFLIGHT_BUDGET: Duration = if cfg!(test) {
     Duration::from_millis(300)
 } else {
@@ -159,6 +172,13 @@ pub(crate) fn default_detector() -> Detector {
     } else {
         Arc::new(crate::detect::detect_now)
     }
+}
+
+/// The time the TUN-routing reconnect budget counts by (tests move it).
+pub(crate) type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+fn system_clock() -> Clock {
+    Arc::new(Instant::now)
 }
 
 pub(crate) type StateSink = Arc<dyn Fn(EnhancedState) + Send + Sync>;
@@ -323,6 +343,39 @@ impl RecoveryEpisode {
     }
 }
 
+/// Automatic reconnects because another program changed the TUN's routing
+/// (`tun_routing` broken: macOS, Windows), at most [`TUN_ROUTING_RECONNECTS`]
+/// in any [`TUN_ROUTING_WINDOW`]. The routing stays broken until the next
+/// start, so each one is a reconnect; another VPN that keeps taking the
+/// routes back would otherwise be fought forever. A user's connect, retry
+/// or take-over starts afresh.
+#[derive(Debug, Default)]
+pub(crate) struct RoutingReconnects {
+    at: VecDeque<Instant>,
+}
+
+impl RoutingReconnects {
+    pub(crate) fn reset(&mut self) {
+        self.at.clear();
+    }
+
+    /// Takes one reconnect at `now`; `false` when the window's are used up.
+    pub(crate) fn claim(&mut self, now: Instant) -> bool {
+        while self
+            .at
+            .front()
+            .is_some_and(|at| now.saturating_duration_since(*at) >= TUN_ROUTING_WINDOW)
+        {
+            self.at.pop_front();
+        }
+        if self.at.len() >= TUN_ROUTING_RECONNECTS {
+            return false;
+        }
+        self.at.push_back(now);
+        true
+    }
+}
+
 /// Turns cumulative counters into rates (bytes per second).
 #[derive(Debug, Default)]
 pub(crate) struct TrafficMeter {
@@ -390,6 +443,20 @@ pub(crate) fn ownership_lost(error: &ServiceError) -> Option<(ClientErrorInfo, b
         )),
         _ => None,
     }
+}
+
+/// Detail of the health failure for broken TUN routing.
+const TUN_ROUTING_BROKEN: &str = "HEALTH_TUN_ROUTING_BROKEN";
+
+/// The TUN's routing is broken (see [`core_ipc::CoreStatus::tun_routing_broken`]).
+fn is_tun_routing_broken(info: &ClientErrorInfo) -> bool {
+    info.code == ErrorCode::ConnectHealthCheckFailed && info.detail.starts_with(TUN_ROUTING_BROKEN)
+}
+
+/// Out of automatic reconnects for TUN routing another program keeps
+/// changing: `Contended`, retryable, until the user retries.
+fn tun_routing_taken_over() -> Option<ClientErrorInfo> {
+    contended(TUN_ROUTING_TAKEN_OVER)
 }
 
 fn health_error(detail: impl Into<String>) -> ClientErrorInfo {
@@ -592,6 +659,7 @@ struct Data {
     /// replaced before the next connect.
     stale_service_noted: bool,
     recovery: RecoveryEpisode,
+    routing_reconnects: RoutingReconnects,
     loops_generation: Option<u64>,
     loops: Vec<JoinHandle<()>>,
 }
@@ -606,6 +674,8 @@ struct Inner {
     detector: Mutex<Detector>,
     /// Pause between data-plane health checks ([`HEALTH_INTERVAL`]).
     health_interval: Mutex<Duration>,
+    /// For [`RoutingReconnects`].
+    clock: Mutex<Clock>,
     /// Woken by [`Enhanced::network_changed`]: brings the next health check
     /// forward, and cuts a reconnect pause short.
     network_changed: tokio::sync::Notify,
@@ -644,6 +714,7 @@ impl Enhanced {
                 on_error,
                 detector: Mutex::new(default_detector()),
                 health_interval: Mutex::new(HEALTH_INTERVAL),
+                clock: Mutex::new(system_clock()),
                 network_changed: tokio::sync::Notify::new(),
                 operation: tokio::sync::Mutex::new(()),
                 uninstalling: AtomicBool::new(false),
@@ -689,6 +760,16 @@ impl Enhanced {
             .health_interval
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = interval;
+    }
+
+    /// Replaces the clock of the TUN-routing reconnect budget (tests).
+    #[cfg(test)]
+    pub(crate) fn set_clock(&self, clock: Clock) {
+        *self
+            .inner
+            .clock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = clock;
     }
 
     #[cfg(test)]
@@ -897,6 +978,7 @@ impl Enhanced {
         let _operation = inner.operation.lock().await;
         let machine = inner.with_data(|data| {
             data.recovery.reset();
+            data.routing_reconnects.reset();
             data.machine.clone()
         });
         if machine.phase == ConnectionPhase::On {
@@ -940,6 +1022,7 @@ impl Enhanced {
         let _operation = inner.operation.lock().await;
         let allowed = inner.with_data(|data| {
             data.recovery.reset();
+            data.routing_reconnects.reset();
             can_take_over(&data.machine)
         });
         if !allowed {
@@ -962,6 +1045,7 @@ impl Enhanced {
         let _operation = inner.operation.lock().await;
         let machine = inner.with_data(|data| {
             data.recovery.reset();
+            data.routing_reconnects.reset();
             data.machine.clone()
         });
         inner.service.reset_auth();
@@ -1158,6 +1242,18 @@ impl Inner {
         core_ipc::ApplyChoices::new(self.config.selection.get(), &self.config.ingress_pins.get())
     }
 
+    /// Takes one automatic reconnect for broken TUN routing from the budget
+    /// ([`RoutingReconnects`]); `false` when it is used up.
+    fn claim_routing_reconnect(&self) -> bool {
+        let clock = self
+            .clock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let now = clock();
+        self.with_data(|data| data.routing_reconnects.claim(now))
+    }
+
     fn with_data<T>(&self, change: impl FnOnce(&mut Data) -> T) -> T {
         let mut guard = match self.data.lock() {
             Ok(guard) => guard,
@@ -1186,6 +1282,24 @@ impl Inner {
             self.emit();
         }
         applied
+    }
+
+    /// Out of automatic reconnects for TUN routing another program keeps
+    /// changing: `Contended` (`TUN_ROUTING_TAKEN_OVER`) until the user
+    /// retries. The session is already released.
+    fn routing_taken_over(&self, generation: u64) {
+        tracing::warn!(
+            generation,
+            "enhanced mode: another program keeps changing the TUN routing \
+             ({TUN_ROUTING_RECONNECTS} reconnects in {} min); not reconnecting",
+            TUN_ROUTING_WINDOW.as_secs() / 60
+        );
+        self.transition(
+            generation,
+            ConnectionPhase::Contended,
+            tun_routing_taken_over(),
+            true,
+        );
     }
 
     /// An uninstall is in progress and enhanced mode is off.
@@ -1738,15 +1852,19 @@ impl Inner {
         let status = core_ipc::get_status(core)
             .await
             .map_err(|error| health_error(format!("HEALTH_STATUS_FAILED: {}", error.detail())))?;
-        if status.state != "running" {
+        // A degraded engine still forwards: engine-host reports it as
+        // `running` (reasons kept), the engine itself as `degraded`. Its
+        // reasons heal themselves, all but broken TUN routing below.
+        if !matches!(status.state.as_str(), "running" | "degraded") {
             return Err(health_error("HEALTH_CORE_NOT_RUNNING"));
         }
         if status.revision.as_deref() != Some(expected_revision) {
             return Err(health_error("HEALTH_PROFILE_REVISION_MISMATCH"));
         }
         if status.tun_routing_broken {
-            // Traffic bypasses the TUN: a fresh core reinstalls the rules.
-            return Err(service_unreachable("HEALTH_TUN_ROUTING_BROKEN"));
+            // Traffic may bypass the TUN until the next start: a fresh core
+            // installs the routes again (within the reconnect budget).
+            return Err(service_unreachable(TUN_ROUTING_BROKEN));
         }
         let node_id = status
             .selected_node_id
@@ -1886,7 +2004,8 @@ impl Inner {
         }
     }
 
-    /// Automatic recovery: one reconnect per episode.
+    /// Automatic recovery: one reconnect per episode; for broken TUN
+    /// routing, within [`RoutingReconnects`].
     /// Never prompts for installation.
     ///
     /// `cause` is what failed while on. Only a network-path failure (see
@@ -1913,6 +2032,7 @@ impl Inner {
             }
             let path = is_path_cause(&cause);
             let service_down = is_service_down(&cause);
+            let routing_broken = is_tun_routing_broken(&cause);
             // With this episode's reconnect already used, still reconnect,
             // but only after the service backoff (bounded: a core that keeps
             // dying or a path that stays broken ends in Error / Contended).
@@ -1933,6 +2053,16 @@ impl Inner {
                 }
                 return;
             }
+            // Another program changed the TUN's routing (another VPN, as a
+            // rule). It stays so until the next start, but that program may
+            // take it again at once: past the budget, leave the network to
+            // it (our routes go with the session) and let the user decide.
+            if routing_broken && !self.claim_routing_reconnect() {
+                self.stop_loops();
+                self.release_session(&machine).await;
+                self.routing_taken_over(generation);
+                return;
+            }
             self.transition(
                 generation,
                 ConnectionPhase::Reconnecting,
@@ -1949,7 +2079,9 @@ impl Inner {
             // is going away (stopping, restarting, gone): then, as after
             // every such failure, the next attempt waits (see
             // [`service_backoff`]) without holding the operation lock.
-            let mut wait = service_down || !claimed;
+            // Broken TUN routing may leak traffic: no pause, the budget
+            // bounds it.
+            let mut wait = service_down || (!claimed && !routing_broken);
             let mut generation = generation;
             let mut operation = Some(_operation);
             loop {
@@ -2016,6 +2148,14 @@ impl Inner {
                         data.machine.competitors.clone(),
                     )
                 });
+                // The new core's first check found the routing taken again.
+                if phase == ConnectionPhase::Reconnecting
+                    && reason.as_ref().is_some_and(is_tun_routing_broken)
+                    && !self.claim_routing_reconnect()
+                {
+                    self.routing_taken_over(current);
+                    return;
+                }
                 match reason {
                     Some(reason)
                         if phase == ConnectionPhase::Reconnecting && is_service_down(&reason) =>
@@ -2332,8 +2472,8 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
             // Traffic that bypasses the TUN (its routing rules gone, e.g.
             // systemd-networkd dropping foreign rules on a link change) is a
             // leak, not the network settling: no grace, recover now.
-            let leaking = error.detail.contains("HEALTH_CAPTURE_PATH_FAILED")
-                || error.detail.contains("HEALTH_TUN_ROUTING_BROKEN");
+            let leaking =
+                error.detail.contains("HEALTH_CAPTURE_PATH_FAILED") || is_tun_routing_broken(error);
             if is_path_cause(error) && settling && !leaking {
                 tracing::info!(
                     generation,
@@ -2351,8 +2491,9 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
         // instead of reconnecting, which would only tear the TUN down again
         // and again. Once the line is back, or the user unpins, the checks
         // pass again. A check before the core's verdict gets one more round.
+        // Broken TUN routing is no line's doing.
         if let Err(error) = &result {
-            if is_path_cause(error) {
+            if is_path_cause(error) && !is_tun_routing_broken(error) {
                 match pinned_ingress(&core, &inner.config.ingress_pins.get()).await {
                     PinnedIngress::Down => {
                         tracing::info!(
@@ -2489,6 +2630,27 @@ mod tests {
         assert!(episode.claim());
         episode.reset();
         assert!(episode.claim());
+    }
+
+    #[test]
+    fn tun_routing_reconnects_are_bounded_per_rolling_window() {
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let mut budget = RoutingReconnects::default();
+        assert!(budget.claim(at(0)));
+        assert!(budget.claim(at(60)));
+        assert!(budget.claim(at(120)));
+        assert!(!budget.claim(at(180)), "a fourth within 10 minutes");
+        assert!(!budget.claim(at(599)));
+        // The first one left the window: one more.
+        assert!(budget.claim(at(600)));
+        assert!(!budget.claim(at(601)));
+        // A user's retry starts afresh.
+        budget.reset();
+        assert!(budget.claim(at(602)));
+        assert!(budget.claim(at(602)));
+        assert!(budget.claim(at(602)));
+        assert!(!budget.claim(at(602)));
     }
 
     #[test]
@@ -2667,8 +2829,11 @@ mod tests {
         entrance_failures: AtomicUsize,
         /// `GetStatus.nodes`, once set (core 0.5.7+).
         status_nodes: Mutex<Option<Value>>,
-        /// `tun_routing` in GetStatus (None: not reported).
+        /// `tun_routing` in GetStatus (None: not reported). A connect starts
+        /// a fresh core, which installs the routing again: back to None.
         tun_routing: Mutex<Option<String>>,
+        /// Fields merged into GetStatus (e.g. a degraded state, reasons).
+        status_extra: Mutex<Option<Value>>,
         /// `Disconnect` answers only after this long (a slow core stop).
         disconnect_delay: Mutex<Option<Duration>>,
         /// `RenewLease` fails with this service error.
@@ -2793,6 +2958,7 @@ mod tests {
                 }
                 let revision = profile["revision"].as_str().unwrap_or_default().to_string();
                 *self.owner.lock().unwrap() = Some((session.clone(), revision));
+                *self.tun_routing.lock().unwrap() = None;
                 self.applied(choices);
                 Ok(4242)
             })
@@ -2902,6 +3068,13 @@ mod tests {
                         }
                         if let Some(routing) = self.tun_routing.lock().unwrap().clone() {
                             status["tun_routing"] = routing.into();
+                        }
+                        if let Some(Value::Object(extra)) =
+                            self.status_extra.lock().unwrap().clone()
+                        {
+                            for (key, value) in extra {
+                                status[key] = value;
+                            }
                         }
                         Ok(status)
                     }
@@ -3408,6 +3581,122 @@ mod tests {
             h.service.connects.load(Ordering::SeqCst) > 1,
             "a fresh core was started at once"
         );
+    }
+
+    #[tokio::test]
+    async fn a_degraded_core_that_heals_itself_stays_on() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        // As engine-host reports it: running, the reasons kept.
+        *h.service.status_extra.lock().unwrap() = Some(serde_json::json!({
+            "state": "running", "tun_routing": "unguarded",
+            "reasons": [{"kind": "tun_routing_unguarded"}, {"kind": "no_default_interface"}]
+        }));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // As the engine itself names it.
+        *h.service.status_extra.lock().unwrap() = Some(serde_json::json!({
+            "state": "degraded",
+            "reasons": [{"kind": "ingress_unavailable", "node_id": "n1"}]
+        }));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1, "no reconnect");
+
+        // Broken routing in a degraded state is the one that reconnects.
+        *h.service.status_extra.lock().unwrap() = Some(serde_json::json!({
+            "state": "degraded",
+            "reasons": [{"kind": "tun_routing_broken", "missing": ["utun4: route"]}]
+        }));
+        wait_connects_above(&h, 1, "reconnected for broken routing").await;
+    }
+
+    /// A clock for the TUN-routing budget that the test moves by hand.
+    fn manual_clock(h: &Harness) -> Arc<Mutex<Duration>> {
+        let start = Instant::now();
+        let offset = Arc::new(Mutex::new(Duration::ZERO));
+        h.enhanced.set_clock(Arc::new({
+            let offset = offset.clone();
+            move || start + *offset.lock().unwrap()
+        }));
+        offset
+    }
+
+    /// Another program changes the TUN's routing; waits until the client
+    /// reconnected (its `connects`-th connect) and is on again.
+    async fn routing_taken_and_reconnected(h: &Harness, connects: usize) {
+        *h.service.tun_routing.lock().unwrap() = Some("broken".into());
+        wait_connects_above(h, connects - 1, "reconnected for broken routing").await;
+        wait_phase(h, ConnectionPhase::On).await;
+    }
+
+    /// Another program changes the TUN's routing once more than the budget
+    /// allows: no reconnect, `Contended` saying so, the session released.
+    async fn routing_taken_once_too_often(h: &Harness, connects: usize) {
+        *h.service.tun_routing.lock().unwrap() = Some("broken".into());
+        let state = wait_phase(h, ConnectionPhase::Contended).await;
+        let reason = state.reason.unwrap();
+        assert_eq!(reason.code, ErrorCode::NetworkPathContended);
+        assert_eq!(reason.detail, TUN_ROUTING_TAKEN_OVER);
+        assert!(state.retryable);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            h.service.connects.load(Ordering::SeqCst),
+            connects,
+            "no reconnect past the budget"
+        );
+        assert!(
+            h.service.owner.lock().unwrap().is_none(),
+            "session released"
+        );
+        assert!(h.enhanced.inner.with_data(|d| d.loops.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn broken_tun_routing_reconnects_three_times_in_ten_minutes() {
+        let h = harness(true);
+        let clock = manual_clock(&h);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        for connects in 2..=4 {
+            routing_taken_and_reconnected(&h, connects).await;
+            *clock.lock().unwrap() += Duration::from_secs(3 * 60);
+        }
+        // Reconnected at 0, 3 and 6 minutes: none at 9.
+        routing_taken_once_too_often(&h, 4).await;
+    }
+
+    #[tokio::test]
+    async fn the_tun_routing_budget_frees_up_with_time_and_on_retry() {
+        let h = harness(true);
+        let clock = manual_clock(&h);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        for connects in 2..=4 {
+            routing_taken_and_reconnected(&h, connects).await;
+        }
+        // Ten minutes on, the three are out of the window.
+        *clock.lock().unwrap() += TUN_ROUTING_WINDOW;
+        for connects in 5..=7 {
+            routing_taken_and_reconnected(&h, connects).await;
+        }
+        routing_taken_once_too_often(&h, 7).await;
+
+        // The user retries: connected, and a full budget again.
+        h.enhanced.retry().await.unwrap();
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+        for connects in 9..=11 {
+            routing_taken_and_reconnected(&h, connects).await;
+        }
+        routing_taken_once_too_often(&h, 11).await;
+
+        // So does connecting again.
+        h.enhanced.enable().await.unwrap();
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+        routing_taken_and_reconnected(&h, 13).await;
     }
 
     #[tokio::test]

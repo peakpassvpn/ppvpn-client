@@ -159,6 +159,17 @@ and only signs in when no restore is pending.
   `rulesUnavailableD` ("部分分流规则暂未加载，相关流量暂时走代理。"). It
   comes after the other notices and clears by itself once the core loads the
   rule sets; `stale` rule sets still route and show nothing.
+- **Replaced routes** (`NoticeKind.RoutesReplaced`, tone Warn, no buttons):
+  macOS only, while enhanced mode is on and `ClientSnapshot.replaced_routes`
+  is non-empty: title `routesReplacedT`, message `routesReplacedD`
+  ("另一个 VPN 的路由已被临时接管，断开后恢复。"). Informational; the routes go
+  back when enhanced mode disconnects.
+- **Routes kept being taken:** when another program keeps changing the TUN's
+  routes (macOS, Windows), the crate reconnects at most 3 times in 10 minutes
+  and then stops: `Contended{NetworkPathContended, "TUN_ROUTING_TAKEN_OVER"}`,
+  shown as failed with message `fr_routesTakenOver` (unless a competitor is
+  named: then the conflict notice), `retry` and `useCompatible`. Retry or a
+  new connect starts the count afresh.
 - **Traffic:** `ShowTraffic`, `UpRate`, `DownRate` ("8.6 MB/s", bytes).
 - **Local proxy:** `CurrentNodeProxy` (`ProxyInfo`: `HttpDisplay`,
   `SocksDisplay`, `Username`, `MaskedPassword`, `PasswordDisplay` / `PasswordRevealed` (eye toggle `TogglePasswordRevealedCommand`, masked by default), `CopyUsernameCommand`, `CopyPasswordCommand`, `CopyHttpCommand`,

@@ -84,7 +84,8 @@ extension ClientSnapshot {
         pins: [IngressPin] = [],
         ingresses: [NodeIngresses] = [],
         clearedPins: [IngressPin] = [],
-        proxyReset: Bool = false
+        proxyReset: Bool = false,
+        replacedRoutes: [String] = []
     ) -> ClientSnapshot {
         ClientSnapshot(
             auth: auth, account: nil, team: Team(id: "t-1", name: "Acme", personal: false, active: true),
@@ -98,7 +99,7 @@ extension ClientSnapshot {
             serviceInstalled: serviceInstalled, selectedNodeId: selected, lastError: nil, unreadNotifications: unread,
             ruleSetsUnavailable: ruleSetsUnavailable,
             ingressPins: pins, nodeIngresses: ingresses, clearedIngressPins: clearedPins,
-            localProxyCredentialsReset: proxyReset)
+            localProxyCredentialsReset: proxyReset, replacedRoutes: replacedRoutes)
     }
 }
 

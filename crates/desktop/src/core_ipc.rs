@@ -126,11 +126,17 @@ pub(crate) struct CoreStatus {
     /// `nodes` (core 0.5.7+): each node's ingress pin and ingress health, in
     /// profile order; `None` from cores that do not report them.
     pub nodes: Option<Vec<crate::NodeIngresses>>,
-    /// `tun_routing == "broken"` (core 0.5.20+, Linux TUN): the core lost its
-    /// policy-routing rules and could not restore them, so traffic bypasses
-    /// the TUN. `ok`, `unguarded` (the guard did not start; nothing to gain
-    /// from a restart) and absent are all false.
+    /// `tun_routing == "broken"`, or a `tun_routing_broken` degraded reason:
+    /// on macOS and Windows another program changed the TUN's routes or
+    /// address and nothing puts them back until the next start (the engine
+    /// stays degraded); on Linux (Go core 0.5.20+) the rules could not be
+    /// restored. Either way traffic may bypass the TUN. `ok`, `unguarded`
+    /// (the guard did not start; nothing to gain from a restart) and absent
+    /// are all false.
     pub tun_routing_broken: bool,
+    /// `replaced_routes` (macOS TUN): another VPN's routes the TUN replaced
+    /// for now; they are put back when the TUN stops. Empty when none.
+    pub replaced_routes: Vec<String>,
 }
 
 /// One entry of `GetStatus.nodes`.
@@ -335,7 +341,23 @@ pub(crate) async fn get_status(core: &dyn CoreTransport) -> Result<CoreStatus, C
             .get("nodes")
             .and_then(Value::as_array)
             .map(|nodes| nodes.iter().filter_map(parse_node_ingresses).collect()),
-        tun_routing_broken: opt_string(status, "tun_routing").as_deref() == Some("broken"),
+        tun_routing_broken: opt_string(status, "tun_routing").as_deref() == Some("broken")
+            || status
+                .get("reasons")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|reason| {
+                    reason.get("kind").and_then(Value::as_str) == Some("tun_routing_broken")
+                }),
+        replaced_routes: status
+            .get("replaced_routes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
     })
 }
 
@@ -1096,6 +1118,37 @@ pub(crate) mod tests {
         let status = get_status(core.as_ref()).await.unwrap();
         assert!(status.rule_sets.is_empty());
         assert!(unavailable_rule_sets(&status.rule_sets).is_empty());
+        assert!(!status.tun_routing_broken);
+        assert!(status.replaced_routes.is_empty());
+    }
+
+    async fn status_of(body: Value) -> CoreStatus {
+        let core = FakeCore::new(move |_, _| (Duration::ZERO, Ok(body.clone())));
+        get_status(core.as_ref()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn status_reads_broken_tun_routing_and_replaced_routes() {
+        // engine-host reports a degraded engine as running, reasons kept.
+        let status = status_of(json!({"state": "running", "tun_routing": "broken",
+            "reasons": [{"kind": "tun_routing_broken", "missing": ["utun4: route"]}],
+            "replaced_routes": ["route 128.0.0.0/1 via 192.0.2.1 on utun4"]}))
+        .await;
+        assert!(status.tun_routing_broken);
+        assert_eq!(
+            status.replaced_routes,
+            ["route 128.0.0.0/1 via 192.0.2.1 on utun4"]
+        );
+        // The reason alone, in the engine's own `degraded` state.
+        let status = status_of(json!({"state": "degraded",
+            "reasons": [{"kind": "tun_routing_broken", "missing": []}]}))
+        .await;
+        assert!(status.tun_routing_broken);
+        // Self-healing reasons are not broken routing.
+        let status = status_of(json!({"state": "running", "tun_routing": "unguarded",
+            "reasons": [{"kind": "tun_routing_unguarded"}, {"kind": "no_default_interface"}]}))
+        .await;
+        assert!(!status.tun_routing_broken);
     }
 
     #[test]

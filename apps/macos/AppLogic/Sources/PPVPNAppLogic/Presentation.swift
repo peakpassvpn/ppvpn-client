@@ -380,6 +380,13 @@ extension AppState {
                 title: tr("proxyResetT"), message: tr("proxyResetD"),
                 actionTitle: tr("ok"), action: .dismissProxyReset))
         }
+        // The TUN took another VPN's routes over for now; they go back on
+        // disconnect. Said while connected, nothing to do about it.
+        if isSignedIn, restricted == nil, phase == .on, !snapshot.replacedRoutes.isEmpty {
+            notices.append(Notice(
+                id: "routesReplaced", tone: .warn, systemImage: "info.circle",
+                title: tr("routesReplacedT"), message: tr("routesReplacedD"), actionTitle: nil, action: nil))
+        }
 
         return ConnectionPresentation(
             tone: tone, headline: headline, detail: detail, systemImage: image,
@@ -428,6 +435,8 @@ extension AppState {
         switch reason.code {
         case .serviceInstallCancelled: return tr("fr_auth")
         case .connectFailed, .timeout, .unreachable: return tr("fr_timeout")
+        // Another program kept changing the TUN's routes: no more reconnects.
+        case .networkPathContended where reason.detail == "TUN_ROUTING_TAKEN_OVER": return tr("fr_routesTakenOver")
         // Taken over by nobody named: an ordinary failure.
         case .networkPathContended where snapshot.connection.competitor?.isEmpty ?? true: return tr("fr_timeout")
         case .systemProxyUnavailable: return tr("sysproxyUnavailable")

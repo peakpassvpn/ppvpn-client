@@ -229,6 +229,8 @@ public static class OverviewPage
             NoticeKind.IngressUnavailable or NoticeKind.IngressPinCleared => "dialog-warning-symbolic",
             // The local proxy got new credentials: apps using it must copy them again.
             NoticeKind.LocalProxyCredentialsReset => "dialog-password-symbolic",
+            // Enhanced mode took another VPN's routes over for now (macOS; not shown on Linux).
+            NoticeKind.RoutesReplaced => "dialog-information-symbolic",
             _ => "dialog-error-symbolic",
         });
         icon.SetValign(Gtk.Align.Start);

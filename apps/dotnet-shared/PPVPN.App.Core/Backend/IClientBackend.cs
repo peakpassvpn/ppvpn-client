@@ -217,7 +217,8 @@ public static class ClientSnapshots
         IngressPins: [],
         NodeIngresses: [],
         ClearedIngressPins: [],
-        LocalProxyCredentialsReset: false);
+        LocalProxyCredentialsReset: false,
+        ReplacedRoutes: []);
 }
 
 

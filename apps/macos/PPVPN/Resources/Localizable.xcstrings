@@ -1548,6 +1548,23 @@
         }
       }
     },
+    "fr_routesTakenOver": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另一个 VPN 或程序反复改动本机路由，已停止自动重连，以免和它来回争抢。请先关闭它再重试，或改用兼容模式。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another VPN or app keeps changing this device's routes, so automatic reconnecting has stopped rather than fight it. Turn it off and retry, or use compatibility mode."
+          }
+        }
+      }
+    },
     "fr_timeout": {
       "extractionState": "manual",
       "localizations": {
@@ -3516,6 +3533,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Route {n}"
+          }
+        }
+      }
+    },
+    "routesReplacedD": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另一个 VPN 的路由已被临时接管，断开后恢复。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another VPN's routes are taken over for now; they're restored when you disconnect."
+          }
+        }
+      }
+    },
+    "routesReplacedT": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "路由已临时接管"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Routes Taken Over for Now"
           }
         }
       }

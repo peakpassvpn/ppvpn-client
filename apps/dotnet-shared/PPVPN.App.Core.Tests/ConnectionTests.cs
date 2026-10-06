@@ -587,6 +587,63 @@ public sealed class ConnectionTests
     }
 
     [Fact]
+    public async Task ReplacedRoutesAndStoppedReconnectsAreSaid()
+    {
+        using var ui = new UiContext();
+        await ui.RunAsync(async () =>
+        {
+            var t = new Scripted();
+            await t.SignedInAsync();
+            var main = t.Main;
+            const string route = "route 128.0.0.0/1 via 192.0.2.1 on utun4";
+
+            await t.PushAsync(main.Snapshot with { ReplacedRoutes = [route] }, Conn(ConnectionPhase.On, endpoint: "11", latency: 38));
+            var notice = Assert.Single(main.Notices);
+            Assert.Equal((NoticeKind.RoutesReplaced, ConnectionTone.Warn, "routesReplacedT", "routesReplacedD", null, null),
+                (notice.Kind, notice.Tone, notice.Title, notice.Message, notice.ActionText, notice.Action));
+            // Informational: the connection itself is unaffected.
+            Assert.Equal((ConnectState.On, ConnectionTone.Ok), (main.ConnectState, main.ConnectionTone));
+
+            // Only while connected, and gone once the routes are back.
+            await t.PushAsync(main.Snapshot, Conn(ConnectionPhase.Disconnecting));
+            Assert.Empty(main.Notices);
+            await t.PushAsync(main.Snapshot with { ReplacedRoutes = [] }, Conn(ConnectionPhase.On, endpoint: "11", latency: 38));
+            Assert.Empty(main.Notices);
+
+            // Another program kept changing the TUN's routes and the crate stopped reconnecting:
+            // a failure that says so, with retry and compatibility mode.
+            await t.PushAsync(main.Snapshot, Conn(ConnectionPhase.Contended, new(ErrorCode.NetworkPathContended, "TUN_ROUTING_TAKEN_OVER"),
+                suggestCompatible: true));
+            Assert.Equal((ConnectState.Failed, "h_failed"), (main.ConnectState, main.ConnectionTitle));
+            notice = Assert.Single(main.Notices);
+            Assert.Equal((NoticeKind.Failed, "fr_routesTakenOver", "retry", "useCompatible"),
+                (notice.Kind, notice.Message, notice.ActionText, notice.SecondaryActionText));
+        });
+    }
+
+    [Theory]
+    [InlineData("zh-CN", "另一个 VPN 的路由已被临时接管，断开后恢复。", "另一个 VPN 或程序反复改动本机路由，已停止自动重连，以免和它来回争抢。请先关闭它再重试，或改用兼容模式。")]
+    [InlineData("en-US", "Another VPN's routes are taken over for now; they're restored when you disconnect.",
+        "Another VPN or app keeps changing this device's routes, so automatic reconnecting has stopped rather than fight it. Turn it off and retry, or use compatibility mode.")]
+    public async Task RoutesTakenOverAreLocalized(string culture, string replaced, string gaveUp)
+    {
+        using var ui = new UiContext();
+        await ui.RunAsync(async () =>
+        {
+            var t = new Scripted(new JsonLocalizer(culture: System.Globalization.CultureInfo.GetCultureInfo(culture)));
+            await t.SignedInAsync();
+            var s = t.Main.Snapshot;
+            await t.PushAsync(s with { ReplacedRoutes = ["route 0.0.0.0/1 via 192.0.2.1 on utun4"] }, Conn(ConnectionPhase.On, endpoint: "11", latency: 38));
+            Assert.Equal(replaced, Assert.Single(t.Main.Notices).Message);
+
+            // Another program kept changing the TUN's routes: the crate stopped reconnecting.
+            await t.PushAsync(s with { }, Conn(ConnectionPhase.Contended, new(ErrorCode.NetworkPathContended, "TUN_ROUTING_TAKEN_OVER"),
+                suggestCompatible: true));
+            Assert.Equal(gaveUp, Assert.Single(t.Main.Notices).Message);
+        });
+    }
+
+    [Fact]
     public async Task UnavailableRoutingRulesShowALowKeyNoticeUntilTheyLoad()
     {
         using var ui = new UiContext();
