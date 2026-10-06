@@ -22,14 +22,14 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::core_ipc::{self, BoxFuture, CoreTransport};
+use crate::core_ipc::{self, BoxFuture, CoreTraffic, CoreTransport};
 use crate::detect::ConflictReport;
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
 use crate::service::{ServiceApi, ServiceCoreTransport, ServiceError, SessionRef, WatchEnd};
@@ -1139,7 +1139,10 @@ impl Enhanced {
             service: self.inner.service.clone(),
             session: machine.session()?,
         };
-        core_ipc::get_traffic(&core).await.ok()
+        core_ipc::get_traffic(&core)
+            .await
+            .ok()
+            .map(|traffic| traffic.totals())
     }
 
     /// Releases the service session and stops background loops; call before
@@ -1797,7 +1800,10 @@ impl Inner {
                 // seconds to settle (Windows: the old adapter, filters and
                 // DNS cache go away), and the first check of a reconnect
                 // failed where the next one passed: one more, after a pause.
-                if is_path_cause(info) && self.is_current(generation, ConnectionPhase::Connecting) {
+                // So for the TUN core's counters not read again in time.
+                if (is_path_cause(info) || is_traffic_stale(info))
+                    && self.is_current(generation, ConnectionPhase::Connecting)
+                {
                     tracing::info!(
                         generation,
                         detail = %info.detail,
@@ -1849,6 +1855,9 @@ impl Inner {
         entrance_timeout_ms: u64,
     ) -> Result<(), ClientErrorInfo> {
         let mut steps = Steps::new("enhanced health", core.session.generation, first);
+        // The capture check needs traffic counters read after this (the
+        // status read below already gets the engine reading its runtime).
+        let started = SystemTime::now();
         let status = core_ipc::get_status(core)
             .await
             .map_err(|error| health_error(format!("HEALTH_STATUS_FAILED: {}", error.detail())))?;
@@ -1895,30 +1904,14 @@ impl Inner {
             return Ok(());
         };
 
-        let traffic = |label: &'static str| async move {
-            core_ipc::get_traffic(core)
-                .await
-                .map(|(up, down)| up.saturating_add(down))
-                .map_err(|error| health_error(format!("{label}: {}", error.detail())))
-        };
-        let before = traffic("HEALTH_TRAFFIC_FAILED").await?;
+        let host = target.host_str().unwrap_or("");
+        let before = capture_baseline(core, started, host).await?;
         let direct = direct_health_request(target.clone()).await;
+        let done = SystemTime::now();
         steps.done("direct request");
         let remote = direct?;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let after = traffic("HEALTH_TRAFFIC_FAILED").await?;
-        if after <= before {
-            // The request did not show in the TUN's counters: it left
-            // another way. Name where it went for the investigation.
-            tracing::warn!(
-                remote = ?remote,
-                host = target.host_str().unwrap_or(""),
-                before,
-                after,
-                "enhanced health: the direct request bypassed the TUN"
-            );
-            return Err(service_unreachable("HEALTH_CAPTURE_PATH_FAILED"));
-        }
+        capture_verdict(core, before, done, remote, host).await?;
+        steps.done("capture check");
 
         // The privileged core runs TUN only (`--local-proxy=false`), so the
         // proxied path is exercised through the standard core.
@@ -2290,6 +2283,144 @@ async fn direct_health_request(
     let remote = response.remote_addr();
     let _ = response.bytes().await;
     Ok(remote)
+}
+
+/// Detail of the health failure when the TUN core's traffic counters were
+/// not read late enough to judge the capture check. Neither a path failure
+/// nor a leak: the core is not doing its part, as when its traffic call
+/// fails (`HEALTH_TRAFFIC_FAILED`), so recovery reconnects with this cause.
+const TRAFFIC_STALE: &str = "HEALTH_TRAFFIC_STALE";
+/// How long the capture check waits for a sample of the TUN core's
+/// counters read late enough. The engine reads its runtime about once a
+/// second while a host reads, and at once on the first read after it went
+/// idle (docs/host-integration.md 4.4).
+const TRAFFIC_FRESH_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(300)
+} else {
+    Duration::from_secs(3)
+};
+/// Between reads while waiting for such a sample.
+const TRAFFIC_POLL: Duration = if cfg!(test) {
+    Duration::from_millis(5)
+} else {
+    Duration::from_millis(100)
+};
+
+fn is_traffic_stale(info: &ClientErrorInfo) -> bool {
+    info.code == ErrorCode::ConnectFailed && info.detail.starts_with(TRAFFIC_STALE)
+}
+
+/// The TUN core's counters once the engine's sample of them is one `fresh`
+/// accepts (by its `measured_at`), within [`TRAFFIC_FRESH_WAIT`];
+/// `Ok(Err(last))` when none came. A sample counts once two reads in a row
+/// return it: until the engine first reads its runtime it dates its zero
+/// counters with the time of each call, which no two calls share.
+async fn fresh_traffic(
+    core: &dyn CoreTransport,
+    fresh: impl Fn(SystemTime) -> bool,
+) -> Result<Result<CoreTraffic, CoreTraffic>, ClientErrorInfo> {
+    let deadline = Instant::now() + TRAFFIC_FRESH_WAIT;
+    let mut previous: Option<CoreTraffic> = None;
+    loop {
+        let sample = core_ipc::get_traffic(core)
+            .await
+            .map_err(|error| health_error(format!("HEALTH_TRAFFIC_FAILED: {}", error.detail())))?;
+        let repeated = previous == Some(sample);
+        if repeated && sample.measured_at.is_some_and(&fresh) {
+            return Ok(Ok(sample));
+        }
+        if Instant::now() >= deadline {
+            return Ok(Err(sample));
+        }
+        previous = Some(sample);
+        tokio::time::sleep(TRAFFIC_POLL).await;
+    }
+}
+
+/// The capture check's baseline: the TUN core's counters as read no earlier
+/// than `since`, when the health check started. An older sample (the first
+/// read after the engine went idle, or the previous run's) can miss what
+/// went through since, or not be this run's at all.
+async fn capture_baseline(
+    core: &dyn CoreTransport,
+    since: SystemTime,
+    host: &str,
+) -> Result<CoreTraffic, ClientErrorInfo> {
+    fresh_traffic(core, |at| at >= since)
+        .await?
+        .map_err(|last| traffic_stale("before", since, last, host))
+}
+
+/// The capture check's verdict: the direct request, done at `done`, must
+/// show in the TUN core's counters as read after it.
+async fn capture_verdict(
+    core: &dyn CoreTransport,
+    before: CoreTraffic,
+    done: SystemTime,
+    remote: Option<std::net::SocketAddr>,
+    host: &str,
+) -> Result<(), ClientErrorInfo> {
+    let mut after = fresh_traffic(core, |at| at > done)
+        .await?
+        .map_err(|last| traffic_stale("after", done, last, host))?;
+    if after.total() <= before.total() {
+        // The engine dates a sample when its read of the runtime returns:
+        // one dated just after `done` may have been read before the
+        // request's last bytes. The next one was not.
+        let first = after.measured_at;
+        after = fresh_traffic(core, |at| Some(at) > first)
+            .await?
+            .map_err(|last| traffic_stale("after", done, last, host))?;
+    }
+    if after.total() <= before.total() {
+        // The request did not show in the TUN's counters: it left another
+        // way. Name where it went for the investigation.
+        tracing::warn!(
+            remote = ?remote,
+            host,
+            before = before.total(),
+            after = after.total(),
+            before_at = %measured(before.measured_at),
+            after_at = %measured(after.measured_at),
+            done_at = %rfc3339(done),
+            "enhanced health: the direct request bypassed the TUN"
+        );
+        return Err(service_unreachable("HEALTH_CAPTURE_PATH_FAILED"));
+    }
+    Ok(())
+}
+
+/// No sample of the TUN core's counters read after `since` came in time:
+/// the capture check cannot tell, which is not a leak.
+fn traffic_stale(step: &str, since: SystemTime, last: CoreTraffic, host: &str) -> ClientErrorInfo {
+    tracing::warn!(
+        host,
+        step,
+        since = %rfc3339(since),
+        last_at = %measured(last.measured_at),
+        last = last.total(),
+        "enhanced health: the TUN's traffic counters were not read again in {} ms",
+        TRAFFIC_FRESH_WAIT.as_millis()
+    );
+    health_error(format!("{TRAFFIC_STALE}: {step}"))
+}
+
+fn measured(at: Option<SystemTime>) -> String {
+    at.map_or_else(|| "unknown".to_string(), rfc3339)
+}
+
+/// RFC 3339 in UTC with milliseconds, for logs.
+fn rfc3339(at: SystemTime) -> String {
+    let since_epoch = at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let seconds = since_epoch.as_secs() % 86_400;
+    format!(
+        "{}T{:02}:{:02}:{:02}.{:03}Z",
+        crate::standard::utc_date(at),
+        seconds / 3_600,
+        seconds / 60 % 60,
+        seconds % 60,
+        since_epoch.subsec_millis()
+    )
 }
 
 async fn lease_loop(inner: Arc<Inner>, session: SessionRef) {
@@ -2782,6 +2913,167 @@ mod tests {
             health_error("HEALTH_ENTRANCE_FAILED").code,
             ErrorCode::ConnectFailed
         );
+    }
+
+    /// A TUN core whose `get-traffic` answers `samples` in turn (upload
+    /// bytes, `measured_at`), the last one from then on.
+    fn scripted_traffic(
+        samples: Vec<(u64, Option<SystemTime>)>,
+    ) -> Arc<crate::core_ipc::tests::FakeCore> {
+        let calls = AtomicUsize::new(0);
+        crate::core_ipc::tests::FakeCore::new(move |path, _| {
+            assert_eq!(path, "/v1/get-traffic");
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            let (up, at) = samples[call.min(samples.len() - 1)];
+            (Duration::ZERO, Ok(traffic_json(up, at)))
+        })
+    }
+
+    fn traffic_json(up: u64, at: Option<SystemTime>) -> Value {
+        serde_json::json!({
+            "upload_bytes": up,
+            "download_bytes": 0,
+            "measured_at": at.map(rfc3339),
+        })
+    }
+
+    /// Now, to the millisecond (what the fakes' RFC 3339 dates keep).
+    fn whole_ms_now() -> SystemTime {
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        std::time::UNIX_EPOCH + Duration::from_millis(now.as_millis() as u64)
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[tokio::test]
+    async fn capture_check_waits_out_a_stale_first_sample() {
+        // Right after connect: the first reads return what the engine read
+        // before the check (or the previous run's counters), the same
+        // sample twice in a row; then it reads its runtime again.
+        let t0 = whole_ms_now();
+        let stale = Some(t0 - Duration::from_secs(10));
+        let core = scripted_traffic(vec![
+            (0, stale),
+            (0, stale),
+            (100, Some(t0 + ms(1))),
+            (100, Some(t0 + ms(1))),
+            (150, Some(t0 + ms(10))),
+        ]);
+        let before = capture_baseline(core.as_ref(), t0, "api").await.unwrap();
+        assert_eq!(before.total(), 100);
+        capture_verdict(core.as_ref(), before, t0 + ms(5), None, "api")
+            .await
+            .unwrap();
+        // Two reads of the stale sample, two of the fresh baseline, two of
+        // the sample read after the request.
+        assert_eq!(core.calls.lock().unwrap().len(), 6);
+    }
+
+    #[tokio::test]
+    async fn capture_check_fails_when_fresh_counters_do_not_grow() {
+        let t0 = whole_ms_now();
+        let core = scripted_traffic(vec![
+            (100, Some(t0 + ms(1))),
+            (100, Some(t0 + ms(1))),
+            (100, Some(t0 + ms(10))),
+            (100, Some(t0 + ms(10))),
+            (100, Some(t0 + ms(20))),
+        ]);
+        let before = capture_baseline(core.as_ref(), t0, "api").await.unwrap();
+        let info = capture_verdict(core.as_ref(), before, t0 + ms(5), None, "api")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (info.code, info.detail.as_str()),
+            (
+                ErrorCode::ConnectHealthCheckFailed,
+                "HEALTH_CAPTURE_PATH_FAILED"
+            )
+        );
+        assert!(is_path_cause(&info));
+        assert!(!is_traffic_stale(&info));
+    }
+
+    #[tokio::test]
+    async fn capture_check_reads_once_more_before_calling_a_leak() {
+        // The first sample dated after the request may have been read
+        // before its last bytes: the next one decides.
+        let t0 = whole_ms_now();
+        let core = scripted_traffic(vec![
+            (100, Some(t0 + ms(1))),
+            (100, Some(t0 + ms(1))),
+            (100, Some(t0 + ms(6))),
+            (100, Some(t0 + ms(6))),
+            (180, Some(t0 + ms(20))),
+        ]);
+        let before = capture_baseline(core.as_ref(), t0, "api").await.unwrap();
+        capture_verdict(core.as_ref(), before, t0 + ms(5), None, "api")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn capture_check_without_fresh_counters_is_stale_not_a_leak() {
+        let t0 = whole_ms_now();
+        let stale = Some(t0 - Duration::from_secs(10));
+
+        // Never read again after the check started.
+        let core = scripted_traffic(vec![(0, stale)]);
+        let info = capture_baseline(core.as_ref(), t0, "api")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (info.code, info.detail.as_str()),
+            (ErrorCode::ConnectFailed, "HEALTH_TRAFFIC_STALE: before")
+        );
+
+        // Not read again after the request.
+        let core = scripted_traffic(vec![(100, Some(t0 + ms(1)))]);
+        let before = capture_baseline(core.as_ref(), t0, "api").await.unwrap();
+        let info = capture_verdict(core.as_ref(), before, t0 + ms(5), None, "api")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (info.code, info.detail.as_str()),
+            (ErrorCode::ConnectFailed, "HEALTH_TRAFFIC_STALE: after")
+        );
+        // Neither a path failure nor a leak for the health loop; the
+        // connect's one repeat still covers it.
+        assert!(!is_path_cause(&info));
+        assert!(!info.detail.contains("HEALTH_CAPTURE_PATH_FAILED"));
+        assert!(is_traffic_stale(&info));
+
+        // An engine that has not read its runtime yet dates its zero
+        // counters with the time of each call: never the same sample twice.
+        let core = crate::core_ipc::tests::FakeCore::new(|_, _| {
+            (
+                Duration::ZERO,
+                Ok(traffic_json(0, Some(SystemTime::now() + ms(1)))),
+            )
+        });
+        let before = CoreTraffic {
+            upload_bytes: 0,
+            download_bytes: 0,
+            measured_at: Some(t0),
+        };
+        let info = capture_verdict(core.as_ref(), before, t0, None, "api")
+            .await
+            .unwrap_err();
+        assert_eq!(info.detail, "HEALTH_TRAFFIC_STALE: after");
+    }
+
+    #[test]
+    fn rfc3339_logs_utc_to_the_millisecond() {
+        let days = crate::logging::days_from_civil(2026, 10, 7) as u64;
+        let at = std::time::UNIX_EPOCH
+            + Duration::from_secs(days * 86_400 + 8 * 3_600 + 5 * 60 + 9)
+            + Duration::from_micros(42_900);
+        assert_eq!(rfc3339(at), "2026-10-07T08:05:09.042Z");
+        assert_eq!(measured(None), "unknown");
     }
 
     #[test]

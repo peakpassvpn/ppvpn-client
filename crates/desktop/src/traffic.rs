@@ -54,7 +54,10 @@ impl Client {
                     return;
                 }
                 let standard = match client.standard.transport() {
-                    Ok(transport) => core_ipc::get_traffic(transport.as_ref()).await.ok(),
+                    Ok(transport) => core_ipc::get_traffic(transport.as_ref())
+                        .await
+                        .ok()
+                        .map(|traffic| traffic.totals()),
                     Err(_) => None,
                 };
                 let enhanced = client.enhanced.traffic_totals().await;
