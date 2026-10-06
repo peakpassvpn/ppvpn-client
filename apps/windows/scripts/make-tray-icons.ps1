@@ -30,7 +30,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 if (-not $Source) { $Source = Join-Path $repo "apps\assets\icons\128x128@2x.png" }
 if (-not $OutDir) { $OutDir = Join-Path $repo "apps\windows\PPVPN.Windows\Assets\Tray" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
