@@ -31,14 +31,49 @@ public static class Formatting
 {
     static readonly string[] Months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+    static readonly string[] SizeUnits = ["KB", "MB", "GB", "TB"];
+
     /// <summary>
-    /// A <see cref="TrafficSample"/> rate. <c>UpBps</c>/<c>DownBps</c> are BYTES per second despite
-    /// the suffix. As the design: "8.6 MB/s" from 1 MiB/s up, else whole "KB/s" ("0 KB/s" floor).
+    /// A byte count (traffic, sizes) in DECIMAL units, as the web and store: 1 KB = 1000 B,
+    /// 1 MB = 10^6, 1 GB = 10^9, 1 TB = 10^12; labels KB/MB/GB/TB, never KiB-style. The unit is the
+    /// largest one the value reaches (KB at least: "0 KB" floor, no bytes). KB is whole; MB and up
+    /// have one decimal below 100 ("8.6 MB") and are whole from 100 ("400 GB"). Rounding is half up
+    /// on the exact integer, and a value that rounds to 1000 moves to the next unit ("1.0 MB").
+    /// Culture-independent.
     /// </summary>
-    public static string Rate(ulong bytesPerSecond) =>
-        bytesPerSecond >= 1_048_576
-            ? (bytesPerSecond / 1_048_576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB/s"
-            : Math.Round(bytesPerSecond / 1024.0, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture) + " KB/s";
+    public static string Bytes(ulong bytes)
+    {
+        ulong divisor = 1000;
+        var unit = 0;
+        while (unit < SizeUnits.Length - 1 && bytes >= divisor * 1000)
+        {
+            divisor *= 1000;
+            unit++;
+        }
+        while (true)
+        {
+            if (unit > 0)
+            {
+                var tenths = RoundedDivide(bytes, divisor / 10);
+                if (tenths < 1000) return FormattableString.Invariant($"{tenths / 10}.{tenths % 10} {SizeUnits[unit]}");
+            }
+            var whole = RoundedDivide(bytes, divisor);
+            if (whole < 1000 || unit == SizeUnits.Length - 1)
+                return whole.ToString(CultureInfo.InvariantCulture) + " " + SizeUnits[unit];
+            divisor *= 1000;
+            unit++;
+        }
+    }
+
+    /// <summary><paramref name="value"/> / <paramref name="divisor"/>, rounded half up, without overflow.</summary>
+    static ulong RoundedDivide(ulong value, ulong divisor) =>
+        value / divisor + (2 * (value % divisor) >= divisor ? 1UL : 0UL);
+
+    /// <summary>
+    /// A <see cref="TrafficSample"/> rate: <see cref="Bytes"/> + "/s" ("22 KB/s", "8.6 MB/s",
+    /// "0 KB/s" floor). <c>UpBps</c>/<c>DownBps</c> are BYTES per second despite the suffix.
+    /// </summary>
+    public static string Rate(ulong bytesPerSecond) => Bytes(bytesPerSecond) + "/s";
 
     /// <summary>RFC 3339 → an instant; null when missing or unparseable.</summary>
     public static DateTimeOffset? ParseRfc3339(string? value) =>

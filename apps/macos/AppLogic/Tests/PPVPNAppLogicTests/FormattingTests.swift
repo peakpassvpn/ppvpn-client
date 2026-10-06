@@ -77,6 +77,30 @@ final class FormattingTests: LogicTestCase {
         }
     }
 
+    /// Decimal units (1 KB = 1000 B), as the web and store.
+    func testByteCountsAreDecimal() {
+        let cases: [(UInt64, String)] = [
+            (0, "0 KB"), (499, "0 KB"), (500, "1 KB"), (999, "1 KB"), (1_000, "1 KB"), (1_024, "1 KB"),
+            (22_000, "22 KB"), (999_499, "999 KB"), (999_999, "1.0 MB"), (1_000_000, "1.0 MB"),
+            (1_048_576, "1.0 MB"), (8_649_999, "8.6 MB"), (8_650_000, "8.7 MB"), (99_949_999, "99.9 MB"),
+            (99_950_000, "100 MB"), (999_499_999, "999 MB"), (999_500_000, "1.0 GB"),
+            (1_000_000_000, "1.0 GB"), (400_000_000_000, "400 GB"), (1_000_000_000_000, "1.0 TB"),
+            (1_500_000_000_000_000, "1500 TB"), (.max, "18446744 TB"),
+        ]
+        for (bytes, expected) in cases {
+            XCTAssertEqual(bytes.byteCount, expected, "\(bytes)")
+        }
+    }
+
+    func testByteRatesAreDecimal() {
+        XCTAssertEqual(UInt64(0).byteRate, "0 KB/s")
+        XCTAssertEqual(UInt64(512).byteRate, "1 KB/s")
+        XCTAssertEqual(UInt64(22_000).byteRate, "22 KB/s")
+        XCTAssertEqual(UInt64(1_000_000).byteRate, "1.0 MB/s")
+        XCTAssertEqual(UInt64(8_600_000).byteRate, "8.6 MB/s")
+        XCTAssertEqual(UInt64(125_000_000).byteRate, "125 MB/s")
+    }
+
     func testFlagsAndNames() {
         XCTAssertEqual("hk".flagEmoji, "🇭🇰")
         let hk = node("hk-1", "香港 01", replicas: ["B", "A"])

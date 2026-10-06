@@ -61,14 +61,43 @@ public sealed class FormattingTests
         });
     }
 
+    // Decimal units (1 KB = 1000 B), as the web and store.
+    [Theory]
+    [InlineData(0UL, "0 KB")]
+    [InlineData(499UL, "0 KB")]
+    [InlineData(500UL, "1 KB")]
+    [InlineData(999UL, "1 KB")]
+    [InlineData(1_000UL, "1 KB")]
+    [InlineData(1_024UL, "1 KB")]
+    [InlineData(22_000UL, "22 KB")]
+    [InlineData(999_499UL, "999 KB")]
+    [InlineData(999_999UL, "1.0 MB")]
+    [InlineData(1_000_000UL, "1.0 MB")]
+    [InlineData(1_048_576UL, "1.0 MB")]
+    [InlineData(8_649_999UL, "8.6 MB")]
+    [InlineData(8_650_000UL, "8.7 MB")]
+    [InlineData(99_949_999UL, "99.9 MB")]
+    [InlineData(99_950_000UL, "100 MB")]
+    [InlineData(999_499_999UL, "999 MB")]
+    [InlineData(999_500_000UL, "1.0 GB")]
+    [InlineData(1_000_000_000UL, "1.0 GB")]
+    [InlineData(400_000_000_000UL, "400 GB")]
+    [InlineData(1_000_000_000_000UL, "1.0 TB")]
+    [InlineData(1_500_000_000_000_000UL, "1500 TB")]
+    [InlineData(ulong.MaxValue, "18446744 TB")]
+    public void BytesAreDecimal(ulong bytes, string expected) =>
+        Assert.Equal(expected, Formatting.Bytes(bytes));
+
     [Theory]
     [InlineData(0UL, "0 KB/s")]
     [InlineData(512UL, "1 KB/s")]
     [InlineData(1536UL, "2 KB/s")]
-    [InlineData(307_200UL, "300 KB/s")]
-    [InlineData(1_048_576UL, "1.0 MB/s")]
-    [InlineData(9_017_753UL, "8.6 MB/s")]
-    public void RatesAreBytesPerSecond(ulong bytesPerSecond, string expected) =>
+    [InlineData(22_000UL, "22 KB/s")]
+    [InlineData(307_200UL, "307 KB/s")]
+    [InlineData(1_000_000UL, "1.0 MB/s")]
+    [InlineData(8_600_000UL, "8.6 MB/s")]
+    [InlineData(125_000_000UL, "125 MB/s")]
+    public void RatesAreDecimalBytesPerSecond(ulong bytesPerSecond, string expected) =>
         Assert.Equal(expected, Formatting.Rate(bytesPerSecond));
 
     [Fact]
