@@ -1326,6 +1326,39 @@ jobs:
         run: |
           echo "The update site was uploaded: ${SITE_BASE%/}/desktop/channels/stable.json" >>"$GITHUB_STEP_SUMMARY"
 
+  # The rehearsal's check of the bucket, after the approval and with its
+  # keys: read only (upload-site.sh --check lists the bucket, compares the
+  # immutable files as an upload would and lists what an upload would
+  # overwrite). The keys' write access is first used by a real release.
+  site-check:
+    name: site-check
+    if: ${{ !cancelled() && inputs.rehearsal && needs.approve.result == 'success' && needs.site.result == 'success' }}
+    needs: [approve, site]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: desktop-release-stable
+    env:
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.PPVPN_PKG_R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.PPVPN_PKG_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.PPVPN_PKG_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/desktop/ci
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: site
+          path: site
+      - name: Check against R2 (read only)
+        run: tools/desktop/ci/upload-site.sh --check site | tee check.txt
+      - name: Summary
+        run: |
+          { echo '```'; grep -v '^[0-9]  ' check.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+
   # ---- On a merge only: the build caches ci.yml restores. One job per
   # ci.yml cache key (shared-key), building what the ci.yml jobs on that key
   # build, so that a pull request after a dependency change does not build

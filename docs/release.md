@@ -69,8 +69,10 @@ max-age=31536000, immutable`，其余 `no-cache`；bucket 里已有、内容不�
 `github-pages` 环境。
 
 演练（`rehearsal`，在 main 上的 stable 运行）照常构建、签名、出草稿 Release，按本次的文件构建站点，作为
-artifact `site` 保留三天，并在日志里打出上传的顺序和缓存设置（`upload-site.sh --plan`）；不读 R2 的密钥，
-不上传任何东西。
+artifact `site` 保留三天，并在日志里打出上传的顺序和缓存设置（`upload-site.sh --plan`）。审批之后，
+`site-check` 在 `desktop-release-stable` 里带着 R2 的密钥只读地核对一遍（`upload-site.sh --check`）：
+列出桶里 `linux/` 和 `desktop/` 下的对象，像上传那样比对不可变文件（内容不同就失败），并列出真正上传时
+会覆盖的现有文件，结果写在运行摘要里。演练不上传任何东西；密钥的写权限在第一次正式发布时才用到。
 
 ## v0.5.21 的发布文件
 
