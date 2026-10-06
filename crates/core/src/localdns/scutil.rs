@@ -82,13 +82,25 @@ pub fn parse_shows(output: &str) -> Vec<Option<Dict>> {
 /// belong to `iface`: by the entry's `__IF_INDEX__` when configd recorded
 /// it, else when `iface` is the primary interface (IPv4's, or IPv6's on an
 /// IPv6-only network). None otherwise: another VPN's service is primary
-/// (its utun, with its own DNS), or configd has not caught up with a switch.
+/// (its utun, with its own DNS), configd has not caught up with a switch, or
+/// the entry is a supplemental resolver. While sail's utun is open, configd
+/// shows the tunnel's supplemental resolver (matching every domain) as the
+/// global DNS, with no `__IF_INDEX__`, although `iface` stays primary; its
+/// servers are the tunnel's, so the scoped resolver of `iface` is read
+/// instead.
 pub fn global_servers(output: &str, iface: &str, index: u32) -> Option<Vec<Server>> {
     let shows = parse_shows(output);
     if shows.len() != 3 {
         return None;
     }
     let dns = shows[2].as_ref()?;
+    let supplemental = dns
+        .values
+        .get("__CONFIGURATION_ID__")
+        .is_some_and(|id| id.starts_with("Supplemental"));
+    if supplemental {
+        return None;
+    }
     match dns.values.get("__IF_INDEX__") {
         Some(owner) if !owner.is_empty() => {
             if *owner != index.to_string() {
@@ -226,6 +238,7 @@ mod tests {
     const V6ONLY: &str = include_str!("testdata/scutil-global-v6only.txt");
     const PENDING: &str = include_str!("testdata/scutil-global-pending.txt");
     const OTHER_VPN: &str = include_str!("testdata/scutil-global-othervpn.txt");
+    const TUN: &str = include_str!("testdata/scutil-global-tun.txt");
 
     fn en0() -> Interface {
         Interface {
@@ -263,6 +276,18 @@ mod tests {
         assert!(
             global_servers(&behind, "en0", 6).is_none(),
             "__IF_INDEX__ 29 is not en0"
+        );
+    }
+
+    // While sail's utun is open, the global DNS is the tunnel's supplemental
+    // resolver although en0 stays primary: not en0's, so discover() reads
+    // en0's scoped resolver (seen on macOS with sail 0.18).
+    #[test]
+    fn the_tunnels_supplemental_resolver_is_not_the_default_interfaces() {
+        assert!(global_servers(TUN, "en0", 6).is_none());
+        assert_eq!(
+            join(&scoped_servers(DNS, 6)),
+            "192.168.50.3:53,[fe80::1%en0]:53"
         );
     }
 
