@@ -1305,3 +1305,194 @@ async fn a_refused_socks5_user_reads_the_failure_then_a_clean_close() {
     }
     runtime.stop().await.unwrap();
 }
+
+/// A self-signed certificate for `localhost` and its key, as the PEM lines
+/// sail takes inline (`tls.certificate`, `tls.key`).
+fn self_signed() -> (Vec<String>, Vec<String>) {
+    use btls::asn1::Asn1Time;
+    use btls::bn::BigNum;
+    use btls::ec::{EcGroup, EcKey};
+    use btls::hash::MessageDigest;
+    use btls::nid::Nid;
+    use btls::pkey::PKey;
+    use btls::x509::extension::SubjectAlternativeName;
+    use btls::x509::{X509NameBuilder, X509};
+    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+    let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+    let mut name = X509NameBuilder::new().unwrap();
+    name.append_entry_by_text("CN", "localhost").unwrap();
+    let name = name.build();
+    let mut builder = X509::builder().unwrap();
+    builder.set_version(2).unwrap();
+    let serial = BigNum::from_u32(1).unwrap().to_asn1_integer().unwrap();
+    builder.set_serial_number(&serial).unwrap();
+    builder.set_subject_name(&name).unwrap();
+    builder.set_issuer_name(&name).unwrap();
+    builder.set_pubkey(&key).unwrap();
+    builder
+        .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+        .unwrap();
+    builder
+        .set_not_after(&Asn1Time::days_from_now(2).unwrap())
+        .unwrap();
+    let san = SubjectAlternativeName::new()
+        .dns("localhost")
+        .build(&builder.x509v3_context(None, None))
+        .unwrap();
+    builder.append_extension(&san).unwrap();
+    builder.sign(&key, MessageDigest::sha256()).unwrap();
+    let lines = |pem: Vec<u8>| -> Vec<String> {
+        String::from_utf8(pem)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+    (
+        lines(builder.build().to_pem().unwrap()),
+        lines(key.private_key_to_pem_pkcs8().unwrap()),
+    )
+}
+
+/// Starts `runtime` on a port `config` names, another port while the one
+/// taken is in use by then (free_port lets it go before sail binds it).
+async fn start_on_a_free_port(runtime: &SailRuntime, config: impl Fn(u16) -> String) -> u16 {
+    for _ in 0..5 {
+        let port = free_port();
+        match runtime.start(&config(port)).await {
+            Ok(()) => return port,
+            Err(e) if e.message.contains("Address already in use") => continue,
+            Err(e) => panic!("start: {e:?}"),
+        }
+    }
+    panic!("no free port in five tries")
+}
+
+/// A server that writes to whoever connects, as fast as they take it.
+async fn source() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let chunk = vec![b'x'; 16 << 10];
+                while stream.write_all(&chunk).await.is_ok() {}
+            });
+        }
+    });
+    addr
+}
+
+/// A slow link in front of `to`: each connection is passed on, the way back
+/// (`to` to the client) at `bytes_per_second`. What `to` sends faster waits
+/// in its own socket, as it waits on a slow link in front of a node.
+async fn slow_link(to: SocketAddr, bytes_per_second: usize) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let Ok(upstream) = TcpStream::connect(to).await else {
+                continue;
+            };
+            let (mut client_read, mut client_write) = client.into_split();
+            let (mut upstream_read, mut upstream_write) = upstream.into_split();
+            tokio::spawn(async move {
+                let _ = tokio::io::copy(&mut client_read, &mut upstream_write).await;
+            });
+            tokio::spawn(async move {
+                let tick = Duration::from_millis(50);
+                let mut buf = vec![0u8; bytes_per_second / 20];
+                loop {
+                    match upstream_read.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => {
+                            if client_write.write_all(&buf[..n]).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    tokio::time::sleep(tick).await;
+                }
+            });
+        }
+    });
+    addr
+}
+
+/// #314: on a slow link, a download the client cuts short leaves the node
+/// still sending, behind it on the session. The next connection must not
+/// take that session: there its SYNACK waits behind the backlog, and the
+/// AnyTLS client closes a reused session that answers in no SYNACK_TIMEOUT
+/// (3 s), and the connection with it, nothing received (sail 0.18.1, 6c32ebae:
+/// such a session is retired, and a stuck stream opened again on a new one).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_after_a_download_cut_short_on_a_slow_link_goes_through() {
+    let (source, echo) = (source().await, echo().await);
+    let secret = password();
+    let (certificate, key) = self_signed();
+
+    // The node: AnyTLS in, direct out.
+    let node = SailRuntime::new(options("anytls-node")).unwrap();
+    let node_port = start_on_a_free_port(&node, |port| {
+        serde_json::json!({
+            "log": { "level": "warn" },
+            "inbounds": [{ "type": "anytls", "tag": "anytls-in", "listen": "127.0.0.1",
+                           "listen_port": port, "users": [{ "name": "u", "password": secret }],
+                           "tls": { "enabled": true, "server_name": "localhost",
+                                    "certificate": certificate, "key": key } }],
+            "outbounds": [{ "type": "direct", "tag": "direct" }],
+            "route": { "final": "direct" }
+        })
+        .to_string()
+    })
+    .await;
+    // 32 KiB/s back from the node: a slow link's backlog drains for seconds.
+    let link = slow_link(([127, 0, 0, 1], node_port).into(), 32 << 10).await;
+
+    // The client: SOCKS5 in, AnyTLS out through the slow link.
+    let client = SailRuntime::new(options("anytls-client")).unwrap();
+    let client_port = start_on_a_free_port(&client, |port| {
+        serde_json::json!({
+            "log": { "level": "warn" },
+            "inbounds": [{ "type": "mixed", "tag": "local", "listen": "127.0.0.1",
+                           "listen_port": port }],
+            "outbounds": [{ "type": "anytls", "tag": "node", "server": "127.0.0.1",
+                            "server_port": link.port(), "password": secret,
+                            "tls": { "enabled": true, "server_name": "localhost", "insecure": true } }],
+            "route": { "final": "node" }
+        })
+        .to_string()
+    })
+    .await;
+
+    // A download, cut once it flows: the node goes on sending into the link.
+    let mut download = socks_open(client_port, source)
+        .await
+        .expect("the download opens");
+    let mut buf = vec![0u8; 64 << 10];
+    let mut got = 0;
+    tokio::time::timeout(WAIT, async {
+        while got < 32 << 10 {
+            got += download.read(&mut buf).await.unwrap();
+        }
+    })
+    .await
+    .expect("the download flows");
+    drop(download);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // The next connection: answered, past the 3 s a stuck session gets.
+    let mut next = socks_open(client_port, echo)
+        .await
+        .expect("the next connection opens");
+    next.write_all(b"after the cut").await.unwrap();
+    let mut back = [0u8; 13];
+    let read = tokio::time::timeout(Duration::from_secs(8), next.read_exact(&mut back)).await;
+    assert!(
+        matches!(read, Ok(Ok(_))) && &back == b"after the cut",
+        "the connection after the cut is answered: {read:?}"
+    );
+
+    client.stop().await.unwrap();
+    node.stop().await.unwrap();
+}
