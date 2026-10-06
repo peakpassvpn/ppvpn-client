@@ -2,7 +2,7 @@
 
 `ppvpn-core` 是PPVPN第一方网络核心。后端只下发版本化、平台无关的 Proxy Profile；核心负责严格校验、转换为固定版本的内部运行配置，并统一管理路由判定、运行时、探测、共享端口认证本地代理（用户名选节点）、流量统计、桌面 IPC 和平台绑定。
 
-引擎是 Rust 库 `ppvpn-core`（`crates/core`，内嵌 Sail），由 Desktop 和 CLI 在进程内承载，见 [#214](https://github.com/peakpassvpn/ppvpn-core/issues/214)。原来的 Go 内核已从 main 移除，最后一版是 v0.5.21，它的 tag 和 Release 文件保留；切换前 Desktop 仍 vendor 这个版本。接口版本：Core API `v1`、Profile Schema `1`。支持 Shadowsocks 2022（含多用户/EIH）、VLESS + REALITY 和 AnyTLS。
+引擎是 Rust 库 `ppvpn-core`（`crates/core`，内嵌 Sail），由 Desktop 和 CLI 在进程内承载，见 [#214](https://github.com/peakpassvpn/ppvpn-client/issues/214)。原来的 Go 内核已从 main 移除，最后一版是 v0.5.21，它的 tag 和 Release 文件保留；切换前 Desktop 仍 vendor 这个版本。接口版本：Core API `v1`、Profile Schema `1`。支持 Shadowsocks 2022（含多用户/EIH）、VLESS + REALITY 和 AnyTLS。
 
 ## 文档导航
 

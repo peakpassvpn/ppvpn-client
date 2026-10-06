@@ -6,7 +6,7 @@ for every command.
 
 ## Download
 
-Each release (tag `vX.Y.Z`) of <https://github.com/peakpassvpn/ppvpn-core/releases> carries:
+Each release (tag `vX.Y.Z`) of <https://github.com/peakpassvpn/ppvpn-client/releases> carries:
 
 | File | For |
 |---|---|
@@ -28,8 +28,8 @@ Every file in a release also has build provenance: GitHub's attestation that the
 workflow built it from the release's commit. With the GitHub CLI:
 
 ```sh
-gh attestation verify ppvpn-cli-<version>-<platform>.tar.gz --repo peakpassvpn/ppvpn-core \
-  --signer-workflow peakpassvpn/ppvpn-core/.github/workflows/release.yml
+gh attestation verify ppvpn-cli-<version>-<platform>.tar.gz --repo peakpassvpn/ppvpn-client \
+  --signer-workflow peakpassvpn/ppvpn-client/.github/workflows/release.yml
 ```
 
 ## Install

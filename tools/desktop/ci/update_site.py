@@ -50,7 +50,7 @@ PLATFORMS = ("macos-arm64", "macos-x64", "windows-x64", "linux-x64-deb", "linux-
 # Updated through Sparkle (macOS) and WinSparkle: an EdDSA signature and a feed each.
 SPARKLE = ("macos-arm64", "macos-x64", "windows-x64")
 CHANNELS = ("dev", "stable")
-REPOSITORY = "peakpassvpn/ppvpn-core"
+REPOSITORY = "peakpassvpn/ppvpn-client"
 HOMEPAGE = "https://www.peakpassvpn.com"
 FEED_TITLES = {"macos-arm64": "PPVPN for macOS", "macos-x64": "PPVPN for macOS", "windows-x64": "PPVPN for Windows"}
 

@@ -20,7 +20,7 @@ FILES = {
 }
 MIN_OS = {"macos-arm64": "13.0", "macos-x64": "13.0", "windows-x64": "10.0.17763",
           "linux-x64-deb": "ubuntu-22.04", "linux-x64-rpm": "fedora-36"}
-DOWNLOAD = "https://github.com/peakpassvpn/ppvpn-core/releases/download"
+DOWNLOAD = "https://github.com/peakpassvpn/ppvpn-client/releases/download"
 SITE = "https://updates.example.com"
 
 

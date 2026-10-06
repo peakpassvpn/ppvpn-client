@@ -86,7 +86,7 @@ tools/perf/report.py compare rust.json --baseline go.json
 
 ```sh
 # Go 0.5.21 as released, checked against the release's SHA256SUMS.
-curl -fsSL -o ppvpn-core-0.5.21 https://github.com/peakpassvpn/ppvpn-core/releases/download/v0.5.21/ppvpn-core-linux-amd64
+curl -fsSL -o ppvpn-core-0.5.21 https://github.com/peakpassvpn/ppvpn-client/releases/download/v0.5.21/ppvpn-core-linux-amd64
 echo "04e00bbb526d85350814413432acf2bc6bd5efe2abc00de56cfa2da05da7896a  ppvpn-core-0.5.21" | sha256sum -c - && chmod +x ppvpn-core-0.5.21
 C="--tier c --rounds 3 --engine go=./ppvpn-core-0.5.21 --engine rust=target/release/ppvpn-core-lab --fakenode $FAKENODE --loadgen $LOADGEN"
 sudo -E tools/perf/measure.py $C --engine-cpus 2,3 --load-cpus 4,5 --node-cpus 6,7 --label job=<id> | tee netem.log

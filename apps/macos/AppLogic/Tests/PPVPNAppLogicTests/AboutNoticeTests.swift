@@ -4,7 +4,7 @@ import XCTest
 
 final class AboutNoticeTests: LogicTestCase {
     func testLinksOpenTheSourceThenTheLicense() {
-        XCTAssertEqual(AboutNotice.sourceURL.absoluteString, "https://github.com/peakpassvpn/ppvpn-core")
+        XCTAssertEqual(AboutNotice.sourceURL.absoluteString, "https://github.com/peakpassvpn/ppvpn-client")
         XCTAssertEqual(AboutNotice.licenseURL.absoluteString, "https://www.gnu.org/licenses/gpl-3.0.html")
         XCTAssertEqual(AboutNotice.links.map(\.url), [AboutNotice.sourceURL, AboutNotice.licenseURL])
         XCTAssertEqual(AboutNotice.links.map(\.title), [tr("aboutSource"), tr("aboutViewLicense")])

@@ -27,7 +27,7 @@ ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 SING_BOX=v1.13.12
 cd "$ROOT"
 case $(uname -m) in x86_64) goarch=amd64 ;; aarch64|arm64) goarch=arm64 ;; *) echo "ci-build: $(uname -m)?" >&2; exit 1 ;; esac
-rel=https://github.com/peakpassvpn/ppvpn-core/releases/download/v0.5.21
+rel=https://github.com/peakpassvpn/ppvpn-client/releases/download/v0.5.21
 curl -fsSL --retry 3 -o "$OUT/ppvpn-core" "$rel/ppvpn-core-linux-$goarch"
 (cd "$OUT" && curl -fsSL --retry 3 "$rel/SHA256SUMS" | awk -v f="ppvpn-core-linux-$goarch" '$2 == f || $2 == "*" f {print $1 "  ppvpn-core"}' | sha256sum -c -)
 chmod +x "$OUT/ppvpn-core"

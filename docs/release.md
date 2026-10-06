@@ -76,7 +76,7 @@ artifact `site` 保留三天，并在日志里打出上传的顺序和缓存设�
 
 ## v0.5.21 的发布文件
 
-v0.5.21 的文件由当时的 `release.yml` 在 tag 上构建，带 GitHub artifact attestation。下载后校验：
+v0.5.21 的文件由当时的 `release.yml` 在 tag 上构建，带 GitHub artifact attestation。仓库当时叫 `ppvpn-core`（后改名 `ppvpn-client`），attestation 记的是旧名，所以校验时仍写旧名。下载后校验：
 
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS   # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
