@@ -51,3 +51,17 @@ async fn the_first_read_after_a_start_is_measured_by_it() {
     assert_eq!((traffic.upload_bytes, traffic.download_bytes), (3, 4));
     assert!(traffic.measured_at >= before, "{traffic:?}");
 }
+
+/// Before anything was read, the traffic is dated the Unix epoch: a host
+/// waiting for a figure measured after some moment keeps waiting, it does
+/// not take an empty one for fresh.
+#[tokio::test]
+async fn traffic_never_read_is_dated_the_epoch() {
+    let (engine, _fake) = engine();
+    let traffic = engine.traffic();
+    assert_eq!((traffic.upload_bytes, traffic.download_bytes), (0, 0));
+    assert_eq!(
+        traffic.measured_at,
+        chrono::DateTime::<chrono::Utc>::UNIX_EPOCH
+    );
+}

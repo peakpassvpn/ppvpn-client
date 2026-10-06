@@ -377,14 +377,16 @@ impl Engine {
     }
 
     /// Cumulative bytes as last read from the runtime (every second while
-    /// running); `measured_at` is when.
+    /// running); `measured_at` is when. Never read yet: zero bytes at the
+    /// Unix epoch, older than any moment a host compares it with, never a
+    /// figure that looks fresh.
     pub fn traffic(&self) -> Traffic {
         self.inner.host_read();
         let live = self.inner.live();
         Traffic {
             upload_bytes: live.traffic.upload_bytes,
             download_bytes: live.traffic.download_bytes,
-            measured_at: live.traffic_at.unwrap_or_else(now),
+            measured_at: live.traffic_at.unwrap_or(DateTime::<Utc>::UNIX_EPOCH),
         }
     }
 
