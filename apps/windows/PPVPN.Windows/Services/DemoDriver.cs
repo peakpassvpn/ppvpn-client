@@ -89,9 +89,9 @@ static class DemoDriver
             }
             if (options.DemoCopyProxy)
             {
-                for (var i = 0; i < 60 && vm.ShownProxy is null; i++) await Task.Delay(500);
-                vm.ShownProxy?.CopyHttpCommand.Execute(null);
-                App.Log?.Info($"demo: proxy copied ({vm.ShownProxy?.HttpDisplay ?? "none"})");
+                for (var i = 0; i < 60 && vm.RoutedProxy is null; i++) await Task.Delay(500);
+                vm.RoutedProxy?.CopyHttpCommand.Execute(null);
+                App.Log?.Info($"demo: proxy copied ({vm.RoutedProxy?.HttpDisplay ?? "none"})");
             }
             if (options.DemoSwitchAfter is { } switchAfter)
             {

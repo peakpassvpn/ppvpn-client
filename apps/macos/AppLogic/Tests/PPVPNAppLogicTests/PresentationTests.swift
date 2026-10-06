@@ -141,34 +141,30 @@ final class PresentationTests: LogicTestCase {
     private let nodeProxy = LocalProxy(nodeId: "hk-1", host: "127.0.0.1", port: 17890, username: "u-hk1", password: "p")
     private let routed = LocalProxy(nodeId: "", host: "127.0.0.1", port: 17890, username: "u", password: "p")
 
-    func testRoutedUserIsShownByDefault() async {
+    func testTheCardShowsTheRoutedUser() async {
         backend.proxyList = [nodeProxy]
         backend.routedProxy = routed
         backend.push(.fixture(standard: .ready(revision: "r1")))
         await settle { self.state.routedProxy != nil }
-        XCTAssertTrue(state.offersProxyScope)
-        XCTAssertEqual(state.proxyScope, .routed)
         XCTAssertEqual(state.shownProxy, routed)
         XCTAssertEqual(state.proxyNote, tr("proxyNoteRouted"))
+        XCTAssertNil(state.localProxyUnavailableText)
         XCTAssertEqual(routed.socksURL, "socks5h://u:p@127.0.0.1:17890")
         XCTAssertEqual(routed.socksAddress, "socks5h://127.0.0.1:17890")
         XCTAssertEqual(routed.httpURL, "http://u:p@127.0.0.1:17890")
-
-        state.proxyScope = .node
-        XCTAssertEqual(state.shownProxy, nodeProxy)
-        XCTAssertEqual(state.proxyNote, tr("proxyNote"))
+        // The node's own user stays on the Nodes page, for every node.
+        XCTAssertEqual(state.proxies["hk-1"], nodeProxy)
         XCTAssertEqual(nodeProxy.socksURL, "socks5://u-hk1:p@127.0.0.1:17890")
     }
 
-    func testWithoutRoutedUserTheNodeUserIsShown() async {
+    func testWithoutRoutedUserTheCardSaysUnavailable() async {
         backend.proxyList = [nodeProxy]
         backend.routedFailure = ClientError.StandardNotReady
         backend.push(.fixture(standard: .ready(revision: "r1")))
-        await settle { self.state.currentProxy != nil }
-        XCTAssertFalse(state.offersProxyScope)
+        await settle { !self.state.proxies.isEmpty }
         XCTAssertNil(state.routedProxy)
-        XCTAssertEqual(state.shownProxy, nodeProxy)
-        XCTAssertEqual(state.proxyNote, tr("proxyNote"))
+        XCTAssertNil(state.shownProxy)
+        XCTAssertEqual(state.localProxyUnavailableText, tr("x_proxyUnavailable"))
     }
 
     func testFailedStandardCoreHidesTheRoutedUser() async {
@@ -177,22 +173,17 @@ final class PresentationTests: LogicTestCase {
         backend.push(.fixture(standard: .ready(revision: "r1")))
         await settle { self.state.routedProxy != nil }
         backend.push(.fixture(standard: .failed(error: ClientErrorInfo(code: .standardCoreFailed, detail: "bind"))))
-        XCTAssertFalse(state.offersProxyScope)
         XCTAssertNil(state.shownProxy)
-    }
-
-    func testProxyScopeTitles() {
-        XCTAssertEqual(LocalProxyScope.allCases.map(\.title), [tr("proxyRouted"), tr("proxyNode")])
-        XCTAssertEqual(LocalProxyScope.allCases.map(\.detail), [tr("proxyRoutedD"), tr("proxyNodeD")])
     }
 
     // MARK: Failed standard core
 
     func testFailedStandardCoreShowsTheLocalProxyUnavailable() async {
         let failure = ClientErrorInfo(code: .standardCoreFailed, detail: "bind")
-        backend.proxyList = [LocalProxy(nodeId: "hk-1", host: "127.0.0.1", port: 17890, username: "u", password: "p")]
+        backend.proxyList = [LocalProxy(nodeId: "hk-1", host: "127.0.0.1", port: 17890, username: "u-hk1", password: "p")]
+        backend.routedProxy = LocalProxy(nodeId: "", host: "127.0.0.1", port: 17890, username: "u", password: "p")
         backend.push(.fixture(standard: .ready(revision: "r1")))
-        await settle { self.state.currentProxy != nil }
+        await settle { self.state.shownProxy != nil }
         XCTAssertNil(state.localProxyUnavailableText)
 
         for mode in [ConnectionMode.enhanced, .compatible] {
@@ -205,7 +196,7 @@ final class PresentationTests: LogicTestCase {
             XCTAssertEqual(notice?.actionTitle, tr("retry"))
             XCTAssertEqual(notice?.action, .retryLocalProxy)
         }
-        XCTAssertNil(state.currentProxy)
+        XCTAssertNil(state.shownProxy)
         XCTAssertEqual(state.localProxyUnavailableText, tr("proxyFailed", ["reason": failure.message]))
 
         backend.push(.fixture(standard: .ready(revision: "r1")))

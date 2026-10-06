@@ -48,21 +48,6 @@ public sealed record ConnectionNotice(
     string? SecondaryActionText = null,
     IAsyncRelayCommand? SecondaryAction = null);
 
-/// <summary>Which user of the shared local proxy the overview card shows and copies.</summary>
-public enum LocalProxyScope
-{
-    /// <summary>The routed user: Profile rules (direct where they say so), then the selected node.</summary>
-    Routed,
-    /// <summary>The current node's user: everything through that node.</summary>
-    Node,
-}
-
-/// <summary>An option of the local-proxy user picker (<c>proxyRouted</c> / <c>proxyNode</c>).</summary>
-public sealed record LocalProxyScopeOption(LocalProxyScope Scope, string Title, string Description)
-{
-    public override string ToString() => Title;
-}
-
 public sealed record RoutingModeOption(RoutingMode Mode, string Title, string Description)
 {
     public override string ToString() => Title;
@@ -141,55 +126,25 @@ public sealed partial class MainViewModel
     /// <summary>Latency of the current line ("38 ms" / "—") for the tray header and the title detail.</summary>
     [ObservableProperty] string currentNodeLatencyText = "—";
 
-    /// <summary>Local proxy of the current node (overview ⑤); null while the standard core is not ready or failed.</summary>
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasCurrentNodeProxy), nameof(ShownProxy), nameof(HasShownProxy), nameof(ProxyNote))] ProxyInfo? currentNodeProxy;
+    /// <summary>
+    /// Local proxy of the current node; null while the standard core is not ready or failed. The
+    /// overview card shows the routed user (<see cref="RoutedProxy"/>); a node's own user is on the
+    /// Nodes page.
+    /// </summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasCurrentNodeProxy))] ProxyInfo? currentNodeProxy;
     public bool HasCurrentNodeProxy => CurrentNodeProxy is not null;
 
     /// <summary>
-    /// The routed user of the same port (follows the routing rules and mode); null while the standard
-    /// core is not ready, failed, or predates it (0.5.12).
+    /// What the overview's local proxy card (⑤) shows and copies: the routed user of the shared port
+    /// (Profile rules, then the selected node; follows the rules / global mode). Its SOCKS URLs use
+    /// socks5h:// (SOCKS5 by IP misses domain rules). Null while the standard core is not ready,
+    /// failed, or serves no routed user.
     /// </summary>
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasRoutedProxy), nameof(ShownProxy), nameof(HasShownProxy), nameof(ProxyNote))] ProxyInfo? routedProxy;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasRoutedProxy))] ProxyInfo? routedProxy;
     public bool HasRoutedProxy => RoutedProxy is not null;
 
-    IReadOnlyList<LocalProxyScopeOption>? _proxyScopes;
-    /// <summary>The user picker of the local proxy card: follow the rules (default), or this node only.</summary>
-    public IReadOnlyList<LocalProxyScopeOption> ProxyScopes => _proxyScopes ??=
-    [
-        new(LocalProxyScope.Routed, _strings.Get("proxyRouted"), _strings.Get("proxyRoutedD")),
-        new(LocalProxyScope.Node, _strings.Get("proxyNode"), _strings.Get("proxyNodeD")),
-    ];
-
-    LocalProxyScopeOption? _selectedProxyScope;
-    /// <summary>
-    /// The picker's value, two-way. A null written back by a view, or the same value, is ignored
-    /// without a change notification: re-raising made WinUI's ComboBox write back again (stack
-    /// overflow).
-    /// </summary>
-    public LocalProxyScopeOption SelectedProxyScope
-    {
-        get => _selectedProxyScope ??= ProxyScopes[0];
-        set
-        {
-            if (value is null || value == SelectedProxyScope) return;
-            _selectedProxyScope = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(ShownProxy));
-            OnPropertyChanged(nameof(HasShownProxy));
-            OnPropertyChanged(nameof(ProxyNote));
-        }
-    }
-
-    /// <summary>The card's note: what the shown user does (<c>proxyNoteRouted</c> / <c>proxyNote</c>).</summary>
-    public string ProxyNote => _strings.Get(ShownProxy?.IsRouted == true ? "proxyNoteRouted" : "proxyNote");
-
-    /// <summary>
-    /// What the card shows and copies: the routed user when chosen and the core serves it, else the
-    /// current node's user. Examples use http:// or socks5h:// (SOCKS5 by IP misses domain rules).
-    /// </summary>
-    public ProxyInfo? ShownProxy =>
-        SelectedProxyScope.Scope == LocalProxyScope.Routed && RoutedProxy is { } routed ? routed : CurrentNodeProxy;
-    public bool HasShownProxy => ShownProxy is not null;
+    /// <summary>The card's note (<c>proxyNoteRouted</c>).</summary>
+    public string ProxyNote => _strings.Get("proxyNoteRouted");
     /// <summary>Why there is no local proxy yet (<c>proxyStarting</c> / <c>proxyFailed</c>); null when available.</summary>
     [ObservableProperty] string? proxyUnavailableText;
 
@@ -482,15 +437,15 @@ public sealed partial class MainViewModel
 
         ApplyNotices(connection, method, usable, state, standardError, next.RuleSetsUnavailable, next);
 
-        // Local proxy of the current node (independent of the connection). A failed standard core
-        // serves nothing, whatever proxies were listed before.
+        // Local proxies (independent of the connection). A failed standard core serves nothing,
+        // whatever proxies were listed before.
         CurrentNodeProxy = standardError is null ? node?.Proxy : null;
         var routedProxy = standardError is null ? Nodes.RoutedProxy : null;
         if (routedProxy is null) RoutedProxy = null;
         else if (RoutedProxy?.Proxy != routedProxy) RoutedProxy = new ProxyInfo(routedProxy, _services);
         ProxyUnavailableText = !usable ? null
             : standardError is not null ? _strings.Format("proxyFailed", ("reason", _strings.Message(standardError)))
-            : node?.Proxy is not null ? null
+            : RoutedProxy is not null ? null
             : _strings.Get("proxyStarting");
         ShowTraffic = signedIn && !IsRestricted;
     }

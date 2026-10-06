@@ -53,7 +53,7 @@ public sealed class ConnectionTests
     }
 
     [Fact]
-    public async Task TheProxyCardFollowsTheRulesByDefaultAndCanPinTheNode()
+    public async Task TheProxyCardShowsTheRoutedUser()
     {
         using var ui = new UiContext();
         await ui.RunAsync(async () =>
@@ -61,38 +61,27 @@ public sealed class ConnectionTests
             var t = new Scripted();
             await t.SignedInAsync();
             var main = t.Main;
-            // Default: the routed user (bare prefix), SOCKS URLs resolve at the proxy.
-            Assert.Equal(LocalProxyScope.Routed, main.SelectedProxyScope.Scope);
-            Assert.Equal(["proxyRouted", "proxyNode"], main.ProxyScopes.Select(o => o.Title));
-            var shown = main.ShownProxy!;
-            Assert.Same(main.RoutedProxy, shown);
-            Assert.Equal(("u8f2k", "socks5h://127.0.0.1:7890", true), (shown.Username, shown.SocksDisplay, shown.IsRouted));
-            shown.CopySocksCommand.Execute(null);
+            // The routed user (bare prefix): rules / global mode; SOCKS URLs resolve at the proxy.
+            var routed = main.RoutedProxy!;
+            Assert.True(main.HasRoutedProxy);
+            Assert.Equal(("u8f2k", "socks5h://127.0.0.1:7890", true), (routed.Username, routed.SocksDisplay, routed.IsRouted));
+            routed.CopySocksCommand.Execute(null);
             Assert.Equal("socks5h://u8f2k:secret@127.0.0.1:7890", t.Services.Copied.Last());
-
-            // This node only.
-            var changed = new List<string?>();
-            main.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
-            main.SelectedProxyScope = main.ProxyScopes[1];
-            Assert.Same(main.CurrentNodeProxy, main.ShownProxy);
-            Assert.Contains(nameof(MainViewModel.ShownProxy), changed);
-            Assert.Equal("socks5://127.0.0.1:7890", main.ShownProxy!.SocksDisplay);
-
-            // A null written back by a view is ignored.
-            changed.Clear();
-            main.SelectedProxyScope = null!;
-            main.SelectedProxyScope = main.ProxyScopes[1];
-            Assert.Equal(LocalProxyScope.Node, main.SelectedProxyScope.Scope);
-            // No re-raise: a two-way ComboBox would write back again.
-            Assert.DoesNotContain(nameof(MainViewModel.SelectedProxyScope), changed);
-            Assert.Equal("proxyNote", main.ProxyNote);
-            main.SelectedProxyScope = main.ProxyScopes[0];
+            routed.CopyHttpCommand.Execute(null);
+            Assert.Equal("http://u8f2k:secret@127.0.0.1:7890", t.Services.Copied.Last());
             Assert.Equal("proxyNoteRouted", main.ProxyNote);
+            Assert.Null(main.ProxyUnavailableText);
+
+            // Every node keeps its own user (the Nodes page), not only the current one.
+            Assert.All(main.Nodes.Items, item => Assert.Equal($"u8f2k-{item.Id}", item.Proxy!.Username));
+            var other = main.Nodes.Items.First(i => !i.IsCurrent);
+            other.CopySocksCommand.Execute(null);
+            Assert.Equal($"socks5://u8f2k-{other.Id}:secret@127.0.0.1:7890", t.Services.Copied.Last());
         });
     }
 
     [Fact]
-    public async Task WithoutTheRoutedUserTheCardShowsTheNode()
+    public async Task WithoutTheRoutedUserTheCardWaits()
     {
         using var ui = new UiContext();
         await ui.RunAsync(async () =>
@@ -102,7 +91,9 @@ public sealed class ConnectionTests
             await t.SignedInAsync();
             var main = t.Main;
             Assert.False(main.HasRoutedProxy);
-            Assert.Same(main.CurrentNodeProxy, main.ShownProxy);
+            // The node's own user is still there, but the card does not fall back to it.
+            Assert.True(main.HasCurrentNodeProxy);
+            Assert.Equal("proxyStarting", main.ProxyUnavailableText);
         });
     }
 

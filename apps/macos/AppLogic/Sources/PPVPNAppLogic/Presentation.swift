@@ -26,18 +26,6 @@ extension RoutingMode: @retroactive CaseIterable, @retroactive Identifiable {
     public var detail: String { self == .rules ? tr("routingRulesD") : tr("routingGlobalD") }
 }
 
-/// Which user of the shared local proxy the overview card shows and copies.
-public enum LocalProxyScope: CaseIterable, Identifiable, Sendable {
-    /// Profile rules (direct where they say so), then the selected node.
-    case routed
-    /// Everything through the current node.
-    case node
-
-    public var id: Self { self }
-    public var title: String { self == .routed ? tr("proxyRouted") : tr("proxyNode") }
-    public var detail: String { self == .routed ? tr("proxyRoutedD") : tr("proxyNodeD") }
-}
-
 /// Semantic tone shared by the connection card, status dot and notices.
 public enum Tone: Equatable, Sendable {
     case ok, busy, warn, err, idle
@@ -170,30 +158,19 @@ extension AppState {
         return nil
     }
 
-    /// The selected node's local proxy; none while the standard core failed,
-    /// whatever was listed before.
-    public var currentProxy: LocalProxy? {
-        guard standardError == nil, let node = selectedNode else { return nil }
-        return proxies[node.id]
-    }
+    /// What the local proxy card shows and copies: the routed user of the
+    /// shared port (Profile rules, then the selected node; follows Rules /
+    /// Global). None while the standard core failed, whatever was listed
+    /// before. A node's own user is on the Nodes page.
+    public var shownProxy: LocalProxy? { standardError == nil ? routedProxy : nil }
 
-    /// The core serves a routed user: the card offers the user picker.
-    public var offersProxyScope: Bool { standardError == nil && routedProxy != nil }
-
-    /// What the local proxy card shows and copies: the routed user when chosen
-    /// and served, else the current node's.
-    public var shownProxy: LocalProxy? {
-        if proxyScope == .routed, offersProxyScope, let routedProxy { return routedProxy }
-        return currentProxy
-    }
-
-    /// The card's footnote, for the user it shows.
-    public var proxyNote: String { shownProxy?.isRouted == true ? tr("proxyNoteRouted") : tr("proxyNote") }
+    /// The card's footnote.
+    public var proxyNote: String { tr("proxyNoteRouted") }
 
     /// Why there is no local proxy to show (nil when there is one).
     public var localProxyUnavailableText: String? {
         if let standardError { return tr("proxyFailed", ["reason": standardError.message]) }
-        if currentProxy != nil { return nil }
+        if shownProxy != nil { return nil }
         if case .starting = snapshot.standard { return tr("proxyStarting") }
         return tr("x_proxyUnavailable")
     }
