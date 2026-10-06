@@ -189,6 +189,12 @@ pub struct ClientSnapshot {
     /// name and password (e.g. a browser extension) must copy them again.
     /// Shown once; cleared by `Client::dismiss_local_proxy_credentials_reset`.
     pub local_proxy_credentials_reset: bool,
+    /// macOS, enhanced mode on: another VPN's routes the TUN replaced for
+    /// now, as the core reports them (e.g. `route 128.0.0.0/1 via 192.0.2.1
+    /// on utun4`); they are put back when enhanced mode disconnects. Show an
+    /// informational notice while connected and non-empty (nothing to
+    /// dismiss). Refreshed every few seconds; empty otherwise.
+    pub replaced_routes: Vec<String>,
 }
 
 /// A node fixed to one of its ingresses (`Replica::endpoint_key`).

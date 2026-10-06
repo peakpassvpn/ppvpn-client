@@ -754,6 +754,7 @@ impl Client {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             snapshot.unread_notifications = 0;
             snapshot.rule_sets_unavailable.clear();
+            snapshot.replaced_routes.clear();
             snapshot.auth = AuthState::SignedOut;
             snapshot.account = None;
             snapshot.team = None;

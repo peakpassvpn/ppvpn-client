@@ -16,7 +16,8 @@ public final class PreviewBackend: ClientBackend {
         auth: .restoring, account: nil, team: nil, profile: nil, profileStatus: .loading, standard: .stopped,
         connectionMode: .enhanced, routingMode: .rules, connection: PreviewBackend.idle, serviceInstalled: false,
         selectedNodeId: nil, lastError: nil, unreadNotifications: 0, ruleSetsUnavailable: [],
-        ingressPins: [], nodeIngresses: [], clearedIngressPins: [], localProxyCredentialsReset: false
+        ingressPins: [], nodeIngresses: [], clearedIngressPins: [], localProxyCredentialsReset: false,
+        replacedRoutes: []
     ) {
         didSet { events?.clientDidUpdate(state) }
     }

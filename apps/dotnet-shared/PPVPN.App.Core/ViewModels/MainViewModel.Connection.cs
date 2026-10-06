@@ -24,9 +24,10 @@ public enum SwitchVisual { Off, On, Indeterminate }
 /// pinned; action <c>backToAuto</c>). <c>IngressPinCleared</c>: a profile refresh dropped a pinned
 /// line, the node is back on automatic (action <c>ok</c> dismisses). <c>LocalProxyCredentialsReset</c>:
 /// the local proxy got new user names and passwords, apps using it must copy them again (action
-/// <c>ok</c> dismisses).
+/// <c>ok</c> dismisses). <c>RoutesReplaced</c> is informational (tone Warn, no action): enhanced mode
+/// on macOS took another VPN's routes over for now; they are put back on disconnect.
 /// </summary>
-public enum NoticeKind { Failed, Occupied, ProxyFailed, Conflict, RulesUnavailable, IngressUnavailable, IngressPinCleared, LocalProxyCredentialsReset }
+public enum NoticeKind { Failed, Occupied, ProxyFailed, Conflict, RulesUnavailable, IngressUnavailable, IngressPinCleared, LocalProxyCredentialsReset, RoutesReplaced }
 
 /// <summary>
 /// One anomaly row under the connection card (design ③; InfoBar Error/Warning with buttons):
@@ -583,6 +584,13 @@ public sealed partial class MainViewModel
             notices.Add(new(NoticeKind.LocalProxyCredentialsReset, ConnectionTone.Warn, _strings.Get("proxyResetT"),
                 _strings.Get("proxyResetD"), _strings.Get("ok"), DismissProxyResetCommand));
         }
+        // macOS: the TUN took another VPN's routes over for now; they go back on disconnect. Said
+        // while connected, nothing to do about it.
+        if (usable && state == ConnectState.On && next.ReplacedRoutes.Length > 0)
+        {
+            notices.Add(new(NoticeKind.RoutesReplaced, ConnectionTone.Warn, _strings.Get("routesReplacedT"),
+                _strings.Get("routesReplacedD"), ActionText: null, Action: null));
+        }
         if (notices.SequenceEqual(Notices)) return;
         Notices.Clear();
         foreach (var notice in notices) Notices.Add(notice);
@@ -593,7 +601,8 @@ public sealed partial class MainViewModel
     /// the desktop has no proxy settings (SystemProxyUnavailable); Enhanced → <c>fr_auth</c> (denied
     /// admin prompt), <c>fr_coreStopped</c> (the core exited), <c>fr_timeout</c> (ConnectFailed / Timeout / Unreachable, and
     /// NetworkPathContended with nobody named: "taken over" is only said when the crate names the
-    /// app), or the error text (e.g. <c>Error_ConnectHealthCheckFailed</c>: connected, but the
+    /// app), <c>fr_routesTakenOver</c> (another program kept changing the TUN's routes and the crate
+    /// stopped reconnecting: <c>TUN_ROUTING_TAKEN_OVER</c>), or the error text (e.g. <c>Error_ConnectHealthCheckFailed</c>: connected, but the
     /// service is unreachable).
     /// </summary>
     string FailReason(ConnectionState connection, ConnectionMode method)
@@ -610,6 +619,7 @@ public sealed partial class MainViewModel
             ErrorCode.ConnectFailed when reason.Detail.StartsWith("CORE_STOPPED:", StringComparison.Ordinal) =>
                 _strings.Get("fr_coreStopped"),
             null or ErrorCode.ConnectFailed or ErrorCode.Timeout or ErrorCode.Unreachable => _strings.Get("fr_timeout"),
+            ErrorCode.NetworkPathContended when reason.Detail == "TUN_ROUTING_TAKEN_OVER" => _strings.Get("fr_routesTakenOver"),
             ErrorCode.NetworkPathContended when Competitor(connection) is null => _strings.Get("fr_timeout"),
             _ => _strings.Message(reason),
         };

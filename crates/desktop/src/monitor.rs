@@ -18,6 +18,8 @@
 //! - Rule sets: the unavailable routing rule sets of the core in use (the
 //!   enhanced core's while it is on, otherwise the standard core's), from
 //!   the same `GetStatus` (`rule_sets`, core 0.5.0+).
+//! - Replaced routes (macOS): another VPN's routes the enhanced core's TUN
+//!   replaced for now (`replaced_routes`), while it is on.
 
 use std::time::{Duration, Instant};
 
@@ -110,7 +112,7 @@ impl Client {
                     previous_endpoint_key: status.previous_endpoint_key,
                     latency_ms: None,
                 };
-            } else if status.state == "running" {
+            } else if status.is_serving() {
                 self.select_standard_node(node).await;
             }
         }
@@ -158,6 +160,10 @@ impl Client {
         let enhanced_nodes = enhanced_status
             .as_ref()
             .and_then(|status| status.nodes.clone());
+        let replaced_routes = enhanced_status
+            .as_ref()
+            .map(|status| status.replaced_routes.clone())
+            .unwrap_or_default();
         let node_ingresses = match enhanced_status.as_ref() {
             Some(_) => enhanced_nodes,
             None => standard_nodes,
@@ -185,6 +191,7 @@ impl Client {
         self.set_connection_detail(detail);
         self.set_rule_sets_unavailable(rule_sets_unavailable);
         self.set_node_ingresses(node_ingresses);
+        self.set_replaced_routes(replaced_routes);
         // Compatible mode: re-enable the endpoint after a core restart.
         self.compat.reconcile().await;
     }
@@ -199,6 +206,17 @@ impl Client {
             .unwrap_or(false);
         if changed {
             self.update(|snapshot| snapshot.rule_sets_unavailable = ids);
+        }
+    }
+
+    fn set_replaced_routes(&self, routes: Vec<String>) {
+        let changed = self
+            .snapshot
+            .lock()
+            .map(|snapshot| snapshot.replaced_routes != routes)
+            .unwrap_or(false);
+        if changed {
+            self.update(|snapshot| snapshot.replaced_routes = routes);
         }
     }
 

@@ -303,6 +303,31 @@ final class PresentationTests: LogicTestCase {
         XCTAssertEqual(busy.notices.map(\.id), ["occupied"])
     }
 
+    /// Another program kept changing the TUN's routes and the client stopped
+    /// reconnecting: a failure that says so, with retry and compatibility mode.
+    func testRoutesTakenOverAgainAndAgainSaysSo() {
+        let p = show(.fixture(phase: .contended, reason: .init(code: .networkPathContended, detail: "TUN_ROUTING_TAKEN_OVER"),
+                              retryable: true, suggestCompatible: true))
+        XCTAssertEqual(p.headline, tr("h_failed"))
+        XCTAssertEqual(p.notices.map(\.id), ["failed"])
+        XCTAssertEqual(p.notices.first?.message, tr("fr_routesTakenOver"))
+        XCTAssertEqual(p.notices.first?.action, .retry)
+        XCTAssertEqual(p.notices.first?.secondary, .useCompatible)
+    }
+
+    func testReplacedRoutesNoticeWhileConnected() {
+        let routes = ["route 128.0.0.0/1 via 192.0.2.1 on utun4"]
+        XCTAssertNil(show(.fixture(phase: .on)).notices.first { $0.id == "routesReplaced" })
+        let notice = show(.fixture(phase: .on, replacedRoutes: routes)).notices.first { $0.id == "routesReplaced" }
+        XCTAssertEqual(notice?.tone, .warn)
+        XCTAssertEqual(notice?.title, tr("routesReplacedT"))
+        XCTAssertEqual(notice?.message, tr("routesReplacedD"))
+        XCTAssertNil(notice?.action)
+        XCTAssertEqual(show(.fixture(phase: .on, replacedRoutes: routes)).tone, .ok)
+        XCTAssertTrue(show(.fixture(phase: .disconnecting, replacedRoutes: routes)).notices.isEmpty)
+        XCTAssertTrue(show(.fixture(profileStatus: .noSubscription, phase: .on, replacedRoutes: routes)).notices.isEmpty)
+    }
+
     func testSystemProxyUnavailableInCompatibleMode() {
         let p = show(.fixture(mode: .compatible, phase: .error, reason: .init(code: .systemProxyUnavailable, detail: "")))
         XCTAssertEqual(p.detail, tr("sysproxyUnavailable"))
