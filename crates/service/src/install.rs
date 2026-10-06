@@ -458,10 +458,13 @@ fn main() -> Result<(), anyhow::Error> {
     };
     let src_bin = find("ppvpn-service")?;
 
-    // Stop before replacing binaries; a missing unit is fine.
-    let _ = std::process::Command::new("systemctl")
-        .args(["stop", SERVICE_UNIT])
-        .status();
+    // Stop before replacing binaries. A first install has no unit yet:
+    // asking systemctl to stop it would only print a confusing error.
+    if Path::new(UNIT_PATH).exists() {
+        let _ = std::process::Command::new("systemctl")
+            .args(["stop", SERVICE_UNIT])
+            .status();
+    }
 
     fs::create_dir_all(INSTALL_DIR).with_context(|| format!("mkdir {INSTALL_DIR}"))?;
     fs::set_permissions(INSTALL_DIR, fs::Permissions::from_mode(0o755))?;
