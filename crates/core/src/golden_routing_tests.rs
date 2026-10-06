@@ -32,7 +32,11 @@ use crate::translate::{
     SELECTED_TAG, TUN_INBOUND_TAG,
 };
 
-const WAIT: Duration = Duration::from_secs(5);
+/// How long a case waits for sail to tell its route. A case that routes
+/// returns as soon as it is told, at once when the machine is idle; the
+/// whole crate's tests in parallel (the CI unit job, the test machine's
+/// full runs) once took more than 5 s for one and failed it as NONE.
+const WAIT: Duration = Duration::from_secs(30);
 
 /// How long `direct` tries to connect (sail's `connect_timeout`).
 const DIRECT_CONNECT: &str = "300ms";
