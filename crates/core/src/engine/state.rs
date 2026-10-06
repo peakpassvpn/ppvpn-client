@@ -36,8 +36,9 @@ impl Applied {
     }
 }
 
-/// What the TUN routing guard reports (Linux tunrules; macOS and Windows
-/// later). Its source is the guard (engine/routing.rs).
+/// What the TUN routing guard reports (Linux tunrules), and `Broken` for
+/// what sail tells another program changed elsewhere (macOS; Windows once
+/// sail does). Its sources are in engine/routing.rs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TunRoutingSignal {
     /// Routing was deleted and is being put back: Degraded.
@@ -48,6 +49,9 @@ pub(crate) enum TunRoutingSignal {
     Restored { missing: Vec<String> },
     /// Could not be put back; traffic may bypass the TUN: Fatal.
     Broken { missing: Vec<String>, error: String },
+    /// Another program changed it and nothing puts it back (sail's
+    /// `SystemChanged`, macOS and Windows): Degraded until the next start.
+    Changed { missing: Vec<String>, error: String },
 }
 
 /// The last failover switch of a node's group.
@@ -80,6 +84,9 @@ pub(crate) struct Live {
     pub needs_stop: bool,
     /// The TUN's routing when not in place (None: ok).
     pub tun_routing: Option<TunRouting>,
+    /// What another program changed of the TUN's routing (`Broken`), as
+    /// sail named it.
+    pub tun_routing_missing: Vec<String>,
     /// This run goes without the shared local proxy listener.
     pub local_proxy_unavailable: bool,
     /// The state last reported (StateChanged).
@@ -93,6 +100,9 @@ pub(crate) struct Live {
     pub traffic_at: Option<DateTime<Utc>>,
     /// While running: the connections as last read.
     pub connections: Vec<RuntimeConnection>,
+    /// While running: the routes of others the TUN replaced (macOS), as
+    /// read after the last start or reload.
+    pub replaced_routes: Vec<String>,
 }
 
 impl Live {
@@ -119,6 +129,9 @@ impl Live {
         match self.tun_routing {
             Some(TunRouting::Restoring) => reasons.push(DegradedReason::TunRoutingRestoring),
             Some(TunRouting::Unguarded) => reasons.push(DegradedReason::TunRoutingUnguarded),
+            Some(TunRouting::Broken) => reasons.push(DegradedReason::TunRoutingBroken {
+                missing: self.tun_routing_missing.clone(),
+            }),
             _ => {}
         }
         if self.local_proxy_unavailable {
@@ -140,7 +153,9 @@ impl Live {
     pub(crate) fn clear_runtime(&mut self) {
         self.groups.clear();
         self.connections.clear();
+        self.replaced_routes.clear();
         self.tun_routing = None;
+        self.tun_routing_missing.clear();
         self.local_proxy_unavailable = false;
         self.switched.clear();
     }

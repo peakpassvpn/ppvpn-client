@@ -756,3 +756,29 @@ async fn every_public_method_after_shutdown() {
     // Idempotent.
     assert_eq!(engine.shutdown().await, Ok(ShutdownReport::default()));
 }
+
+/// macOS: the routes of other VPNs the TUN took over are in the status
+/// while it runs, read after the start (and each reload), and gone with
+/// the stop; none in the JSON while there are none.
+#[tokio::test]
+async fn the_status_shows_the_replaced_routes_while_running() {
+    let (engine, fake) = engine();
+    let routes = vec!["route 198.51.100.0/24 via 192.0.2.1 on utun4".to_owned()];
+    fake.set_replaced_routes(routes.clone());
+    engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
+    assert!(engine.status().replaced_routes.is_empty(), "not started");
+    engine.start().await.unwrap();
+    let status = engine.status();
+    assert_eq!(status.replaced_routes, routes);
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["replaced_routes"],
+        serde_json::json!(routes)
+    );
+    engine.stop().await.unwrap();
+    let status = engine.status();
+    assert!(status.replaced_routes.is_empty(), "{status:?}");
+    assert!(serde_json::to_value(&status)
+        .unwrap()
+        .get("replaced_routes")
+        .is_none());
+}

@@ -111,3 +111,55 @@ async fn a_failed_stop_keeps_the_tun_guarded() {
     tun.stop().await.unwrap();
     assert!(!tun.inner.guard_running());
 }
+
+/// macOS and Windows: sail tells that another program changed the TUN's
+/// routing (`SystemChanged`) and puts nothing back. `TunRoutingBroken`,
+/// `tun_routing` broken and Degraded with what changed; not Fatal, the
+/// instance goes on, and a start clears it. (The Engine takes it on any
+/// platform sail tells it on; the TUN here is the Linux one, unguarded.)
+#[tokio::test]
+async fn a_change_by_another_program_breaks_the_tun_routing() {
+    use super::super::lifecycle_tests::next_event;
+    use crate::event::{Event, EventKind};
+    use crate::status::{DegradedReason, TunRouting};
+    let fake = Arc::new(FakeRuntime::default());
+    let tun = Engine::with_runtime(
+        EngineConfig::new(Role::Tun, Platform::Linux, "/nonexistent"),
+        fake.clone(),
+    );
+    tun.inner
+        .set_host_ipv6_probe(|| super::super::tun::HostIpv6 {
+            available: true,
+            route: Ok(true),
+        });
+    running(&tun).await;
+    let mut rx = tun.subscribe(&[EventKind::TunRoutingBroken]);
+    let resource = "route 128.0.0.0/1 into utun9: 128.0.0.0/2 on utun4 wins";
+    fake.system_changed("route", resource);
+
+    match next_event(&mut rx).await {
+        Event::TunRoutingBroken { missing, error, .. } => {
+            assert_eq!(missing, [resource]);
+            assert_eq!(error, "route changed by another program");
+        }
+        other => panic!("not TunRoutingBroken: {other:?}"),
+    }
+    let status = tun.status();
+    assert_eq!(status.tun_routing, Some(TunRouting::Broken));
+    assert_eq!(
+        status.state,
+        EngineState::Degraded {
+            reasons: vec![DegradedReason::TunRoutingBroken {
+                missing: vec![resource.into()]
+            }]
+        }
+    );
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["tun_routing"], "broken");
+
+    // The next start installs the routing again.
+    tun.stop().await.unwrap();
+    tun.start().await.unwrap();
+    assert_eq!(tun.status().tun_routing, Some(TunRouting::Ok));
+    assert_eq!(tun.status().state, EngineState::Running);
+}

@@ -33,6 +33,11 @@ pub struct Status {
     /// TUN instances (Linux, macOS, Windows).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tun_routing: Option<TunRouting>,
+    /// macOS only: the routes of other VPNs that the TUN took over, a line
+    /// each ("route 128.0.0.0/1 via 192.0.2.1 on utun4"); sail puts them
+    /// back when it stops. Empty elsewhere and while not running.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_routes: Vec<String>,
     /// Log lines dropped because the sink blocked (section 10).
     pub dropped_log_lines: u64,
 }
@@ -76,6 +81,10 @@ pub enum DegradedReason {
     TunRoutingRestoring,
     /// The routing guard did not start; routing is as installed.
     TunRoutingUnguarded,
+    /// Another program changed the TUN's routes or address (macOS,
+    /// Windows); sail reports it and does not put it back. Traffic may go
+    /// around the TUN until the instance starts again.
+    TunRoutingBroken { missing: Vec<String> },
     /// The rule set is unavailable; its rules are degraded.
     RuleSetUnavailable { rule_set_id: String },
     /// No DNS servers on the default interface: direct names get SERVFAIL.
@@ -109,6 +118,9 @@ pub enum TunRouting {
     Ok,
     Restoring,
     Unguarded,
+    /// Another program changed what the TUN's routing set up, and nothing
+    /// puts it back (macOS, Windows): until the next start.
+    Broken,
 }
 
 /// The ingress a node is actually using (`get-status.selected_ingress`).

@@ -382,10 +382,12 @@ impl Inner {
             return Err(self.runtime_error(&e));
         }
         self.kernel_started();
+        let replaced_routes = self.runtime.replaced_routes();
         let run = {
             let mut live = self.live();
             live.running = true;
             live.run += 1;
+            live.replaced_routes = replaced_routes;
             live.local_proxy_unavailable = self.local_proxy_left_out();
             if let Some(applied) = live.applied.as_mut() {
                 applied.translation = translation;
@@ -606,6 +608,19 @@ impl Inner {
                 live.tun_routing = None;
                 self.publish(Event::TunRoutingRestored { at: now(), missing });
             }
+            TunRoutingSignal::Changed { missing, error } => {
+                self.publish(Event::TunRoutingBroken {
+                    at: now(),
+                    missing: missing.clone(),
+                    error,
+                });
+                live.tun_routing = Some(TunRouting::Broken);
+                for resource in missing {
+                    if !live.tun_routing_missing.contains(&resource) {
+                        live.tun_routing_missing.push(resource);
+                    }
+                }
+            }
             TunRoutingSignal::Broken { missing, error } => {
                 self.publish(Event::TunRoutingBroken {
                     at: now(),
@@ -674,15 +689,17 @@ fn outcome<T>(result: &Result<T, Error>) -> &'static str {
 }
 
 /// Follows the runtime from `new` until the instance goes: group switches,
-/// failed dials, its state and the network, as they happen; no timer of its
-/// own (the figures are read while the host reads them, reads.rs). Needs a
-/// tokio runtime; without one (no current handle) nothing is followed.
+/// failed dials, changes of the TUN's routing by others, its state and the
+/// network, as they happen; no timer of its own (the figures are read while
+/// the host reads them, reads.rs). Needs a tokio runtime; without one (no
+/// current handle) nothing is followed.
 pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     let handle = tokio::runtime::Handle::try_current().ok()?;
     let mut switches = inner.runtime.group_switches();
     let mut states = inner.runtime.states();
     let mut networks = inner.runtime.network_changes();
     let mut failures = inner.runtime.dial_failures();
+    let mut systems = inner.runtime.system_changes();
     // Routed connections and DNS exchanges only at debug: sail builds them
     // only for a subscriber, and only the debug lines use them.
     let debug = inner.config.log.level == crate::config::LogLevel::Debug;
@@ -692,6 +709,7 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
     Some(handle.spawn(async move {
         let mut switches_open = true;
         let mut failures_open = true;
+        let mut systems_open = true;
         loop {
             tokio::select! {
                 switch = switches.recv(), if switches_open => match switch {
@@ -707,6 +725,13 @@ pub(super) fn spawn_watcher(inner: &Arc<Inner>) -> Option<JoinHandle<()>> {
                         inner.on_dial_failed(failed).await;
                     }
                     None => failures_open = false,
+                },
+                changed = systems.recv(), if systems_open => match changed {
+                    Some(changed) => {
+                        let Some(inner) = weak.upgrade() else { return };
+                        inner.on_system_change(changed);
+                    }
+                    None => systems_open = false,
                 },
                 routed = async {
                     match routes.as_mut() {

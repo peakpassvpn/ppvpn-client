@@ -353,6 +353,7 @@ impl Engine {
             local_proxy,
             tun_routing: (config.role == Role::Tun)
                 .then_some(live.tun_routing.unwrap_or(TunRouting::Ok)),
+            replaced_routes: live.replaced_routes.clone(),
             dropped_log_lines: self.inner.log.dropped(),
             rule_sets,
             ..Status::default()

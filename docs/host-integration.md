@@ -148,7 +148,7 @@ pub fn validate(request: &ApplyRequest) -> Result<(), Error>; // 不需要实例
   - 但之后任何需要重新构建配置的操作都会失败，报 `PROFILE_EXPIRED` 并发出 `ReloadFailed`，已生效的配置不变。这些操作包括：宿主的 apply、规则集刷新、网卡变化后的重新探测。
   - 什么时候换上新 Profile、过期后还能不能继续用，由宿主决定（第 9 节）。
 - **规则集**：apply 前会准备规则集，总共最多等 10 秒。只从 `allowed_rule_set_hosts` 列出的主机下载（宿主传拉取 Profile 的 API 主机）；为空时一个也不下载，只用本地已有的、sha256 相符的缓存，其余规则集报 `RULE_SET_HOST_NOT_PINNED`（和 Go 一致，默认拒绝）。不为空时，Profile 里的规则集 URL 必须都在这些主机上，否则 apply 被拒。下载失败的规则集按降级规则处理，不会让 apply 失败。之后的定时刷新和失败后的恢复都在引擎内部完成，每次状态变化发出 `RuleSetChanged`。宿主不需要（也没有）`reload`。
-- **热切换**：运行中的 apply 原地换掉配置，不关监听，已有连接留在原处继续运行。Rust 版没有“旧内核排空”：Sail 在同一个实例里原地 reload，进行中的连接不迁移、也不需要等待，没有旧内核可排空，所以不发 `KernelDrained`，`status.draining_kernels` 恒为 0（与 Go 0.5.21 的差异：Go 换一个新内核，旧内核带着连接排空，最长 10 分钟）。Go 在切换时还会主动关掉三类连接，这一点和排空无关、Rust 照做：所用节点被新 Profile 删除的、经本地代理进来而其用户已不在新列表里的、新规则会拒绝的；`KernelSwitched` 的 `closed_connections` 是这样关掉的连接数，`kept_connections` 是留下的。前两类已实现（被删用户的连接由 Sail 在 reload 时关掉，计数时也算在内）；新规则会拒绝的那一类尚未实现，见 `docs/rust-parity.md` 的 A 类项。监听的变化大多也原地完成：新增的监听建起来，消失的移除，地址、端口或选项变了的就地替换；被移除或替换的那个监听断开它自己的连接，其他连接不受影响。这些仍算 `KernelSwitch`，`ApplyResult.listeners` 列出哪些监听被增、删、换。route 的网卡选项（`default_interface`、`auto_detect_interface`、`default_mark` 等）的变化也由 reload 接受，不需要重启，进行中的连接保留原来的套接字；新连接改用新值（`default_interface` 由我们的 netns CI 验证；`default_mark` 由 Sail 的 CI 覆盖：Linux 网络命名空间里以 root 运行，sail 41ea4db8；其余选项按 Sail 的说明，尚未验证）。选项指向一张不存在的网卡时，运行时拒绝这次 reload，运行中的配置不变，apply 返回 `CORE_OPERATION_FAILED`（retryable=false），并发出 `ReloadFailed`。只有 TUN 的变化、或者运行时自己表示必须重启时，才走 `FullRestart`（停止再启动，所有连接断开，`reasons` 说明原因，例如 `tun options changed`；这时 `listeners` 为空）。这是 Rust 版和 Go 0.5.21 的行为差异：Go 对任何监听变化都整体重启。重启和 `start` 一样会重新检查监听端口（被占就换，发 `LocalProxyEndpointChanged`），本地代理监听起不来时不带它启动（`Degraded{LocalProxyUnavailable}`）。重启期间状态保持 `Running`，不发 `CoreStopped`、`CoreStarted` 或 `StateChanged`；已有连接断开，监听短暂关闭，宿主从 apply 的结果 `switch = FullRestart { reasons }` 得知发生了重启。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
+- **热切换**：运行中的 apply 原地换掉配置，不关监听，已有连接留在原处继续运行。Rust 版没有“旧内核排空”：Sail 在同一个实例里原地 reload，进行中的连接不迁移、也不需要等待，没有旧内核可排空，所以不发 `KernelDrained`，`status.draining_kernels` 恒为 0（与 Go 0.5.21 的差异：Go 换一个新内核，旧内核带着连接排空，最长 10 分钟）。Go 在切换时还会主动关掉三类连接，这一点和排空无关、Rust 照做：所用节点被新 Profile 删除的、经本地代理进来而其用户已不在新列表里的、新规则会拒绝的；`KernelSwitched` 的 `closed_connections` 是这样关掉的连接数，`kept_connections` 是留下的。三类都已实现：被删用户的连接由 Sail 在 reload 时关掉，计数时也算在内；新规则会拒绝的那一类由 Sail 的复查完成：每次 reload 后，Sail 按新路由把进行中的连接重新匹配一遍（不产生副作用），新规则拒绝或丢弃的就关掉，并报告它们的 id 和对应规则。UDP 会话按它的第一个目的地复查。同一个连接属于多类时只计一次。监听的变化大多也原地完成：新增的监听建起来，消失的移除，地址、端口或选项变了的就地替换；被移除或替换的那个监听断开它自己的连接，其他连接不受影响。这些仍算 `KernelSwitch`，`ApplyResult.listeners` 列出哪些监听被增、删、换。route 的网卡选项（`default_interface`、`auto_detect_interface`、`default_mark` 等）的变化也由 reload 接受，不需要重启，进行中的连接保留原来的套接字；新连接改用新值（`default_interface` 由我们的 netns CI 验证；`default_mark` 由 Sail 的 CI 覆盖：Linux 网络命名空间里以 root 运行，sail 41ea4db8；其余选项按 Sail 的说明，尚未验证）。选项指向一张不存在的网卡时，运行时拒绝这次 reload，运行中的配置不变，apply 返回 `CORE_OPERATION_FAILED`（retryable=false），并发出 `ReloadFailed`。只有 TUN 的变化、或者运行时自己表示必须重启时，才走 `FullRestart`（停止再启动，所有连接断开，`reasons` 说明原因，例如 `tun options changed`；这时 `listeners` 为空）。这是 Rust 版和 Go 0.5.21 的行为差异：Go 对任何监听变化都整体重启。重启和 `start` 一样会重新检查监听端口（被占就换，发 `LocalProxyEndpointChanged`），本地代理监听起不来时不带它启动（`Degraded{LocalProxyUnavailable}`）。重启期间状态保持 `Running`，不发 `CoreStopped`、`CoreStarted` 或 `StateChanged`；已有连接断开，监听短暂关闭，宿主从 apply 的结果 `switch = FullRestart { reasons }` 得知发生了重启。新配置启动失败时恢复原来的配置，apply 返回错误；原配置也起不来时实例停止（`CoreStopped`）。细节和 Go 版一致（`docs/core-api.md` 热更新一节，`docs/rust-parity.md` 第 1 组）。
 
 ### 4.2 start / stop
 
@@ -185,7 +185,7 @@ pub fn version() -> VersionInfo;                  // 关联函数，不需要实
 pub fn logs(&self) -> LogReceiver;                // LogSink::Channel 时的日志行，只能取一次，见第 10 节
 ```
 
-- **运行时数据的时效**：`status` 里的节点健康和当前入口、`traffic`、`connections` 都是引擎最近一次从运行时读到的值。引擎不为它们定时轮询，免得实例空闲时也被唤醒。宿主开始读取后，引擎每秒读一次运行时；宿主停止读取 10 秒后，就不再读。所以空闲后的第一次读取可能是旧值，`Traffic::measured_at` 标明了读取时间，下一次读取就是新的。入口切换（`NodeIngressSwitched`）和拨号失败会立即触发一次读取，不受这个节奏影响。`status.tun_routing` 不属于这类数据：它由路由守护实时更新。目前只有 Linux 的 TUN 实例有守护；macOS 和 Windows 上它恒为 `ok`，这是切换前待补的缺口（`docs/rust-parity.md` N2）。
+- **运行时数据的时效**：`status` 里的节点健康和当前入口、`traffic`、`connections` 都是引擎最近一次从运行时读到的值。引擎不为它们定时轮询，免得实例空闲时也被唤醒。宿主开始读取后，引擎每秒读一次运行时；宿主停止读取 10 秒后，就不再读。所以空闲后的第一次读取可能是旧值，`Traffic::measured_at` 标明了读取时间，下一次读取就是新的。入口切换（`NodeIngressSwitched`）和拨号失败会立即触发一次读取，不受这个节奏影响。`status.tun_routing` 不属于这类数据：它由路由守护实时更新。只有 Linux 的 TUN 实例有守护（补回路由，所以有 `Restoring`、`Unguarded`）。macOS 和 Windows 由 Sail 检测：别的程序改动了 TUN 的路由或地址时，引擎发 `TunRoutingBroken`，`tun_routing` 变为 `broken`，状态进入 `Degraded{TunRoutingBroken}`，实例继续运行；Sail 不补回，所以 `broken` 一直保持到实例下一次 start（或完整重启）重新装上路由为止，这两个平台上也不会出现 `Restoring` 或 `Unguarded`（`docs/rust-parity.md` N2）。
 
 `VersionInfo` 包含以下字段：
 
@@ -268,7 +268,11 @@ pub struct Status {
                                             // next_retry_at（非 ready 时下次重试时间；主机未固定或没有存储时省略），同 get-status
     pub system_proxy: SystemProxyStatus,
     pub draining_kernels: u32,             // Rust 版恒为 0：没有旧内核排空（第 4.1 节）
-    pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded（守护目前只在 Linux；macOS、Windows 恒为 Ok，见 4.4）
+    pub tun_routing: Option<TunRouting>,    // TUN 实例：Ok | Restoring | Unguarded | Broken（Restoring、Unguarded 只在 Linux；
+                                            // Broken：macOS、Windows 上别的程序改动了路由，见 4.4）
+    pub replaced_routes: Vec<String>,       // 仅 macOS：TUN 接管的其他 VPN 的路由，每条一行，如
+                                            // "route 128.0.0.0/1 via 192.0.2.1 on utun4"；Sail 停止时放回。
+                                            // start、重启、热切换后读取，停止后清空；为空时 JSON 省略
     pub dropped_log_lines: u64,             // 日志接收端阻塞而丢弃的行数，见第 10 节
 }
 #[non_exhaustive]
@@ -316,12 +320,13 @@ Stopped ──apply──▶ Configured ──start──▶ Running ⇄ Degrade
   | `LocalProxyUnavailable` | 本地代理端口监听失败，正在按退避重试 |
   | `ProfileExpired { expires_at }` | 已生效的 Profile 越过了 `expires_at`。转发照常；之后的重建都会因 `PROFILE_EXPIRED` 失败；apply 一份未过期的 Profile 后清除。宿主据此提示用户，或者去刷新 Profile（第 9 节） |
   | `DefaultRouteOverridden` | 其他 VPN 抢走了默认路由，流量不再进入本 TUN；对方撤走后自动恢复 |
+  | `TunRoutingBroken { missing }` | macOS、Windows：别的程序（通常是另一个 VPN）改动了 TUN 的路由或地址，Sail 只报告、不补回，部分流量可能绕过 TUN。`missing` 是 Sail 对每处改动的描述，以 TUN 名开头。这是 `Degraded` 里唯一不会自愈的原因：持续到实例下一次 start。宿主可以重建实例（stop 再 start 即可重新装上路由），但另一个 VPN 可能马上又改，所以**建议限制自动重连**：桌面端 10 分钟内最多自动重连 3 次，之后提示用户（例如“另一个 VPN 正在改动路由”），由用户决定。Linux 不出现这个原因（守护会补回，补不回进入 `Fatal{TunRoutingBroken}`） |
 
 - **`Fatal`**：引擎无法自愈。宿主**丢弃并重建**实例；这是宿主重建实例的唯一理由，另外两个是 panic 和会话丢失。
 
   | `FatalReason` | 含义 |
   | --- | --- |
-  | `TunRoutingBroken { missing }` | 路由被删后补不回来，流量可能绕过 TUN（对应 Go 的 `TunRoutingBroken`；Rust 扩展到 macOS 和 Windows） |
+  | `TunRoutingBroken { missing }` | 路由被删后补不回来，流量可能绕过 TUN（对应 Go 的 `TunRoutingBroken`）。只在 Linux 上出现；macOS、Windows 上别的程序改动路由时是 `Degraded{TunRoutingBroken}`，不是 `Fatal` |
   | `TunDeviceLost` | TUN 设备消失，例如适配器被外部删除，并且重建失败 |
   | `Panic` | 公开方法里兜住了一次 panic |
   | `KernelUnrecoverable` | 内核启动失败，也恢复不到上一个内核 |
@@ -353,7 +358,7 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 | `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
 | `KernelSwitched`、`KernelDrained` | 是 | 热切换；Rust 版不发 `KernelDrained`（没有旧内核排空，第 4.1 节） |
 | `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
-| `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有；Rust 版三个平台都有。同时会反映在 `StateChanged` 里 |
+| `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有。Rust 版 `TunRoutingBroken` 在 Linux、macOS 和 Windows 上都有：Linux 上是补不回（随后 `Fatal`），macOS、Windows 上是别的程序改动了路由（随后 `Degraded`，`error` 是“<类别> changed by another program”，`missing` 以 TUN 名开头）；`TunRoutingRestored` 只在 Linux 上有（只有那里补回路由）。同时会反映在 `StateChanged` 里 |
 
 ## 7. 错误
 
@@ -405,7 +410,7 @@ pub struct Error {
   - 运行时失败或 panic 进入的 `Fatal`（`KernelUnrecoverable`、`Panic`）不一样：运行时已经失效，留着只剩系统里的残留（Windows 上 strict_route 的过滤器会挡住所有不走 TUN 的流量）。进入这类 `Fatal` 时，引擎立即停止运行时（有界，至多 10 秒），不等宿主：Sail 先撤路由、规则、过滤器和 DNS，再关设备。撤不掉的记下来，宿主之后 `shutdown`（或 drop）时列在 `ShutdownReport.leftovers` 里，每项带类别和手工清除的说明。三个平台上 Sail 都保证这一清理，并有 CI 测试（Linux、macOS 自 sail dddc2d1c，Windows 自 sail 99b8daef：先撤 WFP 过滤器，再撤 DNS、路由，最后关 Wintun 会话）。我们自己的构建也验证：Linux 在 netns CI，Windows 在 CI 的 `windows` 作业（MSVC 构建、管理员、strict_route）；运行时失败后、宿主还没 shutdown，系统已经回到启动前，再次启动成功。正常情况下引擎已经撤干净，leftovers 为空。leftovers 里出现 `wfp`，或者 Windows 上出现无法归类的 `runtime` 残留，说明清理没有成功、过滤器可能还挡着流量：宿主应当退出进程，由服务管理器重启，进程退出时系统会回收这些过滤器。这是清理失败时唯一的恢复手段。局限：清理步骤自身 panic 的用例只在 Linux 上有；进程被强杀的情形在我们的 MSVC 构建上还没有测；Sail 的 Windows 测试跑在 Windows Server 的 CI 机器上，不是桌面版实机。宿主看到这类 `Fatal`，仍应 `shutdown` 并重建实例。
 - 路由规则守护，以及 Wintun、utun 的自愈；
 - 热切换，以及切换时关掉新 Profile 拿走的连接；
-- 路由和规则层面的完整性：规则或路由都在，流量没有绕过 TUN。Linux 沿用 Go 0.5.20 的规则守护；**macOS 和 Windows 是 Rust 版新增的能力**，至少要能检测到并上报，能自愈的就自愈，由 G5 实机验收。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。
+- 路由和规则层面的完整性：规则或路由都在，流量没有绕过 TUN。Linux 沿用 Go 0.5.20 的规则守护；**macOS 和 Windows 是 Rust 版新增的能力**，至少要能检测到并上报，能自愈的就自愈，由 G5 实机验收。macOS 和 Windows 由 Sail 检测、不自愈：别的程序改动了 TUN 的路由或地址时进入 `Degraded{TunRoutingBroken}`，实例继续运行，是否重建、重建几次由宿主决定（建议见第 5 节 `Degraded` 表）。引擎通过 `TunRouting*` 事件以及 `Degraded`/`Fatal` 状态表达。
 
 留在宿主的：
 

@@ -555,3 +555,74 @@ async fn a_switch_closes_the_connections_of_removed_nodes() {
     assert_eq!(closed, [1, 4]);
     assert_eq!(applied(&engine).node_tags[NODE_2], n2);
 }
+
+/// Go: internal/runtime TestApplyClosesConnectionsANewRuleRejects. sail's
+/// recheck closes, in the reload, the connections the new rules reject:
+/// they are among `KernelSwitched`'s closed, each once, also when its node
+/// was removed too.
+#[tokio::test]
+async fn a_switch_counts_the_connections_a_new_rule_rejects() {
+    use super::super::lifecycle_tests::{drain, engine, NODE_1, NODE_2};
+    let (engine, fake) = engine();
+    running(&engine).await;
+    let before = engine
+        .inner
+        .live()
+        .applied
+        .as_ref()
+        .unwrap()
+        .translation
+        .clone();
+    let (n1, n2) = (
+        before.node_tags[NODE_1].clone(),
+        before.node_tags[NODE_2].clone(),
+    );
+    let connection = |id, chain: &str| crate::runtime::RuntimeConnection {
+        id,
+        inbound: SYSTEM_PROXY_INBOUND_TAG.into(),
+        chain: vec![chain.into()],
+        network: "tcp".into(),
+        destination: "192.0.2.10:443".into(),
+        upload_bytes: 0,
+        download_bytes: 0,
+        started: std::time::SystemTime::now(),
+    };
+    fake.set_connections(vec![
+        connection(1, &n1),
+        connection(2, &n2),
+        connection(3, "direct"),
+        connection(4, "direct"),
+    ]);
+    // 1: its node goes and a rule rejects it; 3: a rule rejects it.
+    fake.recheck_next(vec![(1, Some(0)), (3, None)]);
+    let mut rx = engine.subscribe(&[crate::event::EventKind::KernelSwitched]);
+
+    let without_node_1 = profile_with(R2, |v| {
+        v["nodes"].as_array_mut().unwrap().remove(0);
+        v["selection"]["default_node_id"] = NODE_2.into();
+    });
+    engine
+        .apply(ApplyRequest::new(without_node_1))
+        .await
+        .unwrap();
+
+    let events = drain(&mut rx);
+    assert!(
+        matches!(
+            events.as_slice(),
+            [crate::event::Event::KernelSwitched {
+                closed_connections: 2,
+                kept_connections: 2,
+                ..
+            }]
+        ),
+        "{events:?}"
+    );
+    let left: Vec<u64> = crate::runtime::Runtime::connections(fake.as_ref())
+        .await
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(left, [2, 4]);
+}

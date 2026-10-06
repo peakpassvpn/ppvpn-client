@@ -3,6 +3,12 @@
 //! or a network change, and stopped before the TUN closes, so that sail's
 //! own cleanup is never undone. Its verdicts are the Engine's
 //! `TunRoutingSignal`s (`Status::tun_routing`, the state, the events).
+//!
+//! Elsewhere (macOS; Windows once sail reports it) sail itself tells when
+//! another program changed the TUN's routes or address (its
+//! `SystemChanged`). sail does not put them back: the routing is broken
+//! (Degraded, not Fatal) until the next start; the host decides whether
+//! to rebuild.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,6 +17,7 @@ use tokio::task::JoinHandle;
 use super::state::TunRoutingSignal;
 use super::Inner;
 use crate::config::{Platform, Role};
+use crate::runtime::SystemChange;
 use crate::translate;
 use crate::tunrules::{self, TunRoutingStatus};
 
@@ -124,6 +131,27 @@ impl Inner {
         {
             guard.check(reason);
         }
+    }
+
+    /// Another program changed what sail set up for the TUN, while
+    /// running: `TunRoutingBroken`, `tun_routing` broken and Degraded
+    /// until the next start. Not Fatal: sail puts nothing back here, and
+    /// another VPN changing a route would otherwise end the instance while
+    /// traffic goes around the TUN all the same. Whether and how often to
+    /// rebuild is the host's (host-integration 4.4).
+    pub(super) fn on_system_change(&self, change: SystemChange) {
+        if !self.live().running {
+            return;
+        }
+        tracing::warn!(
+            kind = %change.kind,
+            resource = %change.resource,
+            "tun routing changed by another program"
+        );
+        self.on_tun_routing(TunRoutingSignal::Changed {
+            missing: vec![change.resource],
+            error: format!("{} changed by another program", change.kind),
+        });
     }
 
     /// Whether a guard runs (tests).

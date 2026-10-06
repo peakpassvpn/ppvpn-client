@@ -58,7 +58,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | # | 行为 | 来源 | Rust 用例 | 状态 |
 | --- | --- | --- | --- | --- |
 | N1 | 越过 `expires_at` 时进入 `Degraded{ProfileExpired}`，由定时器触发；转发照常，apply 一份未过期的 Profile 后清除 | #86（Core 定） | | todo |
-| N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护。验收项：路由丢了补不回来、而 strict_route 的拦截还在（流量被挡住，不是绕过）时，进入 `Fatal` 的同时立即停止运行时，不等宿主（#208） | #86（Desktop B） | | todo（G5 实机验收） |
+| N2 | macOS 和 Windows 上的 TUN 路由完整性：被删时检测并上报，能自愈就自愈（`TunRouting*`，`Degraded`/`Fatal`）；Linux 沿用 Go 0.5.20 的规则守护。验收项：路由丢了补不回来、而 strict_route 的拦截还在（流量被挡住，不是绕过）时，进入 `Fatal` 的同时立即停止运行时，不等宿主（#208） | #86（Desktop B） | `ppvpn-core` `engine::routing::tests::a_change_by_another_program_breaks_the_tun_routing` | todo（G5 实机验收）。macOS 和 Windows 由 Sail 0.18 检测：别的程序改动了 TUN 的路由或地址时 Sail 发 `SystemChanged`（`Kinds::SYSTEM`），引擎发 `TunRoutingBroken`，`tun_routing` 为 `broken`，进入 `Degraded{TunRoutingBroken}`，实例继续运行，直到下一次 start；不进 `Fatal`（Core 组 2026-10-06 定：Sail 不补回，进 Fatal 只会让另一个 VPN 一改路由就整个断开，流量照样绕过 TUN）。是否重建、重建几次由宿主决定，host-integration 建议桌面端 10 分钟最多 3 次。`status.replaced_routes` 列出 TUN 接管的其他 VPN 的路由（macOS，Sail 停止时放回） |
 | N3 | 本地代理监听打不开时，本次运行先不带它：start 照常成功，进入 `Degraded{LocalProxyUnavailable}`；之后按退避（1 s 起翻倍，最长 30 s）加回这个监听（只涉及入站的 reload，`ReloadReport.path` 为 `inbounds_only`；`inbound_lost` 仍算不可用、继续退避），成功后恢复。sail 启动时因为这个监听失败（检查端口之后又被占用），就不带它再启动一次。stop 和 shutdown 取消重试 | host-integration 4.6、Desktop C；#148 | `ppvpn-core` `engine::proxy_tests::an_unavailable_local_proxy_degrades_and_is_retried`、`ppvpn-core` `engine::proxy_tests::a_start_failing_with_the_local_proxy_goes_on_without_it`、`ppvpn-core` `engine::proxy_tests::stop_cancels_the_local_proxy_retry` | done（运行中监听自己断掉的情况，sail 目前不报告，不在其中） |
 
 ## 切换前分拣（2026-10-05）
@@ -72,7 +72,7 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 
 | Go 包 | A | B | C | D |
 | --- | --- | --- | --- | --- |
-| `internal/runtime` | 1 | 0 | 23 | 17 |
+| `internal/runtime` | 0 | 0 | 23 | 17 |
 | `profile` | 0 | 0 | 18 | 1 |
 | `internal/config` | 0 | 0 | 16 | 2 |
 | `internal/dnstransport` | 0 | 0 | 3 | 13 |
@@ -88,9 +88,9 @@ lab 用例里也有一项偏离（#214 待定项 D4，2026-10-03 决定：Rust �
 | `internal/corelog` | 0 | 0 | 1 | 0 |
 | `ipc` | 0 | 0 | 0 | 1 |
 | `version` | 0 | 0 | 0 | 1 |
-| 合计 | 1 | 0 | 71 | 66 |
+| 合计 | 0 | 0 | 71 | 66 |
 
-表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）、切换时关掉被删节点的连接（约 1.25 人日）、校验错误的脱敏（约 0.5 人日）、规则匹配项的映射与本地代理规则优先（约 0.25 人日）、入口故障转移形态的守卫分支（约 0.5 人日）、忽略未知字段（约 0.25 人日）、借用的 REALITY SNI（约 0.25 人日）、规则集主机钉住的各变体（约 0.25 人日）、流量方向（约 0.5 人日）、HTTP 认证失败回 407 后正常关闭（约 0.5 人日）、共享本地代理按用户名选节点（约 1 人日）、已有连接不受 select-node 与 routing_mode 切换影响（约 0.5 人日）、系统代理计入流量与关闭后监听消失（约 0.5 人日）、TUN 下命中 direct 规则集的域名直连（约 0.75 人日）、反向映射跨 reload 保留（约 0.5 人日）、SOCKS5 认证失败读完再关（约 0.75 人日，Sail 0.17.0）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
+表里是仍为 todo 的行，每做完一项就转 done、从表里减去。分拣时 A 合计约 7.25 人日，B 约 6.25 人日（按行估计，依据见各行）；已完成：fallback 组的五个参数（约 1.25 人日）、pin 期间照常检查（约 0.5 人日）、REALITY 与 TLS 入口的 debug 指纹日志（约 0.5 人日）、apply 与 start 的分段耗时日志（约 0.5 人日）、带 zone 的链路本地 local_dns_servers（约 0.5 人日）、切换时关掉被删节点的连接（约 1.25 人日）、校验错误的脱敏（约 0.5 人日）、规则匹配项的映射与本地代理规则优先（约 0.25 人日）、入口故障转移形态的守卫分支（约 0.5 人日）、忽略未知字段（约 0.25 人日）、借用的 REALITY SNI（约 0.25 人日）、规则集主机钉住的各变体（约 0.25 人日）、流量方向（约 0.5 人日）、HTTP 认证失败回 407 后正常关闭（约 0.5 人日）、共享本地代理按用户名选节点（约 1 人日）、已有连接不受 select-node 与 routing_mode 切换影响（约 0.5 人日）、系统代理计入流量与关闭后监听消失（约 0.5 人日）、TUN 下命中 direct 规则集的域名直连（约 0.75 人日）、反向映射跨 reload 保留（约 0.5 人日）、SOCKS5 认证失败读完再关（约 0.75 人日，Sail 0.17.0）、切换时关掉新规则拒绝的连接（Sail 0.18 的复查）。`testdata/golden/routing` 的 Rust 运行器已合入，48 个判定与 Go 0.5.21 一致，`TestGoldenRouting` 转回 n-a（约 2 人日）。它覆盖的是每条新连接的路由判定；下面几行 B 里，golden 管不到的部分（已有连接不受切换影响、流量计数、规则集、监听关闭）仍要单独的真 Sail 用例。
 
 待决定：排空相关的行（`TestDrain*`、`TestRapidAppliesDrainEveryKernel` 等）按 D 分拣，理由是 Sail 在实例内原地 reload，没有旧内核可排空。这与第 1 组“等排空接上”的说法冲突。若采纳，契约要改为 Rust 不发 `KernelDrained`、`draining_kernels` 恒为 0，需要 Desktop 和 CLI 评审。
 
@@ -156,7 +156,7 @@ Core 组 2026-10-03 决定：网卡变化以 sail 的监视器为唯一来源，
 
 reload 之后 fallback 组的健康状态从头开始（sail 2f967b1a 读自代码）：每次 reload（apply 的热切换、规则集重建、host IPv6 重探）都会重建出站和组。selector 的选择和 fallback 的 pin 会按 tag 带到新组；fallback 当前用的成员和健康历史则从头开始，新组在首轮检查完成前停在第一个成员（主入口）上。这和 Go 一致：Go 的热切换是换一个新内核，新内核的 failover 组同样从主入口开始，所有成员先算健康。可见的影响两边也一样：主入口不可用时，reload 后的第一条连接先试主入口，失败后在同一次拨号里换到下一个成员；sail 0.16 起只有这一条连接要等拨号超时。随后组切走，引擎发一次 `NodeIngressSwitched`（pin 住的节点不发）。所以不算偏离，引擎不另做处理。开关系统代理监听和本地代理重试走的是只涉及入站的 reload（`inbounds_only`，不碰出站和组），不受影响（#221）。
 
-`draining_kernels`（以及 `kernel switched` 日志行的同名字段）恒为 0：Rust 版没有旧内核排空，Sail 在实例内原地 reload（契约 4.1）。`KernelSwitched` 的 `closed_connections` 和 `kept_connections` 是这次切换关掉和留下的连接数：reload 之后，经新 Profile 已没有的节点的连接被关掉（`engine::switch::close_on_switch`），其余留在原出站上。新 reject 规则命中的连接还没有关（`TestApplyClosesConnectionsANewRuleRejects`，A）。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
+`draining_kernels`（以及 `kernel switched` 日志行的同名字段）恒为 0：Rust 版没有旧内核排空，Sail 在实例内原地 reload（契约 4.1）。`KernelSwitched` 的 `closed_connections` 和 `kept_connections` 是这次切换关掉和留下的连接数：reload 之后，经新 Profile 已没有的节点的连接被关掉（`engine::switch::close_on_switch`），新规则拒绝或丢弃的连接由 Sail 在 reload 时复查关掉（`ReloadReport::recheck_closed`，`TestApplyClosesConnectionsANewRuleRejects`），两者取并集计入 `closed_connections`，同一连接只计一次；UDP 会话按首个目的地址复查。其余留在原出站上，`kept_connections` 是 reload 之后仍在、不在并集里的连接。现在每次 reload 切换（apply 的热切换、规则集重建、host IPv6 重探）都会发事件并记这一行，完整重启不算切换。`gen` 和 `previous` 是引擎自己对内核的计数：每次 start、重启、reload 切换各加一。
 
 `Runtime::network()` / `network_changes()`（`runtime/sail.rs`）现在直接用 `sail::embed` 的 `instance.network()` 和 `instance.events(Kinds::NETWORK)`。订阅在 Runtime 创建时建立，跨越每次启动和停止都有效；落后时收到 `Lagged`，就按快照补一次变化（reason=`lagged`）。不再通过 `manager()`，也没有轮询，过渡已经结束。sail 的事件映射到 Engine：`InterfaceChanged`、`Moved`、`Restored` 映射为 `NetworkChanged`，`Offline` 映射为 `Degraded{NoDefaultInterface}`（`NetworkChange.change`）。
 
@@ -211,7 +211,7 @@ UDP、DNS 劫持和反向映射需要 TUN，在 routing golden（`testdata/golde
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |
-| `internal/runtime` `TestApplyClosesConnectionsANewRuleRejects` | A new reject rule closes the connections it now matches. |  | todo | 【A，等 Sail 0.18】Sail 的 reload 对已开连接只保留、不按新规则重判，core 不自建匹配器（2026-10-05 定）。Sail 已实现（sail 6d8173b6，随 0.18 发行）：`Instance::reload_rechecking(config, ReloadOptions { recheck_open: RecheckOpen::CloseRejected })` 用路由时保存的上下文按新规则重判已开连接（不查 DNS、不嗅探、不拉规则集），判为 reject/drop 的关掉，`ReloadReport.recheck.closed` 列出（id、规则下标），`differ` 只作参考；默认的 reload 不重判。局限：UDP 会话按首个目的地址重判，紧跟在重判之后才登记的连接要到下一次 reload。接入（0.18 升级时）：热切换改用它，按关闭列表记日志并计入 `KernelSwitched.closed_connections`（与被删节点关掉的不重复计）。 |
+| `internal/runtime` `TestApplyClosesConnectionsANewRuleRejects` | A new reject rule closes the connections it now matches. | `ppvpn-core` `runtime::sail::tests::a_reload_closes_the_connections_a_new_rule_rejects`、`ppvpn-core` `engine::switch::tests::a_switch_counts_the_connections_a_new_rule_rejects` | done | Sail 0.18 的复查（sail 6d8173b6）：运行时的每次 reload 都用 `reload_rechecking(config, ReloadOptions::new().recheck_open(RecheckOpen::CloseRejected))`，按路由时保存的上下文用新规则重判已开连接（不查 DNS、不嗅探、不拉规则集），判为 reject/drop 的由 Sail 关掉，`ReloadReport.recheck.closed`（id、规则下标）进 `ReloadReport::recheck_closed`；core 不自建匹配器（2026-10-05 定）。热切换把它们计入 `KernelSwitched.closed_connections`，与被删节点关掉的取并集、不重复计；每条记一行 debug `connection closed by a new rule`，带 `id` 和 Profile 规则的 id（下标越界或没有时为 `final`），不记目的地址。真 Sail 用例：经 mixed 入站连到 echo，reload 加一条拒绝该端口的规则，报告列出这条连接、连接被关。局限（同 Sail）：UDP 会话按首个目的地址重判；紧跟在重判之后才登记的连接要到下一次 reload。`differ`（新规则改发别的出站）只是参考，不关、不计 |
 | `internal/runtime` `TestApplyClosesConnectionsOfRemovedNodes` | Taking a node away closes its connections (and its local proxy user's) on the switch; a connection on a node that stays keeps running. | `ppvpn-core` `engine::switch_tests::a_switch_closes_the_connections_of_removed_nodes` | done | reload 之后关掉经被删节点（含其任一入口）的连接，留在保留节点或不经节点的连接不动；连接在 reload 之前列出，所以 Sail 自己关掉的（被删本地代理用户的）也计入 closed。kept 是 reload 之后仍在的其余连接。桌面 TUN 上删节点会让它的入口 IP 离开 TUN 的排除路由，是完整重启，连接全部断开 |
 | `internal/runtime` `TestApplyDoesNotDeadlockWithStatusAndAWriter` | An apply in progress must not wedge the core's lock: Status reads the kernel while holding it (activeIngress), and the apply's prepare (pins) takes it. |  | todo | 【C】Rust 结构上已避免：status() 只在短 std 锁下读 state::Live，生命周期操作走独立的 op tokio Mutex（engine.rs Inner.op/live），查询从不等待 apply，用例可切换后补。 |
 | `internal/runtime` `TestApplyKeepsRunningConnections` | An apply while a download runs (new rules, same nodes) switches kernels without touching the download: it completes in full after the switch, new connections use the new … |  | todo | 【C】sail 原地 reload 保留未受影响监听上的连接（sail test_reload*.rs 测试），我们的 netns 用例 runtime::netns_tests::a_reload_moves_new_connections_to_the_new_default_interface 也验证 reload 前的连接继续，专门的下载不中断用例可后补。 |
@@ -258,7 +258,7 @@ dns-local 用自研实现（`crate::localdns` 加上进程内监听），不用 
 
 macOS 的 TUN 不写网卡名，由 Sail 选（比现有最大的 `utunN` 大一），实际名字从 `tun_names()` 读。选好的名字在打开前被抢走时，Sail 换名重试，最多 3 个，仍失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true；Linux、Windows 的名字是配置的，被占用时 retryable=false，见 host-integration 第 7 节）。排除隧道网段由 dns-local 自己的隧道地址过滤保证。macOS 的系统 DNS 自 Sail 0.17.0（093041df）起由 Sail 负责：utun 打开时写一个临时的 supplemental 键，teardown 时先于路由撤掉；宿主自己开 TUN 时 Sail 不设（host-integration 第 2、9 节）。
 
-已知行为（macOS，Sail `98a5cbf5`，见 Sail 的 routing 文档）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 会替换它并打一行警告；停止时**不恢复**被替换的路由。
+已知行为（macOS，Sail 0.18 起，见 Sail 的 `docs/releases/0.18.0.md`）：auto_route 要装的路由如果已经存在（例如另一个 VPN 装的），Sail 替换它并记下来，引擎经 `Runtime::replaced_routes` 放进 `status.replaced_routes`。Sail 撤掉自己的路由时（停止，或规则集重填），把被替换的路由放回去，前提是 Sail 自己的路由还在、原来的网卡还在；放不回的列在停止报告的残留里，附手工恢复的 `route add` 命令。实例被强杀后，同一次开机里下一次启动时按记录放回。
 
 | Go 测试 | 行为摘要 | Rust 用例 | 状态 | 备注 |
 | --- | --- | --- | --- | --- |

@@ -833,6 +833,49 @@ async fn a_reload_of_the_inbounds_alone_keeps_the_rest() {
     runtime.stop().await.unwrap();
 }
 
+// sail 0.18's recheck (embed.md, Rechecking the connections open): every
+// reload matches the connections open against the routing it leaves, and
+// closes those its rules now reject. A connection to the echo server, then
+// a reload with a rule rejecting the echo server's port: the report names
+// the connection by its listed id with the rule's index, and it is closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reload_closes_the_connections_a_new_rule_rejects() {
+    let echo = echo().await;
+    let port = free_port();
+    let base = config(port, &[], false);
+    let runtime = SailRuntime::new(options("recheck")).unwrap();
+    runtime.start(&base).await.unwrap();
+    let mut open = socks_open(port, echo).await.expect("through the proxy");
+    round_trip(&mut open, b"before the rule").await;
+    let to_echo = format!(":{}", echo.port());
+    let id = tokio::time::timeout(WAIT, async {
+        loop {
+            let listed = runtime.connections().await.unwrap();
+            if let Some(c) = listed.iter().find(|c| c.destination.ends_with(&to_echo)) {
+                return c.id;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the connection is listed");
+
+    let mut ruled: serde_json::Value = serde_json::from_str(&base).unwrap();
+    ruled["route"]["rules"] = serde_json::json!([{ "port": [echo.port()], "action": "reject" }]);
+    let report = runtime.reload(&ruled.to_string()).await.unwrap();
+    assert_eq!(report.recheck_closed, [(id, Some(0))], "{report:?}");
+    let mut buf = [0u8; 1];
+    let read = tokio::time::timeout(WAIT, open.read(&mut buf))
+        .await
+        .expect("closed in time");
+    assert!(matches!(read, Ok(0) | Err(_)), "it is closed: {read:?}");
+
+    // Nothing more to reject: a reload with the same rules closes none.
+    let report = runtime.reload(&ruled.to_string()).await.unwrap();
+    assert!(report.recheck_closed.is_empty(), "{report:?}");
+    runtime.stop().await.unwrap();
+}
+
 // A rule naming an inbound that does not run (the local proxy's rules
 // while its listener is left out, #229): sail starts the configuration,
 // takes the inbound back by an inbounds-only reload, and leaves it out
