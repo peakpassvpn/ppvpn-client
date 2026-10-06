@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use ppvpn_account::auth::{CredentialStore, StoreFailure};
 use ppvpn_cli::buildinfo::{BuildConfig, Profile};
 use ppvpn_cli::env::{Env, Os};
 use ppvpn_cli::keystore::MemoryStore;
@@ -287,6 +288,50 @@ fn a_denied_authorization_is_reported_and_saves_nothing() {
     assert_eq!(out.code, 3);
     assert_eq!(out.json()["code"], "AUTH_DEVICE_DENIED");
     assert!(cli.store.is_empty());
+}
+
+/// A secret store that cannot be used: none on the machine, or locked.
+struct BrokenStore {
+    locked: bool,
+}
+
+impl BrokenStore {
+    fn failure(&self) -> StoreFailure {
+        StoreFailure {
+            locked: self.locked,
+            message: "no secret store in this test".into(),
+        }
+    }
+}
+
+impl CredentialStore for BrokenStore {
+    fn load(&self) -> Result<Option<Vec<u8>>, StoreFailure> {
+        Err(self.failure())
+    }
+    fn save(&self, _: Vec<u8>) -> Result<(), StoreFailure> {
+        Err(self.failure())
+    }
+    fn delete(&self) -> Result<(), StoreFailure> {
+        Err(self.failure())
+    }
+}
+
+#[test]
+fn login_without_a_usable_secret_store_fails_before_the_backend() {
+    let backend = Backend::serve(|base| vec![device_code(base)]);
+    for (locked, code) in [
+        (false, "CREDENTIAL_STORE_UNAVAILABLE"),
+        (true, "CREDENTIAL_STORE_LOCKED"),
+    ] {
+        let mut cli = Cli::new(&backend.base);
+        cli.hooks.store = Some(Arc::new(BrokenStore { locked }));
+        let out = cli.run(&["--json", "login", "--no-browser"]);
+        assert_eq!(out.code, 8, "locked: {locked}");
+        assert_eq!(out.json()["code"], code);
+        assert!(!out.stderr.contains("Confirmation code"));
+    }
+    // No device authorization was started that nobody could finish.
+    assert!(backend.requests().is_empty());
 }
 
 #[test]
