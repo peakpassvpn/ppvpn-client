@@ -55,7 +55,10 @@ fn answer_for(query: &Message, last: u8, truncated: bool) -> Vec<u8> {
     answer.to_vec().unwrap()
 }
 
-/// Starts a fake on loopback (UDP and TCP on the same port); counts queries.
+/// Starts a fake on loopback (UDP and TCP on the same port); counts the
+/// queries it reads. Only a whole DNS query counts: another test's probe
+/// of a port it freed (a bare connect, which the OS may hand this fake)
+/// is not one.
 async fn start(kind: Fake, queries: Arc<AtomicU32>) -> SocketAddr {
     let (tcp, udp) = listener::bind_pair().await.unwrap();
     let addr = udp.local_addr().unwrap();
@@ -63,8 +66,10 @@ async fn start(kind: Fake, queries: Arc<AtomicU32>) -> SocketAddr {
     tokio::spawn(async move {
         let mut buffer = vec![0u8; 65535];
         while let Ok((n, peer)) = udp.recv_from(&mut buffer).await {
+            let Ok(query) = Message::from_vec(&buffer[..n]) else {
+                continue;
+            };
             counted.fetch_add(1, Ordering::SeqCst);
-            let query = Message::from_vec(&buffer[..n]).unwrap();
             match kind {
                 Fake::Silent => {}
                 Fake::Answers(last) => {
@@ -92,12 +97,18 @@ async fn start(kind: Fake, queries: Arc<AtomicU32>) -> SocketAddr {
     });
     tokio::spawn(async move {
         while let Ok((mut stream, _)) = tcp.accept().await {
-            queries.fetch_add(1, Ordering::SeqCst);
             let mut length = [0u8; 2];
-            stream.read_exact(&mut length).await.unwrap();
+            if stream.read_exact(&mut length).await.is_err() {
+                continue;
+            }
             let mut buffer = vec![0u8; u16::from_be_bytes(length) as usize];
-            stream.read_exact(&mut buffer).await.unwrap();
-            let query = Message::from_vec(&buffer).unwrap();
+            if stream.read_exact(&mut buffer).await.is_err() {
+                continue;
+            }
+            let Ok(query) = Message::from_vec(&buffer) else {
+                continue;
+            };
+            queries.fetch_add(1, Ordering::SeqCst);
             let Fake::Truncates(last) = kind else {
                 continue;
             };
