@@ -64,7 +64,8 @@ apps/
 ├── dotnet-shared/  # PPVPN.App.Core（Windows 与 Linux 共用的视图模型）、PPVPN.Client
 └── assets/icons/   # 品牌与托盘图标
 crates/
-├── desktop/        # 共享客户端核心（账号、Profile、连接状态机、健康检查、UniFFI）
+├── account/        # 账号代码（与 CLI 共用）：后端 API、设备登录、推送设备注册、Profile 视图
+├── desktop/        # 共享客户端核心（会话、连接状态机、健康检查、UniFFI）
 ├── engine-host/    # 进程内引擎上的 Core API v1（客户端与特权服务共用）
 └── service/        # 特权服务：进程内运行增强模式引擎、client↔service IPC、清理旧版残留的系统 DNS（macOS）
 tools/desktop/      # build-service.sh、签名、图标与 CI 辅助脚本

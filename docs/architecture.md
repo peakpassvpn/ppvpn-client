@@ -60,7 +60,7 @@ flowchart LR
 | crate | 作用 |
 | --- | --- |
 | `crates/cli` | `ppvpn` 命令行客户端，daemon 里运行一个标准实例，见 [CLI](cli.md) |
-| `crates/account` | 登录和拉取 Profile |
+| `crates/account` | CLI 和桌面端共用的账号代码：后端 API、设备登录和凭据轮换、401 重试、推送设备注册、Profile 的界面视图；两端只在产品头、token audience 和凭据存储上不同 |
 | `crates/core-lab` | 测试宿主：以 `ppvpn-core serve` 的参数和日志格式、经 Unix socket 提供 lab 用到的 Core API v1，不是产品 |
 | `crates/engine-host` | 桌面端的 Core API v1 到 `Engine` 的映射 |
 
