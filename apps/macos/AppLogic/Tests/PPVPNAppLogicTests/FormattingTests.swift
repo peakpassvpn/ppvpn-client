@@ -113,7 +113,7 @@ final class FormattingTests: LogicTestCase {
     func testLocalProxyForms() {
         let proxy = LocalProxy(nodeId: "n", host: "127.0.0.1", port: 17890, username: "u", password: "p")
         XCTAssertEqual(proxy.httpURL, "http://u:p@127.0.0.1:17890")
-        XCTAssertEqual(proxy.socksAddress, "socks5://127.0.0.1:17890")
+        XCTAssertEqual(proxy.socksAddress, "socks5h://127.0.0.1:17890")
     }
 
     func testMessageKinds() {
