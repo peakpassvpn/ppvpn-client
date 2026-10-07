@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, MutexGuard, Weak};
 use std::time::Duration;
 
+use ppvpn_account::session::{with_bearer, RetrySchedule, ACCESS_TOKEN_MARGIN};
 use serde::{Deserialize, Serialize};
 
 use crate::api::{self, ApiError, TeamEntry};
@@ -26,32 +27,17 @@ use crate::{
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Retry period after a failed background refresh, e.g. offline at launch.
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
-/// Refresh the access token this long before it expires.
-const ACCESS_TOKEN_MARGIN: Duration = Duration::from_secs(60);
-/// Credential-store retry after a failed read at launch (e.g. a login item
-/// started before the keychain was unlocked): fast for the first window,
-/// then slow.
-const CREDENTIAL_RETRY_FAST: Duration = if cfg!(test) {
-    Duration::from_millis(20)
-} else {
-    Duration::from_secs(30)
-};
-const CREDENTIAL_RETRY_SLOW: Duration = if cfg!(test) {
-    Duration::from_millis(50)
-} else {
-    Duration::from_secs(5 * 60)
-};
-const CREDENTIAL_RETRY_FAST_WINDOW: Duration = Duration::from_secs(10 * 60);
-
-/// Delay before the next credential-store retry, `elapsed` after the first
-/// failure.
-fn credential_retry_delay(elapsed: Duration, fast: Duration, slow: Duration) -> Duration {
-    if elapsed < CREDENTIAL_RETRY_FAST_WINDOW {
-        fast
-    } else {
-        slow
+/// Credential-store retry after a failed read at launch
+/// ([`RetrySchedule::CREDENTIAL_STORE`]); much shorter in tests.
+const CREDENTIAL_RETRY: RetrySchedule = if cfg!(test) {
+    RetrySchedule {
+        fast: Duration::from_millis(20),
+        slow: Duration::from_millis(50),
+        fast_window: RetrySchedule::CREDENTIAL_STORE.fast_window,
     }
-}
+} else {
+    RetrySchedule::CREDENTIAL_STORE
+};
 
 /// The background re-read of a credential store that failed at launch
 /// ([`Client::spawn_credential_retry`]), and the wake-up for an immediate
@@ -478,11 +464,7 @@ impl Client {
             let mut attempt: u32 = 0;
             loop {
                 attempt = attempt.saturating_add(1);
-                let delay = credential_retry_delay(
-                    started.elapsed(),
-                    CREDENTIAL_RETRY_FAST,
-                    CREDENTIAL_RETRY_SLOW,
-                );
+                let delay = CREDENTIAL_RETRY.delay(started.elapsed());
                 tokio::select! {
                     () = tokio::time::sleep(delay) => {}
                     () = wake.notified() => {
@@ -853,14 +835,16 @@ impl Client {
         Fut: Future<Output = Result<T, ApiError>>,
     {
         let token = self.ensure_access(session).await?;
-        match call(token.clone()).await {
-            Err(error) if error.is_unauthorized() => {
-                self.invalidate_access(session, &token);
-                let token = self.ensure_access(session).await?;
-                call(token).await.map_err(map)
-            }
-            other => other.map_err(map),
-        }
+        with_bearer(
+            token,
+            call,
+            |refused| async move {
+                self.invalidate_access(session, &refused);
+                self.ensure_access(session).await
+            },
+            map,
+        )
+        .await
     }
 
     // --- account, teams, profile -----------------------------------------------
@@ -1230,7 +1214,6 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use super::credential_retry_delay;
     use super::load_selection;
     use crate::auth::test_support::{serve, serve_with, token_set, MemoryPlatform};
     use crate::{
@@ -1467,20 +1450,6 @@ mod tests {
         fn uninstall_privileged_service(&self) -> Result<(), PlatformError> {
             Ok(())
         }
-    }
-
-    #[test]
-    fn credential_retry_schedule_is_fast_then_slow() {
-        let (fast, slow) = (Duration::from_secs(30), Duration::from_secs(300));
-        assert_eq!(credential_retry_delay(Duration::ZERO, fast, slow), fast);
-        assert_eq!(
-            credential_retry_delay(Duration::from_secs(599), fast, slow),
-            fast
-        );
-        assert_eq!(
-            credential_retry_delay(Duration::from_secs(600), fast, slow),
-            slow
-        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use ppvpn_account::api::{Api, ApiConfig, ApiError, PATH_PROXY_PROFILE};
 use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore};
+use ppvpn_account::session::with_bearer;
 
 use crate::buildinfo::{BuildConfig, Profile};
 use crate::env::Env;
@@ -162,25 +163,21 @@ pub async fn access_token(auth: &Auth) -> Result<String> {
 /// Downloads the proxy profile as raw bytes; core parses and validates it.
 pub async fn download_profile(auth: &Auth) -> Result<Vec<u8>> {
     let token = access_token(auth).await?;
-    match auth.api().proxy_profile(&token).await {
-        Ok(profile) => Ok(profile),
-        // The token may have been revoked or rotated elsewhere: refresh
-        // once, then give up with the login error.
-        Err(err) if err.is_unauthorized() => {
-            let token = {
-                let _guard = auth.lock().await;
-                auth.refresh_or_clear()
-                    .await
-                    .map_err(|e| auth_error(&e))?
-                    .token
-            };
-            auth.api()
-                .proxy_profile(&token)
+    // The token may have been revoked or rotated elsewhere: refresh once,
+    // then give up with the login error.
+    with_bearer(
+        token,
+        |token| async move { auth.api().proxy_profile(&token).await },
+        |_| async move {
+            let _guard = auth.lock().await;
+            auth.refresh_or_clear()
                 .await
-                .map_err(|e| api_error(&e))
-        }
-        Err(err) => Err(api_error(&err)),
-    }
+                .map(|access| access.token)
+                .map_err(|e| auth_error(&e))
+        },
+        |e| api_error(&e),
+    )
+    .await
 }
 
 #[cfg(test)]
