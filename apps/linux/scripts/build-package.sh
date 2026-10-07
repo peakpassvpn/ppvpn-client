@@ -23,7 +23,7 @@
 #   PPVPN_API_BASE            backend baked into the app (default https://www.peakpassvpn.com)
 #   PPVPN_UPDATE_FEED         latest.json the app polls for the update notice
 #                             (default <PPVPN_UPDATE_SITE, else https://pkg.peakpassvpn.com>/linux/<channel or stable>/latest.json)
-#   PPVPN_PACKAGE_MAINTAINER  deb Maintainer / rpm Packager (default: PeakPass VPN LLC <support@peakpassvpn.com>)
+#   PPVPN_PACKAGE_MAINTAINER  deb Maintainer / rpm Packager (default: PeakPass Labs LLC <support@peakpassvpn.com>)
 #   PPVPN_DIST_DIR            output directory (default: dist/linux)
 set -euo pipefail
 
@@ -129,7 +129,7 @@ PY
 mkdir -p "$OUT_DIR"
 export NFPM_ARCH PPVPN_VERSION="$VERSION" PPVPN_BUILD_NUMBER="$BUILD"
 export PPVPN_STAGE_DIR="$STAGE" PPVPN_PACKAGING_DIR="$APP_DIR/packaging"
-export PPVPN_PACKAGE_MAINTAINER="${PPVPN_PACKAGE_MAINTAINER:-PeakPass VPN LLC <support@peakpassvpn.com>}"
+export PPVPN_PACKAGE_MAINTAINER="${PPVPN_PACKAGE_MAINTAINER:-PeakPass Labs LLC <support@peakpassvpn.com>}"
 expand_config "$APP_DIR/packaging/nfpm.yaml" "$WORK/nfpm.yaml"
 PACKAGES=()
 for format in deb rpm; do

@@ -17,7 +17,7 @@ release: ${PPVPN_BUILD_NUMBER}
 section: net
 priority: optional
 maintainer: ${PPVPN_PACKAGE_MAINTAINER}
-vendor: PeakPass VPN LLC
+vendor: PeakPass Labs LLC
 homepage: https://www.peakpassvpn.com
 license: GPL-3.0-or-later
 description: |-

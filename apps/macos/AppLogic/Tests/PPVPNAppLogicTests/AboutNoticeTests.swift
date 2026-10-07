@@ -18,7 +18,7 @@ final class AboutNoticeTests: LogicTestCase {
 
     /// The bundles' NSHumanReadableCopyright (About panel) says the same.
     func testCopyrightMatchesTheBundles() throws {
-        XCTAssertEqual(AboutNotice.copyright, "© 2026 PeakPass VPN LLC")
+        XCTAssertEqual(AboutNotice.copyright, "© 2026 PeakPass Labs LLC")
         let project = try String(contentsOf: Repo.sources.appendingPathComponent("project.yml"), encoding: .utf8)
         let lines = project.split(separator: "\n").filter { $0.contains("INFOPLIST_KEY_NSHumanReadableCopyright") }
         XCTAssertEqual(lines.count, 2, "the app and the push agent")

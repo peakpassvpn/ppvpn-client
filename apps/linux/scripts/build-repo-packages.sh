@@ -14,7 +14,7 @@
 #                               published file under its name for good and refuses to replace one
 #                               with other bytes, so a version is built byte for byte the same
 #                               every time: its timestamp is fixed (PACKAGE_TIME below).
-#   PPVPN_PACKAGE_MAINTAINER    deb Maintainer / rpm Packager (default: PeakPass VPN LLC <support@peakpassvpn.com>)
+#   PPVPN_PACKAGE_MAINTAINER    deb Maintainer / rpm Packager (default: PeakPass Labs LLC <support@peakpassvpn.com>)
 #   PPVPN_DIST_DIR              output directory (default: dist/linux)
 #
 # Tools: nfpm, python3.
@@ -84,7 +84,7 @@ mkdir -p "$OUT_DIR"
 export PPVPN_REPO_PACKAGE_VERSION="$VERSION" PPVPN_REPO_KEY="$KEY" PPVPN_REPO_STAGE="$STAGE"
 export PPVPN_REPO_PACKAGE_TIME="$PACKAGE_TIME"
 export PPVPN_REPO_DIR="$APP_DIR/packaging"
-export PPVPN_PACKAGE_MAINTAINER="${PPVPN_PACKAGE_MAINTAINER:-PeakPass VPN LLC <support@peakpassvpn.com>}"
+export PPVPN_PACKAGE_MAINTAINER="${PPVPN_PACKAGE_MAINTAINER:-PeakPass Labs LLC <support@peakpassvpn.com>}"
 PPVPN_REPO_PACKAGE=ppvpn-archive-keyring expand_config "$APP_DIR/packaging/nfpm-keyring.yaml" "$STAGE/keyring-deb.yaml"
 PPVPN_REPO_PACKAGE=ppvpn-release expand_config "$APP_DIR/packaging/nfpm-keyring.yaml" "$STAGE/keyring-rpm.yaml"
 nfpm package --config "$STAGE/keyring-deb.yaml" --packager deb --target "$OUT_DIR/ppvpn-archive-keyring_${VERSION}_all.deb"

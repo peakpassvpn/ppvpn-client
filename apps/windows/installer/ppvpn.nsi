@@ -56,7 +56,7 @@ RequestExecutionLevel admin
 !endif
 
 !define APP_NAME "PPVPN"
-!define PUBLISHER "PeakPass VPN LLC"
+!define PUBLISHER "PeakPass Labs LLC"
 !define APP_EXE "ppvpn.exe"
 ; PPVPN.PushAgent (Program.cs) and PPVPN.Windows/Platform/PushAgentAutostart.cs
 !define AGENT_EXE "ppvpn-push-agent.exe"
