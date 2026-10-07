@@ -10,7 +10,7 @@ mtime: ${PPVPN_REPO_PACKAGE_TIME}
 section: misc
 priority: optional
 maintainer: ${PPVPN_PACKAGE_MAINTAINER}
-vendor: PeakPass VPN LLC
+vendor: PeakPass Labs LLC
 homepage: https://www.peakpassvpn.com
 license: GPL-3.0-or-later
 description: |-

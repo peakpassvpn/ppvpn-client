@@ -10,7 +10,7 @@ public enum AboutNotice {
     public static let licenseURL = URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!
     /// The copyright line, the same in every language (also the bundles'
     /// NSHumanReadableCopyright).
-    public static let copyright = "© 2026 PeakPass VPN LLC"
+    public static let copyright = "© 2026 PeakPass Labs LLC"
 
     /// `aboutLicense`: free software under the GPL, no warranty.
     public static var notice: String { tr("aboutLicense") }

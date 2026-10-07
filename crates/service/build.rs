@@ -60,10 +60,10 @@ fn version_resource() {
     res.set_icon(icon.to_str().expect("UTF-8 icon path"));
     res.set("FileVersion", &version)
         .set("ProductVersion", &version)
-        .set("CompanyName", "PeakPass VPN LLC")
+        .set("CompanyName", "PeakPass Labs LLC")
         .set("ProductName", "PPVPN")
         .set("FileDescription", "PPVPN privileged service")
-        .set("LegalCopyright", "© PeakPass VPN LLC")
+        .set("LegalCopyright", "© PeakPass Labs LLC")
         .set_version_info(winresource::VersionInfo::FILEVERSION, packed)
         .set_version_info(winresource::VersionInfo::PRODUCTVERSION, packed);
     res.compile().expect("compile the Windows version resource");

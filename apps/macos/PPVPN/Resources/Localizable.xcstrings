@@ -4818,13 +4818,13 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已验证的发布者：PPVPN Ltd."
+            "value": "已验证的发布者：PeakPass Labs LLC"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verified publisher: PPVPN Ltd."
+            "value": "Verified publisher: PeakPass Labs LLC"
           }
         }
       }

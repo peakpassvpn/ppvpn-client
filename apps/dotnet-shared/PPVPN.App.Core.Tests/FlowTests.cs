@@ -538,7 +538,7 @@ public sealed class ConnectionFlowTests
             t.Services.OpenFails = true;
             t.Main.Settings.OpenSourceCommand.Execute(null);
             Assert.Equal(["https://github.com/peakpassvpn/ppvpn-client"], t.Services.Copied);
-            Assert.Equal("© 2026 PeakPass VPN LLC", SettingsViewModel.Copyright);
+            Assert.Equal("© 2026 PeakPass Labs LLC", SettingsViewModel.Copyright);
             await Task.CompletedTask;
         });
     }

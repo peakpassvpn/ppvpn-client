@@ -2,7 +2,7 @@
 name = "ppvpn-service"
 version.workspace = true
 edition = "2021"
-authors = ["PeakPass VPN LLC"]
+authors = ["PeakPass Labs LLC"]
 description = "Privileged helper service for PPVPN transparent routing"
 license = "GPL-3.0-or-later"
 

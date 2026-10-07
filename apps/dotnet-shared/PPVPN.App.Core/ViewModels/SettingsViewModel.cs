@@ -91,7 +91,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public const string LicenseUrl = "https://www.gnu.org/licenses/gpl-3.0.html";
 
     /// <summary>About: the copyright line, the same in every language.</summary>
-    public const string Copyright = "© 2026 PeakPass VPN LLC";
+    public const string Copyright = "© 2026 PeakPass Labs LLC";
 
     [RelayCommand]
     void OpenSource() => OpenOrCopy(SourceUrl);

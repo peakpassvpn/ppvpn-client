@@ -69,7 +69,7 @@ public static class AppUpdater
                 log.Error("updates disabled: invalid EdDSA public key");
                 return;
             }
-            win_sparkle_set_app_details("PeakPass VPN LLC", "PPVPN", displayVersion);
+            win_sparkle_set_app_details("PeakPass Labs LLC", "PPVPN", displayVersion);
             // sparkle:version in the appcast is the monotonic FileVersion (e.g. 0.3.0.12).
             if (buildVersion.Length > 0) win_sparkle_set_app_build_version(buildVersion);
             win_sparkle_set_registry_path(RegistryPath);

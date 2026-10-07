@@ -3,7 +3,7 @@
 GTK 4 / libadwaita app (C# with Gir.Core) on the shared view models in
 `apps/dotnet-shared/PPVPN.App.Core` and the Rust client `crates/desktop`. x86_64 only.
 Paths and commands here are relative to the repository root.
-Packaged by PeakPass VPN LLC <support@peakpassvpn.com>.
+Packaged by PeakPass Labs LLC <support@peakpassvpn.com>.
 
 Runs on Ubuntu 22.04+, Debian 12+ and Fedora 36+: glibc 2.35, GTK 4.6 and libadwaita
 1.1 are the floor, so the UI uses only libadwaita 1.1 API (no ToolbarView, SwitchRow,

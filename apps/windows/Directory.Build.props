@@ -15,8 +15,8 @@
     <FileVersion>$(VersionPrefix).$(PpvpnBuildNumber)</FileVersion>
     <AssemblyVersion>$(FileVersion)</AssemblyVersion>
     <Product>PPVPN</Product>
-    <Company>PeakPass VPN LLC</Company>
-    <Copyright>© PeakPass VPN LLC</Copyright>
+    <Company>PeakPass Labs LLC</Company>
+    <Copyright>© PeakPass Labs LLC</Copyright>
     <!-- CI builds with -warnaserror; only high/critical NuGet advisories (NU1903/NU1904) fail it. -->
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902</WarningsNotAsErrors>
   </PropertyGroup>
