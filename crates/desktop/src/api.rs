@@ -136,21 +136,13 @@ impl ApiErrorExt for ApiError {
     }
 }
 
+/// The client error code of a [`SubscriptionProblem`].
 fn subscription_code(status: StatusCode, code: Option<&str>) -> Option<ErrorCode> {
-    match code {
-        Some(PROBLEM_TEAM_DISABLED) if status == StatusCode::FORBIDDEN => {
-            Some(ErrorCode::TeamDisabled)
-        }
-        Some(PROBLEM_TEAM_DISSOLVED) if status == StatusCode::NOT_FOUND => {
-            Some(ErrorCode::TeamDisabled)
-        }
-        Some("SUBSCRIPTION_EXPIRED") => Some(ErrorCode::SubscriptionExpired),
-        Some(
-            "SUBSCRIPTION_NOT_FOUND" | "SUBSCRIPTION_NOT_ACTIVE" | "POINTS_NO_ACTIVE_SUBSCRIPTION",
-        ) => Some(ErrorCode::NoSubscription),
-        _ if status == StatusCode::PAYMENT_REQUIRED => Some(ErrorCode::NoSubscription),
-        _ => None,
-    }
+    subscription_problem(status, code).map(|problem| match problem {
+        SubscriptionProblem::TeamDisabled => ErrorCode::TeamDisabled,
+        SubscriptionProblem::Expired => ErrorCode::SubscriptionExpired,
+        SubscriptionProblem::NoSubscription => ErrorCode::NoSubscription,
+    })
 }
 
 // ---------------------------------------------------------------------------
