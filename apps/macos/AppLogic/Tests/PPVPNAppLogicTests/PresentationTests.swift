@@ -154,7 +154,7 @@ final class PresentationTests: LogicTestCase {
         XCTAssertEqual(routed.httpURL, "http://u:p@127.0.0.1:17890")
         // The node's own user stays on the Nodes page, for every node.
         XCTAssertEqual(state.proxies["hk-1"], nodeProxy)
-        XCTAssertEqual(nodeProxy.socksURL, "socks5://u-hk1:p@127.0.0.1:17890")
+        XCTAssertEqual(nodeProxy.socksURL, "socks5h://u-hk1:p@127.0.0.1:17890")
     }
 
     func testWithoutRoutedUserTheCardSaysUnavailable() async {

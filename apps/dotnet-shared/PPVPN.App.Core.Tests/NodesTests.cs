@@ -33,7 +33,7 @@ public sealed class NodesTests
             Assert.Equal("nodeProxyT(n=东京 01)", nodes.SelectedNodeProxyTitle);
             Assert.Equal(("u8f2k-jp1", "127.0.0.1:7890"), (nodes.SelectedNodeProxy!.Username, nodes.SelectedNodeProxy.Endpoint));
             nodes.Items[3].CopySocksCommand.Execute(null);
-            Assert.Equal($"socks5://u8f2k-jp1:{FakeClientBackend.ProxyPassword}@127.0.0.1:7890", h.Services.Copied.Single());
+            Assert.Equal($"socks5h://u8f2k-jp1:{FakeClientBackend.ProxyPassword}@127.0.0.1:7890", h.Services.Copied.Single());
 
             // Double-click sets the current node.
             Assert.True(nodes.Items[3].SetCurrentCommand.CanExecute(null));

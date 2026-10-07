@@ -49,13 +49,15 @@ public sealed partial class ProxyInfo : ObservableObject
     public ushort Port => Proxy.Port;
     /// <summary>"http://127.0.0.1:7890".</summary>
     public string HttpDisplay => $"http://{Proxy.Host}:{Proxy.Port}";
-    /// <summary>
-    /// The routed user (no node): its traffic follows domain rules, which SOCKS5 by IP misses, so
-    /// its SOCKS URLs ask the proxy to resolve (<c>socks5h://</c>).
-    /// </summary>
+    /// <summary>The routed user (no node), whose traffic follows the rules.</summary>
     public bool IsRouted => Proxy.NodeId.Length == 0;
-    string SocksScheme => IsRouted ? "socks5h" : "socks5";
-    /// <summary>"socks5://127.0.0.1:7890" ("socks5h://…" for the routed user).</summary>
+    /// <summary>
+    /// SOCKS URLs ask the proxy to resolve (<c>socks5h://</c>) for every user: the routed user's
+    /// domain rules need the name, and a node user resolving locally can get a poisoned answer and
+    /// leaks the lookup outside the proxy.
+    /// </summary>
+    const string SocksScheme = "socks5h";
+    /// <summary>"socks5h://127.0.0.1:7890".</summary>
     public string SocksDisplay => $"{SocksScheme}://{Proxy.Host}:{Proxy.Port}";
     /// <summary>"127.0.0.1:7890" (the Nodes bottom card buttons).</summary>
     public string Endpoint => $"{Proxy.Host}:{Proxy.Port}";

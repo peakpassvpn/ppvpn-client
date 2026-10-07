@@ -35,7 +35,7 @@ public sealed class ConnectionTests
 
             // Local proxy of the current node: shared port, user name per node, masked password.
             var proxy = main.CurrentNodeProxy!;
-            Assert.Equal(("http://127.0.0.1:7890", "socks5://127.0.0.1:7890", "u8f2k-hk1", "••••••"),
+            Assert.Equal(("http://127.0.0.1:7890", "socks5h://127.0.0.1:7890", "u8f2k-hk1", "••••••"),
                 (proxy.HttpDisplay, proxy.SocksDisplay, proxy.Username, proxy.MaskedPassword));
             proxy.CopyHttpCommand.Execute(null);
             Assert.Equal("http://u8f2k-hk1:secret@127.0.0.1:7890", t.Services.Copied.Single());
@@ -76,7 +76,7 @@ public sealed class ConnectionTests
             Assert.All(main.Nodes.Items, item => Assert.Equal($"u8f2k-{item.Id}", item.Proxy!.Username));
             var other = main.Nodes.Items.First(i => !i.IsCurrent);
             other.CopySocksCommand.Execute(null);
-            Assert.Equal($"socks5://u8f2k-{other.Id}:secret@127.0.0.1:7890", t.Services.Copied.Last());
+            Assert.Equal($"socks5h://u8f2k-{other.Id}:secret@127.0.0.1:7890", t.Services.Copied.Last());
         });
     }
 

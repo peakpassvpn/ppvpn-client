@@ -686,7 +686,9 @@ extension LocalProxy {
     /// The routed user (no node): its traffic follows domain rules, which
     /// SOCKS5 by IP misses, so its SOCKS URLs ask the proxy to resolve.
     public var isRouted: Bool { nodeId.isEmpty }
-    private var socksScheme: String { isRouted ? "socks5h" : "socks5" }
+    /// The proxy resolves (socks5h) for every user: the routed user's rules need the name, and a
+    /// node user resolving locally can get a poisoned answer and leaks the lookup.
+    private var socksScheme: String { "socks5h" }
 
     /// The same port serves HTTP and SOCKS5; copies carry the credentials.
     public var httpURL: String { "http://\(username):\(password)@\(host):\(port)" }
