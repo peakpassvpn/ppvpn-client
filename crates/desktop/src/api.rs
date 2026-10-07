@@ -6,9 +6,9 @@
 //! the backend problem `code` travel into [`ClientError`] details.
 
 use reqwest::StatusCode;
-use serde::Deserialize;
 
 pub(crate) use ppvpn_account::api::*;
+use ppvpn_account::profile::{NodeView, ProfileView, ReplicaView};
 
 use crate::errors::{http_error, transport_error, ClientError, ErrorCode};
 use crate::{Account, Node, ProfileSummary, Replica, Team};
@@ -146,12 +146,11 @@ fn subscription_code(status: StatusCode, code: Option<&str>) -> Option<ErrorCode
 }
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // Proxy profile (UI summary only)
 // ---------------------------------------------------------------------------
 
-/// What the UI needs from a proxy profile. The raw bytes stay authoritative;
-/// this lenient view ignores every field it does not read.
+/// What the UI needs from a proxy profile ([`ppvpn_account::profile`]), as
+/// the UniFFI records. The raw bytes stay authoritative.
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedProfile {
     pub(crate) summary: ProfileSummary,
@@ -159,193 +158,55 @@ pub(crate) struct ParsedProfile {
     pub(crate) default_node_id: Option<String>,
 }
 
-/// The only proxy-profile schema this client accepts (no negotiation).
-const PROFILE_SCHEMA_VERSION: u64 = 1;
-
-#[derive(Deserialize)]
-struct ProfileDoc {
-    #[serde(default)]
-    schema_version: Option<u64>,
-    #[serde(default)]
-    revision: String,
-    #[serde(default)]
-    expires_at: String,
-    #[serde(default)]
-    nodes: Vec<ProfileNode>,
-    #[serde(default)]
-    selection: Option<ProfileSelection>,
-}
-
-#[derive(Deserialize)]
-struct ProfileSelection {
-    #[serde(default)]
-    default_node_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ProfileNode {
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    entry_key: String,
-    #[serde(default)]
-    entry_label: Option<String>,
-    #[serde(default)]
-    exit: ProfileExit,
-    #[serde(default)]
-    capabilities: ProfileCapabilities,
-    #[serde(default)]
-    ingresses: Vec<ProfileIngress>,
-}
-
-#[derive(Deserialize, Default)]
-struct ProfileExit {
-    #[serde(default)]
-    region: Option<String>,
-    #[serde(default)]
-    country_code: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-struct ProfileCapabilities {
-    #[serde(default)]
-    udp: bool,
-}
-
-#[derive(Deserialize)]
-struct ProfileIngress {
-    #[serde(default)]
-    endpoint_key: String,
-    #[serde(default)]
-    replica_ordinal: u32,
-    #[serde(default)]
-    protocol: String,
-    /// Optional display name of the replica (≤ 32 chars).
-    #[serde(default)]
-    label: Option<String>,
-}
-
-fn non_empty(value: Option<String>) -> Option<String> {
-    value.filter(|value| !value.trim().is_empty())
-}
-
-/// Splits a flag emoji off the start of a node name: `"🇺🇸洛杉矶家宽-…"` is
-/// `("洛杉矶家宽-…", Some("US"))`. The server puts the flag in the name for
-/// clients that show names as plain text; the apps draw the flag themselves
-/// from the country code, so the name would show it twice (and Windows has
-/// no flag glyphs: "US"). Only one leading pair of regional indicators and
-/// the whitespace after it goes; a name that is nothing but the flag stays.
-fn split_flag(name: String) -> (String, Option<String>) {
-    const BASE: u32 = 0x1F1E6; // REGIONAL INDICATOR SYMBOL LETTER A
-    let letter = |c: char| {
-        let offset = (c as u32).checked_sub(BASE).filter(|offset| *offset < 26)?;
-        char::from_u32('A' as u32 + offset)
-    };
-    let mut chars = name.chars();
-    let (Some(first), Some(second)) =
-        (chars.next().and_then(letter), chars.next().and_then(letter))
-    else {
-        return (name, None);
-    };
-    let country = Some(format!("{first}{second}"));
-    let rest = chars.as_str().trim_start();
-    if rest.is_empty() {
-        return (name, country);
-    }
-    (rest.to_string(), country)
-}
-
-fn shape_error(detail: String) -> ClientError {
-    ClientError::failed(
-        ErrorCode::ProfileInvalid,
-        format!("PROFILE_SHAPE: {detail}"),
-    )
-}
-
-/// Rejects every document that is not the unified schema-1 profile: each
-/// node needs an id, an `entry_key` and at least one ingress with an
-/// `endpoint_key`. Unknown fields are ignored.
-fn check_shape(doc: &ProfileDoc) -> Result<(), ClientError> {
-    match doc.schema_version {
-        Some(PROFILE_SCHEMA_VERSION) => {}
-        Some(other) => return Err(shape_error(format!("schema_version {other} unsupported"))),
-        None => return Err(shape_error("schema_version missing".into())),
-    }
-    if doc.revision.trim().is_empty() {
-        return Err(shape_error("revision missing".into()));
-    }
-    for (index, node) in doc.nodes.iter().enumerate() {
-        if node.id.trim().is_empty() {
-            return Err(shape_error(format!("nodes[{index}].id missing")));
-        }
-        if node.entry_key.trim().is_empty() {
-            return Err(shape_error(format!("nodes[{index}].entry_key missing")));
-        }
-        if node.ingresses.is_empty() {
-            return Err(shape_error(format!("nodes[{index}].ingresses missing")));
-        }
-        if let Some(slot) = node
-            .ingresses
-            .iter()
-            .position(|ingress| ingress.endpoint_key.trim().is_empty())
-        {
-            return Err(shape_error(format!(
-                "nodes[{index}].ingresses[{slot}].endpoint_key missing"
-            )));
+impl From<ProfileView> for ParsedProfile {
+    fn from(view: ProfileView) -> Self {
+        let nodes: Vec<Node> = view.nodes.into_iter().map(Node::from).collect();
+        Self {
+            summary: ProfileSummary {
+                revision: view.revision,
+                expires_at: view.expires_at,
+                node_count: u32::try_from(nodes.len()).unwrap_or(u32::MAX),
+            },
+            nodes,
+            default_node_id: view.default_node_id,
         }
     }
-    Ok(())
+}
+
+impl From<NodeView> for Node {
+    fn from(node: NodeView) -> Self {
+        let (name, flag_country) = split_flag(node.name);
+        Self {
+            id: node.id,
+            name,
+            entry_key: node.entry_key,
+            entry_label: node.entry_label,
+            exit_region: node.exit_region,
+            exit_country_code: node.exit_country_code.or(flag_country),
+            udp: node.udp,
+            replicas: node.replicas.into_iter().map(Replica::from).collect(),
+        }
+    }
+}
+
+impl From<ReplicaView> for Replica {
+    fn from(replica: ReplicaView) -> Self {
+        Self {
+            endpoint_key: replica.endpoint_key,
+            replica_ordinal: replica.replica_ordinal,
+            protocol: replica.protocol,
+            label: replica.label,
+        }
+    }
 }
 
 /// Parse the UI summary out of raw proxy-profile bytes. Fails with
 /// `ProfileInvalid` when the document is not JSON or not the unified
 /// schema-1 shape (detail `PROFILE_SHAPE: …`).
 pub(crate) fn parse_profile(raw: &[u8]) -> Result<ParsedProfile, ClientError> {
-    let doc: ProfileDoc = serde_json::from_slice(raw)
-        .map_err(|error| ClientError::failed(ErrorCode::ProfileInvalid, error.to_string()))?;
-    check_shape(&doc)?;
-    let nodes: Vec<Node> = doc
-        .nodes
-        .into_iter()
-        .map(|node| {
-            let mut replicas: Vec<Replica> = node
-                .ingresses
-                .into_iter()
-                .map(|ingress| Replica {
-                    endpoint_key: ingress.endpoint_key,
-                    replica_ordinal: ingress.replica_ordinal,
-                    protocol: ingress.protocol,
-                    label: non_empty(ingress.label),
-                })
-                .collect();
-            replicas.sort_by_key(|replica| replica.replica_ordinal);
-            let (name, flag_country) = split_flag(node.name);
-            Node {
-                id: node.id,
-                name,
-                entry_key: node.entry_key,
-                entry_label: non_empty(node.entry_label),
-                exit_region: non_empty(node.exit.region),
-                exit_country_code: non_empty(node.exit.country_code).or(flag_country),
-                udp: node.capabilities.udp,
-                replicas,
-            }
-        })
-        .collect();
-    Ok(ParsedProfile {
-        summary: ProfileSummary {
-            revision: doc.revision,
-            expires_at: doc.expires_at,
-            node_count: u32::try_from(nodes.len()).unwrap_or(u32::MAX),
-        },
-        nodes,
-        default_node_id: non_empty(
-            doc.selection
-                .and_then(|selection| selection.default_node_id),
-        ),
-    })
+    ppvpn_account::profile::parse_profile(raw)
+        .map(ParsedProfile::from)
+        .map_err(|error| ClientError::failed(ErrorCode::ProfileInvalid, error.to_string()))
 }
 
 #[cfg(test)]
@@ -362,10 +223,10 @@ mod tests {
         assert_eq!(active, [true, false, true, false]);
     }
 
-    const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/proxy-profile.json");
+    const FIXTURE: &[u8] = include_bytes!("../../account/tests/fixtures/proxy-profile.json");
 
     #[test]
-    fn parses_fixture_profile_summary_and_nodes() {
+    fn fixture_profile_becomes_the_uniffi_summary() {
         let parsed = parse_profile(FIXTURE).expect("fixture parses");
         assert_eq!(
             parsed.summary.revision,
@@ -377,7 +238,6 @@ mod tests {
             parsed.default_node_id.as_deref(),
             Some("7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101")
         );
-
         let first = &parsed.nodes[0];
         assert_eq!(first.id, "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101");
         // The fixture's name starts with the flag ("🇺🇸洛杉矶家宽-…").
@@ -485,33 +345,13 @@ mod tests {
     #[test]
     fn rejects_the_old_profile_format() {
         let old = r#"{"schema_version":1,"revision":"r","expires_at":"2099-01-01T00:00:00Z","nodes":[{"id":"a-1","name":"x","exit":{"region":"东京"}}]}"#;
-        let detail = |raw: &[u8]| match parse_profile(raw).unwrap_err() {
+        match parse_profile(old.as_bytes()).unwrap_err() {
             ClientError::Failed {
                 code: ErrorCode::ProfileInvalid,
                 detail,
-            } => detail,
+            } => assert_eq!(detail, "PROFILE_SHAPE: nodes[0].entry_key missing"),
             other => panic!("unexpected {other:?}"),
-        };
-        assert_eq!(
-            detail(old.as_bytes()),
-            "PROFILE_SHAPE: nodes[0].entry_key missing"
-        );
-        assert_eq!(
-            detail(br#"{"schema_version":1,"revision":"r","nodes":[{"id":"a","entry_key":"k"}]}"#),
-            "PROFILE_SHAPE: nodes[0].ingresses missing"
-        );
-        assert_eq!(
-            detail(br#"{"schema_version":1,"revision":"r","nodes":[{"id":"a","entry_key":"k","ingresses":[{"protocol":"vless"}]}]}"#),
-            "PROFILE_SHAPE: nodes[0].ingresses[0].endpoint_key missing"
-        );
-        assert_eq!(
-            detail(br#"{"schema_version":2,"revision":"r","nodes":[]}"#),
-            "PROFILE_SHAPE: schema_version 2 unsupported"
-        );
-        assert_eq!(
-            detail(br#"{"revision":"r","nodes":[]}"#),
-            "PROFILE_SHAPE: schema_version missing"
-        );
+        }
     }
 
     #[test]

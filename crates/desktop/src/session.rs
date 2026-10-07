@@ -1223,7 +1223,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    const FIXTURE: &str = include_str!("../tests/fixtures/proxy-profile.json");
+    const FIXTURE: &str = include_str!("../../account/tests/fixtures/proxy-profile.json");
     const DEFAULT_NODE: &str = "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101";
 
     #[derive(Default)]
