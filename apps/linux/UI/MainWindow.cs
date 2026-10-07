@@ -26,7 +26,10 @@ public sealed class MainWindow
         _vm = vm;
         Window = Adw.ApplicationWindow.New(app);
         Window.SetTitle("PPVPN");
-        Window.SetDefaultSize(800, 580);
+        // Wide enough for the page switcher's labels in every language: the header centres it
+        // between the status line and the buttons on the right, and at 800 px the English labels
+        // ("Overview", "Nodes", "Logs") were cut to "O…".
+        Window.SetDefaultSize(900, 580);
         Window.SetSizeRequest(600, 460);
 
         _account = AccountMenu.Create(vm);
