@@ -440,7 +440,7 @@ impl Api {
     pub async fn register_device(
         &self,
         token: &str,
-        body: &Value,
+        body: &crate::device::DeviceRegistrationRequest,
     ) -> Result<DeviceRegistration, ApiError> {
         let request = self
             .http
