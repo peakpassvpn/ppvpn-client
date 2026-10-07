@@ -35,6 +35,21 @@ pub struct AuthConfig {
 /// device page: the old `/dashboard/cli/authorize` is refused.
 pub const VERIFICATION_PATHS: &[&str] = &["/dashboard/device/authorize"];
 
+/// The production host of the browser authorization page, for every client.
+pub const PRODUCTION_VERIFICATION_HOST: &str = "www.peakpassvpn.com";
+
+impl AuthConfig {
+    /// The production page ([`PRODUCTION_VERIFICATION_HOST`],
+    /// [`VERIFICATION_PATHS`]); a page on the configured API base is trusted
+    /// as well.
+    pub fn production() -> Self {
+        Self {
+            verification_host: PRODUCTION_VERIFICATION_HOST.to_string(),
+            verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
+        }
+    }
+}
+
 /// The host's secret store for the credential blob (Keychain, Credential
 /// Manager, Secret Service, ...). Called from any thread; may block briefly.
 pub trait CredentialStore: Send + Sync {
@@ -422,6 +437,16 @@ impl Auth {
 
     pub fn api(&self) -> &Api {
         &self.api
+    }
+
+    /// [`access_token_from`] for this client's token audience (e.g. the
+    /// token a team switch returns).
+    pub fn access_token_from(
+        &self,
+        token: String,
+        expires_in: Option<u64>,
+    ) -> Result<AccessToken, AuthError> {
+        access_token_from(token, expires_in, self.api.token_audience())
     }
 
     /// Held across credential rotation so a refresh, an activation and a
@@ -1609,6 +1634,34 @@ mod tests {
             .await
             .unwrap();
         assert!(heads.lock().unwrap()[0].contains("x-product-aud: app"));
+    }
+
+    #[test]
+    fn production_config_is_the_device_page_on_the_production_host() {
+        let config = AuthConfig::production();
+        assert_eq!(config.verification_host, "www.peakpassvpn.com");
+        assert_eq!(config.verification_paths, ["/dashboard/device/authorize"]);
+        let url = "https://www.peakpassvpn.com/dashboard/device/authorize?user_code=ABCD-EFGH";
+        assert!(validate_verification_url(
+            &config,
+            url,
+            "ABCD-EFGH",
+            "https://api.example.com",
+            false
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn auth_checks_tokens_against_its_api_audience() {
+        let auth = auth_with_audiences("https://api.example.com", None, "cli");
+        let cli = jwt(r#"{"aud":"cli"}"#);
+        assert!(auth.access_token_from(cli, Some(60)).is_ok());
+        let app = jwt(r#"{"aud":["app"]}"#);
+        assert!(matches!(
+            auth.access_token_from(app, None),
+            Err(AuthError::Untrusted("restricted session"))
+        ));
     }
 
     #[test]

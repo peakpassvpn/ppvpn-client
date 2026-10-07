@@ -4,17 +4,11 @@
 use std::sync::Arc;
 
 pub(crate) use ppvpn_account::auth::{AccessToken, Auth, AuthError, SignedIn};
-use ppvpn_account::auth::{
-    AuthConfig, CredentialStore, StoreError, StoreFailure, VERIFICATION_PATHS,
-};
+use ppvpn_account::auth::{AuthConfig, CredentialStore, StoreError, StoreFailure};
 
-use crate::api::{Api, ApiErrorExt, PRODUCT_AUDIENCE};
+use crate::api::{Api, ApiErrorExt};
 use crate::errors::{ClientError, ErrorCode};
 use crate::{PlatformError, PlatformHooks};
-
-/// Production verification page; any other host is rejected outside debug
-/// builds (the configured API base's own host aside).
-const VERIFICATION_HOST: &str = "www.peakpassvpn.com";
 
 /// Device name shown in the user's device list (and the admin broadcast
 /// picker): the app and the OS, so a user's machines can be told apart
@@ -29,24 +23,15 @@ pub(crate) fn device_name(platform: &str) -> String {
     format!("PPVPN Desktop · {os}")
 }
 
-/// The device-login coordinator for this client.
+/// The device-login coordinator for this client: the production
+/// verification page; any other host is rejected outside debug builds (the
+/// configured API base's own host aside).
 pub(crate) fn client_auth(api: Arc<Api>, platform: Arc<dyn PlatformHooks>) -> Auth {
     Auth::new(
         api,
         Arc::new(PlatformStore(platform)),
-        AuthConfig {
-            verification_host: VERIFICATION_HOST.to_string(),
-            verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
-        },
+        AuthConfig::production(),
     )
-}
-
-/// [`ppvpn_account::auth::access_token_from`] for the desktop audience.
-pub(crate) fn access_token_from(
-    token: String,
-    expires_in: Option<u64>,
-) -> Result<AccessToken, AuthError> {
-    ppvpn_account::auth::access_token_from(token, expires_in, PRODUCT_AUDIENCE)
 }
 
 /// The platform credential hooks as the account crate's store.

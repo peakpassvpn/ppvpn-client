@@ -3,39 +3,26 @@
 use std::sync::Arc;
 
 use ppvpn_account::api::{Api, ApiConfig, ApiError, PATH_PROXY_PROFILE};
-use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore, VERIFICATION_PATHS};
+use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore};
 
-use crate::buildinfo::{BuildConfig, Profile, PRODUCTION_API_BASE};
+use crate::buildinfo::{BuildConfig, Profile};
 use crate::env::Env;
 use crate::error::{CliError, Exit, Result};
 
-/// The backend issues `cli` tokens only through the device authorization
-/// that carries no product header (it rejects `cli` as a header value on
-/// purpose), so the CLI sends none and requires this audience.
-pub const TOKEN_AUDIENCE: &str = "cli";
+/// The CLI's access-token audience; it sends no product header
+/// ([`ApiConfig::cli`]).
+pub const TOKEN_AUDIENCE: &str = ppvpn_account::api::CLI_AUDIENCE;
 
 pub fn auth(config: &BuildConfig, env: &Env, store: Arc<dyn CredentialStore>) -> Auth {
-    let api = Api::new(ApiConfig {
-        base: config.api_base.clone(),
-        header_audience: None,
-        token_audience: TOKEN_AUDIENCE.to_string(),
-        accept_language: locale(env),
+    let api = Api::new(ApiConfig::cli(
+        &config.api_base,
+        locale(env),
         // Only a dev build may talk to a local mock backend.
-        trust_local_backend: config.profile == Profile::Dev,
-    });
-    let host = PRODUCTION_API_BASE
-        .trim_start_matches("https://")
-        .to_string();
-    Auth::new(
-        Arc::new(api),
-        store,
-        AuthConfig {
-            verification_host: host,
-            // The page's production host is the API's own; a dev build's page
-            // is trusted because it is on the configured API base.
-            verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
-        },
-    )
+        config.profile == Profile::Dev,
+    ));
+    // The page's production host is the API's own; a dev build's page is
+    // trusted because it is on the configured API base.
+    Auth::new(Arc::new(api), store, AuthConfig::production())
 }
 
 /// The POSIX locale as a language tag (`zh_CN.UTF-8` becomes `zh-CN`), or
@@ -200,6 +187,13 @@ pub async fn download_profile(auth: &Auth) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::env::Os;
+
+    #[test]
+    fn the_verification_page_is_on_the_production_api_host() {
+        let host = crate::buildinfo::PRODUCTION_API_BASE.trim_start_matches("https://");
+        assert_eq!(AuthConfig::production().verification_host, host);
+        assert_eq!(TOKEN_AUDIENCE, "cli");
+    }
 
     #[test]
     fn locale_tags() {

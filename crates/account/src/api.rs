@@ -156,6 +156,40 @@ pub struct ApiConfig {
     pub trust_local_backend: bool,
 }
 
+/// The desktop apps' product audience: sent as `X-Product-Aud` so the
+/// backend issues desktop sessions, and required on their access tokens.
+pub const DESKTOP_AUDIENCE: &str = "ppvpn";
+
+/// The CLI's token audience. The backend issues `cli` tokens only through
+/// the device authorization that carries no product header (it rejects
+/// `cli` as a header value on purpose), so the CLI sends none.
+pub const CLI_AUDIENCE: &str = "cli";
+
+impl ApiConfig {
+    /// The desktop apps: product header and token audience
+    /// [`DESKTOP_AUDIENCE`].
+    pub fn desktop(base: &str, accept_language: Option<String>, trust_local_backend: bool) -> Self {
+        Self {
+            base: base.to_string(),
+            header_audience: Some(DESKTOP_AUDIENCE.to_string()),
+            token_audience: DESKTOP_AUDIENCE.to_string(),
+            accept_language,
+            trust_local_backend,
+        }
+    }
+
+    /// The CLI: no product header, token audience [`CLI_AUDIENCE`].
+    pub fn cli(base: &str, accept_language: Option<String>, trust_local_backend: bool) -> Self {
+        Self {
+            base: base.to_string(),
+            header_audience: None,
+            token_audience: CLI_AUDIENCE.to_string(),
+            accept_language,
+            trust_local_backend,
+        }
+    }
+}
+
 /// HTTP client bound to one configured API base.
 pub struct Api {
     http: reqwest::Client,
@@ -633,6 +667,20 @@ mod tests {
             accept_language: None,
             trust_local_backend,
         })
+    }
+
+    #[test]
+    fn client_presets_differ_only_in_audience() {
+        let desktop = ApiConfig::desktop("https://api.example.com", Some("zh-CN".into()), true);
+        assert_eq!(desktop.header_audience.as_deref(), Some("ppvpn"));
+        assert_eq!(desktop.token_audience, "ppvpn");
+        assert_eq!(desktop.accept_language.as_deref(), Some("zh-CN"));
+        assert!(desktop.trust_local_backend);
+        let cli = ApiConfig::cli("https://api.example.com", None, false);
+        assert_eq!(cli.header_audience, None);
+        assert_eq!(cli.token_audience, "cli");
+        assert_eq!(cli.base, "https://api.example.com");
+        assert!(!cli.trust_local_backend);
     }
 
     #[test]

@@ -13,10 +13,6 @@ pub(crate) use ppvpn_account::api::*;
 use crate::errors::{http_error, transport_error, ClientError, ErrorCode};
 use crate::{Account, Node, ProfileSummary, Replica, Team};
 
-/// Sent on device-authorization calls so the backend issues desktop-audience
-/// (`ppvpn`) sessions instead of CLI ones; access tokens must carry it.
-pub(crate) const PRODUCT_AUDIENCE: &str = "ppvpn";
-
 /// The API client for `base`, honouring the local-backend test switch
 /// ([`crate::testmode`]) and sending the system language.
 pub(crate) fn client_api(base: &str) -> Api {
@@ -25,13 +21,11 @@ pub(crate) fn client_api(base: &str) -> Api {
 
 /// [`client_api`] with the test switch given explicitly.
 pub(crate) fn client_api_with_test_mode(base: &str, test_switch: bool) -> Api {
-    Api::new(ApiConfig {
-        base: base.to_string(),
-        header_audience: Some(PRODUCT_AUDIENCE.to_string()),
-        token_audience: PRODUCT_AUDIENCE.to_string(),
-        accept_language: Some(crate::device::locale()),
-        trust_local_backend: test_switch,
-    })
+    Api::new(ApiConfig::desktop(
+        base,
+        Some(crate::device::locale()),
+        test_switch,
+    ))
 }
 
 impl From<UserInfo> for Account {

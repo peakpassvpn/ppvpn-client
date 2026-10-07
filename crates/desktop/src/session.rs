@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::{self, ApiError, TeamEntry};
 use crate::api::{ApiErrorExt, ToTeam};
-use crate::auth::{access_token_from, AccessToken, AuthError, SignedIn};
+use crate::auth::{AccessToken, AuthError, SignedIn};
 use crate::auth::{AuthErrorExt, StoreErrorExt};
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
 use crate::{
@@ -964,7 +964,9 @@ impl Client {
                 self.report(error)
             })?;
         // The response carries a new desktop token bound to the new team.
-        let access = access_token_from(response.token, None)
+        let access = self
+            .auth
+            .access_token_from(response.token, None)
             .map_err(|error| self.report(error.into_client_error()))?;
         let team = Team {
             id: response.id,
