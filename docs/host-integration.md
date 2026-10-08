@@ -362,7 +362,7 @@ pub enum EventItem { Event { event: Event }, Lagged { kind: EventKind, dropped: 
 | `SystemProxyChanged` | 是 | |
 | `LocalProxyEndpointChanged` | 新增 | `{ listen, port }`，本地代理的实际端口变化 |
 | `KernelSwitched`、`KernelDrained` | 是 | 热切换；Rust 版不发 `KernelDrained`（没有旧内核排空，第 4.1 节） |
-| `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
+| `NetworkChanged` | 是 | 默认网卡变化，来自 Sail 的网络事件：`InterfaceChanged`（换了默认网卡）、`Moved`（同一张网卡换了网络，例如唤醒后；只换接入点、地址不变的漫游不算；从 Sail 0.19 起，只是多出一个地址，例如 Wi-Fi 连上后拿到新的 IPv6 /64，也不算）、`Restored`（断网后恢复）。`Offline` 不发这个事件，而是进入 `Degraded{NoDefaultInterface}` |
 | `TunRoutingBroken`、`TunRoutingRestored` | 是 | Go 版只在 Linux 上有。Rust 版 `TunRoutingBroken` 在 Linux、macOS 和 Windows 上都有：Linux 上是补不回（随后 `Fatal`），macOS、Windows 上是别的程序改动了路由（随后 `Degraded`，`error` 是“<类别> changed by another program”，`missing` 以 TUN 名开头）；`TunRoutingRestored` 只在 Linux 上有（只有那里补回路由）。同时会反映在 `StateChanged` 里。宿主不按事件名决定怎么处理，而按随后的状态（`Fatal` 还是 `Degraded`）。 |
 
 ## 7. 错误
@@ -410,6 +410,7 @@ pub struct Error {
 - 入口故障转移和 pin 的生效；
 - 网卡变化后：重新选默认网卡、重新探测 IPv6 出口、重新读本地 DNS，以及离线期间的处理。对此引擎保证两点：
   - 网络变化期间（包括断网、切换网卡）**不会进入 `Fatal`**，只会出现 `Degraded`，网络稳定后自动回到 `Running`；
+  - 网络变化时由 Sail 自己的网卡监视器断开受影响的连接，引擎不另行通知 Sail（不调用 `network_changed`）。从 Sail 0.19 起只断开受影响的连接：绑定在已消失的网卡或地址上的连接；走默认路由的连接，在默认网卡、它的序号、网关或类型变了，或者它的地址消失时断开。地址未知的连接（UDP）遇到任何地址消失都按受影响处理。唤醒仍然断开全部连接。之前的版本在默认网卡状态有任何变化时都断开全部连接；
   - **Linux**：流量一旦绕过 TUN，**立即处理**：先尝试补回路由，补不回来就进入 `Fatal{TunRoutingBroken}`。
   - **macOS、Windows**：Sail 只检测、不补回。别的程序改动了 TUN 的路由或地址时进入 `Degraded{TunRoutingBroken}`，实例继续运行，由宿主按第 5 节 `Degraded` 的说明处理（可以重建，建议 10 分钟内最多 3 次）。下面关于 `Fatal{TunRoutingBroken}` 的要求只适用于 Linux。
   - （Linux）`Fatal{TunRoutingBroken}` 时运行时和 TUN 照常运行，引擎不会自己停止（同 Go 0.5.20）：这时流量绕过 TUN 直连，用户的流量**正在泄露**到隧道之外，但没有断网。宿主**必须立即**丢弃并重建实例（先 `shutdown`，再 `new`、`apply`、`start`），由新实例重新装上路由，期间不要套用“网络正在稳定”的宽限。重建失败时，宿主告诉用户保护已经中断，由用户决定是否继续。Go 版宿主就是这样做的：Desktop 增强模式的健康检查读到 `tun_routing` 为 broken，就按泄露处理，不等宽限，立刻重连。

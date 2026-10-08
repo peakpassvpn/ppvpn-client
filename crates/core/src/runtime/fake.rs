@@ -22,7 +22,6 @@ pub(crate) enum Call {
     DialTcp(String, Target),
     DialUdp(String, Target),
     ReplaceInboundUsers(String, Vec<(String, String)>),
-    NetworkChanged,
 }
 
 /// Which call the next failure is for.
@@ -682,11 +681,6 @@ impl Runtime for FakeRuntime {
         self.record(Call::ReplaceInboundUsers(inbound.to_owned(), users));
         self.running()?;
         self.check(Op::ReplaceInboundUsers)
-    }
-
-    async fn network_changed(&self) -> Result<(), RuntimeError> {
-        self.record(Call::NetworkChanged);
-        Ok(())
     }
 
     fn logs(&self) -> mpsc::Receiver<String> {

@@ -860,10 +860,6 @@ impl Runtime for SailRuntime {
         Ok(())
     }
 
-    async fn network_changed(&self) -> Result<(), RuntimeError> {
-        self.instance.network_changed(None).await.map_err(error)
-    }
-
     fn logs(&self) -> mpsc::Receiver<String> {
         self.logs
             .lock()
