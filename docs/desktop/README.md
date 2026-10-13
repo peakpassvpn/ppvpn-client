@@ -14,6 +14,27 @@ PPVPN 的原生桌面客户端：macOS（SwiftUI）、Windows（WinUI 3）、Lin
 - 引擎本身（Core API、Profile、Rust 版行为对照）的文档在 [docs/](../)。
 - 第三方组件：见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
+## 安装
+
+- **Windows**：运行 `PPVPN-<版本>-windows-x64-setup.exe`。
+- **Linux**：从 PPVPN 的 apt、dnf 仓库安装，之后的更新也从那里来，命令见 [apps/linux/README.md](../../apps/linux/README.md)。
+- **macOS**：打开 DMG（Apple 芯片用 `macos-arm64`，Intel 用 `macos-x64`），把 PPVPN 拖进"应用程序"。需要 macOS 13 或更新的系统。
+
+### macOS：首次打开被拦截
+
+macOS 版用 PPVPN 自己的固定证书签名，没有经过 Apple 公证（还没有 Apple Developer ID）。从浏览器下载后第一次
+打开时，系统会提示"无法打开 PPVPN，因为 Apple 无法检查其是否包含恶意软件"或"无法验证开发者"。只需要放行一次，
+任选一种做法：
+
+- **macOS 15 及以上**：先双击打开一次，在提示里点"完成"；再打开"系统设置 → 隐私与安全性"，拉到"安全性"一段，
+  点 PPVPN 旁边的"仍要打开"，输入本机密码确认。
+- **macOS 13、14**：在"应用程序"里按住 Control 点（或右键点）PPVPN，选"打开"，在弹出的对话框里再点"打开"。
+- **终端**：`xattr -dr com.apple.quarantine /Applications/PPVPN.app`，去掉下载时带上的隔离标记，然后正常打开。
+
+放行之后不会再问。应用内的自动更新不需要再放行：更新包由应用自己下载，用更新签名（EdDSA）校验。请只从官网或
+本仓库的 [Releases](https://github.com/peakpassvpn/ppvpn-client/releases) 下载，可以用 Release 里的 `SHA256SUMS`
+核对文件。
+
 ## 日志位置（测试排障）
 
 特权服务及其增强模式引擎的日志放在卸载、重装服务都不会删除的目录里；每个文件上限 5 MB，写满后滚动为 `<名称>.1.log`、`<名称>.2.log`，每种日志共保留 3 个文件。
