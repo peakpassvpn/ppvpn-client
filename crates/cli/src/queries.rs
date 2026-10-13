@@ -62,6 +62,27 @@ pub fn nodes(env: &Env, out: &mut Printer) -> Result<()> {
     out.success(&ok_with(data), &human).map_err(output_error)
 }
 
+/// A node name for a terminal: a leading flag emoji (a pair of regional
+/// indicators, as the backend names nodes "🇺🇸洛杉矶家宽-203.0.113.10")
+/// becomes its two letters, since terminals draw flags at unsteady widths
+/// and the columns would not line up. Only the leading pair, and only when
+/// a name is left after it; `--json` keeps the name as core gives it.
+fn display_name(name: &str) -> String {
+    let letter = |c: char| {
+        let offset = (c as u32).checked_sub(0x1F1E6)?;
+        (offset < 26).then(|| char::from(b'A' + offset as u8))
+    };
+    let mut chars = name.chars();
+    let (Some(a), Some(b)) = (chars.next().and_then(letter), chars.next().and_then(letter)) else {
+        return name.to_string();
+    };
+    let rest = chars.as_str().trim_start();
+    if rest.is_empty() {
+        return name.to_string();
+    }
+    format!("{a}{b} {rest}")
+}
+
 fn nodes_text(data: &Value) -> String {
     let selected = text(&data["selected_node_id"]);
     let lines: Vec<String> = data["nodes"]
@@ -71,7 +92,7 @@ fn nodes_text(data: &Value) -> String {
         .map(|node| {
             let id = text(&node["id"]);
             let marker = if id == selected { '*' } else { ' ' };
-            let mut line = format!("{marker} {id}\t{}", text(&node["name"]));
+            let mut line = format!("{marker} {id}\t{}", display_name(text(&node["name"])));
             for extra in [&node["region"], &node["entry_label"], &node["protocol"]] {
                 if !text(extra).is_empty() {
                     line.push('\t');
@@ -529,6 +550,24 @@ mod tests {
             "1.0 TB (1000000000000 bytes)"
         );
         assert_eq!(bytes_text(u64::MAX).split(' ').nth(1), Some("TB"));
+    }
+
+    #[test]
+    fn a_leading_flag_becomes_its_letters() {
+        assert_eq!(
+            display_name("🇺🇸洛杉矶家宽-203.0.113.10"),
+            "US 洛杉矶家宽-203.0.113.10"
+        );
+        assert_eq!(display_name("🇯🇵 东京-203.0.113.20"), "JP 东京-203.0.113.20");
+        // Only the leading pair.
+        assert_eq!(display_name("🇺🇸🇯🇵 中转"), "US 🇯🇵 中转");
+        // A name that is only a flag, or has none, stays as it is.
+        assert_eq!(display_name("🇺🇸"), "🇺🇸");
+        assert_eq!(display_name("🇺🇸 "), "🇺🇸 ");
+        assert_eq!(display_name("洛杉矶-203.0.113.10"), "洛杉矶-203.0.113.10");
+        // One regional indicator is not a flag.
+        assert_eq!(display_name("🇺洛杉矶"), "🇺洛杉矶");
+        assert_eq!(display_name(""), "");
     }
 
     #[test]
