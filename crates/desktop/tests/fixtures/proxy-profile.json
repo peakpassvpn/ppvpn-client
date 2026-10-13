@@ -1,16 +1,18 @@
 {
   "schema_version": 1,
-  "revision": "e4f7155c1310e350e297fd67a6259dc85bdce93e7000feda5d607a1c0563a758",
+  "revision": "e4a97a896762108f6b8e05e95e2ce1581b8af4b35044c2898a567a32627d5876",
   "generated_at": "2026-09-29T00:00:00Z",
   "expires_at": "2099-01-01T00:00:00Z",
   "nodes": [
     {
       "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101",
-      "name": "洛杉矶-203.0.113.10",
+      "name": "🇺🇸洛杉矶家宽-203.0.113.10",
       "entry_key": "cn-optimized",
+      "entry_label": "三网优化",
       "exit": {
         "ip": "203.0.113.10",
-        "region": "洛杉矶"
+        "region": "洛杉矶",
+        "country_code": "US"
       },
       "capabilities": {
         "tcp": true,
@@ -30,16 +32,17 @@
           "credentials": {
             "shadowsocks": {
               "method": "2022-blake3-aes-256-gcm",
-              "user_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
               "identity_keys": [
-                "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU="
-              ]
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+              ],
+              "user_key": "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU="
             }
           },
           "capabilities": {
             "tcp": true,
             "udp": true
-          }
+          },
+          "label": "广州移动"
         },
         {
           "role": "backup",
@@ -67,17 +70,19 @@
           "capabilities": {
             "tcp": true,
             "udp": true
-          }
+          },
+          "label": "上海电信"
         }
       ]
     },
     {
       "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101-fe6d3468cf5c",
-      "name": "洛杉矶-203.0.113.10-standard",
+      "name": "🇺🇸洛杉矶家宽-203.0.113.10-standard",
       "entry_key": "standard",
       "exit": {
         "ip": "203.0.113.10",
-        "region": "洛杉矶"
+        "region": "洛杉矶",
+        "country_code": "US"
       },
       "capabilities": {
         "tcp": true,
@@ -119,10 +124,10 @@
           "credentials": {
             "shadowsocks": {
               "method": "2022-blake3-aes-256-gcm",
-              "user_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
               "identity_keys": [
-                "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU="
-              ]
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+              ],
+              "user_key": "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU="
             }
           },
           "capabilities": {
@@ -134,11 +139,13 @@
     },
     {
       "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-102",
-      "name": "东京-203.0.113.20",
+      "name": "🇯🇵东京住宅-203.0.113.20",
       "entry_key": "cn-optimized",
+      "entry_label": "三网优化",
       "exit": {
         "ip": "203.0.113.20",
-        "region": "东京"
+        "region": "东京",
+        "country_code": "JP"
       },
       "capabilities": {
         "tcp": true,
@@ -158,16 +165,17 @@
           "credentials": {
             "shadowsocks": {
               "method": "2022-blake3-aes-256-gcm",
-              "user_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
               "identity_keys": [
-                "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY="
-              ]
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+              ],
+              "user_key": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY="
             }
           },
           "capabilities": {
             "tcp": true,
             "udp": true
-          }
+          },
+          "label": "香港直连"
         },
         {
           "role": "backup",
@@ -200,11 +208,112 @@
     "default_node_id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101"
   },
   "routing": {
+    "rule_sets": [
+      {
+        "id": "home",
+        "url": "https://example.com/api/v1/proxy-profile/rule-sets/home/2d30275474437a1b7ace1bc5228e66305bfa8466d2dac39576c5608a5595f32f.srs",
+        "sha256": "2d30275474437a1b7ace1bc5228e66305bfa8466d2dac39576c5608a5595f32f",
+        "update_interval_seconds": 86400
+      },
+      {
+        "id": "ads",
+        "url": "https://example.com/api/v1/proxy-profile/rule-sets/ads/b2dd6474ef2e88c1e1d7c143fdae5eab913149e34acd47c53061b5fa64e45da6.srs",
+        "sha256": "b2dd6474ef2e88c1e1d7c143fdae5eab913149e34acd47c53061b5fa64e45da6",
+        "update_interval_seconds": 86400
+      },
+      {
+        "id": "cn-domain",
+        "url": "https://example.com/api/v1/proxy-profile/rule-sets/cn-domain/fd3a7a6812bfc58aee16b9fb0754a04e595c863bf87ed3bdffc6c1f0521eb59b.srs",
+        "sha256": "fd3a7a6812bfc58aee16b9fb0754a04e595c863bf87ed3bdffc6c1f0521eb59b",
+        "update_interval_seconds": 43200
+      },
+      {
+        "id": "proxy-domain",
+        "url": "https://example.com/api/v1/proxy-profile/rule-sets/proxy-domain/7b0f9306b9519e89d8a158669278128f3c409aeb8c97f63b37c5f896e4429824.srs",
+        "sha256": "7b0f9306b9519e89d8a158669278128f3c409aeb8c97f63b37c5f896e4429824",
+        "update_interval_seconds": 86400
+      },
+      {
+        "id": "cn-ip",
+        "url": "https://example.com/api/v1/proxy-profile/rule-sets/cn-ip/197975e0fd637a13d3926469dd7d98956db5d4af6f76829b7f38bb22eb45203b.srs",
+        "sha256": "197975e0fd637a13d3926469dd7d98956db5d4af6f76829b7f38bb22eb45203b",
+        "update_interval_seconds": 86400
+      }
+    ],
     "rules": [
+      {
+        "id": "official-api",
+        "match": {
+          "domains": [
+            "example.com"
+          ]
+        },
+        "action": {
+          "type": "direct"
+        },
+        "baseline": true
+      },
       {
         "id": "bypass-private",
         "match": {
           "ip_is_private": true
+        },
+        "action": {
+          "type": "direct"
+        },
+        "baseline": true
+      },
+      {
+        "id": "rs-home",
+        "match": {
+          "rule_set_ids": [
+            "home"
+          ]
+        },
+        "action": {
+          "type": "direct"
+        }
+      },
+      {
+        "id": "rs-ads",
+        "match": {
+          "rule_set_ids": [
+            "ads"
+          ]
+        },
+        "action": {
+          "type": "reject"
+        }
+      },
+      {
+        "id": "rs-cn-domain",
+        "match": {
+          "rule_set_ids": [
+            "cn-domain"
+          ]
+        },
+        "action": {
+          "type": "direct"
+        }
+      },
+      {
+        "id": "rs-proxy-domain",
+        "match": {
+          "rule_set_ids": [
+            "proxy-domain"
+          ]
+        },
+        "action": {
+          "type": "proxy",
+          "target": "selected"
+        }
+      },
+      {
+        "id": "geoip-cn",
+        "match": {
+          "rule_set_ids": [
+            "cn-ip"
+          ]
         },
         "action": {
           "type": "direct"

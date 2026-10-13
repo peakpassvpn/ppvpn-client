@@ -103,8 +103,8 @@ final class FormattingTests: LogicTestCase {
 
     func testFlagsAndNames() {
         XCTAssertEqual("hk".flagEmoji, "🇭🇰")
-        let hk = node("hk-1", "香港 01", replicas: ["B", "A"])
-        XCTAssertEqual(hk.displayName, "🇭🇰 香港 01")
+        let hk = node("hk-1", "香港家宽-203.0.113.31", replicas: ["B", "A"])
+        XCTAssertEqual(hk.displayName, "🇭🇰 香港家宽-203.0.113.31")
         XCTAssertEqual(hk.orderedReplicas.map(\.replicaOrdinal), [0, 1])
         XCTAssertNil(Replica(endpointKey: "k", replicaOrdinal: 0, protocol: "p", label: nil).routeLabel)
         XCTAssertNil(Replica(endpointKey: "k", replicaOrdinal: 0, protocol: "p", label: "").routeLabel)

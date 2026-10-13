@@ -417,7 +417,7 @@ public sealed class ConnectionFlowTests
             await Wait.Until(() => main.ConnectState == ConnectState.On, "reconnected");
             Assert.Contains("d_reconnecting(r0=HKG-A, r=NRT-A)", details);
             Assert.Equal("d_on(r=NRT-A, ms=62 ms)", main.ConnectionDetail);
-            Assert.Equal("东京 01", main.CurrentNodeName);
+            Assert.Equal("东京住宅-203.0.113.20", main.CurrentNodeName);
             Assert.Equal("u8f2k-jp1", main.CurrentNodeProxy!.Username);
 
             // Tapping while on stops it.

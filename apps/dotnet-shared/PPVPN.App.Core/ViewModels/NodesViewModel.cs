@@ -130,7 +130,7 @@ public sealed partial class NodesViewModel : ObservableObject
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(SelectedNodeProxy), nameof(SelectedNodeProxyTitle), nameof(HasSelection))] NodeItemViewModel? selectedItem;
     public bool HasSelection => SelectedItem is not null;
     public ProxyInfo? SelectedNodeProxy => SelectedItem?.Proxy;
-    /// <summary><c>nodeProxyT</c>: "香港 01 的本地代理".</summary>
+    /// <summary><c>nodeProxyT</c>: "香港家宽-203.0.113.31 的本地代理".</summary>
     public string SelectedNodeProxyTitle => SelectedItem is { } item ? _strings.Format("nodeProxyT", ("n", item.Name)) : "";
 
     /// <summary>0 = Ping (ICMP), 1 = TCP, 2 = Connect. TCP by default.</summary>
