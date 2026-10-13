@@ -245,6 +245,32 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
 
+/// Splits a flag emoji off the start of a node name: `"🇺🇸洛杉矶家宽-…"` is
+/// `("洛杉矶家宽-…", Some("US"))`. The server puts the flag in the name for
+/// clients that show names as plain text; the apps draw the flag themselves
+/// from the country code, so the name would show it twice (and Windows has
+/// no flag glyphs: "US"). Only one leading pair of regional indicators and
+/// the whitespace after it goes; a name that is nothing but the flag stays.
+fn split_flag(name: String) -> (String, Option<String>) {
+    const BASE: u32 = 0x1F1E6; // REGIONAL INDICATOR SYMBOL LETTER A
+    let letter = |c: char| {
+        let offset = (c as u32).checked_sub(BASE).filter(|offset| *offset < 26)?;
+        char::from_u32('A' as u32 + offset)
+    };
+    let mut chars = name.chars();
+    let (Some(first), Some(second)) =
+        (chars.next().and_then(letter), chars.next().and_then(letter))
+    else {
+        return (name, None);
+    };
+    let country = Some(format!("{first}{second}"));
+    let rest = chars.as_str().trim_start();
+    if rest.is_empty() {
+        return (name, country);
+    }
+    (rest.to_string(), country)
+}
+
 fn shape_error(detail: String) -> ClientError {
     ClientError::failed(
         ErrorCode::ProfileInvalid,
@@ -309,13 +335,14 @@ pub(crate) fn parse_profile(raw: &[u8]) -> Result<ParsedProfile, ClientError> {
                 })
                 .collect();
             replicas.sort_by_key(|replica| replica.replica_ordinal);
+            let (name, flag_country) = split_flag(node.name);
             Node {
                 id: node.id,
-                name: node.name,
+                name,
                 entry_key: node.entry_key,
                 entry_label: non_empty(node.entry_label),
                 exit_region: non_empty(node.exit.region),
-                exit_country_code: non_empty(node.exit.country_code),
+                exit_country_code: non_empty(node.exit.country_code).or(flag_country),
                 udp: node.capabilities.udp,
                 replicas,
             }
@@ -356,7 +383,7 @@ mod tests {
         let parsed = parse_profile(FIXTURE).expect("fixture parses");
         assert_eq!(
             parsed.summary.revision,
-            "e4f7155c1310e350e297fd67a6259dc85bdce93e7000feda5d607a1c0563a758"
+            "e4a97a896762108f6b8e05e95e2ce1581b8af4b35044c2898a567a32627d5876"
         );
         assert_eq!(parsed.summary.expires_at, "2099-01-01T00:00:00Z");
         assert_eq!(parsed.summary.node_count, 3);
@@ -367,11 +394,12 @@ mod tests {
 
         let first = &parsed.nodes[0];
         assert_eq!(first.id, "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101");
-        assert_eq!(first.name, "洛杉矶-203.0.113.10");
+        // The fixture's name starts with the flag ("🇺🇸洛杉矶家宽-…").
+        assert_eq!(first.name, "洛杉矶家宽-203.0.113.10");
         assert_eq!(first.entry_key, "cn-optimized");
-        assert_eq!(first.entry_label, None);
+        assert_eq!(first.entry_label.as_deref(), Some("三网优化"));
         assert_eq!(first.exit_region.as_deref(), Some("洛杉矶"));
-        assert_eq!(first.exit_country_code, None);
+        assert_eq!(first.exit_country_code.as_deref(), Some("US"));
         assert!(first.udp);
         let replicas: Vec<_> = first
             .replicas
@@ -387,7 +415,57 @@ mod tests {
         assert_eq!(replicas, [("11", 0, "shadowsocks"), ("12", 1, "vless")]);
 
         assert_eq!(parsed.nodes[1].entry_key, "standard");
+        assert_eq!(parsed.nodes[1].name, "洛杉矶家宽-203.0.113.10-standard");
+        assert_eq!(parsed.nodes[2].name, "东京住宅-203.0.113.20");
         assert_eq!(parsed.nodes[2].exit_region.as_deref(), Some("东京"));
+    }
+
+    #[test]
+    fn split_flag_takes_one_leading_flag_off_the_name() {
+        let split = |name: &str| split_flag(name.to_string());
+        let us = Some("US".to_string());
+        assert_eq!(
+            split("🇺🇸洛杉矶家宽-203.0.113.10"),
+            ("洛杉矶家宽-203.0.113.10".to_string(), us.clone())
+        );
+        // The whitespace after the flag goes with it.
+        assert_eq!(split("🇺🇸 LA 01"), ("LA 01".to_string(), us.clone()));
+        // No flag, a flag later in the name, a lone indicator: unchanged.
+        assert_eq!(
+            split("东京-203.0.113.20"),
+            ("东京-203.0.113.20".to_string(), None)
+        );
+        assert_eq!(split("LA 🇺🇸 01"), ("LA 🇺🇸 01".to_string(), None));
+        assert_eq!(split("🇺 LA"), ("🇺 LA".to_string(), None));
+        assert_eq!(split("🇺"), ("🇺".to_string(), None));
+        assert_eq!(split(""), (String::new(), None));
+        // Only the first pair goes.
+        assert_eq!(split("🇺🇸🇯🇵 x"), ("🇯🇵 x".to_string(), us.clone()));
+        // A name that is nothing but the flag keeps it.
+        assert_eq!(split("🇺🇸"), ("🇺🇸".to_string(), us.clone()));
+        assert_eq!(split("🇺🇸  "), ("🇺🇸  ".to_string(), us));
+    }
+
+    #[test]
+    fn a_flag_in_the_name_fills_a_missing_country_code_only() {
+        let profile = |name: &str, exit: &str| {
+            format!(
+                r#"{{"schema_version":1,"revision":"r","expires_at":"2099-01-01T00:00:00Z","nodes":[{{"id":"a-1","name":"{name}","entry_key":"standard","exit":{exit},"capabilities":{{"tcp":true,"udp":true}},"ingresses":[{{"endpoint_key":"a","replica_ordinal":0,"protocol":"vless"}}]}}]}}"#
+            )
+        };
+        let node = |raw: String| parse_profile(raw.as_bytes()).unwrap().nodes.remove(0);
+
+        let filled = node(profile("🇯🇵东京住宅-203.0.113.20", r#"{"region":"东京"}"#));
+        assert_eq!(filled.name, "东京住宅-203.0.113.20");
+        assert_eq!(filled.exit_country_code.as_deref(), Some("JP"));
+
+        // The server's country code wins over the flag.
+        let kept = node(profile(
+            "🇯🇵东京",
+            r#"{"region":"东京","country_code":"US"}"#,
+        ));
+        assert_eq!(kept.name, "东京");
+        assert_eq!(kept.exit_country_code.as_deref(), Some("US"));
     }
 
     #[test]

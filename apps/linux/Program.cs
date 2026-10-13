@@ -28,7 +28,7 @@ if (args.FirstOrDefault(arg => arg.StartsWith("--preview")) is { } preview)
             "香港节点将于 02:00–02:30（UTC+8）重启，连接会自动切换到其他节点。",
             PPVPN.Ffi.MessageSeverity.Important, PPVPN.Ffi.MessageCategory.Announcement, "announcement.maintenance", null, now));
         backend.RecordShownPush(new PPVPN.Ffi.PushMessage(900002, PPVPN.App.Core.Backend.FakeClientBackend.NewestSampleId - 1,
-            "香港 01 线路 HKG-A 不稳定", "HKG-A 在 14:05–14:20 出现间歇性丢包。",
+            "香港家宽-203.0.113.31 线路 HKG-A 不稳定", "HKG-A 在 14:05–14:20 出现间歇性丢包。",
             PPVPN.Ffi.MessageSeverity.Important, PPVPN.Ffi.MessageCategory.Route, "proxy.chain_unhealthy", null, now));
         return backend;
     }).Run(gtkArgs.ToArray());

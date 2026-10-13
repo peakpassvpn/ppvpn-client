@@ -70,10 +70,10 @@ public final class PreviewBackend: ClientBackend {
         Team(id: "t-gone", name: "已解散团队", personal: false, active: false),
     ]
     private let sampleNodes: [Node] = [
-        node("hk-1", "香港 01", "香港", "HK", ["vless-reality", "hysteria2"], tier: "专线"),
-        node("jp-1", "东京 01", "日本", "JP", ["vless-reality"]),
-        node("sg-1", "新加坡 01", "新加坡", "SG", ["hysteria2"], tier: "优化"),
-        node("us-1", "洛杉矶 01", "美国", "US", ["vless-reality", "trojan"]),
+        node("hk-1", "香港家宽-203.0.113.31", "香港", "HK", ["vless-reality", "hysteria2"], tier: "专线"),
+        node("jp-1", "东京住宅-203.0.113.20", "日本", "JP", ["vless-reality"]),
+        node("sg-1", "新加坡机房-203.0.113.40", "新加坡", "SG", ["hysteria2"], tier: "优化"),
+        node("us-1", "洛杉矶家宽-203.0.113.10", "美国", "US", ["vless-reality", "trojan"]),
     ]
 
     /// `signedIn: true` skips the device-login dance (PPVPN_PREVIEW=signed-in);

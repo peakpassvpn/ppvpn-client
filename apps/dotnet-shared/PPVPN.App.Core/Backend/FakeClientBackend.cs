@@ -353,11 +353,11 @@ public sealed class FakeClientBackend : IClientBackend
     static readonly (string Kind, string Event, MessageCategory Category, MessageSeverity Severity, bool Link, string Title, string Body)[] MessageTemplates =
     [
         ("subscription", "subscription.expire_reminder_3d", MessageCategory.SubscriptionExpiring, MessageSeverity.Critical, true, "订阅将在 3 天后到期", "你的 Pro 年付套餐将于 2026年10月2日 到期，到期后将无法连接任何节点。续费后立即生效，剩余时长自动顺延，系统代理与增强模式的设置会保留。"),
-        ("proxy", "proxy.chain_unhealthy", MessageCategory.Route, MessageSeverity.Important, false, "香港 01 线路 HKG-A 不稳定", "HKG-A 在 14:05–14:20 出现间歇性丢包，客户端已自动切换到 HKG-B。如仍有问题，可在节点页重新测速或切换节点。"),
+        ("proxy", "proxy.chain_unhealthy", MessageCategory.Route, MessageSeverity.Important, false, "香港家宽-203.0.113.31 线路 HKG-A 不稳定", "HKG-A 在 14:05–14:20 出现间歇性丢包，客户端已自动切换到 HKG-B。如仍有问题，可在节点页重新测速或切换节点。"),
         ("invoice", "invoice.generated", MessageCategory.Billing, MessageSeverity.Normal, true, "9 月账单已生成", "本期账单金额 ¥128.00，将于 10月1日 从钱包余额自动扣除。"),
-        ("broadcast", "", MessageCategory.Announcement, MessageSeverity.Unspecified, true, "东京节点维护通知", "为提升线路质量，东京 01 将于 10月1日 02:00–04:00（UTC+8）进行维护，期间该节点不可用。建议提前切换到大阪 01 或首尔 01，维护完成后无需任何操作。"),
+        ("broadcast", "", MessageCategory.Announcement, MessageSeverity.Unspecified, true, "东京节点维护通知", "为提升线路质量，东京住宅-203.0.113.20 将于 10月1日 02:00–04:00（UTC+8）进行维护，期间该节点不可用。建议提前切换到大阪机房-203.0.113.21 或首尔住宅-203.0.113.41，维护完成后无需任何操作。"),
         ("order", "order.paid", MessageCategory.Order, MessageSeverity.Normal, true, "订单 #20260928-0417 已支付", "Pro 年付套餐 · ¥1,188.00。发票可在控制台「账单」中申请。"),
-        ("proxy", "proxy.node_unavailable", MessageCategory.Route, MessageSeverity.Important, false, "法兰克福 01 暂时不可用", "上游运营商故障，预计 2 小时内恢复。恢复前测速会显示超时。"),
+        ("proxy", "proxy.node_unavailable", MessageCategory.Route, MessageSeverity.Important, false, "法兰克福机房-203.0.113.50 暂时不可用", "上游运营商故障，预计 2 小时内恢复。恢复前测速会显示超时。"),
         ("subscription", "subscription.expired", MessageCategory.SubscriptionExpired, MessageSeverity.Critical, true, "团队订阅已过期", "Lumen Labs 的团队订阅已于 9月1日 到期，团队成员将无法连接节点。请联系团队管理员续费。"),
         ("broadcast", "broadcast:release-1.4.0", MessageCategory.Announcement, MessageSeverity.Unspecified, true, "客户端 1.4.0 已发布", "新增消息中心与实时流量显示，修复了若干已知问题。"),
         ("billing", "wallet.low_balance", MessageCategory.Billing, MessageSeverity.Important, true, "钱包余额不足", "当前余额 ¥12.50，不足以支付下个周期的费用。请在到期前充值，以免服务中断。"),
@@ -1247,17 +1247,17 @@ public sealed class FakeClientBackend : IClientBackend
 
         return
         [
-            N("hk1", "香港 01", "专线", "中国香港", "HK", "HKG-A", "HKG-B", "SZX-R"),
-            N("hk2", "香港 02", null, "中国香港", "HK", "HKG-C", "HKG-D"),
-            N("tw1", "台北 01", "优化", "中国台湾", "TW", "TPE-A", "TPE-B"),
-            N("jp1", "东京 01", "专线", "日本", "JP", "NRT-A", "NRT-B", "HND-A"),
-            N("sg1", "新加坡 01", "优化", "新加坡", "SG", "SIN-A", "SIN-B"),
-            N("kr1", "首尔 01", null, "韩国", "KR", "ICN-A", "ICN-B"),
-            N("jp2", "大阪 01", null, "日本", "JP", "KIX-A"),
-            N("us1", "洛杉矶 01", "优化", "美国", "US", "LAX-A", "LAX-B", "SJC-A"),
-            N("us2", "纽约 01", null, "美国", "US", "JFK-A"),
-            N("de1", "法兰克福 01", null, "德国", "DE", "FRA-A", "FRA-B"),
-            N("gb1", "伦敦 01", null, "英国", "GB", "LHR-A"),
+            N("hk1", "香港家宽-203.0.113.31", "专线", "中国香港", "HK", "HKG-A", "HKG-B", "SZX-R"),
+            N("hk2", "香港机房-203.0.113.32", null, "中国香港", "HK", "HKG-C", "HKG-D"),
+            N("tw1", "台北住宅-203.0.113.33", "优化", "中国台湾", "TW", "TPE-A", "TPE-B"),
+            N("jp1", "东京住宅-203.0.113.20", "专线", "日本", "JP", "NRT-A", "NRT-B", "HND-A"),
+            N("sg1", "新加坡机房-203.0.113.40", "优化", "新加坡", "SG", "SIN-A", "SIN-B"),
+            N("kr1", "首尔住宅-203.0.113.41", null, "韩国", "KR", "ICN-A", "ICN-B"),
+            N("jp2", "大阪机房-203.0.113.21", null, "日本", "JP", "KIX-A"),
+            N("us1", "洛杉矶家宽-203.0.113.10", "优化", "美国", "US", "LAX-A", "LAX-B", "SJC-A"),
+            N("us2", "纽约机房-203.0.113.11", null, "美国", "US", "JFK-A"),
+            N("de1", "法兰克福机房-203.0.113.50", null, "德国", "DE", "FRA-A", "FRA-B"),
+            N("gb1", "伦敦住宅-203.0.113.51", null, "英国", "GB", "LHR-A"),
         ];
     }
 }

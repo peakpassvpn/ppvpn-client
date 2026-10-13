@@ -26,7 +26,7 @@ public sealed class ConnectionTests
             Assert.Equal(("h_idle", "d_idle", ConnectionTone.Idle), (main.ConnectionTitle, main.ConnectionDetail, main.ConnectionTone));
             Assert.Equal("h_idle", main.StatusLine);
             Assert.Equal(ConnectionTone.Idle, main.StatusDotTone);
-            Assert.Equal(("香港 01", "hk", "38 ms"), (main.CurrentNodeName, main.CurrentNodeCountryCode, main.CurrentNodeLatencyText));
+            Assert.Equal(("香港家宽-203.0.113.31", "hk", "38 ms"), (main.CurrentNodeName, main.CurrentNodeCountryCode, main.CurrentNodeLatencyText));
             Assert.Equal("captionEnhanced", main.ConnectionMethodCaption);
             Assert.Equal((SwitchVisual.Off, true), (main.ConnectSwitch, main.ConnectSwitchEnabled));
             Assert.Empty(main.Notices);
@@ -467,7 +467,7 @@ public sealed class ConnectionTests
             Assert.Equal(("hk1-r1", true, true, "hk1-r1"),
                 (hk1.SelectedLine!.EndpointKey, hk1.IsPinned, hk1.PinnedUnavailable, hk1.ActiveEndpointKey));
             var notice = Assert.Single(main.Notices);
-            Assert.Equal((NoticeKind.IngressUnavailable, ConnectionTone.Warn, "ingressDownT", "ingressDownD(n=香港 01, r=HKG-B)", "backToAuto"),
+            Assert.Equal((NoticeKind.IngressUnavailable, ConnectionTone.Warn, "ingressDownT", "ingressDownD(n=香港家宽-203.0.113.31, r=HKG-B)", "backToAuto"),
                 (notice.Kind, notice.Tone, notice.Title, notice.Message, notice.ActionText));
             await notice.Action!.ExecuteAsync(null);
             Assert.Contains("pin hk1 auto", t.Backend.Calls);
@@ -479,7 +479,7 @@ public sealed class ConnectionTests
             // A refresh dropped the pinned line: back to automatic, said once.
             await t.PushAsync(main.Snapshot with { IngressPins = [], ClearedIngressPins = [new IngressPin("hk1", "gone")] });
             notice = Assert.Single(main.Notices);
-            Assert.Equal((NoticeKind.IngressPinCleared, "pinClearedT", "pinClearedD(n=香港 01)", "ok"),
+            Assert.Equal((NoticeKind.IngressPinCleared, "pinClearedT", "pinClearedD(n=香港家宽-203.0.113.31)", "ok"),
                 (notice.Kind, notice.Title, notice.Message, notice.ActionText));
             await notice.Action!.ExecuteAsync(null);
             Assert.Contains("dismiss_cleared_pins", t.Backend.Calls);
@@ -817,11 +817,11 @@ public sealed class ConnectionTests
                  TrayItemRole.Messages, TrayItemRole.None, TrayItemRole.OpenMain, TrayItemRole.Settings, TrayItemRole.CheckUpdates, TrayItemRole.None, TrayItemRole.Quit],
                 tray.Items.Select(i => i.Role));
             var header = tray.Items[0];
-            Assert.Equal(("h_on", "香港 01 · 38 ms", ConnectionTone.Ok), (header.Text, header.Secondary, header.Dot));
+            Assert.Equal(("h_on", "香港家宽-203.0.113.31 · 38 ms", ConnectionTone.Ok), (header.Text, header.Secondary, header.Dot));
             var connect = tray.Items[2];
             Assert.Equal(("connect", "st_on", true, true), (connect.Text, connect.Secondary, connect.IsChecked, connect.IsEnabled));
             var nodes = tray.Items[3];
-            Assert.Equal("currentNodeIs(n=香港 01)", nodes.Text);
+            Assert.Equal("currentNodeIs(n=香港家宽-203.0.113.31)", nodes.Text);
             Assert.Equal(11, nodes.Children!.Count);
             Assert.True(nodes.Children[0].IsChecked);
             var messages = tray.Items[5];

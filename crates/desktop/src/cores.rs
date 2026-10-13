@@ -696,7 +696,7 @@ mod tests {
     use serde_json::{json, Value};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/proxy-profile.json");
-    const REVISION: &str = "e4f7155c1310e350e297fd67a6259dc85bdce93e7000feda5d607a1c0563a758";
+    const REVISION: &str = "e4a97a896762108f6b8e05e95e2ce1581b8af4b35044c2898a567a32627d5876";
 
     #[derive(Default)]
     struct Recorder {
