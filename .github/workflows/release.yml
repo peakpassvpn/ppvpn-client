@@ -1366,6 +1366,84 @@ jobs:
         run: |
           { echo '```'; grep -v '^[0-9]  ' check.txt || true; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
 
+  # The installers for the website's download buttons, and for the update
+  # feed of the applications before 0.6.0: both go to the backend, which
+  # reads a private R2 bucket on every request (the release objects and one
+  # pointer per platform; tools/desktop/ci/upload-downloads.sh). The files
+  # are the release's own (the artifact release-files), uploaded after the
+  # GitHub release exists; the pointers move last. Nothing is registered
+  # with the backend: moving the pointers is what makes the website serve
+  # this version.
+  downloads-deploy:
+    name: downloads-deploy
+    if: ${{ !cancelled() && !inputs.rehearsal && inputs.channel == 'stable' && needs.approve.result == 'success' && needs.publish.result == 'success' }}
+    needs: [prepare, approve, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The bucket's keys.
+    environment: desktop-release-stable
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD: ${{ needs.prepare.outputs.build_number }}
+      CHANNEL: stable
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.R2_CLIENT_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/desktop/ci
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: release
+      - name: Upload to R2
+        run: tools/desktop/ci/upload-downloads.sh release
+      - name: Summary
+        run: |
+          echo "The website's downloads now serve $VERSION (build $BUILD)." >>"$GITHUB_STEP_SUMMARY"
+
+  # The rehearsal's check of that bucket, after the approval and with its
+  # keys: read only (upload-downloads.sh --check verifies the files against
+  # their release-meta, lists the keys an upload would write and says what
+  # each pointer names now). The keys' write access is first used by a real
+  # release.
+  downloads-check:
+    name: downloads-check
+    if: ${{ !cancelled() && inputs.rehearsal && inputs.channel == 'stable' && needs.approve.result == 'success' && needs.publish.result == 'success' }}
+    needs: [prepare, approve, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: desktop-release-stable
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD: ${{ needs.prepare.outputs.build_number }}
+      CHANNEL: stable
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.R2_CLIENT_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/desktop/ci
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: release
+      - name: Check against R2 (read only)
+        run: tools/desktop/ci/upload-downloads.sh --check release | tee check.txt
+      - name: Summary
+        run: |
+          { echo '```'; cat check.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+
   # ---- On a merge only: the build caches ci.yml restores. One job per
   # ci.yml cache key (shared-key), building what the ci.yml jobs on that key
   # build, so that a pull request after a dependency change does not build

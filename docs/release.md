@@ -74,6 +74,28 @@ artifact `site` 保留三天，并在日志里打出上传的顺序和缓存设�
 列出桶里 `linux/` 和 `desktop/` 下的对象，像上传那样比对不可变文件（内容不同就失败），并列出真正上传时
 会覆盖的现有文件，结果写在运行摘要里。演练不上传任何东西；密钥的写权限在第一次正式发布时才用到。
 
+### 官网下载（私有桶）
+
+官网下载页的五个按钮（`macos-arm64`、`macos-x64`、`windows-x64`、`linux-x64-deb`、`linux-x64-rpm`）和 0.6.0
+之前的应用的更新检查都走后端：`/api/v1/desktop/native/releases/<平台>/download` 跳转到私有 R2 桶里安装包的
+短时签名地址，`/api/v1/desktop/releases/<平台>/appcast.xml` 是 Sparkle 源。后端没有发布记录，每次请求都读桶里
+的渠道指针，所以发布就是上传文件、再移动指针：
+
+- `clients/desktop/native/releases/<版本>/<构建号>/<安装包>` 和同目录的 `release-meta-<平台>.json`，不可变；
+- `clients/desktop/native/channels/stable/release-meta-<平台>.json`：指针，即 release-meta 加上 `path`（安装包的 key）。
+
+`downloads-deploy`（`tools/desktop/ci/upload-downloads.sh`）在 GitHub Release 发出之后，用同一批文件（artifact
+`release-files`）上传：先按 release-meta 核对每个安装包（长度、SHA-256，macOS 和 Windows 还要 `ed_signature`），
+桶里已有而内容不同的发布文件直接拒绝、内容相同的保留（失败后可以重跑），全部传完才移动五个指针。指针一动，
+官网下载的就是这个版本，旧版应用也会收到更新提示。演练时由 `downloads-check` 只读地做同样的核对
+（`--check`），并列出每个指针现在指向的版本，不写任何东西。
+
+| 名称 | 类型 | 放在 | 内容 |
+| --- | --- | --- | --- |
+| `R2_CLIENT_BUCKET` | 变量 | 仓库 | 后端读的私有 bucket 名 |
+| `R2_ACCESS_KEY_ID` | secret | 环境 `desktop-release-stable` | 只对该 bucket 有对象读写权限的 R2 API token |
+| `R2_SECRET_ACCESS_KEY` | secret | 环境 `desktop-release-stable` | 同上 |
+
 ## v0.5.21 的发布文件
 
 v0.5.21 的文件由当时的 `release.yml` 在 tag 上构建，带 GitHub artifact attestation。仓库当时叫 `ppvpn-core`（后改名 `ppvpn-client`），attestation 记的是旧名，所以校验时仍写旧名。下载后校验：
