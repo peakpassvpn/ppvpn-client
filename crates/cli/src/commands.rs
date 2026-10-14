@@ -604,7 +604,8 @@ fn team_command(
             }
             // A disabled team may not list the others; a team ID can still
             // be tried.
-            Err(_) => wanted.clone(),
+            Err(err) if err.is_team_disabled() => wanted.clone(),
+            Err(err) => return Err(account::api_error(err)),
         };
         let switched = auth
             .api()

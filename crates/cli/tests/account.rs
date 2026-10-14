@@ -640,10 +640,13 @@ fn team_lists_and_switches() {
         // team use nobody
         responses.extend(refresh());
         responses.push(teams());
-        // team use x, from a team that cannot list the others
+        // team use x, from a disabled team, which cannot list the others
         responses.extend(refresh());
         responses.push((403, json!({"code": "403012"}).to_string()));
         responses.push(switched("x", "X"));
+        // team use y: any other refusal of the list stops there
+        responses.extend(refresh());
+        responses.push((403, json!({"code": "FORBIDDEN"}).to_string()));
         responses
     });
     let cli = Cli::new(&backend.base);
@@ -687,6 +690,12 @@ fn team_lists_and_switches() {
     assert_eq!(
         (out.code, out.stdout.as_str()),
         (0, "Switched to team X (x).\n")
+    );
+
+    let out = cli.run(&["--json", "team", "use", "y"]);
+    assert_eq!(
+        (out.code, out.json()["code"].as_str()),
+        (3, Some("FORBIDDEN"))
     );
 
     let requests = backend.requests();
