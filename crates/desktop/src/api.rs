@@ -158,6 +158,32 @@ pub(crate) struct ParsedProfile {
     pub(crate) default_node_id: Option<String>,
 }
 
+/// Splits a flag emoji off the start of a node name: `"🇺🇸洛杉矶家宽-…"` is
+/// `("洛杉矶家宽-…", Some("US"))`. The server puts the flag in the name for
+/// clients that show names as plain text; the apps draw the flag themselves
+/// from the country code, so the name would show it twice (and Windows has
+/// no flag glyphs: "US"). Only one leading pair of regional indicators and
+/// the whitespace after it goes; a name that is nothing but the flag stays.
+fn split_flag(name: String) -> (String, Option<String>) {
+    const BASE: u32 = 0x1F1E6; // REGIONAL INDICATOR SYMBOL LETTER A
+    let letter = |c: char| {
+        let offset = (c as u32).checked_sub(BASE).filter(|offset| *offset < 26)?;
+        char::from_u32('A' as u32 + offset)
+    };
+    let mut chars = name.chars();
+    let (Some(first), Some(second)) =
+        (chars.next().and_then(letter), chars.next().and_then(letter))
+    else {
+        return (name, None);
+    };
+    let country = Some(format!("{first}{second}"));
+    let rest = chars.as_str().trim_start();
+    if rest.is_empty() {
+        return (name, country);
+    }
+    (rest.to_string(), country)
+}
+
 impl From<ProfileView> for ParsedProfile {
     fn from(view: ProfileView) -> Self {
         let nodes: Vec<Node> = view.nodes.into_iter().map(Node::from).collect();
