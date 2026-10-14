@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ppvpn_account::api::{Api, ApiConfig, ApiError};
+use ppvpn_account::api::{Api, ApiConfig, ApiError, PATH_PROXY_PROFILE};
 use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore, VERIFICATION_PATHS};
 
 use crate::buildinfo::{BuildConfig, Profile, PRODUCTION_API_BASE};
@@ -72,7 +72,12 @@ pub fn api_error(err: &ApiError) -> CliError {
             "cannot reach the backend",
         )
         .retryable(),
-        ApiError::Status { status, code, .. } => {
+        ApiError::Status {
+            request,
+            status,
+            code,
+            ..
+        } => {
             let problem = code.as_deref().filter(|c| !c.is_empty());
             match status.as_u16() {
                 401 => relogin(problem.unwrap_or("AUTH_EXPIRED")),
@@ -84,7 +89,14 @@ pub fn api_error(err: &ApiError) -> CliError {
                     problem.unwrap_or("FORBIDDEN"),
                     "the backend denied this operation",
                 ),
-                // No active subscription, expired, or nothing to serve.
+                // The profile: no active subscription, or its nodes are
+                // not published yet. The backend tells them apart only in
+                // free text for now, so one message covers both.
+                404 if request.ends_with(PATH_PROXY_PROFILE) => CliError::new(
+                    Exit::Backend,
+                    problem.unwrap_or("NOT_FOUND"),
+                    "no active subscription, or its nodes are not ready yet (try again later)",
+                ),
                 404 => CliError::new(
                     Exit::Backend,
                     problem.unwrap_or("NOT_FOUND"),

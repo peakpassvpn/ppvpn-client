@@ -422,6 +422,45 @@ async fn the_profile_download_refreshes_once_on_401() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_profile_404_says_there_is_no_usable_subscription() {
+    // The backend's problem+json for an account without an active
+    // subscription (or whose nodes are not published yet).
+    let backend = Backend::serve(|base| {
+        let mut responses = login_responses(base);
+        responses.extend([
+            (200, json!({"refresh_token": fake("prepared")}).to_string()),
+            token_set(),
+            (
+                404,
+                json!({"type": "about:blank", "title": "Not Found", "status": 404,
+                       "code": "NOT_FOUND", "detail": "no active subscription"})
+                .to_string(),
+            ),
+        ]);
+        responses
+    });
+    let cli = Cli::new(&backend.base);
+    let (env, hooks) = (cli.env(), cli.hooks.clone());
+    tokio::task::spawn_blocking(move || logged_in(&cli))
+        .await
+        .unwrap();
+
+    let store = hooks.store.clone().unwrap();
+    let auth = ppvpn_cli::account::auth(hooks.build.as_ref().unwrap(), &env, store);
+    let err = ppvpn_cli::account::download_profile(&auth)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.exit_code(), err.code.as_str(), err.retryable),
+        (4, "NOT_FOUND", false)
+    );
+    assert_eq!(
+        err.message,
+        "no active subscription, or its nodes are not ready yet (try again later)"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_missing_subscription_is_exit_4_and_keeps_the_login() {
     let backend = Backend::serve(|base| {
         let mut responses = login_responses(base);
