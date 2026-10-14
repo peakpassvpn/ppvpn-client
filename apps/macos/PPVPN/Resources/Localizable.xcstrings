@@ -5305,6 +5305,108 @@
         }
       }
     },
+    "x_moveB": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移到「应用程序」"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Applications"
+          }
+        }
+      }
+    },
+    "x_moveD": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "增强模式和系统服务只接受「应用程序」文件夹里的 PPVPN。移过去后会从那里重新打开。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enhanced mode and the system service only accept PPVPN in the Applications folder. PPVPN reopens from there after the move."
+          }
+        }
+      }
+    },
+    "x_moveFailedD": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{error}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{error}"
+          }
+        }
+      }
+    },
+    "x_moveFailedT": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能把 PPVPN 移到「应用程序」"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PPVPN Could Not Be Moved to Applications"
+          }
+        }
+      }
+    },
+    "x_moveQuit": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "退出"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit"
+          }
+        }
+      }
+    },
+    "x_moveT": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PPVPN 需要放在「应用程序」文件夹中运行"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PPVPN Needs to Run from the Applications Folder"
+          }
+        }
+      }
+    },
     "x_logEmpty": {
       "extractionState": "manual",
       "localizations": {
