@@ -8,8 +8,15 @@
 //! - a [`auth::CredentialStore`] over its secret store (Keychain, Credential
 //!   Manager, Secret Service).
 //!
+//! [`profile`] is the UI view of a proxy profile, [`device`] registers an
+//! install for push, and [`session`] holds the rules a signed-in host
+//! follows between calls.
+//!
 //! Errors stay structured ([`api::ApiError`], [`auth::AuthError`]); hosts map
 //! them to their own user-facing codes.
 
 pub mod api;
 pub mod auth;
+pub mod device;
+pub mod profile;
+pub mod session;

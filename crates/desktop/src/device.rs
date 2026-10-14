@@ -1,4 +1,5 @@
-//! Desktop push registration (main-app side of the push agent).
+//! Desktop push registration (main-app side of the push agent), on
+//! [`ppvpn_account::device`].
 //!
 //! Each install has a stable `installation_id` (`<data_dir>/installation.json`,
 //! kept across sign-outs). While signed in, the device is registered with the
@@ -10,6 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
+use ppvpn_account::device::{installation_id, push_platform, DeviceRegistrationRequest};
+pub(crate) use ppvpn_account::device::{write_private, DeviceState};
 use serde::{Deserialize, Serialize};
 
 use crate::api::ApiError;
@@ -18,7 +21,6 @@ use crate::errors::ClientError;
 use crate::session::ClientRef;
 use crate::Client;
 
-const INSTALLATION_FILE: &str = "installation.json";
 pub(crate) const AGENT_FILE: &str = "push-agent.json";
 pub(crate) const AGENT_CURSOR_FILE: &str = "push-agent-cursor.json";
 
@@ -29,72 +31,6 @@ pub(crate) struct AgentFile {
     pub device_id: u64,
     pub push_token: String,
     pub installation_id: String,
-}
-
-/// Registration progress of the signed-in session.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum DeviceState {
-    /// Not registered yet (or the last attempt failed transiently).
-    #[default]
-    Pending,
-    Registered,
-    /// Refused because the access token lacks `device:register`; retried
-    /// after the next access-token refresh.
-    AwaitingRefresh,
-}
-
-#[derive(Serialize, Deserialize)]
-struct InstallationFile {
-    installation_id: String,
-}
-
-/// Writes `bytes` to `path` atomically (temp file + rename), private to the
-/// user on Unix (0600); Windows inherits the profile directory's ACL.
-pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let dir = path.parent().ok_or("no parent directory")?;
-    std::fs::create_dir_all(dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
-    let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
-    let result = (|| {
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            file.write_all(bytes)?;
-            file.sync_all()?;
-        }
-        #[cfg(not(unix))]
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, path)
-    })();
-    result.map_err(|error: std::io::Error| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("write {}: {error}", path.display())
-    })
-}
-
-/// The stable id of this install, created on first use.
-pub(crate) fn installation_id(data_dir: &str) -> Result<String, String> {
-    let path = Path::new(data_dir).join(INSTALLATION_FILE);
-    if let Some(id) = std::fs::read(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<InstallationFile>(&raw).ok())
-        .map(|file| file.installation_id)
-        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
-    {
-        return Ok(id);
-    }
-    let id = uuid::Uuid::new_v4().to_string();
-    let raw = serde_json::to_vec(&InstallationFile {
-        installation_id: id.clone(),
-    })
-    .map_err(|error| error.to_string())?;
-    write_private(&path, &raw)?;
-    Ok(id)
 }
 
 pub(crate) fn agent_file_path(data_dir: &str) -> PathBuf {
@@ -117,11 +53,6 @@ pub(crate) fn remove_agent_files(data_dir: &str) {
             Err(error) => tracing::warn!("remove {}: {error}", path.display()),
         }
     }
-}
-
-/// `desktop-macos` / `desktop-windows` / `desktop-linux`.
-pub(crate) fn push_platform(platform: &str) -> String {
-    format!("desktop-{platform}")
 }
 
 pub(crate) fn locale() -> String {
@@ -184,13 +115,13 @@ impl Client {
                 return;
             }
         };
-        let body = serde_json::json!({
-            "platform": push_platform(&self.config.platform),
-            "installation_id": installation,
-            "app_version": self.config.app_version,
-            "locale": locale(),
-            "timezone": timezone(),
-        });
+        let body = DeviceRegistrationRequest {
+            platform: push_platform(&self.config.platform),
+            installation_id: installation.clone(),
+            app_version: self.config.app_version.clone(),
+            locale: locale(),
+            timezone: timezone(),
+        };
         let body = &body;
         let result = self
             .bearer(
@@ -270,21 +201,12 @@ impl Client {
 mod tests {
     use super::*;
 
+    use ppvpn_account::device::INSTALLATION_FILE;
+
     #[test]
-    fn installation_id_is_stable_and_private() {
+    fn installation_id_survives_sign_out() {
         let dir = crate::test_backend::temp_dir("ppvpn-install-test");
         let first = installation_id(&dir).unwrap();
-        assert_eq!(installation_id(&dir).unwrap(), first);
-        assert!(uuid::Uuid::parse_str(&first).is_ok());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(Path::new(&dir).join(INSTALLATION_FILE))
-                .unwrap()
-                .permissions()
-                .mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
         // Survives removing the agent files (sign-out).
         remove_agent_files(&dir);
         assert_eq!(installation_id(&dir).unwrap(), first);
@@ -405,7 +327,6 @@ mod tests {
 
     #[test]
     fn platform_and_environment_values() {
-        assert_eq!(push_platform("windows"), "desktop-windows");
         assert!(!locale().is_empty());
         assert!(!timezone().is_empty());
     }

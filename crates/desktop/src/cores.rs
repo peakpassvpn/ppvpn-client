@@ -695,7 +695,7 @@ mod tests {
     use crate::{ErrorCode, ProfileStatus};
     use serde_json::{json, Value};
 
-    const FIXTURE: &str = include_str!("../tests/fixtures/proxy-profile.json");
+    const FIXTURE: &str = include_str!("../../account/tests/fixtures/proxy-profile.json");
     const REVISION: &str = "e4a97a896762108f6b8e05e95e2ce1581b8af4b35044c2898a567a32627d5876";
 
     #[derive(Default)]

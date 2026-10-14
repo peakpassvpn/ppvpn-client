@@ -99,6 +99,14 @@ impl ApiError {
     pub fn is_rate_limited(&self) -> bool {
         matches!(self, Self::Status { status, .. } if *status == StatusCode::TOO_MANY_REQUESTS)
     }
+
+    /// See [`subscription_problem`].
+    pub fn subscription_problem(&self) -> Option<SubscriptionProblem> {
+        match self {
+            Self::Status { status, code, .. } => subscription_problem(*status, code.as_deref()),
+            _ => None,
+        }
+    }
 }
 
 /// `"<METHOD> <path> -> HTTP <status> <problem code>"`; the backend reuses
@@ -114,6 +122,38 @@ pub fn status_detail(request: &str, status: StatusCode, code: Option<&str>) -> S
 pub const PROBLEM_TEAM_DISABLED: &str = "403012";
 /// Backend problem code for a dissolved team; shown like a suspended one.
 pub const PROBLEM_TEAM_DISSOLVED: &str = "404011";
+/// Backend problem code for an expired subscription; may carry its end.
+pub const PROBLEM_SUBSCRIPTION_EXPIRED: &str = "SUBSCRIPTION_EXPIRED";
+
+/// What a failed team-scoped call says about the team's service, on any
+/// endpoint and status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubscriptionProblem {
+    /// The current team is suspended (`403012`) or dissolved (`404011`).
+    TeamDisabled,
+    /// The subscription has ended.
+    Expired,
+    /// No (active) subscription, or payment required.
+    NoSubscription,
+}
+
+/// The [`SubscriptionProblem`] a status and problem code stand for, if any.
+pub fn subscription_problem(status: StatusCode, code: Option<&str>) -> Option<SubscriptionProblem> {
+    match code {
+        Some(PROBLEM_TEAM_DISABLED) if status == StatusCode::FORBIDDEN => {
+            Some(SubscriptionProblem::TeamDisabled)
+        }
+        Some(PROBLEM_TEAM_DISSOLVED) if status == StatusCode::NOT_FOUND => {
+            Some(SubscriptionProblem::TeamDisabled)
+        }
+        Some(PROBLEM_SUBSCRIPTION_EXPIRED) => Some(SubscriptionProblem::Expired),
+        Some(
+            "SUBSCRIPTION_NOT_FOUND" | "SUBSCRIPTION_NOT_ACTIVE" | "POINTS_NO_ACTIVE_SUBSCRIPTION",
+        ) => Some(SubscriptionProblem::NoSubscription),
+        _ if status == StatusCode::PAYMENT_REQUIRED => Some(SubscriptionProblem::NoSubscription),
+        _ => None,
+    }
+}
 
 #[derive(Deserialize)]
 struct ApiProblem {
@@ -154,6 +194,40 @@ pub struct ApiConfig {
     /// self-signed TLS, the backend's own `http` verification page, short
     /// device codes. Applied only when `base` is a loopback host.
     pub trust_local_backend: bool,
+}
+
+/// The desktop apps' product audience: sent as `X-Product-Aud` so the
+/// backend issues desktop sessions, and required on their access tokens.
+pub const DESKTOP_AUDIENCE: &str = "ppvpn";
+
+/// The CLI's token audience. The backend issues `cli` tokens only through
+/// the device authorization that carries no product header (it rejects
+/// `cli` as a header value on purpose), so the CLI sends none.
+pub const CLI_AUDIENCE: &str = "cli";
+
+impl ApiConfig {
+    /// The desktop apps: product header and token audience
+    /// [`DESKTOP_AUDIENCE`].
+    pub fn desktop(base: &str, accept_language: Option<String>, trust_local_backend: bool) -> Self {
+        Self {
+            base: base.to_string(),
+            header_audience: Some(DESKTOP_AUDIENCE.to_string()),
+            token_audience: DESKTOP_AUDIENCE.to_string(),
+            accept_language,
+            trust_local_backend,
+        }
+    }
+
+    /// The CLI: no product header, token audience [`CLI_AUDIENCE`].
+    pub fn cli(base: &str, accept_language: Option<String>, trust_local_backend: bool) -> Self {
+        Self {
+            base: base.to_string(),
+            header_audience: None,
+            token_audience: CLI_AUDIENCE.to_string(),
+            accept_language,
+            trust_local_backend,
+        }
+    }
 }
 
 /// HTTP client bound to one configured API base.
@@ -366,7 +440,7 @@ impl Api {
     pub async fn register_device(
         &self,
         token: &str,
-        body: &Value,
+        body: &crate::device::DeviceRegistrationRequest,
     ) -> Result<DeviceRegistration, ApiError> {
         let request = self
             .http
@@ -636,6 +710,20 @@ mod tests {
     }
 
     #[test]
+    fn client_presets_differ_only_in_audience() {
+        let desktop = ApiConfig::desktop("https://api.example.com", Some("zh-CN".into()), true);
+        assert_eq!(desktop.header_audience.as_deref(), Some("ppvpn"));
+        assert_eq!(desktop.token_audience, "ppvpn");
+        assert_eq!(desktop.accept_language.as_deref(), Some("zh-CN"));
+        assert!(desktop.trust_local_backend);
+        let cli = ApiConfig::cli("https://api.example.com", None, false);
+        assert_eq!(cli.header_audience, None);
+        assert_eq!(cli.token_audience, "cli");
+        assert_eq!(cli.base, "https://api.example.com");
+        assert!(!cli.trust_local_backend);
+    }
+
+    #[test]
     fn requests_carry_the_configured_language() {
         let headers = language_headers("zh-CN");
         assert_eq!(headers[reqwest::header::ACCEPT_LANGUAGE], "zh-CN");
@@ -700,6 +788,37 @@ mod tests {
         assert!(!status(500, None).is_terminal_credential());
         assert!(status(503, None).is_transient());
         assert!(status(429, None).is_rate_limited());
+    }
+
+    #[test]
+    fn subscription_problems_are_classified() {
+        let problem = |status: u16, code: Option<&str>| {
+            subscription_problem(StatusCode::from_u16(status).unwrap(), code)
+        };
+        use SubscriptionProblem::*;
+        assert_eq!(
+            problem(403, Some(PROBLEM_TEAM_DISABLED)),
+            Some(TeamDisabled)
+        );
+        assert_eq!(
+            problem(404, Some(PROBLEM_TEAM_DISSOLVED)),
+            Some(TeamDisabled)
+        );
+        // The team codes count only with their own status.
+        assert_eq!(problem(400, Some(PROBLEM_TEAM_DISABLED)), None);
+        assert_eq!(problem(403, Some(PROBLEM_TEAM_DISSOLVED)), None);
+        assert_eq!(problem(400, Some("SUBSCRIPTION_EXPIRED")), Some(Expired));
+        for code in [
+            "SUBSCRIPTION_NOT_FOUND",
+            "SUBSCRIPTION_NOT_ACTIVE",
+            "POINTS_NO_ACTIVE_SUBSCRIPTION",
+        ] {
+            assert_eq!(problem(409, Some(code)), Some(NoSubscription), "{code}");
+        }
+        assert_eq!(problem(402, None), Some(NoSubscription));
+        assert_eq!(problem(404, Some("NOT_FOUND")), None);
+        assert_eq!(problem(401, None), None);
+        assert_eq!(ApiError::Decode("x").subscription_problem(), None);
     }
 
     #[test]
