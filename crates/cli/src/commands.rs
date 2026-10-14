@@ -37,16 +37,32 @@ fn store(hooks: &Hooks) -> std::sync::Arc<dyn ppvpn_account::auth::CredentialSto
         .unwrap_or_else(crate::keystore::platform_store)
 }
 
+/// Why the secret store cannot be used, as the CLI reports it (exit 8).
+fn store_error(failure: ppvpn_account::auth::StoreFailure) -> CliError {
+    let code = if failure.locked {
+        "CREDENTIAL_STORE_LOCKED"
+    } else {
+        "CREDENTIAL_STORE_UNAVAILABLE"
+    };
+    CliError::environment(code, failure.message)
+}
+
 /// The saved credential, or why the secret store cannot be read.
 fn load_saved(store: &dyn ppvpn_account::auth::CredentialStore) -> Result<Option<Vec<u8>>> {
-    store.load().map_err(|failure| {
-        let code = if failure.locked {
-            "CREDENTIAL_STORE_LOCKED"
-        } else {
-            "CREDENTIAL_STORE_UNAVAILABLE"
-        };
-        CliError::environment(code, failure.message)
-    })
+    store.load().map_err(store_error)
+}
+
+/// Whether the platform secret store takes a write, tried on an item of its
+/// own (never the login's): a store can answer reads and still refuse
+/// writes, as the macOS login Keychain does in an SSH session ("User
+/// interaction is not allowed"). Not for an injected store.
+fn check_writable(hooks: &Hooks) -> Result<()> {
+    if hooks.store.is_some() {
+        return Ok(());
+    }
+    let probe = crate::keystore::store_for(crate::keystore::PROBE_SERVICE);
+    probe.save(b"probe".to_vec()).map_err(store_error)?;
+    probe.delete().map_err(store_error)
 }
 
 pub fn run(cli: &Cli, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
@@ -479,6 +495,7 @@ fn login(env: &Env, hooks: &Hooks, out: &mut Printer, no_browser: bool) -> Resul
     // confirmed the code in the browser.
     let store = store(hooks);
     load_saved(store.as_ref())?;
+    check_writable(hooks)?;
     let auth = account::auth(&config, env, store);
     let platform = match env.os {
         Os::Macos => "macos",

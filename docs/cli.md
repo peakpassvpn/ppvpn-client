@@ -24,7 +24,10 @@ The device credential is kept in the platform secret store and nowhere else:
 There is no plain-file fallback. Where no secret store is available (for example a server without a Secret
 Service) or the keyring stays locked, the CLI reports `CREDENTIAL_STORE_UNAVAILABLE` or
 `CREDENTIAL_STORE_LOCKED` (exit 8) and does not log in. A locked keyring is asked to unlock (its own prompt);
-when that is not answered within 60 seconds, the keyring counts as locked. Access tokens are never written to disk.
+when that is not answered within 60 seconds, the keyring counts as locked. Before it starts a device authorization,
+`login` reads the store and writes and removes an item of its own (`com.peakpassvpn.ppvpn.cli.probe`), so a store
+that cannot be used fails at once rather than after the code was confirmed: the macOS login Keychain, for one, answers
+reads but refuses writes in an SSH session. Access tokens are never written to disk.
 
 `ppvpn account` prints the authorized account. `ppvpn logout` revokes the device session and removes the
 local credential. Without a saved login, commands that need one report `NOT_LOGGED_IN` (exit 3) before any
