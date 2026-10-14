@@ -16,6 +16,10 @@ extension ErrorCode {
     }
 
     public var message: String {
+        // The shared text says to reinstall, which fits Windows and Linux. On
+        // macOS the service accepts only /Applications/PPVPN.app, and the
+        // usual cause is running the copy inside the disk image.
+        if self == .serviceClientRejected { return tr("x_serviceRejected") }
         let text = Localization.localizer.string(key, table: "Errors")
         return text == key ? tr("x_unknownError", ["c": key]) : text
     }
