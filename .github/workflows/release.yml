@@ -672,6 +672,43 @@ jobs:
           grep -qx 'repo_gpgcheck=1' "$T/ppvpn.repo"
           gpg --batch --dearmor <"$T/site/linux/ppvpn.asc" >"$T/ppvpn-archive-keyring.gpg"
           chmod 644 "$T/ppvpn-archive-keyring.gpg" "$T/ppvpn.list" "$T/ppvpn.repo" "$T/site/linux/ppvpn.asc"
+      # What a release after the first does: the release rpm is signed anew
+      # (another signature time, so other bytes under the same name), and the
+      # site keeps the setup packages it already serves (--published), which
+      # are immutable there.
+      - name: A later release keeps the published setup packages
+        run: |
+          setup_rpm="$(cd "$T/site/linux/setup" && ls ppvpn-release-*.noarch.rpm)"
+          later="$T/later/releases/$STABLE_TAG"
+          mkdir -p "$T/later/releases"
+          cp -R "$T/releases/stable/$STABLE_TAG" "$later"
+          sleep 2   # a signature's time is in seconds
+          rpmsign --delsign "$later/$setup_rpm" >/dev/null
+          tools/desktop/ci/sign-linux-rpms.sh "$later"
+          if cmp -s "$later/$setup_rpm" "$T/site/linux/setup/$setup_rpm"; then
+            echo "signing again did not change the setup rpm" >&2; exit 1
+          fi
+          build() {   # out, extra arguments
+            tools/desktop/ci/build-linux-repo.sh --channel stable --releases "$T/later/releases" \
+              --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$1" --keep 5 "${@:2}"
+          }
+          build "$T/later/site" --published "$REPO_URL"
+          for name in "$setup_rpm" "$(cd "$T/site/linux/setup" && ls ppvpn-archive-keyring_*_all.deb)"; do
+            cmp "$T/later/site/linux/setup/$name" "$T/site/linux/setup/$name"
+          done
+          cmp "$T/later/site/linux/ppvpn-release.rpm" "$T/site/linux/setup/$setup_rpm"
+          # Without --published the release's own copy is used.
+          build "$T/later/fresh"
+          cmp "$T/later/fresh/linux/setup/$setup_rpm" "$later/$setup_rpm"
+          # A published file of another package under the name is refused.
+          cp "$T/site/linux/setup/$setup_rpm" "$T/later/saved.rpm"
+          cp "$T/later/releases/$STABLE_TAG/$RPM_FILE" "$T/site/linux/setup/$setup_rpm"
+          if build "$T/later/refused" --published "$REPO_URL" 2>"$T/later/refusal"; then
+            echo "another package under the setup rpm's name was accepted" >&2; exit 1
+          fi
+          cp "$T/later/saved.rpm" "$T/site/linux/setup/$setup_rpm"
+          cat "$T/later/refusal"
+          grep -q 'is another package than the release' "$T/later/refusal"
       - name: Install with apt (Ubuntu 22.04)
         run: |
           deb="$(ls "$T/site/linux/apt/pool/main/p/ppvpn/"*.deb)"
@@ -1262,8 +1299,11 @@ jobs:
           PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
           [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
           export PKG_GPG_FINGERPRINT
+          # --published: a setup package the site already has under the same name is kept as
+          # published (linux/setup/ is immutable; the release rpm is signed anew each release).
           tools/desktop/ci/build-linux-repo.sh --channel stable --releases linux-releases \
-            --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site --keep "$KEEP"
+            --download-base "$DOWNLOAD_BASE" --site-base "$SITE_BASE" --out site --keep "$KEEP" \
+            --published "$SITE_BASE"
       # The dev channel is retired (dev builds are never published), but
       # earlier dev installs still poll its files: the Linux app
       # linux/dev/latest.json, the macOS and Windows apps
