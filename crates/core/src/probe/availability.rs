@@ -4,8 +4,16 @@
 //! goes through the node's outbound itself ([`Runtime::dial_tcp`]), which is
 //! where that user leads. Redirects are followed, as Go's client does; TLS
 //! is sail's (BoringSSL), checked against the system's roots, with Chrome's
-//! ClientHello: Google's front ends closed connections that came with
-//! BoringSSL's own from some exits, though they answered curl there (#342).
+//! ClientHello.
+//!
+//! Over TLS the probe offers ALPN `h2` before `http/1.1`, as a browser does,
+//! and speaks HTTP/2 (hyper's client) when the target picks it; HTTP/1.1
+//! otherwise (no ALPN, `http/1.1`, plain `http://`). From some exits,
+//! Google's front ends closed the connection, answering nothing, to an
+//! HTTP/1.1 request on a BoringSSL connection that offered `http/1.1` alone,
+//! whatever its ClientHello, though they answered curl there; over h2 they
+//! answered every time (#342). Both versions answer alike: the status, a
+//! redirect's Location, the body read up to 64 KiB, the same result codes.
 //!
 //! Each step that fails has its own result code: the dial (CONNECT_FAILED,
 //! TIMEOUT, or PROXY_REQUEST_FAILED when the outbound could not be used at
@@ -19,10 +27,16 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use bytes::Bytes;
 use chrono::Utc;
+use http_body_util::{BodyExt, Empty};
+use hyper::header::{ACCEPT, LOCATION, USER_AGENT};
+use hyper::Request;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use sail::transport::tls::{BoringConnection, Fingerprint};
 use sail::transport::tls_stream::TlsStream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use url::{Host, Url};
 
@@ -178,7 +192,7 @@ async fn get(
     if !tls {
         return exchange(stream, url, deadline).await;
     }
-    let client = crate::tls::client(&["http/1.1"], trust_pem, Some(Fingerprint::Chrome))
+    let client = crate::tls::client(&["h2", "http/1.1"], trust_pem, Some(Fingerprint::Chrome))
         .map_err(|_| rc::PROXY_REQUEST_FAILED)?;
     let conn = client
         .connection(&server_name, None)
@@ -190,7 +204,11 @@ async fn get(
     if let Err(e) = stream.handshake().await {
         return Err(handshake_code(&e, stream.conn()));
     }
-    exchange(stream, url, deadline).await
+    if stream.conn().ssl().selected_alpn_protocol() == Some(b"h2") {
+        exchange_h2(stream, url, deadline).await
+    } else {
+        exchange(stream, url, deadline).await
+    }
 }
 
 /// A failed dial through the outbound, by sail's error kind
@@ -225,10 +243,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     url: &Url,
     deadline: Instant,
 ) -> Result<(u16, Option<String>), &'static str> {
-    let host = match url.port() {
-        Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
-        None => url.host_str().unwrap_or_default().to_owned(),
-    };
+    let host = authority(url);
     let path = &url[url::Position::BeforePath..url::Position::AfterQuery];
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: ppvpn-core\r\nAccept: */*\r\nConnection: close\r\n\r\n"
@@ -294,6 +309,113 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         .await;
     }
     Ok((status, location))
+}
+
+/// The exchange over HTTP/2, answering as [`exchange`] does. The task that
+/// drives the connection is aborted when the exchange ends or is dropped
+/// (the deadline, a cancel).
+async fn exchange_h2<S>(
+    stream: S,
+    url: &Url,
+    deadline: Instant,
+) -> Result<(u16, Option<String>), &'static str>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let path = &url[url::Position::BeforePath..url::Position::AfterQuery];
+    // The URI's scheme and authority are sent as :scheme and :authority.
+    let request = Request::get(format!("https://{}{path}", authority(url)))
+        .header(USER_AGENT, "ppvpn-core")
+        .header(ACCEPT, "*/*")
+        .body(Empty::<Bytes>::new())
+        .map_err(|_| rc::TARGET_INVALID)?;
+    let (mut sender, connection) =
+        hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
+            .await
+            .map_err(|e| h2_code(&e))?;
+    let _connection = AbortOnDrop(tokio::spawn(connection));
+    let response = sender
+        .send_request(request)
+        .await
+        .map_err(|e| h2_code(&e))?;
+    let status = response.status().as_u16();
+    let location = match response.headers().get(LOCATION) {
+        Some(value) => Some(
+            std::str::from_utf8(value.as_bytes())
+                .map_err(|_| rc::RESPONSE_INVALID)?
+                .trim()
+                .to_owned(),
+        ),
+        None => None,
+    };
+    if location.is_none() && !matches!(status, 204 | 304) {
+        // The body, bounded, is part of the time; how it ends is not.
+        let mut body = response.into_body();
+        let _ = tokio::time::timeout_at(deadline, async {
+            let mut got = 0;
+            while got < MAX_BODY {
+                match body.frame().await {
+                    Some(Ok(frame)) => got += frame.data_ref().map_or(0, Bytes::len),
+                    Some(Err(_)) | None => break,
+                }
+            }
+        })
+        .await;
+    }
+    Ok((status, location))
+}
+
+/// The URL's host, with its port when it names one: HTTP/1.1's Host,
+/// HTTP/2's :authority.
+fn authority(url: &Url) -> String {
+    match url.port() {
+        Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
+        None => url.host_str().unwrap_or_default().to_owned(),
+    }
+}
+
+/// The task driving an HTTP/2 connection, stopped with the exchange.
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// A failed HTTP/2 exchange, as [`io_code`] for HTTP/1.1: frames from the
+/// target that h2 found malformed are RESPONSE_INVALID; the connection
+/// broken or closed, or a GOAWAY or a reset before a response head,
+/// CONNECTION_CLOSED. The error is logged, never the target.
+fn h2_code(error: &hyper::Error) -> &'static str {
+    let mut why = error.to_string();
+    let mut code = if error.is_parse() {
+        rc::RESPONSE_INVALID
+    } else {
+        rc::CONNECTION_CLOSED
+    };
+    let mut source = std::error::Error::source(error);
+    while let Some(e) = source {
+        why = format!("{why}: {e}");
+        if e.downcast_ref::<io::Error>()
+            .is_some_and(|e| e.kind() == io::ErrorKind::TimedOut)
+        {
+            return rc::TIMEOUT;
+        }
+        if let Some(e) = e.downcast_ref::<h2::Error>() {
+            if e.get_io()
+                .is_some_and(|e| e.kind() == io::ErrorKind::TimedOut)
+            {
+                return rc::TIMEOUT;
+            }
+            if e.is_library() {
+                code = rc::RESPONSE_INVALID;
+            }
+        }
+        source = e.source();
+    }
+    tracing::info!("availability probe: the HTTP/2 exchange failed: {why}");
+    code
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -425,6 +547,84 @@ mod tests {
         addr
     }
 
+    /// What the HTTP/2 server does with a connection.
+    #[derive(Clone, Copy)]
+    enum H2 {
+        /// Answers the request with this status and Location, if any (a
+        /// body too, but for a 204).
+        Answer(u16, Option<&'static str>),
+        /// Sends a GOAWAY before it takes any request, then closes.
+        GoAway,
+        /// Takes the request, then drops the connection, answering nothing.
+        Drop,
+    }
+
+    /// A TLS 1.3 server that speaks HTTP/2 alone (ALPN `h2`), doing with
+    /// each connection the next of `then` (none left: it stops), and
+    /// keeping each request's URI and User-Agent.
+    async fn serve_h2(then: Vec<H2>) -> (SocketAddr, String, Arc<Mutex<Vec<String>>>) {
+        let (pem, acceptor) = crate::tls::testing::authority_alpn("probe test ca", b"\x02h2");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let requests = seen.clone();
+        let acceptor = Arc::new(acceptor);
+        tokio::spawn(async move {
+            for then in then {
+                let Ok((tcp, _)) = listener.accept().await else {
+                    return;
+                };
+                let acceptor = acceptor.clone();
+                let requests = requests.clone();
+                tokio::spawn(tokio::time::timeout(BOUND, async move {
+                    let mut ssl = Ssl::new(acceptor.context()).unwrap();
+                    ssl.set_min_proto_version(Some(SslVersion::TLS1_3)).unwrap();
+                    let conn = BoringConnection::server(ssl).unwrap();
+                    let mut stream = TlsStream::new(conn, tcp, None);
+                    if stream.handshake().await.is_err() {
+                        return;
+                    }
+                    let Ok(mut h2) = h2::server::handshake(stream).await else {
+                        return;
+                    };
+                    if let H2::GoAway = then {
+                        h2.abrupt_shutdown(h2::Reason::NO_ERROR);
+                        // Long enough to send it; then the connection goes.
+                        let _ = tokio::time::timeout(Duration::from_millis(200), h2.accept()).await;
+                        return;
+                    }
+                    let Some(Ok((request, mut respond))) = h2.accept().await else {
+                        return;
+                    };
+                    let agent = request.headers().get(USER_AGENT).cloned();
+                    requests.lock().unwrap().push(format!(
+                        "{} {}",
+                        request.uri(),
+                        agent
+                            .as_ref()
+                            .map_or("", |a| a.to_str().unwrap_or_default())
+                    ));
+                    let H2::Answer(status, location) = then else {
+                        return;
+                    };
+                    let mut response = hyper::Response::builder().status(status);
+                    if let Some(location) = location {
+                        response = response.header(LOCATION, location);
+                    }
+                    let response = response.body(()).unwrap();
+                    if status == 204 {
+                        let _ = respond.send_response(response, true);
+                    } else if let Ok(mut body) = respond.send_response(response, false) {
+                        let _ = body.send_data(Bytes::from_static(b"hello"), true);
+                    }
+                    // Drives the connection until the client leaves.
+                    while let Some(Ok(_)) = h2.accept().await {}
+                }));
+            }
+        });
+        (addr, pem, seen)
+    }
+
     async fn runtime(to: Option<SocketAddr>) -> FakeRuntime {
         let runtime = FakeRuntime::default();
         runtime.start("{}").await.unwrap();
@@ -454,8 +654,8 @@ mod tests {
         .await
     }
 
-    /// The error code of a probe of `target` trusting `trust_pem`.
-    async fn code_trusting(runtime: &FakeRuntime, target: &str, trust_pem: &str) -> String {
+    /// A probe of `target` trusting `trust_pem`.
+    async fn trusting(runtime: &FakeRuntime, target: &str, trust_pem: &str) -> AvailabilityResult {
         let request = ProbeAvailabilityRequest::new("stable", target, 5000);
         let (got, _) = probe_trusting(
             runtime,
@@ -467,7 +667,12 @@ mod tests {
         )
         .await
         .unwrap();
-        got.error_code
+        got
+    }
+
+    /// The error code of a probe of `target` trusting `trust_pem`.
+    async fn code_trusting(runtime: &FakeRuntime, target: &str, trust_pem: &str) -> String {
+        trusting(runtime, target, trust_pem).await.error_code
     }
 
     /// The error code of a probe of `target` through `runtime`.
@@ -739,9 +944,77 @@ mod tests {
             "no X25519MLKEM768 in the ClientHello"
         );
         assert!(
-            hello.windows(8).any(|w| w == b"http/1.1"),
-            "the ALPN is http/1.1"
+            hello.windows(3).any(|w| w == b"\x02h2"),
+            "no h2 in the ALPN"
         );
+        assert!(
+            hello.windows(9).any(|w| w == b"\x08http/1.1"),
+            "no http/1.1 in the ALPN"
+        );
+    }
+
+    // #342: a target that picks h2 is asked over HTTP/2, the same GET.
+    #[tokio::test]
+    async fn availability_over_h2() {
+        let (addr, pem, seen) = serve_h2(vec![H2::Answer(204, None), H2::Answer(503, None)]).await;
+        let runtime = runtime(Some(addr)).await;
+        let got = trusting(&runtime, "https://127.0.0.1:8443/check?a=1", &pem).await;
+        assert!(got.success && got.http_status == 204, "{got:?}");
+        assert_eq!(
+            seen.lock().unwrap()[0],
+            "https://127.0.0.1:8443/check?a=1 ppvpn-core"
+        );
+        // A status that is not a success, its body read.
+        let got = trusting(&runtime, "https://127.0.0.1/", &pem).await;
+        assert_eq!(
+            (got.success, got.http_status, got.error_code.as_str()),
+            (false, 503, rc::HTTP_STATUS)
+        );
+    }
+
+    #[tokio::test]
+    async fn availability_h2_redirects() {
+        let (addr, pem, seen) =
+            serve_h2(vec![H2::Answer(302, Some("/next")), H2::Answer(204, None)]).await;
+        let runtime = runtime(Some(addr)).await;
+        let got = trusting(&runtime, "https://127.0.0.1/start", &pem).await;
+        assert!(got.success && got.http_status == 204, "{got:?}");
+        let requests = seen.lock().unwrap().clone();
+        assert_eq!(
+            requests,
+            [
+                "https://127.0.0.1/start ppvpn-core",
+                "https://127.0.0.1/next ppvpn-core"
+            ]
+        );
+    }
+
+    // A GOAWAY before the request was taken, or the connection dropped
+    // after it: closed before a response head, as over HTTP/1.1.
+    #[tokio::test]
+    async fn availability_h2_closed_before_an_answer() {
+        for then in [H2::GoAway, H2::Drop] {
+            let (addr, pem, _) = serve_h2(vec![then]).await;
+            let runtime = runtime(Some(addr)).await;
+            let started = std::time::Instant::now();
+            assert_eq!(
+                code_trusting(&runtime, "https://127.0.0.1/", &pem).await,
+                rc::CONNECTION_CLOSED
+            );
+            assert!(started.elapsed() < Duration::from_secs(4));
+        }
+    }
+
+    // A target that picks http/1.1 is asked over HTTP/1.1, as one that
+    // picks no protocol at all (the other TLS tests' server).
+    #[tokio::test]
+    async fn availability_h1_when_the_target_picks_it() {
+        let (pem, acceptor) = crate::tls::testing::authority_alpn("probe test ca", b"\x08http/1.1");
+        let answer = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n";
+        let addr = serve_tls(acceptor, Then::Answer(Duration::ZERO, answer)).await;
+        let runtime = runtime(Some(addr)).await;
+        let got = trusting(&runtime, "https://127.0.0.1/", &pem).await;
+        assert!(got.success && got.http_status == 204, "{got:?}");
     }
 
     // #342: Google's front end speaks TLS 1.3 and sends session tickets

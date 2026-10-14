@@ -25,9 +25,12 @@ bytes = "1"
 futures-util = "0.3"
 getrandom = "0.4"
 hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
-# Rule set downloads (HTTP/1.1 on sail's TLS) and reading .srs files.
+# Rule set downloads (HTTP/1.1 on sail's TLS), the availability probe's
+# HTTP/2 (#342), and reading .srs files. h2 is the version sail builds; the
+# probe reads its errors.
+h2 = "0.4"
 http-body-util = "0.1"
-hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper = { version = "1", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 miniz_oxide = "0.8"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }

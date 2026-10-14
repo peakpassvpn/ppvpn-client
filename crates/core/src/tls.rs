@@ -35,13 +35,29 @@ pub(crate) mod testing {
     use btls::hash::MessageDigest;
     use btls::nid::Nid;
     use btls::pkey::{PKey, Private};
-    use btls::ssl::{SslAcceptor, SslMethod};
+    use btls::ssl::{select_next_proto, AlpnError, SslAcceptor, SslAcceptorBuilder, SslMethod};
     use btls::x509::extension::{BasicConstraints, SubjectAlternativeName};
     use btls::x509::{X509Name, X509NameBuilder, X509};
 
     /// The authority named `ca_name` (PEM) and an acceptor whose
     /// certificate, for the IP address 127.0.0.1 alone, it issued.
     pub(crate) fn authority(ca_name: &str) -> (String, SslAcceptor) {
+        let (pem, acceptor) = issue(ca_name);
+        (pem, acceptor.build())
+    }
+
+    /// [`authority`], with an acceptor that picks `alpn` (ALPN's wire
+    /// format, e.g. `b"\x02h2"`) when the client offers it, and no protocol
+    /// otherwise.
+    pub(crate) fn authority_alpn(ca_name: &str, alpn: &'static [u8]) -> (String, SslAcceptor) {
+        let (pem, mut acceptor) = issue(ca_name);
+        acceptor.set_alpn_select_callback(move |_, offered| {
+            select_next_proto(alpn, offered).ok_or(AlpnError::NOACK)
+        });
+        (pem, acceptor.build())
+    }
+
+    fn issue(ca_name: &str) -> (String, SslAcceptorBuilder) {
         fn key() -> PKey<Private> {
             let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
             PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap()
@@ -97,6 +113,6 @@ pub(crate) mod testing {
         acceptor.set_private_key(&leaf_key).unwrap();
         acceptor.set_certificate(&leaf).unwrap();
         let pem = String::from_utf8(ca.to_pem().unwrap()).unwrap();
-        (pem, acceptor.build())
+        (pem, acceptor)
     }
 }
