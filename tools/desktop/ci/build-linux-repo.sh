@@ -65,7 +65,7 @@ usage() {
   die "usage: build-linux-repo.sh --channel dev|stable --releases <dir> --download-base <https URL> --site-base <https URL> --out <site dir> [--keep 5] [--published <https URL>]"
 }
 
-CHANNEL="" RELEASES="" DOWNLOAD_BASE="" SITE_BASE="" OUT="" KEEP=5 PUBLISHED=
+CHANNEL="" RELEASES="" DOWNLOAD_BASE="" SITE_BASE="" OUT="" KEEP=5 PUBLISHED_SITE=
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || usage
   case "$1" in
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
     --site-base) SITE_BASE="$2" ;;
     --out) OUT="$2" ;;
     --keep) KEEP="$2" ;;
-    --published) PUBLISHED="$2" ;;
+    --published) PUBLISHED_SITE="$2" ;;
     *) usage ;;
   esac
   shift 2
@@ -87,8 +87,10 @@ case "$CHANNEL" in dev|stable) ;; *) die "channel must be dev or stable, got '$C
 [[ ! -e "$OUT" || -d "$OUT" ]] || die "$OUT is not a directory"
 DOWNLOAD_BASE="${DOWNLOAD_BASE%/}"
 SITE_BASE="${SITE_BASE%/}"
-PUBLISHED="${PUBLISHED%/}"
-for base in "$DOWNLOAD_BASE" "$SITE_BASE" ${PUBLISHED:+"$PUBLISHED"}; do
+PUBLISHED_SITE="${PUBLISHED_SITE%/}"
+# Read only from here on: PUBLISHED is the releases' published_at below.
+readonly PUBLISHED_SITE
+for base in "$DOWNLOAD_BASE" "$SITE_BASE" ${PUBLISHED_SITE:+"$PUBLISHED_SITE"}; do
   case "$base" in
     https://?*) ;;
     http://?*) [[ "${PKG_ALLOW_HTTP:-}" == 1 ]] || die "$base is not https (PKG_ALLOW_HTTP=1 is for the self-test)" ;;
@@ -100,7 +102,7 @@ done
 FINGERPRINT="$(printf '%s' "${PKG_GPG_FINGERPRINT:-6924CE595D51ED53251B8776C48D5132620C3C86}" | tr -d ' ' | tr 'a-f' 'A-F')"
 [[ "$FINGERPRINT" =~ ^[0-9A-F]{40}$ ]] || die "PKG_GPG_FINGERPRINT is not a 40-digit fingerprint"
 for tool in gpg gpgv gpgconf dpkg dpkg-deb apt-ftparchive createrepo_c rpm jq python3 xz gzip sha256sum sha512sum \
-            ${PUBLISHED:+curl}; do
+            ${PUBLISHED_SITE:+curl}; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
 
@@ -405,14 +407,15 @@ deb_files() { dpkg-deb --fsys-tarfile "$1" | tar -xO | sha256sum | cut -d' ' -f1
 published_or() {   # release file; prints the file to use
   local name status copy
   name="$(basename "$1")"
-  if [[ -z "$PUBLISHED" ]]; then echo "$1"; return; fi
+  if [[ -z "$PUBLISHED_SITE" ]]; then echo "$1"; return; fi
+  [[ "$PUBLISHED_SITE" =~ ^https?://[A-Za-z0-9] ]] || die "--published is not a URL: $PUBLISHED_SITE"
   copy="$WORK/published-$name"
-  status="$(curl -sS -o "$copy" -w '%{http_code}' "$PUBLISHED/linux/setup/$name")" \
-    || die "cannot read $PUBLISHED/linux/setup/$name"
+  status="$(curl -sS -o "$copy" -w '%{http_code}' "$PUBLISHED_SITE/linux/setup/$name")" \
+    || die "cannot read $PUBLISHED_SITE/linux/setup/$name"
   case "$status" in
     404) echo "$1"; return ;;
     200) ;;
-    *) die "$PUBLISHED/linux/setup/$name answered $status" ;;
+    *) die "$PUBLISHED_SITE/linux/setup/$name answered $status" ;;
   esac
   case "$name" in
     *.rpm)
