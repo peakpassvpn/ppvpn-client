@@ -264,7 +264,7 @@ sing-box 就地重新加载，不重启实例，也不断开连接。状态每�
 {"node_id":"hk-001","total_ms":241,"success":true,"http_status":204,"measured_at":"2026-07-23T12:00:01Z"}
 ```
 
-入口错误码：通用 `CANCELED`、`DNS_FAILED`（入口无 IP 且域名解析失败）；`tcp` 为 `TIMEOUT`、`CONNECT_FAILED`；`icmp` 为 `ICMP_TIMEOUT`、`ICMP_UNREACHABLE`、`ICMP_UNSUPPORTED`（系统不允许非特权 ICMP）、`ICMP_FAILED`。可用性错误码：`TARGET_INVALID`、`CANCELED`、`TIMEOUT`、`PROXY_REQUEST_FAILED`、`HTTP_STATUS`。探测失败通常仍是成功的 API 调用，应检查每项 `success` 和 `error_code`。
+入口错误码：通用 `CANCELED`、`DNS_FAILED`（入口无 IP 且域名解析失败）；`tcp` 为 `TIMEOUT`、`CONNECT_FAILED`；`icmp` 为 `ICMP_TIMEOUT`、`ICMP_UNREACHABLE`、`ICMP_UNSUPPORTED`（系统不允许非特权 ICMP）、`ICMP_FAILED`。可用性错误码按失败的步骤区分：`TARGET_INVALID`（URL 无法解析、没有主机，或目标及其重定向不是 http/https）、`CANCELED`、`TIMEOUT`（任一步超时）、`CONNECT_FAILED`（经节点出口没能连上目标；目标域名解析失败也在此，Sail 不区分）、`TLS_HANDSHAKE_FAILED`、`TLS_CERTIFICATE_INVALID`（证书校验失败：签发者不受信任、名称不符、过期等）、`CONNECTION_CLOSED`（收到完整响应头之前连接被关闭或出错）、`RESPONSE_INVALID`（状态行无法解析、响应头超过 64 KiB 或不是 UTF-8、重定向地址无效）、`REDIRECT_LOOP`（超过 10 次重定向）、`HTTP_STATUS`（最终状态码不在 200–399）、`PROXY_REQUEST_FAILED`（节点出口本身无法使用：出口不存在、实例未运行或正在停止，或核心的 TLS 客户端建不起来）。此前（#342 之前）除 `TARGET_INVALID`、`CANCELED`、`TIMEOUT`、`HTTP_STATUS` 外的失败都报 `PROXY_REQUEST_FAILED`，宿主应把不认识的错误码当作一般的探测失败。探测失败通常仍是成功的 API 调用，应检查每项 `success` 和 `error_code`。
 
 ### LocalProxyMetadata 与 LocalProxyCredential
 
