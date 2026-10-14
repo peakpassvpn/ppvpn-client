@@ -80,6 +80,7 @@ mod tests {
             status: StatusCode::from_u16(code).unwrap(),
             code: None,
             expired_at: None,
+            detail: None,
         }
     }
 

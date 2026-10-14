@@ -196,9 +196,28 @@ pub async fn download_profile(auth: &Auth) -> Result<Vec<u8>> {
                 .map(|access| access.token)
                 .map_err(|e| auth_error(&e))
         },
-        |e| api_error(&e),
+        |e| profile_error(&e),
     )
     .await
+}
+
+/// A refused profile download, with the backend's own explanation when it
+/// says more than the CLI's message (a subscription being refunded, nodes
+/// being set up).
+fn profile_error(err: &ApiError) -> CliError {
+    let mut cli = api_error(err);
+    if let ApiError::Status {
+        status,
+        detail: Some(detail),
+        ..
+    } = err
+    {
+        let refused = status.is_client_error() && status.as_u16() != 401 && status.as_u16() != 429;
+        if refused && !cli.message.to_lowercase().contains(&detail.to_lowercase()) {
+            cli.message = format!("{} (backend: {detail})", cli.message);
+        }
+    }
+    cli
 }
 
 #[cfg(test)]

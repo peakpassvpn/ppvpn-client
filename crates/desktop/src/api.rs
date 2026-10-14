@@ -73,6 +73,7 @@ impl ApiErrorExt for ApiError {
                 status,
                 code,
                 expired_at,
+                ..
             } => {
                 if let Some(mapped) = subscription_code(status, code.as_deref()) {
                     let mut detail = status_detail(&request, status, code.as_deref());
@@ -394,6 +395,7 @@ mod tests {
             status: StatusCode::BAD_REQUEST,
             code: Some("SUBSCRIPTION_EXPIRED".into()),
             expired_at: Some("2026-09-01T00:00:00Z".into()),
+            detail: None,
         }
         .into_profile_error();
         let ClientError::Failed { code, detail } = error else {
@@ -426,6 +428,7 @@ mod tests {
         };
         let status = |status: u16, problem: Option<&str>| ApiError::Status {
             expired_at: None,
+            detail: None,
             request: "GET /api/v1/me/proxy-profile".to_string(),
             status: StatusCode::from_u16(status).unwrap(),
             code: problem.map(str::to_string),

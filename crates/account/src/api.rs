@@ -31,6 +31,8 @@ pub const PATH_DEVICES_REGISTER: &str = "/api/v1/devices/register";
 
 /// Longest backend problem code copied into an error detail.
 const MAX_PROBLEM_CODE_LEN: usize = 64;
+/// Most characters of a problem's `detail` kept for display.
+pub const MAX_PROBLEM_DETAIL_LEN: usize = 200;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -51,6 +53,10 @@ pub enum ApiError {
         /// RFC 3339 end of the subscription, on `SUBSCRIPTION_EXPIRED`
         /// problems that carry one.
         expired_at: Option<String>,
+        /// The problem's `detail`, for showing to the user as it is (one
+        /// line, at most [`MAX_PROBLEM_DETAIL_LEN`] characters). Never
+        /// branch on it: the code says what happened.
+        detail: Option<String>,
     },
     /// A success status with a body we could not decode.
     Decode(&'static str),
@@ -175,6 +181,9 @@ struct ApiProblem {
     /// or `expires_at`).
     #[serde(default, alias = "expires_at")]
     expired_at: Option<String>,
+    /// RFC 9457 `detail`: the explanation shown to the user.
+    #[serde(default)]
+    detail: Option<String>,
     /// Human-readable backend explanation; logged, never put in details.
     #[serde(default)]
     message: Option<String>,
@@ -527,9 +536,14 @@ async fn check_status(
     // travel in headers or bodies, never in the URL.
     let request = format!("{method} {}", response.url().path());
     let problem = response.json::<ApiProblem>().await.ok();
-    let (code, message, expired_at) = match problem {
-        Some(problem) => (problem.code, problem.message, problem.expired_at),
-        None => (None, None, None),
+    let (code, message, expired_at, detail) = match problem {
+        Some(problem) => (
+            problem.code,
+            problem.message,
+            problem.expired_at,
+            problem.detail,
+        ),
+        None => (None, None, None, None),
     };
     let expired_at = expired_at.filter(|at| is_timestamp(at));
     let code = code.filter(|code| code.len() <= MAX_PROBLEM_CODE_LEN);
@@ -547,7 +561,22 @@ async fn check_status(
         status,
         code,
         expired_at,
+        detail: detail.as_deref().and_then(display_detail),
     })
+}
+
+/// `detail` as one printable line of at most [`MAX_PROBLEM_DETAIL_LEN`]
+/// characters, or `None` when nothing is left.
+fn display_detail(detail: &str) -> Option<String> {
+    let line = detail
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_PROBLEM_DETAIL_LEN)
+        .collect::<String>();
+    (!line.is_empty()).then_some(line)
 }
 
 /// Marks the subscription end inside a `SubscriptionExpired` error detail.
@@ -794,12 +823,29 @@ mod tests {
         .unwrap();
         assert_eq!(problem.code.as_deref(), Some(PROBLEM_SUBSCRIPTION_REQUIRED));
         assert_eq!(problem.expired_at, None);
+        assert_eq!(problem.detail.as_deref(), Some("no subscription"));
+    }
+
+    #[test]
+    fn a_problem_detail_is_kept_as_one_short_line() {
+        assert_eq!(
+            display_detail("  no active\n subscription\t ").as_deref(),
+            Some("no active subscription")
+        );
+        assert_eq!(display_detail("\u{1b}[31m").as_deref(), Some("[31m"));
+        assert_eq!(display_detail(" \r\n "), None);
+        let long = "x".repeat(MAX_PROBLEM_DETAIL_LEN + 50);
+        assert_eq!(
+            display_detail(&long).map(|d| d.chars().count()),
+            Some(MAX_PROBLEM_DETAIL_LEN)
+        );
     }
 
     #[test]
     fn credential_errors_are_classified() {
         let status = |status: u16, problem: Option<&str>| ApiError::Status {
             expired_at: None,
+            detail: None,
             request: "GET /api/v1/users/me".to_string(),
             status: StatusCode::from_u16(status).unwrap(),
             code: problem.map(str::to_string),
