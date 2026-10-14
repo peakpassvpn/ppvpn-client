@@ -144,9 +144,10 @@ impl LocalProxy {
 pub(crate) struct RuleSetFile {
     /// Absolute path of the binary (`.srs`) file.
     pub path: String,
-    /// The set matches domains and no destination CIDRs: only such sets are
-    /// mirrored into DNS rules (a DNS rule whose set carries CIDRs would
-    /// resolve every name through its server to test the answer).
+    /// The set matches domains, no destination CIDRs and no process or
+    /// package: only such sets are mirrored into DNS rules (a DNS rule whose
+    /// set carries CIDRs would resolve every name through its server to test
+    /// the answer; one naming a process would see the resolver, not the app).
     pub mirror_dns: bool,
 }
 

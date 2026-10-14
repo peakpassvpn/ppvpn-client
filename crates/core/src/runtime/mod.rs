@@ -319,9 +319,12 @@ pub(crate) struct NetworkSnapshot {
 }
 
 /// A change of network that sail acts on (its DNS cache cleared, the
-/// connections of the old network reset): the same publication sail's own
-/// reaction reads, so the Engine's NetworkChanged and sail's reset come
-/// from one decision (one monitor, #214).
+/// connections it affects reset: from sail 0.19 those bound to an interface
+/// or address that is gone, and those on the default route when it changed;
+/// a wake still resets all): the same publication sail's own reaction
+/// reads, so the Engine's NetworkChanged and sail's reset come from one
+/// decision (one monitor, #214). The Engine never calls sail's
+/// network_changed: sail's monitor is the only source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NetworkChange {
     /// From 1 for each start of the runtime; a reader that sees a gap
@@ -419,9 +422,6 @@ pub(crate) trait Runtime: Send + Sync + 'static {
         inbound: &str,
         users: Vec<(String, String)>,
     ) -> Result<(), RuntimeError>;
-
-    /// The default interface changed; called by the Engine's one monitor.
-    async fn network_changed(&self) -> Result<(), RuntimeError>;
 
     /// sail's log lines for this instance. Bounded: lines that do not fit
     /// are dropped and counted, never waited for. Taken once (by the Engine,

@@ -41,8 +41,12 @@ const PACKAGE_NAME_REGEX: u8 = 23;
 const FINAL: u8 = 0xff;
 
 /// Reads a binary rule set and reports whether it may be mirrored into DNS
-/// rules: it matches domains and no destination IP CIDRs. A set sail cannot
-/// read is an error, so that it is never handed to the kernel.
+/// rules: it matches domains, and neither destination IP CIDRs nor who opened
+/// the connection (process or package items). sail matches those from 0.19
+/// on, looking the owner up when a rule needs it; in DNS rules the owner is
+/// whoever resolves (the system's resolver under a TUN), never the app, and
+/// every query would be looked up for nothing. A set sail cannot read is an
+/// error, so that it is never handed to the kernel.
 pub(super) fn inspect(data: &[u8]) -> Result<bool, String> {
     let rest = data
         .strip_prefix(b"SRS".as_slice())
@@ -59,13 +63,15 @@ pub(super) fn inspect(data: &[u8]) -> Result<bool, String> {
     for _ in 0..reader.count(1)? {
         rule(&mut reader, 0, &mut found)?;
     }
-    Ok(found.domains && !found.cidrs)
+    Ok(found.domains && !found.cidrs && !found.owner)
 }
 
 #[derive(Default)]
 struct Found {
     domains: bool,
     cidrs: bool,
+    /// Process or package items: who opened the connection.
+    owner: bool,
 }
 
 fn rule(reader: &mut Reader, depth: usize, found: &mut Found) -> Result<(), String> {
@@ -96,9 +102,14 @@ fn plain(reader: &mut Reader, found: &mut Found) -> Result<(), String> {
                 let count = reader.count(2)?;
                 reader.take(count * 2)?;
             }
-            NETWORK | SOURCE_PORT_RANGE | PORT_RANGE | PROCESS_NAME | PROCESS_PATH
-            | PACKAGE_NAME | WIFI_SSID | WIFI_BSSID | PROCESS_PATH_REGEX | PACKAGE_NAME_REGEX => {
+            NETWORK | SOURCE_PORT_RANGE | PORT_RANGE | WIFI_SSID | WIFI_BSSID => {
                 reader.strings()?;
+            }
+            PROCESS_NAME | PROCESS_PATH | PACKAGE_NAME | PROCESS_PATH_REGEX
+            | PACKAGE_NAME_REGEX => {
+                if reader.strings()? > 0 {
+                    found.owner = true;
+                }
             }
             DOMAIN => {
                 reader.succinct()?;
@@ -268,6 +279,57 @@ mod tests {
     #[test]
     fn items_sail_cannot_match_are_invalid() {
         assert!(inspect(&fixture("adguard.srs")).is_err());
+    }
+
+    /// A set of one plain rule with these string items (type, values).
+    fn set(items: &[(u8, &[&str])]) -> Vec<u8> {
+        fn uvarint(out: &mut Vec<u8>, mut n: u64) {
+            while n >= 0x80 {
+                out.push(n as u8 | 0x80);
+                n >>= 7;
+            }
+            out.push(n as u8);
+        }
+        let mut rules = vec![];
+        uvarint(&mut rules, 1);
+        rules.push(0); // plain
+        for (item, values) in items {
+            rules.push(*item);
+            uvarint(&mut rules, values.len() as u64);
+            for value in *values {
+                uvarint(&mut rules, value.len() as u64);
+                rules.extend_from_slice(value.as_bytes());
+            }
+        }
+        rules.extend_from_slice(&[FINAL, 0]);
+        let mut data = b"SRS".to_vec();
+        data.push(MAX_VERSION);
+        data.extend(miniz_oxide::deflate::compress_to_vec_zlib(&rules, 6));
+        data
+    }
+
+    /// A set that names who opened the connection is not mirrored into DNS:
+    /// a DNS rule's owner is the resolver, not the app (sail 0.19 matches
+    /// these items). Routing takes it as it is.
+    #[test]
+    fn sets_naming_a_process_or_package_are_not_mirrored() {
+        let keyword: (u8, &[&str]) = (DOMAIN_KEYWORD, &["example"]);
+        assert_eq!(inspect(&set(&[keyword])), Ok(true), "domains alone");
+        for owner in [
+            PROCESS_NAME,
+            PROCESS_PATH,
+            PACKAGE_NAME,
+            PROCESS_PATH_REGEX,
+            PACKAGE_NAME_REGEX,
+        ] {
+            assert_eq!(
+                inspect(&set(&[keyword, (owner, &["app"])])),
+                Ok(false),
+                "item {owner}"
+            );
+        }
+        // An empty list names nobody.
+        assert_eq!(inspect(&set(&[keyword, (PROCESS_NAME, &[])])), Ok(true));
     }
 
     #[test]
