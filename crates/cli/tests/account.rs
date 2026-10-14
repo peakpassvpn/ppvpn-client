@@ -555,7 +555,7 @@ async fn subscription_codes_pick_the_message_and_keep_the_code_and_exit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_refused_profile_names_the_backend_reason_and_the_team() {
+async fn a_refused_profile_carries_the_backend_reason() {
     let err = profile_error(
         404,
         json!({"type": "about:blank", "title": "Not Found", "status": 404,
