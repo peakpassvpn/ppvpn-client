@@ -1,8 +1,24 @@
-# ppvpn-core
+# ppvpn-client
 
-`ppvpn-core` 是 [PPVPN (PeakPass VPN)](https://www.peakpassvpn.com) 的第一方网络核心。后端只下发版本化、平台无关的 Proxy Profile；核心负责严格校验、转换为固定版本的内部运行配置，并统一管理路由判定、运行时、探测、共享端口认证本地代理（用户名选节点）、流量统计、桌面 IPC 和平台绑定。
+[PPVPN (PeakPass VPN)](https://www.peakpassvpn.com) 的客户端仓库：macOS、Windows、Linux 桌面客户端，命令行 `ppvpn`，以及它们共用的 Rust 网络引擎 `ppvpn-core`。移动端（Android、iOS）以后也放在这里。
 
-引擎是 Rust 库 `ppvpn-core`（`crates/core`，内嵌 Sail），由 Desktop 和 CLI 在进程内承载，见 [#214](https://github.com/peakpassvpn/ppvpn-client/issues/214)。原来的 Go 内核已从 main 移除，最后一版是 v0.5.21，它的 tag 和 Release 文件保留；切换前 Desktop 仍 vendor 这个版本。接口版本：Core API `v1`、Profile Schema `1`。支持 Shadowsocks 2022（含多用户/EIH）、VLESS + REALITY 和 AnyTLS。
+下载安装包请到[官网](https://www.peakpassvpn.com)或 [GitHub Releases](https://github.com/peakpassvpn/ppvpn-client/releases)。桌面端、CLI 和引擎同一个版本、同一个 Release，见[构建与发布](docs/release.md)。
+
+## 目录
+
+| 路径 | 内容 |
+| --- | --- |
+| `crates/core` | 引擎 `ppvpn-core`：内嵌 Sail，负责 Profile 校验与转换、路由、探测、本地代理、流量统计 |
+| `crates/account` | `ppvpn-account`：登录、设备、会话和 Profile 下载，桌面端和 CLI 共用 |
+| `crates/desktop` | 桌面客户端的 Rust 部分，三个平台的原生界面共用 |
+| `crates/service` | 增强模式（TUN）的特权服务 |
+| `crates/engine-host` | 在进程内承载引擎的宿主 |
+| `crates/cli` | 命令行 `ppvpn` |
+| `crates/core-lab` | 引擎的实验与压测工具 |
+| `apps/macos`、`apps/windows`、`apps/linux` | 各平台的原生界面（SwiftUI、WinUI 3、GTK 4 + libadwaita） |
+| `apps/dotnet-shared` | Windows 和 Linux 共用的 .NET 代码 |
+
+引擎是 Rust 库 `ppvpn-core`（`crates/core`），由桌面端和 CLI 在进程内承载，见 [#214](https://github.com/peakpassvpn/ppvpn-client/issues/214)。后端只下发版本化、平台无关的 Proxy Profile；引擎负责严格校验、转换为固定版本的内部运行配置。接口版本：Core API `v1`、Profile Schema `1`。支持 Shadowsocks 2022（含多用户/EIH）、VLESS + REALITY 和 AnyTLS。原来的 Go 内核已从 main 移除，最后一版是 v0.5.21，它的 tag 和 Release 文件保留。
 
 ## 文档导航
 
@@ -36,6 +52,6 @@ cargo fmt --all --check
 
 ## 许可证
 
-`ppvpn-core` 以 [GNU GPL v3 或更高版本](LICENSE) 发布。项目包含和依赖的第三方组件可能适用额外条款；参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本仓库以 [GNU GPL v3 或更高版本](LICENSE) 发布。项目包含和依赖的第三方组件可能适用额外条款；参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 安全问题请勿通过公开 Issue 披露，报告方式见 [SECURITY.md](SECURITY.md)。
