@@ -786,6 +786,17 @@ mod tests {
     }
 
     #[test]
+    fn problem_fields_are_read_at_the_root() {
+        // The backend's problem+json: root-level fields, no `data` wrapper.
+        let problem: ApiProblem = serde_json::from_str(
+            r#"{"type":"about:blank","title":"Not Found","status":404,"detail":"no subscription","code":"SUBSCRIPTION_REQUIRED"}"#,
+        )
+        .unwrap();
+        assert_eq!(problem.code.as_deref(), Some(PROBLEM_SUBSCRIPTION_REQUIRED));
+        assert_eq!(problem.expired_at, None);
+    }
+
+    #[test]
     fn credential_errors_are_classified() {
         let status = |status: u16, problem: Option<&str>| ApiError::Status {
             expired_at: None,
