@@ -25,6 +25,8 @@ public enum FakeProfileScenario
     NoSubscription,
     SubscriptionExpired,
     TeamDisabled,
+    /// <summary>Subscribed, the nodes are not published yet: <see cref="ProfileStatus.NodesNotReady"/>.</summary>
+    NodesNotReady,
     /// <summary>The profile loads, then the core rejects it: <see cref="ProfileStatus.Invalid"/> (profile kept).</summary>
     Invalid,
     /// <summary>The profile is rejected and there is no previous one: Invalid without a profile.</summary>
@@ -999,6 +1001,7 @@ public sealed class FakeClientBackend : IClientBackend
             FakeProfileScenario.NoSubscription => new Blocked(new ProfileStatus.NoSubscription(), ErrorCode.NoSubscription, "GET /api/v1/me/proxy-profile -> HTTP 402 402001"),
             FakeProfileScenario.SubscriptionExpired => new Blocked(new ProfileStatus.SubscriptionExpired(ExpiredAt()), ErrorCode.SubscriptionExpired, "GET /api/v1/me/proxy-profile -> HTTP 402 402002"),
             FakeProfileScenario.TeamDisabled => new Blocked(new ProfileStatus.TeamDisabled(), ErrorCode.TeamDisabled, "GET /api/v1/me/proxy-profile -> HTTP 403 403012"),
+            FakeProfileScenario.NodesNotReady => new Blocked(new ProfileStatus.NodesNotReady(), ErrorCode.ProxyNodesNotReady, "GET /api/v1/me/proxy-profile -> HTTP 404 PROXY_NODES_NOT_READY"),
             _ => null,
         };
         if (blocked is { } b)

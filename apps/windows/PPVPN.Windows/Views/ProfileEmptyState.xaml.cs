@@ -28,6 +28,7 @@ public static class ProfileEmptyStateText
         AccessState.NoSubscription => "\uE7BF",  // shopping cart
         AccessState.Expired => "\uE823",         // clock
         AccessState.TeamDisabled => "\uE716",    // people
+        AccessState.NodesNotReady => "\uE916",   // stopwatch
         _ => "\uE946",
     };
 }

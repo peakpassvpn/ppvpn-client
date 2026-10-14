@@ -207,7 +207,7 @@ public sealed partial class NodesViewModel : ObservableObject
         CanProbe = signedIn && next.Standard is StandardState.Ready;
         ConfigInvalid = next.ProfileStatus is ProfileStatus.Invalid && next.Profile is not null;
         ViewState = !signedIn ? NodesViewState.Loading
-            : next.ProfileStatus is ProfileStatus.NoSubscription or ProfileStatus.SubscriptionExpired or ProfileStatus.TeamDisabled ? NodesViewState.Restricted
+            : next.ProfileStatus is ProfileStatus.NoSubscription or ProfileStatus.SubscriptionExpired or ProfileStatus.TeamDisabled or ProfileStatus.NodesNotReady ? NodesViewState.Restricted
             : next.Profile is not null ? NodesViewState.Data
             : next.ProfileStatus is ProfileStatus.Invalid ? NodesViewState.InvalidNoHistory
             : NodesViewState.Loading;

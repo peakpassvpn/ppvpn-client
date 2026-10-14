@@ -2687,6 +2687,40 @@
         }
       }
     },
+    "nodesWaitD": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "订阅已生效，节点正在准备中，稍后会自动刷新。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your subscription is active and its servers are being set up. The app will check again automatically."
+          }
+        }
+      }
+    },
+    "nodesWaitT": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点准备中"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setting Up Servers"
+          }
+        }
+      }
+    },
     "noSubT": {
       "extractionState": "manual",
       "localizations": {
