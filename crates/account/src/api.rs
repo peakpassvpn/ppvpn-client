@@ -124,6 +124,11 @@ pub const PROBLEM_TEAM_DISABLED: &str = "403012";
 pub const PROBLEM_TEAM_DISSOLVED: &str = "404011";
 /// Backend problem code for an expired subscription; may carry its end.
 pub const PROBLEM_SUBSCRIPTION_EXPIRED: &str = "SUBSCRIPTION_EXPIRED";
+/// Proxy-profile 404: the team has no live subscription.
+pub const PROBLEM_SUBSCRIPTION_REQUIRED: &str = "SUBSCRIPTION_REQUIRED";
+/// Proxy-profile 404: the subscription exists, but no endpoint is published
+/// for it yet.
+pub const PROBLEM_PROXY_NODES_NOT_READY: &str = "PROXY_NODES_NOT_READY";
 
 /// What a failed team-scoped call says about the team's service, on any
 /// endpoint and status.
@@ -135,6 +140,9 @@ pub enum SubscriptionProblem {
     Expired,
     /// No (active) subscription, or payment required.
     NoSubscription,
+    /// The subscription exists, but its nodes are not published yet
+    /// (`PROXY_NODES_NOT_READY`); they usually arrive within minutes.
+    NodesNotReady,
 }
 
 /// The [`SubscriptionProblem`] a status and problem code stand for, if any.
@@ -147,8 +155,12 @@ pub fn subscription_problem(status: StatusCode, code: Option<&str>) -> Option<Su
             Some(SubscriptionProblem::TeamDisabled)
         }
         Some(PROBLEM_SUBSCRIPTION_EXPIRED) => Some(SubscriptionProblem::Expired),
+        Some(PROBLEM_PROXY_NODES_NOT_READY) => Some(SubscriptionProblem::NodesNotReady),
         Some(
-            "SUBSCRIPTION_NOT_FOUND" | "SUBSCRIPTION_NOT_ACTIVE" | "POINTS_NO_ACTIVE_SUBSCRIPTION",
+            PROBLEM_SUBSCRIPTION_REQUIRED
+            | "SUBSCRIPTION_NOT_FOUND"
+            | "SUBSCRIPTION_NOT_ACTIVE"
+            | "POINTS_NO_ACTIVE_SUBSCRIPTION",
         ) => Some(SubscriptionProblem::NoSubscription),
         _ if status == StatusCode::PAYMENT_REQUIRED => Some(SubscriptionProblem::NoSubscription),
         _ => None,
@@ -816,7 +828,19 @@ mod tests {
             assert_eq!(problem(409, Some(code)), Some(NoSubscription), "{code}");
         }
         assert_eq!(problem(402, None), Some(NoSubscription));
+        // The proxy-profile 404 codes; older backends send `NOT_FOUND` or
+        // no code for both, which stays unclassified.
+        assert_eq!(
+            problem(404, Some(PROBLEM_SUBSCRIPTION_REQUIRED)),
+            Some(NoSubscription)
+        );
+        assert_eq!(
+            problem(404, Some(PROBLEM_PROXY_NODES_NOT_READY)),
+            Some(NodesNotReady)
+        );
         assert_eq!(problem(404, Some("NOT_FOUND")), None);
+        assert_eq!(problem(404, None), None);
+        assert_eq!(problem(404, Some("SOMETHING_NEW")), None);
         assert_eq!(problem(401, None), None);
         assert_eq!(ApiError::Decode("x").subscription_problem(), None);
     }

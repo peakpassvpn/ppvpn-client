@@ -135,7 +135,7 @@ extension AppState {
             Restriction(code: .teamDisabled, title: tr("teamOffT"),
                         message: tr("teamOffD", ["team": snapshot.team?.name ?? ""]),
                         systemImage: "person.2.slash", offersPurchase: false)
-        case .loading, .ready, .invalid:
+        case .loading, .ready, .invalid, .nodesNotReady:
             nil
         }
     }

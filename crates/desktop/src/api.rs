@@ -112,7 +112,10 @@ impl ApiErrorExt for ApiError {
     }
 
     /// Mapping for `GET /me/proxy-profile`: the backend answers 404 when the
-    /// team has no active subscription or no usable node.
+    /// team has no live subscription (`SUBSCRIPTION_REQUIRED`) or its nodes
+    /// are not published yet (`PROXY_NODES_NOT_READY`). Older backends send
+    /// `NOT_FOUND`, or no code, for both: that, and any other code, stays
+    /// `NoSubscription`.
     fn into_profile_error(self) -> ClientError {
         match self {
             Self::Status {
@@ -120,10 +123,13 @@ impl ApiErrorExt for ApiError {
                 status,
                 code,
                 ..
-            } if status == StatusCode::NOT_FOUND => ClientError::failed(
-                ErrorCode::NoSubscription,
-                status_detail(&request, status, code.as_deref()),
-            ),
+            } if status == StatusCode::NOT_FOUND => {
+                let mapped = match subscription_problem(status, code.as_deref()) {
+                    Some(SubscriptionProblem::NodesNotReady) => ErrorCode::ProxyNodesNotReady,
+                    _ => ErrorCode::NoSubscription,
+                };
+                ClientError::failed(mapped, status_detail(&request, status, code.as_deref()))
+            }
             other => match other.into_client_error() {
                 // Any other rejection of this endpoint is a profile problem.
                 ClientError::Failed {
@@ -142,6 +148,7 @@ fn subscription_code(status: StatusCode, code: Option<&str>) -> Option<ErrorCode
         SubscriptionProblem::TeamDisabled => ErrorCode::TeamDisabled,
         SubscriptionProblem::Expired => ErrorCode::SubscriptionExpired,
         SubscriptionProblem::NoSubscription => ErrorCode::NoSubscription,
+        SubscriptionProblem::NodesNotReady => ErrorCode::ProxyNodesNotReady,
     })
 }
 
@@ -425,6 +432,24 @@ mod tests {
         };
         assert_eq!(
             code(status(404, Some("NOT_FOUND")).into_profile_error()),
+            ErrorCode::NoSubscription
+        );
+        // The proxy-profile 404 codes; a bare 404 or an unknown code stays
+        // `NoSubscription` as with older backends.
+        assert_eq!(
+            code(status(404, Some("SUBSCRIPTION_REQUIRED")).into_profile_error()),
+            ErrorCode::NoSubscription
+        );
+        assert_eq!(
+            code(status(404, Some("PROXY_NODES_NOT_READY")).into_profile_error()),
+            ErrorCode::ProxyNodesNotReady
+        );
+        assert_eq!(
+            code(status(404, None).into_profile_error()),
+            ErrorCode::NoSubscription
+        );
+        assert_eq!(
+            code(status(404, Some("SOMETHING_NEW")).into_profile_error()),
             ErrorCode::NoSubscription
         );
         assert_eq!(

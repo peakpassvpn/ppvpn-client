@@ -428,6 +428,11 @@ pub enum ProfileStatus {
     /// The backend sent a profile this client or its core rejects; the
     /// previously valid profile, if any, stays in use.
     Invalid { error: ClientErrorInfo },
+    /// The team's subscription is live, but its nodes are not published yet.
+    /// No profile, both cores stopped. The client fetches the profile again
+    /// on its own (after 30 s, 60 s, then every 2 minutes) and moves to
+    /// `Ready` when the nodes arrive; no user action is needed.
+    NodesNotReady,
 }
 
 #[derive(uniffi::Enum, Clone, Debug, Default, PartialEq)]

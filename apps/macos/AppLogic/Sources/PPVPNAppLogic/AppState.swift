@@ -92,7 +92,7 @@ open class AppState: ClientEvents {
         case .noSubscription: .noSubscription
         case .subscriptionExpired: .subscriptionExpired
         case .teamDisabled: .teamDisabled
-        case .loading, .ready, .invalid: nil
+        case .loading, .ready, .invalid, .nodesNotReady: nil
         }
     }
 

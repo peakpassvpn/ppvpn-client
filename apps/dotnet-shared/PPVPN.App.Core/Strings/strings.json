@@ -348,6 +348,7 @@
     "Error_ConnectHealthCheckFailed": "连接后无法访问服务，可能是 DNS 或网络被其他软件接管。",
     "Error_CredentialStoreLocked": "钥匙串或钥匙环已锁定，解锁后会自动恢复登录。",
     "Error_SystemProxyUnavailable": "此桌面环境不支持设置系统代理。请改用增强模式，或在应用中手动填写本地代理。",
+    "Error_ProxyNodesNotReady": "订阅已生效，节点正在准备中，稍后会自动刷新。",
     "t_other": "其他",
     "captionEnhanced": "增强模式",
     "captionCompatible": "兼容模式"
@@ -701,6 +702,7 @@
     "Error_ConnectHealthCheckFailed": "Connected, but the service couldn’t be reached. Another app may have taken over DNS or the network.",
     "Error_CredentialStoreLocked": "Your keychain or keyring is locked. You’ll be signed in again once it’s unlocked.",
     "Error_SystemProxyUnavailable": "This desktop doesn't expose system proxy settings. Use Enhanced Mode, or enter the local proxy in your apps.",
+    "Error_ProxyNodesNotReady": "Your subscription is active and its servers are being set up. The app will check again automatically.",
     "t_other": "Other",
     "captionEnhanced": "Enhanced Mode",
     "captionCompatible": "Compatibility Mode"
