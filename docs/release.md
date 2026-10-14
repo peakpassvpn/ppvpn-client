@@ -44,6 +44,10 @@
 不是 GitHub Pages（Pages 上限 1 GB，只 apt/dnf 仓库 5 个版本就约 600 MB）。内容：
 
 - `desktop/channels/stable.json`（频道指针）和 `desktop/stable/appcast-<平台>.xml`（macOS、Windows 的 Sparkle 源）；
+- 最新版本的 macOS 和 Windows 安装包 `desktop/stable/<版本>/<构建号>/<文件>`：appcast 的 enclosure 和频道指针的
+  `url` 指向这里，而不是 GitHub Release（经 Cloudflare 缓存；GitHub 的下载在一些网络下很慢）。文件就是 Release
+  里那份（`site` 先按 SHA256SUMS 和 provenance 校验），Sparkle/WinSparkle 再校验 EdDSA 签名；Release 里的
+  资产不动，旧的下载地址照旧可用。每个版本约 145 MB（两个 DMG 加 Windows 安装包）；
 - `linux/`：apt 仓库（`linux/apt`，suite `stable`，保留最近 5 个版本的 deb）、dnf 仓库（`linux/rpm/stable`，
   rpm 本身从 GitHub Release 下载）、安装源设置包、公钥和 `linux/stable/latest.json`（Linux 应用的更新检查）；
 - 已停用的 dev 频道：`linux/dev/latest.json` 和 `desktop/dev/appcast-<平台>.xml` 是 stable 的副本，让以前装的
@@ -54,7 +58,8 @@
 索引、repodata 数据文件、带版本的设置包），再传索引（`Packages*`）、签名的索引（`Release`/`InRelease`/
 `repomd.xml`）、更新检查（`latest.json`、appcast），频道指针最后。不变的文件 `Cache-Control: public,
 max-age=31536000, immutable`，其余 `no-cache`；bucket 里已有、内容不同的不变文件会被拒绝，整个上传不开始。
-不删除任何对象：客户端已经拿到的索引所指的文件一直在，旧版本的包和旧的 by-hash 文件会累积，需要时手动清理。
+不删除任何对象：客户端已经拿到的索引所指的文件一直在，旧版本的包、安装包和旧的 by-hash 文件会累积，需要时手动清理
+（安装包只有当前频道指针所指的版本还在用）。
 
 需要在仓库里建的（名字固定）：
 

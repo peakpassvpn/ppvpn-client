@@ -14,7 +14,8 @@
 #
 #   1  immutable: linux/apt/pool/…, the apt indexes' by-hash copies, linux/rpm/…/repodata/
 #      except repomd.xml(.asc) (createrepo_c names them by their checksum), the versioned
-#      setup packages linux/setup/*.{deb,rpm}
+#      setup packages linux/setup/*.{deb,rpm}, the macOS and Windows installers the Sparkle
+#      feeds fetch, desktop/<channel>/<version>/<build>/<file>
 #   2  the key, the setup packages' signatures (made anew on every build: gpg signatures
 #      carry their time) and their stable aliases: linux/ppvpn.asc, linux/setup/*.asc,
 #      linux/ppvpn-archive-keyring.deb, linux/ppvpn-release.rpm (+ .asc)
@@ -58,6 +59,7 @@ tier() {   # path relative to the site
     linux/apt/pool/*|linux/apt/dists/*/by-hash/*|linux/setup/*) echo 1 ;;
     linux/rpm/*/repodata/repomd.xml|linux/rpm/*/repodata/repomd.xml.asc) echo 4 ;;
     linux/rpm/*/repodata/*) echo 1 ;;
+    desktop/*/[0-9]*.[0-9]*.[0-9]*/[0-9]*/*) echo 1 ;;
     linux/ppvpn.asc|linux/ppvpn-archive-keyring.deb|linux/ppvpn-archive-keyring.deb.asc|\
     linux/ppvpn-release.rpm|linux/ppvpn-release.rpm.asc) echo 2 ;;
     linux/apt/dists/*/Packages|linux/apt/dists/*/Packages.gz|linux/apt/dists/*/Packages.xz) echo 3 ;;
@@ -78,6 +80,8 @@ content_type() {
     *.gz) echo "application/gzip" ;;
     *.xz) echo "application/x-xz" ;;
     *.zst) echo "application/zstd" ;;
+    *.dmg) echo "application/x-apple-diskimage" ;;
+    *.exe) echo "application/vnd.microsoft.portable-executable" ;;
     *) echo "application/octet-stream" ;;
   esac
 }

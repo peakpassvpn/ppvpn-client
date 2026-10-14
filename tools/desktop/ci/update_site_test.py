@@ -118,6 +118,41 @@ class Build(unittest.TestCase):
             else:
                 self.assertIsNone(enclosure.get(f"{SPARKLE_NS}os"))
 
+    def test_installers_on_site(self):
+        release(self.assets.name)
+        written = site.build(self.assets.name, "v0.4.0", "stable", DOWNLOAD, SITE, self.out.name,
+                             installers_on_site=True)
+        copies = [f"desktop/stable/0.4.0/1234/{FILES[platform]}" for platform in site.SPARKLE]
+        self.assertEqual(written, sorted([
+            "desktop/channels/stable.json",
+            "desktop/stable/appcast-macos-arm64.xml",
+            "desktop/stable/appcast-macos-x64.xml",
+            "desktop/stable/appcast-windows-x64.xml",
+            *copies,
+        ]))
+        self.assertEqual(self.written(), written)
+        pointer = self.pointer()
+        for platform in site.SPARKLE:
+            relative = f"desktop/stable/0.4.0/1234/{FILES[platform]}"
+            with open(os.path.join(self.out.name, relative), "rb") as f:
+                body = f.read()
+            # The copy is the bytes the metadata (and so SHA256SUMS and the signature) describe.
+            self.assertEqual(hashlib.sha256(body).hexdigest(), pointer["platforms"][platform]["sha256"])
+            self.assertEqual(pointer["platforms"][platform]["url"], f"{SITE}/{relative}")
+            root = ET.parse(os.path.join(self.out.name, "desktop", "stable", f"appcast-{platform}.xml")).getroot()
+            self.assertEqual(root.find("channel/item/enclosure").get("url"), f"{SITE}/{relative}")
+        # Linux updates from the repositories; its addresses stay the release's.
+        self.assertEqual(pointer["platforms"]["linux-x64-deb"]["url"], f"{DOWNLOAD}/v0.4.0/{FILES['linux-x64-deb']}")
+        self.assertEqual(pointer["sha256sums_url"], f"{DOWNLOAD}/v0.4.0/SHA256SUMS")
+        site.check_pointer(pointer, "stable")
+
+    def test_installers_on_site_need_the_installers(self):
+        release(self.assets.name)
+        os.remove(os.path.join(self.assets.name, FILES["windows-x64"]))
+        with self.assertRaisesRegex(site.Refused, "windows-x64: .* is missing"):
+            site.build(self.assets.name, "v0.4.0", "stable", DOWNLOAD, SITE, self.out.name, installers_on_site=True)
+        self.assertEqual(self.written(), [])
+
     def test_a_missing_platform_writes_nothing(self):
         release(self.assets.name, skip=("linux-x64-rpm",))
         with self.assertRaises(site.Refused):

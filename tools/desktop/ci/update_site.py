@@ -5,7 +5,7 @@ produce. Standard library only.
 
     update_site.py build --assets DIR --tag TAG --channel dev|stable \\
         --download-base URL --site-base URL --out DIR \\
-        [--current POINTER [--allow-downgrade]]
+        [--installers-on-site] [--current POINTER [--allow-downgrade]]
     update_site.py check POINTER --channel dev|stable
 
 `build` reads DIR/release-meta-<platform>.json for all five platforms (a
@@ -17,6 +17,17 @@ release with one missing is not published: nothing is written) and writes
 An installer that is in DIR next to its metadata is checked against the
 metadata's length and SHA-256. Every asset's address is
 <download-base>/<tag>/<file>; the feeds are under <site-base>.
+
+With --installers-on-site, the macOS and Windows installers (what the
+Sparkle feeds' enclosures fetch) are part of the site too, at
+
+    OUT/desktop/<channel>/<version>/<build>/<file>
+
+and their addresses in the pointer and the feeds are there, under
+<site-base>: the site is CDN-cached where GitHub's release downloads are
+slow from some networks. They must then be in DIR, so that the copies are
+the bytes of the metadata's length, SHA-256 and EdDSA signature. The
+release's own assets stay where they are.
 
 With --current, the channel's pointer as published now, the release must be
 newer than it by (version, build): running an old tag's release again must
@@ -42,6 +53,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 from email.utils import format_datetime
 from xml.sax.saxutils import escape, quoteattr
@@ -107,7 +119,12 @@ def load_release(assets):
     return metas
 
 
-def build_pointer(metas, tag, channel, download_base, site_base):
+def installer_path(channel, version, build, file):
+    """A Sparkle installer's place in the site (--installers-on-site)."""
+    return f"desktop/{channel}/{version}/{build}/{file}"
+
+
+def build_pointer(metas, tag, channel, download_base, site_base, installers_on_site=False):
     first = metas[PLATFORMS[0]]
     version, full_build = first["version"], first["build"]
     if first.get("channel") != channel:
@@ -123,9 +140,12 @@ def build_pointer(metas, tag, channel, download_base, site_base):
     platforms = {}
     for platform in PLATFORMS:
         meta = metas[platform]
+        url = f"{download_base}/{tag}/{meta['file']}"
+        if installers_on_site and platform in SPARKLE:
+            url = f"{site_base}/{installer_path(channel, version, build, meta['file'])}"
         entry = {
             "file": meta["file"],
-            "url": f"{download_base}/{tag}/{meta['file']}",
+            "url": url,
             "length": meta["length"],
             "sha256": meta["sha256"],
             "min_os": meta.get("min_os") or "",
@@ -236,23 +256,39 @@ def refuse_downgrade(pointer, current, channel):
             f"{current['version']} build {current['build']} (--allow-downgrade to publish it anyway)")
 
 
-def build(assets, tag, channel, download_base, site_base, out, current=None, allow_downgrade=False):
-    """Writes the pointer and the feeds; nothing is written unless all of it can be."""
+def build(assets, tag, channel, download_base, site_base, out, current=None, allow_downgrade=False,
+          installers_on_site=False):
+    """Writes the pointer and the feeds (and with installers_on_site the Sparkle
+    installers); nothing is written unless all of it can be."""
     for name, url in (("download-base", download_base), ("site-base", site_base)):
         if not url.startswith("https://"):
             raise Refused(f"--{name} is not an https URL")
-    pointer = build_pointer(load_release(assets), tag, channel, download_base, site_base)
+    metas = load_release(assets)
+    copies = {}
+    if installers_on_site:
+        for platform in SPARKLE:
+            meta = metas[platform]
+            source = os.path.join(assets, meta["file"])
+            if not os.path.isfile(source):
+                raise Refused(f"{platform}: {meta['file']} is missing: --installers-on-site puts it in the site")
+            build_number = meta["build"][len(meta["version"]) + 1:]
+            copies[installer_path(channel, meta["version"], build_number, meta["file"])] = source
+    pointer = build_pointer(metas, tag, channel, download_base, site_base, installers_on_site)
     if current is not None and not allow_downgrade:
         refuse_downgrade(pointer, current, channel)
     files = {f"desktop/channels/{channel}.json": json.dumps(pointer, indent=2, ensure_ascii=False) + "\n"}
     for platform in SPARKLE:
         files[f"desktop/{channel}/appcast-{platform}.xml"] = appcast(pointer, platform)
+    for relative, source in copies.items():
+        path = os.path.join(out, relative)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        shutil.copyfile(source, path)
     for relative, text in files.items():
         path = os.path.join(out, relative)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
-    return sorted(files)
+    return sorted([*files, *copies])
 
 
 def main(argv=None):
@@ -265,6 +301,8 @@ def main(argv=None):
     b.add_argument("--download-base", required=True)
     b.add_argument("--site-base", required=True)
     b.add_argument("--out", required=True)
+    b.add_argument("--installers-on-site", action="store_true",
+                   help="put the macOS and Windows installers in the site and point the feeds there")
     b.add_argument("--current", help="the channel's published pointer; the release must be newer")
     b.add_argument("--allow-downgrade", action="store_true", help="publish even if not newer than --current")
     c = commands.add_parser("check")
@@ -278,7 +316,8 @@ def main(argv=None):
                 with open(args.current, encoding="utf-8") as f:
                     current = json.load(f)
             for path in build(args.assets, args.tag, args.channel, args.download_base, args.site_base, args.out,
-                              current=current, allow_downgrade=args.allow_downgrade):
+                              current=current, allow_downgrade=args.allow_downgrade,
+                              installers_on_site=args.installers_on_site):
                 print(path)
         else:
             with open(args.pointer, encoding="utf-8") as f:
