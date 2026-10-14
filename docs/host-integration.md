@@ -427,12 +427,12 @@ pub struct Error {
 - UI 状态的映射；
 - 系统层面的 DNS 设置（macOS 除外：TUN 期间由 Sail 设置，见第 2 节）；
 - 拉取 Profile 失败时，保留上一份可用的 Profile，不调用 apply。这一条属于 `ppvpn-account` 和宿主，不属于引擎。后端的口径见 proxy-profile 格式文档（ingress-endpoints.md）：
-  - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）；
+  - **404**：没有有效订阅、订阅已过期、没有可用节点，或者任一实例的入口没有全部渲染出来（"one or more instances have no available ingress"）。`GET /api/v1/me/proxy-profile` 的 404 用问题码 `code` 区分（backend #469）：`SUBSCRIPTION_REQUIRED` 是没有生效的订阅，`PROXY_NODES_NOT_READY` 是订阅已生效、但还没有发布任何入口。旧版后端两种情况都发 `NOT_FOUND` 或不带 `code`；
   - **500**：违反客户端契约，或者规则集读不出来。
 - **续用的硬上限**：保留上一份 Profile 最多到它自己的 `expires_at`。过期后不能再用：引擎进入 `Degraded{ProfileExpired}`（第 4.1 节、第 5 节）。宿主收到后去刷新 Profile 并提示用户；拿不到新 Profile 时，是否停止由宿主决定，因为引擎自己不会因为过期而停止转发。
 - **对 `ppvpn-account` 的要求**：拉取错误分成三类，宿主按类别处理：
   - **暂时性错误**（网络错误、5xx、超时）：保留上一份 Profile（以 `expires_at` 为限），退避重试；
-  - **无可用服务**（404）：保留上一份 Profile（以 `expires_at` 为限），提示用户；
+  - **无可用服务**（404）：保留上一份 Profile（以 `expires_at` 为限），提示用户。`ppvpn-account` 的 `SubscriptionProblem` 把 `SUBSCRIPTION_REQUIRED` 归为 `NoSubscription`，把 `PROXY_NODES_NOT_READY` 归为 `NodesNotReady`；裸 404 和不认识的码不归类，由宿主按旧口径处理。桌面端：`NodesNotReady` 对应 `ProfileStatus::NodesNotReady`（`ErrorCode::ProxyNodesNotReady`），客户端在 30 秒、60 秒后各重新拉取一次，之后每 2 分钟一次，直到状态改变（节点到位即 `Ready`，不需要用户操作）或退出登录；其余 404（`SUBSCRIPTION_REQUIRED`、裸 404、不认识的码）仍是 `ProfileStatus::NoSubscription`；
   - **需要重新登录**（刷新令牌后仍然 401，或者 403）：不再续用旧 Profile，要求用户重新登录。
 - **Profile 只放内存**：宿主可以不把 Profile 写到磁盘，因为里面有节点凭据；引擎的 `state_dir` 里也不保存 Profile 原文（第 4.6 节）。
 

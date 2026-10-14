@@ -122,6 +122,11 @@ pub enum ErrorCode {
     /// `NO_DESKTOP_PROXY_SETTINGS`). Retrying cannot help; use enhanced mode
     /// or point apps at the local proxy.
     SystemProxyUnavailable,
+    /// The team's subscription is live, but its nodes are not published yet
+    /// (backend problem code `PROXY_NODES_NOT_READY`). Shown as
+    /// `ProfileStatus::NodesNotReady`; the profile is fetched again
+    /// automatically until the nodes arrive.
+    ProxyNodesNotReady,
 }
 
 /// A failure the UI shows until the next successful action clears it.

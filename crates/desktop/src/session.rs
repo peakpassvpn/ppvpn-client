@@ -27,6 +27,28 @@ use crate::{
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Retry period after a failed background refresh, e.g. offline at launch.
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
+/// Re-fetch delays while the profile status is `NodesNotReady`: 30 s, 60 s,
+/// then the last one over and over; much shorter in tests.
+const NODES_NOT_READY_RETRY: [Duration; 3] = if cfg!(test) {
+    [
+        Duration::from_millis(20),
+        Duration::from_millis(40),
+        Duration::from_millis(60),
+    ]
+} else {
+    [
+        Duration::from_secs(30),
+        Duration::from_secs(60),
+        Duration::from_secs(2 * 60),
+    ]
+};
+
+/// The delay before the `attempt`-th (from 0) re-fetch in a row while the
+/// nodes are not ready.
+fn nodes_not_ready_delay(attempt: usize) -> Duration {
+    NODES_NOT_READY_RETRY[attempt.min(NODES_NOT_READY_RETRY.len() - 1)]
+}
+
 /// Credential-store retry after a failed read at launch
 /// ([`RetrySchedule::CREDENTIAL_STORE`]); much shorter in tests.
 const CREDENTIAL_RETRY: RetrySchedule = if cfg!(test) {
@@ -93,6 +115,10 @@ pub(crate) struct SessionState {
     /// `ProfileStatus::Invalid` across refreshes of that same revision.
     core_rejected: Option<(String, ClientErrorInfo)>,
     refresh_task: Option<tokio::task::JoinHandle<()>>,
+    /// Wakes the refresh loop when the profile status moves into or out of
+    /// `NodesNotReady` outside the loop (a manual refresh, a team switch), so
+    /// it starts or ends the nodes-not-ready schedule.
+    refresh_wake: Arc<tokio::sync::Notify>,
     /// Notification poll of this session.
     pub(crate) notifications: crate::notifications::NotificationState,
     /// Desktop push registration of this session.
@@ -125,6 +151,8 @@ impl SessionState {
         if let Some(task) = self.refresh_task.take() {
             task.abort();
         }
+        // No wake-up left over from the previous session.
+        self.refresh_wake = Arc::default();
         self.notifications.reset();
         self.device = crate::device::DeviceState::default();
         if let Some(task) = self.traffic_task.take() {
@@ -190,6 +218,7 @@ fn is_account_error(info: &ClientErrorInfo) -> bool {
             | ErrorCode::CredentialStoreLocked
             | ErrorCode::NoSubscription
             | ErrorCode::SubscriptionExpired
+            | ErrorCode::ProxyNodesNotReady
             | ErrorCode::ProfileFetchFailed
             | ErrorCode::ProfileInvalid
     )
@@ -202,7 +231,8 @@ fn clear_error(snapshot: &mut ClientSnapshot, user_action: bool) {
 }
 
 /// The persistent profile state an error stands for (no subscription,
-/// expired, team disabled); such errors never go into `last_error`.
+/// expired, team disabled, nodes not ready); such errors never go into
+/// `last_error`.
 fn blocking_status(error: &ClientError) -> Option<ProfileStatus> {
     match error {
         ClientError::Failed { code, detail } => match code {
@@ -211,6 +241,7 @@ fn blocking_status(error: &ClientError) -> Option<ProfileStatus> {
                 expired_at: api::expired_at_from_detail(detail),
             }),
             ErrorCode::TeamDisabled => Some(ProfileStatus::TeamDisabled),
+            ErrorCode::ProxyNodesNotReady => Some(ProfileStatus::NodesNotReady),
             _ => None,
         },
         _ => None,
@@ -323,6 +354,14 @@ impl Client {
         self.session_state().nodes.clone()
     }
 
+    fn profile_status_is(&self, status: &ProfileStatus) -> bool {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .profile_status
+            == *status
+    }
+
     pub(crate) fn session_is(&self, session: u64) -> bool {
         let state = self.session_state();
         state.signed_in && state.session == session
@@ -353,8 +392,12 @@ impl Client {
                 .snapshot
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let was_waiting = snapshot.profile_status == ProfileStatus::NodesNotReady;
             if !change(&mut state, &mut snapshot) {
                 return false;
+            }
+            if was_waiting != (snapshot.profile_status == ProfileStatus::NodesNotReady) {
+                state.refresh_wake.notify_one();
             }
             snapshot.clone()
         };
@@ -983,9 +1026,10 @@ impl Client {
     }
 
     /// Record a failure of a team-scoped call. A persistent state (no
-    /// subscription, expired, team disabled) becomes `profile_status`, drops
-    /// the profile and stops the cores, and stays out of `last_error`; any
-    /// other failure is a one-off shown in `last_error`, leaving the status.
+    /// subscription, expired, team disabled, nodes not ready) becomes
+    /// `profile_status`, drops the profile and stops the cores, and stays out
+    /// of `last_error`; any other failure is a one-off shown in `last_error`,
+    /// leaving the status.
     fn report_profile_failure(
         &self,
         session: u64,
@@ -1166,17 +1210,41 @@ impl Client {
 
     /// Load session data now (after `first_delay`), then refresh the profile
     /// every 5 minutes; failures retry sooner.
+    ///
+    /// While the status is `NodesNotReady` the profile is fetched again after
+    /// [`NODES_NOT_READY_RETRY`] (30 s, 60 s, then every 2 minutes) until the
+    /// status changes. The schedule lives in this one loop, so it never piles
+    /// up; it ends with the session (logout aborts the task) and restarts or
+    /// ends through `refresh_wake` when another path moves the status into or
+    /// out of `NodesNotReady`.
     fn spawn_refresh_loop(&self, session: u64, first_delay: Duration) {
         let weak = self.this.clone();
+        let wake = self.session_state().refresh_wake.clone();
         let task = self.runtime.spawn(async move {
-            let mut delay = first_delay;
+            let mut due = tokio::time::Instant::now() + first_delay;
+            // Re-fetches in a row while the nodes are not ready.
+            let mut not_ready = 0;
             loop {
-                tokio::time::sleep(delay).await;
+                let woken = tokio::select! {
+                    () = tokio::time::sleep_until(due) => false,
+                    () = wake.notified() => true,
+                };
                 let Some(client) = ClientRef::upgrade(&weak) else {
                     return;
                 };
                 if !client.session_is(session) {
                     return;
+                }
+                if woken {
+                    let waiting = client.profile_status_is(&ProfileStatus::NodesNotReady);
+                    if waiting && not_ready == 0 {
+                        due = tokio::time::Instant::now() + nodes_not_ready_delay(0);
+                        not_ready = 1;
+                    } else if !waiting && not_ready > 0 {
+                        due = tokio::time::Instant::now() + PROFILE_REFRESH_INTERVAL;
+                        not_ready = 0;
+                    }
+                    continue;
                 }
                 let loaded = client.session_state().account_loaded;
                 let result = if loaded {
@@ -1187,12 +1255,20 @@ impl Client {
                 if client.session_state().account_loaded {
                     client.ensure_device_registered(session).await;
                 }
-                delay = match result {
-                    Ok(()) => PROFILE_REFRESH_INTERVAL,
+                let delay = match result {
                     Err(ClientError::NotSignedIn) => return,
+                    _ if client.profile_status_is(&ProfileStatus::NodesNotReady) => {
+                        not_ready += 1;
+                        nodes_not_ready_delay(not_ready - 1)
+                    }
+                    Ok(()) => PROFILE_REFRESH_INTERVAL,
                     Err(error) if is_steady_failure(&error) => PROFILE_REFRESH_INTERVAL,
                     Err(_) => RETRY_INTERVAL,
                 };
+                if !client.profile_status_is(&ProfileStatus::NodesNotReady) {
+                    not_ready = 0;
+                }
+                due = tokio::time::Instant::now() + delay;
             }
         });
         {
@@ -1218,7 +1294,7 @@ mod tests {
     use crate::auth::test_support::{serve, serve_with, token_set, MemoryPlatform};
     use crate::{
         AuthState, Client, ClientConfig, ClientError, ClientListener, ClientSnapshot, ErrorCode,
-        PlatformError, PlatformHooks, ProbeResult, TrafficSample,
+        PlatformError, PlatformHooks, ProbeResult, ProfileStatus, TrafficSample,
     };
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
@@ -1663,5 +1739,126 @@ mod tests {
         // Cancellation is not a failure: nothing to show.
         assert!(client.snapshot().last_error.is_none());
         assert!(ClientError::Cancelled.info().is_none());
+    }
+
+    /// The proxy-profile answer while the subscription's nodes are not
+    /// published yet.
+    fn nodes_not_ready() -> (&'static str, String) {
+        (
+            "404 Not Found",
+            r#"{"code":"PROXY_NODES_NOT_READY"}"#.into(),
+        )
+    }
+
+    /// A restore from a saved login up to the first profile download, which
+    /// gets the first of `profiles`.
+    fn restore_then(
+        profiles: impl IntoIterator<Item = (&'static str, String)>,
+    ) -> Vec<(&'static str, String)> {
+        let mut responses = vec![
+            ("200 OK", r#"{"refresh_token":"jyr_prepared"}"#.to_string()),
+            ("200 OK", token_set("jyr_active")),
+        ];
+        responses.extend(signed_in_data());
+        responses.pop();
+        responses.extend(profiles);
+        responses
+    }
+
+    fn profile_fetches(paths: &Mutex<Vec<String>>) -> usize {
+        paths
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| *path == "GET /api/v1/me/proxy-profile")
+            .count()
+    }
+
+    fn saved_login() -> Arc<MemoryPlatform> {
+        MemoryPlatform::with_blob(r#"{"version":1,"active_refresh":"jyr_old"}"#)
+    }
+
+    #[test]
+    fn nodes_not_ready_is_fetched_again_until_ready() {
+        let (base, paths) = serve(restore_then([
+            nodes_not_ready(),
+            nodes_not_ready(),
+            ("200 OK", FIXTURE.into()),
+            // Never asked for: Ready goes back to the 5-minute refresh.
+            nodes_not_ready(),
+        ]));
+        let (client, data_dir) = client(&base, saved_login());
+
+        let snapshot = wait_for(&client, |s| {
+            s.profile_status == ProfileStatus::NodesNotReady
+        });
+        assert!(snapshot.profile.is_none());
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+        assert!(client.nodes().is_empty());
+
+        // No user action: the schedule fetches it again until the nodes arrive.
+        let snapshot = wait_for(&client, |s| s.profile_status == ProfileStatus::Ready);
+        assert_eq!(snapshot.profile.unwrap().node_count, 3);
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(profile_fetches(&paths), 3);
+        assert_eq!(client.snapshot().profile_status, ProfileStatus::Ready);
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn nodes_not_ready_retries_stop_on_logout() {
+        let (base, paths) = serve(restore_then(vec![nodes_not_ready(); 30]));
+        let (client, data_dir) = client(&base, saved_login());
+
+        wait_for(&client, |s| {
+            s.profile_status == ProfileStatus::NodesNotReady
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while profile_fetches(&paths) < 2 {
+            assert!(Instant::now() < deadline, "no automatic re-fetch");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The revoke takes one of the scripted 404s; the session ends anyway.
+        let _ = block_on(client.logout());
+        assert!(matches!(client.snapshot().auth, AuthState::SignedOut));
+        // The backend answers in order, so every fetch sent before the
+        // logout is counted by now.
+        let fetched = profile_fetches(&paths);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(profile_fetches(&paths), fetched);
+        assert_eq!(client.snapshot().profile_status, ProfileStatus::Loading);
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn manual_refresh_into_nodes_not_ready_starts_the_schedule() {
+        let (base, paths) = serve(restore_then([
+            ("200 OK", FIXTURE.into()),
+            nodes_not_ready(),
+            ("200 OK", FIXTURE.into()),
+            nodes_not_ready(),
+        ]));
+        let (client, data_dir) = client(&base, saved_login());
+        wait_for(&client, |s| s.profile_status == ProfileStatus::Ready);
+
+        let error = block_on(client.refresh_profile()).unwrap_err();
+        assert_eq!(error.info().unwrap().code, ErrorCode::ProxyNodesNotReady);
+        let snapshot = client.snapshot();
+        assert!(matches!(
+            snapshot.profile_status,
+            ProfileStatus::NodesNotReady | ProfileStatus::Ready
+        ));
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+
+        // Long before the 5-minute refresh.
+        wait_for(&client, |s| s.profile_status == ProfileStatus::Ready);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(profile_fetches(&paths), 3);
+        assert_eq!(client.snapshot().profile_status, ProfileStatus::Ready);
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }
