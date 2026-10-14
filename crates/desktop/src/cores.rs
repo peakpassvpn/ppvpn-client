@@ -1201,8 +1201,11 @@ mod tests {
         launcher.credentials_reset.store(true, Ordering::SeqCst);
         let (client, _, _launcher, data_dir) =
             signed_in_client_with(vec![("200 OK", r#"{"revoked":true}"#.into())], launcher);
-        let snapshot = wait_for(&client, |s| s.local_proxy_credentials_reset);
-        assert!(matches!(snapshot.standard, StandardState::Ready { .. }));
+        // The reset is reported as the core starts; Ready may come a moment later.
+        let snapshot = wait_for(&client, |s| {
+            s.local_proxy_credentials_reset && matches!(s.standard, StandardState::Ready { .. })
+        });
+        assert!(snapshot.local_proxy_credentials_reset);
 
         client.dismiss_local_proxy_credentials_reset();
         assert!(!client.snapshot().local_proxy_credentials_reset);
