@@ -34,6 +34,13 @@ TUN 或路由出问题、机器连不上时能自己恢复；确认还能登录�
 
 - [ ] 首次打开：系统拦截未识别的开发者，经「系统设置 → 隐私与安全性 → 仍要打开」后能正常启动。
 - [ ] 应用内更新（Sparkle）：更新安装后直接打开，不需要再次放行。
+- [ ] Sparkle 更新后替换特权服务：从已装过服务的上一版（例如 0.6.0 build 133）用 Sparkle 更新到新版，
+      新版的 `crates/service`、`crates/engine-host`、`crates/core` 或 `Cargo.lock` 有改动。更新后服务不会被
+      替换，打开应用和标准模式连接也不会。第一次增强模式连接前：弹出管理员密码框；
+      `/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle/Contents/MacOS/ppvpn-service` 的
+      SHA-256 等于新版应用内置的那份，服务进程的 pid 换了；应用日志里先有
+      `privileged service differs from this build; reinstalling`，再有 `privileged service reinstalled`。
+      在密码框里取消时，连接照常用旧服务继续，下次连接前再问。
 - [ ] 换 Wi‑Fi 后直连域名仍能解析（引擎的 dns-local 自己读取物理网卡的 DNS）。
 - [ ] Wi‑Fi 与有线之间切换后连接恢复，直连与代理都可用。
 - [ ] 同时开着另一个 VPN 时，引擎日志里 `msg="local dns servers"` 的 interface 是物理网卡，
