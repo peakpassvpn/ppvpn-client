@@ -41,11 +41,9 @@ fn free_port() -> u16 {
 /// exits: bound and never listening, so the kernel gives it to no other
 /// socket (a merely free port can become another test's listener).
 fn closed_port() -> u16 {
-    use socket2::{Domain, Socket, Type};
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
-    let any = SocketAddr::from(([127, 0, 0, 1], 0));
-    socket.bind(&any.into()).unwrap();
-    let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+    let port = socket.local_addr().unwrap().port();
     std::mem::forget(socket); // held for the rest of the process
     port
 }

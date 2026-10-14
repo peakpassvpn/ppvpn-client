@@ -169,11 +169,11 @@ pub(crate) fn free_port() -> u16 {
 /// sail's listener meanwhile; a TLS outbound (AnyTLS) that dials it then
 /// waits for a handshake that never comes, and sail never tells the route.
 pub(crate) fn closed_port() -> u16 {
-    use socket2::{Domain, Socket, Type};
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
-    let any = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-    socket.bind(&any.into()).unwrap();
-    let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap();
+    let port = socket.local_addr().unwrap().port();
     std::mem::forget(socket); // held for the rest of the process
     port
 }
