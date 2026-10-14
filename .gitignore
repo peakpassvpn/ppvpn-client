@@ -7,3 +7,7 @@
 # staging directory and the installer with its release metadata.
 /staging/
 /dist/
+
+# Python bytecode
+__pycache__/
+*.pyc
