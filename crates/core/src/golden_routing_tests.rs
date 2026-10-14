@@ -163,6 +163,15 @@ pub(crate) fn free_port() -> u16 {
         .port()
 }
 
+/// `N` distinct free loopback ports: all are bound at once before any is
+/// let go, so no two are the same.
+fn free_ports<const N: usize>() -> [u16; N] {
+    let held: Vec<_> = (0..N)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    std::array::from_fn(|i| held[i].local_addr().unwrap().port())
+}
+
 /// A loopback port that refuses every connection until the test process
 /// exits: bound and never listening, so the kernel gives it to no other
 /// socket. A port that is merely free (`free_port`) can become another
@@ -178,6 +187,9 @@ pub(crate) fn closed_port() -> u16 {
     port
 }
 
+/// Starts the instance on ports found free (`free_ports`). Another test may
+/// take one of them before sail binds it; then the start is tried again on
+/// other ports.
 async fn start(
     profile_bytes: &[u8],
     tun: bool,
@@ -187,57 +199,66 @@ async fn start(
 ) -> Instance {
     let p = profile::parse(profile_bytes).unwrap();
     profile::validate(&p, golden_now()).unwrap();
-    let mut options = Options {
-        mode,
-        ..Options::default()
-    };
-    let (socks_port, system_port) = (free_port(), free_port());
-    if tun {
-        options.tun = Some(Tun {
-            desktop: true,
-            ipv6: true,
-            no_host_ipv6_route: !host_ipv6,
-            interface_name: interface_name(Platform::Linux).into(),
-            local_dns: LocalDns::System,
-        });
-    } else {
-        options.local_proxy = Some(LocalProxy {
-            listen: "127.0.0.1".into(),
-            port: free_port(),
-            prefix: "gold0".into(),
-            password: password(),
-        });
-        options.system_proxy_port = Some(system_port);
-    }
-    let translation = translate::translate(&p, &options).unwrap();
-    let mut config: Value = serde_json::from_str(&translation.json).unwrap();
-    if tun {
-        stand_in_for_the_tun(&mut config, socks_port);
-    }
-    bind_loopback(&mut config);
     let dir = std::env::temp_dir().join(format!(
         "ppvpn-core-golden-routing-{}-{}",
         key.replace('/', "-"),
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let runtime = SailRuntime::new(
-        sail::embed::Options::new()
-            .data_dir(dir.clone())
-            .threads(sail::embed::Threads::One),
-    )
-    .unwrap();
-    let routes = runtime.routes();
-    runtime.start(&config.to_string()).await.unwrap();
-    Instance {
-        runtime,
-        routes,
-        translation,
-        socks_port,
-        proxy: options.local_proxy,
-        system_port,
-        dir,
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let mut options = Options {
+            mode,
+            ..Options::default()
+        };
+        let [socks_port, system_port, proxy_port] = free_ports();
+        if tun {
+            options.tun = Some(Tun {
+                desktop: true,
+                ipv6: true,
+                no_host_ipv6_route: !host_ipv6,
+                interface_name: interface_name(Platform::Linux).into(),
+                local_dns: LocalDns::System,
+            });
+        } else {
+            options.local_proxy = Some(LocalProxy {
+                listen: "127.0.0.1".into(),
+                port: proxy_port,
+                prefix: "gold0".into(),
+                password: password(),
+            });
+            options.system_proxy_port = Some(system_port);
+        }
+        let translation = translate::translate(&p, &options).unwrap();
+        let mut config: Value = serde_json::from_str(&translation.json).unwrap();
+        if tun {
+            stand_in_for_the_tun(&mut config, socks_port);
+        }
+        bind_loopback(&mut config);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime = SailRuntime::new(
+            sail::embed::Options::new()
+                .data_dir(dir.clone())
+                .threads(sail::embed::Threads::One),
+        )
+        .unwrap();
+        let routes = runtime.routes();
+        match runtime.start(&config.to_string()).await {
+            Ok(()) => {
+                return Instance {
+                    runtime,
+                    routes,
+                    translation,
+                    socks_port,
+                    proxy: options.local_proxy,
+                    system_port,
+                    dir,
+                }
+            }
+            Err(e) if tries < 5 && e.message.contains("Address already in use") => continue,
+            Err(e) => panic!("{key}: {e:?}"),
+        }
     }
 }
 
