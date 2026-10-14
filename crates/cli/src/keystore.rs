@@ -15,6 +15,9 @@ use ppvpn_account::auth::{CredentialStore, StoreFailure};
 /// is its own device session, separate from the desktop app's.
 pub const SERVICE: &str = "com.peakpassvpn.ppvpn.cli";
 pub const ACCOUNT: &str = "device-credential";
+/// The item login writes and removes again to find out, before a device
+/// authorization starts, whether the store takes writes at all.
+pub const PROBE_SERVICE: &str = "com.peakpassvpn.ppvpn.cli.probe";
 
 pub fn platform_store() -> Arc<dyn CredentialStore> {
     store_for(SERVICE)
