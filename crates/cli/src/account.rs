@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ppvpn_account::api::{Api, ApiConfig, ApiError, PATH_PROXY_PROFILE};
+use ppvpn_account::api::{Api, ApiConfig, ApiError, SubscriptionProblem, PATH_PROXY_PROFILE};
 use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore};
 use ppvpn_account::session::with_bearer;
 
@@ -52,6 +52,17 @@ fn relogin(code: &str) -> CliError {
     CliError::new(Exit::Auth, code, "login expired; run ppvpn login again")
 }
 
+fn subscription_text(problem: SubscriptionProblem) -> &'static str {
+    match problem {
+        SubscriptionProblem::TeamDisabled => "the current team is disabled",
+        SubscriptionProblem::Expired => "the subscription has expired",
+        SubscriptionProblem::NoSubscription => "no active subscription",
+        SubscriptionProblem::NodesNotReady => {
+            "the subscription's nodes are not ready yet (try again later)"
+        }
+    }
+}
+
 pub fn api_error(err: &ApiError) -> CliError {
     match err {
         ApiError::Transport(_) => CliError::new(
@@ -67,40 +78,50 @@ pub fn api_error(err: &ApiError) -> CliError {
             ..
         } => {
             let problem = code.as_deref().filter(|c| !c.is_empty());
+            // The subscription problem picks the message only; the exit and
+            // the code still follow the status and the backend's code.
+            let subscription = err.subscription_problem();
+            let message = |fallback: &'static str| subscription.map_or(fallback, subscription_text);
+            let retry = |cli: CliError| match subscription {
+                Some(SubscriptionProblem::NodesNotReady) => cli.retryable(),
+                _ => cli,
+            };
             match status.as_u16() {
                 401 => relogin(problem.unwrap_or("AUTH_EXPIRED")),
                 403 if err.is_team_disabled() => {
                     CliError::new(Exit::Auth, "TEAM_DISABLED", "the current team is disabled")
                 }
-                403 => CliError::new(
+                403 => retry(CliError::new(
                     Exit::Auth,
                     problem.unwrap_or("FORBIDDEN"),
-                    "the backend denied this operation",
-                ),
-                // The profile: no active subscription, or its nodes are
-                // not published yet. The backend tells them apart only in
-                // free text for now, so one message covers both.
-                404 if request.ends_with(PATH_PROXY_PROFILE) => CliError::new(
+                    message("the backend denied this operation"),
+                )),
+                // A profile 404 without a subscription code (an older
+                // backend, or a case it does not classify): one message
+                // covers both a missing subscription and unpublished nodes.
+                404 if request.ends_with(PATH_PROXY_PROFILE) => retry(CliError::new(
                     Exit::Backend,
                     problem.unwrap_or("NOT_FOUND"),
-                    "no active subscription, or its nodes are not ready yet (try again later)",
-                ),
-                404 => CliError::new(
+                    message(
+                        "no active subscription, or its nodes are not ready yet (try again later)",
+                    ),
+                )),
+                404 => retry(CliError::new(
                     Exit::Backend,
                     problem.unwrap_or("NOT_FOUND"),
-                    "the backend has nothing to serve for this account",
-                ),
+                    message("the backend has nothing to serve for this account"),
+                )),
                 429 | 500..=599 => CliError::new(
                     Exit::Backend,
                     "BACKEND_UNAVAILABLE",
                     "the backend is temporarily unavailable",
                 )
                 .retryable(),
-                _ => CliError::new(
+                _ => retry(CliError::new(
                     Exit::Other,
                     problem.unwrap_or("BACKEND_REJECTED"),
-                    "the backend rejected the request",
-                ),
+                    message("the backend rejected the request"),
+                )),
             }
         }
         ApiError::Decode(what) => CliError::new(

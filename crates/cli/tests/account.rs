@@ -494,3 +494,61 @@ async fn a_missing_subscription_is_exit_4_and_keeps_the_login() {
         "a 404 must not log the device out"
     );
 }
+
+/// The error `download_profile` gives when the backend answers the profile
+/// request with `status` and `body`.
+async fn profile_error(status: u16, body: Value) -> ppvpn_cli::error::CliError {
+    let backend = Backend::serve(move |base| {
+        let mut responses = login_responses(base);
+        responses.extend([
+            (200, json!({"refresh_token": fake("prepared")}).to_string()),
+            token_set(),
+            (status, body.to_string()),
+        ]);
+        responses
+    });
+    let cli = Cli::new(&backend.base);
+    let (env, hooks) = (cli.env(), cli.hooks.clone());
+    tokio::task::spawn_blocking(move || logged_in(&cli))
+        .await
+        .unwrap();
+    let store = hooks.store.clone().unwrap();
+    let auth = ppvpn_cli::account::auth(hooks.build.as_ref().unwrap(), &env, store);
+    ppvpn_cli::account::download_profile(&auth)
+        .await
+        .unwrap_err()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn subscription_codes_pick_the_message_and_keep_the_code_and_exit() {
+    for (code, message, retryable) in [
+        ("SUBSCRIPTION_REQUIRED", "no active subscription", false),
+        (
+            "PROXY_NODES_NOT_READY",
+            "the subscription's nodes are not ready yet (try again later)",
+            true,
+        ),
+        (
+            "SUBSCRIPTION_EXPIRED",
+            "the subscription has expired",
+            false,
+        ),
+        ("SUBSCRIPTION_NOT_FOUND", "no active subscription", false),
+    ] {
+        let err = profile_error(
+            404,
+            json!({"type": "about:blank", "title": "Not Found", "status": 404,
+                   "code": code, "detail": "free text the CLI does not read"}),
+        )
+        .await;
+        assert_eq!(
+            (
+                err.exit_code(),
+                err.code.as_str(),
+                err.message.as_str(),
+                err.retryable
+            ),
+            (4, code, message, retryable)
+        );
+    }
+}
