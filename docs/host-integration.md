@@ -210,6 +210,7 @@ pub async fn probe_availability(&self, request: ProbeAvailabilityRequest) -> Res
 - **可用性探测**：请求经该节点的出口发出，也就是该节点的本地代理用户所去的地方，但不经本地代理的监听，所以不受本地代理端口的影响（Go 版经本地代理用户发出）。每次探测发一个 `AvailabilityProbed`。
   - **前置检查的顺序同 Go**：实例没有本地代理 → `LOCAL_PROXY_DISABLED`（retryable=false）；没有 apply → `PROFILE_NOT_APPLIED`（retryable=false）；没有 start → `CORE_NOT_RUNNING`（retryable=true）；之后才检查离线和节点（`NODE_NOT_FOUND`）。
   - **TUN 实例**：始终返回 `LOCAL_PROXY_DISABLED`，不论是否在运行（Core 组决定，同 Go）。
+  - **结果的 `error_code`**（探测跑了但失败，调用本身成功）：按失败的步骤区分，含义见 `docs/core-api.md` 的"EntranceResult 与 AvailabilityResult"一节：`TARGET_INVALID`、`CANCELED`、`TIMEOUT`、`CONNECT_FAILED`、`TLS_HANDSHAKE_FAILED`、`TLS_CERTIFICATE_INVALID`、`CONNECTION_CLOSED`、`RESPONSE_INVALID`、`REDIRECT_LOOP`、`HTTP_STATUS`，以及只在节点出口本身无法使用时的 `PROXY_REQUEST_FAILED`。#342 之前拨号、TLS、读响应的失败都报 `PROXY_REQUEST_FAILED`；宿主应把不认识的错误码当作一般的探测失败。
 - **离线时**：没有默认网卡时立即返回 `NO_DEFAULT_INTERFACE`（retryable=true），不等超时，也不拨号。默认网卡的状态来自 Sail 的网络事件；在那之前，引擎当作"不确定"，照常探测。
 
 ### 4.6 本地代理凭据（仅 Standard）

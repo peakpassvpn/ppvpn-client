@@ -4,12 +4,22 @@
 //! goes through the node's outbound itself ([`Runtime::dial_tcp`]), which is
 //! where that user leads. Redirects are followed, as Go's client does; TLS
 //! is sail's (BoringSSL), checked against the system's roots.
+//!
+//! Each step that fails has its own result code: the dial (CONNECT_FAILED,
+//! TIMEOUT, or PROXY_REQUEST_FAILED when the outbound could not be used at
+//! all), the TLS handshake (TLS_HANDSHAKE_FAILED, TLS_CERTIFICATE_INVALID),
+//! the answer (CONNECTION_CLOSED before a whole response head,
+//! RESPONSE_INVALID), the redirects (REDIRECT_LOOP), and the target itself
+//! (TARGET_INVALID).
 
 use std::collections::BTreeMap;
+use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use chrono::Utc;
+use sail::transport::tls::BoringConnection;
+use sail::transport::tls_stream::TlsStream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::Instant;
 use url::{Host, Url};
@@ -18,7 +28,7 @@ use super::result_codes as rc;
 use super::{require_online, timeout_of, Cancel, DefaultInterface};
 use crate::error::{codes, Error};
 use crate::event::Event;
-use crate::runtime::{Runtime, Target};
+use crate::runtime::{Runtime, RuntimeError, Target};
 use crate::types::{AvailabilityResult, ProbeAvailabilityRequest};
 
 /// A request's timeout when it gives none.
@@ -29,6 +39,9 @@ const MAX_REDIRECTS: usize = 10;
 const MAX_HEAD: usize = 64 << 10;
 /// The most of the final body read (and timed).
 const MAX_BODY: usize = 64 << 10;
+/// BoringSSL's X509_V_ERR_INVALID_CALL: what the verify result reads as
+/// before a certificate was verified at all.
+const NOT_VERIFIED: i32 = 65;
 
 /// Fetches `request.target` through the node's outbound (`node_tags`, the
 /// translation's node id to outbound tag). Offline it fails at once and
@@ -41,6 +54,19 @@ pub(crate) async fn probe_availability(
     network: DefaultInterface,
     cancel: &Cancel,
 ) -> Result<(AvailabilityResult, Event), Error> {
+    probe_trusting(runtime, node_tags, request, network, cancel, None).await
+}
+
+/// [`probe_availability`], trusting `trust_pem` in place of the system's
+/// roots when given (tests).
+async fn probe_trusting(
+    runtime: &dyn Runtime,
+    node_tags: &BTreeMap<String, String>,
+    request: &ProbeAvailabilityRequest,
+    network: DefaultInterface,
+    cancel: &Cancel,
+    trust_pem: Option<&str>,
+) -> Result<(AvailabilityResult, Event), Error> {
     require_online(network)?;
     let outbound = node_tags
         .get(&request.node_id)
@@ -48,13 +74,14 @@ pub(crate) async fn probe_availability(
     let timeout = timeout_of(request.timeout_ms, AVAILABILITY_TIMEOUT);
     let started = Instant::now();
     let deadline = started + timeout;
+    let fetching = fetch(runtime, outbound, &request.target, deadline, trust_pem);
     let outcome = if cancel.is_cancelled() {
         Err(rc::CANCELED)
     } else {
         tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(rc::CANCELED),
-            outcome = tokio::time::timeout_at(deadline, fetch(runtime, outbound, &request.target, deadline)) => {
+            outcome = tokio::time::timeout_at(deadline, fetching) => {
                 outcome.unwrap_or(Err(rc::TIMEOUT))
             }
         }
@@ -97,21 +124,22 @@ async fn fetch(
     outbound: &str,
     target: &str,
     deadline: Instant,
+    trust_pem: Option<&str>,
 ) -> Result<u16, &'static str> {
     let mut url = match Url::parse(target) {
         Ok(url) if url.has_host() && !url.scheme().is_empty() => url,
         _ => return Err(rc::TARGET_INVALID),
     };
     for _ in 0..=MAX_REDIRECTS {
-        let (status, location) = get(runtime, outbound, &url, deadline).await?;
+        let (status, location) = get(runtime, outbound, &url, deadline, trust_pem).await?;
         match location {
             Some(location) if matches!(status, 301 | 302 | 303 | 307 | 308) => {
-                url = url.join(&location).map_err(|_| rc::PROXY_REQUEST_FAILED)?;
+                url = url.join(&location).map_err(|_| rc::RESPONSE_INVALID)?;
             }
             _ => return Ok(status),
         }
     }
-    Err(rc::PROXY_REQUEST_FAILED)
+    Err(rc::REDIRECT_LOOP)
 }
 
 /// One GET: its status and, for a redirect, where to.
@@ -120,11 +148,13 @@ async fn get(
     outbound: &str,
     url: &Url,
     deadline: Instant,
+    trust_pem: Option<&str>,
 ) -> Result<(u16, Option<String>), &'static str> {
     let tls = match url.scheme() {
         "http" => false,
         "https" => true,
-        _ => return Err(rc::PROXY_REQUEST_FAILED),
+        // Where a redirect leads too: nothing this probe can fetch.
+        _ => return Err(rc::TARGET_INVALID),
     };
     let port = url.port_or_known_default().ok_or(rc::TARGET_INVALID)?;
     let (to, server_name) = match url.host().ok_or(rc::TARGET_INVALID)? {
@@ -142,22 +172,50 @@ async fn get(
     let stream = runtime
         .dial_tcp(outbound, to, remaining)
         .await
-        .map_err(|e| {
-            if e.code == "timeout" {
-                rc::TIMEOUT
-            } else {
-                rc::PROXY_REQUEST_FAILED
-            }
-        })?;
+        .map_err(|e| dial_code(&e))?;
     if !tls {
         return exchange(stream, url, deadline).await;
     }
-    let client = crate::tls::client(&["http/1.1"], None).map_err(|_| rc::PROXY_REQUEST_FAILED)?;
-    let stream = client
-        .connect(&server_name, stream, None, None)
-        .await
-        .map_err(|e| io_code(&e))?;
+    let client =
+        crate::tls::client(&["http/1.1"], trust_pem).map_err(|_| rc::PROXY_REQUEST_FAILED)?;
+    let conn = client
+        .connection(&server_name, None)
+        .map_err(|e| match e.kind() {
+            io::ErrorKind::InvalidInput => rc::TARGET_INVALID,
+            _ => rc::TLS_HANDSHAKE_FAILED,
+        })?;
+    let mut stream = TlsStream::new(conn, stream, None);
+    if let Err(e) = stream.handshake().await {
+        return Err(handshake_code(&e, stream.conn()));
+    }
     exchange(stream, url, deadline).await
+}
+
+/// A failed dial through the outbound, by sail's error kind
+/// (`sail::embed::ErrorKind::code`). A dial that was made and failed is
+/// "failed", whether the name did not resolve or the target refused: sail
+/// keeps only the text of why, so DNS_FAILED cannot be told apart here.
+fn dial_code(error: &RuntimeError) -> &'static str {
+    match error.code.as_str() {
+        "timeout" => rc::TIMEOUT,
+        "failed" | "io" => rc::CONNECT_FAILED,
+        // No such outbound, the instance not running or stopping: the node
+        // could not take the request at all.
+        _ => rc::PROXY_REQUEST_FAILED,
+    }
+}
+
+/// A failed handshake: the certificate's fault when BoringSSL verified one
+/// and it failed (an unknown issuer, another name, expired), the
+/// handshake's otherwise.
+fn handshake_code(error: &io::Error, conn: &BoringConnection) -> &'static str {
+    if error.kind() == io::ErrorKind::TimedOut {
+        return rc::TIMEOUT;
+    }
+    match conn.ssl().verify_result() {
+        Err(e) if e.as_raw() != NOT_VERIFIED => rc::TLS_CERTIFICATE_INVALID,
+        _ => rc::TLS_HANDSHAKE_FAILED,
+    }
 }
 
 async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
@@ -185,16 +243,16 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
             break i + 4;
         }
         if buf.len() >= MAX_HEAD {
-            return Err(rc::PROXY_REQUEST_FAILED);
+            return Err(rc::RESPONSE_INVALID);
         }
         let mut chunk = [0u8; 4096];
         let n = stream.read(&mut chunk).await.map_err(|e| io_code(&e))?;
         if n == 0 {
-            return Err(rc::PROXY_REQUEST_FAILED);
+            return Err(rc::CONNECTION_CLOSED);
         }
         buf.extend_from_slice(&chunk[..n]);
     };
-    let head = std::str::from_utf8(&buf[..head_end]).map_err(|_| rc::PROXY_REQUEST_FAILED)?;
+    let head = std::str::from_utf8(&buf[..head_end]).map_err(|_| rc::RESPONSE_INVALID)?;
     let status = head
         .split("\r\n")
         .next()
@@ -206,7 +264,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
                 .then(|| code.parse::<u16>().ok())
                 .flatten()
         })
-        .ok_or(rc::PROXY_REQUEST_FAILED)?;
+        .ok_or(rc::RESPONSE_INVALID)?;
     let header = |name: &str| {
         head.split("\r\n").skip(1).find_map(|line| {
             let (key, value) = line.split_once(':')?;
@@ -239,28 +297,40 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-fn io_code(error: &std::io::Error) -> &'static str {
-    if error.kind() == std::io::ErrorKind::TimedOut {
+/// Writing the request or reading the answer failed: the connection broke
+/// (reset, closed without TLS's close_notify, an alert) before a whole
+/// response head came.
+fn io_code(error: &io::Error) -> &'static str {
+    if error.kind() == io::ErrorKind::TimedOut {
         rc::TIMEOUT
     } else {
-        rc::PROXY_REQUEST_FAILED
+        rc::CONNECTION_CLOSED
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use tokio::net::TcpListener;
+    use btls::ssl::{
+        Ssl, SslAcceptor, SslConnector, SslMethod, SslSessionCacheMode, SslVerifyMode, SslVersion,
+    };
+    use tokio::net::{TcpListener, TcpStream};
 
     use super::*;
     use crate::runtime::fake::{Call, FakeRuntime, Op};
-    use crate::runtime::RuntimeError;
     use crate::translate::node_tag;
+
+    /// No step of a test waits longer.
+    const BOUND: Duration = Duration::from_secs(10);
 
     /// A server that answers each connection with the next of `responses`
     /// (none left: holds it open, silent), and keeps the requests.
-    async fn serve(responses: Vec<&'static str>) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+    async fn serve<R>(responses: Vec<R>) -> (SocketAddr, Arc<Mutex<Vec<String>>>)
+    where
+        R: AsRef<[u8]> + Send + 'static,
+    {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -279,7 +349,7 @@ mod tests {
                     .push(String::from_utf8_lossy(&buf[..n]).into_owned());
                 match responses.next() {
                     Some(response) => {
-                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.write_all(response.as_ref()).await;
                     }
                     None => {
                         tokio::spawn(async move {
@@ -291,6 +361,61 @@ mod tests {
             }
         });
         (addr, seen)
+    }
+
+    /// What the TLS server does once the handshake is done and the request
+    /// read.
+    #[derive(Clone, Copy)]
+    enum Then {
+        /// Waits, then answers this (its session tickets long sent).
+        Answer(Duration, &'static str),
+        /// Ends the TLS session (close_notify), answering nothing.
+        CloseNotify,
+        /// Drops the connection, answering nothing.
+        Drop,
+    }
+
+    /// A TLS 1.3 server (sail's BoringSSL, as the rule set tests') with
+    /// `acceptor`'s certificate. BoringSSL sends its session tickets at the
+    /// end of its handshake, before it reads the request.
+    async fn serve_tls(acceptor: SslAcceptor, then: Then) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let acceptor = Arc::new(acceptor);
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(tokio::time::timeout(BOUND, async move {
+                    let mut ssl = Ssl::new(acceptor.context()).unwrap();
+                    ssl.set_min_proto_version(Some(SslVersion::TLS1_3)).unwrap();
+                    let conn = BoringConnection::server(ssl).unwrap();
+                    let mut stream = TlsStream::new(conn, tcp, None);
+                    if stream.handshake().await.is_err() {
+                        return;
+                    }
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while find(&head, b"\r\n\r\n").is_none() {
+                        match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    match then {
+                        Then::Answer(delay, response) => {
+                            tokio::time::sleep(delay).await;
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.shutdown().await;
+                        }
+                        Then::CloseNotify => {
+                            let _ = stream.shutdown().await;
+                        }
+                        Then::Drop => {}
+                    }
+                }));
+            }
+        });
+        addr
     }
 
     async fn runtime(to: Option<SocketAddr>) -> FakeRuntime {
@@ -320,6 +445,27 @@ mod tests {
             &Cancel::never(),
         )
         .await
+    }
+
+    /// The error code of a probe of `target` trusting `trust_pem`.
+    async fn code_trusting(runtime: &FakeRuntime, target: &str, trust_pem: &str) -> String {
+        let request = ProbeAvailabilityRequest::new("stable", target, 5000);
+        let (got, _) = probe_trusting(
+            runtime,
+            &tags(),
+            &request,
+            DefaultInterface::Present,
+            &Cancel::never(),
+            Some(trust_pem),
+        )
+        .await
+        .unwrap();
+        got.error_code
+    }
+
+    /// The error code of a probe of `target` through `runtime`.
+    async fn code(runtime: &FakeRuntime, target: &str) -> String {
+        probe(runtime, target, 5000).await.unwrap().0.error_code
     }
 
     // Go: TestAvailabilityUsesAuthenticatedNodeProxy. Here: through the
@@ -427,28 +573,41 @@ mod tests {
     #[tokio::test]
     async fn availability_failures() {
         let runtime = runtime(None).await;
-        for target in ["", "not a url", "example.com/path", "mailto:someone"] {
+        for target in [
+            "",
+            "not a url",
+            "example.com/path",
+            "mailto:someone",
+            "ftp://target.invalid/",
+        ] {
             let (got, _) = probe(&runtime, target, 1000).await.unwrap();
             assert_eq!(got.error_code, rc::TARGET_INVALID, "{target}");
         }
-        let (got, _) = probe(&runtime, "ftp://target.invalid/", 1000)
-            .await
-            .unwrap();
-        assert_eq!(got.error_code, rc::PROXY_REQUEST_FAILED);
+        assert!(
+            !runtime
+                .calls()
+                .iter()
+                .any(|c| matches!(c, Call::DialTcp(..))),
+            "dialled an invalid target"
+        );
 
-        runtime.fail_next(Op::Dial, RuntimeError::new("failed", "refused"));
-        let (got, _) = probe(&runtime, "http://target.invalid/", 1000)
-            .await
-            .unwrap();
-        assert_eq!(got.error_code, rc::PROXY_REQUEST_FAILED);
-        runtime.fail_next(Op::Dial, RuntimeError::new("timeout", "slow"));
-        let (got, _) = probe(&runtime, "http://target.invalid/", 1000)
-            .await
-            .unwrap();
-        assert_eq!(got.error_code, rc::TIMEOUT);
+        // The dial, by sail's error kind.
+        for (kind, want) in [
+            ("failed", rc::CONNECT_FAILED),
+            ("io", rc::CONNECT_FAILED),
+            ("timeout", rc::TIMEOUT),
+            ("not_found", rc::PROXY_REQUEST_FAILED),
+            ("not_running", rc::PROXY_REQUEST_FAILED),
+        ] {
+            runtime.fail_next(Op::Dial, RuntimeError::new(kind, "why"));
+            let (got, _) = probe(&runtime, "http://target.invalid/", 1000)
+                .await
+                .unwrap();
+            assert_eq!(got.error_code, want, "{kind}");
+        }
 
         // A server that never answers: the probe's own timeout.
-        let (addr, _) = serve(vec![]).await;
+        let (addr, _) = serve(Vec::<&str>::new()).await;
         runtime.route_tcp_to(addr);
         let started = std::time::Instant::now();
         let (got, _) = probe(&runtime, "http://target.invalid/", 100)
@@ -456,18 +615,152 @@ mod tests {
             .unwrap();
         assert_eq!(got.error_code, rc::TIMEOUT);
         assert!(got.total_ms >= 90 && started.elapsed() < Duration::from_secs(5));
+    }
 
-        // TLS spoken to a plain HTTP server fails as the request.
-        let (addr, _) = serve(vec!["HTTP/1.1 200 OK\r\n\r\n"]).await;
+    #[tokio::test]
+    async fn availability_answers_cut_short_or_invalid() {
+        let runtime = runtime(None).await;
+        let mut long = b"HTTP/1.1 200 OK\r\nX-Long: ".to_vec();
+        long.resize(MAX_HEAD + 1024, b'a');
+        let cases: Vec<(Vec<u8>, &str)> = vec![
+            (b"".to_vec(), rc::CONNECTION_CLOSED),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Le".to_vec(),
+                rc::CONNECTION_CLOSED,
+            ),
+            (b"garbage\r\n\r\n".to_vec(), rc::RESPONSE_INVALID),
+            (b"HTTP/1.1 2000 OK\r\n\r\n".to_vec(), rc::RESPONSE_INVALID),
+            (
+                b"HTTP/1.1 200 OK\r\nX: \xff\r\n\r\n".to_vec(),
+                rc::RESPONSE_INVALID,
+            ),
+            (long, rc::RESPONSE_INVALID),
+            (
+                b"HTTP/1.1 302 Found\r\nLocation: http://[::1\r\n\r\n".to_vec(),
+                rc::RESPONSE_INVALID,
+            ),
+            (
+                b"HTTP/1.1 302 Found\r\nLocation: ftp://target.invalid/\r\n\r\n".to_vec(),
+                rc::TARGET_INVALID,
+            ),
+        ];
+        for (response, want) in cases {
+            let shown = String::from_utf8_lossy(&response[..response.len().min(40)]).into_owned();
+            let (addr, _) = serve(vec![response]).await;
+            runtime.route_tcp_to(addr);
+            assert_eq!(
+                code(&runtime, "http://target.invalid/").await,
+                want,
+                "{shown}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn availability_redirect_loop() {
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: /again\r\nContent-Length: 0\r\n\r\n";
+        let (addr, seen) = serve(vec![redirect; MAX_REDIRECTS + 1]).await;
+        let runtime = runtime(Some(addr)).await;
+        assert_eq!(
+            code(&runtime, "http://target.invalid/").await,
+            rc::REDIRECT_LOOP
+        );
+        assert_eq!(seen.lock().unwrap().len(), MAX_REDIRECTS + 1);
+    }
+
+    #[tokio::test]
+    async fn availability_tls_failures() {
+        let runtime = runtime(None).await;
+        let (pem, acceptor) = crate::tls::testing::authority("probe test ca");
+        let (other_pem, _) = crate::tls::testing::authority("another test ca");
+
+        // TLS spoken to a plain HTTP server, or to one that closes at once.
+        let (addr, _) = serve(vec!["HTTP/1.1 200 OK\r\n\r\n", ""]).await;
         runtime.route_tcp_to(addr);
-        let (got, _) = probe(&runtime, "https://target.invalid/", 2000)
+        for _ in 0..2 {
+            assert_eq!(
+                code_trusting(&runtime, "https://127.0.0.1/", &pem).await,
+                rc::TLS_HANDSHAKE_FAILED
+            );
+        }
+
+        // A certificate from an authority not trusted, or for another name.
+        let addr = serve_tls(acceptor.clone(), Then::Answer(Duration::ZERO, "")).await;
+        runtime.route_tcp_to(addr);
+        assert_eq!(
+            code_trusting(&runtime, "https://127.0.0.1/", &other_pem).await,
+            rc::TLS_CERTIFICATE_INVALID
+        );
+        assert_eq!(
+            code_trusting(&runtime, "https://localhost.invalid/", &pem).await,
+            rc::TLS_CERTIFICATE_INVALID
+        );
+
+        // The handshake done, the server ends the session, or drops the
+        // connection, without an answer.
+        for then in [Then::CloseNotify, Then::Drop] {
+            let addr = serve_tls(acceptor.clone(), then).await;
+            runtime.route_tcp_to(addr);
+            assert_eq!(
+                code_trusting(&runtime, "https://127.0.0.1/", &pem).await,
+                rc::CONNECTION_CLOSED
+            );
+        }
+    }
+
+    // #342: Google's front end speaks TLS 1.3 and sends session tickets
+    // after its handshake. A read that takes in only a ticket record (no
+    // application data) must not read as the end of the stream.
+    #[tokio::test]
+    async fn tls13_session_tickets_before_the_answer() {
+        let (pem, acceptor) = crate::tls::testing::authority("probe test ca");
+        let answer = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n";
+        let addr = serve_tls(acceptor, Then::Answer(Duration::from_millis(200), answer)).await;
+
+        // Through the probe, as a host runs it, a few times.
+        let runtime = runtime(Some(addr)).await;
+        for _ in 0..4 {
+            let request = ProbeAvailabilityRequest::new("stable", "https://127.0.0.1/", 5000);
+            let (got, _) = probe_trusting(
+                &runtime,
+                &tags(),
+                &request,
+                DefaultInterface::Present,
+                &Cancel::never(),
+                Some(&pem),
+            )
             .await
             .unwrap();
-        assert!(
-            got.error_code == rc::PROXY_REQUEST_FAILED || got.error_code == rc::TIMEOUT,
-            "{got:?}"
-        );
-        assert!(!got.success);
+            assert!(got.success && got.http_status == 204, "{got:?}");
+        }
+
+        // The same exchange with a client that counts the tickets: they did
+        // come, over TLS 1.3, before the answer.
+        let tickets = Arc::new(AtomicUsize::new(0));
+        let mut builder = SslConnector::bare_builder(SslMethod::tls()).unwrap();
+        builder.set_verify(SslVerifyMode::NONE);
+        builder.set_session_cache_mode(SslSessionCacheMode::CLIENT);
+        let counted = tickets.clone();
+        builder.set_new_session_callback(move |_, _| {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        let ssl = builder
+            .build()
+            .configure()
+            .unwrap()
+            .into_ssl("127.0.0.1")
+            .unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut stream = TlsStream::new(BoringConnection::client(ssl).unwrap(), tcp, None);
+        tokio::time::timeout(BOUND, stream.handshake())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stream.conn().ssl().version_str(), "TLSv1.3");
+        let url = Url::parse("https://127.0.0.1/").unwrap();
+        let got = exchange(&mut stream, &url, Instant::now() + BOUND).await;
+        assert_eq!(got, Ok((204, None)));
+        assert!(tickets.load(Ordering::SeqCst) > 0, "no session ticket came");
     }
 
     #[allow(dead_code)]

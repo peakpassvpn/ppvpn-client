@@ -40,6 +40,11 @@ pub(crate) mod result_codes {
     pub const TARGET_INVALID: &str = "TARGET_INVALID";
     pub const HTTP_STATUS: &str = "HTTP_STATUS";
     pub const PROXY_REQUEST_FAILED: &str = "PROXY_REQUEST_FAILED";
+    pub const TLS_HANDSHAKE_FAILED: &str = "TLS_HANDSHAKE_FAILED";
+    pub const TLS_CERTIFICATE_INVALID: &str = "TLS_CERTIFICATE_INVALID";
+    pub const CONNECTION_CLOSED: &str = "CONNECTION_CLOSED";
+    pub const RESPONSE_INVALID: &str = "RESPONSE_INVALID";
+    pub const REDIRECT_LOOP: &str = "REDIRECT_LOOP";
 }
 
 /// What the Engine knows of the default interface, from sail's monitor.
