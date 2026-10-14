@@ -99,15 +99,15 @@ class UploadDownloads(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def write_meta(self, platform, **changes):
-        path = self.release / f"release-meta-{platform}.json"
+    def write_meta(self, name, **changes):
+        path = self.release / f"release-meta-{name}.json"
         meta = json.loads(path.read_text()) if path.exists() else {
             "schema": 1,
-            "platform": platform,
+            "platform": name,
             "channel": "stable",
             "version": "0.6.0",
             "build": "0.6.0.117",
-            "ed_signature": None if platform.startswith("linux-") else "c2lnbmF0dXJl",
+            "ed_signature": None if name.startswith("linux-") else "c2lnbmF0dXJl",
             "min_os": "12.0",
             "published_at": "2026-10-12T19:11:52Z",
         }
