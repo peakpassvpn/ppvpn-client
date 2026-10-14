@@ -87,10 +87,14 @@ embedded frameworks, so the app and the agent carry
 `com.apple.security.cs.disable-library-validation` (TODO: drop it with a
 Developer ID).
 
-Installing: the first time PPVPN is opened, macOS blocks it as from an
-unidentified developer. Open **System Settings → Privacy & Security** and
-click **Open Anyway** (then confirm). Updates installed by Sparkle keep the
-same signature and open without asking again.
+Installing: a downloaded copy is blocked twice, first the DMG and then the
+app. Each time, dismiss the alert, open **System Settings → Privacy &
+Security** and click **Open Anyway** (then confirm with the password). Run
+the app from /Applications, not from the mounted DMG. Do not strip the
+quarantine attribute instead: AMFI still rejects the self-signed chain
+(-423), and without the Gatekeeper approval the app never gets past
+`_dyld_start`. Updates installed by Sparkle keep the same signature and open
+without asking again.
 
 ## Updates
 
