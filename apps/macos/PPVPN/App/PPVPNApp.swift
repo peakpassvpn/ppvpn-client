@@ -2,16 +2,7 @@ import PPVPNAppLogic
 import PPVPNClient
 import SwiftUI
 
-/// A copy outside /Applications moves itself there first (``AppMover``),
-/// before the SwiftUI app and its engine start.
 @main
-enum PPVPNMain {
-    @MainActor static func main() {
-        AppMover.moveIfNeeded()
-        PPVPNApp.main()
-    }
-}
-
 struct PPVPNApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @StateObject private var model = AppModel.live
