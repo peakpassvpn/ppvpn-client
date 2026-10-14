@@ -29,7 +29,8 @@ when that is not answered within 60 seconds, the keyring counts as locked. Befor
 that cannot be used fails at once rather than after the code was confirmed: the macOS login Keychain, for one, answers
 reads but refuses writes in an SSH session. Access tokens are never written to disk.
 
-`ppvpn account` prints the authorized account. `ppvpn logout` revokes the device session and removes the
+`ppvpn account` prints the authorized account and its current team (`--json`: `team`, or `null` when the
+team list cannot be read, as from a disabled team). `ppvpn logout` revokes the device session and removes the
 local credential. Without a saved login, commands that need one report `NOT_LOGGED_IN` (exit 3) before any
 request is made.
 
@@ -38,9 +39,17 @@ refreshed once. The profile is passed to core as received and is never written t
 
 The backend serves the profile of the account's current team, and every access token is issued for that
 team. It is the same team as in the dashboard and the desktop app, so switching it there switches the CLI
-at its next command. When the profile download is refused, the message adds the backend's own explanation
-(its problem `detail`) when it says more than the CLI's message, for example
-`no active subscription, or its nodes are not ready yet (try again later) (backend: <detail>)`.
+at its next command. `ppvpn team` lists the teams with the current one marked `*` and personal teams marked
+`personal` (`--json`: `teams`, each with `id`, `name`, `personal`, `current` and `status`).
+`ppvpn team use <id|name>` switches: an exact team ID, or a name only one team has (`TEAM_NOT_FOUND` and
+`TEAM_AMBIGUOUS` are exit 2; a disabled team is `TEAM_DISABLED`, exit 3). The switch changes the user's
+default team on the backend, not just the CLI's: the dashboard and the desktop app follow it at their next
+refresh. A running proxy keeps the old team's profile until `ppvpn restart`; `--json` reports that as
+`"restart_required": true`.
+
+When the profile download is refused, the message adds the backend's own explanation (its problem `detail`,
+when it says more than the CLI's message) and the current team, for example
+`no active subscription (backend: <detail>; team: Personal (t-1)); ppvpn team lists your teams`.
 
 ## Daemon
 
@@ -123,7 +132,8 @@ ppvpn [--json] [--no-color] <command>
 | --- | --- |
 | `login [--no-browser]` | authorize this device in a browser |
 | `logout` | revoke and remove this device's credential |
-| `account` | show the authorized account |
+| `account` | show the authorized account and its current team |
+| `team` / `team use <id\|name>` | list the account's teams; switch to one |
 | `start [--foreground]` / `restart [--foreground]` / `stop` | run or stop the local proxy |
 | `status` | state, routing mode, selected ingress, rule sets |
 | `nodes` / `use <node-id>` | list nodes; select the node for new connections |

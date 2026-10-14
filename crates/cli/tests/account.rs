@@ -194,6 +194,19 @@ fn user() -> (u16, String) {
     (200, json!({"id": "u-1", "name": "Test User"}).to_string())
 }
 
+/// `GET /me/teams`: a personal team, the current one, and a disabled one.
+fn teams() -> (u16, String) {
+    (
+        200,
+        json!({"items": [
+            {"id": "t-1", "name": "Personal", "is_personal": true, "is_default": false, "status": "active"},
+            {"id": "t-2", "name": "Quiet Quartz", "is_personal": false, "is_default": true, "status": "active"},
+            {"id": "t-3", "name": "Old Team", "is_personal": false, "is_default": false, "status": "disabled"},
+        ]})
+        .to_string(),
+    )
+}
+
 #[test]
 fn login_account_and_logout() {
     let backend = Backend::serve(|base| {
@@ -211,6 +224,7 @@ fn login_account_and_logout() {
             (200, json!({"refresh_token": fake("prepared")}).to_string()),
             token_set(),
             user(),
+            teams(),
             // logout
             (200, "{}".to_string()),
         ]
@@ -230,7 +244,10 @@ fn login_account_and_logout() {
     assert!(!cli.store.is_empty(), "the login was not saved");
 
     let out = cli.run(&["account"]);
-    assert_eq!((out.code, out.stdout.as_str()), (0, "Test User (u-1)\n"));
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "Test User (u-1)\nTeam: Quiet Quartz (t-2)\n")
+    );
 
     let out = cli.run(&["--json", "logout"]);
     assert_eq!(
@@ -250,6 +267,7 @@ fn login_account_and_logout() {
             "POST /api/v1/auth/device/refresh",
             "POST /api/v1/auth/device/refresh/commit",
             "GET /api/v1/users/me",
+            "GET /api/v1/me/teams",
             "POST /api/v1/auth/device/revoke",
         ]
     );
@@ -267,6 +285,8 @@ fn commands_without_a_login_exit_3_without_calling_the_backend() {
         &["--json", "account"][..],
         &["--json", "logout"],
         &["--json", "start"],
+        &["--json", "team"],
+        &["--json", "team", "use", "t-1"],
     ] {
         let out = cli.run(args);
         assert_eq!(out.code, 3, "{args:?}");
@@ -454,7 +474,6 @@ async fn a_profile_404_says_there_is_no_usable_subscription() {
         (err.exit_code(), err.code.as_str(), err.retryable),
         (4, "NOT_FOUND", false)
     );
-    // The backend's detail adds nothing here.
     assert_eq!(
         err.message,
         "no active subscription, or its nodes are not ready yet (try again later)"
@@ -498,7 +517,12 @@ async fn a_missing_subscription_is_exit_4_and_keeps_the_login() {
 
 /// The error `download_profile` gives when the backend answers the profile
 /// request with `status` and `body`.
-async fn profile_error(status: u16, body: Value) -> ppvpn_cli::error::CliError {
+/// `after` answers the requests that follow it (the team lookup).
+async fn profile_error(
+    status: u16,
+    body: Value,
+    after: Vec<(u16, String)>,
+) -> ppvpn_cli::error::CliError {
     let backend = Backend::serve(move |base| {
         let mut responses = login_responses(base);
         responses.extend([
@@ -506,6 +530,7 @@ async fn profile_error(status: u16, body: Value) -> ppvpn_cli::error::CliError {
             token_set(),
             (status, body.to_string()),
         ]);
+        responses.extend(after);
         responses
     });
     let cli = Cli::new(&backend.base);
@@ -540,6 +565,7 @@ async fn subscription_codes_pick_the_message_and_keep_the_code_and_exit() {
             404,
             json!({"type": "about:blank", "title": "Not Found", "status": 404,
                    "code": code, "detail": message}),
+            Vec::new(),
         )
         .await;
         assert_eq!(
@@ -555,17 +581,122 @@ async fn subscription_codes_pick_the_message_and_keep_the_code_and_exit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_refused_profile_carries_the_backend_reason() {
+async fn a_refused_profile_carries_the_backend_reason_and_the_team() {
     let err = profile_error(
         404,
         json!({"type": "about:blank", "title": "Not Found", "status": 404,
                "code": "NOT_FOUND", "detail": "Subscription is\n being refunded"}),
+        vec![teams()],
     )
     .await;
     assert_eq!((err.exit_code(), err.code.as_str()), (4, "NOT_FOUND"));
     assert_eq!(
         err.message,
         "no active subscription, or its nodes are not ready yet (try again later) \
-         (backend: Subscription is being refunded)"
+         (backend: Subscription is being refunded; team: Quiet Quartz (t-2)); \
+         ppvpn team lists your teams"
+    );
+
+    // Without the team list the error stands as it is.
+    let err = profile_error(
+        404,
+        json!({"code": "SUBSCRIPTION_REQUIRED", "detail": "no active subscription"}),
+        vec![(403, json!({"code": "403012"}).to_string())],
+    )
+    .await;
+    assert_eq!(err.message, "no active subscription");
+}
+
+#[test]
+fn team_lists_and_switches() {
+    let switched = |id: &str, name: &str| {
+        (
+            200,
+            json!({"id": id, "name": name, "is_personal": id == "t-1", "token": access_token()})
+                .to_string(),
+        )
+    };
+    let backend = Backend::serve(|base| {
+        let mut responses = login_responses(base);
+        let refresh = || {
+            [
+                (200, json!({"refresh_token": fake("prepared")}).to_string()),
+                token_set(),
+            ]
+        };
+        // team
+        responses.extend(refresh());
+        responses.push(teams());
+        // team use Personal
+        responses.extend(refresh());
+        responses.push(teams());
+        responses.push(switched("t-1", "Personal"));
+        // team use t-2: already the current team
+        responses.extend(refresh());
+        responses.push(teams());
+        // team use t-3: disabled
+        responses.extend(refresh());
+        responses.push(teams());
+        // team use nobody
+        responses.extend(refresh());
+        responses.push(teams());
+        // team use x, from a team that cannot list the others
+        responses.extend(refresh());
+        responses.push((403, json!({"code": "403012"}).to_string()));
+        responses.push(switched("x", "X"));
+        responses
+    });
+    let cli = Cli::new(&backend.base);
+    logged_in(&cli);
+
+    let out = cli.run(&["team"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (
+            0,
+            "  Personal (t-1) personal\n* Quiet Quartz (t-2)\n  Old Team (t-3) disabled\n"
+        )
+    );
+
+    let out = cli.run(&["--json", "team", "use", "Personal"]);
+    assert_eq!(
+        out.json(),
+        json!({"ok": true, "changed": true, "restart_required": false, "team":
+            {"id": "t-1", "name": "Personal", "personal": true, "current": true, "status": "active"}})
+    );
+
+    let out = cli.run(&["team", "use", "t-2"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "Already on team Quiet Quartz (t-2).\n")
+    );
+
+    let out = cli.run(&["--json", "team", "use", "t-3"]);
+    assert_eq!(
+        (out.code, out.json()["code"].as_str()),
+        (3, Some("TEAM_DISABLED"))
+    );
+
+    let out = cli.run(&["--json", "team", "use", "nobody"]);
+    assert_eq!(
+        (out.code, out.json()["code"].as_str()),
+        (2, Some("TEAM_NOT_FOUND"))
+    );
+
+    let out = cli.run(&["team", "use", "x"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "Switched to team X (x).\n")
+    );
+
+    let requests = backend.requests();
+    let after_login = &requests[4..];
+    assert_eq!(
+        after_login
+            .iter()
+            .filter(|r| r.as_str() == "POST /api/v1/me/switch-team")
+            .count(),
+        2,
+        "{after_login:?}"
     );
 }

@@ -42,6 +42,11 @@ pub enum Command {
     Account,
     /// Revoke and remove this device credential.
     Logout,
+    /// List the account's teams, or switch to one.
+    Team {
+        #[command(subcommand)]
+        command: Option<TeamCommand>,
+    },
     /// Fetch a profile and start the local proxy.
     Start {
         /// Stay attached to this terminal.
@@ -115,6 +120,13 @@ pub enum ProxyCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum TeamCommand {
+    /// Switch to a team, by ID or name; its subscription and nodes apply
+    /// from the next start.
+    Use { team: String },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum IngressCommand {
     /// Use only one ingress for a node.
     Pin {
@@ -144,6 +156,9 @@ impl Command {
     pub fn validate(&self, json: bool) -> Result<()> {
         match self {
             Command::Use { node_id } => non_empty(node_id, "use requires exactly one node ID"),
+            Command::Team {
+                command: Some(TeamCommand::Use { team }),
+            } => non_empty(team, "team use requires a team ID or name"),
             Command::Probe { .. } => self.probe_settings().map(|_| ()),
             Command::Proxy {
                 command: Some(ProxyCommand::Credential { node_id: Some(id) }),
