@@ -163,6 +163,21 @@ pub(crate) fn free_port() -> u16 {
         .port()
 }
 
+/// A loopback port that refuses every connection until the test process
+/// exits: bound and never listening, so the kernel gives it to no other
+/// socket. A port that is merely free (`free_port`) can become another
+/// sail's listener meanwhile; a TLS outbound (AnyTLS) that dials it then
+/// waits for a handshake that never comes, and sail never tells the route.
+pub(crate) fn closed_port() -> u16 {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap();
+    let port = socket.local_addr().unwrap().port();
+    std::mem::forget(socket); // held for the rest of the process
+    port
+}
+
 async fn start(
     profile_bytes: &[u8],
     tun: bool,
@@ -244,11 +259,12 @@ pub(crate) fn stand_in_for_the_tun(config: &mut Value, port: u16) {
 
 /// Makes every dial fail at once, so that sail tells the route (it does
 /// once the dial ends) and nothing leaves the host: a node's outbound
-/// dials a closed port on loopback and is refused; `direct` is bound to
-/// loopback, where a dial elsewhere goes nowhere, and gives up after
-/// DIRECT_CONNECT (sail's default is 5 s, as long as a case waits).
+/// dials a closed port on loopback (`closed_port`) and is refused;
+/// `direct` is bound to loopback, where a dial elsewhere goes nowhere, and
+/// gives up after DIRECT_CONNECT (sail's default is 5 s, as long as a case
+/// waits).
 pub(crate) fn bind_loopback(config: &mut Value) {
-    let closed = free_port();
+    let closed = closed_port();
     for outbound in config["outbounds"].as_array_mut().unwrap() {
         match outbound["type"].as_str().unwrap_or_default() {
             "selector" | "fallback" | "urltest" | "block" | "dns" => {}
