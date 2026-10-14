@@ -6,7 +6,7 @@ using PPVPN.Ffi;
 namespace PPVPN.App.Core.ViewModels;
 
 /// <summary>Access to the service (design <c>access</c>): the restricted states replace the overview and node list.</summary>
-public enum AccessState { Ok, NoSubscription, Expired, TeamDisabled }
+public enum AccessState { Ok, NoSubscription, Expired, TeamDisabled, NodesNotReady }
 
 /// <summary>
 /// A team in the account menu (radio items) and the Settings team combo. Inactive (disabled or
@@ -35,7 +35,7 @@ public sealed partial class MainViewModel
     // --- access ------------------------------------------------------------------
 
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(IsRestricted))] AccessState access;
-    /// <summary>No subscription, expired or team disabled: overview ②–⑤ and the node table are replaced by the restricted card.</summary>
+    /// <summary>No subscription, expired, team disabled or nodes not ready: overview ②–⑤ and the node table are replaced by the restricted card.</summary>
     public bool IsRestricted => Access != AccessState.Ok;
     [ObservableProperty] string restrictedTitle = "";
     [ObservableProperty] string restrictedMessage = "";
@@ -156,6 +156,7 @@ public sealed partial class MainViewModel
             ProfileStatus.NoSubscription => AccessState.NoSubscription,
             ProfileStatus.SubscriptionExpired => AccessState.Expired,
             ProfileStatus.TeamDisabled => AccessState.TeamDisabled,
+            ProfileStatus.NodesNotReady => AccessState.NodesNotReady,
             _ => AccessState.Ok,
         };
         (RestrictedTitle, RestrictedMessage) = Access switch
@@ -163,6 +164,8 @@ public sealed partial class MainViewModel
             AccessState.NoSubscription => (_strings.Get("noSubT"), _strings.Get("noSubD")),
             AccessState.Expired => (_strings.Get("expiredT"), _strings.Format("expiredD", ("d", ExpiredDate(status) ?? "—"))),
             AccessState.TeamDisabled => (_strings.Get("teamOffT"), _strings.Format("teamOffD", ("team", next.Team?.Name ?? ""))),
+            // The client fetches the profile again by itself; Refresh only asks sooner.
+            AccessState.NodesNotReady => (_strings.Get("nodesWaitT"), _strings.Get("nodesWaitD")),
             _ => ("", ""),
         };
         CanBuy = Access is AccessState.NoSubscription or AccessState.Expired;

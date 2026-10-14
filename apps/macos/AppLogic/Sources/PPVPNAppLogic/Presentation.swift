@@ -135,7 +135,11 @@ extension AppState {
             Restriction(code: .teamDisabled, title: tr("teamOffT"),
                         message: tr("teamOffD", ["team": snapshot.team?.name ?? ""]),
                         systemImage: "person.2.slash", offersPurchase: false)
-        case .loading, .ready, .invalid, .nodesNotReady:
+        case .nodesNotReady:
+            // The client fetches the profile again by itself; Refresh only asks sooner.
+            Restriction(code: .proxyNodesNotReady, title: tr("nodesWaitT"), message: tr("nodesWaitD"),
+                        systemImage: "hourglass", offersPurchase: false)
+        case .loading, .ready, .invalid:
             nil
         }
     }

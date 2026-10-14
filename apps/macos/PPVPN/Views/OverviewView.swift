@@ -338,7 +338,9 @@ struct RestrictionCard: View {
         Card {
             EmptyStateView(systemImage: restriction.systemImage, title: restriction.title,
                            message: restriction.message) {
-                if restriction.offersPurchase {
+                if restriction.code == .proxyNodesNotReady {
+                    Button(tr("refresh")) { model.refreshProfile() }
+                } else if restriction.offersPurchase {
                     Button(tr("refresh")) { model.refreshProfile() }
                     Button {
                         model.openPurchasePage()

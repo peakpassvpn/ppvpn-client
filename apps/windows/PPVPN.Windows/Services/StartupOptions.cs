@@ -135,7 +135,7 @@ public sealed record StartupOptions
 
     /// <summary>
     /// <c>--fake-profile</c> scenarios for the personal team (the one selected at sign-in):
-    /// active (default), no-subscription, expired, team-disabled, invalid. The
+    /// active (default), no-subscription, expired, team-disabled, nodes-not-ready, invalid. The
     /// <see cref="FakeProfileScenario"/> names work too.
     /// </summary>
     static FakeProfileScenario? ParseScenario(string value) =>
@@ -145,6 +145,7 @@ public sealed record StartupOptions
             "nosubscription" => FakeProfileScenario.NoSubscription,
             "expired" or "subscriptionexpired" => FakeProfileScenario.SubscriptionExpired,
             "teamdisabled" or "disabled" => FakeProfileScenario.TeamDisabled,
+            "nodesnotready" => FakeProfileScenario.NodesNotReady,
             "invalid" => FakeProfileScenario.Invalid,
             _ => null,
         };

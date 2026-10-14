@@ -523,6 +523,26 @@ public sealed class ConnectionFlowTests
     }
 
     [Fact]
+    public async Task NodesNotReadyIsRestrictedWithRefreshOnly()
+    {
+        using var ui = new UiContext();
+        await ui.RunAsync(async () =>
+        {
+            using var h = new Harness(new FakeOptions { PersonalTeam = FakeProfileScenario.NodesNotReady }, MemoryHooks.SignedIn());
+            var main = h.Main;
+            await Wait.Until(() => main.Access == AccessState.NodesNotReady, "nodes not ready");
+            Assert.True(main.IsRestricted);
+            Assert.NotEqual("", main.RestrictedTitle);
+            Assert.NotEqual("", main.RestrictedMessage);
+            // Subscribed already: nothing to buy, no team to switch to.
+            Assert.False(main.CanBuy);
+            Assert.False(main.CanSwitchTeam);
+            await main.RefreshAccessCommand.ExecuteAsync(null);
+            Assert.Empty(h.Prompts.Errors);
+        });
+    }
+
+    [Fact]
     public async Task AboutLinksOpenTheSourceAndTheLicense()
     {
         using var ui = new UiContext();

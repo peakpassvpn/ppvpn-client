@@ -388,6 +388,15 @@ final class PresentationTests: LogicTestCase {
         XCTAssertTrue(message.contains("2026"), message)
     }
 
+    func testNodesNotReadyOffersRefreshOnly() {
+        backend.push(.fixture(profileStatus: .nodesNotReady))
+        XCTAssertEqual(state.restriction?.code, .proxyNodesNotReady)
+        XCTAssertEqual(state.restriction?.title, tr("nodesWaitT"))
+        XCTAssertEqual(state.restriction?.message, tr("nodesWaitD"))
+        XCTAssertEqual(state.restriction?.offersPurchase, false)
+        XCTAssertEqual(state.accessBlock, .proxyNodesNotReady)
+    }
+
     func testTeamDisabledNamesTheTeam() {
         backend.push(.fixture(profileStatus: .teamDisabled))
         XCTAssertEqual(state.restriction?.message, tr("teamOffD", ["team": "Acme"]))

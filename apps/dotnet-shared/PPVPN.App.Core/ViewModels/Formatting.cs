@@ -217,7 +217,7 @@ public static class ErrorMessages
 
     /// <summary>
     /// The code a persistent <see cref="ProfileStatus"/> stands for (NoSubscription,
-    /// SubscriptionExpired, TeamDisabled, or the Invalid error's code); null for Loading/Ready.
+    /// SubscriptionExpired, TeamDisabled, NodesNotReady, or the Invalid error's code); null for Loading/Ready.
     /// A failure with the current status's code is shown by the content, not a dialog.
     /// </summary>
     public static ErrorCode? Code(ProfileStatus status) => status switch
@@ -225,6 +225,7 @@ public static class ErrorMessages
         ProfileStatus.NoSubscription => ErrorCode.NoSubscription,
         ProfileStatus.SubscriptionExpired => ErrorCode.SubscriptionExpired,
         ProfileStatus.TeamDisabled => ErrorCode.TeamDisabled,
+        ProfileStatus.NodesNotReady => ErrorCode.ProxyNodesNotReady,
         ProfileStatus.Invalid { Error: var error } => error.Code,
         _ => null,
     };
