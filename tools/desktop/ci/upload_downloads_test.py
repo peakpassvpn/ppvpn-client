@@ -207,6 +207,16 @@ class UploadDownloads(unittest.TestCase):
         self.assertIn("check only: wrote nothing", result.stdout)
         self.assertEqual(self.calls("put-object"), [])
 
+    def test_missing_keys_stop_the_check_and_the_upload(self):
+        for args in (("--check",), ()):
+            for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "R2_BUCKET"):
+                with self.subTest(args=args, name=name):
+                    result = self.run_script(*args, **{name: ""})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"{name} (", result.stderr)
+                    self.assertEqual(self.calls("head-object"), [])
+                    self.assertEqual(self.objects(), [])
+
     def test_no_access_stops_the_run(self):
         result = self.run_script(FAKE_R2_DENY="1")
         self.assertNotEqual(result.returncode, 0)
