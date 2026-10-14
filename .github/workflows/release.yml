@@ -1361,6 +1361,9 @@ jobs:
           name: site
           path: site
       - name: Check against R2 (read only)
+        # bash, not the default `bash -e`: with pipefail a refusal of the
+        # script fails the step rather than vanishing into tee's status.
+        shell: bash
         run: tools/desktop/ci/upload-site.sh --check site | tee check.txt
       - name: Summary
         run: |
@@ -1439,6 +1442,9 @@ jobs:
           name: release-files
           path: release
       - name: Check against R2 (read only)
+        # bash, not the default `bash -e`: with pipefail a refusal of the
+        # script fails the step rather than vanishing into tee's status.
+        shell: bash
         run: tools/desktop/ci/upload-downloads.sh --check release | tee check.txt
       - name: Summary
         run: |
