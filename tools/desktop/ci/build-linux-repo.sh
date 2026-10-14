@@ -19,6 +19,7 @@
 #
 # Usage: scripts/ci/build-linux-repo.sh --channel dev|stable --releases <dir>
 #          --download-base <https URL> --site-base <https URL> --out <site dir> [--keep 5]
+#          [--published <https URL>]
 #
 #   --releases       one subdirectory per release, named by its tag (vX.Y.Z, or
 #                    vX.Y.Z-dev.N on dev), each holding release-meta-linux-x64-deb.json,
@@ -32,13 +33,20 @@
 #                    setup packages and the key, and is run once per channel into the same
 #                    <out>: the pool is shared and the other channel's files are left alone.
 #   --keep           releases in the apt index (default 5)
+#   --published      the site as it is served now. A setup package already published there
+#                    under the same file name is used as published, not the release's copy:
+#                    linux/setup/<name> is immutable, and the release rpm is signed anew for
+#                    every release (a signature carries its time), so its bytes differ while
+#                    its name does not. The published file must be the same package: for the
+#                    rpm the same name, version, release and arch, signed by this key; for the
+#                    deb the same Package, Version and Architecture and the same files.
 #
 # Releases are ordered by the metadata's build, "<version>.<n>": the version numerically,
 # then n. Every release must be of the channel, carry the tag its metadata implies, and every
 # package must have its metadata's length and sha256; anything else is refused, and <out> is
 # only touched once everything was built, signed and verified. The setup packages come from
-# the newest release that has them; when both channels are built, the later run's replace the
-# earlier's.
+# the newest release that has them (or, with --published, from the site when it has them
+# already); when both channels are built, the later run's replace the earlier's.
 #
 # Environment:
 #   PKG_GPG_PRIVATE_KEY   ASCII-armored secret signing key (imported into a throwaway
@@ -54,10 +62,10 @@ set -euo pipefail
 
 die() { echo "build-linux-repo: $*" >&2; exit 1; }
 usage() {
-  die "usage: build-linux-repo.sh --channel dev|stable --releases <dir> --download-base <https URL> --site-base <https URL> --out <site dir> [--keep 5]"
+  die "usage: build-linux-repo.sh --channel dev|stable --releases <dir> --download-base <https URL> --site-base <https URL> --out <site dir> [--keep 5] [--published <https URL>]"
 }
 
-CHANNEL="" RELEASES="" DOWNLOAD_BASE="" SITE_BASE="" OUT="" KEEP=5
+CHANNEL="" RELEASES="" DOWNLOAD_BASE="" SITE_BASE="" OUT="" KEEP=5 PUBLISHED=
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || usage
   case "$1" in
@@ -67,6 +75,7 @@ while [[ $# -gt 0 ]]; do
     --site-base) SITE_BASE="$2" ;;
     --out) OUT="$2" ;;
     --keep) KEEP="$2" ;;
+    --published) PUBLISHED="$2" ;;
     *) usage ;;
   esac
   shift 2
@@ -78,7 +87,8 @@ case "$CHANNEL" in dev|stable) ;; *) die "channel must be dev or stable, got '$C
 [[ ! -e "$OUT" || -d "$OUT" ]] || die "$OUT is not a directory"
 DOWNLOAD_BASE="${DOWNLOAD_BASE%/}"
 SITE_BASE="${SITE_BASE%/}"
-for base in "$DOWNLOAD_BASE" "$SITE_BASE"; do
+PUBLISHED="${PUBLISHED%/}"
+for base in "$DOWNLOAD_BASE" "$SITE_BASE" ${PUBLISHED:+"$PUBLISHED"}; do
   case "$base" in
     https://?*) ;;
     http://?*) [[ "${PKG_ALLOW_HTTP:-}" == 1 ]] || die "$base is not https (PKG_ALLOW_HTTP=1 is for the self-test)" ;;
@@ -89,7 +99,8 @@ done
 : "${PKG_GPG_PRIVATE_KEY:?PKG_GPG_PRIVATE_KEY is required}"
 FINGERPRINT="$(printf '%s' "${PKG_GPG_FINGERPRINT:-6924CE595D51ED53251B8776C48D5132620C3C86}" | tr -d ' ' | tr 'a-f' 'A-F')"
 [[ "$FINGERPRINT" =~ ^[0-9A-F]{40}$ ]] || die "PKG_GPG_FINGERPRINT is not a 40-digit fingerprint"
-for tool in gpg gpgv gpgconf dpkg dpkg-deb apt-ftparchive createrepo_c rpm jq python3 xz gzip sha256sum sha512sum; do
+for tool in gpg gpgv gpgconf dpkg dpkg-deb apt-ftparchive createrepo_c rpm jq python3 xz gzip sha256sum sha512sum \
+            ${PUBLISHED:+curl}; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
 
@@ -387,11 +398,47 @@ newest_with() {   # file name pattern
     fi
   done
 }
+# The deb's files, as one digest: what two builds of the same keyring package must share.
+deb_files() { dpkg-deb --fsys-tarfile "$1" | tar -xO | sha256sum | cut -d' ' -f1; }
+# With --published: the copy the site serves under this name when it is the same package
+# (see --published), else the release's. A name the site does not have (404) is new.
+published_or() {   # release file; prints the file to use
+  local name status copy
+  name="$(basename "$1")"
+  if [[ -z "$PUBLISHED" ]]; then echo "$1"; return; fi
+  copy="$WORK/published-$name"
+  status="$(curl -sS -o "$copy" -w '%{http_code}' "$PUBLISHED/linux/setup/$name")" \
+    || die "cannot read $PUBLISHED/linux/setup/$name"
+  case "$status" in
+    404) echo "$1"; return ;;
+    200) ;;
+    *) die "$PUBLISHED/linux/setup/$name answered $status" ;;
+  esac
+  case "$name" in
+    *.rpm)
+      local query='%{NAME} %{VERSION} %{RELEASE} %{ARCH}'
+      [[ "$(rpm --dbpath "$RPMDB" -qp --qf "$query" "$copy")" == "$(rpm --dbpath "$RPMDB" -qp --qf "$query" "$1")" ]] \
+        || die "the published $name is another package than the release's"
+      check_rpm "$copy"
+      ;;
+    *.deb)
+      local field
+      for field in Package Version Architecture; do
+        [[ "$(dpkg-deb -f "$copy" "$field")" == "$(dpkg-deb -f "$1" "$field")" ]] \
+          || die "the published $name has another $field than the release's"
+      done
+      [[ "$(deb_files "$copy")" == "$(deb_files "$1")" ]] || die "the published $name has other files than the release's"
+      ;;
+  esac
+  [[ "$(sha256 "$copy")" == "$(sha256 "$1")" ]] || echo "keep the published linux/setup/$name (the release's copy differs in its bytes only)" >&2
+  echo "$copy"
+}
 setup_package() {   # file, alias
-  local name
+  local name source
   name="$(basename "$1")"
   [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || die "$1: unexpected file name"
-  cp "$1" "$STAGE/setup/$name"
+  source="$(published_or "$1")"
+  cp "$source" "$STAGE/setup/$name"
   detach_sign "$STAGE/setup/$name" "$STAGE/setup/$name.asc"
   cp "$STAGE/setup/$name" "$STAGE/$2"
   cp "$STAGE/setup/$name.asc" "$STAGE/$2.asc"
