@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-account"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64",
  "reqwest",
@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64",
  "clap",
@@ -2570,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -2605,7 +2605,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-core-lab"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64",
  "bytes",
@@ -2622,7 +2622,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-desktop"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64",
  "hex",
@@ -2649,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-engine-host"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "ppvpn-core",
  "serde",
@@ -2659,7 +2659,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-service"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "hex",
