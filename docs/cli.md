@@ -36,6 +36,12 @@ request is made.
 `ppvpn start` downloads the account's proxy profile before it touches the daemon; a rejected access token is
 refreshed once. The profile is passed to core as received and is never written to disk.
 
+The backend serves the profile of the account's current team, and every access token is issued for that
+team. It is the same team as in the dashboard and the desktop app, so switching it there switches the CLI
+at its next command. When the profile download is refused, the message adds the backend's own explanation
+(its problem `detail`) when it says more than the CLI's message, for example
+`no active subscription, or its nodes are not ready yet (try again later) (backend: <detail>)`.
+
 ## Daemon
 
 `ppvpn start` runs a per-user daemon in the background (`ppvpn daemon`, in its own session) that hosts

@@ -454,6 +454,7 @@ async fn a_profile_404_says_there_is_no_usable_subscription() {
         (err.exit_code(), err.code.as_str(), err.retryable),
         (4, "NOT_FOUND", false)
     );
+    // The backend's detail adds nothing here.
     assert_eq!(
         err.message,
         "no active subscription, or its nodes are not ready yet (try again later)"
@@ -538,7 +539,7 @@ async fn subscription_codes_pick_the_message_and_keep_the_code_and_exit() {
         let err = profile_error(
             404,
             json!({"type": "about:blank", "title": "Not Found", "status": 404,
-                   "code": code, "detail": "free text the CLI does not read"}),
+                   "code": code, "detail": message}),
         )
         .await;
         assert_eq!(
@@ -551,4 +552,20 @@ async fn subscription_codes_pick_the_message_and_keep_the_code_and_exit() {
             (4, code, message, retryable)
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_profile_names_the_backend_reason_and_the_team() {
+    let err = profile_error(
+        404,
+        json!({"type": "about:blank", "title": "Not Found", "status": 404,
+               "code": "NOT_FOUND", "detail": "Subscription is\n being refunded"}),
+    )
+    .await;
+    assert_eq!((err.exit_code(), err.code.as_str()), (4, "NOT_FOUND"));
+    assert_eq!(
+        err.message,
+        "no active subscription, or its nodes are not ready yet (try again later) \
+         (backend: Subscription is being refunded)"
+    );
 }
