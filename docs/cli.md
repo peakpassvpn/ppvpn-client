@@ -157,6 +157,12 @@ between 1 ms and 2 minutes, and a concurrency between 1 and 32.
 | 7 | the backend's profile could not be applied |
 | 8 | local environment: files, directories, keychain |
 
+Backend errors keep the backend's code. When the CLI cannot download a profile because of the
+subscription, the exit is 4 and the code tells why: `SUBSCRIPTION_REQUIRED` (no active subscription),
+`SUBSCRIPTION_EXPIRED`, or `PROXY_NODES_NOT_READY` (the subscription's nodes are not published yet;
+`retryable` is true, try again in a few minutes). A plain `NOT_FOUND` covers the cases the backend does not
+classify.
+
 ## Files
 
 | | macOS | Linux |
