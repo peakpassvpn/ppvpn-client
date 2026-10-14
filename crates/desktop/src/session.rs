@@ -1742,11 +1742,12 @@ mod tests {
     }
 
     /// The proxy-profile answer while the subscription's nodes are not
-    /// published yet.
+    /// published yet, in the backend's whole problem shape (root-level
+    /// fields, no `data` wrapper); only `code` counts.
     fn nodes_not_ready() -> (&'static str, String) {
         (
             "404 Not Found",
-            r#"{"code":"PROXY_NODES_NOT_READY"}"#.into(),
+            r#"{"type":"about:blank","title":"Not Found","status":404,"detail":"proxy nodes are not ready yet","code":"PROXY_NODES_NOT_READY"}"#.into(),
         )
     }
 
