@@ -466,13 +466,13 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "系统服务只接受「应用程序」文件夹里的 PPVPN。请从「应用程序」打开 PPVPN（不要在安装盘里直接运行），然后重试。"
+            "value": "系统服务拒绝了此应用，请重新安装 PPVPN。"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The system service only accepts PPVPN in the Applications folder. Open PPVPN from Applications (not from the disk image) and try again."
+            "value": "The system service rejected this app. Reinstall PPVPN."
           }
         }
       }

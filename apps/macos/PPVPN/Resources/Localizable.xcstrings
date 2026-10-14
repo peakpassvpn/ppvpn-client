@@ -5373,6 +5373,23 @@
         }
       }
     },
+    "x_serviceRejected": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统服务只接受「应用程序」文件夹里的 PPVPN。请从「应用程序」打开 PPVPN（不要在安装盘里直接运行），然后重试。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system service only accepts PPVPN in the Applications folder. Open PPVPN from Applications (not from the disk image) and try again."
+          }
+        }
+      }
+    },
     "x_unknownError": {
       "extractionState": "manual",
       "localizations": {
