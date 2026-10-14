@@ -28,8 +28,9 @@ public sealed class MainWindow
         Window.SetTitle("PPVPN");
         // Wide enough for the page switcher's labels in every language: the header centres it
         // between the status line and the buttons on the right, and at 800 px the English labels
-        // ("Overview", "Nodes", "Logs") were cut to "O…".
-        Window.SetDefaultSize(900, 580);
+        // ("Overview", "Nodes", "Logs") were cut to "O…"; at 900 px the selected tab, which is
+        // bold, still showed "Overv…". 960 px fits them next to a personal team's name.
+        Window.SetDefaultSize(960, 580);
         Window.SetSizeRequest(600, 460);
 
         _account = AccountMenu.Create(vm);
