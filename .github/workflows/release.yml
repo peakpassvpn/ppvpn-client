@@ -500,6 +500,10 @@ jobs:
             test -s "linux/$file"
           done
           test "$(ls linux/setup | wc -l)" = 4
+          # Without --published the setup packages are the release's own.
+          for setup in linux/setup/*.deb linux/setup/*.rpm; do
+            cmp "$setup" "$T/releases/stable/$STABLE_TAG/$(basename "$setup")"
+          done
           cat linux/stable/latest.json
           jq -e --arg build "$(jq -er .build "$GITHUB_WORKSPACE/dist/release-meta-linux-x64-deb.json")" \
             --arg deb_url "$REPO_URL/linux/apt/pool/main/p/ppvpn/$deb" \
@@ -692,7 +696,14 @@ jobs:
             tools/desktop/ci/build-linux-repo.sh --channel stable --releases "$T/later/releases" \
               --download-base "$REPO_URL/download" --site-base "$REPO_URL" --out "$1" --keep 5 "${@:2}"
           }
-          build "$T/later/site" --published "$REPO_URL"
+          build "$T/later/site" --published "$REPO_URL" 2>"$T/later/build.err"
+          cat "$T/later/build.err"
+          # The site's copy was read (over HTTP from the test server) and kept.
+          grep -q "keep the published linux/setup/$setup_rpm" "$T/later/build.err"
+          # --published must be a URL: a bare word is refused.
+          if build "$T/later/not-a-url" --published not-a-url 2>/dev/null; then
+            echo "--published accepted a value that is not a URL" >&2; exit 1
+          fi
           for name in "$setup_rpm" "$(cd "$T/site/linux/setup" && ls ppvpn-archive-keyring_*_all.deb)"; do
             cmp "$T/later/site/linux/setup/$name" "$T/site/linux/setup/$name"
           done
