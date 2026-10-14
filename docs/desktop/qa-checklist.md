@@ -40,7 +40,7 @@ TUN 或路由出问题、机器连不上时能自己恢复；确认还能登录�
       `/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle/Contents/MacOS/ppvpn-service` 的
       SHA-256 等于新版应用内置的那份，服务进程的 pid 换了；应用日志里先有
       `privileged service differs from this build; reinstalling`，再有 `privileged service reinstalled`。
-      在密码框里取消时，连接照常用旧服务继续，下次连接前再问。
+      在密码框里取消时，连接照常用旧服务继续；应用重启之前不再询问（每次运行只试一次）。
 - [ ] 换 Wi‑Fi 后直连域名仍能解析（引擎的 dns-local 自己读取物理网卡的 DNS）。
 - [ ] Wi‑Fi 与有线之间切换后连接恢复，直连与代理都可用。
 - [ ] 同时开着另一个 VPN 时，引擎日志里 `msg="local dns servers"` 的 interface 是物理网卡，
