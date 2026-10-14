@@ -37,6 +37,19 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// A loopback port that refuses every connection until the test process
+/// exits: bound and never listening, so the kernel gives it to no other
+/// socket (a merely free port can become another test's listener).
+fn closed_port() -> u16 {
+    use socket2::{Domain, Socket, Type};
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+    let any = SocketAddr::from(([127, 0, 0, 1], 0));
+    socket.bind(&any.into()).unwrap();
+    let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+    std::mem::forget(socket); // held for the rest of the process
+    port
+}
+
 /// An echo server on loopback.
 async fn echo() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -545,7 +558,7 @@ async fn a_failed_connection_is_told() {
         .unwrap();
 
     // Nothing listens there: the direct outbound's connect is refused.
-    let closed: SocketAddr = ([127, 0, 0, 1], free_port()).into();
+    let closed: SocketAddr = ([127, 0, 0, 1], closed_port()).into();
     let _ = socks(port, "u1", &p1, closed).await;
     let failed = tokio::time::timeout(WAIT, failures.recv())
         .await

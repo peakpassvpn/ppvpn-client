@@ -24,7 +24,8 @@ use tokio::sync::mpsc;
 
 use crate::config::Platform;
 use crate::golden_routing_tests::{
-    bind_loopback, client_hello, free_port, golden_now, password, socks_open, stand_in_for_the_tun,
+    bind_loopback, client_hello, closed_port, free_port, golden_now, password, socks_open,
+    stand_in_for_the_tun,
 };
 use crate::profile::{self, Profile, RoutingAction, RoutingMatch, RoutingRule, RuleSet};
 use crate::request::RoutingMode;
@@ -257,7 +258,7 @@ async fn select_node_and_routing_mode_change_new_connections_only() {
     let proxy = local_proxy("lp1");
     let routed_user = proxy.username("");
     let credentials = Some((routed_user.as_str(), proxy.password.as_str()));
-    let closed = free_port();
+    let closed = closed_port();
     let build = |mode: RoutingMode| {
         let options = Options {
             mode,
@@ -354,7 +355,7 @@ async fn the_system_proxy_counts_its_traffic_and_closes_when_turned_off() {
     let proxy = local_proxy("lp2");
     let routed_user = proxy.username("");
     let credentials = Some((routed_user.as_str(), proxy.password.as_str()));
-    let (system_port, closed) = (free_port(), free_port());
+    let (system_port, closed) = (free_port(), closed_port());
     let build = |system_proxy_port: Option<u16>| {
         let options = Options {
             local_proxy: Some(proxy.clone()),
