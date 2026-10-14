@@ -67,7 +67,7 @@ pub(super) struct Client {
 impl Client {
     /// `trust_pem` replaces the system's roots (tests).
     pub(super) fn new(dial: Arc<dyn Dial>, trust_pem: Option<&str>) -> Self {
-        let tls = crate::tls::client(&[], trust_pem)
+        let tls = crate::tls::client(&[], trust_pem, None)
             .inspect_err(|e| tracing::warn!("rule set downloads have no TLS client: {e}"))
             .ok();
         Client { dial, tls }

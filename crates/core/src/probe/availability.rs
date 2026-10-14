@@ -3,7 +3,9 @@
 //! 64 KiB). Go fetched through the node's local proxy user; here the request
 //! goes through the node's outbound itself ([`Runtime::dial_tcp`]), which is
 //! where that user leads. Redirects are followed, as Go's client does; TLS
-//! is sail's (BoringSSL), checked against the system's roots.
+//! is sail's (BoringSSL), checked against the system's roots, with Chrome's
+//! ClientHello: Google's front ends closed connections that came with
+//! BoringSSL's own from some exits, though they answered curl there (#342).
 //!
 //! Each step that fails has its own result code: the dial (CONNECT_FAILED,
 //! TIMEOUT, or PROXY_REQUEST_FAILED when the outbound could not be used at
@@ -18,7 +20,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use chrono::Utc;
-use sail::transport::tls::BoringConnection;
+use sail::transport::tls::{BoringConnection, Fingerprint};
 use sail::transport::tls_stream::TlsStream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::Instant;
@@ -176,8 +178,8 @@ async fn get(
     if !tls {
         return exchange(stream, url, deadline).await;
     }
-    let client =
-        crate::tls::client(&["http/1.1"], trust_pem).map_err(|_| rc::PROXY_REQUEST_FAILED)?;
+    let client = crate::tls::client(&["http/1.1"], trust_pem, Some(Fingerprint::Chrome))
+        .map_err(|_| rc::PROXY_REQUEST_FAILED)?;
     let conn = client
         .connection(&server_name, None)
         .map_err(|e| match e.kind() {
@@ -248,6 +250,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         let mut chunk = [0u8; 4096];
         let n = stream.read(&mut chunk).await.map_err(|e| io_code(&e))?;
         if n == 0 {
+            tracing::info!("availability probe: closed before a whole response head");
             return Err(rc::CONNECTION_CLOSED);
         }
         buf.extend_from_slice(&chunk[..n]);
@@ -300,10 +303,14 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Writing the request or reading the answer failed: the connection broke
 /// (reset, closed without TLS's close_notify, an alert) before a whole
 /// response head came.
+/// A failed read or write of the exchange. The error itself is logged
+/// (never the target): the code alone does not tell a close from a reset
+/// or a TLS alert.
 fn io_code(error: &io::Error) -> &'static str {
     if error.kind() == io::ErrorKind::TimedOut {
         rc::TIMEOUT
     } else {
+        tracing::info!("availability probe: the connection failed: {error}");
         rc::CONNECTION_CLOSED
     }
 }
@@ -706,6 +713,35 @@ mod tests {
                 rc::CONNECTION_CLOSED
             );
         }
+    }
+
+    // Google's front ends closed, from some exits, connections that came
+    // with BoringSSL's own ClientHello (#342): the probe sends Chrome's,
+    // which offers X25519MLKEM768 (0x11ec) as Chrome does.
+    #[tokio::test]
+    async fn the_client_hello_is_chromes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hello = tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut hello = vec![0u8; 4096];
+            let n = tcp.read(&mut hello).await.unwrap();
+            hello.truncate(n);
+            hello
+        });
+        let runtime = runtime(Some(addr)).await;
+        let (got, _) = probe(&runtime, "https://127.0.0.1/", 2000).await.unwrap();
+        assert!(!got.success, "{got:?}");
+        let hello = tokio::time::timeout(BOUND, hello).await.unwrap().unwrap();
+        assert_eq!(hello.first(), Some(&0x16), "a TLS handshake record");
+        assert!(
+            hello.windows(2).any(|w| w == [0x11, 0xec]),
+            "no X25519MLKEM768 in the ClientHello"
+        );
+        assert!(
+            hello.windows(8).any(|w| w == b"http/1.1"),
+            "the ALPN is http/1.1"
+        );
     }
 
     // #342: Google's front end speaks TLS 1.3 and sends session tickets

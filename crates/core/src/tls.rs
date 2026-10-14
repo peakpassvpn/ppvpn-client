@@ -4,11 +4,16 @@
 
 use sail::config::model::CertificateStore;
 use sail::transport::tls::roots::Roots;
-use sail::transport::tls::TlsClient;
+use sail::transport::tls::{Fingerprint, TlsClient};
 
-/// A client offering `alpn`. `trust_pem` replaces the system's roots
-/// (tests). The error is for the log.
-pub(crate) fn client(alpn: &[&str], trust_pem: Option<&str>) -> Result<TlsClient, String> {
+/// A client offering `alpn`, with a browser's ClientHello when
+/// `fingerprint` names one (BoringSSL's own otherwise). `trust_pem`
+/// replaces the system's roots (tests). The error is for the log.
+pub(crate) fn client(
+    alpn: &[&str],
+    trust_pem: Option<&str>,
+    fingerprint: Option<Fingerprint>,
+) -> Result<TlsClient, String> {
     let store = if trust_pem.is_some() {
         CertificateStore::None
     } else {
@@ -16,7 +21,7 @@ pub(crate) fn client(alpn: &[&str], trust_pem: Option<&str>) -> Result<TlsClient
     };
     let alpn: Vec<String> = alpn.iter().map(|p| (*p).to_owned()).collect();
     Roots::of(store)
-        .and_then(|roots| TlsClient::new(&alpn, trust_pem, false, None, &roots))
+        .and_then(|roots| TlsClient::new(&alpn, trust_pem, false, fingerprint, &roots))
         .map_err(|e| format!("{e:#}"))
 }
 
