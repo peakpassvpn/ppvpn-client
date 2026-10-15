@@ -93,8 +93,10 @@ Without one they report `CORE_NOT_RUNNING` (exit 5, retryable: it works after `p
 report core's `PROFILE_NOT_APPLIED`.
 
 - `nodes` lists the nodes with the selected one marked `*`. A node name that starts with a flag emoji (the backend's
-  "🇺🇸洛杉矶家宽-…") shows the flag's two letters instead (`US 洛杉矶家宽-…`), because terminals draw flags at
-  unsteady widths; `--json` has the name unchanged.
+  "🇺🇸洛杉矶家宽 203.0.113.10 ①") shows the flag's two letters instead (`US 洛杉矶家宽 203.0.113.10 ①`),
+  because terminals draw flags at unsteady widths; `--json` has the name unchanged. Names are never cut, so a
+  node with an IPv6 address has a long one; the columns are separated by tabs. Commands take the node ID, not
+  the name.
 - `use <node-id>` selects the node of new connections; open connections stay where they are. `ingress pin`
   takes effect at once and turns failover off for that node; `ingress auto` turns it back on. Core does not
   persist these choices: the CLI saves them to `settings.json` only after core accepted them, and passes them
