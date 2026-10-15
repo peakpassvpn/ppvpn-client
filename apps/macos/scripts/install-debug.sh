@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build Debug PPVPN.app and run it from /Applications/PPVPN.app — the only
-# client path the privileged service accepts (service/ checks it strictly),
-# so enhanced mode can only be exercised from there.
+# Build Debug PPVPN.app and run it from /Applications/PPVPN.app. A release
+# service accepts only clients signed with the pinned certificate; a debug
+# service also accepts an ad-hoc signed app, from this path only
+# (crates/service/src/ipc.rs), so enhanced mode is exercised from here.
 #
 # Usage: apps/macos/scripts/install-debug.sh [-- env assignments...]
 #   e.g.  install-debug.sh -- PPVPN_AUTO_SIGN_IN=1

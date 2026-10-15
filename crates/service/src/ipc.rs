@@ -1013,8 +1013,9 @@ pub async fn run_ipc_server() -> Result<()> {
         UnixListener::bind(IPC_SOCKET_PATH).with_context(|| format!("bind {IPC_SOCKET_PATH}"))?;
 
     // The socket is connectable by local users, but every accepted connection
-    // is bound to the peer PID and must originate from the fixed PPVPN app
-    // executable path before it can obtain a short-lived HMAC session.
+    // is bound to the peer PID and must come from a process signed as PPVPN.app
+    // with the pinned certificate (macsign.rs) before it can obtain a
+    // short-lived HMAC session.
     set_socket_permissions(IPC_SOCKET_PATH);
 
     info!("IPC server listening on {IPC_SOCKET_PATH}");
@@ -1086,25 +1087,52 @@ fn prepare_macos_socket_directory() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32> {
-    use anyhow::{anyhow, Context};
-    use std::ffi::CStr;
+    use anyhow::anyhow;
     use std::os::fd::AsRawFd;
-    use std::path::Path;
 
-    let mut pid: libc::pid_t = 0;
-    let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // The audit token names the peer process itself (pid and pid version),
+    // so the signature checked is the one of the process that connected.
+    let mut token = [0u32; 8];
+    let mut length = std::mem::size_of_val(&token) as libc::socklen_t;
     let result = unsafe {
         libc::getsockopt(
             stream.as_raw_fd(),
             libc::SOL_LOCAL,
-            libc::LOCAL_PEERPID,
-            (&mut pid as *mut libc::pid_t).cast(),
+            libc::LOCAL_PEERTOKEN,
+            token.as_mut_ptr().cast(),
             &mut length,
         )
     };
-    if result != 0 || pid <= 0 {
+    let pid = token[5] as libc::pid_t;
+    if result != 0 || length as usize != std::mem::size_of_val(&token) || pid <= 0 {
         return Err(anyhow!("CLIENT_PID_UNAVAILABLE"));
     }
+    let bytes: Vec<u8> = token.iter().flat_map(|word| word.to_ne_bytes()).collect();
+    let requirement = crate::macsign::client_requirement(crate::macsign::pinned_cert_sha1())?;
+    match crate::macsign::check_process(&bytes, &requirement) {
+        Ok(()) => Ok(pid as u32),
+        // A debug service also takes an ad-hoc signed debug app, from the
+        // fixed path only (apps/macos/scripts/install-debug.sh).
+        Err(error) if cfg!(debug_assertions) => {
+            let path = macos_process_path(pid)?;
+            if !macos_client_path_allowed(std::path::Path::new(&path)) {
+                return Err(anyhow!("{error}; CLIENT_IMAGE_NOT_ALLOWED:{path}"));
+            }
+            log::warn!("debug build: accepting {path} without the pinned signature ({error})");
+            Ok(pid as u32)
+        }
+        Err(error) => Err(match macos_process_path(pid) {
+            Ok(path) => anyhow!("{error}:{path}"),
+            Err(_) => error,
+        }),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_path(pid: libc::pid_t) -> Result<String> {
+    use anyhow::{anyhow, Context};
+    use std::ffi::CStr;
+
     let mut buffer = vec![0i8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let written = unsafe {
         libc::proc_pidpath(
@@ -1116,13 +1144,10 @@ fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
     if written <= 0 {
         return Err(anyhow!("CLIENT_PROCESS_PATH_UNAVAILABLE"));
     }
-    let path = unsafe { CStr::from_ptr(buffer.as_ptr()) }
+    Ok(unsafe { CStr::from_ptr(buffer.as_ptr()) }
         .to_str()
-        .context("decode client process path")?;
-    if !macos_client_path_allowed(Path::new(path)) {
-        return Err(anyhow!("CLIENT_IMAGE_NOT_ALLOWED:{path}"));
-    }
-    Ok(pid as u32)
+        .context("decode client process path")?
+        .to_string())
 }
 
 #[cfg(any(target_os = "macos", test))]

@@ -86,6 +86,16 @@ if [[ -n "${MACOS_SIGNING_P12_BASE64:-}" ]]; then
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
   security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
   export PPVPN_CODESIGN_IDENTITY="PPVPN Code Signing"
+  # The service accepts only clients signed with the pinned certificate
+  # (crates/service/src/macsign.rs): a release signed with another one could
+  # not use enhanced mode.
+  pinned="$(tr -d '[:space:]' < crates/service/src/macos_client_cert.sha1 | tr 'A-F' 'a-f')"
+  signing="$(security find-certificate -c "$PPVPN_CODESIGN_IDENTITY" -Z "$keychain" \
+    | awk '/^SHA-1 hash:/ { print tolower($NF); exit }')"
+  if [[ -z "$signing" || "$signing" != "$pinned" ]]; then
+    echo "signing certificate SHA-1 ${signing:-<none>} is not the pinned $pinned (crates/service/src/macos_client_cert.sha1)" >&2
+    exit 5
+  fi
 else
   echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
 fi

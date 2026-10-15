@@ -2664,6 +2664,7 @@ name = "ppvpn-service"
 version = "0.6.1"
 dependencies = [
  "anyhow",
+ "core-foundation",
  "hex",
  "hmac",
  "libc",
@@ -2673,6 +2674,7 @@ dependencies = [
  "parking_lot",
  "ppvpn-core",
  "ppvpn-engine-host",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",

@@ -474,6 +474,7 @@ jobs:
           cargo test -p ppvpn-core --lib --locked -- hostipv6::darwin localdns::source probe::icmp runtime::sail_tests
           cargo test -p ppvpn-cli --lib --locked -- identity
           (cd crates/desktop && cargo test --lib --locked -- detect service sysproxy)
+          PPVPN_TEST_CODESIGN=1 cargo test -p ppvpn-service --bin ppvpn-service --locked -- macsign
       - name: macOS tests, the Keychain
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5
