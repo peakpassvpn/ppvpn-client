@@ -321,7 +321,8 @@ pub(crate) struct NetworkSnapshot {
 /// A change of network that sail acts on (its DNS cache cleared, the
 /// connections it affects reset: from sail 0.19 those bound to an interface
 /// or address that is gone, and those on the default route when it changed;
-/// a wake still resets all): the same publication sail's own reaction
+/// from 0.20 a wake resets none, or after a sleep of 2 minutes or more the
+/// idle carriers): the same publication sail's own reaction
 /// reads, so the Engine's NetworkChanged and sail's reset come from one
 /// decision (one monitor, #214). The Engine never calls sail's
 /// network_changed: sail's monitor is the only source.
