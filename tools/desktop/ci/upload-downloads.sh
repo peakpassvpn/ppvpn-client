@@ -14,6 +14,12 @@
 # Sparkle feed /api/v1/desktop/releases/<platform>/appcast.xml from it. Nothing is registered
 # with the backend: moving the pointers is the release.
 #
+# macOS also has a first-install package (.pkg) next to the DMG, which /download serves when
+# the pointer names it: install_file, install_length and install_sha256 in the release-meta,
+# install_path (its key) added to the pointer. All of them or none (the backend answers 503
+# to a partial set; none means the DMG), and only on macOS. The DMG stays in file/path: the
+# Sparkle feeds update from it.
+#
 #   upload-downloads.sh <release dir>           upload
 #   upload-downloads.sh --plan <release dir>    verify the files and print the keys; no bucket
 #   upload-downloads.sh --check <release dir>   with the bucket's keys, read only: the plan,
@@ -21,7 +27,7 @@
 #                                               names now; writes nothing (the rehearsal)
 #
 # <release dir> is the release's files in one directory (release.yml's artifact
-# release-files): the five installers and their release-meta-<platform>.json. Every installer
+# release-files): the five installers, the macOS packages and their release-meta-<platform>.json. Every installer
 # is checked against its release-meta before the bucket is touched. A release object is never
 # replaced: one already there with other content is refused before anything is uploaded, one
 # with the same content is kept (a run that failed half way can be run again). The pointers
@@ -62,6 +68,7 @@ sha256() { sha256sum "$1" | cut -d' ' -f1; }
 content_type() {
   case "$1" in
     *.dmg) echo "application/x-apple-diskimage" ;;
+    *.pkg) echo "application/octet-stream" ;;
     *.exe) echo "application/vnd.microsoft.portable-executable" ;;
     *.deb) echo "application/vnd.debian.binary-package" ;;
     *.rpm) echo "application/x-rpm" ;;
@@ -71,7 +78,7 @@ content_type() {
 }
 
 # --- 1. every platform's release-meta and installer, as the backend will check them ---------
-declare -A FILE=()
+declare -A FILE=() INSTALL=()
 for platform in "${PLATFORMS[@]}"; do
   meta="$DIR/release-meta-$platform.json"
   [[ -f "$meta" ]] || die "release-meta-$platform.json is missing"
@@ -95,6 +102,23 @@ for platform in "${PLATFORMS[@]}"; do
     *) [[ -n "$(field .ed_signature)" ]] || die "$platform: ed_signature is missing" ;;
   esac
   FILE[$platform]="$file"
+  # The first-install package: all three fields valid, or none; install_path is the upload's.
+  [[ -z "$(field .install_path)" ]] || die "$platform: install_path is set by this upload, not by the release-meta"
+  install_keys="$(jq -r '[keys[] | select(startswith("install_"))] | join(" ")' "$meta")"
+  if [[ -n "$install_keys" ]]; then
+    [[ "$platform" == macos-* ]] || die "$platform: install_* fields are for macOS only ($install_keys)"
+    [[ "$install_keys" == "install_file install_length install_sha256" ]] \
+      || die "$platform: install_* fields must be install_file, install_length and install_sha256 together, not: $install_keys"
+    install="$(field .install_file)"
+    [[ "$install" =~ ^[A-Za-z0-9._+~-]+\.pkg$ ]] || die "$platform: unexpected install_file: $install"
+    [[ -f "$DIR/$install" ]] || die "$platform: $install is missing"
+    jq -e '(.install_length | type) == "number" and (.install_sha256 | type) == "string"' "$meta" >/dev/null \
+      || die "$platform: install_length must be a number and install_sha256 a string"
+    [[ "$(field .install_sha256)" =~ ^[0-9a-f]{64}$ ]] || die "$platform: install_sha256 is not 64 hex characters"
+    [[ "$(field .install_length)" == "$(stat -c %s "$DIR/$install")" ]] || die "$platform: $install does not have the release-meta's install_length"
+    [[ "$(field .install_sha256)" == "$(sha256 "$DIR/$install")" ]] || die "$platform: $install does not have the release-meta's install_sha256"
+    INSTALL[$platform]="$install"
+  fi
 done
 
 # key <tab> local file, in upload order: the release objects of every platform.
@@ -102,11 +126,26 @@ PLAN="$(mktemp)" WORK="$(mktemp -d)"
 trap 'rm -rf "$PLAN" "$WORK"' EXIT
 for platform in "${PLATFORMS[@]}"; do
   printf '%s\t%s\n' "$RELEASES/${FILE[$platform]}" "$DIR/${FILE[$platform]}"
+  [[ -z "${INSTALL[$platform]:-}" ]] || printf '%s\t%s\n' "$RELEASES/${INSTALL[$platform]}" "$DIR/${INSTALL[$platform]}"
   printf '%s\t%s\n' "$RELEASES/release-meta-$platform.json" "$DIR/release-meta-$platform.json"
 done >"$PLAN"
 for platform in "${PLATFORMS[@]}"; do
-  jq --arg path "$RELEASES/${FILE[$platform]}" '. + {path: $path}' "$DIR/release-meta-$platform.json" \
-    >"$WORK/release-meta-$platform.json"
+  if [[ -n "${INSTALL[$platform]:-}" ]]; then
+    jq --arg path "$RELEASES/${FILE[$platform]}" --arg install "$RELEASES/${INSTALL[$platform]}" \
+      '. + {path: $path, install_path: $install}' "$DIR/release-meta-$platform.json"
+  else
+    jq --arg path "$RELEASES/${FILE[$platform]}" '. + {path: $path}' "$DIR/release-meta-$platform.json"
+  fi >"$WORK/release-meta-$platform.json"
+  # The pointer as the backend checks it: install_path, when there, is the
+  # install_file of this release's directory, as path is the file's.
+  pointer="$WORK/release-meta-$platform.json"
+  [[ "$(jq -r .path "$pointer")" == "$RELEASES/${FILE[$platform]}" ]] || die "$platform: the pointer's path is not $RELEASES/${FILE[$platform]}"
+  if [[ -n "${INSTALL[$platform]:-}" ]]; then
+    [[ "$(jq -r .install_path "$pointer")" == "$RELEASES/$(jq -r .install_file "$pointer")" ]] \
+      || die "$platform: the pointer's install_path is not $RELEASES/<install_file>"
+  else
+    [[ "$(jq '[keys[] | select(startswith("install_"))] | length' "$pointer")" == 0 ]] || die "$platform: the pointer has install_* fields"
+  fi
 done
 
 while IFS=$'\t' read -r key _; do

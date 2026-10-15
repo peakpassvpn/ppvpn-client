@@ -47,7 +47,8 @@
 - 最新版本的 macOS 和 Windows 安装包 `desktop/stable/<版本>/<构建号>/<文件>`：appcast 的 enclosure 和频道指针的
   `url` 指向这里，而不是 GitHub Release（经 Cloudflare 缓存；GitHub 的下载在一些网络下很慢）。文件就是 Release
   里那份（`site` 先按 SHA256SUMS 和 provenance 校验），Sparkle/WinSparkle 再校验 EdDSA 签名；Release 里的
-  资产不动，旧的下载地址照旧可用。每个版本约 145 MB（两个 DMG 加 Windows 安装包）；
+  资产不动，旧的下载地址照旧可用。每个版本约 145 MB（两个 DMG 加 Windows 安装包；macOS 的 .pkg 只用于首次安装，
+  不在更新站点上）；
 - `linux/`：apt 仓库（`linux/apt`，suite `stable`，保留最近 5 个版本的 deb）、dnf 仓库（`linux/rpm/stable`，
   rpm 本身从 GitHub Release 下载）、安装源设置包、公钥和 `linux/stable/latest.json`（Linux 应用的更新检查）；
 - 已停用的 dev 频道：`linux/dev/latest.json` 和 `desktop/dev/appcast-<平台>.xml` 是 stable 的副本，让以前装的
@@ -88,6 +89,13 @@ artifact `site` 保留三天，并在日志里打出上传的顺序和缓存设�
 
 - `clients/desktop/native/releases/<版本>/<构建号>/<安装包>` 和同目录的 `release-meta-<平台>.json`，不可变；
 - `clients/desktop/native/channels/stable/release-meta-<平台>.json`：指针，即 release-meta 加上 `path`（安装包的 key）。
+
+macOS 从 0.6.2 起另有首次安装用的 `PPVPN-<版本>-macos-<架构>.pkg`（与 DMG 同在 Release、SHA256SUMS 和 provenance 里）。
+它的 release-meta 里 `file`、`length`、`sha256`、`ed_signature` 仍是 DMG 的（Sparkle 更新用），另加
+`install_file`、`install_length`、`install_sha256`；上传时指针再加 `install_path`（`.pkg` 的 key，与 `path` 同一个
+`<版本>/<构建号>` 目录）。这四项要么都有且都对，要么都没有；只允许出现在 macOS 上。后端遇到不全或不对的一组会让整个
+指针 503（下载和旧版更新源一起停），所以 `upload-downloads.sh` 在 `--plan` 阶段就按同样的规则拒绝，演练和 PR 的测试
+都能发现。有这四项时 `/download` 给 `.pkg`，后端的旧版更新源仍指向 DMG。
 
 `downloads-deploy`（`tools/desktop/ci/upload-downloads.sh`）在 GitHub Release 发出之后，用同一批文件（artifact
 `release-files`）上传：先按 release-meta 核对每个安装包（长度、SHA-256，macOS 和 Windows 还要 `ed_signature`），

@@ -24,8 +24,12 @@
 # architecture and re-signed inside out.
 #
 # Output (dist/macos), <platform> = macos-arm64 | macos-x64:
-#   PPVPN-<version>-<platform>.dmg
-#   release-meta-<platform>.json   what the update site's feed and pointer are written from
+#   PPVPN-<version>-<platform>.dmg   Sparkle's updates and manual installs
+#   PPVPN-<version>-<platform>.pkg   first installs: Installer puts the app in
+#                                    /Applications (packaging/postinstall)
+#   release-meta-<platform>.json   what the update site's feed and pointer are written from;
+#                                  file/length/sha256/ed_signature are the DMG's,
+#                                  install_file/install_length/install_sha256 the pkg's
 set -euo pipefail
 
 ARCH="${1:-}"
@@ -111,15 +115,24 @@ done <<< "$BUNDLES"
 # and that certificate: a self-signed certificate has no Team ID, and the
 # default requirement would otherwise not carry across builds (keychain ACLs,
 # SMAppService, notification permission).
+# The service helpers get fixed identifiers (the linker's default carries a
+# hash): the app and ppvpn-service-install check them before running them as
+# root (MacPlatformHooks.swift, install.rs).
 sign() {
-  local req=()
+  local req=() id preserve=identifier,entitlements identifier=()
+  case "$1" in
+    */Contents/MacOS/ppvpn-service | */Contents/MacOS/ppvpn-service-install | */Contents/MacOS/ppvpn-service-uninstall)
+      id="com.peakpassvpn.ppvpn.${1##*/ppvpn-}"
+      identifier=(--identifier "$id")
+      preserve=entitlements
+      ;;
+    *) id="$(codesign -dv "$1" 2>&1 | sed -n 's/^Identifier=//p')" ;;
+  esac
   if [[ -n "$CERT_SHA1" ]]; then
-    local id
-    id="$(codesign -dv "$1" 2>&1 | sed -n 's/^Identifier=//p')"
     req=(--requirements "=designated => identifier \"$id\" and certificate leaf = H\"$CERT_SHA1\"")
   fi
   codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp=none \
-    --preserve-metadata=identifier,entitlements ${req[@]+"${req[@]}"} "$1"
+    --preserve-metadata=$preserve ${identifier[@]+"${identifier[@]}"} ${req[@]+"${req[@]}"} "$1"
 }
 # Loose helpers first (the service helpers, Sparkle's Autoupdate, ...), then bundles.
 while IFS= read -r file; do
@@ -137,6 +150,13 @@ if [[ -n "$CERT_SHA1" ]]; then
       || { echo "error: $bundle lacks the pinned designated requirement" >&2; exit 1; }
   done
 fi
+for helper in service service-install service-uninstall; do
+  file="$APP/Contents/MacOS/ppvpn-$helper"
+  [[ "$(codesign -dv "$file" 2>&1 | sed -n 's/^Identifier=//p')" == "com.peakpassvpn.ppvpn.$helper" ]] \
+    || { echo "error: $file is not signed as com.peakpassvpn.ppvpn.$helper" >&2; exit 1; }
+  [[ -z "$CERT_SHA1" ]] || codesign -dr - "$file" 2>&1 | grep -qi "certificate leaf = H\"$CERT_SHA1\"" \
+    || { echo "error: $file lacks the pinned designated requirement" >&2; exit 1; }
+done
 while IFS= read -r file; do
   [[ "$(lipo -archs "$file")" == "$ARCH" ]] || { echo "error: $file is not $ARCH only" >&2; exit 1; }
 done < "$MACHO"
@@ -167,6 +187,27 @@ hdiutil create -volname "PPVPN" -srcfolder "$STAGE" -fs HFS+ -format UDZO -image
 codesign --force --sign - "$DMG"
 echo "wrote $DMG"
 
+# The first-install package: the same app, installed only to /Applications
+# (not relocated to another copy of the bundle id Installer finds, such as
+# the mounted DMG), with packaging/postinstall and nothing else. Unsigned:
+# Gatekeeper asks once for it, and the app it installs has no quarantine.
+PKG="$OUT_DIR/PPVPN-$VERSION-$PLATFORM.pkg"
+PKG_STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE" "$MACHO" "$PKG_STAGE"' EXIT
+mkdir "$PKG_STAGE/root" "$PKG_STAGE/scripts"
+ditto "$APP" "$PKG_STAGE/root/PPVPN.app"
+install -m 755 "$APP_DIR/packaging/postinstall" "$PKG_STAGE/scripts/postinstall"
+pkgbuild --analyze --root "$PKG_STAGE/root" "$PKG_STAGE/components.plist" >/dev/null
+plutil -replace 0.BundleIsRelocatable -bool NO "$PKG_STAGE/components.plist"
+plutil -replace 0.BundleIsVersionChecked -bool NO "$PKG_STAGE/components.plist"
+rm -f "$PKG"
+pkgbuild --root "$PKG_STAGE/root" --component-plist "$PKG_STAGE/components.plist" \
+  --scripts "$PKG_STAGE/scripts" --install-location /Applications \
+  --identifier com.peakpassvpn.ppvpn.desktop.pkg --version "$BUILD" "$PKG" >/dev/null
+pkgutil --payload-files "$PKG" | grep -qx './PPVPN.app/Contents/MacOS/PPVPN' \
+  || { echo "error: $PKG does not install PPVPN.app" >&2; exit 1; }
+echo "wrote $PKG"
+
 ED_SIGNATURE=""
 if [[ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ]]; then
   SIGN_UPDATE="$(find "$BUILD_DIR/SourcePackages/artifacts" -path '*/bin/sign_update' -type f | head -1)"
@@ -192,6 +233,9 @@ json.dump({
     "length": $(stat -f %z "$DMG"),
     "sha256": "$(shasum -a 256 "$DMG" | cut -d' ' -f1)",
     "ed_signature": "$ED_SIGNATURE" or None,
+    "install_file": "$(basename "$PKG")",
+    "install_length": $(stat -f %z "$PKG"),
+    "install_sha256": "$(shasum -a 256 "$PKG" | cut -d' ' -f1)",
     "min_os": "$MIN_OS",
     "published_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
 }, open(sys.argv[1], "w"), indent=2)

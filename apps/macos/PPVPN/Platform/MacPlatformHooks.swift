@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 import PPVPNAppLogic
 import PPVPNClient
 
@@ -52,7 +53,7 @@ final class MacPlatformHooks: PlatformHooks, @unchecked Sendable {
     }
 
     func installPrivilegedService() throws {
-        try runHelperAsAdmin("ppvpn-service-install")
+        try runHelperAsAdmin("ppvpn-service-install", alongside: ["ppvpn-service"])
     }
 
     func uninstallPrivilegedService() throws {
@@ -61,13 +62,40 @@ final class MacPlatformHooks: PlatformHooks, @unchecked Sendable {
 
     /// Runs a bundled helper from Contents/MacOS as root behind the standard
     /// administrator password prompt.
-    private func runHelperAsAdmin(_ name: String) throws {
-        guard let helper = Bundle.main.executableURL?.deletingLastPathComponent().appending(path: name),
-              FileManager.default.isExecutableFile(atPath: helper.path)
-        else { throw PlatformError.Failed(message: "MACOS_PRIVILEGED_HELPER_MISSING:\(name)") }
+    ///
+    /// The bundle belongs to the user, so in a release the root shell first
+    /// copies the helper (and the files it installs) into a directory only
+    /// root can write, checks the copy with /usr/bin/codesign against the
+    /// helper's identifier and the certificate that signed this app, and
+    /// runs the copy: a helper changed on disk is never run as root.
+    /// ppvpn-service-install checks the service binary the same way
+    /// (crates/service/src/install.rs).
+    private func runHelperAsAdmin(_ name: String, alongside: [String] = []) throws {
+        guard let directory = Bundle.main.executableURL?.deletingLastPathComponent() else {
+            throw PlatformError.Failed(message: "MACOS_PRIVILEGED_HELPER_MISSING:\(name)")
+        }
+        for file in [name] + alongside where !FileManager.default.isExecutableFile(atPath: directory.appending(path: file).path) {
+            throw PlatformError.Failed(message: "MACOS_PRIVILEGED_HELPER_MISSING:\(file)")
+        }
+        func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
-        let shellQuoted = "'" + helper.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        let appleLiteral = "\"" + shellQuoted
+        #if DEBUG
+        // Ad-hoc signed: nothing to check against.
+        let script = quoted(directory.appending(path: name).path)
+        #else
+        guard let leaf = Self.signingCertificateSHA1() else {
+            throw PlatformError.Failed(message: "MACOS_PRIVILEGED_HELPER_UNSIGNED")
+        }
+        let identifier = "com.peakpassvpn.ppvpn." + name.replacingOccurrences(of: "ppvpn-", with: "")
+        let requirement = "=identifier \"\(identifier)\" and certificate leaf = H\"\(leaf)\""
+        let copies = ([name] + alongside)
+            .map { "/bin/cp \(quoted(directory.appending(path: $0).path)) \"$d/\"" }
+            .joined(separator: " && ")
+        let script = "d=$(/usr/bin/mktemp -d /tmp/ppvpn-helper.XXXXXX) || exit 1; "
+            + "trap '/bin/rm -rf \"$d\"' EXIT; "
+            + "\(copies) && /usr/bin/codesign --verify --strict --test-requirement \(quoted(requirement)) \"$d/\(name)\" && \"$d/\(name)\""
+        #endif
+        let appleLiteral = "\"" + script
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"") + "\""
 
@@ -85,5 +113,24 @@ final class MacPlatformHooks: PlatformHooks, @unchecked Sendable {
         // -128 is AppleScript's userCanceledErr.
         if message.contains("-128") { throw PlatformError.Cancelled }
         throw PlatformError.Failed(message: "MACOS_ADMIN_AUTHORIZATION_FAILED:\(message.trimmingCharacters(in: .whitespacesAndNewlines))")
+    }
+
+    /// The SHA-1 of the certificate this app is signed with, from its
+    /// designated requirement (`certificate leaf = H"…"`, which
+    /// package-dmg.sh pins to crates/service/src/macos_client_cert.sha1).
+    private static func signingCertificateSHA1() -> String? {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var requirement: SecRequirement?
+        var text: CFString?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement,
+              SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text
+        else { return nil }
+        let designated = text as String
+        guard let match = designated.range(of: #"certificate leaf = H"[0-9a-fA-F]{40}""#, options: .regularExpression)
+        else { return nil }
+        return String(designated[match].dropFirst(#"certificate leaf = H""#.count).dropLast()).lowercased()
     }
 }

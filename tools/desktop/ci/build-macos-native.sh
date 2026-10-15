@@ -133,6 +133,6 @@ for arch in $MACOS_ARCHS; do
   fi
   [[ "$feed" == "$expected" ]] || { echo "feed URL mismatch ($arch): $feed" >&2; exit 4; }
 
-  cp "dist/macos/"*"-$platform.dmg" "dist/macos/release-meta-$platform.json" "$staging_dir/"
+  cp "dist/macos/"*"-$platform.dmg" "dist/macos/"*"-$platform.pkg" "dist/macos/release-meta-$platform.json" "$staging_dir/"
 done
 ls -l "$staging_dir"

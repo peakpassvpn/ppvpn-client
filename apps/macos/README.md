@@ -35,13 +35,13 @@ apps/macos/scripts/build-swift-linux.sh
 swift test --package-path apps/macos/AppLogic
 ```
 
-## Release DMG
+## Release DMG and package
 
-One DMG per architecture (no universal build):
+One DMG and one first-install package per architecture (no universal build):
 
 ```bash
-apps/macos/scripts/package-dmg.sh arm64    # → dist/macos/PPVPN-<version>-macos-arm64.dmg
-apps/macos/scripts/package-dmg.sh x86_64   # → dist/macos/PPVPN-<version>-macos-x64.dmg
+apps/macos/scripts/package-dmg.sh arm64    # → dist/macos/PPVPN-<version>-macos-arm64.{dmg,pkg}
+apps/macos/scripts/package-dmg.sh x86_64   # → dist/macos/PPVPN-<version>-macos-x64.{dmg,pkg}
 ```
 
 Runs `bootstrap.sh --release` (skip with `SKIP_BOOTSTRAP=1`), builds Release for
@@ -51,8 +51,12 @@ are staged universal) and re-signs inside out, then checks each binary's
 architecture, that the app and the push agent link the single framework in
 `Contents/Frameworks`, and the signature. It ad-hoc signs the DMG and writes
 `release-meta-macos-<arm64|x64>.json` (schema 1: platform, channel, version,
-build, file, length, sha256, ed_signature, min_os, published_at), from which
-the update site's feed is written. `SPARKLE_PRIVATE_KEY_FILE` fills `ed_signature`;
+build, file, length, sha256, ed_signature, min_os, published_at, all of the
+DMG, plus install_file, install_length and install_sha256 of the package),
+from which the update site's feed is written. The package (`pkgbuild`,
+unsigned) installs only to /Applications, is not relocatable, and runs
+`packaging/postinstall`, which hands the bundle to the console user so that
+Sparkle updates it without an administrator prompt (docs/security.md). `SPARKLE_PRIVATE_KEY_FILE` fills `ed_signature`;
 `PPVPN_BUILD_NUMBER` (CI run number) makes `CFBundleVersion` = `<version>.<n>`.
 With `PPVPN_UPDATE_SITE` and a channel set, each build's Sparkle feed is
 `<site>/desktop/<channel>/appcast-macos-<arm64|x64>.xml`, so each
@@ -87,10 +91,13 @@ embedded frameworks, so the app and the agent carry
 `com.apple.security.cs.disable-library-validation` (TODO: drop it with a
 Developer ID).
 
-Installing: a downloaded copy is blocked twice, first the DMG and then the
-app. Each time, dismiss the alert, open **System Settings → Privacy &
-Security** and click **Open Anyway** (then confirm with the password). Run
-the app from /Applications, not from the mounted DMG. Do not strip the
+Installing: open the downloaded .pkg; Gatekeeper blocks it once. Dismiss
+the alert, open **System Settings → Privacy & Security**, click **Open
+Anyway**, and Installer puts the app in /Applications. The installed app has
+no quarantine attribute, opens without asking and is not translocated. From
+the DMG instead, drag the app to Applications in Finder and approve it on
+first open; a copy made by a program (ditto, a Finder Apple Event) needs a
+second approval and runs translocated. Do not strip the
 quarantine attribute instead: AMFI still rejects the self-signed chain
 (-423), and without the Gatekeeper approval the app never gets past
 `_dyld_start`. Updates installed by Sparkle keep the same signature and open
