@@ -1575,7 +1575,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -2822,8 +2822,7 @@ checksum = "95067976aca6421a523e491fce939a3e65249bac4b977adee0ee9771568e8aa3"
 [[package]]
 name = "quinn"
 version = "0.11.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4051e23e9185c255a7e33ef59cdbca87a22d359052eecd22fc6b901fb37d9d11"
+source = "git+https://github.com/peakpassvpn/quinn.git?rev=f814623b47c3435cf71b7570780c1dcf136a9b5c#f814623b47c3435cf71b7570780c1dcf136a9b5c"
 dependencies = [
  "bytes",
  "cfg_aliases",
@@ -2860,7 +2859,7 @@ dependencies = [
 [[package]]
 name = "quinn-proto"
 version = "0.11.19"
-source = "git+https://github.com/peakpassvpn/quinn.git?rev=ac0737da7704788407daab3c5e6abd3dca7ae55e#ac0737da7704788407daab3c5e6abd3dca7ae55e"
+source = "git+https://github.com/peakpassvpn/quinn.git?rev=f814623b47c3435cf71b7570780c1dcf136a9b5c#f814623b47c3435cf71b7570780c1dcf136a9b5c"
 dependencies = [
  "bytes",
  "getrandom 0.4.3",
@@ -2881,8 +2880,7 @@ dependencies = [
 [[package]]
 name = "quinn-udp"
 version = "0.5.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af66907df18639dcf4db56ca65490cabc4b27a97dbadd96f2926cca73298f016"
+source = "git+https://github.com/peakpassvpn/quinn.git?rev=f814623b47c3435cf71b7570780c1dcf136a9b5c#f814623b47c3435cf71b7570780c1dcf136a9b5c"
 dependencies = [
  "cfg_aliases",
  "libc",
@@ -3241,8 +3239,8 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail"
-version = "0.19.2"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.19.2#cfde846a9e18c33a75b2eb99a81e2b25dcc03bde"
+version = "0.20.0"
+source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.20.0#14411c7ab9464efee05f5f7a9fb3520eda12c2e9"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3332,7 +3330,7 @@ dependencies = [
 [[package]]
 name = "sail-netstack"
 version = "0.1.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.19.2#cfde846a9e18c33a75b2eb99a81e2b25dcc03bde"
+source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.20.0#14411c7ab9464efee05f5f7a9fb3520eda12c2e9"
 dependencies = [
  "foldhash",
 ]
@@ -3811,7 +3809,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
