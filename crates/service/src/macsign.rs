@@ -219,6 +219,33 @@ mod tests {
         }
     }
 
+    struct SearchList(Vec<String>);
+
+    impl SearchList {
+        fn with(keychains: &[&Path]) -> Self {
+            let original: Vec<String> =
+                run(Command::new("security").args(["list-keychains", "-d", "user"]))
+                    .lines()
+                    .map(|line| line.trim().trim_matches('"').to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+            run(Command::new("security")
+                .args(["list-keychains", "-d", "user", "-s"])
+                .args(keychains)
+                .args(&original));
+            SearchList(original)
+        }
+    }
+
+    impl Drop for SearchList {
+        fn drop(&mut self) {
+            let _ = Command::new("security")
+                .args(["list-keychains", "-d", "user", "-s"])
+                .args(&self.0)
+                .status();
+        }
+    }
+
     impl Drop for Signer {
         fn drop(&mut self) {
             let _ = Command::new("security")
@@ -247,6 +274,9 @@ mod tests {
 
         let ours = Signer::new(&dir, "ours");
         let other = Signer::new(&dir, "other");
+        // codesign finds an identity only in the search list (as the
+        // release build does it); the runner's list comes back afterwards.
+        let _search_list = SearchList::with(&[&ours.keychain, &other.keychain]);
         assert_ne!(ours.sha1, other.sha1);
         let requirement = client_requirement(&ours.sha1).unwrap();
 
@@ -276,7 +306,7 @@ mod tests {
         let error = check_file(&binary, &requirement).unwrap_err().to_string();
         assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
 
-        drop((ours, other));
+        drop((_search_list, ours, other));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
