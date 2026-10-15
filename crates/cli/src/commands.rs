@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::account;
 use crate::buildinfo::{self, BuildConfig, Profile};
-use crate::cli::{Cli, Command, IngressCommand, ProxyCommand};
+use crate::cli::{Cli, Command, IngressCommand, ProxyCommand, TeamCommand};
 use crate::client::{self, Client};
 use crate::control::Call;
 use crate::daemon::Daemon;
@@ -83,6 +83,7 @@ pub fn run(cli: &Cli, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()>
         Command::Login { no_browser } => login(env, hooks, out, *no_browser),
         Command::Account => account_command(env, hooks, out),
         Command::Logout => logout(env, hooks, out),
+        Command::Team { command } => team_command(command.as_ref(), env, hooks, out),
         Command::Start { foreground } => start(env, hooks, out, *foreground, false),
         Command::Restart { foreground } => start(env, hooks, out, *foreground, true),
         Command::Stop => stop(env, out),
@@ -541,13 +542,125 @@ fn account_command(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
             .account(&token)
             .await
             .map_err(|e| account::api_error(&e))?;
+        // The team decides the subscription and the nodes. Best effort: a
+        // disabled team cannot list its teams.
+        let team = auth
+            .api()
+            .teams(&token)
+            .await
+            .ok()
+            .and_then(|teams| teams.into_iter().find(|team| team.is_default));
         let mut value = json!({"ok": true, "account": {"id": user.id, "name": user.name}});
         if let Some(email) = &user.email {
             value["account"]["email"] = json!(email);
         }
-        out.success(&value, &format!("{} ({})", user.name, user.id))
-            .map_err(output_error)
+        value["team"] = team.as_ref().map_or(Value::Null, account::team_json);
+        let mut human = format!("{} ({})", user.name, user.id);
+        if let Some(team) = &team {
+            human.push_str(&format!("\nTeam: {}", account::team_label(team)));
+        }
+        out.success(&value, &human).map_err(output_error)
     })
+}
+
+fn team_command(
+    command: Option<&TeamCommand>,
+    env: &Env,
+    hooks: &Hooks,
+    out: &mut Printer,
+) -> Result<()> {
+    let config = build_config(env, hooks)?;
+    let auth = auth(&config, env, hooks);
+    runtime()?.block_on(async {
+        let token = account::access_token(&auth).await?;
+        let teams = auth.api().teams(&token).await;
+        let Some(TeamCommand::Use { team: wanted }) = command else {
+            let teams = teams.map_err(|e| account::api_error(&e))?;
+            let value = json!({
+                "ok": true,
+                "teams": teams.iter().map(account::team_json).collect::<Vec<_>>(),
+            });
+            return out
+                .success(&value, &teams_text(&teams))
+                .map_err(output_error);
+        };
+        let target = match &teams {
+            Ok(teams) => {
+                let target = account::find_team(teams, wanted)?;
+                if !target.is_active() {
+                    return Err(CliError::new(
+                        Exit::Auth,
+                        "TEAM_DISABLED",
+                        format!("team {} is disabled", account::team_label(target)),
+                    ));
+                }
+                if target.is_default {
+                    let value =
+                        json!({"ok": true, "team": account::team_json(target), "changed": false});
+                    let human = format!("Already on team {}.", account::team_label(target));
+                    return out.success(&value, &human).map_err(output_error);
+                }
+                target.id.clone()
+            }
+            // A disabled team may not list the others; a team ID can still
+            // be tried.
+            Err(err) if err.is_team_disabled() => wanted.clone(),
+            Err(err) => return Err(account::api_error(err)),
+        };
+        let switched = auth
+            .api()
+            .switch_team(&token, &target)
+            .await
+            .map_err(|e| account::api_error(&e))?;
+        let team = ppvpn_account::api::TeamEntry {
+            id: switched.id,
+            name: switched.name,
+            is_personal: switched.is_personal,
+            is_default: true,
+            status: None,
+        };
+        // The running proxy keeps the old team's profile until it restarts.
+        let running = Paths::resolve(env)
+            .ok()
+            .and_then(|paths| client::running_daemon(&paths))
+            .is_some();
+        let value = json!({
+            "ok": true,
+            "team": account::team_json(&team),
+            "changed": true,
+            "restart_required": running,
+        });
+        let mut human = format!("Switched to team {}.", account::team_label(&team));
+        if running {
+            human.push_str(" Run ppvpn restart to use its nodes.");
+        }
+        out.success(&value, &human).map_err(output_error)
+    })
+}
+
+/// One team per line, the current one marked `*`.
+fn teams_text(teams: &[ppvpn_account::api::TeamEntry]) -> String {
+    if teams.is_empty() {
+        return "No teams.".to_string();
+    }
+    teams
+        .iter()
+        .map(|team| {
+            let mut line = format!(
+                "{} {}",
+                if team.is_default { "*" } else { " " },
+                account::team_label(team)
+            );
+            if team.is_personal {
+                line.push_str(" personal");
+            }
+            if !team.is_active() {
+                line.push_str(&format!(" {}", team.status.as_deref().unwrap_or("")));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn logout(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {

@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use ppvpn_account::api::{Api, ApiConfig, ApiError, SubscriptionProblem, PATH_PROXY_PROFILE};
+use ppvpn_account::api::{
+    Api, ApiConfig, ApiError, SubscriptionProblem, TeamEntry, PATH_PROXY_PROFILE,
+};
 use ppvpn_account::auth::{Auth, AuthConfig, AuthError, CredentialStore};
 use ppvpn_account::session::with_bearer;
 
@@ -186,38 +188,102 @@ pub async fn download_profile(auth: &Auth) -> Result<Vec<u8>> {
     let token = access_token(auth).await?;
     // The token may have been revoked or rotated elsewhere: refresh once,
     // then give up with the login error.
-    with_bearer(
-        token,
+    let result = with_bearer(
+        token.clone(),
         |token| async move { auth.api().proxy_profile(&token).await },
         |_| async move {
             let _guard = auth.lock().await;
             auth.refresh_or_clear()
                 .await
                 .map(|access| access.token)
-                .map_err(|e| auth_error(&e))
+                .map_err(|e| Err(auth_error(&e)))
         },
-        |e| profile_error(&e),
+        Ok,
     )
-    .await
+    .await;
+    match result {
+        Ok(profile) => Ok(profile),
+        Err(Ok(err)) => Err(profile_error(auth, &token, &err).await),
+        Err(Err(err)) => Err(err),
+    }
 }
 
-/// A refused profile download, with the backend's own explanation when it
-/// says more than the CLI's message (a subscription being refunded, nodes
-/// being set up).
-fn profile_error(err: &ApiError) -> CliError {
+/// A refused profile download, with the backend's own words and the team
+/// the login is on: the backend serves the profile of the account's current
+/// team, which can be changed elsewhere (the dashboard, the desktop app).
+async fn profile_error(auth: &Auth, token: &str, err: &ApiError) -> CliError {
     let mut cli = api_error(err);
-    if let ApiError::Status {
-        status,
-        detail: Some(detail),
-        ..
-    } = err
-    {
-        let refused = status.is_client_error() && status.as_u16() != 401 && status.as_u16() != 429;
-        if refused && !cli.message.to_lowercase().contains(&detail.to_lowercase()) {
-            cli.message = format!("{} (backend: {detail})", cli.message);
+    let ApiError::Status { status, detail, .. } = err else {
+        return cli;
+    };
+    if status.as_u16() == 401 || status.as_u16() == 429 || status.is_server_error() {
+        return cli;
+    }
+    let mut notes = Vec::new();
+    if let Some(detail) = detail.as_deref() {
+        if !cli.message.to_lowercase().contains(&detail.to_lowercase()) {
+            notes.push(format!("backend: {detail}"));
         }
     }
+    // Best effort: without the list the error stands as it is.
+    let team = auth.api().teams(token).await.ok().and_then(|teams| {
+        teams
+            .into_iter()
+            .find(|team| team.is_default)
+            .map(|team| team_label(&team))
+    });
+    if let Some(team) = &team {
+        notes.push(format!("team: {team}"));
+    }
+    if !notes.is_empty() {
+        cli.message = format!("{} ({})", cli.message, notes.join("; "));
+    }
+    if team.is_some() {
+        cli.message.push_str("; ppvpn team lists your teams");
+    }
     cli
+}
+
+/// `name (id)`, or the ID alone for a team without a name.
+pub fn team_label(team: &TeamEntry) -> String {
+    if team.name.is_empty() {
+        team.id.clone()
+    } else {
+        format!("{} ({})", team.name, team.id)
+    }
+}
+
+/// A team as `--json` shows it.
+pub fn team_json(team: &TeamEntry) -> serde_json::Value {
+    serde_json::json!({
+        "id": team.id,
+        "name": team.name,
+        "personal": team.is_personal,
+        "current": team.is_default,
+        "status": team.status.as_deref().unwrap_or("active"),
+    })
+}
+
+/// The team `wanted` names: an exact ID, else an exact name that only one
+/// team has.
+pub fn find_team<'a>(teams: &'a [TeamEntry], wanted: &str) -> Result<&'a TeamEntry> {
+    if let Some(team) = teams.iter().find(|team| team.id == wanted) {
+        return Ok(team);
+    }
+    let named: Vec<_> = teams.iter().filter(|team| team.name == wanted).collect();
+    match named[..] {
+        [team] => Ok(team),
+        [] => Err(CliError::new(
+            Exit::Argument,
+            "TEAM_NOT_FOUND",
+            format!("no team has the ID or name {wanted:?}; ppvpn team lists them"),
+        )),
+        _ => Err(CliError::new(
+            Exit::Argument,
+            "TEAM_AMBIGUOUS",
+            format!("several teams are named {wanted:?}; use the team ID"),
+        )),
+    }
 }
 
 #[cfg(test)]
