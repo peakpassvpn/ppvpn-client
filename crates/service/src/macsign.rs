@@ -118,8 +118,7 @@ fn require_runtime(code: *const std::ffi::c_void) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_file, client_requirement, pinned_cert_sha1, requirement, CLIENT_IDENTIFIER,
-        SERVICE_IDENTIFIER,
+        check_file, client_requirement, pinned_cert_sha1, CLIENT_IDENTIFIER, SERVICE_IDENTIFIER,
     };
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -320,7 +319,7 @@ mod tests {
         assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
 
         // The service binary, as ppvpn-service-install checks it.
-        let service = requirement(SERVICE_IDENTIFIER, &ours.sha1).unwrap();
+        let service = super::requirement(SERVICE_IDENTIFIER, &ours.sha1).unwrap();
         let service_binary = dir.join("service");
         ours.sign(&binary, &service_binary, SERVICE_IDENTIFIER, true);
         check_file(&service_binary, &service)
