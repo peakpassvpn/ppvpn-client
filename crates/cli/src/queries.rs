@@ -63,7 +63,7 @@ pub fn nodes(env: &Env, out: &mut Printer) -> Result<()> {
 }
 
 /// A node name for a terminal: a leading flag emoji (a pair of regional
-/// indicators, as the backend names nodes "🇺🇸洛杉矶家宽-203.0.113.10")
+/// indicators, as the backend names nodes "🇺🇸洛杉矶家宽 203.0.113.10 ①")
 /// becomes its two letters, since terminals draw flags at unsteady widths
 /// and the columns would not line up. Only the leading pair, and only when
 /// a name is left after it; `--json` keeps the name as core gives it.
@@ -559,6 +559,15 @@ mod tests {
             "US 洛杉矶家宽-203.0.113.10"
         );
         assert_eq!(display_name("🇯🇵 东京-203.0.113.20"), "JP 东京-203.0.113.20");
+        // The backend's current form: region, class, the full IP and a number.
+        assert_eq!(
+            display_name("🇺🇸洛杉矶家宽 203.0.113.10 ①"),
+            "US 洛杉矶家宽 203.0.113.10 ①"
+        );
+        assert_eq!(
+            display_name("🇯🇵东京机房 2001:db8:85a3::8a2e:370:7334 ②"),
+            "JP 东京机房 2001:db8:85a3::8a2e:370:7334 ②"
+        );
         // Only the leading pair.
         assert_eq!(display_name("🇺🇸🇯🇵 中转"), "US 🇯🇵 中转");
         // A name that is only a flag, or has none, stays as it is.
