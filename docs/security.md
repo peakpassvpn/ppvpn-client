@@ -27,6 +27,13 @@ Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任
   ppvpn-core 0.4.0 在用户目录下写入的“仅 SYSTEM + Administrators”ACL 会由该用户（作为 owner，拥有 WRITE_DAC）自动改回，
   改回成功时在核心诊断日志记一行 info（路径、原 DACL 与新 DACL 的 SDDL，不含文件内容）；
   无法修改时报错并在日志中给出路径和处理方法（管理员执行 `icacls "<路径>" /reset /t /c` 或删除该目录），不会删除任何文件。
+- macOS 特权服务按代码签名认客户端，不按路径：用 socket 对端的 audit token（`LOCAL_PEERTOKEN`）取到连接进程本身，
+  要求它满足 `identifier "com.peakpassvpn.ppvpn.desktop" and certificate leaf = H"<SHA-1>"`，并启用 hardened runtime。
+  我们的证书是自签名、没有 Team ID，所以钉的是证书本身的 SHA-1，不认主题或通用名（谁都能签出同名的 “PPVPN Code Signing”）。
+  钉的哈希只在 `crates/service/src/macos_client_cert.sha1` 一处；发布构建导入签名证书后与它比对，不一致即失败。
+  因此从 DMG 直接运行或被系统移位（translocation）的同一份应用也能连接。debug 构建的服务在签名不符时仍接受
+  `/Applications/PPVPN.app` 下 ad-hoc 签名的 debug 应用（并记一条 warn），发布构建没有这条退路。
+  换签名证书时在同一版里改这个文件：它属于服务的 build id，新版应用首次增强连接时会替换旧服务（需管理员授权）。
 - 每次启动轮换至少 256 bit 随机会话密钥；Unix 交换文件为 `0600`。
 - Bearer 比较使用恒定时间比较。所有调用都要发送认证，事件流也不例外。
 - 生产宿主应使用 `--exit-on-stdin-close` 的父进程存活管道，并在启动超时、异常退出时回收子进程。
@@ -275,4 +282,5 @@ CLI `render` 会对已知敏感 JSON 键和代理 URL 认证信息脱敏，但�
 - 崩溃采集器排除 Profile、session secret 文件、`local-proxies.json` 和 API 原始 body/header。
 - 密钥文件、socket、Named Pipe 名称不放入全局可读目录。
 - API 客户端对认证失败重新握手，不复用上一次进程的 secret。
+- 换 macOS 签名证书（`MACOS_SIGNING_P12_BASE64`）时同时更新 `crates/service/src/macos_client_cert.sha1`，否则发布构建失败。
 - 发布前执行 race 测试、跨平台构建和校验和验证，详见 [构建与发布](release.md)。

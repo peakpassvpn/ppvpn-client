@@ -11,6 +11,8 @@ mod core;
 mod ipc;
 mod logfile;
 mod macdns;
+#[cfg(target_os = "macos")]
+mod macsign;
 mod protocol;
 mod watch;
 
