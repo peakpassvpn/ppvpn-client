@@ -466,10 +466,11 @@ jobs:
             lipo "$f" -verify_arch x86_64
           done
       # The Keychain store against the runner's login keychain has its own
-      # timeout: a keychain prompt would wait for a person.
+      # timeout: a keychain prompt would wait for a person. These four
+      # compile sail anew after a sail upgrade (no cache): over 20 minutes.
       - name: macOS tests
         if: steps.scope.outputs.code == 'true'
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           cargo test -p ppvpn-core --lib --locked -- hostipv6::darwin localdns::source probe::icmp runtime::sail_tests
           cargo test -p ppvpn-cli --lib --locked -- identity
