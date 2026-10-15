@@ -11,6 +11,10 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var canCheckForUpdates = false
     let isConfigured: Bool
 
+    /// Runs right before Sparkle replaces the app (AppDelegate: the push
+    /// agent steps aside).
+    var beforeInstall: (() -> Void)?
+
     private let feedURL: String?
     private var controller: SPUStandardUpdaterController!
 
@@ -41,5 +45,9 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     nonisolated func feedURLString(for updater: SPUUpdater) -> String? {
         MainActor.assumeIsolated { feedURL }
+    }
+
+    nonisolated func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        MainActor.assumeIsolated { beforeInstall?() }
     }
 }

@@ -49,6 +49,32 @@ final class PushAgentService {
         }
     }
 
+    /// Called right before Sparkle replaces the app. launchd kills an agent
+    /// whose bundle is replaced under it (Launch Constraint Violation) and
+    /// keeps the job half-dead for about a minute; unregistering first lets
+    /// the agent exit cleanly, and the new build registers it at launch.
+    /// If the install does not happen after all, the agent is registered
+    /// again.
+    func prepareForUpdate() {
+        guard service.status == .enabled else { return }
+        checkTask?.cancel()
+        do {
+            try service.unregister()
+            UserDefaults.standard.removeObject(forKey: Self.registeredBuildKey)
+            clientLog.info("push agent: unregistered for the update")
+        } catch {
+            clientLog.error("push agent: unregister before the update failed: \(error.localizedDescription)")
+            return
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(120))
+            guard let self else { return }
+            clientLog.info("push agent: still running after the update started; registering again")
+            self.register()
+            self.scheduleCheck()
+        }
+    }
+
     private static var isInstalled: Bool {
         let path = Bundle.main.bundlePath
         let home = FileManager.default.homeDirectoryForCurrentUser.path

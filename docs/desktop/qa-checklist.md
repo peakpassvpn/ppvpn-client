@@ -34,9 +34,10 @@ TUN 或路由出问题、机器连不上时能自己恢复；确认还能登录�
 
 - [ ] 首次打开：系统拦截未识别的开发者，经「系统设置 → 隐私与安全性 → 仍要打开」后能正常启动。
 - [ ] 应用内更新（Sparkle）：更新安装后直接打开，不需要再次放行。
-- [ ] Sparkle 更新后推送助手恢复：更新时系统会结束旧的 PPVPN Agent（日志里有 `Launch Constraint Violation`，
-      可能留下一份"PPVPN Agent"崩溃报告），这是预期的；新版启动后约 1 分钟内
+- [ ] Sparkle 更新时推送助手先退出：安装前应用注销 PPVPN Agent（日志 `push agent: unregistered for the update`），
+      系统日志里没有 `Launch Constraint Violation`，也没有新的"PPVPN Agent"崩溃报告；新版启动后几秒内
       `launchctl print gui/<uid>/com.peakpassvpn.ppvpn.desktop.agent` 显示 running，推送日志里重新出现 `push agent: Running`。
+      从 0.6.1 及更早版本更新时旧版还没有这一步，仍会出现一次上述终止，约 1 分钟后恢复。
 - [ ] Sparkle 更新后替换特权服务：从已装过服务的上一版（例如 0.6.0 build 133）用 Sparkle 更新到新版，
       新版的 `crates/service`、`crates/engine-host`、`crates/core` 或 `Cargo.lock` 有改动。更新后服务不会被
       替换，打开应用和标准模式连接也不会。第一次增强模式连接前：弹出管理员密码框；

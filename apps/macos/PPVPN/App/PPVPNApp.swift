@@ -116,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["PPVPN_PREVIEW"] != nil { return }
         #endif
         pushAgent.start()
+        Updater.shared.beforeInstall = { [pushAgent] in pushAgent.prepareForUpdate() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
