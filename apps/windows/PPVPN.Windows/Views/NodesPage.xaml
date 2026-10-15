@@ -64,7 +64,8 @@
                         VerticalAlignment="Center"
                         FontWeight="{x:Bind local:Ui.Weight(IsCurrent), Mode=OneWay}"
                         Text="{x:Bind Name}"
-                        TextTrimming="CharacterEllipsis" />
+                        TextTrimming="CharacterEllipsis"
+                        ToolTipService.ToolTip="{x:Bind Name}" />
                 </StackPanel>
                 <Border
                     Grid.Column="2"
@@ -310,7 +311,7 @@
                     <Image Source="{x:Bind local:Ui.Flag(ViewModel.SelectedItem.CountryCode), Mode=OneWay}" Stretch="UniformToFill" />
                 </Border>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
-                    <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedNodeProxyTitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedNodeProxyTitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ViewModel.SelectedNodeProxyTitle, Mode=OneWay}" />
                     <!-- User and password on their own lines: the user name is long (<prefix>-<node id>)
                          and one line pushed the password's buttons under HTTP / SOCKS5 in narrow windows. -->
                     <!-- Left-aligned, so the star column is as wide as the name but never wider than the card. -->

@@ -60,9 +60,10 @@ struct NodesView: View {
                     Text(node.name)
                         .fontWeight(node.id == model.snapshot.selectedNodeId ? .semibold : .regular)
                         .lineLimit(1)
+                        .help(node.name)
                 }
             }
-            .width(min: 96, ideal: 130)
+            .width(min: 96, ideal: 200)
             TableColumn(tr("colTier")) { node in
                 if let label = node.entryLabel, !label.isEmpty {
                     TierTag(text: label)
@@ -224,6 +225,7 @@ private struct SelectedNodeBar: View {
             HStack(spacing: 8) {
                 FlagView(countryCode: node?.exitCountryCode)
                 Text(tr("nodeProxyT", ["n": node?.name ?? "—"])).fontWeight(.semibold)
+                    .lineLimit(1).help(node?.name ?? "")
             }
             if let proxy {
                 HStack(spacing: 16) {

@@ -28,7 +28,7 @@
                     CornerRadius="2">
                     <Image Source="{x:Bind local:Ui.Flag(CountryCode)}" Stretch="UniformToFill" />
                 </Border>
-                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Name}" />
                 <TextBlock
                     Grid.Column="2"
                     VerticalAlignment="Center"
@@ -148,8 +148,11 @@
                                         </Border>
                                         <TextBlock
                                             VerticalAlignment="Center"
+                                            MaxWidth="360"
                                             FontWeight="SemiBold"
-                                            Text="{x:Bind ViewModel.CurrentNodeName, Mode=OneWay}" />
+                                            Text="{x:Bind ViewModel.CurrentNodeName, Mode=OneWay}"
+                                            TextTrimming="CharacterEllipsis"
+                                            ToolTipService.ToolTip="{x:Bind ViewModel.CurrentNodeName, Mode=OneWay}" />
                                         <TextBlock
                                             VerticalAlignment="Center"
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"

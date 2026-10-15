@@ -100,7 +100,7 @@ private struct ConnectionCard: View {
                 HStack(spacing: 6) {
                     if let node = model.selectedNode {
                         FlagView(countryCode: node.exitCountryCode)
-                        Text(node.name).fontWeight(.semibold)
+                        Text(node.name).fontWeight(.semibold).lineLimit(1).help(node.name)
                         if !presentation.detail.isEmpty {
                             Text("· \(presentation.detail)").foregroundStyle(.secondary).lineLimit(1)
                         }

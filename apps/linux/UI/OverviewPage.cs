@@ -162,7 +162,9 @@ public static class OverviewPage
             detailFlag.SetVisible(SetFlag(detailFlag, vm.CurrentNodeName.Length > 0 ? vm.CurrentNodeCountryCode : null));
             if (vm.CurrentNodeName.Length > 0) parts.Add(vm.CurrentNodeName);
             if (vm.ConnectionDetail.Length > 0) parts.Add(vm.ConnectionDetail);
-            detail.SetText(string.Join(" · ", parts));
+            var detailText = string.Join(" · ", parts);
+            detail.SetText(detailText);
+            detail.SetTooltipText(detailText);
             detailLine.SetVisible(parts.Count > 0);
 
             connect.Set(vm.ConnectSwitch == SwitchVisual.On);
