@@ -34,6 +34,22 @@ Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任
   因此从 DMG 直接运行或被系统移位（translocation）的同一份应用也能连接。debug 构建的服务在签名不符时仍接受
   `/Applications/PPVPN.app` 下 ad-hoc 签名的 debug 应用（并记一条 warn），发布构建没有这条退路。
   换签名证书时在同一版里改这个文件：它属于服务的 build id，新版应用首次增强连接时会替换旧服务（需管理员授权）。
+- macOS 的应用包属于用户（拖进「应用程序」的安装如此，.pkg 安装也由 postinstall 交给用户，见下），用户身份的代码
+  能改动包里的文件。所以以 root 运行的东西都先核对签名：
+  - 应用请求管理员授权时，root 的 shell 先把 `ppvpn-service-install`/`ppvpn-service-uninstall`（安装时连同
+    `ppvpn-service`）复制到只有 root 可写的临时目录，用系统的 `/usr/bin/codesign --verify --strict --test-requirement`
+    核对副本满足 `identifier "com.peakpassvpn.ppvpn.service-install"`（或 `…service-uninstall`）`and certificate leaf = H"<SHA-1>"`，
+    再运行这个副本（`MacPlatformHooks.swift`）。SHA-1 取自应用自身的指定要求，即打包时钉住的那张证书。
+  - `ppvpn-service-install` 在停掉旧服务之前，以及把 root 所有的暂存副本换上去之前，各按
+    `identifier "com.peakpassvpn.ppvpn.service" and certificate leaf = H"<SHA-1>"` 核对一次服务程序，
+    SHA-1 来自 `macos_client_cert.sha1`；不满足就拒绝，旧服务保持原样（`install.rs`）。
+  - 三个服务程序在打包时用固定的标识签名（`package-dmg.sh`），不再是链接器带哈希的默认标识。debug 构建不做这些检查。
+  这挡住的是只改了包里文件的情况；能替换整个应用并重新签名的代码本来就能自己弹出管理员授权，不在这道防线之内。
+- macOS 首次安装用的 `.pkg` 只装 `/Applications/PPVPN.app`（不可重定位，不会装到别处同标识的副本上），
+  唯一的脚本是 `apps/macos/packaging/postinstall`：用 `stat -f %Su /dev/console` 取当前控制台用户，
+  `chown -R <用户>:admin /Applications/PPVPN.app`（绝对路径，不跟随符号链接，没有 `-H`/`-L`）。
+  控制台用户是 root、loginwindow 或取不到时什么都不做，退出码总是 0。这样应用包的所有者和拖进去安装时一样，
+  Sparkle 能原地更新，不用每次要管理员密码；代价就是上一条所说的用户可写，由签名核对兜住。
 - 每次启动轮换至少 256 bit 随机会话密钥；Unix 交换文件为 `0600`。
 - Bearer 比较使用恒定时间比较。所有调用都要发送认证，事件流也不例外。
 - 生产宿主应使用 `--exit-on-stdin-close` 的父进程存活管道，并在启动超时、异常退出时回收子进程。

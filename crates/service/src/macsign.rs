@@ -6,6 +6,11 @@
 //! anyone can make a certificate with the same common name. The hash lives in
 //! macos_client_cert.sha1 only; the release build refuses a signing
 //! certificate that does not match it (tools/desktop/ci/build-macos-native.sh).
+//!
+//! ppvpn-service-install checks the service binary against the same pin
+//! before it copies it to root (src/install.rs).
+// Both binaries include this module and use different parts of it.
+#![allow(dead_code)]
 
 use anyhow::{anyhow, Result};
 use core_foundation::base::{CFType, TCFType};
@@ -20,6 +25,8 @@ use std::str::FromStr;
 
 /// Bundle identifier of PPVPN.app (apps/macos/project.yml).
 pub const CLIENT_IDENTIFIER: &str = "com.peakpassvpn.ppvpn.desktop";
+/// The service binary's signing identifier (apps/macos/scripts/package-dmg.sh).
+pub const SERVICE_IDENTIFIER: &str = "com.peakpassvpn.ppvpn.service";
 
 const PINNED_CERT_SHA1: &str = include_str!("macos_client_cert.sha1");
 
@@ -46,11 +53,15 @@ pub fn pinned_cert_sha1() -> &'static str {
 /// The requirement a client must meet: our identifier, signed by the pinned
 /// certificate.
 pub fn client_requirement(cert_sha1: &str) -> Result<SecRequirement> {
+    requirement(CLIENT_IDENTIFIER, cert_sha1)
+}
+
+/// `identifier`, signed by the certificate `cert_sha1`.
+pub fn requirement(identifier: &str, cert_sha1: &str) -> Result<SecRequirement> {
     if cert_sha1.len() != 40 || !cert_sha1.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(anyhow!("CLIENT_CERT_PIN_INVALID"));
     }
-    let text =
-        format!("identifier \"{CLIENT_IDENTIFIER}\" and certificate leaf = H\"{cert_sha1}\"");
+    let text = format!("identifier \"{identifier}\" and certificate leaf = H\"{cert_sha1}\"");
     SecRequirement::from_str(&text).map_err(|e| anyhow!("CLIENT_REQUIREMENT_INVALID:{e}"))
 }
 
@@ -68,8 +79,7 @@ pub fn check_process(audit_token: &[u8], requirement: &SecRequirement) -> Result
     require_runtime(code.as_concrete_TypeRef() as *const std::ffi::c_void)
 }
 
-/// The same check against a file, for tests and diagnostics.
-#[cfg(test)]
+/// The same check against a file on disk.
 pub fn check_file(path: &std::path::Path, requirement: &SecRequirement) -> Result<()> {
     let url = core_foundation::url::CFURL::from_path(path, false)
         .ok_or_else(|| anyhow!("CLIENT_PATH_INVALID"))?;
@@ -107,7 +117,10 @@ fn require_runtime(code: *const std::ffi::c_void) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_file, client_requirement, pinned_cert_sha1, CLIENT_IDENTIFIER};
+    use super::{
+        check_file, client_requirement, pinned_cert_sha1, requirement, CLIENT_IDENTIFIER,
+        SERVICE_IDENTIFIER,
+    };
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -304,6 +317,21 @@ mod tests {
         assert_eq!(error, "CLIENT_NOT_HARDENED_RUNTIME");
 
         let error = check_file(&binary, &requirement).unwrap_err().to_string();
+        assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
+
+        // The service binary, as ppvpn-service-install checks it.
+        let service = requirement(SERVICE_IDENTIFIER, &ours.sha1).unwrap();
+        let service_binary = dir.join("service");
+        ours.sign(&binary, &service_binary, SERVICE_IDENTIFIER, true);
+        check_file(&service_binary, &service)
+            .expect("the pinned certificate, the service's identifier");
+        assert!(check_file(&service_binary, &requirement).is_err());
+        assert!(check_file(&good, &service).is_err());
+        let other_service = dir.join("other-service");
+        other.sign(&binary, &other_service, SERVICE_IDENTIFIER, true);
+        let error = check_file(&other_service, &service)
+            .unwrap_err()
+            .to_string();
         assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
 
         drop((_search_list, ours, other));

@@ -11,6 +11,9 @@
 //! `osascript ... with administrator privileges`, on Linux via `pkexec`, so
 //! the system password dialog appears.
 
+#[cfg(target_os = "macos")]
+mod macsign;
+
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn main() {
     eprintln!("install-service supports only Windows, macOS and Linux");
@@ -250,6 +253,23 @@ fn main() -> Result<(), anyhow::Error> {
     .find(|p| p.exists())
     .ok_or_else(|| anyhow!("ppvpn-service binary not found next to {}", exe.display()))?;
 
+    // The app bundle belongs to the user (a drag install, or the pkg's
+    // postinstall), so the binary about to run as root must be signed with
+    // the pinned certificate: checked here, before the running service is
+    // touched, and again on the root-owned copy, before it replaces the old
+    // one (the user could swap the file in between). A debug build installs
+    // the ad-hoc signed debug service.
+    let check_service = |path: &Path| -> Result<(), anyhow::Error> {
+        if cfg!(debug_assertions) {
+            return Ok(());
+        }
+        let requirement =
+            macsign::requirement(macsign::SERVICE_IDENTIFIER, macsign::pinned_cert_sha1())?;
+        macsign::check_file(path, &requirement)
+            .with_context(|| format!("{} is not the signed PPVPN service", path.display()))
+    };
+    check_service(&src_bin)?;
+
     let macos_dir = format!("{BUNDLE_PATH}/Contents/MacOS");
     let target_bin = format!("{macos_dir}/ppvpn-service");
     let info_plist = format!("{BUNDLE_PATH}/Contents/Info.plist");
@@ -262,7 +282,7 @@ fn main() -> Result<(), anyhow::Error> {
     // fail its code signature check and be SIGKILLed with its routes up. A
     // new inode leaves it untouched.
     fs::create_dir_all(&macos_dir).with_context(|| format!("mkdir {macos_dir}"))?;
-    replace_file(&src_bin, Path::new(&target_bin), 0o544)?;
+    replace_file(&src_bin, Path::new(&target_bin), 0o544, &check_service)?;
     fs::write(&info_plist, INFO_PLIST).with_context(|| format!("write {info_plist}"))?;
 
     // The service's and the engine's logs (and launchd's stdout / stderr
@@ -472,6 +492,7 @@ fn main() -> Result<(), anyhow::Error> {
         &src_bin,
         &Path::new(INSTALL_DIR).join("ppvpn-service"),
         0o755,
+        &|_| Ok(()),
     )?;
     run("chown", &["-R", "root:root", INSTALL_DIR])?;
 
@@ -510,10 +531,12 @@ fn run(cmd: &str, args: &[&str]) -> Result<(), anyhow::Error> {
 /// to it, synced, then renamed over `target`. A process still executing the
 /// old file keeps its (unchanged) inode.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+/// `check` sees the staged copy before it replaces `target`.
 fn replace_file(
     src: &std::path::Path,
     target: &std::path::Path,
     mode: u32,
+    check: &dyn Fn(&std::path::Path) -> Result<(), anyhow::Error>,
 ) -> Result<(), anyhow::Error> {
     use anyhow::{anyhow, Context};
     use std::fs::{self, File};
@@ -537,6 +560,10 @@ fn replace_file(
         output
             .sync_all()
             .with_context(|| format!("sync {}", staging.display()))?;
+    }
+    if let Err(error) = check(&staging) {
+        let _ = fs::remove_file(&staging);
+        return Err(error);
     }
     fs::rename(&staging, target).with_context(|| format!("install {}", target.display()))?;
     File::open(dir)
@@ -567,7 +594,7 @@ mod tests {
         std::fs::write(&src, b"new").unwrap();
         std::fs::write(&target, b"old").unwrap();
         let before = std::fs::metadata(&target).unwrap().ino();
-        super::replace_file(&src, &target, 0o544).unwrap();
+        super::replace_file(&src, &target, 0o544, &|_| Ok(())).unwrap();
         let after = std::fs::metadata(&target).unwrap();
         assert_ne!(after.ino(), before);
         assert_eq!(std::fs::read(&target).unwrap(), b"new");

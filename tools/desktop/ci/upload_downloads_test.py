@@ -248,6 +248,82 @@ class UploadDownloads(unittest.TestCase):
                 for name, text in originals.items():
                     (self.release / name).write_text(text)
 
+    def add_packages(self):
+        """The first-install packages of a release from 0.6.2 on, in both macOS metas."""
+        names = {}
+        for platform in ("macos-arm64", "macos-x64"):
+            name = PLATFORMS[platform].replace(".dmg", ".pkg")
+            content = f"package of {platform}".encode()
+            (self.release / name).write_bytes(content)
+            self.write_meta(platform, install_file=name, install_length=len(content),
+                            install_sha256=hashlib.sha256(content).hexdigest())
+            names[platform] = name
+        return names
+
+    def test_the_macos_packages_go_up_with_their_install_path(self):
+        names = self.add_packages()
+        plan = self.run_script("--plan")
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.assertIn(f"release  {RELEASES}/{names['macos-x64']}", plan.stdout.splitlines())
+        self.assertEqual(len(plan.stdout.splitlines()), 17)
+
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for platform, name in names.items():
+            source = json.loads((self.release / f"release-meta-{platform}.json").read_text())
+            pointer = json.loads((self.bucket / "objects" / POINTERS / f"release-meta-{platform}.json").read_text())
+            # The DMG stays in file/path (the Sparkle feeds); the package is install_*.
+            self.assertEqual(pointer, {
+                **source,
+                "path": f"{RELEASES}/{PLATFORMS[platform]}",
+                "install_path": f"{RELEASES}/{name}",
+            })
+            self.assertEqual((self.bucket / "objects" / RELEASES / name).read_bytes(), (self.release / name).read_bytes())
+        for platform in ("windows-x64", "linux-x64-deb", "linux-x64-rpm"):
+            pointer = json.loads((self.bucket / "objects" / POINTERS / f"release-meta-{platform}.json").read_text())
+            self.assertFalse([key for key in pointer if key.startswith("install_")], platform)
+        puts = self.calls("put-object")
+        self.assertTrue(all(key.startswith(RELEASES) for key in puts[:12]), puts)
+        self.assertTrue(all(key.startswith(POINTERS) for key in puts[12:]), puts)
+
+    def test_install_fields_are_all_or_none_and_macos_only(self):
+        names = self.add_packages()
+        package = self.release / names["macos-arm64"]
+        cases = {
+            # Partial: the backend would answer 503 for the whole pointer.
+            "must be install_file, install_length and install_sha256 together":
+                lambda: self.write_meta("macos-arm64", install_sha256=None) or self.drop("macos-arm64", "install_sha256"),
+            "install_path is set by this upload": lambda: self.write_meta("macos-arm64", install_path=f"{RELEASES}/x.pkg"),
+            "install_length must be a number": lambda: self.write_meta("macos-x64", install_length=str(package.stat().st_size)),
+            "install_sha256 is not 64 hex": lambda: self.write_meta("macos-arm64", install_sha256="0" * 63),
+            "does not have the release-meta's install_sha256": lambda: self.write_meta("macos-arm64", install_sha256="0" * 64),
+            "does not have the release-meta's install_length": lambda: self.write_meta("macos-arm64", install_length=1),
+            "unexpected install_file": lambda: self.write_meta("macos-arm64", install_file="../x.pkg"),
+            "PPVPN-0.6.0-macos-arm64.dmg.pkg is missing": lambda: self.write_meta("macos-arm64", install_file="PPVPN-0.6.0-macos-arm64.dmg.pkg"),
+            # macOS only.
+            "windows-x64: install_* fields are for macOS only":
+                lambda: self.write_meta("windows-x64", install_file=names["macos-arm64"], install_length=package.stat().st_size,
+                                        install_sha256=hashlib.sha256(package.read_bytes()).hexdigest()),
+            "linux-x64-deb: install_* fields are for macOS only": lambda: self.write_meta("linux-x64-deb", install_file="x.pkg"),
+        }
+        originals = {p.name: p.read_text() for p in self.release.glob("release-meta-*.json")}
+        for message, change in cases.items():
+            with self.subTest(message):
+                change()
+                for args in (("--plan",), ()):
+                    result = self.run_script(*args)
+                    self.assertNotEqual(result.returncode, 0, args)
+                    self.assertIn(message, result.stderr)
+                    self.assertEqual(self.objects(), [])
+                for name, text in originals.items():
+                    (self.release / name).write_text(text)
+
+    def drop(self, name, key):
+        path = self.release / f"release-meta-{name}.json"
+        meta = json.loads(path.read_text())
+        del meta[key]
+        path.write_text(json.dumps(meta, indent=2))
+
     def test_only_a_numbered_stable_build_is_published(self):
         for env, message in (
             ({"CHANNEL": "dev"}, "only the stable channel"),

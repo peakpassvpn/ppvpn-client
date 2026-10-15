@@ -1,0 +1,13 @@
+#!/bin/sh
+# postinstall of PPVPN-<version>-<platform>.pkg (apps/macos/scripts/package-dmg.sh).
+# Installer leaves /Applications/PPVPN.app owned by root; Sparkle could then
+# only update it behind an administrator prompt. Hand the bundle to the user
+# at the console, which is what dragging it from the DMG gives. Nothing else:
+# one absolute path, symbolic links not followed (no -H, -L), and a missing
+# console user (root, loginwindow) leaves it as Installer made it.
+user=$(/usr/bin/stat -f %Su /dev/console)
+case "$user" in
+  "" | root | loginwindow | _mbsetupuser) exit 0 ;;
+esac
+/usr/sbin/chown -R "$user:admin" /Applications/PPVPN.app || echo "PPVPN: could not hand the app to $user" >&2
+exit 0
