@@ -913,6 +913,25 @@ impl Client {
         self.enhanced.network_changed();
     }
 
+    /// Tell the client the system is about to sleep
+    /// (NSWorkspace.willSleepNotification, PBT_APMSUSPEND, logind
+    /// PrepareForSleep(true)). The cores' timed checks and updates wait until
+    /// [`Client::system_did_wake`]; a wake that never comes is assumed a
+    /// minute after the system is awake again. Best effort, returns within a
+    /// few seconds, safe in any state.
+    pub async fn system_will_sleep(&self) {
+        self.tell_cores_sleep(true).await;
+    }
+
+    /// Tell the client the system woke (NSWorkspace.didWakeNotification,
+    /// PBT_APMRESUMEAUTOMATIC, logind PrepareForSleep(false)). After a sleep
+    /// of 2 minutes or more the cores close their idle connections and test
+    /// the lines again; connections in use stay. Best effort, safe in any
+    /// state, also without a sleep before it.
+    pub async fn system_did_wake(&self) {
+        self.tell_cores_sleep(false).await;
+    }
+
     /// Release the enhanced-mode session and stop the standard-mode core;
     /// call before the app quits. Blocks for at most ~10 seconds. Enhanced
     /// mode is not resumed on the next launch.

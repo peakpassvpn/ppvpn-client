@@ -30,6 +30,7 @@ public sealed class FfiClientBackend : IClientBackend
     public string RoutingRulesUrl() => _client.RoutingRulesUrl();
 
     public void NetworkChanged() => _client.NetworkChanged();
+    public Task SystemSleep(bool asleep) => asleep ? _client.SystemWillSleep() : _client.SystemDidWake();
 
     public Task<InboxPage> Notifications(uint page, uint pageSize) => _client.Notifications(page, pageSize);
     public Task MarkNotificationRead(ulong id) => _client.MarkNotificationRead(id);

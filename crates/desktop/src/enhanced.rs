@@ -1099,6 +1099,26 @@ impl Enhanced {
             .map_err(|error| error.into_client_error(ErrorCode::ConnectFailed))
     }
 
+    /// Tells the enhanced-mode core, while it is on, that the system goes to
+    /// sleep (`asleep`) or woke. Best effort and without the operation lock:
+    /// the system does not wait. A service before 0.6.3 does not know it.
+    pub(crate) async fn tell_sleep(&self, asleep: bool) {
+        let machine = self.inner.with_data(|data| data.machine.clone());
+        if machine.phase != ConnectionPhase::On {
+            return;
+        }
+        let Some(session) = machine.session() else {
+            return;
+        };
+        let core = ServiceCoreTransport {
+            service: self.inner.service.clone(),
+            session,
+        };
+        if let Err(error) = core_ipc::tell_sleep(&core, asleep).await {
+            tracing::info!(asleep, "enhanced core: sleep not told ({})", error.detail());
+        }
+    }
+
     /// Pins (or unpins) one node on the enhanced-mode core while it is on.
     pub(crate) async fn pin_ingress_live(&self, node_id: &str, endpoint_key: Option<&str>) {
         let machine = self.inner.with_data(|data| data.machine.clone());

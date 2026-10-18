@@ -190,6 +190,13 @@ public interface IClientBackend : IDisposable
     void NetworkChanged();
 
     /// <summary>
+    /// The system is about to sleep (true) or woke (false): the cores' timed checks wait while it
+    /// sleeps, and after a long sleep they close idle connections. Best effort, any state; returns
+    /// within a few seconds.
+    /// </summary>
+    Task SystemSleep(bool asleep);
+
+    /// <summary>
     /// Release the enhanced-mode session and stop the standard core; call before the app quits.
     /// The native call blocks for up to ~10 s, so it runs on a thread-pool thread.
     /// </summary>

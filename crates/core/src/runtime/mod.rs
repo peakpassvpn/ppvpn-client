@@ -454,6 +454,13 @@ pub(crate) trait Runtime: Send + Sync + 'static {
     /// a start or a reload; macOS only, empty elsewhere and while not
     /// running.
     fn replaced_routes(&self) -> Vec<String>;
+
+    /// The host says the system goes to sleep; from the first, sail leaves
+    /// its own detection of sleeps to the host for this run. An error while
+    /// not running.
+    fn sleep(&self) -> Result<(), RuntimeError>;
+    /// The host says the system woke. An error while not running.
+    fn wake(&self) -> Result<(), RuntimeError>;
 }
 
 /// An inbound's tag in sing-box JSON: `tag`, else its `type`.

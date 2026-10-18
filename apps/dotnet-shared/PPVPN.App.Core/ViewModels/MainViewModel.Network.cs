@@ -27,6 +27,23 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// The system is about to sleep (<paramref name="asleep"/>) or woke; platforms call it from
+    /// their power events, from any thread. The cores hear of it at once (host-integration 4.7).
+    /// </summary>
+    public async Task OnSystemSleep(bool asleep)
+    {
+        _log.Info(asleep ? "system: going to sleep" : "system: woke");
+        try
+        {
+            await Backend.SystemSleep(asleep).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            _log.Warn($"system sleep: {e.Message}");
+        }
+    }
+
     void NotifyNetworkChanged()
     {
         lock (_networkGate)

@@ -117,6 +117,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         pushAgent.start()
         Updater.shared.beforeInstall = { [pushAgent] in pushAgent.prepareForUpdate() }
+        observeSleep()
+    }
+
+    /// The system's sleep and wake go to the cores (host-integration 4.7).
+    private func observeSleep() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        observers.append(workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in await AppModel.live.backend.systemWillSleep() }
+        })
+        observers.append(workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in await AppModel.live.backend.systemDidWake() }
+        })
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

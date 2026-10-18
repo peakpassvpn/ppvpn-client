@@ -192,6 +192,7 @@ public sealed class FakeClientBackend : IClientBackend
     public string RoutingRulesUrl() => SiteUrl("/dashboard/routing-rules");
 
     public void NetworkChanged() { }
+    public Task SystemSleep(bool asleep) => Task.CompletedTask;
 
     string SiteUrl(string path) =>
         Uri.TryCreate(_config.ApiBase.Trim(), UriKind.Absolute, out var api)

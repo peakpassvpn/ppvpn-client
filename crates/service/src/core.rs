@@ -776,6 +776,9 @@ const ALLOWED_PATHS: &[&str] = &[
     "/v1/get-local-proxy-credential",
     "/v1/get-traffic",
     "/v1/get-connections",
+    // The system's sleep and wake, as the app hears them (4.7).
+    "/v1/sleep",
+    "/v1/wake",
 ];
 
 /// Upper bound for one Core API call. Status-type calls are answered from
@@ -784,9 +787,12 @@ const ALLOWED_PATHS: &[&str] = &[
 /// crates/desktop/src/core_ipc.rs).
 fn call_timeout(path: &str, body: &Value) -> Duration {
     match path {
-        "/v1/get-version" | "/v1/get-status" | "/v1/get-traffic" | "/v1/get-selected-node" => {
-            Duration::from_secs(2)
-        }
+        "/v1/get-version"
+        | "/v1/get-status"
+        | "/v1/get-traffic"
+        | "/v1/get-selected-node"
+        | "/v1/sleep"
+        | "/v1/wake" => Duration::from_secs(2),
         "/v1/list-nodes"
         | "/v1/select-node"
         | "/v1/get-connections"
@@ -1770,6 +1776,7 @@ pub(crate) mod tests {
     #[test]
     fn clients_may_pin_an_ingress_but_not_reach_the_rest_of_the_core_api() {
         assert!(ALLOWED_PATHS.contains(&"/v1/pin-ingress"));
+        assert!(ALLOWED_PATHS.contains(&"/v1/sleep") && ALLOWED_PATHS.contains(&"/v1/wake"));
         assert!(!ALLOWED_PATHS.contains(&"/v1/set-system-proxy"));
     }
 }

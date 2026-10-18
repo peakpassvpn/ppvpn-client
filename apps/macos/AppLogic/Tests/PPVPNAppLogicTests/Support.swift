@@ -172,6 +172,8 @@ final class StubBackend: ClientBackend {
     func dismissClearedIngressPins() { calls.append("dismissClearedPins") }
     func dismissLocalProxyCredentialsReset() { calls.append("dismissProxyReset") }
     func networkChanged() { calls.append("networkChanged") }
+    func systemWillSleep() async { calls.append("willSleep") }
+    func systemDidWake() async { calls.append("didWake") }
     /// What the system check finds (an admin may have installed the service).
     var serviceOnSystem = false
     func refreshServiceInstalled() async -> Bool {

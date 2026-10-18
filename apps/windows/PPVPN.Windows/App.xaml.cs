@@ -14,6 +14,7 @@ public partial class App : Application
     MainWindow? _window;
     MessageCenterWindow? _messages;
     TrayIconHost? _tray;
+    SystemSleep? _sleep;
     bool _quitting;
     DispatcherQueueTimer? _updateQuitTimer;
     PushAgentAutostart? _pushAgent;
@@ -83,6 +84,8 @@ public partial class App : Application
         // Interfaces, addresses and connectivity (our own TUN adapter included): the view model debounces.
         System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, _) => ViewModel.OnNetworkChanged();
         System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged += (_, _) => ViewModel.OnNetworkChanged();
+        // Suspend and resume go to the cores at once (no debounce).
+        _sleep = SystemSleep.Start(ViewModel.OnSystemSleep, log.Warn);
         log.Info(AppNotifications.IsRegistered
             ? $"notifications registered as {AppNotifications.Aumid}"
             : $"notification clicks unavailable: {AppNotifications.RegistrationError}");
@@ -183,6 +186,8 @@ public partial class App : Application
         if (_quitting) return;
         _tray?.Dispose();
         _tray = null;
+        _sleep?.Dispose();
+        _sleep = null;
         _window?.AppWindow.Hide();
         _messages?.AppWindow.Hide();
         var timer = DispatcherQueue.GetForCurrentThread().CreateTimer();

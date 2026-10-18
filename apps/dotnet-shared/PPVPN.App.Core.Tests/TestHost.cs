@@ -420,6 +420,11 @@ sealed class ScriptedBackend : IClientBackend
     public string PurchaseUrl() => "https://www.example.test/dashboard/products";
     public string RoutingRulesUrl() => "https://www.example.test/dashboard/routing-rules";
     public void NetworkChanged() => Calls.Add("network_changed");
+    public Task SystemSleep(bool asleep)
+    {
+        Calls.Add(asleep ? "will_sleep" : "did_wake");
+        return Task.CompletedTask;
+    }
 
     Task Record(string call)
     {
