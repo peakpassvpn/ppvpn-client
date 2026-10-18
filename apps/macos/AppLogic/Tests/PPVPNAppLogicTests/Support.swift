@@ -123,7 +123,7 @@ final class StubBackend: ClientBackend {
     weak var events: ClientEvents?
     let logDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
     var current = ClientSnapshot.fixture()
-    var catalog: [Node] = [node("hk-1", "香港家宽-203.0.113.31", replicas: ["HKG-A", "HKG-B"])]
+    var catalog: [Node] = [node("hk-1", "香港家宽 203.0.113.31", replicas: ["HKG-A", "HKG-B"])]
     var serverInbox: [InboxMessage] = []
     /// Overrides the reported total (the server may over-report).
     var reportedTotal: UInt32?

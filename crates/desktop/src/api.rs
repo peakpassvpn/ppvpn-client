@@ -166,8 +166,8 @@ pub(crate) struct ParsedProfile {
     pub(crate) default_node_id: Option<String>,
 }
 
-/// Splits a flag emoji off the start of a node name: `"🇺🇸洛杉矶家宽-…"` is
-/// `("洛杉矶家宽-…", Some("US"))`. The server puts the flag in the name for
+/// Splits a flag emoji off the start of a node name: `"🇺🇸洛杉矶家宽 …"` is
+/// `("洛杉矶家宽 …", Some("US"))`. The server puts the flag in the name for
 /// clients that show names as plain text; the apps draw the flag themselves
 /// from the country code, so the name would show it twice (and Windows has
 /// no flag glyphs: "US"). Only one leading pair of regional indicators and
@@ -264,7 +264,7 @@ mod tests {
         let parsed = parse_profile(FIXTURE).expect("fixture parses");
         assert_eq!(
             parsed.summary.revision,
-            "e4a97a896762108f6b8e05e95e2ce1581b8af4b35044c2898a567a32627d5876"
+            "49e28b20a5732f48c1f9411e072d97691b4cfc8e1f1e79485f5869ad45915ff5"
         );
         assert_eq!(parsed.summary.expires_at, "2099-01-01T00:00:00Z");
         assert_eq!(parsed.summary.node_count, 3);
@@ -274,8 +274,8 @@ mod tests {
         );
         let first = &parsed.nodes[0];
         assert_eq!(first.id, "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101");
-        // The fixture's name starts with the flag ("🇺🇸洛杉矶家宽-…").
-        assert_eq!(first.name, "洛杉矶家宽-203.0.113.10");
+        // The fixture's name starts with the flag ("🇺🇸洛杉矶家宽 …").
+        assert_eq!(first.name, "洛杉矶家宽 203.0.113.10 cn-optimized");
         assert_eq!(first.entry_key, "cn-optimized");
         assert_eq!(first.entry_label.as_deref(), Some("三网优化"));
         assert_eq!(first.exit_region.as_deref(), Some("洛杉矶"));
@@ -295,8 +295,8 @@ mod tests {
         assert_eq!(replicas, [("11", 0, "shadowsocks"), ("12", 1, "vless")]);
 
         assert_eq!(parsed.nodes[1].entry_key, "standard");
-        assert_eq!(parsed.nodes[1].name, "洛杉矶家宽-203.0.113.10-standard");
-        assert_eq!(parsed.nodes[2].name, "东京住宅-203.0.113.20");
+        assert_eq!(parsed.nodes[1].name, "洛杉矶家宽 203.0.113.10 standard");
+        assert_eq!(parsed.nodes[2].name, "东京住宅 203.0.113.20");
         assert_eq!(parsed.nodes[2].exit_region.as_deref(), Some("东京"));
     }
 
@@ -305,15 +305,15 @@ mod tests {
         let split = |name: &str| split_flag(name.to_string());
         let us = Some("US".to_string());
         assert_eq!(
-            split("🇺🇸洛杉矶家宽-203.0.113.10"),
-            ("洛杉矶家宽-203.0.113.10".to_string(), us.clone())
+            split("🇺🇸洛杉矶家宽 203.0.113.10"),
+            ("洛杉矶家宽 203.0.113.10".to_string(), us.clone())
         );
         // The whitespace after the flag goes with it.
         assert_eq!(split("🇺🇸 LA 01"), ("LA 01".to_string(), us.clone()));
         // No flag, a flag later in the name, a lone indicator: unchanged.
         assert_eq!(
-            split("东京-203.0.113.20"),
-            ("东京-203.0.113.20".to_string(), None)
+            split("东京 203.0.113.20"),
+            ("东京 203.0.113.20".to_string(), None)
         );
         assert_eq!(split("LA 🇺🇸 01"), ("LA 🇺🇸 01".to_string(), None));
         assert_eq!(split("🇺 LA"), ("🇺 LA".to_string(), None));
@@ -335,8 +335,8 @@ mod tests {
         };
         let node = |raw: String| parse_profile(raw.as_bytes()).unwrap().nodes.remove(0);
 
-        let filled = node(profile("🇯🇵东京住宅-203.0.113.20", r#"{"region":"东京"}"#));
-        assert_eq!(filled.name, "东京住宅-203.0.113.20");
+        let filled = node(profile("🇯🇵东京住宅 203.0.113.20", r#"{"region":"东京"}"#));
+        assert_eq!(filled.name, "东京住宅 203.0.113.20");
         assert_eq!(filled.exit_country_code.as_deref(), Some("JP"));
 
         // The server's country code wins over the flag.

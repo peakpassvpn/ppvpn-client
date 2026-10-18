@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "revision": "e4a97a896762108f6b8e05e95e2ce1581b8af4b35044c2898a567a32627d5876",
+  "revision": "49e28b20a5732f48c1f9411e072d97691b4cfc8e1f1e79485f5869ad45915ff5",
   "generated_at": "2026-09-29T00:00:00Z",
   "expires_at": "2099-01-01T00:00:00Z",
   "nodes": [
     {
       "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101",
-      "name": "🇺🇸洛杉矶家宽-203.0.113.10",
+      "name": "🇺🇸洛杉矶家宽 203.0.113.10 cn-optimized",
       "entry_key": "cn-optimized",
       "entry_label": "三网优化",
       "exit": {
@@ -77,7 +77,7 @@
     },
     {
       "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101-fe6d3468cf5c",
-      "name": "🇺🇸洛杉矶家宽-203.0.113.10-standard",
+      "name": "🇺🇸洛杉矶家宽 203.0.113.10 standard",
       "entry_key": "standard",
       "exit": {
         "ip": "203.0.113.10",
@@ -139,7 +139,7 @@
     },
     {
       "id": "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-102",
-      "name": "🇯🇵东京住宅-203.0.113.20",
+      "name": "🇯🇵东京住宅 203.0.113.20",
       "entry_key": "cn-optimized",
       "entry_label": "三网优化",
       "exit": {

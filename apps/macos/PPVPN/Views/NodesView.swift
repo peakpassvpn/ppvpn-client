@@ -60,9 +60,10 @@ struct NodesView: View {
                     Text(node.name)
                         .fontWeight(node.id == model.snapshot.selectedNodeId ? .semibold : .regular)
                         .lineLimit(1)
+                        .help(node.name)
                 }
             }
-            .width(min: 96, ideal: 130)
+            .width(min: 96, ideal: 200)
             TableColumn(tr("colTier")) { node in
                 if let label = node.entryLabel, !label.isEmpty {
                     TierTag(text: label)
@@ -214,7 +215,7 @@ struct TierTag: View {
     }
 }
 
-/// The selected row's local proxy: "香港家宽-203.0.113.31 的本地代理", user, HTTP / SOCKS5 copy.
+/// The selected row's local proxy: "香港家宽 203.0.113.31 的本地代理", user, HTTP / SOCKS5 copy.
 private struct SelectedNodeBar: View {
     @EnvironmentObject private var model: AppModel
     let node: Node?
@@ -224,6 +225,7 @@ private struct SelectedNodeBar: View {
             HStack(spacing: 8) {
                 FlagView(countryCode: node?.exitCountryCode)
                 Text(tr("nodeProxyT", ["n": node?.name ?? "—"])).fontWeight(.semibold)
+                    .lineLimit(1).help(node?.name ?? "")
             }
             if let proxy {
                 HStack(spacing: 16) {

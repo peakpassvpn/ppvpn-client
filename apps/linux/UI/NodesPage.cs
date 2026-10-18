@@ -196,6 +196,7 @@ public static class NodesPage
         nameBox.Append(Flag(item.CountryCode));
         var name = Label(item.Name);
         name.SetEllipsize(Pango.EllipsizeMode.End);
+        name.SetTooltipText(item.Name);
         nameBox.Append(name);
         var tierBox = Gtk.Box.New(Gtk.Orientation.Horizontal, 0);
         var tier = Label(item.Tier, "ppvpn-tag");

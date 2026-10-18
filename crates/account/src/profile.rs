@@ -221,7 +221,7 @@ mod tests {
         let parsed = parse_profile(FIXTURE).expect("fixture parses");
         assert_eq!(
             parsed.revision,
-            "e4a97a896762108f6b8e05e95e2ce1581b8af4b35044c2898a567a32627d5876"
+            "49e28b20a5732f48c1f9411e072d97691b4cfc8e1f1e79485f5869ad45915ff5"
         );
         assert_eq!(parsed.expires_at, "2099-01-01T00:00:00Z");
         assert_eq!(parsed.nodes.len(), 3);
@@ -233,7 +233,7 @@ mod tests {
         let first = &parsed.nodes[0];
         assert_eq!(first.id, "7d7c34e4-7f38-4c0c-9a53-1f0c0c9e2b11-101");
         // As the server sends it: the flag stays in the name here.
-        assert_eq!(first.name, "🇺🇸洛杉矶家宽-203.0.113.10");
+        assert_eq!(first.name, "🇺🇸洛杉矶家宽 203.0.113.10 cn-optimized");
         assert_eq!(first.entry_key, "cn-optimized");
         assert_eq!(first.entry_label.as_deref(), Some("三网优化"));
         assert_eq!(first.exit_region.as_deref(), Some("洛杉矶"));

@@ -52,7 +52,7 @@ final class PresentationTests: LogicTestCase {
     }
 
     func testUnlabelledRouteIsLeftOut() {
-        backend.catalog = [node("hk-1", "香港家宽-203.0.113.31", replicas: [nil, nil])]
+        backend.catalog = [node("hk-1", "香港家宽 203.0.113.31", replicas: [nil, nil])]
         backend.push(.fixture(profileStatus: .loading))
         backend.push(.fixture())
         XCTAssertEqual(show(.fixture(phase: .on, endpoint: "hk-1-0", latency: 38)).detail, "38 ms")
