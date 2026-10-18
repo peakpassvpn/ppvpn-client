@@ -898,6 +898,14 @@ impl Runtime for SailRuntime {
     fn replaced_routes(&self) -> Vec<String> {
         self.instance.replaced_routes().unwrap_or_default()
     }
+
+    fn sleep(&self) -> Result<(), RuntimeError> {
+        self.instance.sleep().map_err(error)
+    }
+
+    fn wake(&self) -> Result<(), RuntimeError> {
+        self.instance.wake().map_err(error)
+    }
 }
 
 /// Seconds since the epoch, for tests that compare `started`.

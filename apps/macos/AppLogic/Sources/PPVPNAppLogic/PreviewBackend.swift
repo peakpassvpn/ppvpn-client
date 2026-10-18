@@ -242,6 +242,10 @@ public final class PreviewBackend: ClientBackend {
 
     public func networkChanged() {}
 
+    public func systemWillSleep() async {}
+
+    public func systemDidWake() async {}
+
     public func refreshServiceInstalled() async -> Bool { state.serviceInstalled }
 
     public func enhancedTakeOver() async throws { try await connect() }

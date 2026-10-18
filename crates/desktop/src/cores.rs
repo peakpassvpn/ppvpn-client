@@ -346,6 +346,21 @@ impl Client {
         }
     }
 
+    /// Tells both cores that the system goes to sleep (`asleep`) or woke,
+    /// best effort: the standard core when it runs, the enhanced-mode core
+    /// while it is on.
+    pub(crate) async fn tell_cores_sleep(&self, asleep: bool) {
+        let standard = async {
+            let Ok(transport) = self.standard.transport() else {
+                return;
+            };
+            if let Err(error) = crate::core_ipc::tell_sleep(transport.as_ref(), asleep).await {
+                tracing::info!(asleep, "standard core: sleep not told ({})", error.detail());
+            }
+        };
+        tokio::join!(standard, self.enhanced.tell_sleep(asleep));
+    }
+
     /// Synchronous app-exit stop: releases the enhanced session and stops the
     /// standard core, waiting at most a few seconds.
     pub(crate) fn is_shut_down(&self) -> bool {

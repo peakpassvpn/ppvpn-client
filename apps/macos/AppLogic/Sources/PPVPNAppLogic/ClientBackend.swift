@@ -55,6 +55,11 @@ public protocol ClientBackend: AnyObject {
     /// The OS reported a network change: enhanced mode checks its data path
     /// soon, a waiting reconnect retries now. Safe in any state.
     func networkChanged()
+    /// The system is about to sleep: the cores' timed checks wait until
+    /// `systemDidWake`. Best effort, returns within a few seconds.
+    func systemWillSleep() async
+    /// The system woke. Best effort, also without a sleep before it.
+    func systemDidWake() async
     /// Checks on the system whether the privileged service is installed
     /// (e.g. by an admin outside the app) and updates the snapshot; no prompt.
     func refreshServiceInstalled() async -> Bool
@@ -125,6 +130,8 @@ public final class RustBackend: ClientBackend {
     public func dismissClearedIngressPins() { client.dismissClearedIngressPins() }
     public func dismissLocalProxyCredentialsReset() { client.dismissLocalProxyCredentialsReset() }
     public func networkChanged() { client.networkChanged() }
+    public func systemWillSleep() async { await client.systemWillSleep() }
+    public func systemDidWake() async { await client.systemDidWake() }
     public func refreshServiceInstalled() async -> Bool { await client.refreshServiceInstalled() }
     public func enhancedTakeOver() async throws { try await client.enhancedTakeOver() }
     public func serviceInstall() async throws { try await client.serviceInstall() }

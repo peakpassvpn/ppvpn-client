@@ -472,6 +472,19 @@ pub(crate) async fn select_node(
     .map(|_| ())
 }
 
+/// How long a sleep or wake may take: the system does not wait for it.
+const SLEEP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `Sleep` / `Wake` (core 0.6.3+, host-integration 4.7): the system goes
+/// to sleep (`asleep`) or woke. An older core answers `CORE_API_UNSUPPORTED`.
+pub(crate) async fn tell_sleep(
+    core: &dyn CoreTransport,
+    asleep: bool,
+) -> Result<(), CoreCallError> {
+    let path = if asleep { "/v1/sleep" } else { "/v1/wake" };
+    core.call(path, json!({}), SLEEP_TIMEOUT).await.map(|_| ())
+}
+
 /// `PinIngress` (core 0.5.7+): pins `node_id` to `endpoint_key`, or back to
 /// automatic failover with `None`. Applied live, no engine rebuild.
 pub(crate) async fn pin_ingress(

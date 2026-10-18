@@ -248,6 +248,21 @@ pub async fn set_system_proxy_listener(&self, enabled: bool) -> Result<SystemPro
   - **重置只在 `new` 打开状态文件时发生**，之后不会再有，所以没有对应的事件：宿主在 `new` 之后读一次 `status().local_proxy.credentials_reset` 即可。
   - 这个字段在本实例存活期间一直存在，core 不提供清除；是否重复提示由宿主决定。
 
+### 4.7 休眠与唤醒（可选）
+
+```rust
+pub async fn sleep(&self);  // 系统即将休眠
+pub async fn wake(&self);   // 系统已唤醒
+```
+
+宿主收到系统的休眠、唤醒通知时转告引擎，引擎转给 Sail（同 libbox 的 `Pause`/`Wake`）。不调用也可以：Sail 自己检测休眠（按时钟跳变），行为见第 9 节“网卡变化后”。
+
+- **`sleep`**：Sail 的定时检查和规则集更新暂停到 `wake`。实例没在运行时什么都不做。
+  - 一次运行里第一次 `sleep` 之后，Sail 不再自己检测休眠，改听宿主的。为防宿主漏掉 `wake`（中途退出、崩溃，或系统最终没有休眠），`sleep` 之后清醒时间累计 60 秒还没收到 `wake`，引擎自己唤醒 Sail。tokio 的时钟在系统休眠时不走（macOS、Linux），所以真唤醒后约 60 秒兜底生效。
+- **`wake`**：休眠（从 `sleep` 起按墙上时钟算）不到 2 分钟时什么都不断开；2 分钟以上时断开闲置的承载连接，各组重新测速。正在用的连接都保留。休眠期间网络变了，照常按网卡变化处理（仍发 `NetworkChanged`）。本次运行没有 `sleep` 在先时什么都不做。
+- 两者都不返回错误。Core API v1 路径是 `/v1/sleep`、`/v1/wake`（请求体为空对象，回 `{}`）。
+- 实例重建（`shutdown` 后 `new`）或重新 `start` 之后，新的运行没收到过 `sleep`，`wake` 对它什么都不做，Sail 仍自己检测休眠。
+
 ## 5. 状态
 
 ```rust

@@ -23,6 +23,7 @@ public sealed class PPVPNApplication
     private readonly Func<ClientConfig, Func<ClientListener, IClientBackend>> _backend;
     private MainViewModel? _vm;
     private Gio.NetworkMonitor? _network;
+    private SystemSleep? _sleep;
     private Update.UpdateNotifier? _updates;
     private LinuxAppServices? _services;
     private TrayController? _trayController;
@@ -48,6 +49,7 @@ public sealed class PPVPNApplication
         _app.OnShutdown += (_, _) =>
         {
             _tray?.Dispose();
+            _sleep?.Dispose();
             // Quit normally shuts down through QuitAsync first; this is a no-op then. When the
             // last window closes without a tray, block here (up to ~10 s) instead.
             _vm?.Backend.ShutdownAsync().GetAwaiter().GetResult();
@@ -90,6 +92,9 @@ public sealed class PPVPNApplication
         // starts, which the debounce absorbs.
         _network = Gio.NetworkMonitorHelper.GetDefault();
         _network.OnNetworkChanged += (_, _) => _vm.OnNetworkChanged();
+        // Suspend and resume go to the cores at once (no debounce).
+        var vm = _vm;
+        _ = Task.Run(async () => _sleep = await SystemSleep.StartAsync(asleep => _ = vm.OnSystemSleep(asleep), log));
 
         _updates = new Update.UpdateNotifier(log, services.AppVersion);
         services.Updates = _updates;

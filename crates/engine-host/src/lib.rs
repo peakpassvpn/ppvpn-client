@@ -98,6 +98,14 @@ pub async fn dispatch(engine: &Engine, path: &str, body: Value) -> Result<Value,
                 .ok_or_else(|| ApiError::request_invalid("enabled is required"))?;
             reply(engine.set_system_proxy_listener(enabled).await)
         }
+        "/v1/sleep" => {
+            engine.sleep().await;
+            Ok(json!({}))
+        }
+        "/v1/wake" => {
+            engine.wake().await;
+            Ok(json!({}))
+        }
         "/v1/get-traffic" => data(engine.traffic()),
         "/v1/get-connections" => data(engine.connections()),
         _ => Err(ApiError::new(

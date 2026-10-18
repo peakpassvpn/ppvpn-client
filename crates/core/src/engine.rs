@@ -50,6 +50,9 @@ mod rule_sets;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
+mod sleep;
+#[cfg(test)]
+mod sleep_tests;
 mod state;
 mod switch;
 mod tun;
@@ -104,6 +107,8 @@ struct Inner {
     /// The Linux desktop TUN's routing guard while it runs.
     routing: routing::RoutingGuard,
     pinned: pinned::PinnedChecks,
+    /// The lease of the host's last `sleep` (sleep.rs).
+    sleep_lease: sleep::SleepLease,
     /// The profile's rule sets: cache, downloads, refresh.
     rule_sets: crate::rulesets::Manager,
     /// Set when `shutdown` begins: rule set downloads under way give up.
@@ -215,6 +220,7 @@ impl Engine {
             kernel_gen: std::sync::atomic::AtomicU64::new(0),
             routing: routing::RoutingGuard::default(),
             pinned: pinned::PinnedChecks::default(),
+            sleep_lease: sleep::SleepLease::default(),
             config,
             runtime,
             op: tokio::sync::Mutex::new(()),
@@ -328,6 +334,20 @@ impl Engine {
         endpoint_key: Option<&str>,
     ) -> Result<(), Error> {
         self.inner.pin_ingress(node_id, endpoint_key).await
+    }
+
+    /// The system goes to sleep (4.7): sail's timed checks and updates
+    /// wait until `wake`. Nothing while not running. A `wake` that does not
+    /// come within a minute awake is done by the instance itself.
+    pub async fn sleep(&self) {
+        self.inner.host_sleep();
+    }
+
+    /// The system woke (4.7): after a sleep of 2 minutes or more sail closes
+    /// its idle carriers and the groups test their members again; a shorter
+    /// one closes nothing. Nothing without a `sleep` of this run before it.
+    pub async fn wake(&self) {
+        self.inner.host_wake();
     }
 
     /// The authoritative snapshot (section 5).

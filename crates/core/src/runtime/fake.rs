@@ -22,6 +22,8 @@ pub(crate) enum Call {
     DialTcp(String, Target),
     DialUdp(String, Target),
     ReplaceInboundUsers(String, Vec<(String, String)>),
+    Sleep,
+    Wake,
 }
 
 /// Which call the next failure is for.
@@ -722,6 +724,18 @@ impl Runtime for FakeRuntime {
             Ok(()) => self.replaced.lock().unwrap().clone(),
             Err(_) => Vec::new(),
         }
+    }
+
+    fn sleep(&self) -> Result<(), RuntimeError> {
+        self.running()?;
+        self.record(Call::Sleep);
+        Ok(())
+    }
+
+    fn wake(&self) -> Result<(), RuntimeError> {
+        self.running()?;
+        self.record(Call::Wake);
+        Ok(())
     }
 }
 
