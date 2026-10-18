@@ -215,7 +215,7 @@ struct TierTag: View {
     }
 }
 
-/// The selected row's local proxy: "香港家宽-203.0.113.31 的本地代理", user, HTTP / SOCKS5 copy.
+/// The selected row's local proxy: "香港家宽 203.0.113.31 的本地代理", user, HTTP / SOCKS5 copy.
 private struct SelectedNodeBar: View {
     @EnvironmentObject private var model: AppModel
     let node: Node?

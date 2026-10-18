@@ -142,7 +142,7 @@ public sealed class FormattingTests
         var replica = new Replica("5086", 0, "vless", null);
         Assert.Null(Formatting.RouteLabel(replica));
         Assert.Equal("HKG-A", Formatting.RouteLabel(replica with { Label = "HKG-A" }));
-        var node = new Node("n1", "中国-203.0.113.49", "standard", null, null, "cn", true, [replica]);
+        var node = new Node("n1", "中国 203.0.113.49", "standard", null, null, "cn", true, [replica]);
         Assert.Null(Formatting.RouteLabel(node, "5086"));
 
         // Unlabelled lines are numbered in failover order; a single one shows nothing.

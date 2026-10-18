@@ -27,7 +27,7 @@ final class AppStateTests: LogicTestCase {
 
     func testCatalogReloadsWithTheProfile() {
         XCTAssertEqual(state.nodes.map(\.id), ["hk-1"])
-        XCTAssertEqual(state.selectedNode?.name, "香港家宽-203.0.113.31")
+        XCTAssertEqual(state.selectedNode?.name, "香港家宽 203.0.113.31")
     }
 
     func testSignOutClearsAccountState() async {

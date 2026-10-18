@@ -20,7 +20,7 @@ public sealed class NodesTests
             Assert.Equal("nodeCount(n=11)", nodes.NodeCountText);
 
             var hk1 = nodes.Items[0];
-            Assert.Equal(("香港家宽-203.0.113.31", "hk", "专线", true, "中国香港"), (hk1.Name, hk1.CountryCode, hk1.Tier, hk1.HasTier, hk1.Region));
+            Assert.Equal(("香港家宽 203.0.113.31", "hk", "专线", true, "中国香港"), (hk1.Name, hk1.CountryCode, hk1.Tier, hk1.HasTier, hk1.Region));
             // Line labels (Replica.label) in failover order.
             Assert.Equal("HKG-A → HKG-B → SZX-R", hk1.Routes);
             Assert.False(nodes.Items[1].HasTier);
@@ -30,7 +30,7 @@ public sealed class NodesTests
 
             // The bottom card follows the selected row.
             nodes.SelectedItem = nodes.Items[3];
-            Assert.Equal("nodeProxyT(n=东京住宅-203.0.113.20)", nodes.SelectedNodeProxyTitle);
+            Assert.Equal("nodeProxyT(n=东京住宅 203.0.113.20)", nodes.SelectedNodeProxyTitle);
             Assert.Equal(("u8f2k-jp1", "127.0.0.1:7890"), (nodes.SelectedNodeProxy!.Username, nodes.SelectedNodeProxy.Endpoint));
             nodes.Items[3].CopySocksCommand.Execute(null);
             Assert.Equal($"socks5h://u8f2k-jp1:{FakeClientBackend.ProxyPassword}@127.0.0.1:7890", h.Services.Copied.Single());
@@ -40,7 +40,7 @@ public sealed class NodesTests
             await nodes.Items[3].SetCurrentCommand.ExecuteAsync(null);
             await Wait.Until(() => nodes.Items[3].IsCurrent, "current");
             Assert.False(hk1.IsCurrent);
-            Assert.Equal("东京住宅-203.0.113.20", h.Main.CurrentNodeName);
+            Assert.Equal("东京住宅 203.0.113.20", h.Main.CurrentNodeName);
             Assert.Equal(nodes.Items[3], h.Main.CurrentNode);
         });
     }
