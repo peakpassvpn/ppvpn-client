@@ -48,11 +48,11 @@ mod reads;
 mod routing;
 mod rule_sets;
 mod selection;
+#[cfg(test)]
+mod selection_tests;
 mod sleep;
 #[cfg(test)]
 mod sleep_tests;
-#[cfg(test)]
-mod selection_tests;
 mod state;
 mod switch;
 mod tun;
