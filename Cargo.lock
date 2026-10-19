@@ -1575,7 +1575,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -2121,7 +2121,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 [[package]]
 name = "netconfig-rs"
 version = "0.1.6"
-source = "git+https://github.com/peakpassvpn/netconfig-rs.git?rev=a5caf848a0e0f18bc9810c1fa854f3ac6a903443#a5caf848a0e0f18bc9810c1fa854f3ac6a903443"
+source = "git+https://github.com/peakpassvpn/netconfig-rs.git?rev=c4186a6416cce1b66ca65200b7a23b5e859181d7#c4186a6416cce1b66ca65200b7a23b5e859181d7"
 dependencies = [
  "cfg-if",
  "core-foundation",
@@ -2129,7 +2129,7 @@ dependencies = [
  "libc",
  "netlink-packet-core",
  "netlink-packet-route",
- "netlink-sys",
+ "netlink-sys 0.9.0",
  "nix 0.30.1",
  "scopeguard",
  "system-configuration-sys",
@@ -2162,6 +2162,17 @@ name = "netlink-sys"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd6c30ed10fa69cc491d491b85cc971f6bdeb8e7367b7cde2ee6cc878d583fae"
+dependencies = [
+ "bytes",
+ "libc",
+ "log",
+]
+
+[[package]]
+name = "netlink-sys"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c99d38e00b420df49e940fe0826e667c3dad82ac68eb4c2bbf754c1c14a83a10"
 dependencies = [
  "bytes",
  "libc",
@@ -2590,7 +2601,7 @@ dependencies = [
  "miniz_oxide",
  "netlink-packet-core",
  "netlink-packet-route",
- "netlink-sys",
+ "netlink-sys 0.8.8",
  "ppvpn-core",
  "sail",
  "serde",
@@ -3117,14 +3128,14 @@ dependencies = [
 
 [[package]]
 name = "route_manager"
-version = "0.2.13"
-source = "git+https://github.com/peakpassvpn/route_manager.git?rev=5703367f56a7b4fed9fd02e216f2f110b4186eda#5703367f56a7b4fed9fd02e216f2f110b4186eda"
+version = "0.2.16"
+source = "git+https://github.com/tun-rs/route_manager.git?rev=d0a6c5e3fbea1b4fba74bd2ad9739bc670936aaf#d0a6c5e3fbea1b4fba74bd2ad9739bc670936aaf"
 dependencies = [
  "flume",
  "libc",
  "netlink-packet-core",
  "netlink-packet-route",
- "netlink-sys",
+ "netlink-sys 0.9.0",
  "windows-sys 0.61.2",
 ]
 
@@ -3239,8 +3250,8 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail"
-version = "0.20.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.20.0#14411c7ab9464efee05f5f7a9fb3520eda12c2e9"
+version = "0.21.0"
+source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.21.0#aa84fef2a4d6106a2847904f7a0bd4061e109222"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3330,7 +3341,7 @@ dependencies = [
 [[package]]
 name = "sail-netstack"
 version = "0.1.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.20.0#14411c7ab9464efee05f5f7a9fb3520eda12c2e9"
+source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.21.0#aa84fef2a4d6106a2847904f7a0bd4061e109222"
 dependencies = [
  "foldhash",
 ]
@@ -3809,7 +3820,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
