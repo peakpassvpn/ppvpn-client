@@ -12,7 +12,8 @@ As root: sail opens the TUN. Runs on macOS and Linux.
 A variant is a run with sail's start settings in PPVPN_LAB_SAIL_SETTINGS
 (ne-mem built with ppvpn-core's `lab` feature): one of VARIANTS by name, or
 NAME='{"profile":"desktop","set":["relay.buffer_size=8"]}'. `default`, the
-first, is core's own options. Each variant runs once per --workers value.
+first, is core's own options (--no-default leaves it out). Each variant
+runs once per --workers value.
 
 --dhat (ne-mem built with its `dhat` feature) writes each run's heap
 profile to PREFIX-<variant>-w<workers>.json; dhat's view of it takes the
@@ -98,6 +99,9 @@ VARIANTS = {
     # Not the profile's: the sessions a 35 MiB budget carries at about 150
     # KiB each (#388); the dispatcher refuses the rest, the TUN's included.
     "cap": {"profile": "desktop", "set": ["inbound.max_connections=128"]},
+    # Far below a DNS burst's concurrent upstream queries: whether the cap
+    # bounds the connections the instance opens itself (#388).
+    "cap16": {"profile": "desktop", "set": ["inbound.max_connections=16"]},
 }
 
 
@@ -240,6 +244,35 @@ def loadgen(args, *extra, failures_ok=True):
         return {"error": out.stderr.strip()[-300:]}
 
 
+def node_connections(port):
+    """The TCP connections established to the fake node's `port` (one per
+    AnyTLS session): the client ends only."""
+    if sys.platform == "darwin":
+        out = subprocess.run(["netstat", "-an", "-p", "tcp"], capture_output=True, text=True).stdout
+        return sum(1 for line in out.splitlines()
+                   if "ESTABLISHED" in line and line.split()[4].endswith(f".{port}"))
+    out = subprocess.run(["ss", "-Htn", "state", "established", f"( dport = :{port} )"],
+                         capture_output=True, text=True).stdout
+    return sum(1 for line in out.splitlines() if line.strip())
+
+
+class PeakCounter:
+    """The most of `count()` seen, sampled every 50 ms until stopped."""
+    def __init__(self, count):
+        self.peak, self._stop = 0, threading.Event()
+        def run():
+            while not self._stop.is_set():
+                self.peak = max(self.peak, count())
+                time.sleep(0.05)
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join()
+        return self.peak
+
+
 def dns_burst(count, rate=400):
     """count A queries for distinct names under example.net, through the
     TUN's DNS (any address port 53 is hijacked), rate a second; returns the
@@ -346,8 +379,11 @@ def run(args, variant, settings, workers, ports, sets1, sets2, work):
         th.join()
         mark("switch", load=holder.get("load"))
 
-        answered = dns_burst(args.dns_queries)
-        mark("dns", queries=args.dns_queries, answered=answered)
+        # The AnyTLS sessions the burst's upstream queries (DoT through the
+        # node) open, which the session cap may or may not count.
+        sessions = PeakCounter(lambda: node_connections(ports["anytls_port"]))
+        answered = dns_burst(args.dns_queries, args.dns_rate)
+        mark("dns", queries=args.dns_queries, answered=answered, node_sessions_peak=sessions.stop())
 
         request = {"profile": profile("ne-mem#2", ports, sets2),
                    "allowed_rule_set_hosts": ["raw.githubusercontent.com"]}
@@ -400,13 +436,15 @@ def main():
     parser.add_argument("--idle-seconds", type=int, default=IDLE_SECONDS)
     parser.add_argument("--load-seconds", type=int, default=20)
     parser.add_argument("--dns-queries", type=int, default=2000)
+    parser.add_argument("--dns-rate", type=int, default=400, help="DNS queries a second")
     parser.add_argument("--conns", default="100,250,500")
     parser.add_argument("--variant", action="append", default=[], metavar="NAME=SETTINGS",
                         help="also run with these sail start settings (JSON), or VARIANTS[NAME]; repeatable")
+    parser.add_argument("--no-default", action="store_true", help="only the --variant runs")
     parser.add_argument("--dhat", metavar="PREFIX", help="ne-mem's heap profiles (its dhat feature) to PREFIX-*.json")
     parser.add_argument("--out", help="also write the rows as JSON here")
     args = parser.parse_args()
-    variants = [("default", "")]
+    variants = [] if args.no_default else [("default", "")]
     for v in args.variant:
         name, _, settings = v.partition("=")
         settings = settings or json.dumps(VARIANTS[name])
