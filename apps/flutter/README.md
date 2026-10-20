@@ -11,12 +11,14 @@ any release.
 - `rust/`: the bridge crate `ppvpn-flutter` (a workspace member). `api.rs` is
   everything Dart can call; `bridge.rs` holds the one `Client`, its listener
   and the conversions; `hooks.rs` holds the platform hooks.
-- `lib/theme.dart`: every design token in one place, from the desktop design
-  handoff. It keeps the brand and semantic colours, and uses the macOS sizes,
-  spacing and radii on every platform. The window (960×640) and the sign-in
-  page follow design v17. Controls are forui's
-  neutral ones. A cross-platform design (desktop and mobile) will replace
-  these values.
+- `lib/theme.dart`: every design token in one place: the unified design
+  signed off on #387 (2026-10-20). It covers colours for light and dark,
+  shadows, type, sizes and radii, with pixel values from the design sources.
+  Latin text uses Inter (bundled by forui), numbers and addresses JetBrains
+  Mono (`assets/fonts`, OFL), and Chinese the system font.
+- `lib/widgets.dart`: the shared pieces drawn to the design: buttons, the
+  three-state switch, the latency pill, flags, the brand mark. Each is
+  keyboard-operable and announced to screen readers.
 - `lib/strings.dart`: the handoff's `strings.json` (zh and en) for the keys
   the prototype shows.
 - `lib/shell.dart`: the window frame, following the navigation decided on

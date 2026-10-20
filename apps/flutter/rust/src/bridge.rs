@@ -289,6 +289,7 @@ pub(crate) fn ui_node(node: Node) -> UiNode {
         exit_region: node.exit_region,
         exit_country_code: node.exit_country_code,
         entry_label: node.entry_label,
+        entry_key: node.entry_key,
         udp: node.udp,
         lines: node
             .replicas

@@ -94,7 +94,7 @@ class PrototypeApp extends StatelessWidget {
           data: t.forui,
           child: DefaultTextStyle(
             style: t.body,
-            child: ColoredBox(color: t.window, child: Shell(app: app)),
+            child: ColoredBox(color: t.bg, child: Shell(app: app)),
           ),
         );
       },

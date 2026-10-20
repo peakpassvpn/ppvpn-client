@@ -20,3 +20,13 @@ dependencies:
 flutter:
   assets:
     - assets/tray/
+  # Numbers and addresses (theme.dart `Tokens.mono`); Inter comes with forui.
+  # OFL: assets/fonts/JetBrainsMono-OFL.txt.
+  fonts:
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+        - asset: assets/fonts/JetBrainsMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/JetBrainsMono-SemiBold.ttf
+          weight: 600

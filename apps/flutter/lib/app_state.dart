@@ -38,6 +38,14 @@ class AppState {
   final ValueNotifier<rust.UiSnapshot> snapshot;
   final ValueNotifier<List<rust.UiNode>> nodes = ValueNotifier(const []);
   final ValueNotifier<rust.UiTraffic> traffic = ValueNotifier(const rust.UiTraffic(up: 0, down: 0));
+
+  /// The last [historyLength] samples, oldest first (the sparkline).
+  final ValueNotifier<List<rust.UiTraffic>> history = ValueNotifier(const []);
+  static const historyLength = 30;
+
+  /// When the connection last came on; null while it is not on. The
+  /// connection card's 「本次连接」 timer counts from it.
+  DateTime? connectedSince;
   final ValueNotifier<Map<String, Latency>> latency = ValueNotifier(const {});
   final ValueNotifier<Map<String, rust.UiLocalProxy>> proxies = ValueNotifier(const {});
 
@@ -61,11 +69,20 @@ class AppState {
       }
       final next = events.snapshot;
       if (next != null) {
+        if (next.phase == rust.UiPhase.connected) {
+          connectedSince ??= DateTime.now();
+        } else if (next.phase != rust.UiPhase.reconnecting) {
+          connectedSince = null;
+        }
         snapshot.value = next;
         _refreshNodes(next);
       }
       final sample = events.traffic;
-      if (sample != null) traffic.value = sample;
+      if (sample != null) {
+        traffic.value = sample;
+        final list = [...history.value, sample];
+        history.value = list.length > historyLength ? list.sublist(list.length - historyLength) : list;
+      }
       if (events.probes.isNotEmpty) {
         final map = Map.of(latency.value);
         for (final probe in events.probes) {
