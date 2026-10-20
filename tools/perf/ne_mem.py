@@ -6,7 +6,13 @@ reports its footprint (phys_footprint on macOS, RssAnon on Linux) per
 scenario.
 As root: sail opens the TUN. Runs on macOS and Linux.
 
-    sudo tools/perf/ne_mem.py --ne-mem BIN --fakenode BIN --loadgen BIN [--workers 0,2] [--out FILE]
+    sudo tools/perf/ne_mem.py --ne-mem BIN --fakenode BIN --loadgen BIN [--workers 1,0]
+        [--variant NAME[=SETTINGS] ...] [--out FILE]
+
+A variant is a run with sail's start settings in PPVPN_LAB_SAIL_SETTINGS
+(ne-mem built with ppvpn-core's `lab` feature): one of VARIANTS by name, or
+NAME='{"profile":"desktop","set":["relay.buffer_size=8"]}'. `default`, the
+first, is core's own options. Each variant runs once per --workers value.
 
 The host's routes stay as they are but for one: TEST-NET-3 (203.0.113.0/24)
 into the TUN, which the loads dial. fakenode (-redirect) sends the node's
@@ -31,7 +37,10 @@ one (see ne-mem's doc):
   restart_warm     stop, then start again with the rule sets cached
 
 Prints one NEMEM JSON line per scenario and a Markdown table at the end
-(also appended to $GITHUB_STEP_SUMMARY when set).
+(also appended to $GITHUB_STEP_SUMMARY when set). A scenario whose load
+failed (a connection refused, an echo short, a download empty, DNS mostly
+unanswered) is marked ✗: its numbers are not the load's. Exits 1 when one
+of the first variant's did.
 """
 
 import argparse
@@ -69,6 +78,17 @@ RULE_SETS = {
     "proxy-domain": (f"{RAW}/chg1f/sing-geosite-mixed/rule-set/proxy.srs",
                      f"{RAW}/SagerNet/sing-geosite/rule-set/geosite-geolocation-!cn.srs"),
     "cn-ip": (f"{RAW}/SagerNet/sing-geoip/rule-set/geoip-cn.srs",) * 2,
+}
+
+# sail's mobile profile in parts, over the desktop one core runs (sail's
+# runtime/options.rs has the values and why).
+_MOBILE_RELAY = ["relay.buffer_size=8", "relay.buffer_max_size=64", "relay.buffer_pool=256"]
+VARIANTS = {
+    "relay": {"profile": "desktop", "set": _MOBILE_RELAY},
+    "window": {"profile": "desktop", "set": ["netstack.receive_window=4", "netstack.receive_window_max=128",
+                                            "netstack.read_ahead=32"]},
+    "budget": {"profile": "desktop", "set": ["netstack.budget=mobile"]},
+    "mobile": {"profile": "mobile"},
 }
 
 
@@ -126,14 +146,18 @@ def profile(revision, ports, sets):
 
 
 class NeMem:
-    def __init__(self, binary, work, workers, platform_name):
+    def __init__(self, binary, work, workers, platform_name, variant, settings):
         self.state = os.path.join(work, "state")
         os.makedirs(self.state, mode=0o700, exist_ok=True)
-        self.log_path = os.path.join(work, f"ne-mem-w{workers}.log")
+        self.log_path = os.path.join(work, f"ne-mem-{variant}-w{workers}.log")
+        env = dict(os.environ)
+        env.pop("PPVPN_LAB_SAIL_SETTINGS", None)
+        if settings:
+            env["PPVPN_LAB_SAIL_SETTINGS"] = settings
         self.proc = subprocess.Popen(
             [binary, "--state-dir", self.state, "--platform", platform_name,
              "--workers", str(workers), "--log-file", self.log_path],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env=env)
         ready = self.read()
         if not ready.get("ok"):
             raise RuntimeError(f"ne-mem: {ready}")
@@ -237,17 +261,34 @@ def dns_burst(count, rate=400):
     return answered
 
 
-def run(args, workers, ports, sets1, sets2, work):
+def failure(row):
+    """Why the scenario's load failed, or None."""
+    load = row.get("load")
+    if load is not None:
+        if "error" in load or load.get("failed_connections"):
+            return f"{load.get('failed_connections', '?')} connections failed"
+        if load.get("bytes_received", 0) == 0:
+            return "nothing received"
+        if load.get("bytes_sent") and load["bytes_received"] < load["bytes_sent"]:
+            return f"echo short: {load['bytes_received']} of {load['bytes_sent']} bytes"
+    if "answered" in row and row["answered"] < 0.95 * row["queries"]:
+        return f"DNS: {row['answered']} of {row['queries']} answered"
+    return None
+
+
+def run(args, variant, settings, workers, ports, sets1, sets2, work):
     rows = []
     plat = "ios" if sys.platform == "darwin" else "android"
     before = interfaces()
-    engine = NeMem(args.ne_mem, work, workers, plat)
+    engine = NeMem(args.ne_mem, work, workers, plat, variant, settings)
     try:
         def mark(label, **extra):
             row = engine.call("mark", label=label)
             row.pop("ok", None)
+            row["variant"] = variant
             row["workers"] = workers
             row.update(extra)
+            row["failed"] = failure(row)
             print("NEMEM " + json.dumps(row), flush=True)
             rows.append(row)
 
@@ -324,14 +365,16 @@ def table(rows, sizes):
              f"Rule sets (bytes, revision 1 / 2): "
              + ", ".join(f"{k} {sizes[0][k]}/{sizes[1][k]}" for k in RULE_SETS) + ".",
              "",
-             "| workers | scenario | peak MiB | after MiB | heap peak MiB | heap after MiB | threads | RSS peak / resident MiB | source |",
-             "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+             "| variant | workers | scenario | peak MiB | after MiB | heap peak MiB | heap after MiB | threads "
+             "| RSS peak / resident MiB | source | load |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for r in rows:
         over = " ⚠" if r["peak_kib"] / 1024 > BUDGET_MIB else ""
-        lines.append(f"| {r['workers'] or 'ncpu'} | {r['label']} | {r['peak_kib'] / 1024:.1f}{over} | "
+        load = f"✗ {r['failed']}" if r.get("failed") else ""
+        lines.append(f"| {r['variant']} | {r['workers'] or 'ncpu'} | {r['label']} | {r['peak_kib'] / 1024:.1f}{over} | "
                      f"{r['footprint_kib'] / 1024:.1f} | {r['heap_peak_kib'] / 1024:.1f} | "
                      f"{r['heap_live_kib'] / 1024:.1f} | {r['threads']} | "
-                     f"{r.get('rss_peak_kib', r.get('resident_kib', 0)) / 1024:.1f} | {r['peak_source']} |")
+                     f"{r.get('rss_peak_kib', r.get('resident_kib', 0)) / 1024:.1f} | {r['peak_source']} | {load} |")
     return "\n".join(lines)
 
 
@@ -340,14 +383,22 @@ def main():
     parser.add_argument("--ne-mem", required=True)
     parser.add_argument("--fakenode", required=True)
     parser.add_argument("--loadgen", required=True)
-    parser.add_argument("--workers", default="0,2",
+    parser.add_argument("--workers", default="1,0",
                         help="comma-separated tokio worker counts, one run each (0: one per CPU)")
     parser.add_argument("--idle-seconds", type=int, default=IDLE_SECONDS)
     parser.add_argument("--load-seconds", type=int, default=20)
     parser.add_argument("--dns-queries", type=int, default=2000)
     parser.add_argument("--conns", default="100,250,500")
+    parser.add_argument("--variant", action="append", default=[], metavar="NAME=SETTINGS",
+                        help="also run with these sail start settings (JSON), or VARIANTS[NAME]; repeatable")
     parser.add_argument("--out", help="also write the rows as JSON here")
     args = parser.parse_args()
+    variants = [("default", "")]
+    for v in args.variant:
+        name, _, settings = v.partition("=")
+        settings = settings or json.dumps(VARIANTS[name])
+        json.loads(settings)
+        variants.append((name, settings))
     if os.geteuid() != 0:
         sys.exit("run as root: sail opens the TUN")
 
@@ -359,10 +410,11 @@ def main():
     rows = []
     try:
         ports = json.loads(node.stdout.readline())
-        for workers in (int(w) for w in args.workers.split(",")):
-            # A fresh state directory each run: start downloads the rule sets.
-            shutil.rmtree(os.path.join(work, "state"), ignore_errors=True)
-            rows += run(args, workers, ports, sets1, sets2, work)
+        for variant, settings in variants:
+            for workers in (int(w) for w in args.workers.split(",")):
+                # A fresh state directory each run: start downloads the rule sets.
+                shutil.rmtree(os.path.join(work, "state"), ignore_errors=True)
+                rows += run(args, variant, settings, workers, ports, sets1, sets2, work)
     finally:
         node.stdin.close()
         node.wait(timeout=10)
@@ -378,8 +430,11 @@ def main():
             f.write("## ne-mem (#388)\n\n" + report + "\n")
     if args.out:
         with open(args.out, "w") as f:
-            json.dump({"rows": rows, "rule_set_bytes": [sizes1, sizes2]}, f, indent=1)
+            json.dump({"rows": rows, "rule_set_bytes": [sizes1, sizes2],
+                       "variants": dict(variants)}, f, indent=1)
         os.chmod(args.out, 0o644)
+    if any(r["failed"] for r in rows if r["variant"] == "default"):
+        sys.exit("a load failed on the default variant (✗ above)")
 
 
 if __name__ == "__main__":

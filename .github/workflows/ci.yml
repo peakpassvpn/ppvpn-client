@@ -282,20 +282,22 @@ jobs:
         run: |
           sudo NETNS_TIMEOUT=600 NETNS_ENV="PPVPN_E2E_FAKENODE=$PWD/build/test-tools/fakenode" \
             test/netns/run.sh --libtest /usr/lib/ppvpn/ppvpn e2e_linux::enhanced_mode_routes_and_cleanup
-      # Memory in the iOS extension's shape (#388): ne-mem in release, the
-      # perf fake node and load generator, tools/perf/ne_mem.py as root (sail
-      # opens the TUN; only 203.0.113.0/24 is routed into it). Only when the
+      # Memory in the iOS extension's shape (#388): ne-mem in release (lab:
+      # the variants' sail settings), the perf fake node and load generator,
+      # tools/perf/ne_mem.py as root (sail opens the TUN; only 203.0.113.0/24
+      # is routed into it). Only when the
       # harness or Cargo.lock (a sail upgrade) changed: scope memory.
       - name: Memory, the extension's shape
         if: steps.scope.outputs.memory == 'true'
         timeout-minutes: 40
         run: |
-          cargo build --release --locked -p ppvpn-core-lab --bin ne-mem
+          cargo build --release --locked -p ppvpn-core-lab --bin ne-mem --features ppvpn-core/lab
           mkdir -p build/perf
           (cd test && CGO_ENABLED=0 go build -trimpath -o ../build/perf/fakenode ./perf/fakenode)
           (cd test && CGO_ENABLED=0 go build -trimpath -o ../build/perf/loadgen ./perf/loadgen)
           sudo --preserve-env=GITHUB_STEP_SUMMARY sh -c 'ulimit -n 16384 && exec python3 tools/perf/ne_mem.py \
             --ne-mem target/release/ne-mem --fakenode build/perf/fakenode --loadgen build/perf/loadgen \
+            --workers 1 --variant relay --variant window --variant budget --variant mobile \
             --out ne-mem-linux.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.scope.outputs.memory == 'true'
@@ -303,7 +305,7 @@ jobs:
           name: ne-mem-linux
           path: |
             ne-mem-linux.json
-            ne-mem-w*.log
+            ne-mem-*.log
           if-no-files-found: ignore
       - name: Service log
         if: always() && steps.scope.outputs.code == 'true'
@@ -513,20 +515,22 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5
         run: PPVPN_TEST_KEYSTORE=1 cargo test -p ppvpn-cli --test keystore --locked -- --nocapture
-      # Memory in the iOS extension's shape (#388): ne-mem in release, the
-      # perf fake node and load generator, tools/perf/ne_mem.py as root (sail
-      # opens the TUN; only 203.0.113.0/24 is routed into it). Only when the
+      # Memory in the iOS extension's shape (#388): ne-mem in release (lab:
+      # the variants' sail settings), the perf fake node and load generator,
+      # tools/perf/ne_mem.py as root (sail opens the TUN; only 203.0.113.0/24
+      # is routed into it). Only when the
       # harness or Cargo.lock (a sail upgrade) changed: scope memory.
       - name: Memory, the extension's shape
         if: steps.scope.outputs.memory == 'true'
         timeout-minutes: 40
         run: |
-          cargo build --release --locked -p ppvpn-core-lab --bin ne-mem
+          cargo build --release --locked -p ppvpn-core-lab --bin ne-mem --features ppvpn-core/lab
           mkdir -p build/perf
           (cd test && CGO_ENABLED=0 go build -trimpath -o ../build/perf/fakenode ./perf/fakenode)
           (cd test && CGO_ENABLED=0 go build -trimpath -o ../build/perf/loadgen ./perf/loadgen)
           sudo --preserve-env=GITHUB_STEP_SUMMARY sh -c 'ulimit -n 16384 && exec python3 tools/perf/ne_mem.py \
             --ne-mem target/release/ne-mem --fakenode build/perf/fakenode --loadgen build/perf/loadgen \
+            --workers 1 --variant relay --variant window --variant budget --variant mobile \
             --out ne-mem-macos.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.scope.outputs.memory == 'true'
@@ -534,7 +538,7 @@ jobs:
           name: ne-mem-macos
           path: |
             ne-mem-macos.json
-            ne-mem-w*.log
+            ne-mem-*.log
           if-no-files-found: ignore
       # Only when the desktop or what it builds from changed: the app
       # compiles the client for both architectures.
