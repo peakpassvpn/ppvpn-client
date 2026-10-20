@@ -52,10 +52,13 @@ any release.
 - `PPVPN_API_BASE` overrides the backend (`https://www.peakpassvpn.com`).
 - Quit the native app before trying it: both write the same system proxy
   setting.
-- Not in the prototype: the logs, messages and settings pages (their sidebar
-  items and the bell lead to a placeholder), the node context menu,
-  bundled flag images (node names carry the backend's emoji flag, which
-  Windows draws as letters), animated tray icons.
+- Flags are 4:3 images from flag-icons (MIT, `assets/flags/LICENSE`), only
+  for the countries we expect; any other country gets its code on a tile.
+  There are no emoji flags: platforms draw them differently, and Windows
+  draws them as letters.
+- Not in the prototype (to-dos on #387): the logs, messages and settings
+  pages (their sidebar items and the bell lead to a placeholder), the node
+  search field and context menu, animated tray icons.
 
 ## Building
 

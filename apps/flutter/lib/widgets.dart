@@ -8,6 +8,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'app_state.dart';
 import 'src/rust/api.dart' as rust;
@@ -379,9 +380,16 @@ String nodeTitle(rust.UiNode node) {
   return String.fromCharCodes(runes.skip(start)).trim();
 }
 
-/// The exit country's flag, 20×15 with radius 3 and a thin outline. The
-/// prototype draws the emoji flag of the country code (no bundled images
-/// yet; Windows draws letters for it).
+/// Flags bundled under assets/flags (flag-icons, 4:3).
+const _flags = {
+  'ae', 'ar', 'at', 'au', 'be', 'ca', 'ch', 'cn', 'de', 'dk', 'fi', 'fr', 'gb', 'hk',
+  'id', 'ie', 'il', 'in', 'it', 'jp', 'kr', 'mo', 'my', 'nl', 'no', 'nz', 'ph', 'pl',
+  'ru', 'se', 'sg', 'th', 'tr', 'tw', 'us', 'vn', 'za',
+};
+
+/// The exit country's flag: a 4:3 image, 20×15 with radius 3 and a 0.5 px
+/// inner outline (no emoji flags: platforms draw them differently, Windows
+/// as letters). A country without a bundled flag gets its code on a tile.
 class Flag extends StatelessWidget {
   const Flag({super.key, required this.countryCode});
 
@@ -390,21 +398,21 @@ class Flag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final code = (countryCode ?? '').toUpperCase();
-    final emoji = code.length == 2 && RegExp(r'^[A-Z]{2}$').hasMatch(code)
-        ? String.fromCharCodes(code.codeUnits.map((c) => 0x1F1E6 + c - 0x41))
-        : null;
+    final code = (countryCode ?? '').toLowerCase();
     return ExcludeSemantics(
       child: Container(
         width: Tokens.flagSize.width,
         height: Tokens.flagSize.height,
         clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: t.sunk,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(3)),
+        foregroundDecoration: BoxDecoration(
           borderRadius: BorderRadius.circular(3),
-          border: Border.all(color: t.hair, width: 0.5),
+          border: Border.all(color: t.flagOutline, width: 0.5),
         ),
-        child: emoji == null ? null : FittedBox(fit: BoxFit.cover, child: Text(emoji)),
+        child: _flags.contains(code)
+            ? SvgPicture.asset('assets/flags/$code.svg', fit: BoxFit.cover, width: Tokens.flagSize.width, height: Tokens.flagSize.height)
+            : Text(code.toUpperCase(), style: t.label.copyWith(fontSize: 8, height: 1, color: t.t3)),
       ),
     );
   }

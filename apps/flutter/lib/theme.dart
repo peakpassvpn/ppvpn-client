@@ -42,6 +42,7 @@ class Tokens {
     required this.navSelectedShadow,
     required this.avatar,
     required this.onAvatar,
+    required this.flagOutline,
   });
 
   final Brightness brightness;
@@ -105,6 +106,9 @@ class Tokens {
   final List<Color> avatar;
   final Color onAvatar;
 
+  /// The flag's 0.5 px inner outline.
+  final Color flagOutline;
+
   static const light = Tokens._(
     brightness: Brightness.light,
     bg: Color(0xFFF3F5F8),
@@ -143,6 +147,7 @@ class Tokens {
     navSelectedShadow: [BoxShadow(color: Color(0x0F0F172A), offset: Offset(0, 1), blurRadius: 2)],
     avatar: [Color(0xFF3D63C9), Color(0xFF1F4390)],
     onAvatar: Color(0xFFFFFFFF),
+    flagOutline: Color(0x2E000000),
   );
 
   /// Dark: cards rely on their outline; the shadow only darkens below.
@@ -178,6 +183,7 @@ class Tokens {
     navSelectedShadow: [],
     avatar: [Color(0xFFB4C5FF), Color(0xFF7F9CF0)],
     onAvatar: Color(0xFF002A78),
+    flagOutline: Color(0x40FFFFFF),
   );
 
   /// Tier tag 「优化」: teal on 10 %. 「专线」 uses the accent.
