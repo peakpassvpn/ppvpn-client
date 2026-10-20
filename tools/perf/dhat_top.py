@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """The heap at its peak, by allocation site, from a dhat heap profile
 (ne-mem's --dhat-file, tools/perf/ne_mem.py --dhat): the bytes live at
-t-gmax summed by the first frame of ours or a dependency's (allocator,
-std, core and dhat frames skipped), then the largest sites with their
-stacks.
+t-gmax summed by the first source line past the standard library and the
+allocator, the caller in our code (sail's, ppvpn's) after it when that
+line is a dependency's (`bytes-1.12.1/src/bytes_mut.rs:157 <- transport/
+muxcore/session.rs:736`), then the largest allocation points' stacks.
 
     tools/perf/dhat_top.py dhat-heap.json [--top 25] [--depth 8]
 
-Prints Markdown.
+Frames are those of a line-tables build: short function names, and paths
+relative to the crate's source (a dependency's begins with its directory,
+`name-1.2.3/`). Prints Markdown.
 """
 
 import argparse
@@ -15,18 +18,37 @@ import collections
 import json
 import re
 
-# Frames that only allocate: skipped to reach the code that asked.
-PLUMBING = re.compile(r"^(<?)(alloc|core|std|dhat|hashbrown|__rust|rust_|_?malloc|<alloc|<core|<std)::|"
-                      r"^(<?alloc::|<?core::|<?std::)|__rdl_|__rg_|^\[root\]$")
+# The standard library's files (as rustc remaps them) and dhat's.
+STD = re.compile(r"^(alloc|core|std)/src/|^src/(raw_vec|vec|boxed|slice|convert|sys|thread|panic|ops|string|"
+                 r"collections|sync|fmt|io|alloc)/|^sys/|^dhat-\d")
+DEPENDENCY = re.compile(r"^[A-Za-z0-9_\-]+-\d+\.\d+\.\d+[^/]*/")
 
 
-def name(frame):
-    """`0x1234: crate::path::fn (file:line)` -> `crate::path::fn (file:line)`."""
-    return frame.split(": ", 1)[1] if re.match(r"^0x[0-9a-f]+: ", frame) else frame
+def location(frame):
+    """`0x1: name (path:line:col)` -> (path, `path:line`), or ("", frame);
+    the global allocator's shims (`__rust_alloc_zeroed`, at the static's
+    line) count as std."""
+    if re.search(r": __r(ust|dl|g)_", frame):
+        return ("alloc/src/", frame)
+    m = re.search(r"\(([^()]*):(\d+):\d+\)$", frame)
+    return (m.group(1), f"{m.group(1)}:{m.group(2)}") if m else ("", frame)
 
 
-def function(frame):
-    return re.sub(r" \(.*\)$", "", name(frame))
+def site(frames):
+    """The first frame past std, and our caller when that is a dependency's."""
+    first = ours = None
+    for frame in frames:
+        path, where = location(frame)
+        if not path or STD.search(path):
+            continue
+        if first is None:
+            first = where
+        if not DEPENDENCY.search(path):
+            ours = where
+            break
+    if first is None:
+        return "?"
+    return first if ours in (None, first) else f"{first} <- {ours}"
 
 
 def main():
@@ -38,39 +60,26 @@ def main():
     with open(args.profile) as f:
         d = json.load(f)
     ftbl = d["ftbl"]
-    total = sum(pp["gb"] for pp in d["pps"])
-    blocks = sum(pp["gbk"] for pp in d["pps"])
-
-    def ours(pp):
-        frames = [ftbl[i] for i in pp["fs"]]
-        kept = [f for f in frames if not PLUMBING.search(function(f))]
-        return kept or frames
-
+    pps = [pp for pp in d["pps"] if pp["gb"]]
+    total = sum(pp["gb"] for pp in pps)
     by_site = collections.Counter()
-    by_crate = collections.Counter()
-    for pp in d["pps"]:
-        if not pp["gb"]:
-            continue
-        frames = ours(pp)
-        by_site[function(frames[0])] += pp["gb"]
-        crate = re.match(r"^<?([a-z0-9_]+)", function(frames[0]))
-        by_crate[crate.group(1) if crate else "?"] += pp["gb"]
+    blocks = collections.Counter()
+    for pp in pps:
+        key = site([ftbl[i] for i in pp["fs"]])
+        by_site[key] += pp["gb"]
+        blocks[key] += pp["gbk"]
 
     mib = lambda b: f"{b / 1048576:.2f}"
-    print(f"Live at t-gmax: {mib(total)} MiB in {blocks} blocks.\n")
-    print("| crate | MiB |\n| --- | --- |")
-    for crate, b in by_crate.most_common(12):
-        print(f"| {crate} | {mib(b)} |")
-    print("\n| first frame of ours | MiB |\n| --- | --- |")
-    for site, b in by_site.most_common(args.top):
-        print(f"| `{site}` | {mib(b)} |")
-    print("\nThe largest allocation points with their stacks:\n")
-    for pp in sorted(d["pps"], key=lambda pp: -pp["gb"])[:10]:
-        if not pp["gb"]:
-            break
+    print(f"Live at t-gmax: {mib(total)} MiB in {sum(pp['gbk'] for pp in pps)} blocks.\n")
+    print("| site | MiB | blocks |\n| --- | --- | --- |")
+    for key, b in by_site.most_common(args.top):
+        print(f"| `{key}` | {mib(b)} | {blocks[key]} |")
+    print("\nThe largest allocation points, their frames past std:\n")
+    for pp in sorted(pps, key=lambda pp: -pp["gb"])[:8]:
         print(f"- {mib(pp['gb'])} MiB in {pp['gbk']} blocks")
-        for f in ours(pp)[: args.depth]:
-            print(f"  - `{name(f)}`")
+        frames = [ftbl[i] for i in pp["fs"] if not STD.search(location(ftbl[i])[0])]
+        for frame in frames[: args.depth]:
+            print(f"  - `{location(frame)[1]}`")
 
 
 if __name__ == "__main__":
