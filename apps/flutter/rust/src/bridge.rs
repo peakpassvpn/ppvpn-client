@@ -278,6 +278,7 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             .as_ref()
             .or(snapshot.last_error.as_ref())
             .map(ui_error),
+        unread: snapshot.unread_notifications,
     }
 }
 

@@ -26,6 +26,9 @@ class Tokens {
     required this.text,
     required this.textSecondary,
     required this.textSubtle,
+    required this.sidebar,
+    required this.badge,
+    required this.onBadge,
   });
 
   final Brightness brightness;
@@ -55,6 +58,12 @@ class Tokens {
   /// Row descriptions and notes: the weakest text.
   final Color textSubtle;
 
+  final Color sidebar;
+
+  /// Unread badge and its digits.
+  final Color badge;
+  final Color onBadge;
+
   static const light = Tokens._(
     brightness: Brightness.light,
     accent: Color(0xFF1F4390),
@@ -73,6 +82,9 @@ class Tokens {
     text: Color(0xD9000000),
     textSecondary: Color(0x8C000000),
     textSubtle: Color(0x66000000),
+    sidebar: Color(0xFFE6E6E6),
+    badge: Color(0xFFBA1A1A),
+    onBadge: Color(0xFFFFFFFF),
   );
 
   static const dark = Tokens._(
@@ -93,12 +105,22 @@ class Tokens {
     text: Color(0xE6FFFFFF),
     textSecondary: Color(0x8CFFFFFF),
     textSubtle: Color(0x66FFFFFF),
+    sidebar: Color(0xFF262626),
+    badge: Color(0xFFFFB4AB),
+    onBadge: Color(0xFF690005),
   );
 
   // Sizes (macOS column of the handoff).
   static const windowSize = Size(760, 540);
   static const windowMinSize = Size(640, 460);
-  static const titleBarHeight = 52.0;
+  /// The strip above the content (and above the sidebar items): macOS's
+  /// unified toolbar height, where the traffic lights sit.
+  static const topBarHeight = 52.0;
+  static const captionButtonWidth = 46.0;
+
+  // Sidebar navigation (#387): 200 wide, 34-high items.
+  static const sidebarWidth = 200.0;
+  static const sidebarItemHeight = 34.0;
   static const contentPadding = EdgeInsets.symmetric(vertical: 20, horizontal: 24);
   static const sectionGap = 18.0;
   static const rowMinHeight = 28.0;

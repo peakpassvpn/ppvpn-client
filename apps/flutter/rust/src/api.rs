@@ -78,6 +78,8 @@ pub struct UiSnapshot {
     pub selected_node_id: Option<String>,
     /// Why the connection failed, else the latest failure of any action.
     pub error: Option<UiError>,
+    /// Unread backend messages (the sidebar badge); 0 while signed out.
+    pub unread: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

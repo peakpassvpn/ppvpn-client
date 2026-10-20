@@ -1,7 +1,8 @@
 // The handoff's strings.json (zh is the source language), only the keys the
 // prototype shows. Generated once from the handoff; two strings that carry
-// sample names take a placeholder here ({d}, {team}). Prototype-only keys
-// are at the end.
+// sample names take a placeholder here ({d}, {team}). The keys after
+// `authPass` are not in the handoff's table (window captions, the
+// prototype's own notes).
 
 import 'dart:ui';
 
@@ -108,7 +109,14 @@ const _zh = <String, String>{
   'st_failed': '连接失败',
   'authUser': '用户名',
   'authPass': '密码',
+  'messages': '消息',
+  'unreadN': '{n} 条未读消息',
+  'settings': '设置',
+  'close': '关闭',
+  'minimize': '最小化',
+  'maximize': '最大化',
   'protoNoTun': '原型不包含增强模式',
+  'protoPage': '原型不包含此页面',
   'h_stdStopping': '正在断开',
 };
 
@@ -199,7 +207,14 @@ const _en = <String, String>{
   'st_failed': 'Connection Failed',
   'authUser': 'User Name',
   'authPass': 'Password',
+  'messages': 'Messages',
+  'unreadN': '{n} unread messages',
+  'settings': 'Settings',
+  'close': 'Close',
+  'minimize': 'Minimize',
+  'maximize': 'Maximize',
   'protoNoTun': 'Not part of the prototype',
+  'protoPage': 'This page is not part of the prototype',
   'h_stdStopping': 'Disconnecting',
 };
 

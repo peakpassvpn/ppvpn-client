@@ -18,6 +18,12 @@ any release.
   these values.
 - `lib/strings.dart`: the handoff's `strings.json` (zh and en) for the keys
   the prototype shows.
+- `lib/shell.dart`: the window frame, following the navigation decided on
+  #387. It has a left sidebar (200 wide, 34-high items: overview, nodes,
+  logs, messages with the unread badge) and the account card and settings at
+  the bottom. There is no system title bar. On macOS the traffic lights sit
+  at the top of the sidebar; on Windows and Linux the caption buttons are at
+  the top right of the content area.
 - `lib/pages/`: sign-in, overview, nodes. `lib/tray.dart`: the tray icon and
   its menu.
 - `assets/tray/`: placeholder tray icons for the four states (off,
@@ -42,7 +48,8 @@ any release.
 - `PPVPN_API_BASE` overrides the backend (`https://www.peakpassvpn.com`).
 - Quit the native app before trying it: both write the same system proxy
   setting.
-- Not in the prototype: logs, settings, messages, the node context menu,
+- Not in the prototype: the logs, messages and settings pages (their sidebar
+  items lead to a placeholder), the node context menu,
   bundled flag images (node names carry the backend's emoji flag, which
   Windows draws as letters), animated tray icons.
 
