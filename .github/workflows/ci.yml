@@ -309,8 +309,9 @@ jobs:
           if-no-files-found: ignore
       # Where the heap goes (#388): ne-mem with dhat's allocator and line
       # tables, once with only the downloads (dhat's snapshot is at the
-      # heap's peak) and once with 500 connections; tools/perf/dhat_top.py
-      # sums each up into the step summary.
+      # heap's peak), once with 500 connections, and once with the sessions
+      # capped at 16 (do the DNS burst's upstream connections count?);
+      # tools/perf/dhat_top.py sums each up into the step summary.
       - name: Memory profile (dhat)
         if: steps.scope.outputs.memory == 'true'
         timeout-minutes: 40
@@ -319,13 +320,18 @@ jobs:
         run: |
           cargo build --release --locked -p ppvpn-core-lab --bin ne-mem --features ppvpn-core/lab,ppvpn-core-lab/dhat
           mkdir -p build/dhat
-          for run in "downloads --conns=" "conns500 --conns=500"; do
+          for run in "downloads default --conns=" "conns500 default --conns=500" \
+                     "dns-cap16 cap16 --conns= --no-default --variant cap16"; do
             set -- $run
+            name=$1 variant=$2
+            shift 2
             sudo sh -c "ulimit -n 16384 && exec python3 tools/perf/ne_mem.py \
               --ne-mem target/release/ne-mem --fakenode build/perf/fakenode --loadgen build/perf/loadgen \
-              --workers 1 $2 --dhat build/dhat/$1 --out build/dhat/$1.json"
+              --workers 1 $* --dhat build/dhat/$name --out build/dhat/$name.json"
+            sudo cp "ne-mem-$variant-w1.log" "build/dhat/$name.log"
             sudo chmod -R a+r build/dhat
-            { echo "## dhat: $1 (#388)"; echo; python3 tools/perf/dhat_top.py "build/dhat/$1-default-w1.json"; } \
+            { echo "## dhat: $name (#388)"; echo; python3 tools/perf/dhat_top.py "build/dhat/$name-$variant-w1.json"
+              echo; echo "Sessions refused (sail's log): $(grep -c 'refused' "build/dhat/$name.log" || true)"; } \
               | tee -a "$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

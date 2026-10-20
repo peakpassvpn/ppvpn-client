@@ -12,7 +12,8 @@ As root: sail opens the TUN. Runs on macOS and Linux.
 A variant is a run with sail's start settings in PPVPN_LAB_SAIL_SETTINGS
 (ne-mem built with ppvpn-core's `lab` feature): one of VARIANTS by name, or
 NAME='{"profile":"desktop","set":["relay.buffer_size=8"]}'. `default`, the
-first, is core's own options. Each variant runs once per --workers value.
+first, is core's own options (--no-default leaves it out). Each variant
+runs once per --workers value.
 
 --dhat (ne-mem built with its `dhat` feature) writes each run's heap
 profile to PREFIX-<variant>-w<workers>.json; dhat's view of it takes the
@@ -98,6 +99,9 @@ VARIANTS = {
     # Not the profile's: the sessions a 35 MiB budget carries at about 150
     # KiB each (#388); the dispatcher refuses the rest, the TUN's included.
     "cap": {"profile": "desktop", "set": ["inbound.max_connections=128"]},
+    # Far below a DNS burst's concurrent upstream queries: whether the cap
+    # bounds the connections the instance opens itself (#388).
+    "cap16": {"profile": "desktop", "set": ["inbound.max_connections=16"]},
 }
 
 
@@ -403,10 +407,11 @@ def main():
     parser.add_argument("--conns", default="100,250,500")
     parser.add_argument("--variant", action="append", default=[], metavar="NAME=SETTINGS",
                         help="also run with these sail start settings (JSON), or VARIANTS[NAME]; repeatable")
+    parser.add_argument("--no-default", action="store_true", help="only the --variant runs")
     parser.add_argument("--dhat", metavar="PREFIX", help="ne-mem's heap profiles (its dhat feature) to PREFIX-*.json")
     parser.add_argument("--out", help="also write the rows as JSON here")
     args = parser.parse_args()
-    variants = [("default", "")]
+    variants = [] if args.no_default else [("default", "")]
     for v in args.variant:
         name, _, settings = v.partition("=")
         settings = settings or json.dumps(VARIANTS[name])
