@@ -20,10 +20,11 @@ any release.
   the prototype shows.
 - `lib/shell.dart`: the window frame, following the navigation decided on
   #387. It has a left sidebar (200 wide, 34-high items: overview, nodes,
-  logs, messages with the unread badge) and the account card and settings at
-  the bottom. There is no system title bar. On macOS the traffic lights sit
-  at the top of the sidebar; on Windows and Linux the caption buttons are at
-  the top right of the content area.
+  logs) and the account card and settings at the bottom. Messages open from
+  a bell with the unread badge at the top right of the content area. There
+  is no system title bar. On macOS the traffic lights sit at the top of the
+  sidebar; on Windows and Linux the caption buttons are at the top right of
+  the content area, right of the bell.
 - `lib/pages/`: sign-in, overview, nodes. `lib/tray.dart`: the tray icon and
   its menu.
 - `assets/tray/`: placeholder tray icons for the four states (off,
@@ -49,7 +50,7 @@ any release.
 - Quit the native app before trying it: both write the same system proxy
   setting.
 - Not in the prototype: the logs, messages and settings pages (their sidebar
-  items lead to a placeholder), the node context menu,
+  items and the bell lead to a placeholder), the node context menu,
   bundled flag images (node names carry the backend's emoji flag, which
   Windows draws as letters), animated tray icons.
 

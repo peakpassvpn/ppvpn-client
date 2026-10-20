@@ -1,10 +1,12 @@
 // The window's frame (#387, navigation as decided on the issue): a left
-// sidebar, 200 wide, with 34-high items for overview, nodes, logs and
-// messages (unread badge), and the account card plus settings at the
-// bottom. The window has no system title bar: on macOS the traffic lights
-// sit at the top of the sidebar; on Windows and Linux the caption buttons
-// are drawn at the top right of the content area. Logs, messages and
-// settings are not in the prototype: their items lead to a placeholder.
+// sidebar, 200 wide, with 34-high items for overview, nodes and logs, and
+// the account card plus settings at the bottom. Messages are not in the
+// sidebar: a bell with the unread badge at the top right of the content
+// area opens them. The window has no system title bar: on macOS the traffic
+// lights sit at the top of the sidebar; on Windows and Linux the caption
+// buttons are drawn at the top right of the content area, right of the
+// bell. Logs, messages and settings are not in the prototype: they lead to
+// a placeholder.
 // Signed out, the sign-in page fills the window.
 
 import 'dart:async';
@@ -62,7 +64,13 @@ class _ShellState extends State<Shell> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const _TopBar(),
+                _TopBar(
+                  bell: _Bell(
+                    unread: snapshot.unread,
+                    selected: _page == _Page.messages,
+                    onPress: () => setState(() => _page = _Page.messages),
+                  ),
+                ),
                 Expanded(
                   child: switch (_page) {
                     _Page.overview => OverviewPage(app: widget.app),
@@ -79,10 +87,12 @@ class _ShellState extends State<Shell> {
   );
 }
 
-/// The draggable strip above the content; the caption buttons at its end on
-/// Windows and Linux.
+/// The draggable strip above the content; at its end the bell (signed in)
+/// and, on Windows and Linux, the caption buttons.
 class _TopBar extends StatelessWidget {
-  const _TopBar();
+  const _TopBar({this.bell});
+
+  final Widget? bell;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -90,10 +100,58 @@ class _TopBar extends StatelessWidget {
     child: Row(
       children: [
         const Expanded(child: DragToMoveArea(child: SizedBox.expand())),
+        if (bell case final bell?) ...[bell, SizedBox(width: Platform.isMacOS ? 16 : 8)],
         if (!Platform.isMacOS) const _CaptionButtons(),
       ],
     ),
   );
+}
+
+/// Messages: the bell, the unread badge on its top right corner (none at 0).
+class _Bell extends StatelessWidget {
+  const _Bell({required this.unread, required this.selected, required this.onPress});
+
+  final int unread;
+  final bool selected;
+  final VoidCallback onPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final s = S.current;
+    return SizedBox(
+      width: 34,
+      height: 30,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: FButton.icon(
+              variant: selected ? FButtonVariant.secondary : FButtonVariant.ghost,
+              semanticsLabel: unread > 0 ? '${s('messages')}, ${s('unreadN', {'n': '$unread'})}' : s('messages'),
+              onPress: onPress,
+              child: Icon(FLucideIcons.bell, size: 16, color: t.textSecondary),
+            ),
+          ),
+          if (unread > 0)
+            Positioned(
+              top: -3,
+              right: -6,
+              child: ExcludeSemantics(
+                child: DecoratedBox(
+                  // The background-coloured ring around the badge.
+                  decoration: BoxDecoration(
+                    color: t.window,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Padding(padding: const EdgeInsets.all(1.5), child: Badge(count: unread)),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CaptionButtons extends StatefulWidget {
@@ -195,13 +253,6 @@ class _Sidebar extends StatelessWidget {
             selected: page == _Page.logs,
             onPress: () => onPage(_Page.logs),
           ),
-          _Item(
-            icon: FLucideIcons.bell,
-            label: s('messages'),
-            badge: snapshot.unread,
-            selected: page == _Page.messages,
-            onPress: () => onPage(_Page.messages),
-          ),
           const Spacer(),
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
@@ -229,13 +280,12 @@ class _Sidebar extends StatelessWidget {
 }
 
 class _Item extends StatelessWidget {
-  const _Item({required this.icon, required this.label, required this.selected, required this.onPress, this.badge = 0});
+  const _Item({required this.icon, required this.label, required this.selected, required this.onPress});
 
   final IconData icon;
   final String label;
   final bool selected;
   final VoidCallback onPress;
-  final int badge;
 
   @override
   Widget build(BuildContext context) {
@@ -249,9 +299,8 @@ class _Item extends StatelessWidget {
           selected: selected,
           mainAxisAlignment: MainAxisAlignment.start,
           onPress: onPress,
-          semanticsLabel: badge > 0 ? '$label, ${S.current('unreadN', {'n': '$badge'})}' : label,
+          semanticsLabel: label,
           prefix: Icon(icon, size: 15, color: selected ? t.accent : t.textSecondary),
-          suffix: badge > 0 ? Badge(count: badge) : null,
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(label, style: t.rowTitle.copyWith(fontWeight: selected ? FontWeight.w600 : null)),
