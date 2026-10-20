@@ -2834,6 +2834,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "ppvpn-core",
  "serde",
  "serde_json",

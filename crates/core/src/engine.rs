@@ -182,7 +182,7 @@ impl Engine {
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         log.span().in_scope(|| cleanup::sweep(&config))?;
         give_back_freed_memory();
-        let options = sail::embed::Options::new()
+        let options = sail_options()
             .run_dir(cleanup::run_dir(&config))
             .runtime(sail_runtime());
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error_on(config.platform))?;
@@ -654,6 +654,21 @@ fn sail_runtime() -> sail::embed::Runtime {
         }
         _ => sail::embed::Runtime::Own,
     }
+}
+
+/// sail's options before the run directory and the runtime: its defaults,
+/// or in a lab build (`lab`) the start settings in PPVPN_LAB_SAIL_SETTINGS
+/// (`{"profile": .., "set": ["relay.buffer_size=8"]}`), for ne-mem to
+/// measure tunings side by side (#388); settings it refuses end the lab
+/// process.
+fn sail_options() -> sail::embed::Options {
+    #[cfg(feature = "lab")]
+    if let Ok(json) = std::env::var("PPVPN_LAB_SAIL_SETTINGS") {
+        return sail::embed::Options::new()
+            .settings_json(&json)
+            .expect("PPVPN_LAB_SAIL_SETTINGS");
+    }
+    sail::embed::Options::new()
 }
 
 /// glibc's malloc keeps what a load freed (a start, a reload, a rule

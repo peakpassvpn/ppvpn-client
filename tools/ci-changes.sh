@@ -15,12 +15,15 @@
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
 #         release.yml warms the caches on main only when it is true.
+#   memory  the memory harness (ne-mem, tools/perf/ne_mem.py, test/perf/)
+#         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
+#         then build it in release and measure (#388).
 # Every other event (workflow_dispatch, a new branch), a compare that fails,
 # or one with 300 files or more (the API's page limit) counts as changing
 # everything.
 set -euo pipefail
 
-all() { printf '%s=true\n' code desktop flutter deps; exit 0; }
+all() { printf '%s=true\n' code desktop flutter deps memory; exit 0; }
 
 case "${GITHUB_EVENT_NAME:-}" in
   pull_request) base=${PR_BASE_SHA:-} ;;
@@ -34,8 +37,11 @@ files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
 n=$(grep -c . <<<"$files" || true)
 (( n > 0 && n < 300 )) || all
 
-code=false desktop=false flutter=false deps=false
+code=false desktop=false flutter=false deps=false memory=false
 while IFS= read -r f; do
+  case $f in
+    Cargo.lock | crates/core-lab/src/bin/ne-mem.rs | tools/perf/ne_mem.py | test/perf/*) memory=true ;;
+  esac
   case $f in
     docs/* | *.md) ;;
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | \
@@ -52,3 +58,4 @@ echo "code=$code"
 echo "desktop=$desktop"
 echo "flutter=$flutter"
 echo "deps=$deps"
+echo "memory=$memory"

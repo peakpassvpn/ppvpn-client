@@ -5,6 +5,11 @@
 // generated at start for "localhost" and written to -dir; the engine under
 // test trusts it through SSL_CERT_FILE. No key is ever committed.
 //
+// -redirect sends the node's dials to that range to loopback instead, the
+// port kept: a client whose connections a TUN carries dials an address the
+// TUN routes (ne_mem.py routes a test range into it), and the node, on the
+// same host, would otherwise send them back into the TUN.
+//
 // It prints one JSON line with the ports and the certificate path, then
 // runs until stdin closes or it is signalled.
 package main
@@ -46,6 +51,7 @@ const (
 
 func main() {
 	dir := flag.String("dir", "", "directory for the generated certificate (required)")
+	redirect := flag.String("redirect", "", "CIDR whose dials go to 127.0.0.1 instead, the port kept")
 	flag.Parse()
 	if *dir == "" {
 		log.Fatal("-dir is required")
@@ -78,6 +84,13 @@ func main() {
 	})
 	ssPort, anytlsPort := freePort(), freePort()
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	var route *option.RouteOptions
+	if *redirect != "" {
+		route = &option.RouteOptions{Rules: []option.Rule{{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{
+			RawDefaultRule: option.RawDefaultRule{IPCIDR: badoption.Listable[string]{*redirect}},
+			RuleAction: option.RuleAction{Action: C.RuleActionTypeRouteOptions,
+				RouteOptionsOptions: option.RouteOptionsActionOptions{OverrideAddress: "127.0.0.1"}}}}}}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	instance, err := box.New(box.Options{Context: box.Context(ctx, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry()), Options: option.Options{
@@ -91,6 +104,7 @@ func main() {
 				InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{TLS: &option.InboundTLSOptions{Enabled: true, ServerName: "localhost", CertificatePath: certPath, KeyPath: keyPath}}}},
 		},
 		Outbounds: []option.Outbound{{Type: C.TypeDirect, Tag: "direct"}},
+		Route:     route,
 	}})
 	if err != nil {
 		log.Fatal(err)
