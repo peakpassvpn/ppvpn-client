@@ -1,0 +1,4 @@
+# flutter_rust_bridge_codegen generate (ci.yml): Dart for crate::api.
+rust_input: crate::api
+rust_root: rust/
+dart_output: lib/src/rust

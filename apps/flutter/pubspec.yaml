@@ -1,0 +1,22 @@
+name: ppvpn_flutter
+description: The PPVPN Flutter desktop prototype (#387).
+publish_to: none
+version: 0.0.1
+
+environment:
+  sdk: ^3.13.0
+  flutter: ">=3.47.0"
+
+# Exact versions: forui is before 1.0, and flutter_rust_bridge must match
+# the Rust crate and the codegen (2.13.0 in all three).
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_rust_bridge: 2.13.0
+  forui: 0.27.6
+  tray_manager: 0.8.0
+  window_manager: 0.5.2
+
+flutter:
+  assets:
+    - assets/tray/

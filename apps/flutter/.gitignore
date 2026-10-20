@@ -1,0 +1,15 @@
+# Generated in CI (apps/flutter/scripts/ci-build.sh): the bridge glue, the
+# platform runners (flutter create), and the build.
+/lib/src/rust/
+/rust/src/frb_generated.rs
+/linux/
+/macos/
+/windows/
+/test/
+/build/
+/.dart_tool/
+/.metadata
+/.flutter-plugins
+/.flutter-plugins-dependencies
+/pubspec.lock
+*.iml
