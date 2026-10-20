@@ -21,3 +21,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+
+# ne-mem reads its own phys_footprint and thread count (macOS).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
