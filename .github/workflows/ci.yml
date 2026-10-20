@@ -540,21 +540,34 @@ jobs:
             echo "$f: $(lipo -archs "$f")"
             lipo "$f" -verify_arch x86_64
           done
-      # The Keychain store against the runner's login keychain has its own
-      # timeout: a keychain prompt would wait for a person. These four
-      # compile sail anew after a sail upgrade (no cache): over 20 minutes.
+      # The macOS-only tests, built by one cargo invocation and run from
+      # their binaries (tools/test-binary.py), each with its own filters, in
+      # its package's directory as cargo test would. One cargo test per
+      # package resolved other features each time (tokio's, serde_json's,
+      # log's), and each rebuilt sail: after a sail upgrade (no cache) the
+      # first three took 27 minutes and the fourth did not end in 30. The
+      # Keychain store against the runner's login keychain has its own
+      # timeout: a keychain prompt would wait for a person.
       - name: macOS tests
         if: steps.scope.outputs.code == 'true'
-        timeout-minutes: 30
+        timeout-minutes: 50
         run: |
-          cargo test -p ppvpn-core --lib --locked -- hostipv6::darwin localdns::source probe::icmp runtime::sail_tests
-          cargo test -p ppvpn-cli --lib --locked -- identity
-          (cd crates/desktop && cargo test --lib --locked -- detect service sysproxy)
-          PPVPN_TEST_CODESIGN=1 cargo test -p ppvpn-service --bin ppvpn-service --locked -- macsign
+          mkdir -p build
+          cargo test --locked --no-run --message-format=json \
+            -p ppvpn-core -p ppvpn-cli -p ppvpn-desktop -p ppvpn-service \
+            --lib --bin ppvpn-service --test keystore > build/macos-tests.json
+          bin() { python3 tools/test-binary.py "$PWD/build/macos-tests.json" "$1"; }
+          core=$(bin ppvpn_core) cli=$(bin ppvpn_cli) desktop=$(bin ppvpn_client) service=$(bin ppvpn-service)
+          (cd crates/core && "$core" hostipv6::darwin localdns::source probe::icmp runtime::sail_tests)
+          (cd crates/cli && "$cli" identity)
+          (cd crates/desktop && "$desktop" detect service sysproxy)
+          (cd crates/service && PPVPN_TEST_CODESIGN=1 "$service" macsign)
       - name: macOS tests, the Keychain
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5
-        run: PPVPN_TEST_KEYSTORE=1 cargo test -p ppvpn-cli --test keystore --locked -- --nocapture
+        run: |
+          keystore=$(python3 tools/test-binary.py build/macos-tests.json keystore)
+          cd crates/cli && PPVPN_TEST_KEYSTORE=1 "$keystore" --nocapture
       # Memory in the iOS extension's shape (#388): ne-mem in release (lab:
       # the variants' sail settings), the perf fake node and load generator,
       # tools/perf/ne_mem.py as root (sail opens the TUN; only 203.0.113.0/24
