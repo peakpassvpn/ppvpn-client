@@ -89,6 +89,8 @@ pub struct UiNode {
     pub exit_region: Option<String>,
     pub exit_country_code: Option<String>,
     pub entry_label: Option<String>,
+    /// Entry key, e.g. `cn-optimized`: picks the tier tag's colour.
+    pub entry_key: String,
     pub udp: bool,
     /// Lines (replicas) in failover order: label, else key.
     pub lines: Vec<String>,

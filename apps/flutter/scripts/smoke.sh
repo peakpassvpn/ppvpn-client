@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Starts the built prototype ($1: the bundle), checks that it is still
 # running after $SETTLE seconds, takes a screenshot of the screen and notes
-# the app's resident memory and the bundle's sizes, then stops it. Results
-# go to $2 (a directory: screenshot.png, results.txt). Linux runs it inside
+# the app's resident memory and the bundle's sizes, then stops it; then
+# screenshots of the signed-in pages on sample data. Results go to $2 (a
+# directory: screenshot.png, overview-light.png, overview-dark.png,
+# nodes-light.png, results.txt). Linux runs it inside
 # xvfb-run and a D-Bus session (ci.yml).
 set -euo pipefail
 
@@ -45,6 +47,32 @@ case "$(uname -s)" in
   Linux | Darwin) kill "$pid"; wait "$pid" 2>/dev/null || true ;;
   *) taskkill //F //IM ppvpn_flutter.exe >/dev/null || true ;;
 esac
+
+# Screenshots of the signed-in pages on the design's sample data
+# (lib/sample.dart; no client runs), light and dark.
+shot() {
+  local name=$1; shift
+  env "$@" "$exe" >"$out/$name.log" 2>&1 &
+  local p=$!
+  sleep 8
+  case "$(uname -s)" in
+    Linux) import -window root "$out/$name.png" ;;
+    Darwin) screencapture -x "$out/$name.png" ;;
+    *) powershell -NoProfile -Command "
+         Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+         \$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+         \$img = New-Object System.Drawing.Bitmap \$b.Width, \$b.Height
+         [System.Drawing.Graphics]::FromImage(\$img).CopyFromScreen(\$b.Location, [System.Drawing.Point]::Empty, \$b.Size)
+         \$img.Save('$(cygpath -w "$out/$name.png")')" ;;
+  esac
+  case "$(uname -s)" in
+    Linux | Darwin) kill "$p"; wait "$p" 2>/dev/null || true ;;
+    *) taskkill //F //IM ppvpn_flutter.exe >/dev/null || true ;;
+  esac
+}
+shot overview-light PPVPN_FLUTTER_SAMPLE=overview PPVPN_FLUTTER_THEME=light
+shot overview-dark PPVPN_FLUTTER_SAMPLE=overview PPVPN_FLUTTER_THEME=dark
+shot nodes-light PPVPN_FLUTTER_SAMPLE=nodes PPVPN_FLUTTER_THEME=light
 
 # Unpacked size in KiB, and the size of a zip of the bundle (no installer
 # yet: the closest to a download).

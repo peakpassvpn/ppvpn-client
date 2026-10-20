@@ -178,3 +178,34 @@ The remaining crates are under permissive licenses, most under MIT OR Apache-2.0
 
 PPVPN and `ppvpn-core` are not affiliated with or endorsed by the authors of these components.
 
+## The Flutter desktop prototype (`apps/flutter/`)
+
+Not part of any release (#387). Besides the Rust crates above it bundles:
+
+- [Inter](https://github.com/rsms/inter), through forui, under the SIL Open Font License 1.1.
+- [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) 2.304 (`apps/flutter/assets/fonts`), under the SIL Open Font License 1.1 (`JetBrainsMono-OFL.txt` there).
+- Country flags from [flag-icons](https://github.com/lipis/flag-icons) 7.6.0 (`apps/flutter/assets/flags`, 4:3, a subset), under the MIT License:
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2013 Panayiotis Lipiridis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

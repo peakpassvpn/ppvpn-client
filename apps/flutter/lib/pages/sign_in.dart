@@ -1,8 +1,7 @@
-// Sign-in (handoff "1. 登录", design v17): a brand column on the left (the
-// brand at its top and one line about the app), the content on the right
-// with 56 on either side. Signed out, waiting for the browser with the
-// device code (one 40×52 box per character) and its countdown, and the
-// three errors.
+// Sign-in (design DesktopLogin): the brand panel on the left (see
+// SignInBrand), the content on the right with 56 on either side. Signed
+// out; waiting for the browser (the device code in 40×52 boxes, the wait
+// ring with the countdown, the three steps); and the three errors.
 
 import 'dart:async';
 
@@ -33,10 +32,11 @@ class SignInPage extends StatelessWidget {
       } else {
         body = _SignedOut(app: app, error: _signInError(snapshot.error));
       }
-      return Center(
+      return Align(
+        alignment: Alignment.centerLeft,
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: Tokens.signInPadding, vertical: 20),
-          child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420), child: body),
+          child: body,
         ),
       );
     },
@@ -52,30 +52,36 @@ _SignInError? _signInError(rust.UiError? error) => switch (error?.code) {
   _ => null,
 };
 
-class BrandIcon extends StatelessWidget {
-  const BrandIcon({super.key, this.size = Tokens.brandIconSize});
+/// 「登录」 over the heading, then the heading and the paragraph.
+class _Heading extends StatelessWidget {
+  const _Heading({required this.title, required this.text, this.icon});
 
-  final double size;
+  final String title;
+  final String text;
+  final Widget? icon;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(size * 0.24),
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF1F4390), Color(0xFF3B5BA9)],
-      ),
-    ),
-    // Placeholder, as in the handoff: the brand double-P mark replaces it.
-    child: Text(
-      'PP',
-      style: TextStyle(fontSize: size * 0.36, fontWeight: FontWeight.w800, color: const Color(0xFFFFFFFF)),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (icon != null) ...[icon!, const SizedBox(height: 12)],
+        Text(
+          S.current('signInOver'),
+          style: t.note.copyWith(fontWeight: FontWeight.w600, color: t.accent, letterSpacing: 0.24),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 8),
+          child: Semantics(header: true, child: Text(title, style: t.signInTitle)),
+        ),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Text(text, style: t.body.copyWith(color: t.t2)),
+        ),
+      ],
+    );
+  }
 }
 
 class _SignedOut extends StatelessWidget {
@@ -88,7 +94,7 @@ class _SignedOut extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final s = S.current;
-    final (title, description) = switch (error) {
+    final (title, text) = switch (error) {
       null => (s('loginTitle'), s('loginSub')),
       _SignInError.expired => (s('errExpiredT'), s('errExpiredD')),
       _SignInError.denied => (s('errDeniedT'), s('errDeniedD')),
@@ -100,25 +106,18 @@ class _SignedOut extends StatelessWidget {
       _ => s('signInAgain'),
     };
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (error != null) ...[
-          Icon(FLucideIcons.circleAlert, size: 44, color: error == _SignInError.network ? t.warning : t.danger),
-          const SizedBox(height: 16),
-        ],
-        Semantics(header: true, child: Text(title, style: t.statusTitle, textAlign: TextAlign.center)),
-        const SizedBox(height: 6),
-        Text(description, style: t.secondary, textAlign: TextAlign.center),
-        const SizedBox(height: 20),
-        SizedBox(
-          height: Tokens.largeControlHeight,
-          child: FButton(
-            size: FButtonSizeVariant.sm,
-            onPress: app.signIn,
-            mainAxisSize: MainAxisSize.min,
-            child: Text(button),
-          ),
+        _Heading(
+          title: title,
+          text: text,
+          icon: error == null
+              ? null
+              : Icon(FLucideIcons.circleAlert, size: 32, color: error == _SignInError.network ? t.warn : t.bad),
         ),
+        const SizedBox(height: 32),
+        Button(kind: ButtonKind.primary, label: button, fontSize: 14, onPress: app.signIn),
       ],
     );
   }
@@ -169,49 +168,91 @@ class _WaitingState extends State<_Waiting> {
     final left = _expires.difference(DateTime.now());
     final seconds = left.isNegative ? 0 : left.inSeconds;
     final countdown = '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+    // The page opened in the browser counts as step 1 done.
+    Widget step(int n, String text, {bool done = false, bool now = false}) => Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 20,
+            height: 20,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: done ? t.ok : (now ? t.accent : t.sunk),
+              border: done || now ? null : Border.all(color: t.line),
+              boxShadow: now ? [BoxShadow(color: t.accentSoft, spreadRadius: 4)] : null,
+            ),
+            child: Text(
+              done ? '✓' : '$n',
+              style: t.label.copyWith(
+                fontWeight: FontWeight.w700,
+                color: done ? const Color(0xFFFFFFFF) : (now ? t.onAccent : t.t2),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            text,
+            style: t.sub.copyWith(color: now ? t.t1 : t.t2, fontWeight: now ? FontWeight.w500 : FontWeight.w400),
+          ),
+        ],
+      ),
+    );
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Semantics(header: true, child: Text(s('waitTitle'), style: t.statusTitle, textAlign: TextAlign.center)),
-        const SizedBox(height: 6),
-        Text(s('waitSub'), style: t.secondary, textAlign: TextAlign.center),
-        const SizedBox(height: 20),
+        _Heading(title: s('waitTitle'), text: s('waitSub')),
+        const SizedBox(height: 28),
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Semantics(label: widget.code.userCode, child: ExcludeSemantics(child: _CodeBoxes(code: widget.code.userCode))),
-            const SizedBox(width: 12),
-            CopyButton(text: widget.code.userCode),
+            const SizedBox(width: 10),
+            CopyButton(text: widget.code.userCode, kind: ButtonKind.soft, height: Tokens.controlHeight),
           ],
-        ),
-        const SizedBox(height: 8),
-        Text(
-          seconds == 0 ? s('errExpiredT') : s('expiresIn', {'t': countdown}),
-          style: t.note.copyWith(color: seconds == 0 ? t.danger : null),
         ),
         const SizedBox(height: 20),
         Row(
+          children: [
+            Spinner(color: t.accent, track: t.accentSoft, size: 18),
+            const SizedBox(width: 10),
+            if (seconds == 0)
+              Text(s('errExpiredT'), style: t.sub.copyWith(color: t.bad))
+            else
+              Text.rich(
+                TextSpan(
+                  style: t.sub,
+                  children: [
+                    TextSpan(text: '${s('st_authorizing')} · '),
+                    TextSpan(text: s('expiresIn', {'t': countdown}), style: t.monoText(13, color: t.t2)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        step(1, s('step1'), done: widget.code.browserOpened),
+        step(2, s('step2'), now: true),
+        step(3, s('step3')),
+        const SizedBox(height: 32),
+        Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              height: Tokens.largeControlHeight,
-              child: FButton(
-                size: FButtonSizeVariant.sm,
-                variant: FButtonVariant.outline,
-                mainAxisSize: MainAxisSize.min,
-                onPress: widget.app.cancelSignIn,
-                child: Text(s('cancel')),
-              ),
+            Button(
+              kind: ButtonKind.secondary,
+              height: Tokens.primaryHeight,
+              fontSize: 14,
+              label: s('cancel'),
+              onPress: widget.app.cancelSignIn,
             ),
             const SizedBox(width: 8),
-            SizedBox(
-              height: Tokens.largeControlHeight,
-              child: FButton(
-                size: FButtonSizeVariant.sm,
-                mainAxisSize: MainAxisSize.min,
-                onPress: () => rust.openUrl(url: widget.code.verificationUrl),
-                child: Text(s('reopen')),
-              ),
+            Button(
+              kind: ButtonKind.primary,
+              fontSize: 14,
+              label: s('reopen'),
+              onPress: () => rust.openUrl(url: widget.code.verificationUrl),
             ),
           ],
         ),
@@ -220,7 +261,8 @@ class _WaitingState extends State<_Waiting> {
   }
 }
 
-/// The device code, one box per character; a hyphen stays a plain gap mark.
+/// The device code, a 40×52 box per character (radius 10, sunk, line
+/// outline, mono 26/600), 6 apart; the hyphen is a 12×2 dash.
 class _CodeBoxes extends StatelessWidget {
   const _CodeBoxes({required this.code});
 
@@ -229,66 +271,125 @@ class _CodeBoxes extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final char in code.characters)
-          if (char == '-')
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Text('–', style: TextStyle(fontSize: Tokens.codeFontSize, color: t.textSubtle)),
-            )
-          else
-            Container(
-              width: Tokens.codeBox.width,
-              height: Tokens.codeBox.height,
-              margin: const EdgeInsets.symmetric(horizontal: 2),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: t.group,
-                borderRadius: BorderRadius.circular(Tokens.buttonRadius),
-                border: Border.all(color: t.border),
-              ),
-              child: Text(
-                char,
-                style: TextStyle(
-                  fontFamily: Tokens.monoFamily,
-                  fontSize: Tokens.codeFontSize,
-                  fontWeight: FontWeight.w600,
-                  color: t.text,
+    final cells = <Widget>[];
+    for (final char in code.characters) {
+      if (cells.isNotEmpty) cells.add(const SizedBox(width: Tokens.codeGap));
+      cells.add(
+        char == '-'
+            ? Container(
+                width: 12,
+                height: 2,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(color: t.t3, borderRadius: BorderRadius.circular(1)),
+              )
+            : Container(
+                width: Tokens.codeBox.width,
+                height: Tokens.codeBox.height,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: t.sunk,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: t.line),
                 ),
+                child: Text(char, style: t.monoText(Tokens.codeFontSize, weight: FontWeight.w600)),
               ),
-            ),
-      ],
-    );
+      );
+    }
+    return Row(mainAxisSize: MainAxisSize.min, children: cells);
   }
 }
 
-/// The left column of the sign-in window: the brand at the top and one line
-/// about the app.
+/// The sign-in brand panel, 380 wide on the brand gradient with a white
+/// glow at 80 % / 12 %: the traffic lights' row, 36 below it the 40 mark
+/// with 「PPVPN」 22/700, low in the panel the title (24/32 · 700) and 10
+/// below it the line (13/20, white 78 %, max 280), 150 for the mountains,
+/// the copyright (11, white 65 %).
 class SignInBrand extends StatelessWidget {
   const SignInBrand({super.key});
 
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
+    const white = Color(0xFFFFFFFF);
+    TextStyle text(double size, double height, FontWeight weight, Color color, [double tracking = 0]) =>
+        t.body.copyWith(fontSize: size, height: height / size, fontWeight: weight, color: color, letterSpacing: tracking * size);
     return Container(
-      width: Tokens.sidebarWidth,
-      padding: const EdgeInsets.fromLTRB(20, Tokens.topBarHeight + 8, 20, 20),
-      decoration: BoxDecoration(
-        color: t.sidebar,
-        border: Border(right: BorderSide(color: t.border, width: 0.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      width: Tokens.signInBrandWidth,
+      decoration: const BoxDecoration(gradient: Tokens.brandGradient),
+      child: Stack(
         children: [
-          const BrandIcon(size: 48),
-          const SizedBox(height: 12),
-          Text(S.current('app'), style: t.sectionTitle.copyWith(fontSize: 17)),
-          const SizedBox(height: 4),
-          Text(S.current('brandLine'), style: t.secondary),
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment(0.6, -0.76),
+                  radius: 0.55,
+                  colors: [Color(0x38FFFFFF), Color(0x00FFFFFF)],
+                  stops: [0, 0.7],
+                ),
+              ),
+            ),
+          ),
+          const Positioned(left: 0, right: 0, bottom: 0, height: 250, child: CustomPaint(painter: _Mountains())),
+          Padding(
+            padding: Tokens.signInBrandPadding,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // The traffic lights' row (macOS draws them over it).
+                const SizedBox(height: Tokens.trafficLightsHeight),
+                const SizedBox(height: 36),
+                Row(
+                  children: [
+                    const BrandMark(size: 40, light: true),
+                    const SizedBox(width: 12),
+                    Text(S.current('app'), style: text(22, 28, FontWeight.w700, white, -0.02)),
+                  ],
+                ),
+                const Spacer(),
+                Semantics(
+                  header: true,
+                  child: Text(S.current('signInTitle'), style: text(24, 32, FontWeight.w700, white, -0.02)),
+                ),
+                const SizedBox(height: 10),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 280),
+                  child: Text(S.current('signInLine'), style: text(13, 20, FontWeight.w400, const Color(0xC7FFFFFF))),
+                ),
+                const SizedBox(height: Tokens.signInMountains),
+                Text('© PeakPass Labs LLC', style: text(11, 16, FontWeight.w400, const Color(0xA6FFFFFF))),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+/// The mountains behind the panel's bottom (DesktopLogin's 380×250 drawing,
+/// anchored to the bottom).
+class _Mountains extends CustomPainter {
+  const _Mountains();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 380, size.height / 250);
+    Path poly(List<double> xy) {
+      final path = Path()..moveTo(xy[0], xy[1]);
+      for (var i = 2; i < xy.length; i += 2) {
+        path.lineTo(xy[i], xy[i + 1]);
+      }
+      return path..close();
+    }
+
+    void fill(List<double> xy, Color color) => canvas.drawPath(poly(xy), Paint()..color = color);
+    fill([0, 150, 70, 90, 120, 130, 190, 50, 250, 110, 300, 80, 380, 140, 380, 250, 0, 250], const Color(0x14FFFFFF));
+    fill([0, 190, 60, 150, 110, 175, 170, 110, 230, 160, 290, 125, 380, 180, 380, 250, 0, 250], const Color(0x1AFFFFFF));
+    fill([190, 50, 205, 66, 196, 72, 184, 64], const Color(0x59FFFFFF));
+    fill([0, 225, 80, 200, 150, 215, 220, 190, 300, 210, 380, 200, 380, 250, 0, 250], const Color(0x590A193C));
+  }
+
+  @override
+  bool shouldRepaint(_Mountains old) => false;
 }

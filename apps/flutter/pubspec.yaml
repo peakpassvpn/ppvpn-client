@@ -13,6 +13,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_rust_bridge: 2.13.0
+  flutter_svg: 2.3.0
   forui: 0.27.6
   tray_manager: 0.8.0
   window_manager: 0.5.2
@@ -20,3 +21,16 @@ dependencies:
 flutter:
   assets:
     - assets/tray/
+    # flag-icons 7.6.0 (MIT, assets/flags/LICENSE), 4:3, the exit countries
+    # we expect; others get a lettered tile.
+    - assets/flags/
+  # Numbers and addresses (theme.dart `Tokens.mono`); Inter comes with forui.
+  # OFL: assets/fonts/JetBrainsMono-OFL.txt.
+  fonts:
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+        - asset: assets/fonts/JetBrainsMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/JetBrainsMono-SemiBold.ttf
+          weight: 600

@@ -13,6 +13,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
 import 'src/rust/api.dart' as rust;
+import 'sample.dart';
 import 'shell.dart';
 import 'src/rust/frb_generated.dart';
 import 'theme.dart';
@@ -29,8 +30,13 @@ String _libraryPath() {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
-  final app = AppState(rust.start());
+  final AppState app;
+  if (samplePage != null) {
+    app = sampleState();
+  } else {
+    await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
+    app = AppState(rust.start());
+  }
 
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
@@ -94,7 +100,7 @@ class PrototypeApp extends StatelessWidget {
           data: t.forui,
           child: DefaultTextStyle(
             style: t.body,
-            child: ColoredBox(color: t.window, child: Shell(app: app)),
+            child: ColoredBox(color: t.bg, child: Shell(app: app)),
           ),
         );
       },
