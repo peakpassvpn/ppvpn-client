@@ -26,11 +26,16 @@ ss_port=18388 http_port=18080 api_port=18090
 "$work/fakenode$exe" -ss "127.0.0.1:$ss_port" -key AAAAAAAAAAAAAAAAAAAAAA== \
   -http "127.0.0.1:$http_port" >"$work/fakenode.log" 2>&1 &
 python=$(command -v python3 || command -v python)
-"$python" "$app/e2e/mock_backend.py" --port "$api_port" --node-port "$ss_port" \
+echo "e2e: $("$python" --version 2>&1) at $python"
+"$python" -u "$app/e2e/mock_backend.py" --port "$api_port" --node-port "$ss_port" \
   --log "$work/backend.log" >"$work/backend.out" 2>&1 &
 for f in fakenode.log backend.out; do
-  for _ in $(seq 100); do grep -q '^ready' "$work/$f" && break; sleep 0.1; done
-  grep -q '^ready' "$work/$f" || { echo "::error::$f did not get ready"; cat "$work/$f"; exit 1; }
+  for _ in $(seq 300); do grep -q '^ready' "$work/$f" && break; sleep 0.1; done
+  grep -q '^ready' "$work/$f" || {
+    echo "::error::$f did not get ready"; cat "$work/$f"; jobs -l
+    (lsof -nP -iTCP:"$api_port" -iTCP:"$ss_port" 2>/dev/null || netstat -an 2>/dev/null | grep -E "$api_port|$ss_port") || true
+    exit 1
+  }
 done
 
 home=$work/home
