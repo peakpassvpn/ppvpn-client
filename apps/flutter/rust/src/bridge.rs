@@ -128,6 +128,9 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
             }
         });
     }
+    if std::env::var("PPVPN_FLUTTER_SYNTHETIC_TRAFFIC").is_ok_and(|value| value == "1") {
+        runtime.spawn(synthetic_traffic(events.clone()));
+    }
     // Two first calls at once: the loser's client is dropped unused.
     let _ = BRIDGE.set(Bridge {
         client,
@@ -135,6 +138,23 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
         runtime,
     });
     get()
+}
+
+/// compare.py's memory curve (#387): a traffic sample every second, through
+/// the listener's path, as a signed-in client's would come. Measurement
+/// only; off unless `PPVPN_FLUTTER_SYNTHETIC_TRAFFIC=1`.
+async fn synthetic_traffic(events: Arc<Events>) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    let mut n: i64 = 0;
+    loop {
+        tick.tick().await;
+        n += 1;
+        events.pending.lock().unwrap().traffic = Some(UiTraffic {
+            up: 200_000 + (n * 7_919) % 1_000_000,
+            down: 2_000_000 + (n * 104_729) % 8_000_000,
+        });
+        events.ready.notify_one();
+    }
 }
 
 impl Bridge {

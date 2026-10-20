@@ -16,7 +16,7 @@ ppvpn-desktop = { path = "../../../crates/desktop" }
 # The Dart package and the codegen in ci.yml are the same version: the
 # generated glue checks it at start.
 flutter_rust_bridge = "=2.13.0"
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 
 # flutter_rust_bridge's #[frb] expands to code under `cfg(frb_expand)`.
