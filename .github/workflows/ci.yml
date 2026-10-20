@@ -794,7 +794,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config \
-            libgtk-3-dev libx11-dev libxi-dev xvfb imagemagick libgl1-mesa-dri mesa-vulkan-drivers
+            libgtk-3-dev libx11-dev libxi-dev xvfb imagemagick libgl1-mesa-dri mesa-vulkan-drivers \
+            gsettings-desktop-schemas dconf-gsettings-backend dconf-service
       - name: Cache Flutter
         if: steps.scope.outputs.flutter == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -828,6 +829,22 @@ jobs:
           name: flutter-bundle-linux
           path: ${{ steps.build.outputs.bundle }}
           retention-days: 14
+      # The signed-in flow end to end (#401 step 1): mock backend, fakenode,
+      # the app's integration test. The fakenode is test/go.mod's.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          go-version-file: test/go.mod
+          cache-dependency-path: test/go.sum
+      - name: End to end, signed in
+        if: steps.scope.outputs.flutter == 'true'
+        timeout-minutes: 20
+        run: |
+          if [ "${{ matrix.os }}" = ubuntu-latest ]; then
+            xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- apps/flutter/e2e/run.sh
+          else
+            apps/flutter/e2e/run.sh
+          fi
       - name: Smoke test
         if: steps.scope.outputs.flutter == 'true'
         run: |
