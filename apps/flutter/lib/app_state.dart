@@ -35,6 +35,12 @@ class AppState {
     unawaited(_pump());
   }
 
+  /// Fixed state with no client behind it (sample.dart, for CI
+  /// screenshots): nothing is read from Rust, actions fail quietly.
+  AppState.fixed(rust.UiSnapshot initial) : snapshot = ValueNotifier(initial) {
+    _stopped = true;
+  }
+
   final ValueNotifier<rust.UiSnapshot> snapshot;
   final ValueNotifier<List<rust.UiNode>> nodes = ValueNotifier(const []);
   final ValueNotifier<rust.UiTraffic> traffic = ValueNotifier(const rust.UiTraffic(up: 0, down: 0));
@@ -151,6 +157,7 @@ class AppState {
 
   /// Puts the system proxy back and stops the core; before the app quits.
   void stop() {
+    if (_stopped) return;
     _stopped = true;
     rust.shutdown();
   }

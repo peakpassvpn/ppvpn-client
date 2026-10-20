@@ -7,6 +7,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
+import 'sample.dart' show forcedBrightness;
+
 class Tokens {
   const Tokens._({
     required this.brightness,
@@ -334,7 +336,7 @@ class Tokens {
   }
 
   static Tokens of(BuildContext context) =>
-      MediaQuery.platformBrightnessOf(context) == Brightness.dark ? dark : light;
+      (forcedBrightness ?? MediaQuery.platformBrightnessOf(context)) == Brightness.dark ? dark : light;
 
   /// A card: radius 12, the 1 px hair outline, the card shadow.
   BoxDecoration cardDecoration({Color? color, Gradient? gradient}) => BoxDecoration(

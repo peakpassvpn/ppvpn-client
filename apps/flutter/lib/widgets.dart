@@ -130,7 +130,6 @@ class Button extends StatelessWidget {
         height: h,
         width: kind == ButtonKind.icon ? h : null,
         padding: kind == ButtonKind.icon ? null : EdgeInsets.symmetric(horizontal: h >= 32 ? 12 : 8),
-        alignment: Alignment.center,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(h <= 26 ? 6 : Tokens.controlRadius),
           gradient: kind == ButtonKind.primary && t.brightness == Brightness.light ? Tokens.primaryGradient : null,
@@ -147,7 +146,10 @@ class Button extends StatelessWidget {
             _ => null,
           },
         ),
-        child: Row(
+        // As wide as its label, centred in its height.
+        child: Center(
+          widthFactor: 1,
+          child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (icon != null) Icon(icon, size: kind == ButtonKind.icon ? 18 : 14, color: fg),
@@ -160,6 +162,7 @@ class Button extends StatelessWidget {
                 style: t.control.copyWith(fontSize: fontSize, color: fg),
               ),
           ],
+          ),
         ),
       ),
     );

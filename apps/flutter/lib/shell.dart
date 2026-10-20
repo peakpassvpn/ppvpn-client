@@ -19,6 +19,7 @@ import 'app_state.dart';
 import 'pages/nodes.dart';
 import 'pages/overview.dart';
 import 'pages/sign_in.dart';
+import 'sample.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
 import 'theme.dart';
@@ -36,7 +37,7 @@ class Shell extends StatefulWidget {
 }
 
 class _ShellState extends State<Shell> {
-  _Page _page = _Page.overview;
+  _Page _page = samplePage == 'nodes' ? _Page.nodes : _Page.overview;
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
