@@ -117,6 +117,7 @@ const _zh = <String, String>{
   'maximize': '最大化',
   'protoNoTun': '原型不包含增强模式',
   'protoPage': '原型不包含此页面',
+  'brandLine': '面向个人与团队的代理与 VPN 客户端',
   'h_stdStopping': '正在断开',
 };
 
@@ -215,6 +216,7 @@ const _en = <String, String>{
   'maximize': 'Maximize',
   'protoNoTun': 'Not part of the prototype',
   'protoPage': 'This page is not part of the prototype',
+  'brandLine': 'Proxy and VPN client for individuals and teams',
   'h_stdStopping': 'Disconnecting',
 };
 

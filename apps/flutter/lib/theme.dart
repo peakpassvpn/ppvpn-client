@@ -131,6 +131,12 @@ class Tokens {
   static const buttonRadius = 6.0;
   static const menuItemHeight = 22.0;
   static const statusIconSize = 44.0;
+
+  // Sign-in (design v17): 56 either side of the content, a 40×52 box per
+  // device-code character at 26.
+  static const signInPadding = 56.0;
+  static const codeBox = Size(40, 52);
+  static const codeFontSize = 26.0;
   static const brandIconSize = 76.0;
 
   // Type (macOS: 13 body, 20 bold status title, 11 row descriptions).

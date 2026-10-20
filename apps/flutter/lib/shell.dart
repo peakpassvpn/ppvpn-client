@@ -6,7 +6,8 @@
 // lights sit at the top of the sidebar; on Windows and Linux the caption
 // buttons are drawn at the top right of the content area, right of the
 // bell. Logs, messages and settings are not in the prototype: they lead to
-// a placeholder.
+// a placeholder. Signed out, the sign-in page's brand column takes the
+// sidebar's place.
 // Signed out, the sign-in page fills the window.
 
 import 'dart:async';
@@ -43,11 +44,31 @@ class _ShellState extends State<Shell> {
     valueListenable: widget.app.snapshot,
     builder: (context, snapshot, _) {
       if (snapshot.auth != rust.UiAuth.signedIn) {
-        return Column(
+        return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const _TopBar(),
-            Expanded(child: SignInPage(app: widget.app)),
+            Stack(
+              children: [
+                const SignInBrand(),
+                // The brand column's top is part of the window's drag strip.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: Tokens.topBarHeight,
+                  child: DragToMoveArea(child: const SizedBox.expand()),
+                ),
+              ],
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const _TopBar(),
+                  Expanded(child: SignInPage(app: widget.app)),
+                ],
+              ),
+            ),
           ],
         );
       }

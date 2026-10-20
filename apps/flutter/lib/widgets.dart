@@ -168,7 +168,9 @@ class _CopyButtonState extends State<CopyButton> {
           _reset?.cancel();
           setState(() => _reset = Timer(const Duration(milliseconds: 1600), () => setState(() {})));
         },
-        child: Text(copied ? '✓ ${S.current('copied')}' : widget.label ?? S.current('copy')),
+        // Never wraps (design v17): the button grows with its label.
+        mainAxisSize: MainAxisSize.min,
+        child: Text(copied ? '✓ ${S.current('copied')}' : widget.label ?? S.current('copy'), maxLines: 1, softWrap: false),
       ),
     );
   }

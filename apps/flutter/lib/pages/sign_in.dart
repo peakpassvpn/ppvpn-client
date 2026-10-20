@@ -1,5 +1,8 @@
-// Sign-in (handoff "1. 登录"): signed out, waiting for the browser with the
-// device code and its countdown, and the three errors.
+// Sign-in (handoff "1. 登录", design v17): a brand column on the left (the
+// brand at its top and one line about the app), the content on the right
+// with 56 on either side. Signed out, waiting for the browser with the
+// device code (one 40×52 box per character) and its countdown, and the
+// three errors.
 
 import 'dart:async';
 
@@ -32,7 +35,7 @@ class SignInPage extends StatelessWidget {
       }
       return Center(
         child: SingleChildScrollView(
-          padding: Tokens.contentPadding,
+          padding: const EdgeInsets.symmetric(horizontal: Tokens.signInPadding, vertical: 20),
           child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420), child: body),
         ),
       );
@@ -99,10 +102,10 @@ class _SignedOut extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        error == null
-            ? const BrandIcon()
-            : Icon(FLucideIcons.circleAlert, size: 44, color: error == _SignInError.network ? t.warning : t.danger),
-        const SizedBox(height: 16),
+        if (error != null) ...[
+          Icon(FLucideIcons.circleAlert, size: 44, color: error == _SignInError.network ? t.warning : t.danger),
+          const SizedBox(height: 16),
+        ],
         Semantics(header: true, child: Text(title, style: t.statusTitle, textAlign: TextAlign.center)),
         const SizedBox(height: 6),
         Text(description, style: t.secondary, textAlign: TextAlign.center),
@@ -171,16 +174,7 @@ class _WaitingState extends State<_Waiting> {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              widget.code.userCode,
-              style: TextStyle(
-                fontFamily: Tokens.monoFamily,
-                fontSize: 36,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 3.6,
-                color: t.text,
-              ),
-            ),
+            Semantics(label: widget.code.userCode, child: ExcludeSemantics(child: _CodeBoxes(code: widget.code.userCode))),
             const SizedBox(width: 12),
             CopyButton(text: widget.code.userCode),
           ],
@@ -215,6 +209,79 @@ class _WaitingState extends State<_Waiting> {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// The device code, one box per character; a hyphen stays a plain gap mark.
+class _CodeBoxes extends StatelessWidget {
+  const _CodeBoxes({required this.code});
+
+  final String code;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final char in code.characters)
+          if (char == '-')
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text('–', style: TextStyle(fontSize: Tokens.codeFontSize, color: t.textSubtle)),
+            )
+          else
+            Container(
+              width: Tokens.codeBox.width,
+              height: Tokens.codeBox.height,
+              margin: const EdgeInsets.symmetric(horizontal: 2),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: t.group,
+                borderRadius: BorderRadius.circular(Tokens.buttonRadius),
+                border: Border.all(color: t.border),
+              ),
+              child: Text(
+                char,
+                style: TextStyle(
+                  fontFamily: Tokens.monoFamily,
+                  fontSize: Tokens.codeFontSize,
+                  fontWeight: FontWeight.w600,
+                  color: t.text,
+                ),
+              ),
+            ),
+      ],
+    );
+  }
+}
+
+/// The left column of the sign-in window: the brand at the top and one line
+/// about the app.
+class SignInBrand extends StatelessWidget {
+  const SignInBrand({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    return Container(
+      width: Tokens.sidebarWidth,
+      padding: const EdgeInsets.fromLTRB(20, Tokens.topBarHeight + 8, 20, 20),
+      decoration: BoxDecoration(
+        color: t.sidebar,
+        border: Border(right: BorderSide(color: t.border, width: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const BrandIcon(size: 48),
+          const SizedBox(height: 12),
+          Text(S.current('app'), style: t.sectionTitle.copyWith(fontSize: 17)),
+          const SizedBox(height: 4),
+          Text(S.current('brandLine'), style: t.secondary),
+        ],
+      ),
     );
   }
 }
