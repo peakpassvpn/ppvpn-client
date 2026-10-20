@@ -7,11 +7,13 @@
 // submenu, open, quit. Signed out: "not signed in", open, quit. The icon's
 // four states differ by shape only (placeholders for the brand mark).
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:tray_manager/tray_manager.dart';
 
 import 'app_state.dart';
+import 'bench.dart';
 import 'pages/overview.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
@@ -30,7 +32,17 @@ class Tray {
     app.nodes.addListener(_update);
     _update();
     icon.setVisible(true);
+    if (trayBench) {
+      // compare.py: a rebuild every second, whatever changed.
+      Timer.periodic(const Duration(seconds: 1), (_) {
+        _shown = null;
+        _benchTick++;
+        _update();
+      });
+    }
   }
+
+  int _benchTick = 0;
 
   final AppState app;
   final void Function() onOpen;
@@ -63,7 +75,13 @@ class Tray {
     final image = ImageAsset.fromAsset('assets/tray/${state}_${template ? 'template' : 'mono'}.png');
     if (image != null) icon.icon = image;
     if (template) icon.isIconTemplate = true;
-    icon.setTooltip(node == null ? 'PPVPN · $title' : 'PPVPN · $title · ${node.name}');
+    icon.setTooltip(
+      [
+        'PPVPN · $title',
+        if (node != null) node.name,
+        if (trayBench) '$_benchTick',
+      ].join(' · '),
+    );
 
     final menu = Menu.create();
     if (menu == null) return;

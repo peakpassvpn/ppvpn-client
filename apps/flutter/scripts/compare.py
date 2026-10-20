@@ -9,7 +9,10 @@ platform, the same way for both (#387, acceptance 2 and 4):
 - window closed: the same 15 s after the window was asked to close (both
   apps hide to the tray then); not measured on macOS, where closing another
   app's window needs an accessibility grant the runner does not have;
-- sizes: download (installer / zip) and unpacked.
+- sizes: download (installer / zip) and unpacked;
+- the prototype only: its startup phases (bench.dart marks), tray CPU at
+  rest and with the tray rebuilt every second, and with --curve-minutes its
+  memory over that long with a traffic sample pushed every second.
 
 Both run signed out, with their own empty data directories. Linux also
 gets the prototype's memory by mapping (smaps), to say what the RSS is.
@@ -161,8 +164,9 @@ def stop(proc):
         pass
 
 
-def launch(argv, home):
+def launch(argv, home, extra=None):
     env = dict(os.environ)
+    env.update(extra or {})
     # Each app's own empty data: HOME (macOS, Linux) and the Windows profile
     # folders it writes to.
     env.update(HOME=home, XDG_DATA_HOME=os.path.join(home, "share"),
@@ -180,18 +184,40 @@ def native_env(argv):
     return ["env", "MALLOC_ARENA_MAX=2"] + argv if SYSTEM == "Linux" else argv
 
 
+def read_phases(path):
+    """`phase ms` lines from the prototype's PPVPN_FLUTTER_TIMING file."""
+    phases = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                name, _, ms = line.strip().partition(" ")
+                if ms.lstrip("-").isdigit():
+                    phases[name] = int(ms)
+    except OSError:
+        pass
+    return phases
+
+
 def measure(name, argv):
     home = tempfile.mkdtemp(prefix=f"cmp-{name}-")
     starts = []
+    phases = []
     for _ in range(RUNS):
+        timing = os.path.join(home, "timing.txt")
+        if os.path.exists(timing):
+            os.remove(timing)
+        extra = {"PPVPN_FLUTTER_TIMING": timing, "PPVPN_FLUTTER_T0_MS": str(int(time.time() * 1000))}
         began = time.monotonic()
-        proc = launch(argv, home)
+        proc = launch(argv, home, extra if name == "flutter" else None)
         shown = None
         while time.monotonic() - began < 60 and proc.poll() is None:
             if visible_window(proc.pid):
                 shown = time.monotonic() - began
                 break
             time.sleep(0.05)
+        if name == "flutter":
+            time.sleep(1)  # the first frame's mark can land after the window shows
+            phases.append(read_phases(timing))
         stop(proc)
         starts.append(None if shown is None else round(shown * 1000))
         time.sleep(2)
@@ -199,6 +225,11 @@ def measure(name, argv):
     proc = launch(argv, home)
     time.sleep(SETTLE)
     result = {"cold_start_ms": starts}
+    if phases:
+        names = []
+        for run in phases:
+            names += [n for n in run if n not in names]
+        result["phases_ms"] = {n: median([run.get(n) for run in phases[1:]]) for n in names}
     if proc.poll() is not None:
         result["error"] = f"exited with {proc.returncode} within {SETTLE}s"
         return result
@@ -214,7 +245,67 @@ def measure(name, argv):
     if SYSTEM == "Linux" and name == "flutter":
         result["smaps_top_kib"] = smaps_top(proc.pid)
     stop(proc)
+    if name == "flutter":
+        result.update(tray_cpu(argv, home))
     shutil.rmtree(home, ignore_errors=True)
+    return result
+
+
+def tray_cpu(argv, home):
+    """CPU of the prototype over 30 s at rest, then over 30 s with the tray
+    rebuilt every second (PPVPN_FLUTTER_TRAY_BENCH)."""
+    out = {}
+    for key, extra in (("tray_rest_cpu_percent", None), ("tray_1hz_cpu_percent", {"PPVPN_FLUTTER_TRAY_BENCH": "1"})):
+        proc = launch(argv, home, extra)
+        time.sleep(15)
+        if proc.poll() is None:
+            out[key] = cpu_percent(proc.pid, 30)
+        stop(proc)
+    return out
+
+
+def committed_kib(pid):
+    """Memory the process holds: RSS, except on Windows, where the RSS is the
+    working set, which the system trims at will (it fell from 148 to 17 MiB
+    in a curve with the window open); there it is the private bytes."""
+    info = psutil.Process(pid).memory_info()
+    return (info.private if SYSTEM == "Windows" else info.rss) // 1024
+
+
+def curve(argv, minutes, out_dir):
+    """Memory (committed_kib) every 10 s for `minutes` with a traffic sample
+    pushed every second (PPVPN_FLUTTER_SYNTHETIC_TRAFFIC) and the overview
+    showing it."""
+    home = tempfile.mkdtemp(prefix="cmp-curve-")
+    proc = launch(argv, home, {"PPVPN_FLUTTER_SYNTHETIC_TRAFFIC": "1"})
+    began = time.monotonic()
+    samples = []
+    while time.monotonic() - began < minutes * 60 and proc.poll() is None:
+        time.sleep(10)
+        try:
+            samples.append((round(time.monotonic() - began), committed_kib(proc.pid)))
+        except psutil.Error:
+            break
+    exited = proc.poll()
+    stop(proc)
+    shutil.rmtree(home, ignore_errors=True)
+    with open(os.path.join(out_dir, "curve.csv"), "w", encoding="utf-8") as f:
+        f.write("seconds,kib\n")
+        f.writelines(f"{t},{kib}\n" for t, kib in samples)
+    result = {"minutes": minutes, "samples": len(samples)}
+    if exited is not None:
+        result["error"] = f"exited with {exited} after {round(time.monotonic() - began)} s"
+    # After the first 2 minutes (startup settling): first, last, peak, and
+    # the least-squares slope in MiB per hour.
+    steady = [(t, kib) for t, kib in samples if t >= 120]
+    if len(steady) >= 2:
+        n = len(steady)
+        mean_t = sum(t for t, _ in steady) / n
+        mean_k = sum(k for _, k in steady) / n
+        var = sum((t - mean_t) ** 2 for t, _ in steady)
+        slope = sum((t - mean_t) * (k - mean_k) for t, k in steady) / var if var else 0.0
+        result.update(first_kib=steady[0][1], last_kib=steady[-1][1], peak_kib=max(k for _, k in steady),
+                      slope_mib_per_hour=round(slope * 3600 / 1024, 2))
     return result
 
 
@@ -253,6 +344,7 @@ def main():
     parser.add_argument("--native-installer", required=True)
     parser.add_argument("--native-root", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--curve-minutes", type=int, default=0)
     args = parser.parse_args()
 
     flutter_bundle = args.flutter
@@ -276,7 +368,9 @@ def main():
     report["native"].update(measure("native", native_env([args.native])))
 
     os.makedirs(args.out, exist_ok=True)
-    with open(os.path.join(args.out, "compare.json"), "w") as f:
+    if args.curve_minutes:
+        report["flutter"]["curve"] = curve([flutter_exe], args.curve_minutes, args.out)
+    with open(os.path.join(args.out, "compare.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
     f, n = report["flutter"], report["native"]
@@ -297,6 +391,21 @@ def main():
     lines = [f"### Flutter prototype vs native 0.6.3, {report['platform']}", "",
              "| | Flutter prototype | Native 0.6.3 |", "| --- | --- | --- |"]
     lines += [f"| {a} | {b} | {c} |" for a, b, c in rows]
+    lines += [f"| Tray CPU over 30 s, at rest / rebuilt every second | {f.get('tray_rest_cpu_percent', 'n/a')} % / "
+              f"{f.get('tray_1hz_cpu_percent', 'n/a')} % | n/a |"]
+    if f.get("phases_ms"):
+        lines += ["", "Prototype startup, ms since launch (median of runs 2–5):", "",
+                  "| Phase | ms |", "| --- | --- |"]
+        lines += [f"| `{k}` | {v} |" for k, v in f["phases_ms"].items()]
+    c = f.get("curve")
+    if c:
+        measure_name = "private bytes" if SYSTEM == "Windows" else "RSS"
+        lines += ["", f"Prototype {measure_name} with a traffic sample every second, {c['minutes']} min "
+                  f"({c['samples']} samples, `curve.csv`): after the first 2 min "
+                  f"{fmt_mib(c.get('first_kib'))} → {fmt_mib(c.get('last_kib'))}, peak {fmt_mib(c.get('peak_kib'))}, "
+                  f"slope {c.get('slope_mib_per_hour', 'n/a')} MiB/h."]
+        if "error" in c:
+            lines.append(f"Curve: {c['error']}")
     for key in ("error", "closed_error"):
         for side, data in (("Flutter", f), ("Native", n)):
             if key in data:
@@ -306,11 +415,11 @@ def main():
                   "| Mapping | RSS |", "| --- | --- |"]
         lines += [f"| `{name}` | {kib} |" for name, kib in f["smaps_top_kib"]]
     text = "\n".join(lines) + "\n"
-    with open(os.path.join(args.out, "compare.md"), "w") as out:
+    with open(os.path.join(args.out, "compare.md"), "w", encoding="utf-8") as out:
         out.write(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
-        with open(summary, "a") as out:
+        with open(summary, "a", encoding="utf-8") as out:
             out.write(text)
     print(text)
 

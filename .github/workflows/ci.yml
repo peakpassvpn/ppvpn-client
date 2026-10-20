@@ -42,6 +42,10 @@ on:
         description: "windows: runs of the runtime's failure tests (twenty on the pull request that adds one)"
         type: number
         default: 5
+      flutter_curve_minutes:
+        description: "flutter: minutes of the prototype's memory curve with traffic pushes (10 on a pull request)"
+        type: number
+        default: 120
 
 permissions:
   contents: read
@@ -738,9 +742,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    # By hand the memory curve runs for flutter_curve_minutes (2 h unless told).
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 240 || 90 }}
     env:
       FRB_CODEGEN_VERSION: 2.13.0
+      CURVE_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.flutter_curve_minutes || 10 }}
     defaults:
       run:
         shell: bash
@@ -812,8 +818,10 @@ jobs:
           fi
           { echo '```'; cat "$RUNNER_TEMP/flutter-out/results.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # Against the native app of the latest release, the same measurements
-      # for both (apps/flutter/scripts/compare.py). Reported, never a gate:
-      # the numbers go to the job summary and the artifact.
+      # for both (apps/flutter/scripts/compare.py), then the prototype's own:
+      # startup phases, tray CPU, the memory curve with traffic pushes.
+      # Reported, never a gate: the numbers go to the job summary and the
+      # artifact.
       - id: native
         name: Fetch the native app
         if: steps.scope.outputs.flutter == 'true'
@@ -838,7 +846,8 @@ jobs:
           set -- "$py" apps/flutter/scripts/compare.py --flutter "$(p "${{ steps.build.outputs.bundle }}")" \
             --flutter-zip-kib "$zip" --native "$(p "${{ steps.native.outputs.exe }}")" \
             --native-installer "$(p "${{ steps.native.outputs.installer }}")" \
-            --native-root "$(p "${{ steps.native.outputs.root }}")" --out "$(p "$RUNNER_TEMP/flutter-out")"
+            --native-root "$(p "${{ steps.native.outputs.root }}")" --out "$(p "$RUNNER_TEMP/flutter-out")" \
+            --curve-minutes "$CURVE_MINUTES"
           if [ "${{ matrix.os }}" = ubuntu-latest ]; then
             xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- "$@"
           else

@@ -12,6 +12,7 @@ import 'package:forui/forui.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'bench.dart';
 import 'src/rust/api.dart' as rust;
 import 'sample.dart';
 import 'shell.dart';
@@ -29,16 +30,20 @@ String _libraryPath() {
 }
 
 Future<void> main() async {
+  mark('main');
   WidgetsFlutterBinding.ensureInitialized();
   final AppState app;
   if (samplePage != null) {
     app = sampleState();
   } else {
     await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
+    mark('bridge_loaded');
     app = AppState(rust.start());
+    mark('client_created');
   }
 
   await windowManager.ensureInitialized();
+  mark('window_manager_ready');
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(
       size: Tokens.windowSize,
@@ -49,8 +54,10 @@ Future<void> main() async {
       titleBarStyle: TitleBarStyle.hidden,
     ),
     () async {
+      mark('ready_to_show');
       await windowManager.show();
       await windowManager.focus();
+      mark('window_shown');
     },
   );
   await windowManager.setPreventClose(true);
@@ -68,7 +75,9 @@ Future<void> main() async {
 
   final tray = Tray(app: app, onOpen: () => unawaited(open()), onQuit: quit);
   windowManager.addListener(_HideOnClose());
+  mark('tray_created');
   runApp(PrototypeApp(app: app, tray: tray));
+  unawaited(WidgetsBinding.instance.waitUntilFirstFrameRasterized.then((_) => mark('first_frame')));
 }
 
 class _HideOnClose with WindowListener {
