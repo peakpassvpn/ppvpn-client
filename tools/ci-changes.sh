@@ -15,7 +15,7 @@
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
 #         release.yml warms the caches on main only when it is true.
-#   memory  the memory harness (ne-mem, tools/perf/ne_mem.py, test/perf/)
+#   memory  the memory harness (ne-mem, tools/perf/{ne_mem,dhat_top}.py, test/perf/)
 #         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
 #         then build it in release and measure (#388).
 # Every other event (workflow_dispatch, a new branch), a compare that fails,
@@ -40,7 +40,8 @@ n=$(grep -c . <<<"$files" || true)
 code=false desktop=false flutter=false deps=false memory=false
 while IFS= read -r f; do
   case $f in
-    Cargo.lock | crates/core-lab/src/bin/ne-mem.rs | tools/perf/ne_mem.py | test/perf/*) memory=true ;;
+    Cargo.lock | crates/core-lab/src/bin/ne-mem.rs | tools/perf/ne_mem.py | tools/perf/dhat_top.py | \
+    test/perf/*) memory=true ;;
   esac
   case $f in
     docs/* | *.md) ;;

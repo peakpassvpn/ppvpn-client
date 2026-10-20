@@ -5,6 +5,7 @@
 //! to a file. Nothing else runs in it: the loads come from other processes.
 //!
 //!     ne-mem --state-dir <dir> [--platform ios|android] [--workers N] [--log-file <path>]
+//!            [--dhat-file <path>]
 //!
 //! Commands, one JSON object per line on stdin, one answer per line on
 //! stdout (`{"ok":true,...}` or `{"ok":false,"error":"..."}`):
@@ -23,6 +24,12 @@
 //! where it keeps one per interval (macOS's interval maximum when the call
 //! to reset it exists), else the highest of samples taken every
 //! millisecond; `peak_source` says which.
+//!
+//! Built with the `dhat` feature, the allocator is dhat's instead (the heap
+//! figures then read 0) and `--dhat-file` gets its heap profile at quit:
+//! the allocation sites live at the heap's peak (t-gmax) and in all. Its
+//! bookkeeping costs memory and time, so its footprints are not the
+//! extension's.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::{BufRead, Write};
@@ -36,6 +43,7 @@ use ppvpn_core::{
 use serde_json::{json, Value};
 
 /// The system allocator, counting the bytes live and their peak.
+#[cfg_attr(feature = "dhat", allow(dead_code))]
 struct Counting;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
@@ -77,8 +85,13 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 
+#[cfg(not(feature = "dhat"))]
 #[global_allocator]
 static ALLOC: Counting = Counting;
+
+#[cfg(feature = "dhat")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[cfg(target_os = "macos")]
 mod mem {
@@ -266,6 +279,8 @@ struct Args {
     platform: Platform,
     workers: usize,
     log_file: Option<String>,
+    #[cfg_attr(not(feature = "dhat"), allow(dead_code))]
+    dhat_file: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -274,6 +289,7 @@ fn parse_args() -> Result<Args, String> {
         platform: Platform::Ios,
         workers: 0,
         log_file: None,
+        dhat_file: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -291,6 +307,7 @@ fn parse_args() -> Result<Args, String> {
                 args.workers = value()?.parse().map_err(|e| format!("--workers: {e}"))?
             }
             "--log-file" => args.log_file = Some(value()?),
+            "--dhat-file" if cfg!(feature = "dhat") => args.dhat_file = Some(value()?),
             other => return Err(format!("unknown flag {other:?}")),
         }
     }
@@ -308,6 +325,13 @@ fn main() {
             std::process::exit(2);
         }
     };
+    #[cfg(feature = "dhat")]
+    let profiler = args.dhat_file.as_ref().map(|path| {
+        dhat::Profiler::builder()
+            .file_name(path)
+            .trim_backtraces(Some(24))
+            .build()
+    });
     let stop = Arc::new(AtomicBool::new(false));
     let sampler = {
         let stop = stop.clone();
@@ -327,6 +351,9 @@ fn main() {
     let code = runtime.block_on(run(args));
     stop.store(true, Ordering::Relaxed);
     let _ = sampler.join();
+    // exit() runs no destructors: the profile is written here.
+    #[cfg(feature = "dhat")]
+    drop(profiler);
     std::process::exit(code);
 }
 

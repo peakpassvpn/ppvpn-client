@@ -307,6 +307,33 @@ jobs:
             ne-mem-linux.json
             ne-mem-*.log
           if-no-files-found: ignore
+      # Where the heap goes (#388): ne-mem with dhat's allocator and line
+      # tables, once with only the downloads (dhat's snapshot is at the
+      # heap's peak) and once with 500 connections; tools/perf/dhat_top.py
+      # sums each up into the step summary.
+      - name: Memory profile (dhat)
+        if: steps.scope.outputs.memory == 'true'
+        timeout-minutes: 40
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+        run: |
+          cargo build --release --locked -p ppvpn-core-lab --bin ne-mem --features ppvpn-core/lab,ppvpn-core-lab/dhat
+          mkdir -p build/dhat
+          for run in "downloads --conns=" "conns500 --conns=500"; do
+            set -- $run
+            sudo sh -c "ulimit -n 16384 && exec python3 tools/perf/ne_mem.py \
+              --ne-mem target/release/ne-mem --fakenode build/perf/fakenode --loadgen build/perf/loadgen \
+              --workers 1 $2 --dhat build/dhat/$1 --out build/dhat/$1.json"
+            sudo chmod -R a+r build/dhat
+            { echo "## dhat: $1 (#388)"; echo; python3 tools/perf/dhat_top.py "build/dhat/$1-default-w1.json"; } \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.scope.outputs.memory == 'true'
+        with:
+          name: ne-mem-dhat-linux
+          path: build/dhat/
+          if-no-files-found: ignore
       - name: Service log
         if: always() && steps.scope.outputs.code == 'true'
         run: sudo tail -n 200 /var/log/ppvpn/ppvpn-service.log || true
