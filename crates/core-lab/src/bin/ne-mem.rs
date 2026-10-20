@@ -16,12 +16,13 @@
 //!     {"cmd":"quit"}
 //!
 //! A mark answers with `footprint_kib` (phys_footprint on macOS, the figure
-//! jetsam judges; RSS elsewhere) now and its peak since the last mark, the
-//! heap bytes live now and at their peak (a counting allocator over the
-//! system's), and the thread count. The peak is the kernel's where it keeps
-//! one per interval (macOS's interval maximum when the call to reset it
-//! exists, Linux's VmHWM, reset through clear_refs), else the highest of
-//! samples taken every millisecond; `peak_source` says which.
+//! jetsam judges; RssAnon on Linux, the nearest to it) now and its peak
+//! since the last mark, the heap bytes live now and at their peak (a
+//! counting allocator over the system's), and the thread count; on Linux
+//! also RSS and VmHWM, on macOS the resident size. The peak is the kernel's
+//! where it keeps one per interval (macOS's interval maximum when the call
+//! to reset it exists), else the highest of samples taken every
+//! millisecond; `peak_source` says which.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::{BufRead, Write};
@@ -84,11 +85,12 @@ mod mem {
     //! phys_footprint from proc_pid_rusage (RUSAGE_INFO_V4), the interval
     //! maximum reset through proc_reset_footprint_interval when libSystem
     //! exports it (looked up at run time: it is not in the public headers).
-    use std::ffi::{c_int, c_void, CStr};
+    use std::ffi::{c_int, c_void};
     use std::sync::OnceLock;
 
     const RUSAGE_INFO_V4: c_int = 4;
     // u64 fields after the 16-byte uuid of rusage_info_v4 (sys/resource.h).
+    const RESIDENT_SIZE: usize = 6;
     const PHYS_FOOTPRINT: usize = 7;
     const INTERVAL_MAX_PHYS_FOOTPRINT: usize = 33;
 
@@ -127,7 +129,7 @@ mod mem {
     fn reset_fn() -> Option<Reset> {
         static RESET: OnceLock<Option<Reset>> = OnceLock::new();
         *RESET.get_or_init(|| {
-            let name = CStr::from_bytes_with_nul(b"proc_reset_footprint_interval\0").ok()?;
+            let name = c"proc_reset_footprint_interval";
             // SAFETY: a symbol lookup; the signature is libproc's.
             let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
             (!sym.is_null()).then(|| unsafe { std::mem::transmute::<*mut c_void, Reset>(sym) })
@@ -148,6 +150,12 @@ mod mem {
     }
 
     pub const KERNEL_PEAK: &str = "interval_max_phys_footprint";
+
+    /// Other figures for the mark, in bytes: the resident size, file pages
+    /// included.
+    pub fn extra() -> Vec<(&'static str, u64)> {
+        vec![("resident", rusage().map_or(0, |r| r.fields[RESIDENT_SIZE]))]
+    }
 
     pub fn threads() -> u64 {
         let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
@@ -172,8 +180,11 @@ mod mem {
 
 #[cfg(not(target_os = "macos"))]
 mod mem {
-    //! RSS and VmHWM from /proc/self/status; writing 5 to clear_refs resets
-    //! VmHWM.
+    //! The footprint is RssAnon from /proc/self/status: the anonymous
+    //! pages, as phys_footprint counts dirty memory and not the binary's
+    //! clean file pages (RSS counts those: sail's text alone is megabytes).
+    //! Its peak is sampled; RSS and VmHWM (reset through clear_refs) go
+    //! along as `rss_kib` and `rss_peak_kib`.
     fn status_kib(field: &str) -> Option<u64> {
         let status = std::fs::read_to_string("/proc/self/status").ok()?;
         status
@@ -183,18 +194,25 @@ mod mem {
     }
 
     pub fn now_bytes() -> u64 {
-        status_kib("VmRSS").unwrap_or(0) * 1024
+        status_kib("RssAnon").unwrap_or(0) * 1024
     }
 
     pub fn kernel_peak_bytes() -> Option<u64> {
-        status_kib("VmHWM").map(|k| k * 1024)
+        None
+    }
+
+    pub fn extra() -> Vec<(&'static str, u64)> {
+        vec![
+            ("rss", status_kib("VmRSS").unwrap_or(0) * 1024),
+            ("rss_peak", status_kib("VmHWM").unwrap_or(0) * 1024),
+        ]
     }
 
     pub fn reset_kernel_peak() {
         let _ = std::fs::write("/proc/self/clear_refs", "5");
     }
 
-    pub const KERNEL_PEAK: &str = "VmHWM";
+    pub const KERNEL_PEAK: &str = "";
 
     pub fn threads() -> u64 {
         std::fs::read_dir("/proc/self/task").map_or(0, |d| d.count() as u64)
@@ -224,7 +242,7 @@ fn mark(label: &str) -> Value {
     };
     let live = LIVE.load(Ordering::Relaxed) as u64;
     let heap_peak = PEAK.load(Ordering::Relaxed) as u64;
-    let out = json!({
+    let mut out = json!({
         "label": label,
         "footprint_kib": kib(now),
         "peak_kib": kib(peak),
@@ -234,6 +252,9 @@ fn mark(label: &str) -> Value {
         "heap_peak_kib": kib(heap_peak),
         "threads": mem::threads(),
     });
+    for (name, bytes) in mem::extra() {
+        out[format!("{name}_kib")] = kib(bytes).into();
+    }
     mem::reset_kernel_peak();
     SAMPLED_PEAK.store(mem::now_bytes() as usize, Ordering::Relaxed);
     PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);

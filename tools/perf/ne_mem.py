@@ -2,7 +2,8 @@
 """Peak memory of ppvpn-core and sail in the iOS Network Extension's shape
 (#388): ne-mem (crates/core-lab/src/bin/ne-mem.rs) holds the Engine as the
 extension will, a TUN instance on a mobile platform with no local proxy, and
-reports its footprint (phys_footprint on macOS, RSS on Linux) per scenario.
+reports its footprint (phys_footprint on macOS, RssAnon on Linux) per
+scenario.
 As root: sail opens the TUN. Runs on macOS and Linux.
 
     sudo tools/perf/ne_mem.py --ne-mem BIN --fakenode BIN --loadgen BIN [--workers 0,2] [--out FILE]
@@ -20,7 +21,8 @@ one (see ne-mem's doc):
   engine_new       Engine::new, nothing applied
   start            apply (the rule sets downloaded) and start
   idle             IDLE_SECONDS later
-  conns500         500 connections held open at once, echoing a little each
+  conns<N>         N connections held open at once, echoing a little each
+                   (--conns, 100, 250 and 500: the slope is the cost of one)
   download_<node>  8 connections downloading as fast as they go (unpaced)
   switch           a switch of the selected node during 8 streams
   dns              2000 queries for distinct names, through the TUN's DNS
@@ -265,9 +267,10 @@ def run(args, workers, ports, sets1, sets2, work):
         mark("idle")
 
         target = f"{TARGET_IP}:{ports['sink_port']}"
-        res = loadgen(args, "-target", target, "-mode", "stream", "-conns", "500", "-rate-mbit", "20",
-                      "-duration", f"{args.load_seconds}s")
-        mark("conns500", load=res)
+        for conns in (int(c) for c in args.conns.split(",")):
+            res = loadgen(args, "-target", target, "-mode", "stream", "-conns", str(conns), "-rate-mbit", "20",
+                          "-duration", f"{args.load_seconds}s")
+            mark(f"conns{conns}", load=res)
 
         for node in ("anytls", "ss"):
             engine.call("select", node=node)
@@ -321,13 +324,14 @@ def table(rows, sizes):
              f"Rule sets (bytes, revision 1 / 2): "
              + ", ".join(f"{k} {sizes[0][k]}/{sizes[1][k]}" for k in RULE_SETS) + ".",
              "",
-             "| workers | scenario | peak MiB | after MiB | heap peak MiB | heap after MiB | threads | source |",
-             "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+             "| workers | scenario | peak MiB | after MiB | heap peak MiB | heap after MiB | threads | RSS peak / resident MiB | source |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for r in rows:
         over = " ⚠" if r["peak_kib"] / 1024 > BUDGET_MIB else ""
         lines.append(f"| {r['workers'] or 'ncpu'} | {r['label']} | {r['peak_kib'] / 1024:.1f}{over} | "
                      f"{r['footprint_kib'] / 1024:.1f} | {r['heap_peak_kib'] / 1024:.1f} | "
-                     f"{r['heap_live_kib'] / 1024:.1f} | {r['threads']} | {r['peak_source']} |")
+                     f"{r['heap_live_kib'] / 1024:.1f} | {r['threads']} | "
+                     f"{r.get('rss_peak_kib', r.get('resident_kib', 0)) / 1024:.1f} | {r['peak_source']} |")
     return "\n".join(lines)
 
 
@@ -341,6 +345,7 @@ def main():
     parser.add_argument("--idle-seconds", type=int, default=IDLE_SECONDS)
     parser.add_argument("--load-seconds", type=int, default=20)
     parser.add_argument("--dns-queries", type=int, default=2000)
+    parser.add_argument("--conns", default="100,250,500")
     parser.add_argument("--out", help="also write the rows as JSON here")
     args = parser.parse_args()
     if os.geteuid() != 0:
@@ -363,7 +368,8 @@ def main():
         node.wait(timeout=10)
         for name in os.listdir(work):
             if name.endswith(".log"):
-                shutil.copy(os.path.join(work, name), os.getcwd())
+                dest = shutil.copy(os.path.join(work, name), os.getcwd())
+                os.chmod(dest, 0o644)
         shutil.rmtree(work, ignore_errors=True)
     report = table(rows, (sizes1, sizes2))
     print(report)
@@ -373,6 +379,7 @@ def main():
     if args.out:
         with open(args.out, "w") as f:
             json.dump({"rows": rows, "rule_set_bytes": [sizes1, sizes2]}, f, indent=1)
+        os.chmod(args.out, 0o644)
 
 
 if __name__ == "__main__":
