@@ -22,6 +22,13 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 
+# ne-mem's heap profile (#388): dhat's allocator in place of its counting
+# one. Lab only; ci.yml's memory profile step turns it on.
+dhat = { version = "0.3", optional = true }
+
+[features]
+dhat = ["dep:dhat"]
+
 # ne-mem reads its own phys_footprint and thread count (macOS).
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

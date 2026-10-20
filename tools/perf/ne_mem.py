@@ -7,12 +7,18 @@ scenario.
 As root: sail opens the TUN. Runs on macOS and Linux.
 
     sudo tools/perf/ne_mem.py --ne-mem BIN --fakenode BIN --loadgen BIN [--workers 1,0]
-        [--variant NAME[=SETTINGS] ...] [--out FILE]
+        [--variant NAME[=SETTINGS] ...] [--dhat PREFIX] [--out FILE]
 
 A variant is a run with sail's start settings in PPVPN_LAB_SAIL_SETTINGS
 (ne-mem built with ppvpn-core's `lab` feature): one of VARIANTS by name, or
 NAME='{"profile":"desktop","set":["relay.buffer_size=8"]}'. `default`, the
 first, is core's own options. Each variant runs once per --workers value.
+
+--dhat (ne-mem built with its `dhat` feature) writes each run's heap
+profile to PREFIX-<variant>-w<workers>.json; dhat's view of it takes the
+file, and tools/perf/dhat_top.py sums it up. Its snapshot is at the heap's
+peak, so --conns picks what it shows: '' for the downloads, 500 for the
+connections.
 
 The host's routes stay as they are but for one: TEST-NET-3 (203.0.113.0/24)
 into the TUN, which the loads dial. fakenode (-redirect) sends the node's
@@ -149,17 +155,19 @@ def profile(revision, ports, sets):
 
 
 class NeMem:
-    def __init__(self, binary, work, workers, platform_name, variant, settings):
+    def __init__(self, binary, work, workers, platform_name, variant, settings, dhat=None):
         self.state = os.path.join(work, "state")
         os.makedirs(self.state, mode=0o700, exist_ok=True)
         self.log_path = os.path.join(work, f"ne-mem-{variant}-w{workers}.log")
+        self.dhat = dhat
         env = dict(os.environ)
         env.pop("PPVPN_LAB_SAIL_SETTINGS", None)
         if settings:
             env["PPVPN_LAB_SAIL_SETTINGS"] = settings
         self.proc = subprocess.Popen(
             [binary, "--state-dir", self.state, "--platform", platform_name,
-             "--workers", str(workers), "--log-file", self.log_path],
+             "--workers", str(workers), "--log-file", self.log_path,
+             *(["--dhat-file", f"{dhat}-{variant}-w{workers}.json"] if dhat else [])],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env=env)
         ready = self.read()
         if not ready.get("ok"):
@@ -183,7 +191,8 @@ class NeMem:
         try:
             self.proc.stdin.write('{"cmd":"quit"}\n')
             self.proc.stdin.flush()
-            self.proc.wait(timeout=20)
+            # dhat writes its profile at quit.
+            self.proc.wait(timeout=180 if self.dhat else 20)
         except Exception:
             self.proc.kill()
 
@@ -283,7 +292,7 @@ def run(args, variant, settings, workers, ports, sets1, sets2, work):
     rows = []
     plat = "ios" if sys.platform == "darwin" else "android"
     before = interfaces()
-    engine = NeMem(args.ne_mem, work, workers, plat, variant, settings)
+    engine = NeMem(args.ne_mem, work, workers, plat, variant, settings, args.dhat)
     try:
         def mark(label, **extra):
             row = engine.call("mark", label=label)
@@ -311,7 +320,7 @@ def run(args, variant, settings, workers, ports, sets1, sets2, work):
         mark("idle")
 
         target = f"{TARGET_IP}:{ports['sink_port']}"
-        for conns in (int(c) for c in args.conns.split(",")):
+        for conns in (int(c) for c in args.conns.split(",") if c):
             res = loadgen(args, "-target", target, "-mode", "stream", "-conns", str(conns), "-rate-mbit", "20",
                           "-duration", f"{args.load_seconds}s")
             mark(f"conns{conns}", load=res)
@@ -394,6 +403,7 @@ def main():
     parser.add_argument("--conns", default="100,250,500")
     parser.add_argument("--variant", action="append", default=[], metavar="NAME=SETTINGS",
                         help="also run with these sail start settings (JSON), or VARIANTS[NAME]; repeatable")
+    parser.add_argument("--dhat", metavar="PREFIX", help="ne-mem's heap profiles (its dhat feature) to PREFIX-*.json")
     parser.add_argument("--out", help="also write the rows as JSON here")
     args = parser.parse_args()
     variants = [("default", "")]
