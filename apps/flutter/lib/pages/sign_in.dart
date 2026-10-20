@@ -112,7 +112,12 @@ class _SignedOut extends StatelessWidget {
         const SizedBox(height: 20),
         SizedBox(
           height: Tokens.largeControlHeight,
-          child: FButton(onPress: app.signIn, mainAxisSize: MainAxisSize.min, child: Text(button)),
+          child: FButton(
+            size: FButtonSizeVariant.sm,
+            onPress: app.signIn,
+            mainAxisSize: MainAxisSize.min,
+            child: Text(button),
+          ),
         ),
       ],
     );
@@ -191,6 +196,7 @@ class _WaitingState extends State<_Waiting> {
             SizedBox(
               height: Tokens.largeControlHeight,
               child: FButton(
+                size: FButtonSizeVariant.sm,
                 variant: FButtonVariant.outline,
                 mainAxisSize: MainAxisSize.min,
                 onPress: widget.app.cancelSignIn,
@@ -201,6 +207,7 @@ class _WaitingState extends State<_Waiting> {
             SizedBox(
               height: Tokens.largeControlHeight,
               child: FButton(
+                size: FButtonSizeVariant.sm,
                 mainAxisSize: MainAxisSize.min,
                 onPress: () => rust.openUrl(url: widget.code.verificationUrl),
                 child: Text(s('reopen')),
