@@ -1768,7 +1768,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -3504,7 +3504,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "sail"
 version = "0.21.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.21.0#aa84fef2a4d6106a2847904f7a0bd4061e109222"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=5bfc46898ba399049201487656f37e5085555173#5bfc46898ba399049201487656f37e5085555173"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3594,7 +3594,7 @@ dependencies = [
 [[package]]
 name = "sail-netstack"
 version = "0.1.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.21.0#aa84fef2a4d6106a2847904f7a0bd4061e109222"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=5bfc46898ba399049201487656f37e5085555173#5bfc46898ba399049201487656f37e5085555173"
 dependencies = [
  "foldhash",
 ]
@@ -4073,7 +4073,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
