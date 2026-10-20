@@ -1,0 +1,20 @@
+[package]
+name = "ppvpn-flutter"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+publish = false
+description = "The Flutter desktop prototype's bridge to the PPVPN client (#387)"
+
+[lib]
+name = "ppvpn_flutter"
+# Loaded by the Flutter app at run time (ExternalLibrary.open).
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+ppvpn-desktop = { path = "../../../crates/desktop" }
+# The Dart package and the codegen in ci.yml are the same version: the
+# generated glue checks it at start.
+flutter_rust_bridge = "=2.13.0"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tracing = "0.1"

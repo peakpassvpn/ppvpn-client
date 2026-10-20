@@ -8,6 +8,10 @@
 #         the dependencies or the workflows: what the desktop
 #         app builds (the macOS Debug app, the Windows C# bindings and app)
 #         depend on. ci.yml skips those builds when it is false.
+#   flutter  apps/flutter/ (the Flutter prototype, #387), crates/desktop/
+#         (what it links), the dependencies or the workflows. ci.yml's
+#         flutter job builds only when it is true. apps/flutter/ alone
+#         does not set desktop: the native apps do not depend on it.
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
 #         release.yml warms the caches on main only when it is true.
@@ -16,7 +20,7 @@
 # everything.
 set -euo pipefail
 
-all() { printf '%s=true\n' code desktop deps; exit 0; }
+all() { printf '%s=true\n' code desktop flutter deps; exit 0; }
 
 case "${GITHUB_EVENT_NAME:-}" in
   pull_request) base=${PR_BASE_SHA:-} ;;
@@ -30,18 +34,21 @@ files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
 n=$(grep -c . <<<"$files" || true)
 (( n > 0 && n < 300 )) || all
 
-code=false desktop=false deps=false
+code=false desktop=false flutter=false deps=false
 while IFS= read -r f; do
   case $f in
     docs/* | *.md) ;;
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | \
     .github/workflows/ci.yml | .github/workflows/release.yml)
-      deps=true desktop=true code=true ;;
-    apps/* | crates/desktop/* | crates/engine-host/* | crates/service/* | tools/desktop/*)
+      deps=true desktop=true flutter=true code=true ;;
+    apps/flutter/*) flutter=true code=true ;;
+    crates/desktop/*) desktop=true flutter=true code=true ;;
+    apps/* | crates/engine-host/* | crates/service/* | tools/desktop/*)
       desktop=true code=true ;;
     *) code=true ;;
   esac
 done <<<"$files"
 echo "code=$code"
 echo "desktop=$desktop"
+echo "flutter=$flutter"
 echo "deps=$deps"
