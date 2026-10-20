@@ -720,6 +720,39 @@ jobs:
             apps/flutter/scripts/smoke.sh "${{ steps.build.outputs.bundle }}" "$RUNNER_TEMP/flutter-out"
           fi
           { echo '```'; cat "$RUNNER_TEMP/flutter-out/results.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Against the native app of the latest release, the same measurements
+      # for both (apps/flutter/scripts/compare.py). Reported, never a gate:
+      # the numbers go to the job summary and the artifact.
+      - id: native
+        name: Fetch the native app
+        if: steps.scope.outputs.flutter == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ matrix.os }}" = ubuntu-latest ]; then
+            sudo apt-get install -y --no-install-recommends xdotool >/dev/null
+          fi
+          apps/flutter/scripts/native.sh v0.6.3 "$RUNNER_TEMP/native"
+      - name: Compare with the native app
+        if: steps.scope.outputs.flutter == 'true' && steps.native.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv" 2>/dev/null || python -m venv "$RUNNER_TEMP/venv"
+          py="$RUNNER_TEMP/venv/bin/python"; [ -x "$py" ] || py="$RUNNER_TEMP/venv/Scripts/python.exe"
+          "$py" -m pip install --quiet psutil==7.2.2 python-xlib==0.33
+          zip=$(sed -n 's/^zip_kib=//p' "$RUNNER_TEMP/flutter-out/results.txt")
+          # Windows paths for Python on Windows (Git Bash gives /d/a/...).
+          p() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else echo "$1"; fi; }
+          set -- "$py" apps/flutter/scripts/compare.py --flutter "$(p "${{ steps.build.outputs.bundle }}")" \
+            --flutter-zip-kib "$zip" --native "$(p "${{ steps.native.outputs.exe }}")" \
+            --native-installer "$(p "${{ steps.native.outputs.installer }}")" \
+            --native-root "$(p "${{ steps.native.outputs.root }}")" --out "$(p "$RUNNER_TEMP/flutter-out")"
+          if [ "${{ matrix.os }}" = ubuntu-latest ]; then
+            xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- "$@"
+          else
+            "$@"
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.scope.outputs.flutter == 'true'
         with:
