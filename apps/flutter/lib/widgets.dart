@@ -212,3 +212,59 @@ String formatRate(int bytesPerSecond) {
   final digits = unit == 0 || value >= 100 ? 0 : 1;
   return '${value.toStringAsFixed(digits)} ${units[unit]}';
 }
+
+/// The overview's icon (design v17): Lucide's shield with the check
+/// `m8.5 12 2.5 2.5 4.5-5` inside. Outlined; when [filled] (selected) a
+/// solid shield with the check stroked in white.
+class ShieldCheckIcon extends StatelessWidget {
+  const ShieldCheckIcon({super.key, required this.size, required this.color, this.filled = false});
+
+  final double size;
+  final Color color;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) =>
+      CustomPaint(size: Size.square(size), painter: _ShieldCheckPainter(color: color, filled: filled));
+}
+
+class _ShieldCheckPainter extends CustomPainter {
+  _ShieldCheckPainter({required this.color, required this.filled});
+
+  final Color color;
+  final bool filled;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Lucide's 24-unit grid, stroke 2.
+    canvas.scale(size.width / 24);
+    final shield = Path()
+      ..moveTo(12, 2.2)
+      ..cubicTo(13.8, 3.8, 16.6, 5, 19, 5)
+      ..quadraticBezierTo(20, 5, 20, 6)
+      ..lineTo(20, 13)
+      ..cubicTo(20, 18, 16.5, 20.5, 12.3, 21.95)
+      ..quadraticBezierTo(12, 22.05, 11.7, 21.95)
+      ..cubicTo(7.5, 20.5, 4, 18, 4, 13)
+      ..lineTo(4, 6)
+      ..quadraticBezierTo(4, 5, 5, 5)
+      ..cubicTo(7.4, 5, 10.2, 3.8, 12, 2.2)
+      ..close();
+    final check = Path()
+      ..moveTo(8.5, 12)
+      ..lineTo(11, 14.5)
+      ..lineTo(15.5, 9.5);
+    Paint stroke(Color color) => Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    if (filled) canvas.drawPath(shield, Paint()..color = color);
+    canvas.drawPath(shield, stroke(color));
+    canvas.drawPath(check, stroke(filled ? const Color(0xFFFFFFFF) : color));
+  }
+
+  @override
+  bool shouldRepaint(_ShieldCheckPainter old) => old.color != color || old.filled != filled;
+}

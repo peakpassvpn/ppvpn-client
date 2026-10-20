@@ -117,7 +117,8 @@ const _zh = <String, String>{
   'maximize': '最大化',
   'protoNoTun': '原型不包含增强模式',
   'protoPage': '原型不包含此页面',
-  'brandLine': '面向个人与团队的代理与 VPN 客户端',
+  'signInTitle': '稳定地连接世界',
+  'signInLine': '设备授权登录：在浏览器里确认一次，无需在应用里输入密码。',
   'h_stdStopping': '正在断开',
 };
 
@@ -216,7 +217,8 @@ const _en = <String, String>{
   'maximize': 'Maximize',
   'protoNoTun': 'Not part of the prototype',
   'protoPage': 'This page is not part of the prototype',
-  'brandLine': 'Proxy and VPN client for individuals and teams',
+  'signInTitle': 'Connect to the world, reliably',
+  'signInLine': 'Device sign-in: confirm once in your browser. No password to type in the app.',
   'h_stdStopping': 'Disconnecting',
 };
 

@@ -257,7 +257,7 @@ class _Sidebar extends StatelessWidget {
           // Room for the macOS traffic lights; a drag area everywhere.
           const SizedBox(height: Tokens.topBarHeight, child: DragToMoveArea(child: SizedBox.expand())),
           _Item(
-            icon: FLucideIcons.house,
+            iconBuilder: (color, selected) => ShieldCheckIcon(size: 15, color: color, filled: selected),
             label: s('overview'),
             selected: page == _Page.overview,
             onPress: () => onPage(_Page.overview),
@@ -301,9 +301,13 @@ class _Sidebar extends StatelessWidget {
 }
 
 class _Item extends StatelessWidget {
-  const _Item({required this.icon, required this.label, required this.selected, required this.onPress});
+  const _Item({this.icon, this.iconBuilder, required this.label, required this.selected, required this.onPress})
+    : assert(icon != null || iconBuilder != null);
 
-  final IconData icon;
+  final IconData? icon;
+
+  /// Draws the icon instead of [icon] (the overview's shield).
+  final Widget Function(Color color, bool selected)? iconBuilder;
   final String label;
   final bool selected;
   final VoidCallback onPress;
@@ -321,7 +325,10 @@ class _Item extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.start,
           onPress: onPress,
           semanticsLabel: label,
-          prefix: Icon(icon, size: 15, color: selected ? t.accent : t.textSecondary),
+          prefix: switch (iconBuilder) {
+            final build? => build(selected ? t.accent : t.textSecondary, selected),
+            null => Icon(icon, size: 15, color: selected ? t.accent : t.textSecondary),
+          },
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(label, style: t.rowTitle.copyWith(fontWeight: selected ? FontWeight.w600 : null)),

@@ -111,7 +111,8 @@ class Tokens {
   );
 
   // Sizes (macOS column of the handoff).
-  static const windowSize = Size(760, 540);
+  // Design v17: 960×640 (the sign-in page's two columns).
+  static const windowSize = Size(960, 640);
   static const windowMinSize = Size(640, 460);
   /// The strip above the content (and above the sidebar items): macOS's
   /// unified toolbar height, where the traffic lights sit.
@@ -137,6 +138,15 @@ class Tokens {
   static const signInPadding = 56.0;
   static const codeBox = Size(40, 52);
   static const codeFontSize = 26.0;
+  static const codeGap = 6.0;
+
+  // The sign-in brand panel (design v17).
+  static const signInBrandWidth = 380.0;
+  static const signInBrandPadding = EdgeInsets.fromLTRB(32, 16, 32, 28);
+  static const trafficLightsHeight = 12.0;
+
+  /// Room below the panel's text for the mountains.
+  static const signInMountains = 150.0;
   static const brandIconSize = 76.0;
 
   // Type (macOS: 13 body, 20 bold status title, 11 row descriptions).

@@ -13,7 +13,8 @@ any release.
   and the conversions; `hooks.rs` holds the platform hooks.
 - `lib/theme.dart`: every design token in one place, from the desktop design
   handoff. It keeps the brand and semantic colours, and uses the macOS sizes,
-  spacing, radii and window size on every platform. Controls are forui's
+  spacing and radii on every platform. The window (960×640) and the sign-in
+  page follow design v17. Controls are forui's
   neutral ones. A cross-platform design (desktop and mobile) will replace
   these values.
 - `lib/strings.dart`: the handoff's `strings.json` (zh and en) for the keys
