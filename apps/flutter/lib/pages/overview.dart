@@ -782,7 +782,11 @@ class ProxyRows extends StatelessWidget {
       decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(Tokens.segmentRadius)),
       child: Row(
         children: [
-          SizedBox(width: 54, child: Text(key, style: t.note)),
+          // 54 in the design (Chinese); no wrapping for longer labels.
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 54),
+            child: Text(key, maxLines: 1, softWrap: false, style: t.note),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(

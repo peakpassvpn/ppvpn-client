@@ -183,17 +183,21 @@ class _Table extends StatelessWidget {
   final String? selected;
   final ValueChanged<String> onSelect;
 
-  // Columns: mark 20, node (flex), tier 52, region 68, lines 150, latency
-  // 84; 12 apart.
+  // Columns: mark 20, node (flex), tier, region, lines 150, latency 84; 12
+  // apart. Tier and region are the design's 52 and 68 for Chinese, wider
+  // for longer (English) labels.
+  static final _wide = S.current('colTier') != '入口';
+  static final double _tierWidth = _wide ? 76 : 52;
+  static final double _regionWidth = _wide ? 104 : 68;
   static Widget _cells(List<Widget> c) => Row(
     children: [
       SizedBox(width: 20, child: c[0]),
       const SizedBox(width: 12),
       Expanded(child: c[1]),
       const SizedBox(width: 12),
-      SizedBox(width: 52, child: c[2]),
+      SizedBox(width: _tierWidth, child: c[2]),
       const SizedBox(width: 12),
-      SizedBox(width: 68, child: c[3]),
+      SizedBox(width: _regionWidth, child: c[3]),
       const SizedBox(width: 12),
       SizedBox(width: 150, child: c[4]),
       const SizedBox(width: 12),
