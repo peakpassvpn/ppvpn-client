@@ -264,9 +264,18 @@ def tray_cpu(argv, home):
     return out
 
 
+def committed_kib(pid):
+    """Memory the process holds: RSS, except on Windows, where the RSS is the
+    working set, which the system trims at will (it fell from 148 to 17 MiB
+    in a curve with the window open); there it is the private bytes."""
+    info = psutil.Process(pid).memory_info()
+    return (info.private if SYSTEM == "Windows" else info.rss) // 1024
+
+
 def curve(argv, minutes, out_dir):
-    """RSS every 10 s for `minutes` with a traffic sample pushed every second
-    (PPVPN_FLUTTER_SYNTHETIC_TRAFFIC) and the overview showing it."""
+    """Memory (committed_kib) every 10 s for `minutes` with a traffic sample
+    pushed every second (PPVPN_FLUTTER_SYNTHETIC_TRAFFIC) and the overview
+    showing it."""
     home = tempfile.mkdtemp(prefix="cmp-curve-")
     proc = launch(argv, home, {"PPVPN_FLUTTER_SYNTHETIC_TRAFFIC": "1"})
     began = time.monotonic()
@@ -274,14 +283,14 @@ def curve(argv, minutes, out_dir):
     while time.monotonic() - began < minutes * 60 and proc.poll() is None:
         time.sleep(10)
         try:
-            samples.append((round(time.monotonic() - began), memory(proc.pid)[0]))
+            samples.append((round(time.monotonic() - began), committed_kib(proc.pid)))
         except psutil.Error:
             break
     exited = proc.poll()
     stop(proc)
     shutil.rmtree(home, ignore_errors=True)
     with open(os.path.join(out_dir, "curve.csv"), "w", encoding="utf-8") as f:
-        f.write("seconds,rss_kib\n")
+        f.write("seconds,kib\n")
         f.writelines(f"{t},{kib}\n" for t, kib in samples)
     result = {"minutes": minutes, "samples": len(samples)}
     if exited is not None:
@@ -390,7 +399,8 @@ def main():
         lines += [f"| `{k}` | {v} |" for k, v in f["phases_ms"].items()]
     c = f.get("curve")
     if c:
-        lines += ["", f"Prototype memory with a traffic sample every second, {c['minutes']} min "
+        measure_name = "private bytes" if SYSTEM == "Windows" else "RSS"
+        lines += ["", f"Prototype {measure_name} with a traffic sample every second, {c['minutes']} min "
                   f"({c['samples']} samples, `curve.csv`): after the first 2 min "
                   f"{fmt_mib(c.get('first_kib'))} → {fmt_mib(c.get('last_kib'))}, peak {fmt_mib(c.get('peak_kib'))}, "
                   f"slope {c.get('slope_mib_per_hour', 'n/a')} MiB/h."]
