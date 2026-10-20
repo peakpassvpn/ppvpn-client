@@ -25,7 +25,7 @@ bool isBusy(rust.UiPhase phase) => switch (phase) {
 
 /// The status title for the system proxy (handoff "状态标题规则").
 String statusTitle(rust.UiPhase phase) => switch (phase) {
-  rust.UiPhase.on => S.current('h_on'),
+  rust.UiPhase.connected => S.current('h_on'),
   rust.UiPhase.disconnecting => S.current('h_stdStopping'),
   rust.UiPhase.error || rust.UiPhase.contended => S.current('h_stdFail'),
   _ when isBusy(phase) => S.current('h_stdStarting'),
@@ -33,7 +33,7 @@ String statusTitle(rust.UiPhase phase) => switch (phase) {
 };
 
 Color statusColor(Tokens t, rust.UiPhase phase) => switch (phase) {
-  rust.UiPhase.on => t.success,
+  rust.UiPhase.connected => t.success,
   rust.UiPhase.error || rust.UiPhase.contended => t.danger,
   _ when isBusy(phase) => t.accent,
   _ => t.idle,
@@ -112,7 +112,7 @@ class _ConnectionCard extends StatelessWidget {
                 child: busy
                     ? Spinner(color: color, size: 20)
                     : Icon(
-                        phase == rust.UiPhase.on
+                        phase == rust.UiPhase.connected
                             ? FLucideIcons.shieldCheck
                             : phase == rust.UiPhase.error
                             ? FLucideIcons.circleAlert
@@ -144,7 +144,7 @@ class _ConnectionCard extends StatelessWidget {
             description: s('stdDesc'),
             trailing: TriSwitch(
               label: s('stdMode'),
-              state: phase == rust.UiPhase.on
+              state: phase == rust.UiPhase.connected
                   ? SwitchState.on
                   : busy
                   ? SwitchState.busy

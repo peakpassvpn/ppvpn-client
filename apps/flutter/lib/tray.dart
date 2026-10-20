@@ -48,7 +48,7 @@ class Tray {
     final state = !signedIn
         ? 'off'
         : switch (snapshot.phase) {
-            rust.UiPhase.on => 'on',
+            rust.UiPhase.connected => 'on',
             rust.UiPhase.error || rust.UiPhase.contended => 'error',
             final phase when isBusy(phase) => 'busy',
             _ => 'off',
@@ -74,11 +74,11 @@ class Tray {
     if (signedIn) {
       final proxy = MenuItem.createWithLabelAndType(S.current('stdMode'), MenuItemType.checkbox);
       if (proxy != null) {
-        proxy.state = snapshot.phase == rust.UiPhase.on ? MenuItemState.checked : MenuItemState.unchecked;
+        proxy.state = snapshot.phase == rust.UiPhase.connected ? MenuItemState.checked : MenuItemState.unchecked;
         proxy.isEnabled = !isBusy(snapshot.phase);
         proxy.addListener((event) {
           if (event is MenuItemClickedEvent) {
-            snapshot.phase == rust.UiPhase.on ? app.disconnect() : app.connect();
+            snapshot.phase == rust.UiPhase.connected ? app.disconnect() : app.connect();
           }
         });
         menu.addItem(proxy);

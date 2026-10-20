@@ -32,7 +32,8 @@ pub enum UiPhase {
     Preparing,
     WaitingPermission,
     Connecting,
-    On,
+    /// `ConnectionPhase::On` (Dart cannot name a constant `on`).
+    Connected,
     Reconnecting,
     Contended,
     Disconnecting,

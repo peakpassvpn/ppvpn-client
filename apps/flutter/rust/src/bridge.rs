@@ -259,7 +259,7 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             ConnectionPhase::Preparing => UiPhase::Preparing,
             ConnectionPhase::WaitingPermission => UiPhase::WaitingPermission,
             ConnectionPhase::Connecting => UiPhase::Connecting,
-            ConnectionPhase::On => UiPhase::On,
+            ConnectionPhase::On => UiPhase::Connected,
             ConnectionPhase::Reconnecting => UiPhase::Reconnecting,
             ConnectionPhase::Contended => UiPhase::Contended,
             ConnectionPhase::Disconnecting => UiPhase::Disconnecting,
