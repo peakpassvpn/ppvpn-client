@@ -89,6 +89,9 @@ VARIANTS = {
                                             "netstack.read_ahead=32"]},
     "budget": {"profile": "desktop", "set": ["netstack.budget=mobile"]},
     "mobile": {"profile": "mobile"},
+    # Not the profile's: the sessions a 35 MiB budget carries at about 150
+    # KiB each (#388); the dispatcher refuses the rest, the TUN's included.
+    "cap": {"profile": "desktop", "set": ["inbound.max_connections=128"]},
 }
 
 
