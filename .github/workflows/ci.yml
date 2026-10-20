@@ -321,7 +321,7 @@ jobs:
           cargo build --release --locked -p ppvpn-core-lab --bin ne-mem --features ppvpn-core/lab,ppvpn-core-lab/dhat
           mkdir -p build/dhat
           for run in "downloads default --conns=" "conns500 default --conns=500" \
-                     "dns-cap16 cap16 --conns= --no-default --variant cap16"; do
+                     "dns-cap16 cap16 --conns= --no-default --variant cap16 --dns-rate 4000"; do
             set -- $run
             name=$1 variant=$2
             shift 2
@@ -331,7 +331,10 @@ jobs:
             sudo cp "ne-mem-$variant-w1.log" "build/dhat/$name.log"
             sudo chmod -R a+r build/dhat
             { echo "## dhat: $name (#388)"; echo; python3 tools/perf/dhat_top.py "build/dhat/$name-$variant-w1.json"
-              echo; echo "Sessions refused (sail's log): $(grep -c 'refused' "build/dhat/$name.log" || true)"; } \
+              echo; echo "Sessions refused (sail's log): $(grep -c 'refused' "build/dhat/$name.log" || true)"
+              python3 -c "import json,sys; r=[r for r in json.load(open(sys.argv[1]))['rows'] if r['label']=='dns'][0]; \
+                print(f\"DNS: {r['answered']} of {r['queries']} answered, AnyTLS sessions at most {r['node_sessions_peak']}\")" \
+                "build/dhat/$name.json"; } \
               | tee -a "$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
