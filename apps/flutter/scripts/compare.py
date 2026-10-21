@@ -349,11 +349,11 @@ def main():
 
     flutter_bundle = args.flutter
     if SYSTEM == "Darwin":
-        flutter_exe = os.path.join(flutter_bundle, "Contents", "MacOS", "ppvpn_flutter")
+        flutter_exe = os.path.join(flutter_bundle, "Contents", "MacOS", "PPVPN")
     elif SYSTEM == "Windows":
-        flutter_exe = os.path.join(flutter_bundle, "ppvpn_flutter.exe")
+        flutter_exe = os.path.join(flutter_bundle, "ppvpn.exe")
     else:
-        flutter_exe = os.path.join(flutter_bundle, "ppvpn_flutter")
+        flutter_exe = os.path.join(flutter_bundle, "ppvpn")
 
     if SYSTEM == "Darwin":
         visible_window(os.getpid())  # builds the window probe before timing anything

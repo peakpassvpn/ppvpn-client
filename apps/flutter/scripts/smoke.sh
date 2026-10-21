@@ -15,9 +15,9 @@ out=$(mkdir -p "$2" && cd "$2" && pwd)
 settle=${SETTLE:-20}
 
 case "$(uname -s)" in
-  Linux) exe="$bundle/ppvpn_flutter" ;;
-  Darwin) exe="$bundle/Contents/MacOS/ppvpn_flutter" ;;
-  *) exe="$bundle/ppvpn_flutter.exe" ;;
+  Linux) exe="$bundle/ppvpn" ;;
+  Darwin) exe="$bundle/Contents/MacOS/PPVPN" ;;
+  *) exe="$bundle/ppvpn.exe" ;;
 esac
 
 "$exe" >"$out/app.log" 2>&1 &
@@ -31,7 +31,7 @@ fi
 case "$(uname -s)" in
   Linux | Darwin) rss=$(ps -o rss= -p "$pid" | tr -d ' ') ;;
   *) rss=$(powershell -NoProfile -Command \
-         "[int]((Get-Process ppvpn_flutter | Measure-Object WorkingSet64 -Sum).Sum / 1KB)") ;;
+         "[int]((Get-Process ppvpn | Measure-Object WorkingSet64 -Sum).Sum / 1KB)") ;;
 esac
 
 case "$(uname -s)" in
@@ -47,7 +47,7 @@ esac
 
 case "$(uname -s)" in
   Linux | Darwin) kill "$pid"; wait "$pid" 2>/dev/null || true ;;
-  *) taskkill //F //IM ppvpn_flutter.exe >/dev/null || true ;;
+  *) taskkill //F //IM ppvpn.exe >/dev/null || true ;;
 esac
 
 # Screenshots of the signed-in pages on the design's sample data
@@ -69,7 +69,7 @@ shot() {
   esac
   case "$(uname -s)" in
     Linux | Darwin) kill "$p"; wait "$p" 2>/dev/null || true ;;
-    *) taskkill //F //IM ppvpn_flutter.exe >/dev/null || true ;;
+    *) taskkill //F //IM ppvpn.exe >/dev/null || true ;;
   esac
 }
 shot overview-light PPVPN_FLUTTER_SAMPLE=overview PPVPN_FLUTTER_THEME=light

@@ -49,7 +49,23 @@ any release.
 - `runner/<os>/`: our files over the generated runner (`flutter create`).
   On macOS that is `MainFlutterWindow.swift`, for the `ppvpn://` links and
   reopens; `scripts/ci-build.sh` also registers the scheme in its
-  Info.plist.
+  Info.plist. The app icons are the native apps' (`AppIcon.appiconset`
+  from `apps/macos`, `app_icon.ico` from `apps/windows`).
+- The native apps' identity (#401 step 5), set by `scripts/ci-build.sh` in
+  the generated runner:
+  - macOS: `PPVPN.app`, bundle id `com.peakpassvpn.ppvpn.desktop`, macOS
+    13 or later, with the native Info.plist's display name, category,
+    copyright (PeakPass Labs LLC) and localizations;
+  - Windows: `ppvpn.exe`, window title `PPVPN`, and the version resource's
+    company (PeakPass Labs LLC), product and copyright;
+  - Linux: `ppvpn`, application id `com.peakpassvpn.ppvpn.desktop` (the
+    desktop entry's name), window title `PPVPN`.
+
+  The version is `PPVPN_VERSION` (default: the workspace's, `Cargo.toml`)
+  and the build number `PPVPN_BUILD_NUMBER` (default 0), the names
+  release.yml gives the native builds. macOS's `CFBundleVersion` is
+  `<version>.<build>`, as the native app's. The Dart package stays
+  `ppvpn_flutter`, and so does the bridge library (`libppvpn_flutter`).
 - `assets/tray/`: the shipped tray icons, copied from the native apps: the
   macOS template images (`menubar-*`, from `apps/macos` `MenuBar-*`) and
   the Windows and Linux colour icons (`tray-*`, from `apps/assets/icons`)
@@ -97,7 +113,7 @@ any release.
   effect on the next launch; `PPVPN_API_BASE` wins over it. Without either
   the backend is `https://www.peakpassvpn.com`.
 - Quit the native app before trying it: both write the same system proxy
-  setting.
+  setting, and both have the same identity (bundle id, executable names).
 - Flags are 4:3 images from flag-icons (MIT, `assets/flags/LICENSE`), only
   for the countries we expect; any other country gets its code on a tile.
   There are no emoji flags: platforms draw them differently, and Windows
@@ -113,11 +129,12 @@ platforms, and only when `apps/flutter/` or `crates/desktop/` changes.
 `scripts/ci-build.sh` does the following:
 
 1. generates the platform runner (`flutter create`), copies `runner/<os>/`
-   over it, and keeps the window hidden until `main.dart` shows it on Windows
-   and Linux;
+   over it, gives it the native apps' identity (above), and keeps the window
+   hidden until `main.dart` shows it on Windows and Linux;
 2. generates the bridge glue (`flutter_rust_bridge_codegen generate`);
 3. analyses the Dart code;
-4. builds the Rust library and the app in release mode;
+4. builds the Rust library and the app in release mode, with the version
+   and build number;
 5. copies the library into the bundle.
 
 `scripts/smoke.sh` then starts the app and checks that it is still running

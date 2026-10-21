@@ -24,9 +24,9 @@ mkdir -p "$HOME" "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 failed=0
 while (( total < limit )); do
   echo "# segment $segment from total ${total}s" >&2
-  xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- /app/bundle/ppvpn_flutter >/out/app-$segment.log 2>&1 &
+  xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- /app/bundle/ppvpn >/out/app-$segment.log 2>&1 &
   sleep 20
-  pid=$(pgrep -x ppvpn_flutter | head -1 || true)
+  pid=$(pgrep -x ppvpn | head -1 || true)
   if [ -z "$pid" ]; then
     # Three starts in a row without a process: stop instead of spinning.
     failed=$((failed + 1))
@@ -46,7 +46,7 @@ while (( total < limit )); do
     sleep 10
     total=$((total + 10))
   done
-  pkill -x ppvpn_flutter || true
+  pkill -x ppvpn || true
   wait || true
   segment=$((segment + 1))
 done
