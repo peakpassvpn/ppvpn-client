@@ -4,7 +4,8 @@
 // it; the app stays in the tray until "Quit". `--background` (the login
 // entry on Windows and Linux, rust/src/autostart.rs) starts it in the tray
 // with no window. One instance runs: another launch, or a click on a
-// notification, shows its window (activation.dart).
+// notification, shows its window (activation.dart); the Windows installer
+// has it quit as the tray's Quit does.
 
 import 'dart:async';
 import 'dart:io';
@@ -110,6 +111,8 @@ Future<void> main() async {
       onPush: (pushId) => unawaited(() async {
         if (await app.openPush(pushId)) await open();
       }()),
+      // The installer is about to replace the app's files.
+      onQuit: () => unawaited(quit()),
     );
   }
   unawaited(WidgetsBinding.instance.waitUntilFirstFrameRasterized.then((_) => mark('first_frame')));

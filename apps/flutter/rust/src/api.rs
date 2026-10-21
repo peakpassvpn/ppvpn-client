@@ -411,14 +411,23 @@ pub struct UiActivation {
     /// The clicked notification's push id ([`shown_push`]); `None`: only
     /// show the window.
     pub push_id: Option<i64>,
+    /// The installer asks the app to quit (Windows): quit as the tray's
+    /// Quit does, `push_id` is `None`.
+    pub quit: bool,
 }
 
 /// Makes this process the app's one instance (Windows and Linux; on macOS
 /// the system keeps one, and clicks come through the runner). False when
 /// another one runs: it got this launch's arguments and shows its window,
 /// so quit at once. Call once, before [`start`].
+///
+/// On Windows it first gives the process the app's AppUserModelID and
+/// registers it for notifications, and a launch by the installer with
+/// `--set-shortcut-aumid <.lnk>` only stamps that shortcut and exits here
+/// (`aumid.rs`).
 #[frb(sync)]
 pub fn claim_instance() -> bool {
+    crate::aumid::prepare();
     crate::instance::claim()
 }
 

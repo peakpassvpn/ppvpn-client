@@ -223,6 +223,45 @@ CI (job `flutter`, macOS) packages the arm64 slice ad-hoc with the client
 and the helpers in debug. It checks the bundle, the signatures, the DMG,
 the expanded `.pkg` and release-meta. release.yml does not use it yet.
 
+## Windows installer
+
+`scripts/package-windows.ps1` (Windows, after `scripts/ci-build.sh`) builds
+the installer the native Windows release ships, from this app: the same
+NSIS script (`apps/windows/installer/ppvpn.nsi`), install directory
+(`C:\Program Files\PPVPN`), service handling, shortcuts, uninstall entry
+and `/PURGE`, and the same artifacts,
+`dist/windows/PPVPN-<version>-windows-x64-setup.exe` (+ `.sha256`) and
+`release-meta-windows-x64.json`. It stages the release bundle (`ppvpn.exe`,
+`flutter_windows.dll`, `ppvpn_flutter.dll`, the plugins' DLLs, `data\`), the
+Rust push agent, `ppvpn-service`, `-install` and `-uninstall` (built as
+`apps/windows/scripts/package.ps1` builds them), `wintun.dll` and the
+notifications' icon (`Assets\AppLogo.png`). `install-files.txt` lists what
+it installs, so an upgrade from the native app removes the native app's
+files, and the next upgrade this app's. Authenticode signing and the
+update feed's EdDSA signature take the native build's environment
+(`WINDOWS_SIGN_COMMAND` or `WINDOWS_CERTIFICATE`, `SPARKLE_PRIVATE_KEY`);
+the version is `PPVPN_VERSION` and `PPVPN_BUILD_NUMBER`, as for
+`ci-build.sh`, and the bundle's `ppvpn.exe` must carry it.
+
+What the installer expects of the app, as of the native one:
+
+- the quit event `Local\PPVPN.Desktop.Quit`: the running instance creates
+  it (`rust/src/instance.rs`); set, the app quits as the tray's Quit does.
+  The installer and uninstaller set it before replacing or removing the
+  files;
+- `ppvpn.exe --set-shortcut-aumid <.lnk>` stamps the AppUserModelID
+  `PeakPass.PPVPN` on the shortcut the installer created and exits
+  (`rust/src/aumid.rs`). At every start the app also sets it as the
+  process's AppUserModelID and writes its notification registration
+  (display name, icon, `ppvpn.exe --toast-activated` as the click
+  activator), as the push agent does; the uninstaller removes it.
+
+In CI (`ci.yml`, job `flutter` on Windows) the installer is built
+unsigned, then `scripts/smoke-installer.ps1` installs it over the native
+app of the latest release, checks the installation, sets the quit event,
+and uninstalls with `/PURGE`. The artifact `flutter-installer-windows`
+holds the installer.
+
 ## Linux layout and the enhanced-mode end-to-end test
 
 `scripts/install-linux-layout.sh <bundle> <service-bin-dir>` (root, Linux
