@@ -122,7 +122,11 @@ case $os in
     replace linux/CMakeLists.txt '^set(BINARY_NAME ".*")' 'set(BINARY_NAME "ppvpn")'
     replace linux/CMakeLists.txt '^set(APPLICATION_ID ".*")' 'set(APPLICATION_ID "com.peakpassvpn.ppvpn.desktop")'
     replace "$cc" 'gtk_header_bar_set_title(header_bar, "[^"]*");' 'gtk_header_bar_set_title(header_bar, "PPVPN");'
-    replace "$cc" 'gtk_window_set_title(window, "[^"]*");' 'gtk_window_set_title(window, "PPVPN");' ;;
+    replace "$cc" 'gtk_window_set_title(window, "[^"]*");' 'gtk_window_set_title(window, "PPVPN");'
+    # The program name, so the X11 WM_CLASS, is the application id: the
+    # desktop entry's StartupWMClass (packaging/linux).
+    grep -qF 'g_set_prgname(APPLICATION_ID);' "$cc" ||
+      { echo "$cc: the program name is no longer the application id" >&2; exit 1; } ;;
 esac
 
 # The Windows and Linux runners show the window on Flutter's first frame;
