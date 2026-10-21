@@ -22,7 +22,11 @@ import 'tray.dart';
 
 /// The bridge library ci.yml puts next to the app: beside the executable
 /// (Windows), in the bundle's lib/ (Linux), in Contents/Frameworks (macOS).
+/// PPVPN_FLUTTER_LIB overrides it (the end-to-end test's debug build runs
+/// with the release library ci-build.sh built).
 String _libraryPath() {
+  final override = Platform.environment['PPVPN_FLUTTER_LIB'];
+  if (override != null && override.isNotEmpty) return override;
   final dir = File(Platform.resolvedExecutable).parent.path;
   if (Platform.isWindows) return '$dir\\ppvpn_flutter.dll';
   if (Platform.isMacOS) return '$dir/../Frameworks/libppvpn_flutter.dylib';

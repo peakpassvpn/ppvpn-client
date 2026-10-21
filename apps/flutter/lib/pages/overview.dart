@@ -406,6 +406,7 @@ class _Modes extends StatelessWidget {
             title: s('stdMode'),
             description: s('stdDesc'),
             trailing: TriSwitch(
+              key: const ValueKey('switch-system-proxy'),
               label: s('stdMode'),
               state: phase == rust.UiPhase.connected
                   ? SwitchState.on
@@ -516,6 +517,7 @@ class NodePicker extends StatelessWidget {
             ),
           ],
           builder: (context, controller, _) => Pressable(
+            key: const ValueKey('node-picker'),
             onPress: controller.toggle,
             label: '${S.current('currentNode')}: ${selected == null ? '—' : nodeTitle(selected)}',
             builder: (context, hovered) => Container(

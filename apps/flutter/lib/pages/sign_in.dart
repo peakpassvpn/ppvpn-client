@@ -205,13 +205,19 @@ class _WaitingState extends State<_Waiting> {
       children: [
         _Heading(title: s('waitTitle'), text: s('waitSub')),
         const SizedBox(height: 28),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Semantics(label: widget.code.userCode, child: ExcludeSemantics(child: _CodeBoxes(code: widget.code.userCode))),
-            const SizedBox(width: 10),
-            CopyButton(text: widget.code.userCode, kind: ButtonKind.soft, height: Tokens.controlHeight),
-          ],
+        // Shrinks rather than overflows in a narrow window (the code row is
+        // about 460 wide).
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Semantics(label: widget.code.userCode, child: ExcludeSemantics(child: _CodeBoxes(code: widget.code.userCode))),
+              const SizedBox(width: 10),
+              CopyButton(text: widget.code.userCode, kind: ButtonKind.soft, height: Tokens.controlHeight),
+            ],
+          ),
         ),
         const SizedBox(height: 20),
         Row(

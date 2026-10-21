@@ -78,6 +78,18 @@ bundle's sizes. The job summary shows those numbers, and the artifact
 `flutter-<os>` holds the screenshot. Nothing generated is committed (see
 `.gitignore`).
 
+`e2e/run.sh` runs the signed-in flow end to end on each platform (#401
+step 1). It covers device sign-in, choosing a node, connecting in standard
+mode, a request through the node, disconnecting and signing out. The
+setup is:
+
+- the real client and core, against `e2e/mock_backend.py` (Python standard
+  library, on loopback) and `test/fakenode` as the node;
+- `integration_test/signed_in_test.dart` drives the UI;
+- `PPVPN_FLUTTER_HOME` keeps the app's data apart, and
+  `PPVPN_TEST_TRUST_LOCAL_BACKEND=1` lets the client accept the loopback
+  backend.
+
 Pinned versions:
 
 | Component | Version | Pinned in |

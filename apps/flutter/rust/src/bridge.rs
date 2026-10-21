@@ -203,10 +203,14 @@ pub(crate) fn probe_method(method: UiProbeMethod) -> ProbeMethod {
 }
 
 /// Per-user directories of the prototype's own, apart from the native
-/// apps': (data, logs).
+/// apps': (data, logs). `PPVPN_FLUTTER_HOME` puts both under one directory
+/// (the end-to-end test: HOME and LOCALAPPDATA also hold Flutter's own
+/// caches, so it cannot move those).
 fn dirs() -> Result<(String, String), String> {
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    let (data, logs) = if cfg!(windows) {
+    let (data, logs) = if let Some(base) = env("PPVPN_FLUTTER_HOME") {
+        (format!("{base}/data"), format!("{base}/logs"))
+    } else if cfg!(windows) {
         let base = env("LOCALAPPDATA").ok_or("LOCALAPPDATA is not set")? + "\\PPVPN Flutter";
         (format!("{base}\\data"), format!("{base}\\logs"))
     } else {

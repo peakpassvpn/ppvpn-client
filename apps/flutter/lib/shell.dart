@@ -360,6 +360,7 @@ class _Sidebar extends StatelessWidget {
             ),
           ),
           _NavItem(
+            key: const ValueKey('nav-overview'),
             icon: (color, selected) => ShieldCheckIcon(size: 17, color: color, filled: selected),
             label: s('overview'),
             selected: page == _Page.overview,
@@ -367,6 +368,7 @@ class _Sidebar extends StatelessWidget {
           ),
           const SizedBox(height: Tokens.navGap),
           _NavItem(
+            key: const ValueKey('nav-nodes'),
             icon: (color, _) => Icon(FLucideIcons.globe, size: 17, color: color),
             label: s('nodes'),
             selected: page == _Page.nodes,
@@ -374,6 +376,7 @@ class _Sidebar extends StatelessWidget {
           ),
           const SizedBox(height: Tokens.navGap),
           _NavItem(
+            key: const ValueKey('nav-logs'),
             icon: (color, _) => Icon(FLucideIcons.list, size: 17, color: color),
             label: s('logs'),
             selected: page == _Page.logs,
@@ -388,7 +391,7 @@ class _Sidebar extends StatelessWidget {
 }
 
 class _NavItem extends StatelessWidget {
-  const _NavItem({required this.icon, required this.label, required this.selected, required this.onPress});
+  const _NavItem({super.key, required this.icon, required this.label, required this.selected, required this.onPress});
 
   final Widget Function(Color color, bool selected) icon;
   final String label;
@@ -457,6 +460,7 @@ class _AccountCard extends StatelessWidget {
                 ),
               ],
               builder: (context, controller, _) => Pressable(
+                key: const ValueKey('account'),
                 onPress: controller.toggle,
                 label: S.current('account'),
                 builder: (context, hovered) => Row(
