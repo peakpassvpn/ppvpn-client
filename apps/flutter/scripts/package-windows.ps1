@@ -112,7 +112,7 @@ $buildVersion = "$version.$build"
 $info = (Get-Item -LiteralPath (Join-Path $Bundle "ppvpn.exe")).VersionInfo
 $exeVersion = "$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart).$($info.FilePrivatePart)"
 if ($exeVersion -ne $buildVersion) {
-  throw "the bundle's ppvpn.exe is $exeVersion, not $buildVersion: build it with the same PPVPN_VERSION and PPVPN_BUILD_NUMBER"
+  throw "the bundle's ppvpn.exe is $exeVersion, not ${buildVersion}: build it with the same PPVPN_VERSION and PPVPN_BUILD_NUMBER"
 }
 Write-Host "PPVPN $version (build $buildVersion), Flutter"
 $installerName = "PPVPN-$version-windows-x64-setup.exe"
