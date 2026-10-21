@@ -6,3 +6,4 @@ pub mod api;
 mod bridge;
 mod hooks;
 mod messages;
+mod settings;

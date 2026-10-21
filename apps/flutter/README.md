@@ -28,9 +28,10 @@ any release.
   is no system title bar. On macOS the traffic lights sit at the top of the
   sidebar; on Windows and Linux the caption buttons are at the top right of
   the content area, right of the bell.
-- `lib/pages/`: sign-in, overview, nodes, and the message center (opened
-  from the bell; `lib/messages_state.dart` holds its pages). `lib/tray.dart`: the tray icon and
-  its menu.
+- `lib/pages/`: sign-in, overview, nodes, logs, settings, and the message
+  center (opened from the bell; `lib/messages_state.dart` holds its pages).
+  `lib/tray.dart`: the tray icon and its menu. `lib/settings.dart`: the
+  app's own settings.
 - `assets/tray/`: placeholder tray icons for the four states (off,
   connecting, on, error), told apart by shape. The brand mark replaces them.
 
@@ -50,15 +51,21 @@ any release.
   - Linux: `$XDG_DATA_HOME/ppvpn-flutter`, logs in
     `$XDG_STATE_HOME/ppvpn-flutter/logs`;
   - Windows: `%LOCALAPPDATA%\PPVPN Flutter`.
-- `PPVPN_API_BASE` overrides the backend (`https://www.peakpassvpn.com`).
+- The settings page (#401 step 3) sets the appearance, the language and
+  the routing mode, and shows the account, the version and the system
+  service's status. Launch at login, update checks and installing the
+  service come in later steps: their rows are shown, disabled.
+- Appearance, language and the API override are kept in `settings.json` in
+  the data directory above. The API override (Settings → Advanced) takes
+  effect on the next launch; `PPVPN_API_BASE` wins over it. Without either
+  the backend is `https://www.peakpassvpn.com`.
 - Quit the native app before trying it: both write the same system proxy
   setting.
 - Flags are 4:3 images from flag-icons (MIT, `assets/flags/LICENSE`), only
   for the countries we expect; any other country gets its code on a tile.
   There are no emoji flags: platforms draw them differently, and Windows
   draws them as letters.
-- Not in the prototype (to-dos on #387): the logs and settings pages (their
-  sidebar items lead to a placeholder), the node search field and context
+- Not yet (to-dos on #387 and #401): the node search field and context
   menu, the message rows' context menu, animated tray icons.
 
 ## Building

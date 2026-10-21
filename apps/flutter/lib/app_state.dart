@@ -156,6 +156,7 @@ class AppState {
   Future<void> retry() => _run(rust.retry);
   Future<void> refreshNodes() => _run(rust.refreshNodes);
   Future<void> selectNode(String id) => _run(() => rust.selectNode(nodeId: id));
+  Future<void> setRoutingMode(rust.UiRoutingMode mode) => _run(() => rust.setRoutingMode(mode: mode));
 
   Future<void> testAll(rust.UiProbeMethod method) async {
     latency.value = {for (final node in nodes.value) node.id: const LatencyTesting()};

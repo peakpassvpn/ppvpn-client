@@ -2907,6 +2907,8 @@ version = "0.6.4"
 dependencies = [
  "flutter_rust_bridge",
  "ppvpn-desktop",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

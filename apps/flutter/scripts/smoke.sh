@@ -6,6 +6,7 @@
 # directory: screenshot.png, overview-light.png, overview-dark.png,
 # nodes-light.png, logs-light.png, messages-light.png, results.txt). Linux
 # runs it inside
+# nodes-light.png, settings-light.png, results.txt). Linux runs it inside
 # xvfb-run and a D-Bus session (ci.yml).
 set -euo pipefail
 
@@ -76,6 +77,7 @@ shot overview-dark PPVPN_FLUTTER_SAMPLE=overview PPVPN_FLUTTER_THEME=dark
 shot nodes-light PPVPN_FLUTTER_SAMPLE=nodes PPVPN_FLUTTER_THEME=light
 shot logs-light PPVPN_FLUTTER_SAMPLE=logs PPVPN_FLUTTER_THEME=light
 shot messages-light PPVPN_FLUTTER_SAMPLE=messages PPVPN_FLUTTER_THEME=light
+shot settings-light PPVPN_FLUTTER_SAMPLE=settings PPVPN_FLUTTER_THEME=light
 
 # Unpacked size in KiB, and the size of a zip of the bundle (no installer
 # yet: the closest to a download).

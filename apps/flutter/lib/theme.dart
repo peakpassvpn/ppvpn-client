@@ -8,6 +8,8 @@ import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
 import 'sample.dart' show forcedBrightness;
+import 'settings.dart';
+import 'src/rust/api.dart' as rust;
 
 class Tokens {
   const Tokens._({
@@ -244,6 +246,19 @@ class Tokens {
   static const controlRadius = 8.0;
   static const segmentRadius = 7.0;
 
+  /// A segmented control's selected segment.
+  static const segmentShadow = [BoxShadow(color: Color(0x140F172A), offset: Offset(0, 1), blurRadius: 2)];
+  static const segmentHeight = 26.0;
+
+  // Settings: a heading above each group's card; the API field's block.
+  static const groupLabelPadding = EdgeInsets.fromLTRB(4, 0, 4, 8);
+  static const groupGap = 22.0;
+  static const fieldBlockPadding = EdgeInsets.fromLTRB(20, 14, 20, 14);
+  static const fieldPadding = EdgeInsets.symmetric(horizontal: 10);
+
+  /// A confirmation dialog's content.
+  static const dialogPadding = EdgeInsets.fromLTRB(24, 22, 24, 20);
+
   static const switchSize = Size(36, 20);
   static const flagSize = Size(20, 15);
   static const orbSize = 52.0;
@@ -392,8 +407,21 @@ class Tokens {
     );
   }
 
-  static Tokens of(BuildContext context) =>
-      (forcedBrightness ?? MediaQuery.platformBrightnessOf(context)) == Brightness.dark ? dark : light;
+  /// The screenshot mode's forced theme, else the settings' appearance,
+  /// else the system's. Widgets that call it rebuild when the appearance
+  /// changes ([AppearanceScope]).
+  static Tokens of(BuildContext context) {
+    final appearance =
+        context.dependOnInheritedWidgetOfExactType<AppearanceScope>()?.notifier?.value ?? Settings.appearance.value;
+    final brightness =
+        forcedBrightness ??
+        switch (appearance) {
+          rust.UiAppearance.light => Brightness.light,
+          rust.UiAppearance.dark => Brightness.dark,
+          rust.UiAppearance.system => MediaQuery.platformBrightnessOf(context),
+        };
+    return brightness == Brightness.dark ? dark : light;
+  }
 
   /// A card: radius 12, the 1 px hair outline, the card shadow.
   BoxDecoration cardDecoration({Color? color, Gradient? gradient}) => BoxDecoration(
@@ -419,4 +447,10 @@ class CardBox extends StatelessWidget {
     decoration: Tokens.of(context).cardDecoration(),
     child: child,
   );
+}
+
+/// Above the app: [Tokens.of] depends on it, so that every widget that
+/// takes colours rebuilds when the appearance setting changes.
+class AppearanceScope extends InheritedNotifier<ValueNotifier<rust.UiAppearance>> {
+  const AppearanceScope({super.key, required super.notifier, required super.child});
 }

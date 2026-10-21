@@ -80,6 +80,10 @@ pub struct UiSnapshot {
     pub error: Option<UiError>,
     /// Unread backend messages (the sidebar badge); 0 while signed out.
     pub unread: u32,
+    /// Rules or global (settings; [`set_routing_mode`]).
+    pub routing_mode: UiRoutingMode,
+    /// The privileged service (enhanced mode) is installed.
+    pub service_installed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,5 +337,67 @@ pub async fn mark_notification_unread(id: i64) -> Result<(), String> {
 pub async fn mark_all_notifications_read() -> Result<(), String> {
     bridge::get()?
         .call(|client| async move { client.mark_all_notifications_read().await })
+        .await
+}
+
+// --- settings ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiAppearance {
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiLanguage {
+    System,
+    Chinese,
+    English,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiRoutingMode {
+    Rules,
+    Global,
+}
+
+/// The app's own settings, kept in the data directory (`settings`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiSettings {
+    pub appearance: UiAppearance,
+    pub language: UiLanguage,
+    /// The backend to sign in to; empty for the default. Read when the
+    /// client starts: a change takes effect on the next launch.
+    /// `PPVPN_API_BASE` wins over it.
+    pub api_override: String,
+}
+
+/// The saved settings, defaults when there are none. Works before
+/// [`start`] (the API override is for it).
+#[frb(sync)]
+pub fn load_settings() -> Result<UiSettings, String> {
+    crate::settings::load()
+}
+
+/// Saves all settings at once. Fails when `api_override` is neither empty
+/// nor an http(s) URL; nothing is written then.
+#[frb(sync)]
+pub fn save_settings(settings: UiSettings) -> Result<(), String> {
+    crate::settings::save(settings)
+}
+
+/// The bridge's version (the workspace's), for the settings page.
+#[frb(sync)]
+pub fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").into()
+}
+
+/// Rules or global routing (persisted by the client); the running core
+/// applies it without a reconnect.
+pub async fn set_routing_mode(mode: UiRoutingMode) -> Result<(), String> {
+    let mode = bridge::routing_mode(mode);
+    bridge::get()?
+        .call(move |client| async move { client.set_routing_mode(mode).await })
         .await
 }

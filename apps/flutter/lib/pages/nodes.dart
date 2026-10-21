@@ -100,58 +100,20 @@ class _Tools extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final t = Tokens.of(context);
     final s = S.current;
-    Widget segment(rust.UiProbeMethod value, String label) {
-      final on = value == method;
-      return Pressable(
-        onPress: () => onMethod(value),
-        selected: on,
-        label: label,
-        radius: 6,
-        builder: (context, hovered) => Container(
-          height: 26,
-          padding: const EdgeInsets.symmetric(horizontal: 11),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: on ? t.card : null,
-            borderRadius: BorderRadius.circular(6),
-            boxShadow: on ? const [BoxShadow(color: Color(0x140F172A), offset: Offset(0, 1), blurRadius: 2)] : null,
-          ),
-          child: Text(
-            label,
-            style: t.note.copyWith(
-              fontWeight: on ? FontWeight.w600 : FontWeight.w500,
-              color: on ? t.t1 : t.t2,
-            ),
-          ),
-        ),
-      );
-    }
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(Tokens.pageInset, 0, Tokens.pageInset, 12),
       child: Row(
         children: [
-          Semantics(
+          Segmented(
             label: s('probe'),
-            container: true,
-            child: Container(
-              padding: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                color: t.sunk,
-                borderRadius: BorderRadius.circular(Tokens.controlRadius),
-                border: Border.all(color: t.hair),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  segment(rust.UiProbeMethod.icmp, 'Ping'),
-                  segment(rust.UiProbeMethod.tcp, 'TCP'),
-                  segment(rust.UiProbeMethod.connect, 'Connect'),
-                ],
-              ),
-            ),
+            options: const [
+              (rust.UiProbeMethod.icmp, 'Ping'),
+              (rust.UiProbeMethod.tcp, 'TCP'),
+              (rust.UiProbeMethod.connect, 'Connect'),
+            ],
+            value: method,
+            onChanged: onMethod,
           ),
           const Spacer(),
           Button(kind: ButtonKind.secondary, label: s('refreshNodes'), onPress: onRefresh),

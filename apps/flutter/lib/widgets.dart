@@ -1,5 +1,6 @@
 // Pieces the pages share, drawn to the signed-off design: the pressable
-// base (keyboard, focus, screen readers), buttons, the three-state switch,
+// base (keyboard, focus, screen readers), buttons, the segmented control,
+// the card row, the text field, the three-state switch,
 // the spinner, the latency pill, the copy button, flags, the brand mark and
 // the overview's shield. Colours and sizes come from theme.dart.
 
@@ -167,6 +168,266 @@ class Button extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// A segmented control (26-high segments on a sunk track): one of
+/// [options], announced as a group named [label] with each segment a
+/// selectable button.
+class Segmented<T> extends StatelessWidget {
+  const Segmented({
+    super.key,
+    required this.label,
+    required this.options,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final List<(T, String)> options;
+  final T value;
+  final ValueChanged<T>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    Widget segment(T option, String text) {
+      final on = option == value;
+      return Pressable(
+        onPress: onChanged == null ? null : () => onChanged!(option),
+        selected: on,
+        label: text,
+        radius: 6,
+        builder: (context, hovered) => Container(
+          height: Tokens.segmentHeight,
+          padding: const EdgeInsets.symmetric(horizontal: 11),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: on ? t.card : null,
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: on ? Tokens.segmentShadow : null,
+          ),
+          child: Text(
+            text,
+            style: t.note.copyWith(fontWeight: on ? FontWeight.w600 : FontWeight.w500, color: on ? t.t1 : t.t2),
+          ),
+        ),
+      );
+    }
+
+    return Semantics(
+      label: label,
+      container: true,
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: t.sunk,
+          borderRadius: BorderRadius.circular(Tokens.controlRadius),
+          border: Border.all(color: t.hair),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [for (final (option, text) in options) segment(option, text)],
+        ),
+      ),
+    );
+  }
+}
+
+/// A 58-high row of a card: the icon tile, title and a one-line
+/// description, the control at its end; [divider] draws the hair above.
+class SettingRow extends StatelessWidget {
+  const SettingRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.description,
+    required this.trailing,
+    this.divider = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? description;
+  final Widget trailing;
+  final bool divider;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    return Container(
+      height: Tokens.rowHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(border: divider ? Border(top: BorderSide(color: t.hair)) : null),
+      child: Row(
+        children: [
+          RowIcon(icon: icon),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: t.rowTitle),
+                if (description case final text?)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(text, style: t.note, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+            ),
+          ),
+          trailing,
+        ],
+      ),
+    );
+  }
+}
+
+/// A row's 32 icon tile: the accent icon on accent-soft.
+class RowIcon extends StatelessWidget {
+  const RowIcon({super.key, required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    return Container(
+      width: Tokens.rowIconSize,
+      height: Tokens.rowIconSize,
+      decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(Tokens.controlRadius)),
+      child: Icon(icon, size: 17, color: t.accent),
+    );
+  }
+}
+
+/// A one-line text field (32 high, mono): the placeholder while empty, the
+/// accent outline while focused. Click, drag and double-click select (the
+/// platform's text gestures); [onSubmit] runs on Enter and when focus
+/// leaves. Announced as a text field named [label].
+class TextInput extends StatefulWidget {
+  const TextInput({
+    super.key,
+    required this.label,
+    required this.initial,
+    required this.onSubmit,
+    this.placeholder,
+    this.invalid = false,
+  });
+
+  final String label;
+  final String initial;
+  final String? placeholder;
+  final ValueChanged<String> onSubmit;
+
+  /// Outlined in the error colour.
+  final bool invalid;
+
+  @override
+  State<TextInput> createState() => _TextInputState();
+}
+
+class _TextInputState extends State<TextInput> implements TextSelectionGestureDetectorBuilderDelegate {
+  late final TextEditingController _controller = TextEditingController(text: widget.initial);
+  final FocusNode _focus = FocusNode();
+  late final _gestures = _FieldGestures(this);
+
+  @override
+  final GlobalKey<EditableTextState> editableTextKey = GlobalKey<EditableTextState>();
+
+  @override
+  bool get forcePressEnabled => false;
+
+  @override
+  bool get selectionEnabled => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocus);
+  }
+
+  void _onFocus() {
+    setState(() {});
+    if (!_focus.hasFocus) widget.onSubmit(_controller.text);
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocus);
+    _focus.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final style = t.monoText(13, color: t.t1, height: 18);
+    final border = widget.invalid ? t.bad : (_focus.hasFocus ? t.accent : t.line);
+    return MergeSemantics(
+      child: Semantics(
+        label: widget.label,
+        child: Container(
+          height: Tokens.controlHeight,
+          padding: Tokens.fieldPadding,
+          alignment: Alignment.centerLeft,
+          decoration: BoxDecoration(
+            color: t.brightness == Brightness.light ? t.card : t.sunk,
+            borderRadius: BorderRadius.circular(Tokens.controlRadius),
+            border: Border.all(color: border),
+          ),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.text,
+            child: _gestures.buildGestureDetector(
+              behavior: HitTestBehavior.translucent,
+              child: Stack(
+                alignment: Alignment.centerLeft,
+                children: [
+                  if (widget.placeholder case final hint?)
+                    ValueListenableBuilder(
+                      valueListenable: _controller,
+                      builder: (context, value, _) => value.text.isEmpty
+                          ? ExcludeSemantics(child: Text(hint, maxLines: 1, style: style.copyWith(color: t.t3)))
+                          : const SizedBox(),
+                    ),
+                  EditableText(
+                    key: editableTextKey,
+                    controller: _controller,
+                    focusNode: _focus,
+                    style: style,
+                    cursorColor: t.accent,
+                    backgroundCursorColor: t.t3,
+                    selectionColor: t.accentSoft,
+                    maxLines: 1,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    keyboardType: TextInputType.url,
+                    textInputAction: TextInputAction.done,
+                    rendererIgnoresPointer: true,
+                    onSubmitted: widget.onSubmit,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The platform's text gestures; a click also focuses the field.
+class _FieldGestures extends TextSelectionGestureDetectorBuilder {
+  _FieldGestures(this._state) : super(delegate: _state);
+
+  final _TextInputState _state;
+
+  @override
+  void onSingleTapUp(TapDragUpDetails details) {
+    super.onSingleTapUp(details);
+    _state._focus.requestFocus();
   }
 }
 

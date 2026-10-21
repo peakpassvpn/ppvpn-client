@@ -13,17 +13,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use ppvpn_client::{
     AuthState, Client, ClientConfig, ClientError, ClientErrorInfo, ClientListener, ClientSnapshot,
     ConnectionMode, ConnectionPhase, ErrorCode, Node, ProbeMethod, ProbeResult, ProfileStatus,
-    StandardState, TrafficSample,
+    RoutingMode, StandardState, TrafficSample,
 };
 use tokio::sync::Notify;
 
 use crate::api::{
     UiAuth, UiDeviceCode, UiError, UiEvents, UiLocalProxy, UiNode, UiPhase, UiProbe, UiProbeMethod,
-    UiProfile, UiSnapshot, UiTraffic,
+    UiProfile, UiRoutingMode, UiSnapshot, UiTraffic,
 };
 use crate::hooks::Hooks;
 
-/// The backend the prototype signs in to; `PPVPN_API_BASE` overrides it.
+/// The backend the prototype signs in to; `PPVPN_API_BASE` overrides it,
+/// else the settings page's API override (`settings.json`).
 const DEFAULT_API_BASE: &str = "https://www.peakpassvpn.com";
 
 pub(crate) struct Bridge {
@@ -102,7 +103,11 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
         "linux"
     };
     let config = ClientConfig {
-        api_base: std::env::var("PPVPN_API_BASE").unwrap_or_else(|_| DEFAULT_API_BASE.into()),
+        api_base: std::env::var("PPVPN_API_BASE")
+            .ok()
+            .filter(|base| !base.is_empty())
+            .or_else(|| crate::settings::api_override(&data_dir))
+            .unwrap_or_else(|| DEFAULT_API_BASE.into()),
         data_dir: data_dir.clone(),
         log_dir,
         platform: platform.into(),
@@ -212,11 +217,18 @@ pub(crate) fn probe_method(method: UiProbeMethod) -> ProbeMethod {
     }
 }
 
+pub(crate) fn routing_mode(mode: UiRoutingMode) -> RoutingMode {
+    match mode {
+        UiRoutingMode::Rules => RoutingMode::Rules,
+        UiRoutingMode::Global => RoutingMode::Global,
+    }
+}
+
 /// Per-user directories of the prototype's own, apart from the native
 /// apps': (data, logs). `PPVPN_FLUTTER_HOME` puts both under one directory
 /// (the end-to-end test: HOME and LOCALAPPDATA also hold Flutter's own
 /// caches, so it cannot move those).
-fn dirs() -> Result<(String, String), String> {
+pub(crate) fn dirs() -> Result<(String, String), String> {
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let (data, logs) = if let Some(base) = env("PPVPN_FLUTTER_HOME") {
         (format!("{base}/data"), format!("{base}/logs"))
@@ -313,6 +325,11 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             .or(snapshot.last_error.as_ref())
             .map(ui_error),
         unread: snapshot.unread_notifications,
+        routing_mode: match snapshot.routing_mode {
+            RoutingMode::Rules => UiRoutingMode::Rules,
+            RoutingMode::Global => UiRoutingMode::Global,
+        },
+        service_installed: snapshot.service_installed,
     }
 }
 

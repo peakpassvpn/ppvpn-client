@@ -4,10 +4,9 @@
 // with the settings gear at the bottom. Content: a 52-high header with the
 // page title, a status pill on the nodes page, the bell with the unread
 // badge, and on Windows and Linux the caption buttons. The window has no
-// system title bar. The bell opens the message center as a page. Settings
-// is not in the prototype yet: it leads to a placeholder. Signed out, the
-// sign-in brand panel takes
-// the sidebar's place.
+// system title bar. The bell opens the message center and the gear the
+// settings, both as pages (#401 step 3). Signed out, the sign-in brand
+// panel takes the sidebar's place.
 
 import 'dart:async';
 import 'dart:io';
@@ -21,6 +20,7 @@ import 'pages/logs.dart';
 import 'pages/messages.dart';
 import 'pages/nodes.dart';
 import 'pages/overview.dart';
+import 'pages/settings.dart';
 import 'pages/sign_in.dart';
 import 'sample.dart';
 import 'src/rust/api.dart' as rust;
@@ -44,6 +44,7 @@ class _ShellState extends State<Shell> {
     'nodes' => _Page.nodes,
     'logs' => _Page.logs,
     'messages' => _Page.messages,
+    'settings' => _Page.settings,
     _ => _Page.overview,
   };
 
@@ -113,6 +114,7 @@ class _ShellState extends State<Shell> {
                     _Page.nodes => NodesPage(app: widget.app),
                     _Page.logs => const LogsPage(),
                     _Page.messages => MessagesPage(app: widget.app),
+                    _Page.settings => SettingsPage(app: widget.app),
                     _ => const _NotInPrototype(),
                   },
                 ),

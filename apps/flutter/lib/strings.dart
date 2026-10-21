@@ -2,18 +2,32 @@
 // prototype shows. Generated once from the handoff; two strings that carry
 // sample names take a placeholder here ({d}, {team}). The keys after
 // `authPass` are not in the handoff's table (window captions, the
-// prototype's own notes).
+// prototype's own notes); from `general` on, the settings page's, with
+// those after `uninstallBtn` again the prototype's own.
 
 import 'dart:ui';
 
+import 'settings.dart';
+import 'src/rust/api.dart' as rust;
+
 class S {
-  S._(this._table);
+  S._(this._table, this.locale);
 
   final Map<String, String> _table;
 
-  static final S current = S._(
-    PlatformDispatcher.instance.locale.languageCode == 'zh' ? _zh : _en,
-  );
+  /// For forui's own strings (WidgetsApp.locale).
+  final Locale locale;
+
+  static final _chinese = S._(_zh, const Locale('zh'));
+  static final _english = S._(_en, const Locale('en'));
+
+  /// The language chosen in the settings, else the system's. main.dart
+  /// rebuilds every widget when the choice changes.
+  static S get current => switch (Settings.language.value) {
+    rust.UiLanguage.chinese => _chinese,
+    rust.UiLanguage.english => _english,
+    rust.UiLanguage.system => PlatformDispatcher.instance.locale.languageCode == 'zh' ? _chinese : _english,
+  };
 
   /// Chinese is shown (dates are written the Chinese way).
   bool get zh => identical(_table, _zh);
@@ -174,6 +188,34 @@ const _zh = <String, String>{
   'h_stdStopping': '正在断开',
   't_other': '其他',
   'unread': '未读',
+  'general': '通用',
+  'advanced': '高级',
+  'appearance': '外观',
+  'sys': '跟随系统',
+  'light': '浅色',
+  'dark': '深色',
+  'launchAtLogin': '登录时启动',
+  'autoUpdate': '自动检查更新',
+  'user': '用户',
+  'expires': '服务到期',
+  'apiOverride': 'API 地址覆盖',
+  'apiPh': 'https://api.ppvpn.com',
+  'service': '系统服务',
+  'serviceOn': '已安装',
+  'serviceOff': '未安装',
+  'installBtn': '安装系统服务…',
+  'uninstall': '卸载系统服务',
+  'uninstallBtn': '卸载…',
+  'apiHintNext': '仅供开发调试。留空则使用默认地址。下次启动时生效。',
+  'apiInvalid': '请输入以 http:// 或 https:// 开头的地址。',
+  'apiSaved': '已保存，下次启动时生效。',
+  'versionT': '版本',
+  'routing': '分流模式',
+  'rules': '规则',
+  'global': '全局',
+  'language': '语言',
+  'laterStep': '后续步骤提供',
+  'signOutBtn': '退出登录…',
 };
 
 const _en = <String, String>{
@@ -325,5 +367,33 @@ const _en = <String, String>{
   'h_stdStopping': 'Disconnecting',
   't_other': 'Other',
   'unread': 'Unread',
+  'general': 'General',
+  'advanced': 'Advanced',
+  'appearance': 'Appearance',
+  'sys': 'System',
+  'light': 'Light',
+  'dark': 'Dark',
+  'launchAtLogin': 'Launch at Login',
+  'autoUpdate': 'Automatically Check for Updates',
+  'user': 'User',
+  'expires': 'Service Expires',
+  'apiOverride': 'API Endpoint Override',
+  'apiPh': 'https://api.ppvpn.com',
+  'service': 'System Service',
+  'serviceOn': 'Installed',
+  'serviceOff': 'Not Installed',
+  'installBtn': 'Install System Service…',
+  'uninstall': 'Uninstall System Service',
+  'uninstallBtn': 'Uninstall…',
+  'apiHintNext': 'For development only. Leave empty to use the default. Takes effect on next launch.',
+  'apiInvalid': 'Enter an address starting with http:// or https://.',
+  'apiSaved': 'Saved. Takes effect on next launch.',
+  'versionT': 'Version',
+  'routing': 'Routing',
+  'rules': 'Rules',
+  'global': 'Global',
+  'language': 'Language',
+  'laterStep': 'Coming in a later step',
+  'signOutBtn': 'Sign Out…',
 };
 
