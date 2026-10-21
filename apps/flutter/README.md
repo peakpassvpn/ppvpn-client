@@ -10,7 +10,12 @@ any release.
 
 - `rust/`: the bridge crate `ppvpn-flutter` (a workspace member). `api.rs` is
   everything Dart can call; `bridge.rs` holds the one `Client`, its listener
-  and the conversions; `hooks.rs` holds the platform hooks.
+  and the conversions; `hooks.rs` holds the platform hooks; `push_agent.rs`
+  starts the push agent.
+- `push-agent/`: `ppvpn-push-agent` (a workspace member), which shows
+  backend pushes as notifications while the app is closed, on Windows and
+  Linux (macOS keeps the Swift agent). It replaces the .NET agents and
+  reads the app's data directory (`rust/src/dirs.rs`, compiled into both).
 - `lib/theme.dart`: every design token in one place: the unified design
   signed off on #387 (2026-10-20). It covers colours for light and dark,
   shadows, type, sizes and radii, with pixel values from the design sources.

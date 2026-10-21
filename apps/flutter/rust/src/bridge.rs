@@ -93,7 +93,7 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
     if let Some(bridge) = BRIDGE.get() {
         return Ok(bridge);
     }
-    let (data_dir, log_dir) = dirs()?;
+    let (data_dir, log_dir) = crate::dirs::dirs()?;
     let platform = if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(windows) {
@@ -128,11 +128,17 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
         runtime.spawn(synthetic_traffic(events.clone()));
     }
     // Two first calls at once: the loser's client is dropped unused.
-    let _ = BRIDGE.set(Bridge {
-        client,
-        events,
-        runtime,
-    });
+    let agent_client = client.clone();
+    if BRIDGE
+        .set(Bridge {
+            client,
+            events,
+            runtime,
+        })
+        .is_ok()
+    {
+        crate::push_agent::start(&agent_client, &data_dir);
+    }
     get()
 }
 
@@ -220,39 +226,6 @@ pub(crate) fn routing_mode(mode: UiRoutingMode) -> RoutingMode {
         UiRoutingMode::Rules => RoutingMode::Rules,
         UiRoutingMode::Global => RoutingMode::Global,
     }
-}
-
-/// Per-user directories of the prototype's own, apart from the native
-/// apps': (data, logs). `PPVPN_FLUTTER_HOME` puts both under one directory
-/// (the end-to-end test: HOME and LOCALAPPDATA also hold Flutter's own
-/// caches, so it cannot move those).
-pub(crate) fn dirs() -> Result<(String, String), String> {
-    let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    let (data, logs) = if let Some(base) = env("PPVPN_FLUTTER_HOME") {
-        (format!("{base}/data"), format!("{base}/logs"))
-    } else if cfg!(windows) {
-        let base = env("LOCALAPPDATA").ok_or("LOCALAPPDATA is not set")? + "\\PPVPN Flutter";
-        (format!("{base}\\data"), format!("{base}\\logs"))
-    } else {
-        let home = env("HOME").ok_or("HOME is not set")?;
-        if cfg!(target_os = "macos") {
-            (
-                format!("{home}/Library/Application Support/PPVPN Flutter"),
-                format!("{home}/Library/Logs/PPVPN Flutter"),
-            )
-        } else {
-            let data = env("XDG_DATA_HOME").unwrap_or(format!("{home}/.local/share"));
-            let state = env("XDG_STATE_HOME").unwrap_or(format!("{home}/.local/state"));
-            (
-                format!("{data}/ppvpn-flutter"),
-                format!("{state}/ppvpn-flutter/logs"),
-            )
-        }
-    };
-    for dir in [&data, &logs] {
-        std::fs::create_dir_all(dir).map_err(|error| format!("{dir}: {error}"))?;
-    }
-    Ok((data, logs))
 }
 
 fn ui_error(info: &ClientErrorInfo) -> UiError {

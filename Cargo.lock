@@ -2915,6 +2915,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppvpn-push-agent"
+version = "0.6.4"
+dependencies = [
+ "chrono",
+ "ppvpn-desktop",
+ "tokio",
+ "tracing",
+ "windows 0.61.3",
+ "windows-sys 0.61.2",
+ "zbus",
+]
+
+[[package]]
 name = "ppvpn-service"
 version = "0.6.4"
 dependencies = [
