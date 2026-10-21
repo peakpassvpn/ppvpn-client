@@ -484,7 +484,10 @@ def main():
             json.dump({"rows": rows, "rule_set_bytes": [sizes1, sizes2],
                        "variants": dict(variants)}, f, indent=1)
         os.chmod(args.out, 0o644)
-    if any(r["failed"] for r in rows if r["variant"] == "default"):
+    # dhat slows the engine enough that the DNS burst falls short (#388):
+    # under --dhat only a failed transfer counts, the DNS row still shows ✗.
+    if any(r["failed"] and not (args.dhat and r["failed"].startswith("DNS:"))
+           for r in rows if r["variant"] == "default"):
         sys.exit("a load failed on the default variant (✗ above)")
 
 
