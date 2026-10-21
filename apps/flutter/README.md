@@ -32,8 +32,10 @@ any release.
   center (opened from the bell; `lib/messages_state.dart` holds its pages).
   `lib/tray.dart`: the tray icon and its menu. `lib/settings.dart`: the
   app's own settings.
-- `assets/tray/`: placeholder tray icons for the four states (off,
-  connecting, on, error), told apart by shape. The brand mark replaces them.
+- `assets/tray/`: the shipped tray icons, copied from the native apps: the
+  macOS template images (`menubar-*`, from `apps/macos` `MenuBar-*`) and
+  the Windows and Linux colour icons (`tray-*`, from `apps/assets/icons`)
+  for not connected, in progress, connected and error.
 
 ## What it does and does not do
 
@@ -72,7 +74,8 @@ any release.
   There are no emoji flags: platforms draw them differently, and Windows
   draws them as letters.
 - Not yet (to-dos on #387 and #401): the node search field and context
-  menu, the message rows' context menu, animated tray icons.
+  menu, the message rows' context menu, check for updates in the tray
+  (in-app update, #401 step 5).
 
 ## Building
 
@@ -112,6 +115,7 @@ Pinned versions:
 | flutter_rust_bridge | 2.13.0 | crate, Dart package and codegen |
 | forui | 0.27.6 | `pubspec.yaml` |
 | tray_manager | 0.8.0 | `pubspec.yaml` |
+| nativeapi | 0.5.2 | `pubspec.yaml` |
 | window_manager | 0.5.2 | `pubspec.yaml` |
 
 ## Linux layout and the enhanced-mode end-to-end test

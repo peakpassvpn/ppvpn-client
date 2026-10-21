@@ -3,9 +3,9 @@
 // sample names take a placeholder here ({d}, {team}). The keys after
 // `authPass` are not in the handoff's table (window captions, the
 // prototype's own notes); from `general` on, the settings page's, with
-// those after `uninstallBtn` again the prototype's own; and the
-// enhanced-mode block after `h_stdStopping` (#401), whose own additions are
-// marked there.
+// those after `uninstallBtn` again the prototype's own; the enhanced-mode
+// block after `h_stdStopping` (#401) and the tray's block at the end, whose
+// own additions are marked there.
 
 import 'dart:ui';
 
@@ -237,6 +237,14 @@ const _zh = <String, String>{
   'fr_install': '系统服务安装失败。',
   'fr_service': '系统服务没有响应，请稍后重试。',
   'fr_contended': '其他 VPN 或代理软件正在接管系统网络。',
+  // The tray (#401 step 3), from the handoff, and its own line for access
+  // limited, which has no handoff string (marked).
+  'noUnread': '没有未读消息',
+  'settingsMenuMac': '设置…',
+  'settingsMenuWin': '设置',
+  'preferences': '首选项',
+  'checkUpdates': '检查更新…',
+  'openForDetails': '打开 PPVPN 查看详情', // not in the handoff
 };
 
 const _en = <String, String>{
@@ -435,5 +443,13 @@ const _en = <String, String>{
   'fr_install': 'The system service couldn’t be installed.',
   'fr_service': 'The system service isn’t responding. Try again later.',
   'fr_contended': 'Another VPN or proxy app is taking over the system network.',
+  // The tray (#401 step 3), from the handoff, and its own line for access
+  // limited, which has no handoff string (marked).
+  'noUnread': 'No unread messages',
+  'settingsMenuMac': 'Settings…',
+  'settingsMenuWin': 'Settings',
+  'preferences': 'Preferences',
+  'checkUpdates': 'Check for Updates…',
+  'openForDetails': 'Open PPVPN for Details', // not in the handoff
 };
 
