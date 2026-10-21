@@ -77,6 +77,56 @@ class AppState {
 
   void showPage(WindowPage page) => pageRequests.value = (page: page, request: (pageRequests.value?.request ?? 0) + 1);
 
+  /// A notification click (activation.dart), handled as the native apps
+  /// do. The push behind it opens its http(s) link in the browser (and
+  /// marks its message read); else the message center opens on its inbox
+  /// message, or on the push itself, read-only. An unknown or old push
+  /// opens the message center. Signed out the window shows the sign-in.
+  /// False when the window need not show (the link opened).
+  Future<bool> openPush(int pushId) async {
+    if (fixed) return true;
+    await _restored();
+    rust.UiPush? push;
+    try {
+      push = rust.shownPush(pushId: pushId);
+    } catch (error) {
+      debugPrint('shown_push: $error');
+    }
+    final signedIn = snapshot.value.auth == rust.UiAuth.signedIn;
+    final messageId = push?.messageId;
+    final link = push?.message.deepLink;
+    if (link != null) {
+      rust.openUrl(url: link);
+      if (messageId != null && signedIn) {
+        try {
+          await rust.markNotificationRead(id: messageId);
+        } catch (error) {
+          debugPrint('mark_notification_read: $error');
+        }
+      }
+      return false;
+    }
+    if (signedIn) {
+      if (push != null) messages.requestOpen((messageId: messageId, push: push.message));
+      showPage(WindowPage.messages);
+    }
+    return true;
+  }
+
+  /// Until the saved sign-in has been read: a click can start the app.
+  Future<void> _restored() async {
+    while (snapshot.value.auth == rust.UiAuth.restoring) {
+      final changed = Completer<void>();
+      void done() {
+        if (!changed.isCompleted) changed.complete();
+      }
+
+      snapshot.addListener(done);
+      await changed.future;
+      snapshot.removeListener(done);
+    }
+  }
+
   /// Set once [stop] runs: the event loop ends.
   bool _stopped = false;
   String? _revision;

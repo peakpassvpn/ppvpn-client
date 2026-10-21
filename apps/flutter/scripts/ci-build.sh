@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Flutter prototype for the runner's platform (ci.yml, job
-# flutter): the platform runner (flutter create), the bridge glue
+# flutter): the platform runner (flutter create, with our files from
+# runner/<os> over it), the bridge glue
 # (flutter_rust_bridge_codegen), analysis, the Rust library (release), the
 # app (release), the library put into the bundle. The bundle's path goes to
 # $GITHUB_OUTPUT as `bundle`.
@@ -21,6 +22,10 @@ esac
 # The runner for this platform, then without the counter sample's test.
 flutter create --platforms="$os" --org com.peakpassvpn --project-name ppvpn_flutter . >/dev/null
 rm -rf test
+# Our changes to the generated runner (macOS: the activation channel).
+if [ -d "runner/$os" ]; then
+  cp -R "runner/$os/." "$os/"
+fi
 flutter pub get
 
 if [ "$os" = macos ]; then
@@ -29,6 +34,17 @@ if [ "$os" = macos ]; then
   for f in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
     /usr/libexec/PlistBuddy -c 'Set :com.apple.security.app-sandbox false' "$f"
   done
+  # The ppvpn:// scheme: the push agent opens ppvpn://push/<id> for a click
+  # on a notification (as for the native app, apps/macos/PPVPN/Info.plist).
+  plist=macos/Runner/Info.plist
+  /usr/libexec/PlistBuddy -c 'Delete :CFBundleURLTypes' "$plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy \
+    -c 'Add :CFBundleURLTypes array' \
+    -c 'Add :CFBundleURLTypes:0 dict' \
+    -c 'Add :CFBundleURLTypes:0:CFBundleURLName string com.peakpassvpn.ppvpn.desktop' \
+    -c 'Add :CFBundleURLTypes:0:CFBundleURLSchemes array' \
+    -c 'Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string ppvpn' \
+    "$plist"
 fi
 
 # The Windows and Linux runners show the window on Flutter's first frame;

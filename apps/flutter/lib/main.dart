@@ -3,7 +3,8 @@
 // (crates/desktop) through flutter_rust_bridge. Closing the window hides
 // it; the app stays in the tray until "Quit". `--background` (the login
 // entry on Windows and Linux, rust/src/autostart.rs) starts it in the tray
-// with no window.
+// with no window. One instance runs: another launch, or a click on a
+// notification, shows its window (activation.dart).
 
 import 'dart:async';
 import 'dart:io';
@@ -13,6 +14,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:forui/forui.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'activation.dart';
 import 'app_state.dart';
 import 'bench.dart';
 import 'e2e.dart';
@@ -48,6 +50,9 @@ Future<void> main() async {
   } else {
     await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
     mark('bridge_loaded');
+    // Another instance runs (Windows, Linux): it took this launch's
+    // arguments and shows its window. Before the window and the client.
+    if (!rust.claimInstance()) exit(0);
     // Before the client: it reads the API override when it starts.
     Settings.load();
     background = rust.startedInBackground();
@@ -99,6 +104,14 @@ Future<void> main() async {
   // Off unless PPVPN_FLUTTER_E2E is set (e2e/linux_enhanced.sh).
   if (samplePage == null) startE2e(app, quit);
   runApp(PrototypeApp(app: app, tray: tray));
+  if (samplePage == null) {
+    listenForActivations(
+      onShow: () => unawaited(open()),
+      onPush: (pushId) => unawaited(() async {
+        if (await app.openPush(pushId)) await open();
+      }()),
+    );
+  }
   unawaited(WidgetsBinding.instance.waitUntilFirstFrameRasterized.then((_) => mark('first_frame')));
 }
 

@@ -37,6 +37,19 @@ any release.
   center (opened from the bell; `lib/messages_state.dart` holds its pages).
   `lib/tray.dart`: the tray icon and its menu. `lib/settings.dart`: the
   app's own settings.
+- `lib/activation.dart` with `rust/src/instance.rs`: one instance, and
+  clicks on the push agent's notifications (#401 step 4), handled as the
+  native apps do. A second launch hands its arguments to the running
+  instance and exits; the running one shows its window. On Linux the lock
+  and socket are `instance.lock` and `instance.sock` in the data
+  directory. On Windows it is a named pipe, plus the toast's COM activator
+  (`--toast-activated`, registered by the push agent). On macOS the push
+  agent opens `ppvpn://push/<id>`. A click opens the message's link in the
+  browser, or the message center on that message.
+- `runner/<os>/`: our files over the generated runner (`flutter create`).
+  On macOS that is `MainFlutterWindow.swift`, for the `ppvpn://` links and
+  reopens; `scripts/ci-build.sh` also registers the scheme in its
+  Info.plist.
 - `assets/tray/`: the shipped tray icons, copied from the native apps: the
   macOS template images (`menubar-*`, from `apps/macos` `MenuBar-*`) and
   the Windows and Linux colour icons (`tray-*`, from `apps/assets/icons`)
@@ -99,8 +112,9 @@ Builds and tests run only in CI (`ci.yml`, job `flutter`), on the three
 platforms, and only when `apps/flutter/` or `crates/desktop/` changes.
 `scripts/ci-build.sh` does the following:
 
-1. generates the platform runner (`flutter create`), with the window
-   hidden until `main.dart` shows it on Windows and Linux;
+1. generates the platform runner (`flutter create`), copies `runner/<os>/`
+   over it, and keeps the window hidden until `main.dart` shows it on Windows
+   and Linux;
 2. generates the bridge glue (`flutter_rust_bridge_codegen generate`);
 3. analyses the Dart code;
 4. builds the Rust library and the app in release mode;

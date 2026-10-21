@@ -7,6 +7,7 @@ mod autostart;
 mod bridge;
 mod dirs;
 mod hooks;
+mod instance;
 mod messages;
 mod push_agent;
 mod settings;

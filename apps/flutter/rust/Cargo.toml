@@ -23,13 +23,20 @@ tracing = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 # The privileged service hooks: the SCM query and the UAC launch of the
-# install helpers (hooks.rs), as the native Windows app does them.
+# install helpers (hooks.rs), as the native Windows app does them. The
+# single instance's pipe and the toast's click activator (instance.rs).
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_Services",
     "Win32_System_Threading",
     "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # flutter_rust_bridge's #[frb] expands to code under `cfg(frb_expand)`.

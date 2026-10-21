@@ -381,6 +381,53 @@ pub async fn mark_all_notifications_read() -> Result<(), String> {
         .await
 }
 
+// --- notification clicks, one instance ---
+
+/// A push the push agent showed as an OS notification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiPush {
+    /// The inbox message it is about; `None` for one without (a broadcast).
+    pub message_id: Option<i64>,
+    /// The push itself as a read-only message (its id is the push's), for
+    /// when the inbox does not have it. `deep_link` only when http(s).
+    pub message: UiMessage,
+}
+
+/// The push behind a clicked notification (`push_id`, the only thing the
+/// notification carries), or `None` when it is unknown or too old. Reads
+/// the push agent's record of what it showed; no network.
+#[frb(sync)]
+pub fn shown_push(push_id: i64) -> Result<Option<UiPush>, String> {
+    let push_id = crate::messages::backend_id(push_id)?;
+    Ok(bridge::get()?
+        .client
+        .shown_push(push_id)
+        .map(crate::messages::ui_push))
+}
+
+/// A notification click, or another launch of the app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiActivation {
+    /// The clicked notification's push id ([`shown_push`]); `None`: only
+    /// show the window.
+    pub push_id: Option<i64>,
+}
+
+/// Makes this process the app's one instance (Windows and Linux; on macOS
+/// the system keeps one, and clicks come through the runner). False when
+/// another one runs: it got this launch's arguments and shows its window,
+/// so quit at once. Call once, before [`start`].
+#[frb(sync)]
+pub fn claim_instance() -> bool {
+    crate::instance::claim()
+}
+
+/// Waits for the next notification click or launch of the app (Windows
+/// and Linux), the first launch's own click included.
+pub async fn next_activation() -> UiActivation {
+    crate::instance::next().await
+}
+
 // --- settings ---
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
