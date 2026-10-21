@@ -2,7 +2,8 @@
 // from the client, newest first. Kept while the app runs, so the page
 // reopens on what it showed and a failed reload keeps the list. A read
 // state change shows at once and goes back if the call fails. The unread
-// count is the snapshot's (the server's total), not counted here.
+// count is the snapshot's (the server's total), not counted here. A
+// notification click asks the page to open its message ([requestOpen]).
 
 import 'dart:async';
 
@@ -56,10 +57,17 @@ class MessagesView {
   );
 }
 
+/// What a notification click opens: inbox message [messageId], else (or
+/// when the inbox does not have it) the push itself, read-only.
+typedef OpenRequest = ({int? messageId, rust.UiMessage push});
+
 class MessagesState {
   MessagesState({required this.fixed, required this.onError});
 
   static const pageSize = 20;
+
+  /// The most pages [locate] reads (as the native apps).
+  static const searchPages = 10;
 
   /// Sample data with no client behind it (sample.dart): nothing is
   /// loaded, read changes stay local, links do not open.
@@ -78,8 +86,48 @@ class MessagesState {
   /// The failed load was a further page (retry loads it again).
   bool _failedMore = false;
 
+  /// The loads in flight, for [locate] to wait on.
+  Future<void>? _reloading;
+  Future<void>? _loadingMore;
+
+  OpenRequest? _openRequest;
+
+  /// Counts the notification clicks' requests; the page takes the latest
+  /// with [takeOpen].
+  final ValueNotifier<int> openRequests = ValueNotifier(0);
+
+  void requestOpen(OpenRequest request) {
+    _openRequest = request;
+    openRequests.value++;
+  }
+
+  /// The latest request, once.
+  OpenRequest? takeOpen() {
+    final request = _openRequest;
+    _openRequest = null;
+    return request;
+  }
+
+  /// Inbox message [id]'s index in the list: the first page loaded again
+  /// (or the load in flight), then further pages, at most [searchPages].
+  /// Null when it is not there or a load fails.
+  Future<int?> locate(int id) async {
+    if (fixed) return null;
+    final reloading = _reloading;
+    await (view.value.loading && reloading != null ? reloading : reload());
+    for (var pages = 1; ; pages++) {
+      final current = view.value;
+      final index = current.items.indexWhere((message) => message.id == id);
+      if (index >= 0) return index;
+      if (current.failed || !current.hasMore || pages >= searchPages) return null;
+      await loadMore();
+    }
+  }
+
   /// Loads the first page again; the list stays while it loads.
-  Future<void> reload() async {
+  Future<void> reload() => _reloading = _reload();
+
+  Future<void> _reload() async {
     if (fixed) return;
     final generation = ++_generation;
     view.value = view.value.copyWith(loading: true, loadingMore: false, failed: false);
@@ -96,13 +144,19 @@ class MessagesState {
     }
   }
 
-  /// The next page, when there is one and nothing else loads. Not after a
-  /// failure (the list's end would ask again at once): [retry] does.
-  Future<void> loadMore() async {
+  /// The next page, when there is one and nothing else loads (the one
+  /// loading, when that is the next page). Not after a failure (the list's
+  /// end would ask again at once): [retry] does.
+  Future<void> loadMore() {
     final current = view.value;
-    if (fixed || !current.loaded || current.loading || current.loadingMore || current.failed || !current.hasMore) {
-      return;
+    if (current.loadingMore) return _loadingMore ?? Future.value();
+    if (fixed || !current.loaded || current.loading || current.failed || !current.hasMore) {
+      return Future.value();
     }
+    return _loadingMore = _loadMore(current);
+  }
+
+  Future<void> _loadMore(MessagesView current) async {
     final generation = _generation;
     view.value = current.copyWith(loadingMore: true);
     try {

@@ -7,8 +7,10 @@
 // first page, an empty state, an error banner over the kept list. The
 // detail replaces the list in the same page (back, 「1 / 46」, previous and
 // next, the full text, 「标为未读」) and marks the message read; Esc goes
-// back, the list keeps its scroll position. Not in the prototype: the
-// row's context menu.
+// back, the list keeps its scroll position. A notification click opens
+// its message's detail, or the push itself read-only when the inbox does
+// not have it (MessagesState.requestOpen). Not in the prototype: the row's
+// context menu.
 
 import 'dart:async';
 
@@ -39,6 +41,10 @@ class _MessagesPageState extends State<MessagesPage> {
   /// The message the detail shows, else the list.
   int? _open;
 
+  /// A clicked notification's push the detail shows read-only, else the
+  /// list.
+  rust.UiMessage? _push;
+
   /// Relative times move on.
   Timer? _tick;
 
@@ -49,11 +55,14 @@ class _MessagesPageState extends State<MessagesPage> {
     super.initState();
     _scroll.addListener(_nearEnd);
     _tick = Timer.periodic(const Duration(minutes: 1), (_) => setState(() {}));
+    messages.openRequests.addListener(_onOpenRequest);
     unawaited(messages.reload());
+    _onOpenRequest();
   }
 
   @override
   void dispose() {
+    messages.openRequests.removeListener(_onOpenRequest);
     _tick?.cancel();
     _scroll.dispose();
     _selection.dispose();
@@ -69,13 +78,39 @@ class _MessagesPageState extends State<MessagesPage> {
   void _show(int index) {
     final items = messages.view.value.items;
     if (index < 0 || index >= items.length) return;
-    setState(() => _open = index);
+    setState(() {
+      _open = index;
+      _push = null;
+    });
     unawaited(messages.setRead(items[index], true));
     // Next is there before it is pressed.
     if (index >= items.length - 2) unawaited(messages.loadMore());
   }
 
-  void _back() => setState(() => _open = null);
+  void _back() => setState(() {
+    _open = null;
+    _push = null;
+  });
+
+  void _onOpenRequest() => unawaited(_openRequested());
+
+  /// A notification click's message: found in the list (loading pages as
+  /// needed), else its push, read-only.
+  Future<void> _openRequested() async {
+    final request = messages.takeOpen();
+    if (request == null) return;
+    final id = request.messageId;
+    final index = id == null ? null : await messages.locate(id);
+    if (!mounted) return;
+    if (index != null) {
+      _show(index);
+    } else {
+      setState(() {
+        _open = null;
+        _push = request.push;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
@@ -89,13 +124,14 @@ class _MessagesPageState extends State<MessagesPage> {
         });
         final unread = widget.app.fixed ? view.items.where((message) => !message.read).length : snapshot.unread;
         final open = _open != null && _open! < view.items.length ? _open : null;
+        final push = _push;
         return Padding(
           padding: Tokens.messagesPadding,
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: Tokens.pageMaxWidth),
               child: IndexedStack(
-                index: open == null ? 0 : 1,
+                index: open == null && push == null ? 0 : 1,
                 sizing: StackFit.expand,
                 children: [
                   _List(
@@ -105,20 +141,21 @@ class _MessagesPageState extends State<MessagesPage> {
                     messages: messages,
                     onOpen: _show,
                   ),
-                  if (open == null)
-                    const SizedBox()
-                  else
+                  if (open != null)
                     _Detail(
                       message: view.items[open],
-                      index: open,
-                      total: view.total > view.items.length ? view.total : view.items.length,
+                      position: (index: open, total: view.total > view.items.length ? view.total : view.items.length),
                       selection: _selection,
                       onBack: _back,
                       onPrevious: open > 0 ? () => _show(open - 1) : null,
                       onNext: open + 1 < view.items.length ? () => _show(open + 1) : null,
                       onToggleRead: () => unawaited(messages.setRead(view.items[open], !view.items[open].read)),
                       onLink: () => messages.openLink(view.items[open]),
-                    ),
+                    )
+                  else if (push != null)
+                    _Detail(message: push, selection: _selection, onBack: _back)
+                  else
+                    const SizedBox(),
                 ],
               ),
             ),
@@ -618,30 +655,33 @@ class _Empty extends StatelessWidget {
 
 // --- the detail -------------------------------------------------------------
 
+/// A message of the list, or with only [message], [selection] and [onBack]
+/// a clicked notification's push, read-only: no position, no previous and
+/// next, no read toggle.
 class _Detail extends StatelessWidget {
   const _Detail({
     required this.message,
-    required this.index,
-    required this.total,
+    this.position,
     required this.selection,
     required this.onBack,
-    required this.onPrevious,
-    required this.onNext,
-    required this.onToggleRead,
-    required this.onLink,
+    this.onPrevious,
+    this.onNext,
+    this.onToggleRead,
+    this.onLink,
   });
 
   final rust.UiMessage message;
-  final int index;
-  final int total;
+
+  /// Its place in the list (「1 / 46」).
+  final ({int index, int total})? position;
 
   /// The full text's selection.
   final FocusNode selection;
   final VoidCallback onBack;
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
-  final VoidCallback onToggleRead;
-  final VoidCallback onLink;
+  final VoidCallback? onToggleRead;
+  final VoidCallback? onLink;
 
   @override
   Widget build(BuildContext context) {
@@ -686,22 +726,24 @@ class _Detail extends StatelessWidget {
                       ),
                     ),
                     const Spacer(),
-                    Text('${index + 1} / $total', style: t.note.copyWith(color: t.t2)),
-                    const SizedBox(width: 4),
-                    Button(
-                      kind: ButtonKind.icon,
-                      height: 26,
-                      icon: FLucideIcons.chevronUp,
-                      semanticsLabel: s('prevMsg'),
-                      onPress: onPrevious,
-                    ),
-                    Button(
-                      kind: ButtonKind.icon,
-                      height: 26,
-                      icon: FLucideIcons.chevronDown,
-                      semanticsLabel: s('nextMsg'),
-                      onPress: onNext,
-                    ),
+                    if (position case final position?) ...[
+                      Text('${position.index + 1} / ${position.total}', style: t.note.copyWith(color: t.t2)),
+                      const SizedBox(width: 4),
+                      Button(
+                        kind: ButtonKind.icon,
+                        height: 26,
+                        icon: FLucideIcons.chevronUp,
+                        semanticsLabel: s('prevMsg'),
+                        onPress: onPrevious,
+                      ),
+                      Button(
+                        kind: ButtonKind.icon,
+                        height: 26,
+                        icon: FLucideIcons.chevronDown,
+                        semanticsLabel: s('nextMsg'),
+                        onPress: onNext,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -737,7 +779,7 @@ class _Detail extends StatelessWidget {
                           ],
                         ),
                       ),
-                      if (message.deepLink != null) ...[
+                      if (message.deepLink != null && onLink != null) ...[
                         const SizedBox(height: 16),
                         Align(
                           alignment: Alignment.centerLeft,
@@ -755,22 +797,23 @@ class _Detail extends StatelessWidget {
                   ),
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(border: Border(top: BorderSide(color: t.hair))),
-                child: Row(
-                  children: [
-                    Button(
-                      kind: ButtonKind.secondary,
-                      height: 26,
-                      fontSize: 12,
-                      icon: message.read ? FLucideIcons.mail : FLucideIcons.mailOpen,
-                      label: message.read ? s('markUnread') : s('markRead'),
-                      onPress: onToggleRead,
-                    ),
-                  ],
+              if (onToggleRead != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(border: Border(top: BorderSide(color: t.hair))),
+                  child: Row(
+                    children: [
+                      Button(
+                        kind: ButtonKind.secondary,
+                        height: 26,
+                        fontSize: 12,
+                        icon: message.read ? FLucideIcons.mail : FLucideIcons.mailOpen,
+                        label: message.read ? s('markUnread') : s('markRead'),
+                        onPress: onToggleRead,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
             ],
           ),
         ),

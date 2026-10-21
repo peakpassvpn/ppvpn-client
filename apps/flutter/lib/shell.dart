@@ -53,6 +53,8 @@ class _ShellState extends State<Shell> {
     super.initState();
     widget.app.enhancedRequests.addListener(_turnOnEnhanced);
     widget.app.pageRequests.addListener(_showRequested);
+    // One asked for before the window was built (a click started the app).
+    _page = _requestedPage() ?? _page;
   }
 
   @override
@@ -69,17 +71,20 @@ class _ShellState extends State<Shell> {
     unawaited(turnOnEnhanced(context, widget.app));
   }
 
-  /// The tray's messages and settings items. Signed out the sign-in page
-  /// stays: there is no page to show yet.
+  /// The tray's messages and settings items, a notification click.
+  /// Signed out the sign-in page stays: there is no page to show yet.
   void _showRequested() {
+    final page = _requestedPage();
+    if (page != null) setState(() => _page = page);
+  }
+
+  _Page? _requestedPage() {
     final request = widget.app.pageRequests.value;
-    if (request == null || widget.app.snapshot.value.auth != rust.UiAuth.signedIn) return;
-    setState(
-      () => _page = switch (request.page) {
-        WindowPage.messages => _Page.messages,
-        WindowPage.settings => _Page.settings,
-      },
-    );
+    if (request == null || widget.app.snapshot.value.auth != rust.UiAuth.signedIn) return null;
+    return switch (request.page) {
+      WindowPage.messages => _Page.messages,
+      WindowPage.settings => _Page.settings,
+    };
   }
 
   @override
