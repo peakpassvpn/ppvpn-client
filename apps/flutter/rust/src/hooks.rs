@@ -262,7 +262,7 @@ mod service {
 
     /// The SHA-1 of the certificate this app is signed with, from its
     /// designated requirement (`certificate leaf = H"…"`, which
-    /// package-dmg.sh pins to crates/service/src/macos_client_cert.sha1).
+    /// package-app.sh pins to crates/service/src/macos_client_cert.sha1).
     /// `directory` is the bundle's Contents/MacOS.
     fn signing_certificate_sha1(directory: &Path) -> Option<String> {
         let bundle = directory.parent()?.parent()?;
