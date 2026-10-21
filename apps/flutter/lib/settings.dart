@@ -2,7 +2,9 @@
 // override, kept by the bridge in settings.json in the data directory
 // (rust/src/settings.rs). The routing mode is the client's and comes with
 // the snapshot. Theme (Tokens.of) and strings (S.current) follow the
-// notifiers here; main.dart rebuilds the app when they change.
+// notifiers here; main.dart rebuilds the app when they change. Launch at
+// login (#401 step 4) is the system's (rust/src/autostart.rs): read back,
+// never saved here.
 
 import 'package:flutter/foundation.dart';
 
@@ -17,6 +19,11 @@ class Settings {
   /// As saved; the client read it when it started (it takes effect on the
   /// next launch).
   static final ValueNotifier<String> apiOverride = ValueNotifier('');
+
+  /// As the system has it; [refreshLaunchAtLogin] reads it again.
+  static final ValueNotifier<rust.UiLaunchAtLogin> launchAtLogin = ValueNotifier(
+    const rust.UiLaunchAtLogin(enabled: false, needsApproval: false),
+  );
 
   /// The bridge's version, for the settings page.
   static String version = '';
@@ -76,5 +83,27 @@ class Settings {
     if (_save(apiOverride: text) != null) return false;
     apiOverride.value = text;
     return true;
+  }
+
+  /// Reads launch at login from the system (the settings page, when it
+  /// shows and when the window gains focus).
+  static void refreshLaunchAtLogin() {
+    if (!_persist) return;
+    launchAtLogin.value = rust.launchAtLogin();
+  }
+
+  /// Turns launch at login on or off, then reads it back; the error's text
+  /// when the system refused.
+  static String? setLaunchAtLogin(bool enabled) {
+    if (!_persist) return null;
+    String? failure;
+    try {
+      rust.setLaunchAtLogin(enabled: enabled);
+    } catch (error) {
+      debugPrint('set_launch_at_login: $error');
+      failure = '$error';
+    }
+    refreshLaunchAtLogin();
+    return failure;
   }
 }

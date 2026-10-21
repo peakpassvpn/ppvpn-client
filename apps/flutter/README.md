@@ -61,8 +61,19 @@ any release.
   - Windows: `%LOCALAPPDATA%\PPVPN Flutter`.
 - The settings page (#401 step 3) sets the appearance, the language and
   the routing mode, and shows the account, the version and the system
-  service's status. Launch at login, update checks and installing the
-  service come in later steps: their rows are shown, disabled.
+  service's status. Update checks and installing the service come in later
+  steps: their rows are shown, disabled.
+- Launch at login (#401 step 4, `rust/src/autostart.rs`) is the native
+  apps' own, off by default, its state read from the system:
+  `SMAppService.mainApp` on macOS (with the approval hint and System
+  Settings › Login Items), the `PPVPN` value under HKCU's `Run` key on
+  Windows (with the hint when Settings › Apps › Startup turned it off; the
+  value is pointed at the current executable at every start), and
+  `$XDG_CONFIG_HOME/autostart/com.peakpassvpn.ppvpn.desktop` on Linux. The
+  Windows and Linux entries pass `--background`: the app starts in the
+  tray with no window. For that, `scripts/ci-build.sh` takes the
+  first-frame show out of those two runners, and `main.dart` shows the
+  window otherwise.
 - Appearance, language and the API override are kept in `settings.json` in
   the data directory above. The API override (Settings → Advanced) takes
   effect on the next launch; `PPVPN_API_BASE` wins over it. Without either
@@ -83,7 +94,8 @@ Builds and tests run only in CI (`ci.yml`, job `flutter`), on the three
 platforms, and only when `apps/flutter/` or `crates/desktop/` changes.
 `scripts/ci-build.sh` does the following:
 
-1. generates the platform runner (`flutter create`);
+1. generates the platform runner (`flutter create`), with the window
+   hidden until `main.dart` shows it on Windows and Linux;
 2. generates the bridge glue (`flutter_rust_bridge_codegen generate`);
 3. analyses the Dart code;
 4. builds the Rust library and the app in release mode;

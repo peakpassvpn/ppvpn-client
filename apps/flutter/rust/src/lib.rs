@@ -3,6 +3,7 @@
 //! `mod frb_generated;` here; nothing generated is committed.
 
 pub mod api;
+mod autostart;
 mod bridge;
 mod hooks;
 mod messages;

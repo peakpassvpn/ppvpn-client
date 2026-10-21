@@ -1,7 +1,9 @@
 // The Flutter desktop prototype (#387): one window (see shell.dart) with the
 // overview, nodes and settings pages, plus the menu bar / tray icon, on the client
 // (crates/desktop) through flutter_rust_bridge. Closing the window hides
-// it; the app stays in the tray until "Quit".
+// it; the app stays in the tray until "Quit". `--background` (the login
+// entry on Windows and Linux, rust/src/autostart.rs) starts it in the tray
+// with no window.
 
 import 'dart:async';
 import 'dart:io';
@@ -40,6 +42,7 @@ Future<void> main() async {
   mark('main');
   WidgetsFlutterBinding.ensureInitialized();
   final AppState app;
+  var background = false;
   if (samplePage != null) {
     app = sampleState();
   } else {
@@ -47,6 +50,8 @@ Future<void> main() async {
     mark('bridge_loaded');
     // Before the client: it reads the API override when it starts.
     Settings.load();
+    background = rust.startedInBackground();
+    rust.refreshLaunchAtLogin();
     app = AppState(rust.start());
     mark('client_created');
   }
@@ -64,6 +69,12 @@ Future<void> main() async {
     ),
     () async {
       mark('ready_to_show');
+      // The runners leave the window hidden (ci-build.sh); macOS shows its
+      // own at launch.
+      if (background) {
+        await windowManager.hide();
+        return;
+      }
       await windowManager.show();
       await windowManager.focus();
       mark('window_shown');
