@@ -38,14 +38,17 @@ windows = { version = "0.61", features = [
 # single instance's pipe, the toast's click activator and the installer's
 # quit event (instance.rs). The native app's sign-in in the Credential
 # Manager (credentials.rs). The AppUserModelID and its registration
-# (aumid.rs).
+# (aumid.rs). WinSparkle, loaded at run time, and the UI language for its
+# dialogs (update.rs).
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_IO",
+    "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_Services",

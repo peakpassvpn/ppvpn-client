@@ -90,12 +90,13 @@ try {
   Install $Installer
   foreach ($file in @("ppvpn.exe", "flutter_windows.dll", "ppvpn_flutter.dll", "data\icudtl.dat", "data\app.so",
       "data\flutter_assets", "Assets\AppLogo.png", "ppvpn-push-agent.exe", "ppvpn-service.exe",
-      "ppvpn-service-install.exe", "ppvpn-service-uninstall.exe", "wintun.dll", "install-files.txt",
-      "uninstall.exe", "LICENSE.txt")) {
+      "ppvpn-service-install.exe", "ppvpn-service-uninstall.exe", "wintun.dll", "WinSparkle.dll",
+      "install-files.txt", "uninstall.exe", "LICENSE.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $dir $file))) { throw "not installed: $file" }
   }
-  # The native app's own files went with its install-files.txt.
-  foreach ($file in @("WinSparkle.dll", "ppvpn.pri", "runtimes", "Microsoft.WindowsAppRuntime.dll")) {
+  # The native app's own files went with its install-files.txt (WinSparkle.dll is
+  # this app's too).
+  foreach ($file in @("ppvpn.pri", "runtimes", "Microsoft.WindowsAppRuntime.dll")) {
     if (Test-Path -LiteralPath (Join-Path $dir $file)) { throw "left from the native app: $file" }
   }
   $listed = @(Get-Content -LiteralPath (Join-Path $dir "install-files.txt"))

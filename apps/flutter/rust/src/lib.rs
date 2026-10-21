@@ -15,3 +15,4 @@ mod instance;
 mod messages;
 mod push_agent;
 mod settings;
+mod update;

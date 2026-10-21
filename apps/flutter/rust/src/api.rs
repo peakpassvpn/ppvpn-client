@@ -414,6 +414,10 @@ pub struct UiActivation {
     /// The installer asks the app to quit (Windows): quit as the tray's
     /// Quit does, `push_id` is `None`.
     pub quit: bool,
+    /// The update's installer runs (Windows, [`start_updater`]): hide the
+    /// window and the tray icon and wait for `quit`, which comes from the
+    /// installer or, 30 s later, from the bridge. `push_id` is `None`.
+    pub update: bool,
 }
 
 /// Makes this process the app's one instance (Windows and Linux; on macOS
@@ -544,4 +548,46 @@ pub fn refresh_launch_at_login() {
 #[frb(sync)]
 pub fn started_in_background() -> bool {
     crate::autostart::started_in_background()
+}
+
+// --- updates ---
+
+/// How this build updates itself (#401 step 5, `update.rs`). macOS: the
+/// runner's Sparkle, nothing here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiUpdater {
+    /// Windows: WinSparkle runs; the app shows 「检查更新…」
+    /// ([`check_for_updates`]) and the automatic-check switch.
+    pub installs: bool,
+    /// Windows: WinSparkle checks on its own schedule
+    /// ([`set_auto_check_updates`]).
+    pub auto_check: bool,
+    /// Linux: the repository's latest.json, to compare with `build` (a
+    /// notice, the package manager upgrades); `None` in a development build.
+    pub notice_feed: Option<String>,
+    /// This build, `<version>.<build number>`, as latest.json's `build`.
+    pub build: String,
+    /// Linux: the upgrade command for this install's package format.
+    pub upgrade_command: String,
+}
+
+/// Starts the updater (Windows: WinSparkle, with its scheduled check) and
+/// says what this build can do. Call once the window exists.
+#[frb(sync)]
+pub fn start_updater() -> UiUpdater {
+    crate::update::start()
+}
+
+/// A check the user asked for, with WinSparkle's own progress and result
+/// windows (Windows; nothing elsewhere).
+#[frb(sync)]
+pub fn check_for_updates() {
+    crate::update::check();
+}
+
+/// Turns WinSparkle's scheduled checks on or off and saves it as the native
+/// app does (Windows).
+#[frb(sync)]
+pub fn set_auto_check_updates(enabled: bool) -> Result<(), String> {
+    crate::update::set_auto_check(enabled)
 }

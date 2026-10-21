@@ -84,7 +84,7 @@ pub(crate) async fn next() -> UiActivation {
     }
 }
 
-fn deliver(activation: UiActivation) {
+pub(crate) fn deliver(activation: UiActivation) {
     QUEUE.lock().unwrap().push_back(activation);
     READY.notify_one();
 }
@@ -93,6 +93,7 @@ fn activation(args: &[String]) -> UiActivation {
     UiActivation {
         push_id: push_in(args).and_then(|id| i64::try_from(id).ok()),
         quit: false,
+        update: false,
     }
 }
 
@@ -364,6 +365,7 @@ mod platform {
                     super::deliver(crate::api::UiActivation {
                         push_id: None,
                         quit: true,
+                        update: false,
                     });
                 }
             });
@@ -691,6 +693,7 @@ mod toast {
             super::deliver(crate::api::UiActivation {
                 push_id: i64::try_from(id).ok(),
                 quit: false,
+                update: false,
             });
         }
         S_OK

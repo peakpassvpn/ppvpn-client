@@ -8,7 +8,8 @@
 // before Dart asks ("ready") is held until then.
 //
 // It also keeps the bundled push agent registered (PushAgentService below),
-// in a packaged app (scripts/package-macos.sh).
+// in a packaged app (scripts/package-macos.sh), and runs Sparkle (Updater
+// below, the channel lib/updates.dart calls).
 
 import Cocoa
 import FlutterMacOS
@@ -18,6 +19,7 @@ import os
 class MainFlutterWindow: NSWindow {
   private var activation: Activation?
   private var pushAgent: PushAgentService?
+  private var updater: Updater?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -27,8 +29,12 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     activation = Activation(messenger: flutterViewController.engine.binaryMessenger)
-    pushAgent = PushAgentService()
-    pushAgent?.start()
+    let pushAgent = PushAgentService()
+    pushAgent.start()
+    self.pushAgent = pushAgent
+    updater = Updater(messenger: flutterViewController.engine.binaryMessenger) { [weak pushAgent] in
+      pushAgent?.prepareForUpdate()
+    }
 
     super.awakeFromNib()
   }
@@ -94,8 +100,8 @@ private let agentLog = Logger(subsystem: "com.peakpassvpn.ppvpn.desktop", catego
 /// registered with launchd, and restarts or re-registers it when it stopped
 /// running: the native app's apps/macos/PPVPN/Platform/PushAgentService.swift
 /// with its PushAgentHealth (AppLogic), the same files, defaults key and
-/// timings, so that either app takes over from the other. Not yet: the
-/// unregistering before an update (the app has no updater yet).
+/// timings, so that either app takes over from the other, and the
+/// unregistering before an update (Updater).
 @MainActor
 private final class PushAgentService {
   static let label = "com.peakpassvpn.ppvpn.desktop.agent"
@@ -144,6 +150,32 @@ private final class PushAgentService {
         self?.watchingSince = Date()
         self?.scheduleCheck()
       }
+    }
+  }
+
+  /// Called right before Sparkle replaces the app. launchd kills an agent
+  /// whose bundle is replaced under it (Launch Constraint Violation) and
+  /// keeps the job half-dead for about a minute; unregistering first lets
+  /// the agent exit cleanly, and the new build registers it at launch.
+  /// If the install does not happen after all, the agent is registered
+  /// again.
+  func prepareForUpdate() {
+    guard service.status == .enabled else { return }
+    checkTask?.cancel()
+    do {
+      try service.unregister()
+      UserDefaults.standard.removeObject(forKey: Self.registeredBuildKey)
+      agentLog.info("push agent: unregistered for the update")
+    } catch {
+      agentLog.error("push agent: unregister before the update failed: \(error.localizedDescription, privacy: .public)")
+      return
+    }
+    Task { [weak self] in
+      try? await Task.sleep(for: .seconds(120))
+      guard let self else { return }
+      agentLog.info("push agent: still running after the update started; registering again")
+      self.register()
+      self.scheduleCheck()
     }
   }
 
@@ -318,4 +350,104 @@ private final class PushAgentService {
       }
     }
   }
+}
+
+private let updateLog = Logger(subsystem: "com.peakpassvpn.ppvpn.desktop", category: "update")
+
+/// Sparkle 2, as the native app's apps/macos/PPVPN/Platform/Updater.swift:
+/// the appcast and the EdDSA key are the Info.plist keys PPVPNUpdateFeedURL
+/// and SUPublicEDKey, which scripts/package-macos.sh writes with the native
+/// build's settings, and it adds Sparkle.framework to Contents/Frameworks.
+/// The generated runner does not link Sparkle: the framework is loaded at
+/// run time, and a build without it or without both keys (ci-build.sh
+/// alone) has updates off, with no 「检查更新…」.
+///
+/// Channel ppvpn/update: `state` → {available, autoCheck}, `check`,
+/// `setAutoCheck` (a Bool).
+@MainActor
+private final class Updater: NSObject {
+  private let channel: FlutterMethodChannel
+  private let feedURL: String?
+  private let beforeInstall: @MainActor () -> Void
+  private var controller: SparkleUpdaterController?
+
+  init(messenger: FlutterBinaryMessenger, beforeInstall: @escaping @MainActor () -> Void) {
+    channel = FlutterMethodChannel(name: "ppvpn/update", binaryMessenger: messenger)
+    let info = Bundle.main.infoDictionary ?? [:]
+    let feed = (info["PPVPNUpdateFeedURL"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+    let key = (info["SUPublicEDKey"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+    feedURL = feed.isEmpty ? nil : feed
+    self.beforeInstall = beforeInstall
+    super.init()
+    if feedURL != nil, !key.isEmpty {
+      controller = Self.makeController(delegate: self)
+    } else {
+      updateLog.info("updates off: no feed or no public key in this build")
+    }
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self else { return result(nil) }
+      switch call.method {
+      case "state":
+        result(["available": self.controller != nil,
+                "autoCheck": self.controller?.updater.automaticallyChecksForUpdates ?? false])
+      case "check":
+        self.controller?.checkForUpdates(nil)
+        result(nil)
+      case "setAutoCheck":
+        if let enabled = call.arguments as? Bool {
+          self.controller?.updater.automaticallyChecksForUpdates = enabled
+        }
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  /// SPUStandardUpdaterController from the bundled framework, started.
+  private static func makeController(delegate: AnyObject) -> SparkleUpdaterController? {
+    guard let url = Bundle.main.privateFrameworksURL?.appendingPathComponent("Sparkle.framework"),
+      let bundle = Bundle(url: url), bundle.load(),
+      let controllerClass = NSClassFromString("SPUStandardUpdaterController"),
+      let updaterClass = NSClassFromString("SPUUpdater")
+    else {
+      updateLog.info("updates off: no Sparkle.framework in this build")
+      return nil
+    }
+    // Sparkle's classes have these methods (SPUStandardUpdaterController.h,
+    // SPUUpdater.h); the protocols only let Swift call them.
+    class_addProtocol(controllerClass, SparkleUpdaterController.self)
+    class_addProtocol(updaterClass, SparkleUpdater.self)
+    guard let type = controllerClass as? SparkleUpdaterController.Type else { return nil }
+    let controller = type.init(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: nil)
+    updateLog.info("updates on")
+    return controller
+  }
+
+  // SPUUpdaterDelegate, which Sparkle asks with respondsToSelector:.
+
+  @objc(feedURLStringForUpdater:)
+  nonisolated func feedURLString(for updater: AnyObject) -> String? {
+    MainActor.assumeIsolated { feedURL }
+  }
+
+  @objc(updater:willInstallUpdate:)
+  nonisolated func updater(_ updater: AnyObject, willInstallUpdate item: AnyObject) {
+    MainActor.assumeIsolated {
+      updateLog.info("update: installing")
+      beforeInstall()
+    }
+  }
+}
+
+/// What the runner calls of SPUStandardUpdaterController.
+@objc private protocol SparkleUpdaterController: NSObjectProtocol {
+  init(startingUpdater: Bool, updaterDelegate: AnyObject?, userDriverDelegate: AnyObject?)
+  var updater: SparkleUpdater { get }
+  func checkForUpdates(_ sender: Any?)
+}
+
+/// What the runner calls of SPUUpdater.
+@objc private protocol SparkleUpdater: NSObjectProtocol {
+  var automaticallyChecksForUpdates: Bool { get set }
 }

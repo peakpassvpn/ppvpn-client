@@ -10,6 +10,11 @@
 #   PPVPN_BINARIES_DIR         the service helpers, <bin>-universal-apple-darwin or
 #                              <bin>-<triple> (default build/binaries, as
 #                              tools/desktop/build-service.sh stages them)
+#   PPVPN_UPDATE_FEED_URL      Sparkle appcast. Unset: the channel's feed on the update
+#                              site, <PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-<platform>.xml,
+#                              when both the site and the channel are given; otherwise
+#                              updates are off (as apps/macos/scripts/package-dmg.sh)
+#   PPVPN_SPARKLE_PUBLIC_KEY   Sparkle EdDSA public key
 #   and package-app.sh's: PPVPN_CODESIGN_IDENTITY, PPVPN_RELEASE_CHANNEL,
 #   SPARKLE_PRIVATE_KEY_FILE.
 #
@@ -21,6 +26,10 @@
 #   Contents/Frameworks/PPVPNClientFFI.framework  the agent's client
 #   Contents/MacOS/ppvpn-service{,-install,-uninstall}  what rust/src/hooks.rs
 #       runs for enhanced mode
+#   Contents/Frameworks/Sparkle.framework  the native app's Sparkle (its Xcode
+#       project's package), which the runner loads (MainFlutterWindow.swift,
+#       Updater), and the Info.plist keys it reads: PPVPNUpdateFeedURL,
+#       SUPublicEDKey, SUEnableAutomaticChecks
 # then apps/macos/scripts/package-app.sh: thinning, inside-out signing with
 # the native app's entitlements, and dist/macos/PPVPN-<version>-<platform>.dmg,
 # .pkg and release-meta-<platform>.json.
@@ -29,8 +38,8 @@ set -euo pipefail
 src="${1:-}"
 arch="${2:-}"
 case "$arch" in
-  arm64) triple=aarch64-apple-darwin ;;
-  x86_64) triple=x86_64-apple-darwin ;;
+  arm64) triple=aarch64-apple-darwin platform=macos-arm64 ;;
+  x86_64) triple=x86_64-apple-darwin platform=macos-x64 ;;
   *) echo "usage: $0 <PPVPN.app> arm64|x86_64" >&2; exit 2 ;;
 esac
 [ -x "$src/Contents/MacOS/PPVPN" ] || { echo "no PPVPN.app at '$src'" >&2; exit 2; }
@@ -63,6 +72,15 @@ ffi=("$macos"/PPVPNClient/PPVPNClientFFI.xcframework/macos-*/PPVPNClientFFI.fram
 [ ${#ffi[@]} = 1 ] && [ -d "${ffi[0]}" ] ||
   { echo "expected one macOS PPVPNClientFFI.framework, found: ${ffi[*]}" >&2; exit 1; }
 
+# Sparkle, as the agent's build resolved the project's packages.
+sparkle=$(find "$build/xcode/SourcePackages/artifacts" -type d -path '*/Sparkle.xcframework/macos-*/Sparkle.framework' -prune)
+[ -n "$sparkle" ] && [ "$(printf '%s\n' "$sparkle" | wc -l | tr -d ' ')" = 1 ] ||
+  { echo "expected one macOS Sparkle.framework in the agent build's packages, found: ${sparkle:-none}" >&2; exit 1; }
+feed=${PPVPN_UPDATE_FEED_URL:-}
+if [ -z "$feed" ] && [ -n "${PPVPN_UPDATE_SITE:-}" ] && [ -n "${PPVPN_RELEASE_CHANNEL:-}" ]; then
+  feed="${PPVPN_UPDATE_SITE%/}/desktop/$PPVPN_RELEASE_CHANNEL/appcast-$platform.xml"
+fi
+
 app="$build/PPVPN.app"
 rm -rf "$app"
 ditto "$src" "$app"
@@ -76,6 +94,16 @@ rmdir "$contents/Library/LoginItems/PPVPN Agent.app/Contents/Frameworks" 2>/dev/
 rm -rf "$contents/Frameworks/PPVPNClientFFI.framework"
 ditto "${ffi[0]}" "$contents/Frameworks/PPVPNClientFFI.framework"
 install -m 644 "$macos/LaunchAgents/com.peakpassvpn.ppvpn.desktop.agent.plist" "$contents/Library/LaunchAgents/"
+rm -rf "$contents/Frameworks/Sparkle.framework"
+ditto "$sparkle" "$contents/Frameworks/Sparkle.framework"
+# As apps/macos/project.yml has them; empty values leave updates off.
+plist_set() {
+  /usr/libexec/PlistBuddy -c "Delete :$1" "$contents/Info.plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :$1 $2 $3" "$contents/Info.plist"
+}
+plist_set PPVPNUpdateFeedURL string "$feed"
+plist_set SUPublicEDKey string "${PPVPN_SPARKLE_PUBLIC_KEY:-}"
+plist_set SUEnableAutomaticChecks bool true
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   file="$bins/$bin-universal-apple-darwin"
   [ -f "$file" ] || file="$bins/$bin-$triple"
@@ -92,7 +120,8 @@ PPVPN_SOURCE_PACKAGES="$build/xcode/SourcePackages" \
 for path in "Library/LoginItems/PPVPN Agent.app/Contents/MacOS/PPVPN Agent" \
     Library/LaunchAgents/com.peakpassvpn.ppvpn.desktop.agent.plist \
     Frameworks/PPVPNClientFFI.framework/Versions/A/PPVPNClientFFI \
-    Frameworks/libppvpn_flutter.dylib MacOS/ppvpn-service MacOS/ppvpn-service-install \
+    Frameworks/libppvpn_flutter.dylib Frameworks/Sparkle.framework/Versions/B/Sparkle \
+    MacOS/ppvpn-service MacOS/ppvpn-service-install \
     MacOS/ppvpn-service-uninstall; do
   [ -e "$contents/$path" ] || { echo "$path missing in $app" >&2; exit 1; }
 done
