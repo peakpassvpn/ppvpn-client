@@ -15,8 +15,9 @@
 #         And outside apps/flutter/rust/ it does not set code either: a
 #         change to the Flutter app's Dart, scripts or assets runs only the
 #         flutter job (and lint's sensitive check, which always runs). Its
-#         Rust bridge (apps/flutter/rust/) is a workspace member, so it
-#         still sets code for the workspace's clippy and tests.
+#         Rust bridge (apps/flutter/rust/) and push agent
+#         (apps/flutter/push-agent/) are workspace members, so they still
+#         set code for the workspace's clippy and tests.
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
 #         release.yml warms the caches on main only when it is true.
@@ -53,7 +54,7 @@ while IFS= read -r f; do
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | \
     .github/workflows/ci.yml | .github/workflows/release.yml)
       deps=true desktop=true flutter=true code=true ;;
-    apps/flutter/rust/*) flutter=true code=true ;;
+    apps/flutter/rust/* | apps/flutter/push-agent/*) flutter=true code=true ;;
     apps/flutter/*) flutter=true ;;
     crates/desktop/*) desktop=true flutter=true code=true ;;
     apps/* | crates/engine-host/* | crates/service/* | tools/desktop/*)

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::api::{UiAppearance, UiLanguage, UiSettings};
-use crate::bridge;
+use crate::dirs::dirs;
 
 const FILE: &str = "settings.json";
 
@@ -36,7 +36,7 @@ fn read(data_dir: &str) -> Saved {
 }
 
 pub(crate) fn load() -> Result<UiSettings, String> {
-    let (data_dir, _) = bridge::dirs()?;
+    let (data_dir, _) = dirs()?;
     let saved = read(&data_dir);
     Ok(UiSettings {
         appearance: match saved.appearance.as_str() {
@@ -78,7 +78,7 @@ pub(crate) fn save(settings: UiSettings) -> Result<(), String> {
         .into(),
         api_override: api_override.into(),
     };
-    let (data_dir, _) = bridge::dirs()?;
+    let (data_dir, _) = dirs()?;
     let path = path(&data_dir);
     let temp = path.with_extension("json.tmp");
     let json = serde_json::to_vec_pretty(&saved).map_err(|error| error.to_string())?;

@@ -356,6 +356,8 @@ jobs:
   #   - the privileged service (a workspace member, shipped with the
   #     "service" profile; it hosts the TUN engine): tests and clippy;
   #   - the client crate: tests and clippy;
+  #   - the Flutter app's Rust (its bridge and the push agent): clippy, and
+  #     the agent's tests;
   #   - the desktop scripts: bash -n and their Python tests;
   #   - C# bindings, then App.Core's and the Linux app's tests (.NET 8, no
   #     GTK runtime needed);
@@ -408,6 +410,11 @@ jobs:
         run: |
           cargo test --locked
           cargo clippy --locked --all-targets -- -D warnings
+      - name: Flutter bridge and push agent
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          cargo test --locked -p ppvpn-push-agent
+          cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets -- -D warnings
       - name: Check scripts
         if: steps.scope.outputs.code == 'true'
         run: |
@@ -605,7 +612,8 @@ jobs:
 
   # Windows (MSVC, what the desktop links), for what Linux cannot cover:
   #   - clippy over the crates the desktop links (ppvpn-cli ships for Linux
-  #     and macOS only), so that every cfg'd Windows path compiles;
+  #     and macOS only) and the Flutter app's Rust (its bridge and the push
+  #     agent), so that every cfg'd Windows path compiles;
   #   - the Windows-only tests, by filter (docs/testing.md, "Platform
   #     tests"), then L3 on Windows (G7): a failing instance leaves the
   #     system as it was while the host lives on (runtime::windows_tests):
@@ -666,12 +674,13 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: |
           cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-desktop -p ppvpn-engine-host -p ppvpn-service \
-            --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
+            -p ppvpn-flutter -p ppvpn-push-agent --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
       - name: Windows tests
         if: steps.scope.outputs.code == 'true'
         run: |
           cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc -- hostipv6::windows localdns::source probe::icmp
           cargo test -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc -- detect service sysproxy
+          cargo test -p ppvpn-push-agent --locked --target x86_64-pc-windows-msvc
       - name: L3, build the failure tests
         if: steps.scope.outputs.code == 'true'
         run: cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run

@@ -2,7 +2,7 @@
 # process by Desktop and the CLI. The Go core it replaces is gone from main;
 # v0.5.21, its last release, keeps its tag and release files.
 [workspace]
-members = ["crates/core", "crates/cli", "crates/account", "crates/core-lab", "crates/engine-host", "crates/desktop", "crates/service", "apps/flutter/rust"]
+members = ["crates/core", "crates/cli", "crates/account", "crates/core-lab", "crates/engine-host", "crates/desktop", "crates/service", "apps/flutter/rust", "apps/flutter/push-agent"]
 # What a bare cargo command at the root builds, and so what ci.yml's
 # required jobs cover; the desktop crates and the service have their own
 # jobs there (desktop-*).
