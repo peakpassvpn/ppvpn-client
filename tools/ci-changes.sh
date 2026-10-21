@@ -8,10 +8,15 @@
 #         the dependencies or the workflows: what the desktop
 #         app builds (the macOS Debug app, the Windows C# bindings and app)
 #         depend on. ci.yml skips those builds when it is false.
-#   flutter  apps/flutter/ (the Flutter prototype, #387), crates/desktop/
+#   flutter  apps/flutter/ (the Flutter desktop app, #401), crates/desktop/
 #         (what it links), the dependencies or the workflows. ci.yml's
 #         flutter job builds only when it is true. apps/flutter/ alone
 #         does not set desktop: the native apps do not depend on it.
+#         And outside apps/flutter/rust/ it does not set code either: a
+#         change to the Flutter app's Dart, scripts or assets runs only the
+#         flutter job (and lint's sensitive check, which always runs). Its
+#         Rust bridge (apps/flutter/rust/) is a workspace member, so it
+#         still sets code for the workspace's clippy and tests.
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
 #         release.yml warms the caches on main only when it is true.
@@ -48,7 +53,8 @@ while IFS= read -r f; do
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | \
     .github/workflows/ci.yml | .github/workflows/release.yml)
       deps=true desktop=true flutter=true code=true ;;
-    apps/flutter/*) flutter=true code=true ;;
+    apps/flutter/rust/*) flutter=true code=true ;;
+    apps/flutter/*) flutter=true ;;
     crates/desktop/*) desktop=true flutter=true code=true ;;
     apps/* | crates/engine-host/* | crates/service/* | tools/desktop/*)
       desktop=true code=true ;;
