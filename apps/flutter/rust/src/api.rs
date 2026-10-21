@@ -248,3 +248,13 @@ pub fn shutdown() {
         bridge.client.shutdown();
     }
 }
+
+// --- logs ---
+
+/// The client's log directory: crates/desktop writes
+/// `ppvpn-client.YYYY-MM-DD.log` and `ppvpn-core.YYYY-MM-DD.log` there, one
+/// per UTC day. The logs page reads them itself.
+#[frb(sync)]
+pub fn log_dir() -> Result<String, String> {
+    Ok(bridge::get()?.client.log_dir())
+}
