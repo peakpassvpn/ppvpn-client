@@ -56,7 +56,13 @@ struct Owned(CFTypeRef);
 
 impl Owned {
     fn new(value: CFTypeRef) -> Option<Self> {
-        (!value.is_null()).then_some(Self(value))
+        // Not `then_some(Self(value))`: that builds (and drops, releasing
+        // null) the wrapper even when `value` is null.
+        if value.is_null() {
+            None
+        } else {
+            Some(Self(value))
+        }
     }
 
     fn string(text: &str) -> Option<Self> {
