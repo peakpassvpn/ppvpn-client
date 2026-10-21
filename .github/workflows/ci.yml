@@ -820,6 +820,14 @@ jobs:
         name: Build
         if: steps.scope.outputs.flutter == 'true'
         run: apps/flutter/scripts/ci-build.sh
+      # The Linux bundle, for the 24 h curve on the test machine (built here,
+      # never there: apps/flutter/scripts/longcurve).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        with:
+          name: flutter-bundle-linux
+          path: ${{ steps.build.outputs.bundle }}
+          retention-days: 14
       - name: Smoke test
         if: steps.scope.outputs.flutter == 'true'
         run: |
