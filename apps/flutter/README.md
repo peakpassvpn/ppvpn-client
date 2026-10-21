@@ -44,7 +44,8 @@ any release.
   system's admin prompt, exactly as the native apps do (same paths and
   helpers: `rust/src/hooks.rs`). The helpers (`ppvpn-service-install`,
   `-uninstall`, and on macOS `ppvpn-service`) must sit next to the app's
-  executable; `scripts/ci-build.sh` does not put them there yet.
+  executable; `scripts/ci-build.sh` does not put them there. On Linux,
+  `scripts/install-linux-layout.sh` does (see below).
 - Quitting from the tray puts the system proxy back (`Client::shutdown`).
   Closing the window only hides it.
 - The sign-in is kept in a file in the prototype's own data directory,
@@ -112,3 +113,44 @@ Pinned versions:
 | forui | 0.27.6 | `pubspec.yaml` |
 | tray_manager | 0.8.0 | `pubspec.yaml` |
 | window_manager | 0.5.2 | `pubspec.yaml` |
+
+## Linux layout and the enhanced-mode end-to-end test
+
+`scripts/install-linux-layout.sh <bundle> <service-bin-dir>` (root, Linux
+only) installs the bundle as the native packages do
+(`apps/linux/packaging/nfpm.yaml`). The executable becomes
+`/usr/lib/ppvpn/ppvpn`, root-owned and 0755, because that is the only
+client the privileged service accepts. `lib/` and `data/` sit beside it,
+and so do `ppvpn-service`, `ppvpn-service-install` and
+`ppvpn-service-uninstall`, which is where `rust/src/hooks.rs` looks for
+them. There is no deb or rpm yet. To remove it, run
+`/usr/lib/ppvpn/ppvpn-service-uninstall` and then `rm -rf /usr/lib/ppvpn`.
+
+`e2e/linux_enhanced.sh` is the enhanced-mode test (#401 step 2), the
+counterpart of `crates/desktop/src/e2e_linux.rs`. CI runs it in the Linux
+`flutter` job after the build as
+`sudo test/netns/run.sh --script e2e/linux_enhanced.sh <fakenode>`, which
+puts it inside run.sh's network namespace and checks that the host is left
+as it was. Before that, the job installs the layout and the service with
+`ppvpn-service-install`, then stops the unit, because a systemd unit runs in
+the host's namespace. The script then:
+
+1. starts `test/fakenode` in the uplink namespace,
+   `/usr/lib/ppvpn-service/ppvpn-service` in the test namespace and
+   `e2e/linux_enhanced_backend.py` on loopback;
+2. writes a saved sign-in (`credential.json`) to a temporary
+   `XDG_DATA_HOME`;
+3. starts the installed release app under its own Xvfb and D-Bus session,
+   with `PPVPN_FLUTTER_E2E=enhanced`;
+4. checks the TUN, the policy rules (9091–9101) and table 2091 while
+   connected;
+5. checks that `GET http://192.0.2.10:8080/` answers through the node;
+6. checks that the routing state is gone after a disconnect and after the
+   app quits.
+
+`PPVPN_FLUTTER_E2E=enhanced` (`lib/e2e.dart`) is a test-only switch and is
+off unless the variable is set. Once the app is signed in with a profile,
+it turns enhanced mode on. It prints `E2E ready`, `E2E phase <phase>` and
+`E2E action-error <error>` to stdout. It reads `connect`, `disconnect` and
+`quit` lines from stdin. On `quit` or SIGTERM it disconnects and then quits
+as the tray's Quit does.

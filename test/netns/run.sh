@@ -6,6 +6,8 @@
 #   sudo test/netns/run.sh --host <script> [args]        # a script that builds
 #                                                        # namespaces of its own
 #   sudo test/netns/run.sh --libtest <rust test binary> <filter> [libtest args]
+#   sudo test/netns/run.sh --script <script> [args]      # a script that runs
+#                                                        # inside ppvpn-t
 #
 # A Rust (libtest) binary runs its ignored tests matching the filter, one at
 # a time, with output: such tests are #[ignore]d so that a plain cargo test
@@ -17,6 +19,11 @@
 # its changes inside namespaces it creates and removes, as the test/lab/localdns
 # scripts do); the timeout and the host check are the same, and its exit
 # status is the result.
+#
+# With --script the command runs inside ppvpn-t as the test binaries do
+# (PPVPN_TEST_REAL_TUN=1, NETNS_ENV, the host's D-Bus out of reach), with its
+# arguments as they are; it does its own checks and its exit status is the
+# result (apps/flutter/e2e/linux_enhanced.sh).
 #
 # Namespaces (removed again on exit):
 #   ppvpn-t: the test's; veth pt0 10.243.0.1/24, default route via 10.243.0.2
@@ -35,7 +42,8 @@ set -euo pipefail
 
 HOST_MODE=0; [ "${1:-}" = --host ] && { HOST_MODE=1; shift; }
 LIBTEST=0; [ "${1:-}" = --libtest ] && { LIBTEST=1; shift; }
-BIN=$(realpath "${1:?usage: run.sh [--host|--libtest] <test binary or script> [args]}"); shift
+SCRIPT=0; [ "${1:-}" = --script ] && { SCRIPT=1; shift; }
+BIN=$(realpath "${1:?usage: run.sh [--host|--libtest|--script] <test binary or script> [args]}"); shift
 T=ppvpn-t; W=ppvpn-w
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=${NETNS_OUT:-$(mktemp -d)}
@@ -109,6 +117,8 @@ else
 	fi
 	if [ "$LIBTEST" = 1 ]; then
 		args=(--ignored --test-threads=1 --nocapture "$@")
+	elif [ "$SCRIPT" = 1 ]; then
+		args=("$@")
 	else
 		args=(-test.v -test.count=1 "$@")
 	fi
@@ -123,6 +133,8 @@ else
 		skipped=$(grep -c 'SKIP: ' "$OUT/test.txt" || true)
 		[ "$ran" -gt "$skipped" ] || { echo "run.sh: no test ran (all skipped?)" >&2; status=1; }
 		grep -q 'SKIP: ' "$OUT/test.txt" && grep 'SKIP: ' "$OUT/test.txt" >&2 || true
+	elif [ "$SCRIPT" = 1 ]; then
+		: # its exit status is the result
 	else
 		grep -qE '^--- (PASS|FAIL)' "$OUT/test.txt" || { echo "run.sh: no test ran (all skipped?)" >&2; status=1; }
 		grep -q '^--- SKIP' "$OUT/test.txt" && grep '^--- SKIP' "$OUT/test.txt" >&2 || true

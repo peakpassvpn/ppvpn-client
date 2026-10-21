@@ -13,6 +13,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
 import 'bench.dart';
+import 'e2e.dart';
 import 'src/rust/api.dart' as rust;
 import 'sample.dart';
 import 'settings.dart';
@@ -84,6 +85,8 @@ Future<void> main() async {
   final tray = Tray(app: app, onOpen: () => unawaited(open()), onQuit: quit);
   windowManager.addListener(_HideOnClose());
   mark('tray_created');
+  // Off unless PPVPN_FLUTTER_E2E is set (e2e/linux_enhanced.sh).
+  if (samplePage == null) startE2e(app, quit);
   runApp(PrototypeApp(app: app, tray: tray));
   unawaited(WidgetsBinding.instance.waitUntilFirstFrameRasterized.then((_) => mark('first_frame')));
 }
