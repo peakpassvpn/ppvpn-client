@@ -663,7 +663,7 @@ class _Problem extends StatelessWidget {
         title: s('h_stdFail'),
         description: switch (snapshot.error?.code) {
           null || 'SystemProxyFailed' => s('fr_port'),
-          final code? => code,
+          final code => code,
         },
         actions: [retry],
       ),
