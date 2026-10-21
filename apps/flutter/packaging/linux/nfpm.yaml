@@ -94,6 +94,8 @@ overrides:
       - libx11-6
       - libxi6
       - libegl1
+      # The engine loads libGLESv2.so.2 at run time (dlopen, so ldd misses it).
+      - libgles2
       # The logs page's "open folder".
       - xdg-utils
       - pkexec | policykit-1
@@ -110,6 +112,8 @@ overrides:
       - libX11
       - libXi
       - libglvnd-egl
+      # The engine loads libGLESv2.so.2 at run time (dlopen, so ldd misses it).
+      - libglvnd-gles
       - xdg-utils
       - polkit
     recommends:
