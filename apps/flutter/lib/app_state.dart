@@ -30,6 +30,9 @@ class LatencyFailed extends Latency {
   const LatencyFailed();
 }
 
+/// The window's pages the tray opens.
+enum WindowPage { messages, settings }
+
 class AppState {
   AppState(rust.UiSnapshot initial) : fixed = false, snapshot = ValueNotifier(initial) {
     _refreshNodes(initial);
@@ -67,6 +70,12 @@ class AppState {
   /// Bumped when the tray turns enhanced mode on before the service is
   /// installed: the window shows the install explanation first (shell.dart).
   final ValueNotifier<int> enhancedRequests = ValueNotifier(0);
+
+  /// The tray's latest ask for a page in the window (shell.dart); `request`
+  /// counts up, so asking for the same page again still notifies.
+  final ValueNotifier<({WindowPage page, int request})?> pageRequests = ValueNotifier(null);
+
+  void showPage(WindowPage page) => pageRequests.value = (page: page, request: (pageRequests.value?.request ?? 0) + 1);
 
   /// Set once [stop] runs: the event loop ends.
   bool _stopped = false;

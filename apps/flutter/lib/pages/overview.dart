@@ -940,7 +940,7 @@ class ProxyRows extends StatelessWidget {
 }
 
 /// Access limited: no subscription, subscription expired, team disabled
-/// (a full empty state replaces the page).
+/// (a full empty state replaces the page; the tray shows its title).
 class LimitedAccess extends StatelessWidget {
   const LimitedAccess._({required this.icon, required this.title, required this.description});
 
@@ -948,7 +948,7 @@ class LimitedAccess extends StatelessWidget {
   final String title;
   final String description;
 
-  static Widget? of(rust.UiSnapshot snapshot) {
+  static LimitedAccess? of(rust.UiSnapshot snapshot) {
     final s = S.current;
     return switch (snapshot.profile) {
       rust.UiProfile.noSubscription => LimitedAccess._(

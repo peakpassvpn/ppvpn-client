@@ -52,17 +52,35 @@ class _ShellState extends State<Shell> {
   void initState() {
     super.initState();
     widget.app.enhancedRequests.addListener(_turnOnEnhanced);
+    widget.app.pageRequests.addListener(_showRequested);
   }
 
   @override
   void dispose() {
     widget.app.enhancedRequests.removeListener(_turnOnEnhanced);
+    widget.app.pageRequests.removeListener(_showRequested);
     super.dispose();
   }
 
   /// The tray asked for enhanced mode before the service is installed: the
-  /// install explanation needs the window.
-  void _turnOnEnhanced() => unawaited(turnOnEnhanced(context, widget.app));
+  /// install explanation needs the window, over the overview.
+  void _turnOnEnhanced() {
+    setState(() => _page = _Page.overview);
+    unawaited(turnOnEnhanced(context, widget.app));
+  }
+
+  /// The tray's messages and settings items. Signed out the sign-in page
+  /// stays: there is no page to show yet.
+  void _showRequested() {
+    final request = widget.app.pageRequests.value;
+    if (request == null || widget.app.snapshot.value.auth != rust.UiAuth.signedIn) return;
+    setState(
+      () => _page = switch (request.page) {
+        WindowPage.messages => _Page.messages,
+        WindowPage.settings => _Page.settings,
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
