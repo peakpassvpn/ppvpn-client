@@ -166,7 +166,9 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 Write-Host "==> staging $Bundle"
 Copy-Item -Path (Join-Path $Bundle "*") -Destination $stage -Recurse
-Get-ChildItem -LiteralPath $stage -Recurse -File -Include *.pdb, *.lib, *.exp, *.ilk | Remove-Item -Force
+# Not -Include: Windows PowerShell ignores it with -LiteralPath and lists every file.
+Get-ChildItem -LiteralPath $stage -Recurse -File |
+  Where-Object { $_.Extension -in @(".pdb", ".lib", ".exp", ".ilk") } | Remove-Item -Force
 foreach ($required in @("ppvpn.exe", "flutter_windows.dll", "ppvpn_flutter.dll", "data\icudtl.dat", "data\app.so", "data\flutter_assets")) {
   if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) { throw "the bundle lacks $required" }
 }
