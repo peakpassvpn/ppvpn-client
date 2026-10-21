@@ -19,6 +19,7 @@ flutter_rust_bridge = "=2.13.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 # The privileged service hooks: the SCM query and the UAC launch of the
