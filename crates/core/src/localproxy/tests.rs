@@ -309,7 +309,9 @@ fn migrates_version_1_state_in_place() {
 #[test]
 fn unsupported_or_corrupt_state_is_rebuilt() {
     let (prefix, password) = secret();
-    let upper = prefix.to_uppercase();
+    // The right length with a letter outside the alphabet: uppercasing a
+    // random prefix leaves an all-digit one valid.
+    let upper = format!("A{}", &prefix[1..]);
     let cases = [
         ("future", json!({ "version": 3 })),
         (
