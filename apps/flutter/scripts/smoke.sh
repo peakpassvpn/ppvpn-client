@@ -24,7 +24,13 @@ esac
 pid=$!
 sleep "$settle"
 if ! kill -0 "$pid" 2>/dev/null; then
-  echo "::error::the prototype exited within ${settle}s"; cat "$out/app.log"; exit 1
+  echo "::error::the prototype exited within ${settle}s"; cat "$out/app.log"
+  # macOS: the crash report (the thread that crashed and its frames).
+  if [ "$(uname -s)" = Darwin ]; then
+    report=$(ls -t ~/Library/Logs/DiagnosticReports/PPVPN*.ips 2>/dev/null | head -1 || true)
+    [ -n "$report" ] && head -c 20000 "$report"
+  fi
+  exit 1
 fi
 
 # Resident memory in KiB; on Windows Git Bash's pid is not the Windows one.
