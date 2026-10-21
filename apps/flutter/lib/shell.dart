@@ -49,6 +49,22 @@ class _ShellState extends State<Shell> {
   };
 
   @override
+  void initState() {
+    super.initState();
+    widget.app.enhancedRequests.addListener(_turnOnEnhanced);
+  }
+
+  @override
+  void dispose() {
+    widget.app.enhancedRequests.removeListener(_turnOnEnhanced);
+    super.dispose();
+  }
+
+  /// The tray asked for enhanced mode before the service is installed: the
+  /// install explanation needs the window.
+  void _turnOnEnhanced() => unawaited(turnOnEnhanced(context, widget.app));
+
+  @override
   Widget build(BuildContext context) => ValueListenableBuilder(
     valueListenable: widget.app.snapshot,
     builder: (context, snapshot, _) {
@@ -182,9 +198,9 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final tone = statusColor(t, snapshot.phase);
+    final tone = statusColor(t, snapshot);
     final node = app.nodeById(snapshot.selectedNodeId);
-    final text = node == null ? statusTitle(snapshot.phase) : '${statusTitle(snapshot.phase)} · ${nodeTitle(node)}';
+    final text = node == null ? statusTitle(snapshot) : '${statusTitle(snapshot)} · ${nodeTitle(node)}';
     return Container(
       height: 24,
       constraints: const BoxConstraints(maxWidth: 260),

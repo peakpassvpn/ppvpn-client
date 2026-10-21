@@ -64,6 +64,9 @@ class AppState {
 
   /// The message center's list.
   late final MessagesState messages = MessagesState(fixed: fixed, onError: (error) => actionError.value = error);
+  /// Bumped when the tray turns enhanced mode on before the service is
+  /// installed: the window shows the install explanation first (shell.dart).
+  final ValueNotifier<int> enhancedRequests = ValueNotifier(0);
 
   /// Set once [stop] runs: the event loop ends.
   bool _stopped = false;
@@ -154,6 +157,21 @@ class AppState {
   Future<void> connect() => _run(rust.connect);
   Future<void> disconnect() => _run(rust.disconnect);
   Future<void> retry() => _run(rust.retry);
+
+  /// Turns the connection on in [mode] (the overview's switches, the tray,
+  /// "use the system proxy"). From the other mode while it is not off, the
+  /// client reconnects in [mode] itself; otherwise connect follows.
+  Future<void> connectIn(rust.UiConnectionMode mode) => _run(() async {
+    final before = snapshot.value;
+    await rust.setConnectionMode(mode: mode);
+    if (before.connectionMode == mode || before.phase == rust.UiPhase.off) await rust.connect();
+  });
+
+  /// "Use on this device" while enhanced mode is contended.
+  Future<void> takeOver() => _run(rust.enhancedTakeOver);
+
+  /// Installs the privileged service without connecting (the admin prompt).
+  Future<void> installService() => _run(rust.serviceInstall);
   Future<void> refreshNodes() => _run(rust.refreshNodes);
   Future<void> selectNode(String id) => _run(() => rust.selectNode(nodeId: id));
   Future<void> setRoutingMode(rust.UiRoutingMode mode) => _run(() => rust.setRoutingMode(mode: mode));

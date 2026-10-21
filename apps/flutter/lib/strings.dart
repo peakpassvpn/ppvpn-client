@@ -3,7 +3,9 @@
 // sample names take a placeholder here ({d}, {team}). The keys after
 // `authPass` are not in the handoff's table (window captions, the
 // prototype's own notes); from `general` on, the settings page's, with
-// those after `uninstallBtn` again the prototype's own.
+// those after `uninstallBtn` again the prototype's own; and the
+// enhanced-mode block after `h_stdStopping` (#401), whose own additions are
+// marked there.
 
 import 'dart:ui';
 
@@ -181,7 +183,6 @@ const _zh = <String, String>{
   'st_authorizing': '等待授权',
   'copyHttpShort': '复制 HTTP',
   'copySocksShort': '复制 SOCKS5',
-  'protoNoTun': '原型不包含增强模式',
   'signInTitle': '稳定地连接世界',
   'signInLine': '设备授权登录：在浏览器里确认一次，无需在应用里输入密码。',
   'h_stdStopping': '正在断开',
@@ -215,6 +216,27 @@ const _zh = <String, String>{
   'language': '语言',
   'laterStep': '后续步骤提供',
   'signOutBtn': '退出登录…',
+  'st_preparing': '正在准备',
+  'st_reconnecting': '正在重连',
+  'st_occupied': '被其他设备占用',
+  'h_failed': '连接失败',
+  'h_occupied': '被其他设备占用',
+  'd_preparing': '正在检查系统服务',
+  'd_authorizing': '首次开启需要安装系统服务，请在系统对话框中输入管理员密码。',
+  'd_disconnecting': '正在恢复系统网络设置',
+  'd_occupied': '此账户的增强模式正在另一台设备上使用。',
+  'fr_auth': '未获得管理员授权，系统服务未安装。',
+  'fr_timeout': '所有线路均无法连接（连接超时）。',
+  'installT': '安装 PPVPN 系统服务',
+  'installD': '增强模式需要一个后台系统服务来接管本机网络。安装时系统会要求输入管理员密码，之后开启或关闭增强模式无需再次授权。',
+  'installGo': '继续',
+  'takeOver': '在此设备上使用',
+  // Not in the handoff (#401): the enhanced failures it has no line for,
+  // and its offer of the system proxy instead.
+  'useCompat': '改用系统代理',
+  'fr_install': '系统服务安装失败。',
+  'fr_service': '系统服务没有响应，请稍后重试。',
+  'fr_contended': '其他 VPN 或代理软件正在接管系统网络。',
 };
 
 const _en = <String, String>{
@@ -359,7 +381,6 @@ const _en = <String, String>{
   'st_authorizing': 'Waiting for Authorization',
   'copyHttpShort': 'Copy HTTP',
   'copySocksShort': 'Copy SOCKS5',
-  'protoNoTun': 'Not part of the prototype',
   'signInTitle': 'Connect to the world, reliably',
   'signInLine': 'Device sign-in: confirm once in your browser. No password to type in the app.',
   'h_stdStopping': 'Disconnecting',
@@ -393,5 +414,26 @@ const _en = <String, String>{
   'language': 'Language',
   'laterStep': 'Coming in a later step',
   'signOutBtn': 'Sign Out…',
+  'st_preparing': 'Preparing',
+  'st_reconnecting': 'Reconnecting',
+  'st_occupied': 'In Use on Another Device',
+  'h_failed': 'Connection Failed',
+  'h_occupied': 'In Use on Another Device',
+  'd_preparing': 'Checking system service',
+  'd_authorizing': 'First-time setup installs a system service. Enter your administrator password in the system dialog.',
+  'd_disconnecting': 'Restoring system network settings',
+  'd_occupied': 'Enhanced Mode for this account is active on another device.',
+  'fr_auth': 'Administrator authorization was not granted. The system service was not installed.',
+  'fr_timeout': 'All routes failed to connect (timed out).',
+  'installT': 'Install PPVPN System Service',
+  'installD': 'Enhanced Mode needs a background system service to route this device’s traffic. You’ll be asked for an administrator password once; turning Enhanced Mode on or off afterwards won’t ask again.',
+  'installGo': 'Continue',
+  'takeOver': 'Use on This Device',
+  // Not in the handoff (#401): the enhanced failures it has no line for,
+  // and its offer of the system proxy instead.
+  'useCompat': 'Use System Proxy',
+  'fr_install': 'The system service couldn’t be installed.',
+  'fr_service': 'The system service isn’t responding. Try again later.',
+  'fr_contended': 'Another VPN or proxy app is taking over the system network.',
 };
 

@@ -18,8 +18,8 @@ use ppvpn_client::{
 use tokio::sync::Notify;
 
 use crate::api::{
-    UiAuth, UiDeviceCode, UiError, UiEvents, UiLocalProxy, UiNode, UiPhase, UiProbe, UiProbeMethod,
-    UiProfile, UiRoutingMode, UiSnapshot, UiTraffic,
+    UiAuth, UiConnectionMode, UiDeviceCode, UiError, UiEvents, UiLocalProxy, UiNode, UiPhase,
+    UiProbe, UiProbeMethod, UiProfile, UiRoutingMode, UiSnapshot, UiTraffic,
 };
 use crate::hooks::Hooks;
 
@@ -87,9 +87,8 @@ pub(crate) fn running() -> Option<&'static Bridge> {
     BRIDGE.get()
 }
 
-/// Creates the client once. The prototype connects in compatible mode (the
-/// system proxy on the standard-mode core), which needs no privileged
-/// service.
+/// Creates the client once. The connection mode is the client's persisted
+/// one: the overview's two switches choose it (`api::set_connection_mode`).
 pub(crate) fn start() -> Result<&'static Bridge, String> {
     if let Some(bridge) = BRIDGE.get() {
         return Ok(bridge);
@@ -125,14 +124,6 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    if client.snapshot().connection_mode != ConnectionMode::Compatible {
-        let client = client.clone();
-        runtime.spawn(async move {
-            if let Err(error) = client.set_connection_mode(ConnectionMode::Compatible).await {
-                tracing::warn!(%error, "flutter prototype: compatible mode not set");
-            }
-        });
-    }
     if std::env::var("PPVPN_FLUTTER_SYNTHETIC_TRAFFIC").is_ok_and(|value| value == "1") {
         runtime.spawn(synthetic_traffic(events.clone()));
     }
@@ -206,6 +197,13 @@ impl Bridge {
                 password: proxy.password,
             })
             .collect())
+    }
+}
+
+pub(crate) fn connection_mode(mode: UiConnectionMode) -> ConnectionMode {
+    match mode {
+        UiConnectionMode::Enhanced => ConnectionMode::Enhanced,
+        UiConnectionMode::Compatible => ConnectionMode::Compatible,
     }
 }
 
@@ -329,7 +327,13 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             RoutingMode::Rules => UiRoutingMode::Rules,
             RoutingMode::Global => UiRoutingMode::Global,
         },
+        connection_mode: match snapshot.connection_mode {
+            ConnectionMode::Enhanced => UiConnectionMode::Enhanced,
+            ConnectionMode::Compatible => UiConnectionMode::Compatible,
+        },
         service_installed: snapshot.service_installed,
+        can_take_over: connection.can_take_over,
+        suggest_compatible: connection.suggest_compatible,
     }
 }
 

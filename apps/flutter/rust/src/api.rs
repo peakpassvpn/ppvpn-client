@@ -84,6 +84,13 @@ pub struct UiSnapshot {
     pub routing_mode: UiRoutingMode,
     /// The privileged service (enhanced mode) is installed.
     pub service_installed: bool,
+    /// The mode `phase` belongs to: one connection, either mode.
+    pub connection_mode: UiConnectionMode,
+    /// Enhanced, `Contended`: another session of this OS user has the
+    /// connection and hands it over on [`enhanced_take_over`].
+    pub can_take_over: bool,
+    /// Enhanced failed in a way the system proxy avoids: offer it.
+    pub suggest_compatible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,6 +248,40 @@ pub async fn disconnect() -> Result<(), String> {
 pub async fn retry() -> Result<(), String> {
     bridge::get()?
         .call(|client| async move { client.retry().await })
+        .await
+}
+
+// --- enhanced ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiConnectionMode {
+    /// TUN through the privileged service.
+    Enhanced,
+    /// The system proxy on the standard-mode core.
+    Compatible,
+}
+
+/// Chooses how [`connect`] connects (persisted). A connection that is not
+/// off is disconnected and connected again in the new mode.
+pub async fn set_connection_mode(mode: UiConnectionMode) -> Result<(), String> {
+    let mode = bridge::connection_mode(mode);
+    bridge::get()?
+        .call(move |client| async move { client.set_connection_mode(mode).await })
+        .await
+}
+
+/// "Use on this device": takes the enhanced-mode connection over from
+/// another session (`UiSnapshot::can_take_over`).
+pub async fn enhanced_take_over() -> Result<(), String> {
+    bridge::get()?
+        .call(|client| async move { client.enhanced_take_over().await })
+        .await
+}
+
+/// Installs the privileged service (admin prompt) without connecting.
+pub async fn service_install() -> Result<(), String> {
+    bridge::get()?
+        .call(|client| async move { client.service_install().await })
         .await
 }
 

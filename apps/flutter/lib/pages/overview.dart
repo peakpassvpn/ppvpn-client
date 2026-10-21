@@ -1,9 +1,11 @@
 // Overview (design Main / DesktopDark): the connection card (status orb,
 // title, node and latency, the session timer, the route), the modes and
 // node card, then live traffic and the local proxy side by side. A full
-// empty state instead while access is limited. The prototype has the
-// system proxy (standard mode) only: the enhanced-mode row is shown,
-// switched off and disabled.
+// empty state instead while access is limited. System proxy and enhanced
+// mode are the client's one connection in either mode: each switch picks
+// its mode and connects, and turning it off disconnects. Enhanced mode
+// installs the privileged service on first use, after the explanation
+// dialog (handoff "7. 增强模式安装授权").
 
 import 'dart:async';
 
@@ -26,21 +28,72 @@ bool isBusy(rust.UiPhase phase) => switch (phase) {
   _ => false,
 };
 
-/// The status title for the system proxy (handoff "状态标题规则").
-String statusTitle(rust.UiPhase phase) => switch (phase) {
-  rust.UiPhase.connected => S.current('h_on'),
-  rust.UiPhase.disconnecting => S.current('h_stdStopping'),
-  rust.UiPhase.error || rust.UiPhase.contended => S.current('h_stdFail'),
-  _ when isBusy(phase) => S.current('h_stdStarting'),
-  _ => S.current('h_idle'),
-};
+/// The connection is in enhanced mode and not off: the status follows it.
+bool enhancedActive(rust.UiSnapshot snapshot) =>
+    snapshot.connectionMode == rust.UiConnectionMode.enhanced && snapshot.phase != rust.UiPhase.off;
 
-Color statusColor(Tokens t, rust.UiPhase phase) => switch (phase) {
+/// A mode's switch: on, in between, or off (also while the other mode has
+/// the connection).
+SwitchState switchState(rust.UiSnapshot snapshot, rust.UiConnectionMode mode) => snapshot.connectionMode != mode
+    ? SwitchState.off
+    : snapshot.phase == rust.UiPhase.connected
+    ? SwitchState.on
+    : isBusy(snapshot.phase)
+    ? SwitchState.busy
+    : SwitchState.off;
+
+/// The status title (handoff "状态标题规则"): enhanced mode's while it is
+/// not off, else the system proxy's.
+String statusTitle(rust.UiSnapshot snapshot) {
+  final s = S.current;
+  final phase = snapshot.phase;
+  if (enhancedActive(snapshot)) {
+    return switch (phase) {
+      rust.UiPhase.connected => s('h_on'),
+      rust.UiPhase.error => s('h_failed'),
+      rust.UiPhase.contended => s('h_occupied'),
+      rust.UiPhase.preparing => s('st_preparing'),
+      rust.UiPhase.waitingPermission => s('st_authorizing'),
+      rust.UiPhase.connecting => s('st_connecting'),
+      rust.UiPhase.reconnecting => s('st_reconnecting'),
+      rust.UiPhase.disconnecting => s('st_disconnecting'),
+      rust.UiPhase.off => s('h_idle'),
+    };
+  }
+  return switch (phase) {
+    rust.UiPhase.connected => s('h_on'),
+    rust.UiPhase.disconnecting => s('h_stdStopping'),
+    rust.UiPhase.error || rust.UiPhase.contended => s('h_stdFail'),
+    _ when isBusy(phase) => s('h_stdStarting'),
+    _ => s('h_idle'),
+  };
+}
+
+/// Enhanced mode's line under the title while it has no node line to show.
+String? enhancedDetail(rust.UiSnapshot snapshot) => !enhancedActive(snapshot)
+    ? null
+    : switch (snapshot.phase) {
+        rust.UiPhase.preparing => S.current('d_preparing'),
+        rust.UiPhase.waitingPermission => S.current('d_authorizing'),
+        rust.UiPhase.disconnecting => S.current('d_disconnecting'),
+        _ => null,
+      };
+
+Color statusColor(Tokens t, rust.UiSnapshot snapshot) => switch (snapshot.phase) {
   rust.UiPhase.connected => t.ok,
-  rust.UiPhase.error || rust.UiPhase.contended => t.bad,
-  _ when isBusy(phase) => t.accent,
+  rust.UiPhase.error => t.bad,
+  rust.UiPhase.contended => t.warn,
+  final phase when isBusy(phase) => t.accent,
   _ => t.t3,
 };
+
+/// Turns enhanced mode on; before the service is installed, only after
+/// the install explanation ("Cancel" leaves it off, no failure). The client
+/// then installs it behind the system's admin prompt (`WaitingPermission`).
+Future<void> turnOnEnhanced(BuildContext context, AppState app) async {
+  if (!app.snapshot.value.serviceInstalled && !await confirmInstall(context)) return;
+  await app.connectIn(rust.UiConnectionMode.enhanced);
+}
 
 class OverviewPage extends StatelessWidget {
   const OverviewPage({super.key, required this.app});
@@ -67,9 +120,9 @@ class OverviewPage extends StatelessWidget {
                   const SizedBox(height: Tokens.cardGap),
                 ],
                 _Hero(app: app, snapshot: snapshot),
-                if (snapshot.phase == rust.UiPhase.error) ...[
+                if (_Problem.of(app, snapshot) case final problem?) ...[
                   const SizedBox(height: Tokens.cardGap),
-                  _Problem(app: app, error: snapshot.error),
+                  problem,
                 ],
                 const SizedBox(height: Tokens.cardGap),
                 _Modes(app: app, snapshot: snapshot),
@@ -107,8 +160,9 @@ class _Hero extends StatelessWidget {
     final phase = snapshot.phase;
     final connected = phase == rust.UiPhase.connected;
     final busy = isBusy(phase);
-    final tone = statusColor(t, phase);
+    final tone = statusColor(t, snapshot);
     final node = app.nodeById(snapshot.selectedNodeId);
+    final detail = enhancedDetail(snapshot);
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: t.cardDecoration(),
@@ -136,7 +190,7 @@ class _Hero extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    _Orb(phase: phase),
+                    _Orb(snapshot: snapshot),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
@@ -145,11 +199,13 @@ class _Hero extends StatelessWidget {
                           Semantics(
                             header: true,
                             liveRegion: true,
-                            child: Text(statusTitle(phase), style: t.heroTitle),
+                            child: Text(statusTitle(snapshot), style: t.heroTitle),
                           ),
                           const SizedBox(height: 2),
                           if (phase == rust.UiPhase.off)
                             Text(s('d_idle'), style: t.sub)
+                          else if (detail != null)
+                            Text(detail, style: t.sub)
                           else if (node != null)
                             Row(
                               children: [
@@ -176,8 +232,11 @@ class _Hero extends StatelessWidget {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text(s('stdMode'), style: t.sectionTitle.copyWith(color: t.accent)),
-                          Text(statusTitle(phase), style: t.note),
+                          Text(
+                            s(snapshot.connectionMode == rust.UiConnectionMode.enhanced ? 'tunMode' : 'stdMode'),
+                            style: t.sectionTitle.copyWith(color: t.accent),
+                          ),
+                          Text(statusTitle(snapshot), style: t.note),
                         ],
                       ),
                   ],
@@ -199,16 +258,17 @@ class _Hero extends StatelessWidget {
 }
 
 class _Orb extends StatelessWidget {
-  const _Orb({required this.phase});
+  const _Orb({required this.snapshot});
 
-  final rust.UiPhase phase;
+  final rust.UiSnapshot snapshot;
 
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
+    final phase = snapshot.phase;
     final connected = phase == rust.UiPhase.connected;
     final busy = isBusy(phase);
-    final tone = statusColor(t, phase);
+    final tone = statusColor(t, snapshot);
     final light = t.brightness == Brightness.light;
     return SizedBox(
       width: Tokens.orbSize,
@@ -396,8 +456,8 @@ class _Modes extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = S.current;
-    final phase = snapshot.phase;
-    final busy = isBusy(phase);
+    // While one mode is on its way, the other mode's switch waits.
+    bool enabled(rust.UiConnectionMode mode) => !isBusy(snapshot.phase) || snapshot.connectionMode == mode;
     return CardBox(
       child: Column(
         children: [
@@ -408,21 +468,24 @@ class _Modes extends StatelessWidget {
             trailing: TriSwitch(
               key: const ValueKey('switch-system-proxy'),
               label: s('stdMode'),
-              state: phase == rust.UiPhase.connected
-                  ? SwitchState.on
-                  : busy
-                  ? SwitchState.busy
-                  : SwitchState.off,
-              onChanged: (on) => on ? app.connect() : app.disconnect(),
+              state: switchState(snapshot, rust.UiConnectionMode.compatible),
+              enabled: enabled(rust.UiConnectionMode.compatible),
+              onChanged: (on) => on ? app.connectIn(rust.UiConnectionMode.compatible) : app.disconnect(),
             ),
           ),
           SettingRow(
             icon: FLucideIcons.zap,
             title: s('tunMode'),
-            description: s('protoNoTun'),
+            description: s('tunDesc'),
             divider: true,
-            trailing: TriSwitch(label: s('tunMode'), state: SwitchState.off, enabled: false, onChanged: null),
+            trailing: TriSwitch(
+              label: s('tunMode'),
+              state: switchState(snapshot, rust.UiConnectionMode.enhanced),
+              enabled: enabled(rust.UiConnectionMode.enhanced),
+              onChanged: (on) => on ? turnOnEnhanced(context, app) : app.disconnect(),
+            ),
           ),
+          if (!snapshot.serviceInstalled && !enhancedActive(snapshot)) _InstallHint(app: app),
           SettingRow(
             icon: FLucideIcons.mapPin,
             title: s('currentNode'),
@@ -514,38 +577,140 @@ class NodePicker extends StatelessWidget {
   }
 }
 
-class _Problem extends StatelessWidget {
-  const _Problem({required this.app, required this.error});
+/// Under the enhanced-mode row while the privileged service is missing
+/// (handoff "7. 增强模式安装授权", step 1): a soft-accent line with the
+/// install button, which explains first and installs without connecting.
+class _InstallHint extends StatelessWidget {
+  const _InstallHint({required this.app});
 
   final AppState app;
-  final rust.UiError? error;
 
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final s = S.current;
-    final reason = error?.code == 'SystemProxyFailed' || error == null ? s('fr_port') : error!.code;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+      decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(Tokens.controlRadius)),
+      child: Row(
+        children: [
+          Icon(FLucideIcons.info, size: 14, color: t.accent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(s('needInstall'), style: t.note.copyWith(color: t.accent)),
+          ),
+          Button(
+            kind: ButtonKind.text,
+            label: s('installBtn'),
+            height: 26,
+            onPress: () async {
+              if (await confirmInstall(context)) await app.installService();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A one-line problem card (handoff "异常提示") with its buttons on the
+/// right: enhanced mode failed or is in use elsewhere, or the system proxy
+/// failed.
+class _Problem extends StatelessWidget {
+  const _Problem({required this.warn, required this.title, required this.description, required this.actions});
+
+  /// Warning tone (in use elsewhere) instead of the failure tone.
+  final bool warn;
+  final String title;
+  final String description;
+  final List<Widget> actions;
+
+  /// The card for the snapshot's connection, or null while there is none.
+  static Widget? of(AppState app, rust.UiSnapshot snapshot) {
+    final s = S.current;
+    final enhanced = snapshot.connectionMode == rust.UiConnectionMode.enhanced;
+    final retry = Button(kind: ButtonKind.secondary, label: s('retry'), onPress: app.retry);
+    final compatible = [
+      if (enhanced && snapshot.suggestCompatible)
+        Button(
+          kind: ButtonKind.text,
+          label: s('useCompat'),
+          onPress: () => app.connectIn(rust.UiConnectionMode.compatible),
+        ),
+    ];
+    return switch (snapshot.phase) {
+      rust.UiPhase.error when enhanced => _Problem(
+        warn: false,
+        title: '${s('tunMode')} · ${s('st_failed')}',
+        description: enhancedReason(snapshot.error),
+        actions: [...compatible, retry],
+      ),
+      rust.UiPhase.contended => _Problem(
+        warn: true,
+        title: s('st_occupied'),
+        description: s('d_occupied'),
+        actions: [
+          ...compatible,
+          if (snapshot.canTakeOver)
+            Button(kind: ButtonKind.secondary, label: s('takeOver'), onPress: app.takeOver)
+          else
+            retry,
+        ],
+      ),
+      rust.UiPhase.error => _Problem(
+        warn: false,
+        title: s('h_stdFail'),
+        description: switch (snapshot.error?.code) {
+          null || 'SystemProxyFailed' => s('fr_port'),
+          final code? => code,
+        },
+        actions: [retry],
+      ),
+      _ => null,
+    };
+  }
+
+  /// Why enhanced mode failed, for people; the code when there is no line
+  /// for it.
+  static String enhancedReason(rust.UiError? error) {
+    final s = S.current;
+    return switch (error?.code) {
+      'ServiceInstallCancelled' => s('fr_auth'),
+      'ServiceInstallFailed' => s('fr_install'),
+      'ServiceUnavailable' || 'ServiceIncompatible' => s('fr_service'),
+      'NetworkPathContended' => s('fr_contended'),
+      'Timeout' => s('fr_timeout'),
+      final code? => code,
+      null => s('st_failed'),
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final tone = warn ? t.warn : t.bad;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: t.badSoft,
+        color: warn ? t.warnSoft : t.badSoft,
         borderRadius: BorderRadius.circular(Tokens.cardRadius),
         border: Border.all(color: t.hair),
       ),
       child: Row(
         children: [
-          Icon(FLucideIcons.circleAlert, size: 16, color: t.bad),
+          Icon(FLucideIcons.circleAlert, size: 16, color: tone),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(s('h_stdFail'), style: t.sectionTitle),
-                Text(reason, style: t.note),
+                Text(title, style: t.sectionTitle),
+                Text(description, style: t.note),
               ],
             ),
           ),
-          Button(kind: ButtonKind.secondary, label: s('retry'), onPress: app.retry),
+          for (final (i, action) in actions.indexed) ...[if (i > 0) const SizedBox(width: 8), action],
         ],
       ),
     );

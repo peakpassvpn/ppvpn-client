@@ -3,9 +3,10 @@
 // node list does, never with traffic: frequent tray updates are what made
 // other Flutter clients burn CPU (#387).
 //
-// Signed in: status header, system proxy (checked while on), current node
-// submenu, open, quit. Signed out: "not signed in", open, quit. The icon's
-// four states differ by shape only (placeholders for the brand mark).
+// Signed in: status header, system proxy and enhanced mode (each checked
+// while its mode has the connection), current node submenu, open, quit.
+// Signed out: "not signed in", open, quit. The icon's four states differ
+// by shape only (placeholders for the brand mark).
 
 import 'dart:async';
 import 'dart:io';
@@ -18,6 +19,7 @@ import 'pages/overview.dart';
 import 'settings.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
+import 'widgets.dart' show SwitchState;
 
 class Tray {
   Tray({required this.app, required this.onOpen, required this.onQuit}) {
@@ -71,9 +73,17 @@ class Tray {
             final phase when isBusy(phase) => 'busy',
             _ => 'off',
           };
-    final title = signedIn ? statusTitle(snapshot.phase) : S.current('notSignedIn');
+    final title = signedIn ? statusTitle(snapshot) : S.current('notSignedIn');
     // Rebuild only when something shown changes.
-    final key = [state, title, snapshot.selectedNodeId, app.nodes.value.length].join('|');
+    final key = [
+      state,
+      title,
+      snapshot.phase,
+      snapshot.connectionMode,
+      snapshot.serviceInstalled,
+      snapshot.selectedNodeId,
+      app.nodes.value.length,
+    ].join('|');
     if (key == _shown) return;
     _shown = key;
 
@@ -96,17 +106,33 @@ class Tray {
     menu.addItem(header);
     menu.addSeparator();
     if (signedIn) {
-      final proxy = MenuItem.createWithLabelAndType(S.current('stdMode'), MenuItemType.checkbox);
-      if (proxy != null) {
-        proxy.state = snapshot.phase == rust.UiPhase.connected ? MenuItemState.checked : MenuItemState.unchecked;
-        proxy.isEnabled = !isBusy(snapshot.phase);
-        proxy.addListener((event) {
-          if (event is MenuItemClickedEvent) {
-            snapshot.phase == rust.UiPhase.connected ? app.disconnect() : app.connect();
+      void modeItem(String label, rust.UiConnectionMode mode, void Function() turnOn) {
+        final item = MenuItem.createWithLabelAndType(label, MenuItemType.checkbox);
+        if (item == null) return;
+        final checked = switchState(snapshot, mode) != SwitchState.off;
+        item.state = checked ? MenuItemState.checked : MenuItemState.unchecked;
+        item.isEnabled = !isBusy(snapshot.phase);
+        item.addListener((event) {
+          if (event is! MenuItemClickedEvent) return;
+          if (checked) {
+            app.disconnect();
+          } else {
+            turnOn();
           }
         });
-        menu.addItem(proxy);
+        menu.addItem(item);
       }
+
+      modeItem(S.current('stdMode'), rust.UiConnectionMode.compatible, () => app.connectIn(rust.UiConnectionMode.compatible));
+      modeItem(S.current('tunMode'), rust.UiConnectionMode.enhanced, () {
+        if (app.snapshot.value.serviceInstalled) {
+          app.connectIn(rust.UiConnectionMode.enhanced);
+        } else {
+          // The install explanation comes first, in the window.
+          onOpen();
+          app.enhancedRequests.value++;
+        }
+      });
       final nodes = Menu.create();
       final parent = MenuItem.createWithLabelAndType(
         '${S.current('currentNode')}: ${node?.name ?? '—'}',

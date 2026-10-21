@@ -264,6 +264,10 @@ class Tokens {
   static const orbSize = 52.0;
   static const rowIconSize = 32.0;
 
+  /// Dialogs (the install explanation): at most 420 wide.
+  static const dialogWidth = 420.0;
+  static const dialogPadding = EdgeInsets.fromLTRB(24, 22, 24, 18);
+
   // Sign-in (DesktopLogin).
   static const signInBrandWidth = 380.0;
   static const signInBrandPadding = EdgeInsets.fromLTRB(32, 16, 32, 28);
