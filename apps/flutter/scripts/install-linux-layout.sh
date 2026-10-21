@@ -3,7 +3,7 @@
 # (apps/linux/packaging/nfpm.yaml), as root (#401). Linux only; no deb or
 # rpm, no /usr/bin link, desktop entry or icons yet.
 #
-#   /usr/lib/ppvpn/ppvpn          the bundle's ppvpn_flutter, renamed: the
+#   /usr/lib/ppvpn/ppvpn          the bundle's ppvpn: the
 #                                 only client ppvpn-service accepts is
 #                                 /usr/lib/ppvpn/ppvpn, root-owned and not
 #                                 group or world writable
@@ -33,7 +33,7 @@ bundle=$(realpath "${1:?usage: install-linux-layout.sh <bundle> <service-bin-dir
 service=$(realpath "${2:?usage: install-linux-layout.sh <bundle> <service-bin-dir>}")
 dest=/usr/lib/ppvpn
 
-for path in "$bundle/ppvpn_flutter" "$bundle/lib/libppvpn_flutter.so" "$bundle/data" \
+for path in "$bundle/ppvpn" "$bundle/lib/libppvpn_flutter.so" "$bundle/data" \
     "$service/ppvpn-service" "$service/ppvpn-service-install" "$service/ppvpn-service-uninstall"; do
   [ -e "$path" ] || { echo "install-linux-layout.sh: $path is missing" >&2; exit 1; }
 done
@@ -46,7 +46,7 @@ fi
 stage=$(mktemp -d /usr/lib/.ppvpn-stage.XXXXXX)
 trap 'rm -rf "$stage"' EXIT
 cp -R "$bundle/lib" "$bundle/data" "$stage/"
-install -m 0755 "$bundle/ppvpn_flutter" "$stage/ppvpn"
+install -m 0755 "$bundle/ppvpn" "$stage/ppvpn"
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   install -m 0755 "$service/$bin" "$stage/$bin"
 done
