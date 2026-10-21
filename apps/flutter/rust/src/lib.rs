@@ -5,6 +5,9 @@
 pub mod api;
 mod autostart;
 mod bridge;
+#[cfg(target_os = "macos")]
+mod cf;
+mod credentials;
 mod dirs;
 mod hooks;
 mod instance;

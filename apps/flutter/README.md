@@ -84,15 +84,27 @@ any release.
   `scripts/install-linux-layout.sh` does (see below).
 - Quitting from the tray puts the system proxy back (`Client::shutdown`).
   Closing the window only hides it.
-- The sign-in is kept in a file in the prototype's own data directory,
-  readable only by the owner on macOS and Linux. The native apps use the
-  keychain or keyring instead. The data, logs and sign-in are separate from
-  the native apps':
-  - macOS: `~/Library/Application Support/PPVPN Flutter`, logs in
-    `~/Library/Logs/PPVPN Flutter`;
-  - Linux: `$XDG_DATA_HOME/ppvpn-flutter`, logs in
-    `$XDG_STATE_HOME/ppvpn-flutter/logs`;
-  - Windows: `%LOCALAPPDATA%\PPVPN Flutter`.
+- The app takes over the native apps' data in place (#401 step 5): the
+  same data and log directories (`rust/src/dirs.rs`), so the client's own
+  files there (node, connection and routing mode, push agent state) carry
+  over both ways, and an upgrade from the native app, or a rollback to it,
+  needs no copy:
+  - macOS: `~/Library/Application Support/PPVPN` (0700), logs in
+    `~/Library/Logs/PPVPN`;
+  - Linux: `$XDG_DATA_HOME/ppvpn`, logs in `$XDG_STATE_HOME/ppvpn/logs`;
+  - Windows: `%LOCALAPPDATA%\PPVPN`, logs in its `logs` folder.
+- The sign-in is the native apps' own too, the same bytes in the same
+  store (`rust/src/credentials.rs`):
+  - macOS: the 0600 file `credentials` in the data directory, excluded
+    from Time Machine (the native app's release name; its Debug builds
+    use `credentials.debug`);
+  - Windows: the Credential Manager's generic credential
+    `PPVPN/desktop.credentials` (user `PPVPN`);
+  - Linux: the Secret Service item the native app stores through
+    libsecret (schema `com.peakpassvpn.ppvpn.desktop`, attributes
+    `service`, `account` = `credentials`, `xdg:schema`), reached over
+    D-Bus; the 0600 file `credentials` in the data directory when the
+    session has no Secret Service.
 - The settings page (#401 step 3) sets the appearance, the language and
   the routing mode, and shows the account, the version and the system
   service's status. Update checks and installing the service come in later
@@ -108,12 +120,20 @@ any release.
   tray with no window. For that, `scripts/ci-build.sh` takes the
   first-frame show out of those two runners, and `main.dart` shows the
   window otherwise.
-- Appearance, language and the API override are kept in `settings.json` in
-  the data directory above. The API override (Settings → Advanced) takes
-  effect on the next launch; `PPVPN_API_BASE` wins over it. Without either
-  the backend is `https://www.peakpassvpn.com`.
-- Quit the native app before trying it: both write the same system proxy
-  setting, and both have the same identity (bundle id, executable names).
+- Appearance and the API override are the native apps' settings
+  (`rust/src/settings.rs`): on macOS the user defaults of
+  `com.peakpassvpn.ppvpn.desktop` (`appearance`, `apiBaseOverride`), on
+  Windows `app-settings.json` in the data directory and on Linux
+  `$XDG_CONFIG_HOME/ppvpn/settings.json` (`Appearance`,
+  `ApiBaseOverride`; the native apps' other keys are kept). The native
+  apps have no language setting: this app keeps its own next to those
+  (`language` or `Language`), which they ignore. The API override
+  (Settings → Advanced) takes effect on the next launch; `PPVPN_API_BASE`
+  wins over it. Without either the backend is
+  `https://www.peakpassvpn.com`.
+- Quit the native app before trying it: both use the same data, sign-in
+  and system proxy setting, and both have the same identity (bundle id,
+  executable names).
 - Flags are 4:3 images from flag-icons (MIT, `assets/flags/LICENSE`), only
   for the countries we expect; any other country gets its code on a tile.
   There are no emoji flags: platforms draw them differently, and Windows
@@ -151,7 +171,9 @@ setup is:
 - the real client and core, against `e2e/mock_backend.py` (Python standard
   library, on loopback) and `test/fakenode` as the node;
 - `integration_test/signed_in_test.dart` drives the UI;
-- `PPVPN_FLUTTER_HOME` keeps the app's data apart, and
+- `PPVPN_FLUTTER_HOME` keeps the app's data apart (its sign-in and
+  settings too, as plain files in that home: never the keyring or the
+  native apps' settings), and
   `PPVPN_TEST_TRUST_LOCAL_BACKEND=1` lets the client accept the loopback
   backend.
 
@@ -190,8 +212,8 @@ the host's namespace. The script then:
 1. starts `test/fakenode` in the uplink namespace,
    `/usr/lib/ppvpn-service/ppvpn-service` in the test namespace and
    `e2e/linux_enhanced_backend.py` on loopback;
-2. writes a saved sign-in (`credential.json`) to a temporary
-   `XDG_DATA_HOME`;
+2. writes a saved sign-in (`data/credentials`) to a temporary
+   `PPVPN_FLUTTER_HOME`;
 3. starts the installed release app under its own Xvfb and D-Bus session,
    with `PPVPN_FLUTTER_E2E=enhanced`;
 4. checks the TUN, the policy rules (9091–9101) and table 2091 while
