@@ -256,13 +256,14 @@ class Tokens {
   static const fieldBlockPadding = EdgeInsets.fromLTRB(20, 14, 20, 14);
   static const fieldPadding = EdgeInsets.symmetric(horizontal: 10);
 
-  /// A confirmation dialog's content.
-  static const dialogPadding = EdgeInsets.fromLTRB(24, 22, 24, 20);
-
   static const switchSize = Size(36, 20);
   static const flagSize = Size(20, 15);
   static const orbSize = 52.0;
   static const rowIconSize = 32.0;
+
+  /// Dialogs (the install explanation, confirmations): at most 420 wide.
+  static const dialogWidth = 420.0;
+  static const dialogPadding = EdgeInsets.fromLTRB(24, 22, 24, 20);
 
   // Sign-in (DesktopLogin).
   static const signInBrandWidth = 380.0;

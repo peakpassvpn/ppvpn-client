@@ -1,8 +1,8 @@
 // Pieces the pages share, drawn to the signed-off design: the pressable
 // base (keyboard, focus, screen readers), buttons, the segmented control,
-// the card row, the text field, the three-state switch,
-// the spinner, the latency pill, the copy button, flags, the brand mark and
-// the overview's shield. Colours and sizes come from theme.dart.
+// the card row, the text field, the three-state switch, the spinner, the
+// latency pill, the copy button, flags, the brand mark, the overview's
+// shield and the install dialog. Colours and sizes come from theme.dart.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -11,6 +11,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:forui/forui.dart' show FDialog, showFDialog;
 
 import 'app_state.dart';
 import 'src/rust/api.dart' as rust;
@@ -805,4 +806,53 @@ class _ShieldCheckPainter extends CustomPainter {
   }
   final digits = unit == 0 || value >= 100 ? 0 : 1;
   return (value.toStringAsFixed(digits), units[unit]);
+}
+
+/// The explanation before the privileged service is installed (handoff
+/// "7. 增强模式安装授权"): true on "Continue"; Cancel, Esc or a click outside
+/// give false, which is no failure (the switch stays off).
+Future<bool> confirmInstall(BuildContext context) async {
+  final s = S.current;
+  final go = await showFDialog<bool>(
+    context: context,
+    builder: (context, _, animation) {
+      final t = Tokens.of(context);
+      return FDialog(
+        animation: animation,
+        semanticsLabel: s('installT'),
+        constraints: const BoxConstraints(minWidth: 280, maxWidth: Tokens.dialogWidth),
+        builder: (context, _) => Padding(
+          padding: Tokens.dialogPadding,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Semantics(header: true, child: Text(s('installT'), style: t.pageTitle)),
+              const SizedBox(height: 8),
+              Text(s('installD'), style: t.sub),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Button(
+                    kind: ButtonKind.secondary,
+                    label: s('cancel'),
+                    onPress: () => Navigator.of(context).pop(false),
+                  ),
+                  const SizedBox(width: 8),
+                  Button(
+                    kind: ButtonKind.primary,
+                    label: s('installGo'),
+                    height: Tokens.controlHeight,
+                    onPress: () => Navigator.of(context).pop(true),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+  return go ?? false;
 }

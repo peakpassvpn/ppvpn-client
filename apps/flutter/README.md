@@ -37,9 +37,14 @@ any release.
 
 ## What it does and does not do
 
-- Signs in with the device code, picks a node, and connects in **compatible
-  mode** (the system proxy on the in-process standard core). Enhanced mode
-  is shown but disabled: the prototype installs no privileged service.
+- Signs in with the device code, picks a node, and connects with the
+  **system proxy** (compatible mode, on the in-process standard core) or in
+  **enhanced mode** (TUN through the privileged service, #401). Enhanced
+  mode installs the service on first use, after an explanation, behind the
+  system's admin prompt, exactly as the native apps do (same paths and
+  helpers: `rust/src/hooks.rs`). The helpers (`ppvpn-service-install`,
+  `-uninstall`, and on macOS `ppvpn-service`) must sit next to the app's
+  executable; `scripts/ci-build.sh` does not put them there yet.
 - Quitting from the tray puts the system proxy back (`Client::shutdown`).
   Closing the window only hides it.
 - The sign-in is kept in a file in the prototype's own data directory,

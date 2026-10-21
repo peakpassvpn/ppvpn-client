@@ -105,7 +105,11 @@ AppState sampleState() {
       error: null,
       unread: _sampleUnread,
       routingMode: rust.UiRoutingMode.rules,
+      // The design's Main: system proxy on, the service not installed yet.
+      connectionMode: rust.UiConnectionMode.compatible,
       serviceInstalled: false,
+      canTakeOver: false,
+      suggestCompatible: false,
     ),
   );
   app.nodes.value = nodes;
