@@ -4,7 +4,7 @@
 # the app's resident memory and the bundle's sizes, then stops it; then
 # screenshots of the signed-in pages on sample data. Results go to $2 (a
 # directory: screenshot.png, overview-light.png, overview-dark.png,
-# nodes-light.png, results.txt). Linux runs it inside
+# nodes-light.png, logs-light.png, results.txt). Linux runs it inside
 # xvfb-run and a D-Bus session (ci.yml).
 set -euo pipefail
 
@@ -73,6 +73,7 @@ shot() {
 shot overview-light PPVPN_FLUTTER_SAMPLE=overview PPVPN_FLUTTER_THEME=light
 shot overview-dark PPVPN_FLUTTER_SAMPLE=overview PPVPN_FLUTTER_THEME=dark
 shot nodes-light PPVPN_FLUTTER_SAMPLE=nodes PPVPN_FLUTTER_THEME=light
+shot logs-light PPVPN_FLUTTER_SAMPLE=logs PPVPN_FLUTTER_THEME=light
 
 # Unpacked size in KiB, and the size of a zip of the bundle (no installer
 # yet: the closest to a download).

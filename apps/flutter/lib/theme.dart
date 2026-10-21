@@ -259,6 +259,16 @@ class Tokens {
   static const codeGap = 6.0;
   static const signInMountains = 150.0;
 
+  // Logs (handoff §4).
+  static const logMenuWidth = 200.0;
+  static const logPadding = EdgeInsets.fromLTRB(14, 10, 14, 10);
+  static const logFooterHeight = 28.0;
+
+  /// The 「正在跟随末尾」 dot: 7 across, breathing 1 ↔ 0.35 in 1.6 s.
+  static const pulseDotSize = 7.0;
+  static const pulseHalf = Duration(milliseconds: 800);
+  static const pulseLow = 0.35;
+
   // --- type ----------------------------------------------------------------
 
   /// Latin from Inter (forui bundles it); Chinese from the system, no CJK
@@ -315,6 +325,12 @@ class Tokens {
     fontWeight: weight,
     color: color ?? t1,
   );
+
+  /// Log lines, mono 12 at line height 1.6.
+  TextStyle get logLine => monoText(12, color: t1, height: 12 * 1.6);
+
+  /// The log file's path under the log card, mono 11/16.
+  TextStyle get logPath => monoText(11, color: t2, height: 16);
 
   /// Rates, 22/28 · 600.
   TextStyle get rate => monoText(22, weight: FontWeight.w600, height: 28).copyWith(letterSpacing: -0.44);

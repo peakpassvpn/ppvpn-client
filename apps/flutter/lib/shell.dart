@@ -4,8 +4,8 @@
 // with the settings gear at the bottom. Content: a 52-high header with the
 // page title, a status pill on the nodes page, the bell with the unread
 // badge, and on Windows and Linux the caption buttons. The window has no
-// system title bar. Logs, messages and settings are not in the prototype:
-// they lead to a placeholder. Signed out, the sign-in brand panel takes
+// system title bar. Messages and settings are not in the prototype: they
+// lead to a placeholder. Signed out, the sign-in brand panel takes
 // the sidebar's place.
 
 import 'dart:async';
@@ -16,6 +16,7 @@ import 'package:forui/forui.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'pages/logs.dart';
 import 'pages/nodes.dart';
 import 'pages/overview.dart';
 import 'pages/sign_in.dart';
@@ -37,7 +38,11 @@ class Shell extends StatefulWidget {
 }
 
 class _ShellState extends State<Shell> {
-  _Page _page = samplePage == 'nodes' ? _Page.nodes : _Page.overview;
+  _Page _page = switch (samplePage) {
+    'nodes' => _Page.nodes,
+    'logs' => _Page.logs,
+    _ => _Page.overview,
+  };
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
@@ -103,6 +108,7 @@ class _ShellState extends State<Shell> {
                   child: switch (_page) {
                     _Page.overview => OverviewPage(app: widget.app),
                     _Page.nodes => NodesPage(app: widget.app),
+                    _Page.logs => const LogsPage(),
                     _ => const _NotInPrototype(),
                   },
                 ),
