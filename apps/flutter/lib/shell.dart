@@ -115,7 +115,6 @@ class _ShellState extends State<Shell> {
                     _Page.logs => const LogsPage(),
                     _Page.messages => MessagesPage(app: widget.app),
                     _Page.settings => SettingsPage(app: widget.app),
-                    _ => const _NotInPrototype(),
                   },
                 ),
               ],
@@ -520,15 +519,5 @@ class _AccountCard extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-class _NotInPrototype extends StatelessWidget {
-  const _NotInPrototype();
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Tokens.of(context);
-    return Center(child: Text(S.current('protoPage'), style: t.sub));
   }
 }
