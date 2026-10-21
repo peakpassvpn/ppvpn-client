@@ -269,6 +269,32 @@ class Tokens {
   static const pulseHalf = Duration(milliseconds: 800);
   static const pulseLow = 0.35;
 
+  // Message center (handoff §8): a page of the main window (#387).
+  static const messagesPadding = EdgeInsets.fromLTRB(pageInset, 0, pageInset, 20);
+
+  /// The bars above the list and the detail (unread count, back).
+  static const messagesBarHeight = 40.0;
+
+  /// The severity bar on a row's and the detail's left.
+  static const severityBarWidth = 3.0;
+  static const unreadDot = 8.0;
+  static const messageRowPadding = EdgeInsets.fromLTRB(10, 12, 16, 12);
+  static const messageDetailPadding = EdgeInsets.fromLTRB(20, 18, 20, 22);
+
+  /// 「查看详情 ↗」, 「标记为已读」, 「重试」 in a row or the banner.
+  static const smallButtonHeight = 22.0;
+
+  /// 「正在加载…」 / 「没有更多消息了」 under the list.
+  static const listFooterHeight = 40.0;
+
+  /// The next page loads this close to the list's end.
+  static const loadMoreDistance = 24.0;
+  static const emptyIconSize = 60.0;
+  static const skeletonRows = 6;
+
+  /// The skeleton's breathing, one way.
+  static const skeletonPulse = Duration(milliseconds: 1400);
+
   // --- type ----------------------------------------------------------------
 
   /// Latin from Inter (forui bundles it); Chinese from the system, no CJK
@@ -313,6 +339,15 @@ class Tokens {
 
   /// Secondary, 12/16.
   TextStyle get note => _text(12, 16, FontWeight.w400, t3);
+
+  /// A message's body in the list, two lines, 12/17.
+  TextStyle get preview => _text(12, 17, FontWeight.w400, t2);
+
+  /// A message's full text, 13 with line height 1.7.
+  TextStyle get longText => _text(13, 22, FontWeight.w400, t1);
+
+  /// A message's title in the detail, 17/22 · 700.
+  TextStyle get detailTitle => _text(17, 22, FontWeight.w700, t1);
 
   /// Labels and badges, 11/16 · 600.
   TextStyle get label => _text(11, 16, FontWeight.w600, t1);

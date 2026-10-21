@@ -4,8 +4,9 @@
 // with the settings gear at the bottom. Content: a 52-high header with the
 // page title, a status pill on the nodes page, the bell with the unread
 // badge, and on Windows and Linux the caption buttons. The window has no
-// system title bar. Messages and settings are not in the prototype: they
-// lead to a placeholder. Signed out, the sign-in brand panel takes
+// system title bar. The bell opens the message center as a page. Settings
+// is not in the prototype yet: it leads to a placeholder. Signed out, the
+// sign-in brand panel takes
 // the sidebar's place.
 
 import 'dart:async';
@@ -17,6 +18,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
 import 'pages/logs.dart';
+import 'pages/messages.dart';
 import 'pages/nodes.dart';
 import 'pages/overview.dart';
 import 'pages/sign_in.dart';
@@ -41,6 +43,7 @@ class _ShellState extends State<Shell> {
   _Page _page = switch (samplePage) {
     'nodes' => _Page.nodes,
     'logs' => _Page.logs,
+    'messages' => _Page.messages,
     _ => _Page.overview,
   };
 
@@ -79,7 +82,7 @@ class _ShellState extends State<Shell> {
         _Page.overview => s('overview'),
         _Page.nodes => s('nodes'),
         _Page.logs => s('logs'),
-        _Page.messages => s('messages'),
+        _Page.messages => s('msgCenter'),
         _Page.settings => s('settings'),
       };
       return Row(
@@ -109,6 +112,7 @@ class _ShellState extends State<Shell> {
                     _Page.overview => OverviewPage(app: widget.app),
                     _Page.nodes => NodesPage(app: widget.app),
                     _Page.logs => const LogsPage(),
+                    _Page.messages => MessagesPage(app: widget.app),
                     _ => const _NotInPrototype(),
                   },
                 ),

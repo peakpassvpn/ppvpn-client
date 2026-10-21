@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'messages_state.dart';
 import 'src/rust/api.dart' as rust;
 
 /// A speed-test result as the nodes page shows it.
@@ -30,16 +31,19 @@ class LatencyFailed extends Latency {
 }
 
 class AppState {
-  AppState(rust.UiSnapshot initial) : snapshot = ValueNotifier(initial) {
+  AppState(rust.UiSnapshot initial) : fixed = false, snapshot = ValueNotifier(initial) {
     _refreshNodes(initial);
     unawaited(_pump());
   }
 
   /// Fixed state with no client behind it (sample.dart, for CI
   /// screenshots): nothing is read from Rust, actions fail quietly.
-  AppState.fixed(rust.UiSnapshot initial) : snapshot = ValueNotifier(initial) {
+  AppState.fixed(rust.UiSnapshot initial) : fixed = true, snapshot = ValueNotifier(initial) {
     _stopped = true;
   }
+
+  /// Made by [AppState.fixed]: sample data, no client.
+  final bool fixed;
 
   final ValueNotifier<rust.UiSnapshot> snapshot;
   final ValueNotifier<List<rust.UiNode>> nodes = ValueNotifier(const []);
@@ -57,6 +61,9 @@ class AppState {
 
   /// The latest failed action, for the one-time error dialog.
   final ValueNotifier<String?> actionError = ValueNotifier(null);
+
+  /// The message center's list.
+  late final MessagesState messages = MessagesState(fixed: fixed, onError: (error) => actionError.value = error);
 
   /// Set once [stop] runs: the event loop ends.
   bool _stopped = false;

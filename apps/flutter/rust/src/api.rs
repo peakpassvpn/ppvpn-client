@@ -258,3 +258,80 @@ pub fn shutdown() {
 pub fn log_dir() -> Result<String, String> {
     Ok(bridge::get()?.client.log_dir())
 }
+
+// --- messages ---
+
+/// `MessageCategory`: what a backend message is about (its icon and type
+/// label).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiMessageCategory {
+    SubscriptionExpiring,
+    SubscriptionExpired,
+    Billing,
+    Order,
+    Route,
+    Announcement,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiMessageSeverity {
+    Critical,
+    Important,
+    Normal,
+    /// Old messages without a severity.
+    Unspecified,
+}
+
+/// A backend message (inbox entry).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiMessage {
+    /// The backend's id (a `u64`; Dart ints are signed).
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub category: UiMessageCategory,
+    pub severity: UiMessageSeverity,
+    /// Absolute URL behind 「查看详情」.
+    pub deep_link: Option<String>,
+    pub read: bool,
+    /// RFC 3339.
+    pub created_at: String,
+}
+
+/// One page of messages, newest first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiMessagePage {
+    pub items: Vec<UiMessage>,
+    /// All messages of the account.
+    pub total: u32,
+}
+
+/// Page `page` (1-based) of the messages, `page_size` to a page (1–100).
+/// Also refreshes the snapshot's `unread`.
+pub async fn notifications(page: u32, page_size: u32) -> Result<UiMessagePage, String> {
+    let inbox = bridge::get()?
+        .fetch(move |client| async move { client.notifications(page, page_size).await })
+        .await?;
+    Ok(crate::messages::ui_page(inbox))
+}
+
+pub async fn mark_notification_read(id: i64) -> Result<(), String> {
+    let id = crate::messages::backend_id(id)?;
+    bridge::get()?
+        .call(move |client| async move { client.mark_notification_read(id).await })
+        .await
+}
+
+pub async fn mark_notification_unread(id: i64) -> Result<(), String> {
+    let id = crate::messages::backend_id(id)?;
+    bridge::get()?
+        .call(move |client| async move { client.mark_notification_unread(id).await })
+        .await
+}
+
+pub async fn mark_all_notifications_read() -> Result<(), String> {
+    bridge::get()?
+        .call(|client| async move { client.mark_all_notifications_read().await })
+        .await
+}

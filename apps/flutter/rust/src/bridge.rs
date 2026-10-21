@@ -164,6 +164,16 @@ impl Bridge {
         F: FnOnce(Arc<Client>) -> Fut,
         Fut: std::future::Future<Output = Result<(), ClientError>> + Send + 'static,
     {
+        self.fetch(f).await
+    }
+
+    /// [`Bridge::call`] for a call that returns a value.
+    pub(crate) async fn fetch<T, F, Fut>(&self, f: F) -> Result<T, String>
+    where
+        T: Send + 'static,
+        F: FnOnce(Arc<Client>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ClientError>> + Send + 'static,
+    {
         self.runtime
             .spawn(f(self.client.clone()))
             .await
