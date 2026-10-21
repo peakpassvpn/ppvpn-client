@@ -31,6 +31,26 @@ if [ "$os" = macos ]; then
   done
 fi
 
+# The Windows and Linux runners show the window on Flutter's first frame;
+# here it stays hidden until main.dart shows it, so that a `--background`
+# start (launch at login) keeps to the tray. A template without the line
+# fails the build rather than showing the window after all.
+unshow() {
+  grep -qF "$2" "$1" || { echo "$1: no '$2' to remove" >&2; exit 1; }
+  sed -i "s|$2|$3|" "$1"
+}
+case $os in
+  windows) unshow windows/runner/flutter_window.cpp 'this->Show();' '' ;;
+  linux)
+    f=linux/runner/my_application.cc
+    [ -f "$f" ] || f=linux/my_application.cc
+    if grep -qF 'first_frame_cb' "$f"; then
+      unshow "$f" 'gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));' ''
+    else
+      unshow "$f" 'gtk_widget_show(GTK_WIDGET(window));' 'gtk_widget_realize(GTK_WIDGET(window));'
+    fi ;;
+esac
+
 flutter_rust_bridge_codegen generate
 grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> rust/src/lib.rs
 flutter analyze --no-fatal-infos

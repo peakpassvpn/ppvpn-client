@@ -442,3 +442,50 @@ pub async fn set_routing_mode(mode: UiRoutingMode) -> Result<(), String> {
         .call(move |client| async move { client.set_routing_mode(mode).await })
         .await
 }
+
+// --- launch at login ---
+
+/// Launch at login as the system has it (`autostart`): never kept in the
+/// settings, off until turned on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UiLaunchAtLogin {
+    pub enabled: bool,
+    /// On, but held back by the system: macOS waits for approval in Login
+    /// Items, Windows had it turned off in Settings › Apps › Startup. Only
+    /// the system can let it run ([`open_launch_at_login_settings`]).
+    pub needs_approval: bool,
+}
+
+/// Read again whenever it is shown: the system can change it.
+#[frb(sync)]
+pub fn launch_at_login() -> UiLaunchAtLogin {
+    crate::autostart::state()
+}
+
+/// Registers or removes the login entry (Windows and Linux start the app
+/// with `--background`). Read [`launch_at_login`] again after either.
+#[frb(sync)]
+pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+    crate::autostart::set(enabled)
+}
+
+/// Where the system holds the entry back: Login Items (macOS), Startup
+/// apps (Windows). Nothing on Linux.
+#[frb(sync)]
+pub fn open_launch_at_login_settings() {
+    crate::autostart::open_settings();
+}
+
+/// At start: points an enabled Windows entry at the current executable
+/// (the app may have moved). Nothing elsewhere.
+#[frb(sync)]
+pub fn refresh_launch_at_login() {
+    crate::autostart::refresh();
+}
+
+/// Started with `--background` (the login entry): the tray only, no
+/// window.
+#[frb(sync)]
+pub fn started_in_background() -> bool {
+    crate::autostart::started_in_background()
+}

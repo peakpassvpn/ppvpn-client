@@ -1,14 +1,17 @@
 // Settings (handoff "6. 设置", #401 step 3): a page of the main window, in
 // the overview's column, with three grouped cards. General: appearance,
-// language, routing mode, launch at login (shown, disabled: step 4), the
+// language, routing mode, launch at login (step 4, the system's state), the
 // version (update checks are step 5). Account: user, team, service expiry,
 // sign out with a confirmation. Advanced: the API override (next launch)
 // and the system service's status (install and uninstall disabled:
 // enhanced mode is step 2). Appearance, language and the override are the
 // app's own (settings.dart); the routing mode is the client's.
 
+import 'dart:io';
+
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../app_state.dart';
 import '../settings.dart';
@@ -150,13 +153,7 @@ class _General extends StatelessWidget {
             onChanged: app.setRoutingMode,
           ),
         ),
-        SettingRow(
-          icon: FLucideIcons.power,
-          title: s('launchAtLogin'),
-          description: s('laterStep'),
-          divider: true,
-          trailing: TriSwitch(label: s('launchAtLogin'), state: SwitchState.off, enabled: false, onChanged: null),
-        ),
+        const _LaunchAtLogin(),
         SettingRow(
           icon: FLucideIcons.info,
           title: s('versionT'),
@@ -166,6 +163,108 @@ class _General extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Launch at login: the switch, then, while the system holds the entry
+/// back, the native apps' hint with the way to the system's settings (macOS
+/// Login Items, Windows Startup apps), and the error when the system
+/// refused a change. Read again when the page shows and when the window
+/// gains focus: the user may have changed it in the system's settings.
+class _LaunchAtLogin extends StatefulWidget {
+  const _LaunchAtLogin();
+
+  @override
+  State<_LaunchAtLogin> createState() => _LaunchAtLoginState();
+}
+
+class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+    Settings.refreshLaunchAtLogin();
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  @override
+  void onWindowFocus() => Settings.refreshLaunchAtLogin();
+
+  void _set(bool enabled) {
+    final error = Settings.setLaunchAtLogin(enabled);
+    setState(() => _error = error);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final s = S.current;
+    return ValueListenableBuilder(
+      valueListenable: Settings.launchAtLogin,
+      builder: (context, state, _) => Column(
+        children: [
+          SettingRow(
+            icon: FLucideIcons.power,
+            title: s('launchAtLogin'),
+            divider: true,
+            trailing: TriSwitch(
+              label: s('launchAtLogin'),
+              state: state.enabled ? SwitchState.on : SwitchState.off,
+              onChanged: _set,
+            ),
+          ),
+          if (state.needsApproval)
+            _SubRow(
+              children: [
+                Icon(FLucideIcons.circleAlert, size: 14, color: t.warn),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(s(Platform.isWindows ? 'winLaunchApprove' : 'launchApprove'), style: t.note),
+                ),
+                const SizedBox(width: 8),
+                Button(
+                  kind: ButtonKind.text,
+                  height: Tokens.smallButtonHeight,
+                  fontSize: 12,
+                  label: s(Platform.isWindows ? 'openWinStartup' : 'openSysSettings'),
+                  onPress: rust.openLaunchAtLoginSettings,
+                ),
+              ],
+            ),
+          if (_error case final error?)
+            _SubRow(
+              children: [
+                Expanded(
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text(error, style: t.note.copyWith(color: t.bad)),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A line under a row, aligned with the row's title.
+class _SubRow extends StatelessWidget {
+  const _SubRow({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(20 + Tokens.rowIconSize + 14, 0, 20, 12),
+    child: Row(children: children),
+  );
 }
 
 /// RFC 3339 as the local date, YYYY-MM-DD.
