@@ -855,6 +855,31 @@ jobs:
             apps/flutter/scripts/smoke.sh "${{ steps.build.outputs.bundle }}" "$RUNNER_TEMP/flutter-out"
           fi
           { echo '```'; cat "$RUNNER_TEMP/flutter-out/results.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Enhanced mode end to end on Linux (#401 step 2): the release bundle
+      # in the packages' layout (/usr/lib/ppvpn/ppvpn, the only client the
+      # service accepts) with the service built in its shipping profile and
+      # installed by its own helper, then stopped: e2e/linux_enhanced.sh runs
+      # it inside test/netns/run.sh's namespace, with a mock backend, a saved
+      # sign-in and test/fakenode, and checks the TUN, the rules and table,
+      # traffic through the node and the cleanup after a disconnect. Removed
+      # again afterwards: the native app's deb goes to /usr/lib/ppvpn next.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        with:
+          go-version-file: test/go.mod
+          cache-dependency-path: test/go.sum
+      - name: Enhanced mode end to end (Linux)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        timeout-minutes: 30
+        run: |
+          cargo build --locked -p ppvpn-service --profile service --bins
+          make test-tools
+          sudo apps/flutter/scripts/install-linux-layout.sh "${{ steps.build.outputs.bundle }}" target/service
+          trap 'sudo /usr/lib/ppvpn/ppvpn-service-uninstall || true; sudo rm -rf /usr/lib/ppvpn' EXIT
+          sudo /usr/lib/ppvpn/ppvpn-service-install
+          sudo systemctl disable --now ppvpn-service
+          sudo NETNS_TIMEOUT=300 test/netns/run.sh --script apps/flutter/e2e/linux_enhanced.sh \
+            "$PWD/build/test-tools/fakenode"
       # Against the native app of the latest release, the same measurements
       # for both (apps/flutter/scripts/compare.py), then the prototype's own:
       # startup phases, tray CPU, the memory curve with traffic pushes.
