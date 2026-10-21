@@ -401,7 +401,7 @@ class _Modes extends StatelessWidget {
     return CardBox(
       child: Column(
         children: [
-          _Row(
+          SettingRow(
             icon: FLucideIcons.monitor,
             title: s('stdMode'),
             description: s('stdDesc'),
@@ -416,65 +416,19 @@ class _Modes extends StatelessWidget {
               onChanged: (on) => on ? app.connect() : app.disconnect(),
             ),
           ),
-          _Row(
+          SettingRow(
             icon: FLucideIcons.zap,
             title: s('tunMode'),
             description: s('protoNoTun'),
             divider: true,
             trailing: TriSwitch(label: s('tunMode'), state: SwitchState.off, enabled: false, onChanged: null),
           ),
-          _Row(
+          SettingRow(
             icon: FLucideIcons.mapPin,
             title: s('currentNode'),
             divider: true,
             trailing: NodePicker(app: app, selectedId: snapshot.selectedNodeId),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Row extends StatelessWidget {
-  const _Row({required this.icon, required this.title, this.description, required this.trailing, this.divider = false});
-
-  final IconData icon;
-  final String title;
-  final String? description;
-  final Widget trailing;
-  final bool divider;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Tokens.of(context);
-    return Container(
-      height: Tokens.rowHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: BoxDecoration(border: divider ? Border(top: BorderSide(color: t.hair)) : null),
-      child: Row(
-        children: [
-          Container(
-            width: Tokens.rowIconSize,
-            height: Tokens.rowIconSize,
-            decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(Tokens.controlRadius)),
-            child: Icon(icon, size: 17, color: t.accent),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: t.rowTitle),
-                if (description case final text?)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 1),
-                    child: Text(text, style: t.note, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  ),
-              ],
-            ),
-          ),
-          trailing,
         ],
       ),
     );

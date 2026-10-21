@@ -1,8 +1,9 @@
 // Screenshot mode for CI (#387): PPVPN_FLUTTER_SAMPLE=overview|nodes|logs|
-// messages shows the signed-in pages on fixed data, the design handoff's
-// sample nodes and messages (sample-nodes.json, sample-messages.json) and a
-// few log lines, with no client behind them: no backend, no core, no
-// sign-in, no log file read. PPVPN_FLUTTER_THEME=dark|light forces the theme. Only
+// messages|settings shows the signed-in pages on fixed data, the design
+// handoff's sample nodes and messages (sample-nodes.json,
+// sample-messages.json) and a few log lines, with no client behind them: no
+// backend, no core, no sign-in, no log or settings file read or written.
+// PPVPN_FLUTTER_THEME=dark|light forces the theme. Only
 // apps/flutter/scripts/smoke.sh sets these.
 
 import 'dart:io';
@@ -12,12 +13,13 @@ import 'package:flutter/widgets.dart';
 
 import 'app_state.dart';
 import 'messages_state.dart';
+import 'settings.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
 
 /// The page the screenshot mode opens on, or null when it is off.
 final String? samplePage = switch (Platform.environment['PPVPN_FLUTTER_SAMPLE']) {
-  final page? when page == 'overview' || page == 'nodes' || page == 'logs' || page == 'messages' => page,
+  final page? when const {'overview', 'nodes', 'logs', 'messages', 'settings'}.contains(page) => page,
   _ => null,
 };
 
@@ -94,7 +96,7 @@ AppState sampleState() {
       teamName: 'Acme Studio',
       profile: rust.UiProfile.ready,
       profileRevision: 'sample',
-      expiresAt: null,
+      expiresAt: '2027-03-31T00:00:00Z',
       phase: rust.UiPhase.connected,
       line: 'HKG-A',
       latencyMs: 38,
@@ -102,6 +104,8 @@ AppState sampleState() {
       selectedNodeId: 'hk1',
       error: null,
       unread: _sampleUnread,
+      routingMode: rust.UiRoutingMode.rules,
+      serviceInstalled: false,
     ),
   );
   app.nodes.value = nodes;
@@ -124,6 +128,7 @@ AppState sampleState() {
       ),
   ];
   app.traffic.value = app.history.value.last;
+  Settings.version = '0.6.3';
   app.connectedSince = DateTime.now().subtract(const Duration(minutes: 42, seconds: 17));
   final messages = _sampleMessages();
   app.messages.view.value = MessagesView(items: messages, total: messages.length, loaded: true);

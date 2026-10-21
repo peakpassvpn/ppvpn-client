@@ -15,6 +15,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'app_state.dart';
 import 'bench.dart';
 import 'pages/overview.dart';
+import 'settings.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
 
@@ -30,6 +31,11 @@ class Tray {
     });
     app.snapshot.addListener(_update);
     app.nodes.addListener(_update);
+    // A new language: rebuild the menu whatever else changed.
+    Settings.language.addListener(() {
+      _shown = null;
+      _update();
+    });
     _update();
     icon.setVisible(true);
     if (trayBench) {

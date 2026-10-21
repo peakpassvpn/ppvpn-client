@@ -1,5 +1,5 @@
 // The Flutter desktop prototype (#387): one window (see shell.dart) with the
-// overview and the nodes pages, plus the menu bar / tray icon, on the client
+// overview, nodes and settings pages, plus the menu bar / tray icon, on the client
 // (crates/desktop) through flutter_rust_bridge. Closing the window hides
 // it; the app stays in the tray until "Quit".
 
@@ -15,7 +15,9 @@ import 'app_state.dart';
 import 'bench.dart';
 import 'src/rust/api.dart' as rust;
 import 'sample.dart';
+import 'settings.dart';
 import 'shell.dart';
+import 'strings.dart';
 import 'src/rust/frb_generated.dart';
 import 'theme.dart';
 import 'tray.dart';
@@ -42,6 +44,8 @@ Future<void> main() async {
   } else {
     await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
     mark('bridge_loaded');
+    // Before the client: it reads the API override when it starts.
+    Settings.load();
     app = AppState(rust.start());
     mark('client_created');
   }
@@ -89,7 +93,7 @@ class _HideOnClose with WindowListener {
   void onWindowClose() => unawaited(windowManager.hide());
 }
 
-class PrototypeApp extends StatelessWidget {
+class PrototypeApp extends StatefulWidget {
   const PrototypeApp({super.key, required this.app, required this.tray});
 
   final AppState app;
@@ -98,25 +102,61 @@ class PrototypeApp extends StatelessWidget {
   final Tray tray;
 
   @override
-  Widget build(BuildContext context) => WidgetsApp(
-    title: 'PPVPN',
-    color: Tokens.light.accent,
-    debugShowCheckedModeBanner: false,
-    localizationsDelegates: FLocalizations.localizationsDelegates,
-    supportedLocales: FLocalizations.supportedLocales,
-    pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) =>
-        PageRouteBuilder<T>(settings: settings, pageBuilder: (context, _, _) => builder(context)),
-    home: Builder(
-      builder: (context) {
-        final t = Tokens.of(context);
-        return FTheme(
-          data: t.forui,
-          child: DefaultTextStyle(
-            style: t.body,
-            child: ColoredBox(color: t.bg, child: Shell(app: app)),
-          ),
-        );
-      },
+  State<PrototypeApp> createState() => _PrototypeAppState();
+}
+
+/// The appearance reaches every widget through [AppearanceScope]
+/// (Tokens.of). The language has no such dependency (S.current takes no
+/// context): a change rebuilds every element once, keeping their state
+/// (the page, the scroll position).
+class _PrototypeAppState extends State<PrototypeApp> {
+  @override
+  void initState() {
+    super.initState();
+    Settings.language.addListener(_relabel);
+  }
+
+  @override
+  void dispose() {
+    Settings.language.removeListener(_relabel);
+    super.dispose();
+  }
+
+  void _relabel() {
+    setState(() {});
+    void rebuild(Element element) {
+      element.markNeedsBuild();
+      element.visitChildren(rebuild);
+    }
+
+    (context as Element).visitChildren(rebuild);
+  }
+
+  @override
+  Widget build(BuildContext context) => AppearanceScope(
+    notifier: Settings.appearance,
+    child: WidgetsApp(
+      title: 'PPVPN',
+      color: Tokens.light.accent,
+      debugShowCheckedModeBanner: false,
+      // Follows the language setting; the system's while it follows that.
+      locale: Settings.language.value == rust.UiLanguage.system ? null : S.current.locale,
+      localizationsDelegates: FLocalizations.localizationsDelegates,
+      supportedLocales: FLocalizations.supportedLocales,
+      pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) =>
+          PageRouteBuilder<T>(settings: settings, pageBuilder: (context, _, _) => builder(context)),
+      home: Builder(
+        builder: (context) {
+          final t = Tokens.of(context);
+          return FTheme(
+            data: t.forui,
+            child: DefaultTextStyle(
+              style: t.body,
+              child: ColoredBox(color: t.bg, child: Shell(app: widget.app)),
+            ),
+          );
+        },
+      ),
     ),
   );
 }
