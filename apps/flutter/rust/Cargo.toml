@@ -25,9 +25,11 @@ tracing = "0.1"
 # The privileged service hooks: the SCM query and the UAC launch of the
 # install helpers (hooks.rs), as the native Windows app does them. The
 # single instance's pipe and the toast's click activator (instance.rs).
+# The native app's sign-in in the Credential Manager (credentials.rs).
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_IO",
@@ -38,6 +40,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The native app's sign-in in the Secret Service (credentials.rs), on the
+# zbus the CLI and the push agent already lock.
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
 
 # flutter_rust_bridge's #[frb] expands to code under `cfg(frb_expand)`.
 [lints.rust]

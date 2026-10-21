@@ -20,9 +20,9 @@
 #   itself, here, without a system bus (as e2e_linux.rs does);
 # - xvfb-run, dbus-run-session, python3, curl, iproute2.
 # The app runs with PPVPN_FLUTTER_E2E=enhanced (lib/e2e.dart) and its data
-# under XDG_DATA_HOME/XDG_STATE_HOME of a temporary directory, which holds the
-# saved sign-in (credential.json, the client restores it via the refresh
-# endpoints). Addresses: run.sh's 10.243.0.0/24, the TUN's own, the backend
+# under PPVPN_FLUTTER_HOME, a temporary directory, which holds the saved
+# sign-in as a plain file (data/credentials, never the keyring; the client
+# restores it via the refresh endpoints). Addresses: run.sh's 10.243.0.0/24, the TUN's own, the backend
 # on 127.0.0.1:18090 and 192.0.2.10 (TEST-NET-1) for the HTTP target behind
 # the node.
 set -euo pipefail
@@ -70,7 +70,7 @@ dump() {
   for f in app.out service.out backend.log fakenode.log; do
     echo "## $f"; tail -n 60 "$work/$f" 2>/dev/null || true
   done
-  echo "## client logs"; find "$work/state" -name '*.log' -exec tail -n 40 {} + 2>/dev/null || true
+  echo "## client logs"; find "$work/home/logs" -name '*.log' -exec tail -n 40 {} + 2>/dev/null || true
   echo "## /var/log/ppvpn/ppvpn-service.log"; tail -n 40 /var/log/ppvpn/ppvpn-service.log 2>/dev/null || true
 }
 
@@ -162,10 +162,10 @@ python3 -u "$here/linux_enhanced_backend.py" --port "$API_PORT" --log "$work/bac
   > "$work/backend.out" 2>&1 &
 until_ok "the mock backend" 20 grep -q '^ready' "$work/backend.out"
 
-export XDG_DATA_HOME=$work/data XDG_STATE_HOME=$work/state
-mkdir -p -m 0700 "$XDG_DATA_HOME/ppvpn-flutter"
+export PPVPN_FLUTTER_HOME=$work/home
+mkdir -p -m 0700 "$PPVPN_FLUTTER_HOME/data"
 ( umask 077; printf '%s' '{"version":1,"active_refresh":"jyr_e2e_saved"}' \
-  > "$XDG_DATA_HOME/ppvpn-flutter/credential.json" )
+  > "$PPVPN_FLUTTER_HOME/data/credentials" )
 
 # 1. The app: signed in, it connects in enhanced mode by itself.
 mkfifo "$work/in"

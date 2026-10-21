@@ -33,10 +33,10 @@ final Brightness? forcedBrightness = switch (Platform.environment['PPVPN_FLUTTER
 /// The logs page in the screenshot mode: its directory (as the footer shows
 /// it), its "today" and its lines.
 final String sampleLogDir = Platform.isMacOS
-    ? '~/Library/Logs/PPVPN Flutter'
+    ? '~/Library/Logs/PPVPN'
     : Platform.isWindows
-    ? r'%LOCALAPPDATA%\PPVPN Flutter\logs'
-    : '~/.local/state/ppvpn-flutter/logs';
+    ? r'%LOCALAPPDATA%\PPVPN\logs'
+    : '~/.local/state/ppvpn/logs';
 final DateTime sampleLogDate = DateTime.utc(2026, 10, 20);
 const sampleLogLines = [
   '2026-10-20T14:30:02.418Z  INFO ppvpn_desktop: client created app_version=0.7.0',
