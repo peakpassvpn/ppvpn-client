@@ -1,7 +1,8 @@
-// Screenshot mode for CI (#387): PPVPN_FLUTTER_SAMPLE=overview|nodes|logs
-// shows the signed-in pages on fixed data, the design handoff's sample nodes
-// (sample-nodes.json) and a few log lines, with no client behind them: no
-// backend, no core, no sign-in, no log file read. PPVPN_FLUTTER_THEME=dark|light forces the theme. Only
+// Screenshot mode for CI (#387): PPVPN_FLUTTER_SAMPLE=overview|nodes|logs|
+// messages shows the signed-in pages on fixed data, the design handoff's
+// sample nodes and messages (sample-nodes.json, sample-messages.json) and a
+// few log lines, with no client behind them: no backend, no core, no
+// sign-in, no log file read. PPVPN_FLUTTER_THEME=dark|light forces the theme. Only
 // apps/flutter/scripts/smoke.sh sets these.
 
 import 'dart:io';
@@ -10,11 +11,13 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 
 import 'app_state.dart';
+import 'messages_state.dart';
 import 'src/rust/api.dart' as rust;
+import 'strings.dart';
 
 /// The page the screenshot mode opens on, or null when it is off.
 final String? samplePage = switch (Platform.environment['PPVPN_FLUTTER_SAMPLE']) {
-  final page? when page == 'overview' || page == 'nodes' || page == 'logs' => page,
+  final page? when page == 'overview' || page == 'nodes' || page == 'logs' || page == 'messages' => page,
   _ => null,
 };
 
@@ -98,7 +101,7 @@ AppState sampleState() {
       standardReady: true,
       selectedNodeId: 'hk1',
       error: null,
-      unread: 3,
+      unread: _sampleUnread,
     ),
   );
   app.nodes.value = nodes;
@@ -122,5 +125,53 @@ AppState sampleState() {
   ];
   app.traffic.value = app.history.value.last;
   app.connectedSince = DateTime.now().subtract(const Duration(minutes: 42, seconds: 17));
+  final messages = _sampleMessages();
+  app.messages.view.value = MessagesView(items: messages, total: messages.length, loaded: true);
   return app;
+}
+
+/// The newest ones are unread.
+const _sampleUnread = 4;
+
+/// sample-messages.json, aged as the handoff's prototype ages them
+/// (minutes before now).
+List<rust.UiMessage> _sampleMessages() {
+  const c = rust.UiMessageCategory.values;
+  const v = rust.UiMessageSeverity.values;
+  rust.UiMessageCategory category(String type) => c.byName(switch (type) {
+    'expiring' => 'subscriptionExpiring',
+    'expired' => 'subscriptionExpired',
+    'bill' => 'billing',
+    'broadcast' => 'announcement',
+    _ => type,
+  });
+  const link = 'https://www.peakpassvpn.com/console';
+  // (type, severity, link, age, zh title, zh body, en title, en body)
+  const sample = [
+    ('expiring', 'critical', true, 3, '订阅将在 3 天后到期', '你的 Pro 年付套餐将于 2026年10月2日 到期，到期后将无法连接任何节点。续费后立即生效，剩余时长自动顺延，系统代理与增强模式的设置会保留。', 'Subscription expires in 3 days', 'Your Pro annual plan expires on Oct 2, 2026, after which you can’t connect to any node. Renewal takes effect immediately and remaining time carries over. System Proxy and Enhanced Mode settings are kept.'),
+    ('route', 'important', false, 18, '香港 01 线路 HKG-A 不稳定', 'HKG-A 在 14:05–14:20 出现间歇性丢包，客户端已自动切换到 HKG-B。如仍有问题，可在节点页重新测速或切换节点。', 'Hong Kong 01 route HKG-A is unstable', 'HKG-A had intermittent packet loss from 14:05 to 14:20, and the client switched to HKG-B automatically. If problems persist, re-test latency on the Nodes page or switch nodes.'),
+    ('bill', 'normal', true, 52, '9 月账单已生成', '本期账单金额 ¥128.00，将于 10月1日 从钱包余额自动扣除。', 'September bill is ready', 'This bill is ¥128.00 and will be charged to your wallet balance on Oct 1.'),
+    ('broadcast', 'unspecified', true, 131, '东京节点维护通知', '为提升线路质量，东京 01 将于 10月1日 02:00–04:00（UTC+8）进行维护，期间该节点不可用。建议提前切换到大阪 01 或首尔 01，维护完成后无需任何操作。', 'Tokyo node maintenance', 'To improve route quality, Tokyo 01 will be under maintenance on Oct 1, 02:00–04:00 (UTC+8) and unavailable during that time. Switch to Osaka 01 or Seoul 01 beforehand. No action is needed afterwards.'),
+    ('order', 'normal', true, 262, '订单 #20260928-0417 已支付', 'Pro 年付套餐 · ¥1,188.00。发票可在控制台「账单」中申请。', 'Order #20260928-0417 paid', 'Pro annual plan · ¥1,188.00. Request an invoice under Billing in the console.'),
+    ('route', 'important', false, 1450, '法兰克福 01 暂时不可用', '上游运营商故障，预计 2 小时内恢复。恢复前测速会显示超时。', 'Frankfurt 01 temporarily unavailable', 'An upstream carrier outage should be fixed within 2 hours. Latency tests will show a timeout until then.'),
+    ('expired', 'critical', true, 1690, '团队订阅已过期', 'Lumen Labs 的团队订阅已于 9月1日 到期，团队成员将无法连接节点。请联系团队管理员续费。', 'Team subscription expired', 'The Lumen Labs team subscription expired on Sep 1, so team members can’t connect to nodes. Ask your team admin to renew.'),
+    ('broadcast', 'unspecified', true, 3249, '客户端 1.4.0 已发布', '新增消息中心与实时流量显示，修复了若干已知问题。', 'Client 1.4.0 released', 'Adds the message center and live traffic, and fixes several known issues.'),
+    ('bill', 'important', true, 5145, '钱包余额不足', '当前余额 ¥12.50，不足以支付下个周期的费用。请在到期前充值，以免服务中断。', 'Low wallet balance', 'Your balance is ¥12.50, which isn’t enough for the next billing cycle. Top up before it’s due to avoid interruption.'),
+    ('order', 'unspecified', false, 5878, '退款已完成', '订单 #20260903-1122 的退款 ¥49.00 已原路退回。', 'Refund completed', 'The ¥49.00 refund for order #20260903-1122 was returned to the original payment method.'),
+  ];
+  final now = DateTime.now();
+  final zh = S.current.zh;
+  return [
+    for (final (i, m) in sample.indexed)
+      rust.UiMessage(
+        id: i + 1,
+        title: zh ? m.$5 : m.$7,
+        content: zh ? m.$6 : m.$8,
+        category: category(m.$1),
+        severity: v.byName(m.$2),
+        deepLink: m.$3 ? link : null,
+        read: i >= _sampleUnread,
+        createdAt: now.subtract(Duration(minutes: m.$4)).toUtc().toIso8601String(),
+      ),
+  ];
 }

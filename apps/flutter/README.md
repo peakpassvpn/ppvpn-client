@@ -28,7 +28,8 @@ any release.
   is no system title bar. On macOS the traffic lights sit at the top of the
   sidebar; on Windows and Linux the caption buttons are at the top right of
   the content area, right of the bell.
-- `lib/pages/`: sign-in, overview, nodes. `lib/tray.dart`: the tray icon and
+- `lib/pages/`: sign-in, overview, nodes, and the message center (opened
+  from the bell; `lib/messages_state.dart` holds its pages). `lib/tray.dart`: the tray icon and
   its menu.
 - `assets/tray/`: placeholder tray icons for the four states (off,
   connecting, on, error), told apart by shape. The brand mark replaces them.
@@ -56,9 +57,9 @@ any release.
   for the countries we expect; any other country gets its code on a tile.
   There are no emoji flags: platforms draw them differently, and Windows
   draws them as letters.
-- Not in the prototype (to-dos on #387): the logs, messages and settings
-  pages (their sidebar items and the bell lead to a placeholder), the node
-  search field and context menu, animated tray icons.
+- Not in the prototype (to-dos on #387): the logs and settings pages (their
+  sidebar items lead to a placeholder), the node search field and context
+  menu, the message rows' context menu, animated tray icons.
 
 ## Building
 
