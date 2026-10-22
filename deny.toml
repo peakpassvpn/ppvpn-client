@@ -1,0 +1,31 @@
+# cargo-deny (ci.yml's advisories job): the RustSec advisories against
+# Cargo.lock, every target and feature, and where the dependencies come from.
+# An advisory we cannot fix yet goes under `ignore` with its reason and the
+# issue or pull request that removes it; take it out when that lands.
+# Licences and duplicate versions are not checked here (sail checks its own
+# licences, tools/security/deny.toml there).
+
+[advisories]
+ignore = [
+  # emSign ECC Root CA - G3 distrusted; webpki-root-certs 1.0.10 drops it.
+  # sail 0.22.0 takes it with it (#421, held until that release is
+  # promoted).
+  { id = "RUSTSEC-2026-0383", reason = "fixed by the sail 0.22.0 upgrade, #421" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# sail by its release tag, its forks by revision.
+required-git-spec = "tag"
+unused-allowed-source = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+  "https://github.com/peakpassvpn/sail.git",
+  # sail's [patch.crates-io] (Cargo.toml) and their own forks.
+  "https://github.com/peakpassvpn/btls.git",
+  "https://github.com/peakpassvpn/quinn.git",
+  "https://github.com/peakpassvpn/quinn-btls.git",
+  "https://github.com/peakpassvpn/netconfig-rs.git",
+  "https://github.com/tun-rs/route_manager.git",
+]
