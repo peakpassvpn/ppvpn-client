@@ -197,8 +197,21 @@ only) installs the bundle as the native packages do
 client the privileged service accepts. `lib/` and `data/` sit beside it,
 and so do `ppvpn-service`, `ppvpn-service-install` and
 `ppvpn-service-uninstall`, which is where `rust/src/hooks.rs` looks for
-them. There is no deb or rpm yet. To remove it, run
+them. To remove it, run
 `/usr/lib/ppvpn/ppvpn-service-uninstall` and then `rm -rf /usr/lib/ppvpn`.
+
+`scripts/package-linux.sh <bundle>` makes the deb and rpm in that layout
+(`packaging/linux/nfpm.yaml`): the files the native release makes
+(`PPVPN-<version>-linux-x64.{deb,rpm}` and their `release-meta-linux-x64-*.json`),
+under the native package's name `ppvpn`, version and release (the build
+number), with its maintainer scripts and push agent autostart entry
+(`apps/linux/packaging`), so it upgrades the native package in place. The
+dependencies are GTK 3, X11 and XInput, EGL, xdg-utils and pkexec instead of
+GTK 4, libadwaita and .NET's. It builds the service and the push agent
+itself. CI builds both in the Linux `flutter` job and checks each in a fresh
+container (`scripts/package-smoke.sh`, ubuntu:24.04 and fedora:latest): the
+libraries resolve from the dependencies, the app starts, it is removed
+cleanly, and the deb upgrades the native release in place.
 
 `e2e/linux_enhanced.sh` is the enhanced-mode test (#401 step 2), the
 counterpart of `crates/desktop/src/e2e_linux.rs`. CI runs it in the Linux

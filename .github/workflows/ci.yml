@@ -24,7 +24,8 @@ name: ci
 #   windows      clippy (MSVC), the Windows-only tests, G7 on Windows, the
 #                C# bindings, App.Core, the app and push agent builds
 #   flutter      the Flutter prototype (#387) on Linux, macOS and Windows:
-#                build and smoke test, only when it or the client changed
+#                build and smoke test, the Linux deb and rpm, only when it
+#                or the client changed
 # A pull request that changes only docs/ or Markdown runs every job, and each
 # skips its build and test steps (tools/ci-changes.sh `code`); lint still runs
 # the sensitive check.
@@ -905,6 +906,42 @@ jobs:
             sudo apt-get install -y --no-install-recommends xdotool >/dev/null
           fi
           apps/flutter/scripts/native.sh v0.6.3 "$RUNNER_TEMP/native"
+      # The deb and rpm (#401 step 5, apps/flutter/scripts/package-linux.sh),
+      # each installed alone in a fresh container by package-smoke.sh: the
+      # layout, every library resolved from the package's dependencies, one
+      # start on Xvfb, the removal; the deb then upgrades the native package
+      # fetched above in place. Built on this runner, so the glibc floor is
+      # only reported (the release builds on Ubuntu 22.04).
+      - name: Linux packages
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        timeout-minutes: 30
+        env:
+          NFPM_VERSION: '2.47.0'
+          PPVPN_GLIBC_FLOOR: ''
+          PPVPN_DIST_DIR: ${{ runner.temp }}/flutter-pkg
+          NATIVE_DEB: ${{ steps.native.outputs.installer }}
+        run: |
+          curl -sSfL "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nfpm
+          apps/flutter/scripts/package-linux.sh "${{ steps.build.outputs.bundle }}"
+          cat "$PPVPN_DIST_DIR"/release-meta-linux-*.json
+          native=()
+          if [ -n "$NATIVE_DEB" ]; then
+            native=(-v "$(dirname "$NATIVE_DEB"):/native:ro")
+          fi
+          smoke() {
+            docker run --rm -v "$PWD:/src:ro" -v "$PPVPN_DIST_DIR:/pkg:ro" "${native[@]}" -w /src "$1" \
+              bash apps/flutter/scripts/package-smoke.sh "${@:2}"
+          }
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          smoke ubuntu:24.04 "/pkg/PPVPN-$version-linux-x64.deb" ${NATIVE_DEB:+"/native/$(basename "$NATIVE_DEB")"}
+          smoke fedora:latest "/pkg/PPVPN-$version-linux-x64.rpm"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        with:
+          name: flutter-packages-linux
+          path: ${{ runner.temp }}/flutter-pkg
+          retention-days: 7
       - name: Compare with the native app
         if: steps.scope.outputs.flutter == 'true' && steps.native.outcome == 'success'
         continue-on-error: true
