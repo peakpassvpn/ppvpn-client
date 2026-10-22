@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
-# Builds the Flutter prototype for the runner's platform (ci.yml, job
-# flutter): the platform runner (flutter create, with our files from
-# runner/<os> over it and the native app's identity), the bridge glue
-# (flutter_rust_bridge_codegen), analysis, the Rust library (release), the
-# app (release), the library put into the bundle. The bundle's path goes to
-# $GITHUB_OUTPUT as `bundle`.
+# Builds the Flutter app for the runner's platform (ci.yml, job flutter;
+# release.yml's installer jobs): the platform runner (flutter create, with
+# our files from runner/<os> over it and the native app's identity), the
+# bridge glue (flutter_rust_bridge_codegen), analysis, the Rust library
+# (release), the app (release), the library put into the bundle. The
+# bundle's path goes to $GITHUB_OUTPUT as `bundle`.
 # Nothing generated here is committed (see apps/flutter/.gitignore).
 #
-# Optional, as release.yml passes them to the native builds:
+# Optional, as release.yml passes them:
 #   PPVPN_VERSION        x.y.z (default: the workspace's, Cargo.toml)
 #   PPVPN_BUILD_NUMBER   the release's one counter, DESKTOP_BUILD_OFFSET plus
 #                        its run number, 0-65535 (default 0): the fourth part
 #                        of the Windows file version, and CFBundleVersion
 #                        <version>.<build> on macOS, as for the native apps
+#   MACOS_ARCHS          macOS: "arm64 x86_64" builds the library for both and
+#                        joins them, for the release's two DMGs (default: the
+#                        runner's architecture only)
+#   and what rust/src/update.rs and bridge.rs bake into the library:
+#   PPVPN_UPDATE_SITE, PPVPN_RELEASE_CHANNEL, PPVPN_SPARKLE_PUBLIC_KEY,
+#   PPVPN_API_BASE_DEFAULT
 set -euo pipefail
 
 app=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,6 +37,16 @@ build=${PPVPN_BUILD_NUMBER:-0}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be x.y.z, got '$version'" >&2; exit 1; }
 [[ $build =~ ^[0-9]+$ ]] && [ "$build" -le 65535 ] ||
   { echo "build number must be 0-65535, got '$build'" >&2; exit 1; }
+# A build for a channel updates from that channel's feed (as the native
+# builds require it): without the site its updates would silently be off.
+if [ -n "${PPVPN_RELEASE_CHANNEL:-}" ] && [ -z "${PPVPN_UPDATE_SITE:-}" ]; then
+  echo "PPVPN_UPDATE_SITE is required for a channel build" >&2
+  exit 1
+fi
+if [ -n "${PPVPN_UPDATE_SITE:-}" ] && [[ ! $PPVPN_UPDATE_SITE =~ ^https://[^/[:space:]]+(/[^[:space:]]*)?$ ]]; then
+  echo "PPVPN_UPDATE_SITE must be an https URL" >&2
+  exit 1
+fi
 
 # Replaces the template's $2 (a basic regex) with $3 in $1. A template
 # without it fails the build rather than keeping the generated value.
@@ -147,10 +163,27 @@ flutter_rust_bridge_codegen generate
 grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> rust/src/lib.rs
 flutter analyze --no-fatal-infos
 
-(cd "$root" && cargo build --release --locked -p ppvpn-flutter)
+lib="$root/target/release"
+if [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
+  # Flutter's release app is universal; package-app.sh thins each DMG's copy.
+  slices=()
+  for arch in $MACOS_ARCHS; do
+    case $arch in
+      arm64) triple=aarch64-apple-darwin ;;
+      x86_64) triple=x86_64-apple-darwin ;;
+      *) echo "unsupported arch in MACOS_ARCHS: $arch" >&2; exit 1 ;;
+    esac
+    (cd "$root" && cargo build --release --locked -p ppvpn-flutter --target "$triple")
+    slices+=("$root/target/$triple/release/libppvpn_flutter.dylib")
+  done
+  lib="$root/target/universal-apple-darwin/release"
+  mkdir -p "$lib"
+  lipo -create "${slices[@]}" -output "$lib/libppvpn_flutter.dylib"
+else
+  (cd "$root" && cargo build --release --locked -p ppvpn-flutter)
+fi
 flutter build "$os" --release --build-name "$version" --build-number "$build"
 
-lib="$root/target/release"
 case $os in
   linux)
     bundle=build/linux/x64/release/bundle

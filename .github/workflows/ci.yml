@@ -847,27 +847,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config \
             libgtk-3-dev libx11-dev libxi-dev xvfb imagemagick libgl1-mesa-dri mesa-vulkan-drivers \
             gsettings-desktop-schemas dconf-gsettings-backend dconf-service
-      - name: Cache Flutter
+      - uses: ./.github/actions/flutter-toolchain
         if: steps.scope.outputs.flutter == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/flutter-sdk
-          key: flutter-${{ hashFiles('apps/flutter/scripts/install-flutter.sh') }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Install Flutter
-        if: steps.scope.outputs.flutter == 'true'
-        run: apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/flutter-sdk"
-      - name: Cache flutter_rust_bridge_codegen
-        if: steps.scope.outputs.flutter == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/flutter_rust_bridge_codegen*
-          key: frb-codegen-${{ env.FRB_CODEGEN_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Install flutter_rust_bridge_codegen
-        if: steps.scope.outputs.flutter == 'true'
-        run: |
-          if ! flutter_rust_bridge_codegen --version 2>/dev/null | grep -qF "$FRB_CODEGEN_VERSION"; then
-            cargo install flutter_rust_bridge_codegen --version "$FRB_CODEGEN_VERSION" --locked --force
-          fi
+          frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
       - id: build
         name: Build
         if: steps.scope.outputs.flutter == 'true'

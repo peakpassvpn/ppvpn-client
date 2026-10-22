@@ -26,7 +26,11 @@
 
 ## 打包与发行（`release.yml`）
 
-- 每次合入 main：`linux`（deb 和 rpm）、`macos`（每个架构一个 DMG）、`windows`（NSIS）构建安装包，不读任何密钥
+安装包都是 Flutter 版（`apps/flutter`，#401）：`apps/flutter/scripts/ci-build.sh` 构建 app，再由
+`package-linux.sh`、`tools/desktop/ci/build-macos-native.sh`（经 `package-macos.sh`）、`package-windows.ps1` 打包，
+文件名、更新源和签名都和原生版相同，已装的原生版原地升级。原生版（`apps/macos`、`apps/windows`、`apps/linux`）不再发行。
+
+- 每次合入 main：`linux`（deb 和 rpm）、`macos`（每个架构一个 DMG 和 .pkg）、`windows`（NSIS）构建安装包，不读任何密钥
   （Windows 不签名、macOS ad-hoc 签名、没有更新签名），作为 workflow artifact；`linux-rpm-smoke` 在 dnf 下安装一次，
   `linux-repo` 用这些包自测 apt/dnf 仓库。什么都不发布。
 - 手动触发 `channel=stable`：在 tag `vX.Y.Z`（0.6.0 及以后；桌面端、CLI 和引擎同一个版本、同一个 Release）上，
