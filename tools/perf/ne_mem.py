@@ -223,14 +223,40 @@ def unroute_test_net():
         subprocess.run(["ip", "route", "del", TEST_NET], stderr=subprocess.DEVNULL)
 
 
+class RuleSetChanged(RuntimeError):
+    pass
+
+
 def wait_rule_sets(engine, timeout=60):
     deadline = time.time() + timeout
     while time.time() < deadline:
         sets = engine.call("status")["status"].get("rule_sets", [])
         if sets and all(s.get("state") == "ready" for s in sets):
             return sets
+        if any(s.get("error") == "RULE_SET_SHA256_MISMATCH" for s in sets):
+            raise RuleSetChanged(f"rule sets not ready: {sets}")
         time.sleep(0.5)
     raise RuntimeError(f"rule sets not ready: {sets}")
+
+
+def apply_rule_sets(engine, revision, ports, index, sizes, start=False):
+    """Applies the profile REVISION with the rule sets of RULE_SETS[...][INDEX]
+    and waits for them, hashed right before: the sources rewrite their
+    branches, and a file that changes between the hash and the engine's
+    download is a SHA256 mismatch (#425). Then hashes again and applies once
+    more."""
+    for attempt in (1, 2):
+        sets, sizes[index] = rule_sets(index)
+        engine.call("apply", request={"profile": profile(revision, ports, sets),
+                                      "allowed_rule_set_hosts": ["raw.githubusercontent.com"]})
+        if start and attempt == 1:
+            engine.call("start")
+        try:
+            return wait_rule_sets(engine)
+        except RuleSetChanged:
+            if attempt == 2:
+                raise
+            log("ne-mem: a rule set changed upstream, hashing again (#425)")
 
 
 def loadgen(args, *extra, failures_ok=True):
@@ -321,7 +347,7 @@ def failure(row):
     return None
 
 
-def run(args, variant, settings, workers, ports, sets1, sets2, work):
+def run(args, variant, settings, workers, ports, sizes, work):
     rows = []
     plat = "ios" if sys.platform == "darwin" else "android"
     before = interfaces()
@@ -338,11 +364,7 @@ def run(args, variant, settings, workers, ports, sets1, sets2, work):
             rows.append(row)
 
         mark("engine_new")
-        request = {"profile": profile("ne-mem#1", ports, sets1),
-                   "allowed_rule_set_hosts": ["raw.githubusercontent.com"]}
-        engine.call("apply", request=request)
-        engine.call("start")
-        wait_rule_sets(engine)
+        apply_rule_sets(engine, "ne-mem#1", ports, 0, sizes, start=True)
         new = sorted(interfaces() - before)
         if len(new) != 1:
             raise RuntimeError(f"want one new interface, got {new}")
@@ -385,10 +407,7 @@ def run(args, variant, settings, workers, ports, sets1, sets2, work):
         answered = dns_burst(args.dns_queries, args.dns_rate)
         mark("dns", queries=args.dns_queries, answered=answered, node_sessions_peak=sessions.stop())
 
-        request = {"profile": profile("ne-mem#2", ports, sets2),
-                   "allowed_rule_set_hosts": ["raw.githubusercontent.com"]}
-        engine.call("apply", request=request)
-        wait_rule_sets(engine)
+        apply_rule_sets(engine, "ne-mem#2", ports, 1, sizes)
         mark("ruleset_refresh")
 
         time.sleep(SETTLE_SECONDS)
@@ -453,8 +472,7 @@ def main():
     if os.geteuid() != 0:
         sys.exit("run as root: sail opens the TUN")
 
-    sets1, sizes1 = rule_sets(0)
-    sets2, sizes2 = rule_sets(1)
+    sizes = [{}, {}]  # the rule sets' sizes, as last hashed
     work = tempfile.mkdtemp(prefix="ne-mem-")
     node = subprocess.Popen([args.fakenode, "-dir", work, "-redirect", TEST_NET],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -465,7 +483,7 @@ def main():
             for workers in (int(w) for w in args.workers.split(",")):
                 # A fresh state directory each run: start downloads the rule sets.
                 shutil.rmtree(os.path.join(work, "state"), ignore_errors=True)
-                rows += run(args, variant, settings, workers, ports, sets1, sets2, work)
+                rows += run(args, variant, settings, workers, ports, sizes, work)
     finally:
         node.stdin.close()
         node.wait(timeout=10)
@@ -474,14 +492,14 @@ def main():
                 dest = shutil.copy(os.path.join(work, name), os.getcwd())
                 os.chmod(dest, 0o644)
         shutil.rmtree(work, ignore_errors=True)
-    report = table(rows, (sizes1, sizes2))
+    report = table(rows, sizes)
     print(report)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write("## ne-mem (#388)\n\n" + report + "\n")
     if args.out:
         with open(args.out, "w") as f:
-            json.dump({"rows": rows, "rule_set_bytes": [sizes1, sizes2],
+            json.dump({"rows": rows, "rule_set_bytes": sizes,
                        "variants": dict(variants)}, f, indent=1)
         os.chmod(args.out, 0o644)
     # dhat slows the engine enough that the DNS burst falls short (#388):
