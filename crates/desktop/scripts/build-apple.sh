@@ -6,6 +6,8 @@
 #
 # Usage: scripts/build-apple.sh [output-dir] [--debug]
 #   output-dir defaults to <repo>/apps/macos/PPVPNClient
+#   PPVPN_APPLE_TARGETS  the slices (default both); CI's package check of the
+#                        Flutter app builds only the runner's
 set -euo pipefail
 
 CRATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,7 +17,7 @@ PROFILE=release
 [[ "${2:-}" == "--debug" ]] && PROFILE=debug
 CARGO_FLAGS=(--locked)
 [[ "$PROFILE" == release ]] && CARGO_FLAGS+=(--release)
-TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
+read -r -a TARGETS <<< "${PPVPN_APPLE_TARGETS:-aarch64-apple-darwin x86_64-apple-darwin}"
 LIB=libppvpn_client.dylib
 FRAMEWORK=PPVPNClientFFI
 export MACOSX_DEPLOYMENT_TARGET=13.0
@@ -31,16 +33,23 @@ WORK="$TARGET_DIR/apple-package"
 rm -rf "$WORK" && mkdir -p "$WORK/bindings"
 
 # Bindings are generated from the compiled library so they always match it.
-cargo run --locked --quiet --bin uniffi-bindgen -- generate \
-  --library "$TARGET_DIR/aarch64-apple-darwin/$PROFILE/$LIB" \
+# The generator is built like the library (profile, and the host's target
+# named), so that it reuses the library's build when the host is one slice.
+HOST="$(rustc -vV | sed -n 's/^host: //p')"
+cargo run ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} --quiet --target "$HOST" --bin uniffi-bindgen -- generate \
+  --library "$TARGET_DIR/${TARGETS[0]}/$PROFILE/$LIB" \
   --language swift --out-dir "$WORK/bindings"
 
-# Versioned macOS framework around the universal dylib.
+# Versioned macOS framework around the universal dylib (or the one slice).
 FW="$WORK/$FRAMEWORK.framework"
 mkdir -p "$FW/Versions/A/Headers" "$FW/Versions/A/Modules" "$FW/Versions/A/Resources"
-lipo -create -output "$FW/Versions/A/$FRAMEWORK" \
-  "$TARGET_DIR/aarch64-apple-darwin/$PROFILE/$LIB" \
-  "$TARGET_DIR/x86_64-apple-darwin/$PROFILE/$LIB"
+SLICES=()
+for target in "${TARGETS[@]}"; do SLICES+=("$TARGET_DIR/$target/$PROFILE/$LIB"); done
+if ((${#SLICES[@]} == 1)); then
+  cp "${SLICES[0]}" "$FW/Versions/A/$FRAMEWORK"
+else
+  lipo -create -output "$FW/Versions/A/$FRAMEWORK" "${SLICES[@]}"
+fi
 install_name_tool -id "@rpath/$FRAMEWORK.framework/Versions/A/$FRAMEWORK" "$FW/Versions/A/$FRAMEWORK"
 # Local symbols only; the exported FFI stays.
 if [[ "$PROFILE" == release ]]; then strip -x "$FW/Versions/A/$FRAMEWORK"; fi

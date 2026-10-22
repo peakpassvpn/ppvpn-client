@@ -865,6 +865,54 @@ jobs:
             apps/flutter/scripts/smoke.sh "${{ steps.build.outputs.bundle }}" "$RUNNER_TEMP/flutter-out"
           fi
           { echo '```'; cat "$RUNNER_TEMP/flutter-out/results.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # The macOS packaging (#401 step 5, scripts/package-macos.sh), as the
+      # native release's: the Swift push agent, its client framework, the
+      # LaunchAgent and the service helpers in the bundle, inside-out
+      # signing (ad-hoc here), the DMG, the .pkg and release-meta. The
+      # runner's slice only (arm64), with the client and the helpers in
+      # debug: the packaging is what is checked, and debug builds the
+      # quickest. Then the shipped app as the .pkg holds it. Nothing uploaded.
+      - name: Package (macOS)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
+        timeout-minutes: 45
+        env:
+          PPVPN_APPLE_TARGETS: aarch64-apple-darwin
+        run: |
+          triple=aarch64-apple-darwin
+          command -v xcodegen >/dev/null || brew install xcodegen
+          apps/macos/scripts/bootstrap.sh
+          cargo build --locked -p ppvpn-service --bins --target "$triple"
+          mkdir -p build/binaries
+          for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
+            install -m 755 "target/$triple/debug/$bin" "build/binaries/$bin-$triple"
+          done
+          SKIP_BOOTSTRAP=1 apps/flutter/scripts/package-macos.sh "${{ steps.build.outputs.bundle }}" arm64
+          ls -l dist/macos
+          python3 - dist/macos/release-meta-macos-arm64.json <<'PY'
+          import hashlib, json, os, sys
+          meta = json.load(open(sys.argv[1]))
+          keys = {"schema", "platform", "channel", "version", "build", "file", "length", "sha256",
+                  "ed_signature", "install_file", "install_length", "install_sha256", "min_os",
+                  "published_at"}
+          assert set(meta) == keys, sorted(set(meta) ^ keys)
+          assert meta["platform"] == "macos-arm64" and meta["min_os"] == "13.0", meta
+          base = os.path.dirname(sys.argv[1])
+          for file, length, sha in (("file", "length", "sha256"),
+                                    ("install_file", "install_length", "install_sha256")):
+              data = open(os.path.join(base, meta[file]), "rb").read()
+              assert len(data) == meta[length] and hashlib.sha256(data).hexdigest() == meta[sha], file
+          print(json.dumps(meta, indent=2))
+          PY
+          hdiutil verify dist/macos/PPVPN-*-macos-arm64.dmg
+          pkg="$RUNNER_TEMP/flutter-pkg"
+          pkgutil --expand-full dist/macos/PPVPN-*-macos-arm64.pkg "$pkg"
+          grep -q 'identifier="com.peakpassvpn.ppvpn.desktop.pkg"' "$pkg/PackageInfo"
+          cmp apps/macos/packaging/postinstall "$pkg/Scripts/postinstall"
+          app="$pkg/Payload/PPVPN.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -qx 'Signature=adhoc'
+          codesign -d --entitlements - --xml "$app" | grep -q 'com.apple.security.cs.disable-library-validation'
+          ls -R "$app/Contents/Library" "$app/Contents/MacOS"
       # Enhanced mode end to end on Linux (#401 step 2): the release bundle
       # in the packages' layout (/usr/lib/ppvpn/ppvpn, the only client the
       # service accepts) with the service built in its shipping profile and

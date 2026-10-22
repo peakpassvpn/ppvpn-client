@@ -81,7 +81,8 @@ any release.
   helpers: `rust/src/hooks.rs`). The helpers (`ppvpn-service-install`,
   `-uninstall`, and on macOS `ppvpn-service`) must sit next to the app's
   executable; `scripts/ci-build.sh` does not put them there. On Linux,
-  `scripts/install-linux-layout.sh` does (see below).
+  `scripts/install-linux-layout.sh` does, on macOS
+  `scripts/package-macos.sh` (see below).
 - Quitting from the tray puts the system proxy back (`Client::shutdown`).
   Closing the window only hides it.
 - The app takes over the native apps' data in place (#401 step 5): the
@@ -187,6 +188,40 @@ Pinned versions:
 | tray_manager | 0.8.0 | `pubspec.yaml` |
 | nativeapi | 0.5.2 | `pubspec.yaml` |
 | window_manager | 0.5.2 | `pubspec.yaml` |
+
+## macOS packaging
+
+`scripts/package-macos.sh <PPVPN.app> arm64|x86_64` packages the app that
+`scripts/ci-build.sh` built as the native release packages
+`apps/macos` (#401 step 5), into the same artifacts in `dist/macos`. Into a
+copy of the bundle, at the native app's paths, it puts:
+
+- the Swift push agent (`apps/macos`, target `PPVPNAgent`, built with the
+  app's version) at `Contents/Library/LoginItems/PPVPN Agent.app`;
+- its launchd job at `Contents/Library/LaunchAgents`;
+- the client framework the agent links at `Contents/Frameworks`;
+- the service helpers in `Contents/MacOS`, where `rust/src/hooks.rs` looks
+  for them.
+
+Then `apps/macos/scripts/package-app.sh`, which the native
+`package-dmg.sh` also uses, does the rest. It thins the bundle to the one
+architecture and signs it inside out with the hardened runtime and the
+native app's entitlements. It signs with the fixed certificate the service
+pins when `PPVPN_CODESIGN_IDENTITY` is set, ad-hoc otherwise. It then writes
+`PPVPN-<version>-<platform>.dmg` (with the Sparkle signature when
+`SPARKLE_PRIVATE_KEY_FILE` is set), the `.pkg` (id
+`com.peakpassvpn.ppvpn.desktop.pkg`, with the native postinstall) and
+`release-meta-<platform>.json`.
+
+An installed app keeps the agent registered as the native app does
+(`runner/macos/Runner/MainFlutterWindow.swift`, `PushAgentService`): it
+uses `SMAppService.agent` from `/Applications`, registers again once per
+build, and checks the heartbeat every five minutes, with `launchctl
+kickstart` and a rate-limited re-registration.
+
+CI (job `flutter`, macOS) packages the arm64 slice ad-hoc with the client
+and the helpers in debug. It checks the bundle, the signatures, the DMG,
+the expanded `.pkg` and release-meta. release.yml does not use it yet.
 
 ## Linux layout and the enhanced-mode end-to-end test
 

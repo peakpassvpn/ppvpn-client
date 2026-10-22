@@ -10,7 +10,10 @@
 #         depend on. ci.yml skips those builds when it is false.
 #   flutter  apps/flutter/ (the Flutter desktop app, #401), crates/desktop/
 #         (what it links), apps/linux/packaging/ (its deb and rpm take the
-#         native package's scripts), the dependencies or the workflows. ci.yml's
+#         native package's scripts), what its macOS packaging takes from
+#         apps/macos (the scripts, the push agent and what it builds from,
+#         the LaunchAgent, the .pkg's postinstall), the dependencies or the
+#         workflows. ci.yml's
 #         flutter job builds only when it is true. apps/flutter/ alone
 #         does not set desktop: the native apps do not depend on it.
 #         And outside apps/flutter/rust/ it does not set code either: a
@@ -60,6 +63,9 @@ while IFS= read -r f; do
     crates/desktop/*) desktop=true flutter=true code=true ;;
     # The maintainer scripts and autostart entry both Linux packages ship.
     apps/linux/packaging/*) desktop=true flutter=true code=true ;;
+    apps/macos/scripts/* | apps/macos/PPVPNAgent/* | apps/macos/AppLogic/* | \
+    apps/macos/LaunchAgents/* | apps/macos/packaging/* | apps/macos/project.yml)
+      desktop=true flutter=true code=true ;;
     apps/* | crates/engine-host/* | crates/service/* | tools/desktop/*)
       desktop=true code=true ;;
     *) code=true ;;
