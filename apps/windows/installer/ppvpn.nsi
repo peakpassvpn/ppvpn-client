@@ -1,7 +1,8 @@
 ﻿; PPVPN for Windows — NSIS installer (per-machine, x64, zh-CN + en-US).
 ;
-; Built by apps/windows/scripts/package.ps1, which stages the files and
-; passes /DDEFINES=<generated defines.nsh> with:
+; Built by apps/windows/scripts/package.ps1 (the native WinUI app) or
+; apps/flutter/scripts/package-windows.ps1 (the Flutter app, #401), which
+; stage the files and pass /DDEFINES=<generated defines.nsh> with:
 ;   VERSION        user-visible version (0.3.0)
 ;   BUILD_VERSION  four-part file version (0.3.0.12)
 ;   STAGE_DIR      directory whose contents are installed into $INSTDIR
@@ -12,8 +13,11 @@
 ; Layout: everything in one directory, because ppvpn-service only accepts
 ; clients named ppvpn.exe that run from the service's own directory, and it
 ; loads wintun.dll from that directory too:
-;   $PROGRAMFILES64\PPVPN\ppvpn.exe (+ .NET/Windows App SDK runtime, WinSparkle.dll)
-;   ppvpn-push-agent.exe (NativeAOT; shares runtimes\win-x64\native\ppvpn_client.dll)
+;   $PROGRAMFILES64\PPVPN\ppvpn.exe
+;     native: + .NET/Windows App SDK runtime, WinSparkle.dll
+;     Flutter: + flutter_windows.dll, ppvpn_flutter.dll, plugin DLLs, data\, Assets\AppLogo.png
+;   ppvpn-push-agent.exe (native: NativeAOT, shares runtimes\win-x64\native\ppvpn_client.dll;
+;     Flutter: Rust, apps/flutter/push-agent)
 ;   ppvpn-service.exe, ppvpn-service-install.exe, ppvpn-service-uninstall.exe, wintun.dll
 ;   install-files.txt (what this version installed; used to clean up on upgrade)
 ;   uninstall.exe
@@ -67,12 +71,13 @@ RequestExecutionLevel admin
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 ; Platform/LaunchAtLogin.cs
 !define RUN_VALUE "PPVPN"
-; Platform/AppUpdater.cs (QuitSignal)
+; Platform/AppUpdater.cs (QuitSignal); apps/flutter/rust/src/instance.rs
 !define QUIT_EVENT "Local\PPVPN.Desktop.Quit"
 ; Platform/CredentialStore.cs
 !define CREDENTIAL_TARGET "PPVPN/desktop.credentials"
 !define FAKE_CREDENTIAL_TARGET "PPVPN/desktop.credentials.fake"
-; Platform/AppNotifications.cs (process AppUserModelID; also on the shortcuts)
+; Platform/AppNotifications.cs (process AppUserModelID; also on the shortcuts);
+; apps/flutter/rust/src/aumid.rs
 !define AUMID "PeakPass.PPVPN"
 !define TOAST_ACTIVATOR_CLSID "{FCD3C3FA-FCA6-4F2D-BC9E-BEA74D70EBBE}"
 !define MANIFEST "install-files.txt"

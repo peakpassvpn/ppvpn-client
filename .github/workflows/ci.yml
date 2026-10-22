@@ -25,7 +25,8 @@ name: ci
 #                C# bindings, App.Core, the app and push agent builds
 #   flutter      the Flutter prototype (#387) on Linux, macOS and Windows:
 #                build and smoke test, the Linux deb and rpm, only when it
-#                or the client changed
+#                or the client changed; on Windows also its installer,
+#                installed and uninstalled
 # A pull request that changes only docs/ or Markdown runs every job, and each
 # skips its build and test steps (tools/ci-changes.sh `code`); lint still runs
 # the sensitive check.
@@ -754,7 +755,8 @@ jobs:
   # apps/flutter/scripts/ci-build.sh (platform runner, bridge codegen,
   # analysis, the Rust library and the app in release), then smoke.sh (still
   # running after 20 s, a screenshot, resident memory, bundle sizes; Linux
-  # in Xvfb without a GPU). Only when apps/flutter/ or crates/desktop
+  # in Xvfb without a GPU); on Windows also the installer, installed over
+  # the native app and uninstalled. Only when apps/flutter/ or crates/desktop
   # changed (tools/ci-changes.sh `flutter`); not in release.yml. Its caches
   # are read-only like the others', and nothing saves them: the Rust release
   # build starts from scratch.
@@ -1010,6 +1012,50 @@ jobs:
           else
             "$@"
           fi
+      # The Windows installer (#401 step 5): package-windows.ps1 packages
+      # the release bundle with the native app's installer script
+      # (apps/windows/installer/ppvpn.nsi), unsigned, as release.yml's
+      # windows job will; the service in its shipping profile without LTO,
+      # to keep the job short. smoke-installer.ps1 then installs it over the
+      # native app of the latest release (when fetched above), checks the
+      # installation, has the app quit on the installer's quit event and
+      # uninstalls it with /PURGE.
+      - name: Ensure NSIS
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
+            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          }
+          & $makensis /VERSION
+      - name: Installer (Windows)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        shell: powershell
+        env:
+          CARGO_PROFILE_SERVICE_LTO: 'false'
+          CARGO_PROFILE_SERVICE_CODEGEN_UNITS: '16'
+        run: apps/flutter/scripts/package-windows.ps1
+      - name: Installer smoke test (Windows)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        timeout-minutes: 15
+        run: |
+          set -- -Installer "$(cygpath -w "$(ls dist/windows/*-setup.exe)")"
+          native="${{ steps.native.outputs.installer }}"
+          if [ -n "$native" ]; then set -- "$@" -Native "$(cygpath -w "$native")"; fi
+          powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/smoke-installer.ps1 "$@"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        with:
+          name: flutter-installer-windows
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/windows/*-setup.exe
+            dist/windows/release-meta-windows-x64.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.scope.outputs.flutter == 'true'
         with:

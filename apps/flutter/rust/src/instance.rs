@@ -11,7 +11,10 @@
 //! - Windows: the toast's COM activator ([`toast`], as
 //!   apps/windows/PPVPN.Windows/Platform/AppNotifications.cs). The running
 //!   instance owns the first instance of a named pipe named after the data
-//!   directory. The push agent writes the activator's registration.
+//!   directory. The push agent writes the activator's registration (and
+//!   so does the app at start, `aumid.rs`). The running instance also
+//!   owns the installer's quit event (`QUIT_EVENT`): set, it quits the
+//!   app as the tray's Quit does.
 //! - macOS: nothing here. Launch Services keeps one instance, and the
 //!   push agent's `ppvpn://push/<id>` reaches the runner
 //!   (runner/macos/Runner/MainFlutterWindow.swift, lib/activation.dart).
@@ -30,6 +33,14 @@ const OPEN_SWITCH: &str = "--open-notification";
 /// A click forwarded to the running instance on Windows, as the native
 /// app forwards it: `--notification-activated=id%3D<push id>`.
 const FORWARD_SWITCH: &str = "--notification-activated=";
+/// Set by the installer and the uninstaller (apps/windows/installer/ppvpn.nsi,
+/// `QUIT_EVENT`) to have the running app quit through its normal path
+/// before they replace its files; the native app's QuitSignal
+/// (apps/windows/PPVPN.Windows/Platform/AppUpdater.cs). Only the running
+/// instance creates it: the installer takes its existence for a running app
+/// and starts the app again after a silent upgrade.
+#[cfg(windows)]
+const QUIT_EVENT: &str = r"Local\PPVPN.Desktop.Quit";
 /// More than any launch's arguments.
 #[cfg(any(target_os = "linux", windows))]
 const MAX_MESSAGE: usize = 64 * 1024;
@@ -81,6 +92,7 @@ fn deliver(activation: UiActivation) {
 fn activation(args: &[String]) -> UiActivation {
     UiActivation {
         push_id: push_in(args).and_then(|id| i64::try_from(id).ok()),
+        quit: false,
     }
 }
 
@@ -233,7 +245,7 @@ mod platform {
 
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
-        GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FlushFileBuffers, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -244,6 +256,7 @@ mod platform {
         WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
         PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
+    use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
     use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
 
     fn wide(text: &str) -> Vec<u16> {
@@ -277,6 +290,7 @@ mod platform {
             if pipe != INVALID_HANDLE_VALUE {
                 serve(pipe as usize)?;
                 super::toast::register();
+                listen_for_quit();
                 return Ok(true);
             }
             // SAFETY: no other call in between.
@@ -324,6 +338,38 @@ mod platform {
             })
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    /// Waits for the installer's quit event on a thread of its own and
+    /// hands it on as an activation. Without the event the installer falls
+    /// back to terminating the process, as with the native app.
+    fn listen_for_quit() {
+        let name = wide(super::QUIT_EVENT);
+        // SAFETY: a NUL-terminated name; an auto-reset event, not set. The
+        // handle stays open for the process's life.
+        let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+        if event.is_null() {
+            // SAFETY: no other call in between.
+            let error = unsafe { GetLastError() };
+            tracing::warn!("{}: {}", super::QUIT_EVENT, os_error(error));
+            return;
+        }
+        let event = event as usize;
+        let spawned = std::thread::Builder::new()
+            .name("ppvpn-quit".into())
+            .spawn(move || {
+                // SAFETY: the handle is open (above) and never closed.
+                if unsafe { WaitForSingleObject(event as HANDLE, INFINITE) } == WAIT_OBJECT_0 {
+                    tracing::info!("quit requested ({})", super::QUIT_EVENT);
+                    super::deliver(crate::api::UiActivation {
+                        push_id: None,
+                        quit: true,
+                    });
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "quit event not watched");
+        }
     }
 
     /// Until the launch closes its end.
@@ -644,6 +690,7 @@ mod toast {
             CLICKED.notify_all();
             super::deliver(crate::api::UiActivation {
                 push_id: i64::try_from(id).ok(),
+                quit: false,
             });
         }
         S_OK

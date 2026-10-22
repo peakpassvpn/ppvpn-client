@@ -3,6 +3,7 @@
 //! `mod frb_generated;` here; nothing generated is committed.
 
 pub mod api;
+mod aumid;
 mod autostart;
 mod bridge;
 #[cfg(target_os = "macos")]
