@@ -25,7 +25,9 @@
 #   release-meta-<platform>.json   what the update site's feed and pointer are written from;
 #                                  file/length/sha256/ed_signature are the DMG's,
 #                                  install_file/install_length/install_sha256 the pkg's
-set -euo pipefail
+set -Eeuo pipefail
+# Name the failing command: some (a pipeline in an assignment) fail silently.
+trap 'echo "error: ${BASH_SOURCE[0]}:$LINENO: \"$BASH_COMMAND\" exited $?" >&2' ERR
 
 APP="${1:-}"
 ARCH="${2:-}"
@@ -93,7 +95,13 @@ sign() {
       identifier=(--identifier "$id")
       preserve=entitlements
       ;;
-    *) id="$(codesign -dv "$1" 2>&1 | sed -n 's/^Identifier=//p')" ;;
+    *)
+      # x86_64 slices carry no linker signature (arm64 ones do): sign ad hoc
+      # first, so that codesign picks the identifier (the bundle id or the
+      # file name) as it does for the arm64 build.
+      codesign -dv "$1" >/dev/null 2>&1 || codesign --sign - "$1"
+      id="$(codesign -dv "$1" 2>&1 | sed -n 's/^Identifier=//p')"
+      ;;
   esac
   if [[ "$1" == "$APP" && -n "$ENTITLEMENTS" ]]; then
     entitlements=(--entitlements "$ENTITLEMENTS")
