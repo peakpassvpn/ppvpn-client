@@ -25,7 +25,8 @@
 #         set code for the workspace's clippy and tests.
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
-#         release.yml warms the caches on main only when it is true.
+#         release.yml warms the caches on main only when it is true; ci.yml's
+#         advisories job fails on an advisory only then.
 #   memory  the memory harness (ne-mem, tools/perf/{ne_mem,dhat_top}.py, test/perf/)
 #         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
 #         then build it in release and measure (#388).

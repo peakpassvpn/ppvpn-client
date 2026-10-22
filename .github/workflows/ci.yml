@@ -6,13 +6,15 @@ name: ci
 #                   (make test-integration)
 #   L3 system       a real TUN, routes, rules and DNS, privileged
 #                   (make test-system), and the desktop end to end
-# Eight jobs, all in parallel, all on every pull request. A job that does not
+# Nine jobs, all in parallel, all on every pull request. A job that does not
 # depend on the platform is named for what it checks (it runs on ubuntu, as
 # an implementation detail); a platform job is named for its OS and covers
 # only that OS's own code. L1 and L2 run once (docs/testing.md, "Platform
 # tests"):
 #   lint         the sensitive check, format, clippy, sail's pins, the
 #                release feature check
+#   advisories   cargo-deny: RustSec advisories and dependency sources
+#                (deny.toml)
 #   unit         L1
 #   integration  L2
 #   desktop      the desktop layers: the service and the client, the
@@ -150,6 +152,43 @@ jobs:
       - name: scripts
         if: steps.scope.outputs.code == 'true'
         run: bash -n tools/*.sh test/netns/*.sh
+
+  # cargo-deny against Cargo.lock (deny.toml): the RustSec advisories, then
+  # where the dependencies come from. A new advisory can appear on any day:
+  # it fails only a pull request that changes the dependencies (scope deps)
+  # and is a warning on the others, so that it shows without blocking
+  # unrelated work. The binary is cargo-deny's release, checked by hash.
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      # cargo-deny reads the graph with cargo metadata: rust-toolchain.toml's.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - name: cargo-deny
+        env:
+          VERSION: 0.20.2
+          SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          name=cargo-deny-$VERSION-x86_64-unknown-linux-musl
+          curl -sSfL -o "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$VERSION/$name.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+      - name: advisories
+        continue-on-error: ${{ steps.scope.outputs.deps != 'true' }}
+        run: cargo deny --all-features --locked check advisories
+      - name: sources
+        run: cargo deny --all-features --locked check sources
 
   # L1 on Linux.
   unit:
