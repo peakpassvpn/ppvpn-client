@@ -63,7 +63,7 @@ any release.
 
   The version is `PPVPN_VERSION` (default: the workspace's, `Cargo.toml`)
   and the build number `PPVPN_BUILD_NUMBER` (default 0), the names
-  release.yml gives the native builds. macOS's `CFBundleVersion` is
+  release.yml gives the installer jobs. macOS's `CFBundleVersion` is
   `<version>.<build>`, as the native app's. The Dart package stays
   `ppvpn_flutter`, and so does the bridge library (`libppvpn_flutter`).
 - `assets/tray/`: the shipped tray icons, copied from the native apps: the
@@ -225,7 +225,10 @@ kickstart` and a rate-limited re-registration.
 
 CI (job `flutter`, macOS) packages the arm64 slice ad-hoc with the client
 and the helpers in debug. It checks the bundle, the signatures, the DMG,
-the expanded `.pkg` and release-meta. release.yml does not use it yet.
+the expanded `.pkg` and release-meta. release.yml's `macos` job builds the
+app universal (`MACOS_ARCHS="arm64 x86_64"`) and packages both
+architectures through `tools/desktop/ci/build-macos-native.sh`
+(`PPVPN_FLUTTER_BUNDLE`), with the release's signing and Sparkle keys.
 
 ## Windows installer
 

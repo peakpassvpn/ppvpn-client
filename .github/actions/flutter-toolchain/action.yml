@@ -1,0 +1,35 @@
+name: Flutter toolchain
+description: >-
+  What apps/flutter/scripts/ci-build.sh needs besides Rust: the pinned
+  Flutter SDK (apps/flutter/scripts/install-flutter.sh, on PATH) and
+  flutter_rust_bridge_codegen at the version the bridge is generated with,
+  both cached. ci.yml's flutter job and release.yml's installer jobs.
+inputs:
+  frb-codegen-version:
+    description: flutter_rust_bridge_codegen's version (the flutter_rust_bridge of apps/flutter/rust/Cargo.toml)
+    required: false
+    default: 2.13.0
+runs:
+  using: composite
+  steps:
+    - name: Cache Flutter
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/flutter-sdk
+        key: flutter-${{ hashFiles('apps/flutter/scripts/install-flutter.sh') }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Install Flutter
+      shell: bash
+      run: apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/flutter-sdk"
+    - name: Cache flutter_rust_bridge_codegen
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cargo/bin/flutter_rust_bridge_codegen*
+        key: frb-codegen-${{ inputs.frb-codegen-version }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Install flutter_rust_bridge_codegen
+      shell: bash
+      env:
+        FRB_CODEGEN_VERSION: ${{ inputs.frb-codegen-version }}
+      run: |
+        if ! flutter_rust_bridge_codegen --version 2>/dev/null | grep -qF "$FRB_CODEGEN_VERSION"; then
+          cargo install flutter_rust_bridge_codegen --version "$FRB_CODEGEN_VERSION" --locked --force
+        fi

@@ -95,6 +95,9 @@ apps/linux/scripts/build-repo-packages.sh  # ppvpn-archive-keyring (deb), ppvpn-
 apps/linux/scripts/smoke-test.sh deb|rpm   # start an installed package once under Xvfb
 ```
 
+Releases no longer ship this app: release.yml packages the Flutter app (`apps/flutter`, #401)
+into the same deb and rpm. What follows is how the native app was released.
+
 Releases publish through `.github/workflows/release.yml` (see `docs/desktop/ci.md` and
 `docs/release.md`): the deb and the signed rpm are assets of the GitHub Release `vX.Y.Z`, and
 `tools/desktop/ci/build-linux-repo.sh` rebuilds the signed repositories from the releases (apt

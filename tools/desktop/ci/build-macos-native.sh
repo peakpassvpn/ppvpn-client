@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Build the native macOS app (apps/macos) as one DMG per architecture, plus
-# release metadata for each: macos-arm64 (Apple silicon) and macos-x64
-# (Intel), both built on an Apple silicon runner.
+# Build the macOS app as one DMG (and .pkg) per architecture, plus release
+# metadata for each: macos-arm64 (Apple silicon) and macos-x64 (Intel), both
+# built on an Apple silicon runner. The app is the Flutter one when
+# PPVPN_FLUTTER_BUNDLE is given (apps/flutter/scripts/package-macos.sh, #401),
+# else the native one (apps/macos, package-dmg.sh); the signing, the checks
+# and the output are the same.
 #
 # Required: CI_PROJECT_DIR
 # Optional:
+#   PPVPN_FLUTTER_BUNDLE       the universal PPVPN.app of apps/flutter/scripts/ci-build.sh
+#                              (built with MACOS_ARCHS and this script's environment)
 #   MACOS_ARCHS                "arm64 x86_64" (default), or one of them
 #   RUST_TOOLCHAIN             default stable
 #   PPVPN_BUILD_NUMBER         monotonic counter shared by the release
@@ -116,10 +121,15 @@ for arch in $MACOS_ARCHS; do
   platform=macos-arm64
   [[ "$arch" == x86_64 ]] && platform=macos-x64
   # The client package is built once (universal) and reused.
-  SKIP_BOOTSTRAP=$bootstrap apps/macos/scripts/package-dmg.sh "$arch"
+  if [[ -n "${PPVPN_FLUTTER_BUNDLE:-}" ]]; then
+    SKIP_BOOTSTRAP=$bootstrap apps/flutter/scripts/package-macos.sh "$PPVPN_FLUTTER_BUNDLE" "$arch"
+    app="apps/flutter/build/macos-package-$arch/PPVPN.app"
+  else
+    SKIP_BOOTSTRAP=$bootstrap apps/macos/scripts/package-dmg.sh "$arch"
+    app="apps/macos/build/release-$arch/Build/Products/Release/PPVPN.app"
+  fi
   bootstrap=1
 
-  app="apps/macos/build/release-$arch/Build/Products/Release/PPVPN.app"
   expected_signature='Signature=adhoc'
   [[ -n "${PPVPN_CODESIGN_IDENTITY:-}" ]] && expected_signature="Authority=$PPVPN_CODESIGN_IDENTITY"
   if ! codesign -dv --verbose=4 "$app" 2>&1 | grep -qx "$expected_signature"; then
