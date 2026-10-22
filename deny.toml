@@ -7,10 +7,15 @@
 
 [advisories]
 ignore = [
-  # emSign ECC Root CA - G3 distrusted; webpki-root-certs 1.0.10 drops it.
-  # sail 0.22.0 takes it with it (#421, held until that release is
-  # promoted).
-  { id = "RUSTSEC-2026-0383", reason = "fixed by the sail 0.22.0 upgrade, #421" },
+  # Unmaintained, no known vulnerability, no update removes them yet (#423).
+  # zbus 4's (Linux D-Bus: the flutter app, the push agent, the CLI's
+  # keyring through secret-service 4); zbus 6 no longer depends on them.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant, through zbus 4 (#423)" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names, through zbus 4 (#423)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, through zbus 4 (#423)" },
+  # askama's derive, through uniffi_bindgen: build time only; the newest
+  # askama_derive still depends on it.
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml, through uniffi_bindgen's askama, build time only (#423)" },
 ]
 
 [sources]
