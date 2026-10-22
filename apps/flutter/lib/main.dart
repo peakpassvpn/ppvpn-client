@@ -5,7 +5,7 @@
 // entry on Windows and Linux, rust/src/autostart.rs) starts it in the tray
 // with no window. One instance runs: another launch, or a click on a
 // notification, shows its window (activation.dart); the Windows installer
-// has it quit as the tray's Quit does.
+// has it quit as the tray's Quit does. Updates: updates.dart.
 
 import 'dart:async';
 import 'dart:io';
@@ -27,6 +27,7 @@ import 'strings.dart';
 import 'src/rust/frb_generated.dart';
 import 'theme.dart';
 import 'tray.dart';
+import 'updates.dart';
 
 /// The bridge library ci.yml puts next to the app: beside the executable
 /// (Windows), in the bundle's lib/ (Linux), in Contents/Frameworks (macOS).
@@ -99,7 +100,14 @@ Future<void> main() async {
     await windowManager.focus();
   }
 
-  final tray = Tray(app: app, onOpen: () => unawaited(open()), onQuit: quit);
+  // Before the tray, whose menu offers a check where the app installs updates.
+  if (samplePage == null) await Updates.start();
+  final tray = Tray(
+    app: app,
+    onOpen: () => unawaited(open()),
+    onQuit: quit,
+    onCheckForUpdates: Updates.installs ? () => unawaited(Updates.check()) : null,
+  );
   windowManager.addListener(_HideOnClose());
   mark('tray_created');
   // Off unless PPVPN_FLUTTER_E2E is set (e2e/linux_enhanced.sh).
@@ -113,6 +121,11 @@ Future<void> main() async {
       }()),
       // The installer is about to replace the app's files.
       onQuit: () => unawaited(quit()),
+      // The update's installer runs: out of sight until it asks the app to quit.
+      onUpdate: () => unawaited(() async {
+        tray.dispose();
+        await windowManager.hide();
+      }()),
     );
   }
   unawaited(WidgetsBinding.instance.waitUntilFirstFrameRasterized.then((_) => mark('first_frame')));

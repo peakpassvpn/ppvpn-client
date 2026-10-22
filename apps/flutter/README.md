@@ -201,7 +201,11 @@ copy of the bundle, at the native app's paths, it puts:
 - its launchd job at `Contents/Library/LaunchAgents`;
 - the client framework the agent links at `Contents/Frameworks`;
 - the service helpers in `Contents/MacOS`, where `rust/src/hooks.rs` looks
-  for them.
+  for them;
+- Sparkle (the native project's package) at `Contents/Frameworks`, and the
+  Info.plist keys the native build sets: the appcast (`PPVPN_UPDATE_FEED_URL`,
+  else the channel's feed from `PPVPN_UPDATE_SITE` and
+  `PPVPN_RELEASE_CHANNEL`) and the EdDSA key (`PPVPN_SPARKLE_PUBLIC_KEY`).
 
 Then `apps/macos/scripts/package-app.sh`, which the native
 `package-dmg.sh` also uses, does the rest. It thins the bundle to the one
@@ -234,7 +238,8 @@ and `/PURGE`, and the same artifacts,
 `release-meta-windows-x64.json`. It stages the release bundle (`ppvpn.exe`,
 `flutter_windows.dll`, `ppvpn_flutter.dll`, the plugins' DLLs, `data\`), the
 Rust push agent, `ppvpn-service`, `-install` and `-uninstall` (built as
-`apps/windows/scripts/package.ps1` builds them), `wintun.dll` and the
+`apps/windows/scripts/package.ps1` builds them), `wintun.dll`,
+`WinSparkle.dll` (the native app's WinSparkle version) and the
 notifications' icon (`Assets\AppLogo.png`). `install-files.txt` lists what
 it installs, so an upgrade from the native app removes the native app's
 files, and the next upgrade this app's. Authenticode signing and the
@@ -261,6 +266,29 @@ unsigned, then `scripts/smoke-installer.ps1` installs it over the native
 app of the latest release, checks the installation, sets the quit event,
 and uninstalls with `/PURGE`. The artifact `flutter-installer-windows`
 holds the installer.
+
+## Updates
+
+From the native apps' feeds, as they update (`lib/updates.dart`):
+
+- macOS: Sparkle, which the runner loads from `Contents/Frameworks` when
+  `scripts/package-macos.sh` bundled it (`MainFlutterWindow.swift`,
+  `Updater`). It unregisters the push agent before it replaces the app.
+- Windows: WinSparkle (`rust/src/update.rs`) with the feed and key baked
+  into the bridge when it is built (`PPVPN_UPDATE_FEED_URL`, else
+  `PPVPN_UPDATE_SITE` and `PPVPN_RELEASE_CHANNEL`; `PPVPN_SPARKLE_PUBLIC_KEY`),
+  its state under the native app's registry key and the automatic-check
+  switch as `AutoCheckUpdates` in `app-settings.json`. Once its installer
+  runs, the app hides and waits for the installer's quit event, then
+  quits on its own after 30 s.
+- Linux: a notice in the settings page with the upgrade command, when the
+  repository's `latest.json` (`PPVPN_UPDATE_FEED`, else the channel's, else
+  stable's on the update site) has a newer build than `PPVPN_VERSION` and
+  `PPVPN_BUILD_NUMBER` baked into the bridge. A build without a build number
+  or outside a package has no notice.
+
+Builds without a feed (CI's, local ones) have updates off and no
+「检查更新…」.
 
 ## Linux layout and the enhanced-mode end-to-end test
 

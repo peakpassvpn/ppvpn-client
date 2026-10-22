@@ -20,7 +20,8 @@
     3. builds the push agent (apps/flutter/push-agent, release) -> ppvpn-push-agent.exe
     4. stages the bundle (ppvpn.exe, flutter_windows.dll, ppvpn_flutter.dll, the plugins' DLLs,
        data\), the agent, the service binaries, wintun.dll (pinned release, sha256-checked),
-       Assets\AppLogo.png (the notifications' icon, the native app's) and LICENSE.txt
+       WinSparkle.dll (the updater, rust/src/update.rs: the WinSparkle package the native app
+       references), Assets\AppLogo.png (the notifications' icon, the native app's) and LICENSE.txt
     5. optional Authenticode signing (apps/windows/scripts/sign-file.ps1, the same environment)
     6. install-files.txt, makensis (solid LZMA, or zlib with -FastCompression)
     7. EdDSA signature for the update feed (winsparkle-tool, as the native app's feed is
@@ -192,6 +193,20 @@ Expand-Archive -LiteralPath $wintunZip -DestinationPath $wintunDir -Force
 Copy-Item -LiteralPath (Join-Path $wintunDir "wintun\bin\amd64\wintun.dll") -Destination (Join-Path $stage "wintun.dll")
 Write-Host "wintun.dll $wintunVersion staged"
 
+# WinSparkle of the package the native app references: its DLL for the updater
+# (rust/src/update.rs loads it from beside ppvpn.exe), its winsparkle-tool.exe for the
+# feed's signature (step 7).
+$csproj = Join-Path $windowsDir "PPVPN.Windows\PPVPN.Windows.csproj"
+$winSparkleVersion = ([xml](Get-Content -Raw $csproj)).SelectSingleNode("//PackageReference[@Include='WinSparkle']").GetAttribute("Version")
+$winSparklePackage = Join-Path $work "winsparkle.$winSparkleVersion.zip"
+Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/winsparkle/$winSparkleVersion/winsparkle.$winSparkleVersion.nupkg" -OutFile $winSparklePackage
+$winSparkleDir = Join-Path $work "winsparkle"
+Expand-Archive -LiteralPath $winSparklePackage -DestinationPath $winSparkleDir -Force
+$winSparkleDll = Join-Path $winSparkleDir "runtimes\win-x64\native\WinSparkle.dll"
+if (-not (Test-Path -LiteralPath $winSparkleDll)) { throw "WinSparkle.dll (win-x64) not found in WinSparkle $winSparkleVersion" }
+Copy-Item -LiteralPath $winSparkleDll -Destination (Join-Path $stage "WinSparkle.dll")
+Write-Host "WinSparkle.dll $winSparkleVersion staged"
+
 # --- 5. Authenticode (optional) --------------------------------------------------------
 # Ours: the app, the bridge, the plugins built with it, the agent, the service.
 $ownBinaries = @("ppvpn.exe", "ppvpn_flutter.dll", "ppvpn-push-agent.exe", "ppvpn-service.exe",
@@ -263,14 +278,9 @@ if (-not $keyFile -and $keyText) {
 $edSignature = $null
 try {
   if ($keyFile) {
-    # winsparkle-tool.exe of the WinSparkle package the native app references: the
-    # installed native apps check the feed's signatures with WinSparkle.
-    $csproj = Join-Path $windowsDir "PPVPN.Windows\PPVPN.Windows.csproj"
-    $winSparkleVersion = ([xml](Get-Content -Raw $csproj)).SelectSingleNode("//PackageReference[@Include='WinSparkle']").GetAttribute("Version")
-    $package = Join-Path $work "winsparkle.$winSparkleVersion.zip"
-    Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/winsparkle/$winSparkleVersion/winsparkle.$winSparkleVersion.nupkg" -OutFile $package
-    Expand-Archive -LiteralPath $package -DestinationPath (Join-Path $work "winsparkle") -Force
-    $tool = Join-Path $work "winsparkle\tools\winsparkle-tool.exe"
+    # winsparkle-tool.exe of the WinSparkle package staged above: the installed apps,
+    # native and this one, check the feed's signatures with WinSparkle.
+    $tool = Join-Path $winSparkleDir "tools\winsparkle-tool.exe"
     if (-not (Test-Path -LiteralPath $tool)) { throw "winsparkle-tool.exe not found in WinSparkle $winSparkleVersion" }
     $edSignature = (& $tool sign --private-key-file $keyFile $installer | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $edSignature -notmatch '^[A-Za-z0-9+/]{86}==$') {

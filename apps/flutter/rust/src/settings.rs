@@ -13,7 +13,8 @@
 //!
 //! The two files are the .NET apps' JSON: `Appearance` (`System`, `Light`,
 //! `Dark`) and `ApiBaseOverride` (a string or null) among keys of theirs,
-//! which are kept as they are. The native apps have no language setting:
+//! which are kept as they are; on Windows also `AutoCheckUpdates` (a bool,
+//! update.rs). The native apps have no language setting:
 //! this app keeps its own as `language` (macOS) or `Language`, with the
 //! values `system`, `zh` and `en`; the native apps ignore it. With
 //! `PPVPN_FLUTTER_HOME` (the end-to-end tests) the settings are the JSON
@@ -81,6 +82,18 @@ fn read_json(path: &std::path::Path) -> Map<String, Value> {
     }
 }
 
+/// A file whole: a temporary file, then a rename.
+fn write_json(path: &std::path::Path, json: &Map<String, Value>) -> Result<(), String> {
+    if let Some(directory) = path.parent() {
+        std::fs::create_dir_all(directory)
+            .map_err(|error| format!("{}: {error}", directory.display()))?;
+    }
+    let staging = path.with_extension("json.new");
+    let bytes = serde_json::to_vec_pretty(json).map_err(|error| error.to_string())?;
+    std::fs::write(&staging, bytes).map_err(|error| format!("{}: {error}", staging.display()))?;
+    std::fs::rename(&staging, path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 fn read(store: &Store) -> Saved {
     match store {
         Store::Json(path) => {
@@ -129,15 +142,7 @@ fn write(store: &Store, saved: &Saved) -> Result<(), String> {
                 },
             );
             json.insert("Language".into(), saved.language.as_str().into());
-            if let Some(directory) = path.parent() {
-                std::fs::create_dir_all(directory)
-                    .map_err(|error| format!("{}: {error}", directory.display()))?;
-            }
-            let staging = path.with_extension("json.new");
-            let bytes = serde_json::to_vec_pretty(&json).map_err(|error| error.to_string())?;
-            std::fs::write(&staging, bytes)
-                .map_err(|error| format!("{}: {error}", staging.display()))?;
-            std::fs::rename(&staging, path).map_err(|error| format!("{}: {error}", path.display()))
+            write_json(path, &json)
         }
         #[cfg(target_os = "macos")]
         Store::Defaults => crate::cf::set_preferences(
@@ -202,4 +207,30 @@ pub(crate) fn save(settings: UiSettings) -> Result<(), String> {
 pub(crate) fn api_override(data_dir: &str) -> Option<String> {
     let store = store(data_dir).ok()?;
     Some(read(&store).api_override).filter(|base| !base.is_empty())
+}
+
+/// Windows: the native app's "Automatically check for updates",
+/// `AutoCheckUpdates` in app-settings.json; on unless saved off.
+#[cfg(windows)]
+pub(crate) fn auto_check_updates() -> bool {
+    let Ok((data_dir, _)) = dirs() else {
+        return true;
+    };
+    match store(&data_dir) {
+        Ok(Store::Json(path)) => read_json(&path)
+            .get("AutoCheckUpdates")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        _ => true,
+    }
+}
+
+/// Saves [`auto_check_updates`], keeping the file's other keys.
+#[cfg(windows)]
+pub(crate) fn set_auto_check_updates(enabled: bool) -> Result<(), String> {
+    let (data_dir, _) = dirs()?;
+    let Store::Json(path) = store(&data_dir)?;
+    let mut json = read_json(&path);
+    json.insert("AutoCheckUpdates".into(), enabled.into());
+    write_json(&path, &json)
 }
