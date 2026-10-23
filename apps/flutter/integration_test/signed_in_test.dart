@@ -63,9 +63,12 @@ void main() {
     // The nodes page: both nodes; make the second one current.
     await tester.tap(find.byKey(const ValueKey('nav-nodes')));
     await pumpUntil(tester, find.text('CI Two'));
+    // A double tap is two taps 40 to 300 ms apart in real time: wait that
+    // without a frame. pump waits for one, and macOS gives a window in the
+    // background (the runners') its frames late, past 300 ms (#425).
     final row = find.text('CI Two');
     await tester.tap(row);
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.tap(row);
     // The overview's node picker shows the current node.
     await tester.tap(find.byKey(const ValueKey('nav-overview')));
