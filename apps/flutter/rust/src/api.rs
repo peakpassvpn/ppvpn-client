@@ -70,8 +70,9 @@ pub struct UiSnapshot {
     /// Service paid-until, RFC 3339.
     pub expires_at: Option<String>,
     pub phase: UiPhase,
-    /// Line (replica) in use: its label, else its key.
-    pub line: Option<String>,
+    /// Line (replica) in use: its endpoint key, one of the current node's
+    /// [`UiLine::key`]s.
+    pub line_key: Option<String>,
     pub latency_ms: Option<u32>,
     /// The standard-mode core runs: local proxies and speed tests work.
     pub standard_ready: bool,
@@ -103,8 +104,17 @@ pub struct UiNode {
     /// Entry key, e.g. `cn-optimized`: picks the tier tag's colour.
     pub entry_key: String,
     pub udp: bool,
-    /// Lines (replicas) in failover order: label, else key.
-    pub lines: Vec<String>,
+    /// Lines (replicas) in failover order.
+    pub lines: Vec<UiLine>,
+}
+
+/// One of a node's lines. Keys are internal and never shown: a line
+/// without a label is named by its place (线路 2), as in the native apps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiLine {
+    pub key: String,
+    /// The backend's label; None when it gives none (or an empty one).
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

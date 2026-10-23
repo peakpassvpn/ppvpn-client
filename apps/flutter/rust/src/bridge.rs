@@ -18,8 +18,8 @@ use ppvpn_client::{
 use tokio::sync::Notify;
 
 use crate::api::{
-    UiAuth, UiConnectionMode, UiDeviceCode, UiError, UiEvents, UiLocalProxy, UiNode, UiPhase,
-    UiProbe, UiProbeMethod, UiProfile, UiRoutingMode, UiSnapshot, UiTraffic,
+    UiAuth, UiConnectionMode, UiDeviceCode, UiError, UiEvents, UiLine, UiLocalProxy, UiNode,
+    UiPhase, UiProbe, UiProbeMethod, UiProfile, UiRoutingMode, UiSnapshot, UiTraffic,
 };
 use crate::hooks::Hooks;
 
@@ -287,11 +287,7 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             ConnectionPhase::Disconnecting => UiPhase::Disconnecting,
             ConnectionPhase::Error => UiPhase::Error,
         },
-        line: connection
-            .detail
-            .endpoint_label
-            .clone()
-            .or_else(|| connection.detail.endpoint_key.clone()),
+        line_key: connection.detail.endpoint_key.clone(),
         latency_ms: connection.detail.latency_ms,
         standard_ready: matches!(snapshot.standard, StandardState::Ready { .. }),
         selected_node_id: snapshot.selected_node_id.clone(),
@@ -327,7 +323,10 @@ pub(crate) fn ui_node(node: Node) -> UiNode {
         lines: node
             .replicas
             .into_iter()
-            .map(|replica| replica.label.unwrap_or(replica.endpoint_key))
+            .map(|replica| UiLine {
+                key: replica.endpoint_key,
+                label: replica.label.filter(|label| !label.is_empty()),
+            })
             .collect(),
     }
 }

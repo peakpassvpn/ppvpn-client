@@ -643,6 +643,17 @@ String nodeTitle(rust.UiNode node) {
   return String.fromCharCodes(runes.skip(start)).trim();
 }
 
+/// A node's lines in failover order, by name: the label, else 线路 N by
+/// place (keys are internal and never shown), as in the native apps.
+List<String> lineNames(rust.UiNode node) => [
+  for (final (i, line) in node.lines.indexed) line.label ?? S.current('routeN', {'n': '${i + 1}'}),
+];
+
+/// The lines as one text, "HKG-A → 线路 2"; a single line without a label
+/// shows nothing.
+String linesText(rust.UiNode node) =>
+    node.lines.length == 1 ? (node.lines.single.label ?? '') : lineNames(node).join(' → ');
+
 /// Flags bundled under assets/flags (flag-icons, 4:3).
 const _flags = {
   'ae', 'ar', 'at', 'au', 'be', 'ca', 'ch', 'cn', 'de', 'dk', 'fi', 'fr', 'gb', 'hk',
