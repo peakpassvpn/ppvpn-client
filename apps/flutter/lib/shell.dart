@@ -190,19 +190,23 @@ class _Header extends StatelessWidget {
       child: Stack(
         children: [
           const Positioned.fill(child: _Drag()),
-          Padding(
-            padding: EdgeInsets.only(left: Tokens.pageInset, right: caps ? 0 : Tokens.pageInset),
-            child: Row(
-              children: [
-                Expanded(
-                  child: title == null
-                      ? const SizedBox()
-                      : Semantics(header: true, child: Text(title!, style: t.pageTitle)),
-                ),
-                if (status != null) ...[status!, const SizedBox(width: 12)],
-                ?bell,
-                if (caps) ...[const SizedBox(width: 8), const _CaptionButtons()],
-              ],
+          // Filled: the row is the bar's height and centres the title, the
+          // pill and the bell in it (not at the window's top edge).
+          Positioned.fill(
+            child: Padding(
+              padding: EdgeInsets.only(left: Tokens.pageInset, right: caps ? 0 : Tokens.pageInset),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: title == null
+                        ? const SizedBox()
+                        : Semantics(header: true, child: Text(title!, style: t.pageTitle)),
+                  ),
+                  if (status != null) ...[status!, const SizedBox(width: 12)],
+                  ?bell,
+                  if (caps) ...[const SizedBox(width: 8), const _CaptionButtons()],
+                ],
+              ),
             ),
           ),
         ],

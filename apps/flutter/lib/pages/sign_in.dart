@@ -347,7 +347,7 @@ class SignInBrand extends StatelessWidget {
                 const SizedBox(height: 36),
                 Row(
                   children: [
-                    const BrandMark(size: 40, light: true),
+                    const BrandMark(size: 40),
                     const SizedBox(width: 12),
                     Text(S.current('app'), style: text(22, 28, FontWeight.w700, white, -0.02)),
                   ],

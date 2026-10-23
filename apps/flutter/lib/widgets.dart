@@ -681,61 +681,29 @@ class Flag extends StatelessWidget {
   }
 }
 
-/// The brand mark: a rounded tile with the mountain (DesktopLogin and the
-/// sidebar). [tile] is the tile's fill, [mountain] and [snow] the shapes'.
+/// The brand mark: the app icon, the double P (sign-in and the sidebar).
+/// Drawn 1.22 times [size], as the native login did, so that the mark
+/// itself fills [size] and the icon's transparent margin overflows it.
 class BrandMark extends StatelessWidget {
-  const BrandMark({super.key, required this.size, this.light = false});
+  const BrandMark({super.key, required this.size});
 
   final double size;
 
-  /// White tile with a blue mountain (on the brand gradient); otherwise the
-  /// blue gradient tile with a white mountain.
-  final bool light;
-
   @override
-  Widget build(BuildContext context) => CustomPaint(size: Size.square(size), painter: _BrandMarkPainter(light));
-}
-
-class _BrandMarkPainter extends CustomPainter {
-  _BrandMarkPainter(this.light);
-  final bool light;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.scale(size.width / 24);
-    final tile = RRect.fromRectAndRadius(const Rect.fromLTWH(0, 0, 24, 24), const Radius.circular(6.5));
-    final fill = Paint();
-    if (light) {
-      fill.color = const Color(0xFFFFFFFF);
-    } else {
-      fill.shader = const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF3D63C9), Color(0xFF1F4390)],
-      ).createShader(const Rect.fromLTWH(0, 0, 24, 24));
-    }
-    canvas.drawRRect(tile, fill);
-    // M3.5 17.5 9.2 9l3.3 4.8 2.1-2.9 5.9 6.6z
-    final mountain = Path()
-      ..moveTo(3.5, 17.5)
-      ..lineTo(9.2, 9)
-      ..lineTo(12.5, 13.8)
-      ..lineTo(14.6, 10.9)
-      ..lineTo(20.5, 17.5)
-      ..close();
-    // M9.2 9l1.4 2.1-1.4.8-1.3-1z
-    final snow = Path()
-      ..moveTo(9.2, 9)
-      ..lineTo(10.6, 11.1)
-      ..lineTo(9.2, 11.9)
-      ..lineTo(7.9, 10.9)
-      ..close();
-    canvas.drawPath(mountain, Paint()..color = light ? const Color(0xFF1F4390) : const Color(0xFFFFFFFF));
-    canvas.drawPath(snow, Paint()..color = light ? const Color(0xFF8FA8F5) : const Color(0xFFC9D6FF));
-  }
-
-  @override
-  bool shouldRepaint(_BrandMarkPainter old) => old.light != light;
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: OverflowBox(
+      maxWidth: size * 1.22,
+      maxHeight: size * 1.22,
+      child: Image.asset(
+        'assets/brand/app-icon.png',
+        width: size * 1.22,
+        height: size * 1.22,
+        filterQuality: FilterQuality.medium,
+        excludeFromSemantics: true,
+      ),
+    ),
+  );
 }
 
 /// The overview's icon: the shield `M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10
