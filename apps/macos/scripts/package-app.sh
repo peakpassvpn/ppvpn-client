@@ -172,7 +172,21 @@ cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 mkdir -p "$OUT_DIR"
 rm -f "$DMG"
-hdiutil create -volname "PPVPN" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" >/dev/null
+# hdiutil create sometimes fails with "Resource busy" on CI runners (its
+# temporary image is still attached, or a leftover volume is). Detach those
+# and try again, three times at most.
+for try in 1 2 3; do
+  if hdiutil create -volname "PPVPN" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" >/dev/null; then
+    break
+  fi
+  [[ "$try" -lt 3 ]] || { echo "error: hdiutil create failed $try times" >&2; exit 1; }
+  echo "warning: hdiutil create failed (try $try), retrying" >&2
+  for volume in /Volumes/PPVPN*; do
+    [[ -d "$volume" ]] && hdiutil detach -force "$volume" >/dev/null 2>&1 || true
+  done
+  rm -f "$DMG"
+  sleep $((try * 5))
+done
 codesign --force --sign - "$DMG"
 echo "wrote $DMG"
 
