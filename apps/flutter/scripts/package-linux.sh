@@ -62,7 +62,9 @@ echo "PPVPN $version (build $build) for linux-$ARCH, channel ${channel:-none}"
 
 # --- 1. service and push agent --------------------------------------------------------
 (cd "$root" && cargo build --locked -p ppvpn-service --profile service --bins)
-(cd "$root" && cargo build --locked -p ppvpn-push-agent --release)
+# With the bridge, as ci-build.sh builds them: the same features, so nothing
+# is built again.
+(cd "$root" && cargo build --release --locked -p ppvpn-flutter -p ppvpn-push-agent)
 target=$(cd "$root" && cargo metadata --format-version 1 --no-deps \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 

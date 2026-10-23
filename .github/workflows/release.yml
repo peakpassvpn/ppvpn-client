@@ -269,8 +269,7 @@ jobs:
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
         run: |
-          tools/release-features-check.sh -p ppvpn-flutter
-          tools/release-features-check.sh -p ppvpn-push-agent
+          tools/release-features-check.sh -p ppvpn-flutter -p ppvpn-push-agent
           tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
       - id: build
         name: Build the app
@@ -816,8 +815,7 @@ jobs:
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
         run: |
-          tools/release-features-check.sh -p ppvpn-flutter
-          tools/release-features-check.sh -p ppvpn-push-agent
+          tools/release-features-check.sh -p ppvpn-flutter -p ppvpn-push-agent
           tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
       - name: Build the app
         run: apps/flutter/scripts/ci-build.sh
