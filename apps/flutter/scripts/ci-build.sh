@@ -180,7 +180,13 @@ if [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
   mkdir -p "$lib"
   lipo -create "${slices[@]}" -output "$lib/libppvpn_flutter.dylib"
 else
-  (cd "$root" && cargo build --release --locked -p ppvpn-flutter)
+  # Linux and Windows ship the push agent: built in the same invocation, its
+  # features unify with the bridge's (tokio's signal, the windows crate's),
+  # so the dependencies they share compile once, and package-linux.sh's and
+  # package-windows.ps1's build, the same command, finds them built.
+  agent=()
+  case $os in linux | windows) agent=(-p ppvpn-push-agent) ;; esac
+  (cd "$root" && cargo build --release --locked -p ppvpn-flutter ${agent[@]+"${agent[@]}"})
 fi
 flutter build "$os" --release --build-name "$version" --build-number "$build"
 

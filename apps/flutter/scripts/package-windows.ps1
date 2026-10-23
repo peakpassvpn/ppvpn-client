@@ -150,10 +150,11 @@ Push-Location $repo
 try {
   Invoke-Native "cargo" @("build", "--locked", "-p", "ppvpn-service", "--profile", "service", "--target", $target)
   # --- 3. the push agent ---------------------------------------------------------
-  # The host's release build, as ci-build.sh builds the bridge: it shares the client's
-  # build with it.
-  Write-Host "==> cargo build ppvpn-push-agent (release)"
-  Invoke-Native "cargo" @("build", "--locked", "--release", "-p", "ppvpn-push-agent")
+  # The host's release build with the bridge, the command ci-build.sh runs: alone, its
+  # features (the windows crate's) differ from the bridge's, and everything that shares
+  # them would be built again.
+  Write-Host "==> cargo build ppvpn-flutter ppvpn-push-agent (release)"
+  Invoke-Native "cargo" @("build", "--release", "--locked", "-p", "ppvpn-flutter", "-p", "ppvpn-push-agent")
 } finally {
   Pop-Location
 }
