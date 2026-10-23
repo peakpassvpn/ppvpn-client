@@ -910,7 +910,30 @@ jobs:
           for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
             install -m 755 "target/$triple/debug/$bin" "build/binaries/$bin-$triple"
           done
-          SKIP_BOOTSTRAP=1 apps/flutter/scripts/package-macos.sh "${{ steps.build.outputs.bundle }}" arm64
+          # Sign with a throwaway self-signed identity, as a release signs with
+          # its own (pinned designated requirements), not ad hoc.
+          key_dir="$RUNNER_TEMP/ci-signing"
+          mkdir -p "$key_dir"
+          printf '%s\n' '[req]' 'distinguished_name=dn' 'x509_extensions=ext' 'prompt=no' \
+            '[dn]' 'CN=PPVPN CI Signing' \
+            '[ext]' 'basicConstraints=critical,CA:false' 'keyUsage=critical,digitalSignature' \
+            'extendedKeyUsage=critical,codeSigning' > "$key_dir/req.cnf"
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 2 -config "$key_dir/req.cnf" \
+            -keyout "$key_dir/key.pem" -out "$key_dir/cert.pem" 2>/dev/null
+          /usr/bin/openssl pkcs12 -export -inkey "$key_dir/key.pem" -in "$key_dir/cert.pem" \
+            -out "$key_dir/id.p12" -passout pass:ci
+          keychain="$key_dir/ci.keychain-db"
+          security create-keychain -p ci "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p ci "$keychain"
+          security import "$key_dir/id.p12" -k "$keychain" -P ci -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$keychain" >/dev/null
+          keychains=("$keychain")
+          while IFS= read -r line; do keychains+=("$(echo "$line" | tr -d ' "')"); done \
+            < <(security list-keychains -d user)
+          security list-keychains -d user -s "${keychains[@]}"
+          PPVPN_CODESIGN_IDENTITY="PPVPN CI Signing" \
+            SKIP_BOOTSTRAP=1 apps/flutter/scripts/package-macos.sh "${{ steps.build.outputs.bundle }}" arm64
           ls -l dist/macos
           python3 - dist/macos/release-meta-macos-arm64.json <<'PY'
           import hashlib, json, os, sys
@@ -934,7 +957,7 @@ jobs:
           cmp apps/macos/packaging/postinstall "$pkg/Scripts/postinstall"
           app="$pkg/Payload/PPVPN.app"
           codesign --verify --deep --strict --verbose=2 "$app"
-          codesign -dv "$app" 2>&1 | grep -qx 'Signature=adhoc'
+          codesign -dv "$app" 2>&1 | grep -qx 'Authority=PPVPN CI Signing'
           codesign -d --entitlements - --xml "$app" | grep -q 'com.apple.security.cs.disable-library-validation'
           ls -R "$app/Contents/Library" "$app/Contents/MacOS"
       # Enhanced mode end to end on Linux (#401 step 2): the release bundle

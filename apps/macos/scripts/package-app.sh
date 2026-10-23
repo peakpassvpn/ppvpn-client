@@ -57,7 +57,9 @@ OUT_DIR="$REPO_DIR/dist/macos"
 MACHO="$(mktemp)"
 trap 'rm -f "$MACHO"' EXIT
 find "$APP" -type f -print0 | while IFS= read -r -d '' file; do
-  archs="$(lipo -archs "$file" 2>/dev/null)" || continue
+  # Not Mach-O: no archs (and no failing command for the ERR trap to report).
+  archs="$(lipo -archs "$file" 2>/dev/null || true)"
+  [[ -n "$archs" ]] || continue
   echo "$file" >> "$MACHO"
   [[ "$archs" == "$ARCH" ]] && continue
   [[ " $archs " == *" $ARCH "* ]] || { echo "error: $file lacks $ARCH ($archs)" >&2; exit 1; }
@@ -124,7 +126,11 @@ sign "$APP"
 
 # --- Checks ------------------------------------------------------------------
 AGENT="$APP/Contents/Library/LoginItems/PPVPN Agent.app"
-codesign --verify --deep --strict "$APP"
+# Each bundle on its own first, so that a failure names it.
+while IFS= read -r bundle; do
+  [[ -z "$bundle" ]] || codesign --verify --strict --verbose=2 "$bundle"
+done <<< "$BUNDLES"
+codesign --verify --deep --strict --verbose=4 "$APP"
 if [[ -n "$CERT_SHA1" ]]; then
   for bundle in "$APP" "$AGENT"; do
     codesign -dr - "$bundle" 2>&1 | grep -qi "certificate leaf = H\"$CERT_SHA1\"" \
