@@ -72,11 +72,39 @@ function Uninstall {
   Write-Host "==> $uninstaller /S /PURGE"
   # The uninstaller runs from a copy in %TEMP%: wait for what it removes, the
   # user's data (/PURGE) last.
-  Start-Process -FilePath $uninstaller -ArgumentList "/S", "/PURGE" | Out-Null
-  Wait-Until "the uninstaller" 120 {
-    -not (Test-Path -LiteralPath $dir) -and -not (Test-Path $uninstallKey) -and
-    -not (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA "PPVPN"))
+  $process = Start-Process -FilePath $uninstaller -ArgumentList "/S", "/PURGE" -PassThru
+  try {
+    Wait-Until "the uninstaller" 120 {
+      -not (Test-Path -LiteralPath $dir) -and -not (Test-Path $uninstallKey) -and
+      -not (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA "PPVPN"))
+    }
+  } catch {
+    Show-UninstallState $process
+    throw
   }
+}
+
+# What is left when the uninstaller times out (#425): its launcher's exit, which of the
+# three conditions still holds and the files in each place, and what still runs (the
+# app, the push agent, NSIS's copy of the uninstaller in %TEMP%, the service).
+function Show-UninstallState($Process) {
+  Write-Host "--- the uninstaller timed out; what is left:"
+  $launcher = if ($Process.HasExited) { "exited with $($Process.ExitCode)" } else { "still running" }
+  Write-Host "uninstall.exe: $launcher"
+  Write-Host "uninstall key: $(if (Test-Path $uninstallKey) { 'present' } else { 'gone' })"
+  foreach ($path in @($dir, (Join-Path $env:LOCALAPPDATA "PPVPN"))) {
+    if (-not (Test-Path -LiteralPath $path)) { Write-Host "gone: $path"; continue }
+    Write-Host "left: $path"
+    Get-ChildItem -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue |
+      Select-Object -First 40 | ForEach-Object { Write-Host "  $($_.FullName)" }
+  }
+  Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessName -like "ppvpn*" -or $_.ProcessName -like "Un_*" -or $_.ProcessName -like "Au_*" } |
+    ForEach-Object {
+      $path = try { $_.Path } catch { "" }
+      Write-Host "running: $($_.ProcessName) (pid $($_.Id)) $path"
+    }
+  Get-Service $service -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "service ${service}: $($_.Status)" }
 }
 
 try {
