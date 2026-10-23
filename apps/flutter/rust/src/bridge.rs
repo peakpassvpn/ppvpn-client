@@ -273,6 +273,7 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             .as_ref()
             .map(|account| account.name.clone()),
         team_name: snapshot.team.as_ref().map(|team| team.name.clone()),
+        team_id: snapshot.team.as_ref().map(|team| team.id.clone()),
         profile,
         profile_revision: snapshot.profile.as_ref().map(|p| p.revision.clone()),
         expires_at: snapshot.profile.as_ref().map(|p| p.expires_at.clone()),
