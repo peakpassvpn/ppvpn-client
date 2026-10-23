@@ -5,7 +5,9 @@
 # PPVPN.app/Contents/Frameworks; install name @rpath/PPVPNClientFFI.framework/...).
 #
 # Usage: scripts/build-apple.sh [output-dir] [--debug]
-#   output-dir defaults to <repo>/apps/macos/PPVPNClient
+#   output-dir defaults to <repo>/apps/macos/PPVPNClient; a relative one is
+#              the caller's (the script works in the crate). Its absolute
+#              path goes to $GITHUB_OUTPUT as `package`.
 #   PPVPN_APPLE_TARGETS  the slices (default both); CI's package check of the
 #                        Flutter app builds only the runner's
 set -euo pipefail
@@ -13,6 +15,7 @@ set -euo pipefail
 CRATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="$(cd "$CRATE_DIR/../.." && pwd)"
 OUT_DIR="${1:-$REPO_DIR/apps/macos/PPVPNClient}"
+[[ "$OUT_DIR" == /* ]] || OUT_DIR="$PWD/$OUT_DIR"
 PROFILE=release
 [[ "${2:-}" == "--debug" ]] && PROFILE=debug
 CARGO_FLAGS=(--locked)
@@ -104,3 +107,4 @@ let package = Package(
 SWIFT
 
 echo "PPVPNClient package written to $OUT_DIR"
+[[ -z "${GITHUB_OUTPUT:-}" ]] || echo "package=$OUT_DIR" >> "$GITHUB_OUTPUT"
