@@ -25,6 +25,11 @@
 #   MACOS_SIGNING_P12_BASE64   the fixed self-signed "PPVPN Code Signing"
 #   MACOS_SIGNING_P12_PASSWORD   certificate + key; without them builds are ad-hoc
 #   MACOS_STAGING_DIR          output directory (default staging/macos-native)
+#   PPVPN_PREBUILT=1           the Rust is built already, by other jobs (release.yml):
+#                              the service helpers in build/binaries
+#                              (tools/desktop/build-service.sh macos) and
+#                              apps/macos/PPVPNClient (crates/desktop/scripts/build-apple.sh);
+#                              only the Xcode project is generated here
 set -euo pipefail
 
 : "${CI_PROJECT_DIR:?CI_PROJECT_DIR is required}"
@@ -38,14 +43,17 @@ for arch in $MACOS_ARCHS; do
 done
 
 cd "$CI_PROJECT_DIR"
-rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-rustup default "$RUST_TOOLCHAIN"
-# ppvpn-client's build-apple.sh builds both slices; each package is thinned.
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
 command -v xcodegen >/dev/null || brew install xcodegen
-
-# Universal service helpers; package-dmg.sh thins them per build.
-bash tools/desktop/build-service.sh macos
+if [[ "${PPVPN_PREBUILT:-}" == 1 ]]; then
+  (cd apps/macos && xcodegen generate)
+else
+  rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+  rustup default "$RUST_TOOLCHAIN"
+  # ppvpn-client's build-apple.sh builds both slices; each package is thinned.
+  rustup target add aarch64-apple-darwin x86_64-apple-darwin
+  # Universal service helpers; package-dmg.sh thins them per build.
+  bash tools/desktop/build-service.sh macos
+fi
 
 # A build for a channel updates from that channel's feed; one without has no feed.
 if [[ -n "${PPVPN_RELEASE_CHANNEL:-}" && -z "${PPVPN_UPDATE_SITE:-}" ]]; then
@@ -117,6 +125,7 @@ rm -rf "$staging_dir"
 mkdir -p "$staging_dir"
 
 bootstrap=0
+[[ "${PPVPN_PREBUILT:-}" == 1 ]] && bootstrap=1
 for arch in $MACOS_ARCHS; do
   platform=macos-arm64
   [[ "$arch" == x86_64 ]] && platform=macos-x64

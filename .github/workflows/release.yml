@@ -834,32 +834,35 @@ jobs:
             dist/windows/*-setup.exe
             dist/windows/release-meta-windows-x64.json
 
-  # Both DMGs and .pkgs of the Flutter app (#401), built on an Apple silicon
-  # runner: the app universal (apps/flutter/scripts/ci-build.sh), then
-  # tools/desktop/ci/build-macos-native.sh packages and signs each
-  # architecture's copy (apps/flutter/scripts/package-macos.sh).
-  macos:
-    name: macos
+  # Both DMGs and .pkgs of the Flutter app (#401), built on Apple silicon
+  # runners in three jobs (#429). The service's profile shares no build with
+  # the app's release build, so it compiles beside it:
+  #   macos-app      the app universal (apps/flutter/scripts/ci-build.sh) and
+  #                  the push agent's client, PPVPNClient
+  #                  (crates/desktop/scripts/build-apple.sh), which reuses that
+  #                  build; it needs the backend's address, so the environment
+  #   macos-service  the service helpers universal (tools/desktop/build-service.sh),
+  #                  no secret
+  #   macos          tools/desktop/ci/build-macos-native.sh packages and signs
+  #                  each architecture's copy (apps/flutter/scripts/package-macos.sh)
+  #                  from the two
+  # Not one job per architecture: the Swift bindings' generator runs on the
+  # host (arm64), so an x86_64 job would build the client's dependencies a
+  # second time, for arm64.
+  macos-app:
+    name: macos-app
     needs: [prepare, approve]
     if: >-
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
     runs-on: macos-15
     environment: ${{ needs.prepare.outputs.environment }}
-    timeout-minutes: 120
+    timeout-minutes: 90
     env:
-      # rust-toolchain.toml's version (build-macos-native.sh installs it);
-      # keep them in step. Not workflow-wide: RUST* is part of the cache keys.
-      RUST_TOOLCHAIN: 1.98.1
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      CI_PROJECT_DIR: ${{ github.workspace }}
       MACOS_ARCHS: arm64 x86_64
       PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
-      SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
-      # The release signing certificate; without it the build is ad-hoc signed.
-      MACOS_SIGNING_P12_BASE64: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
-      MACOS_SIGNING_P12_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -876,13 +879,94 @@ jobs:
         run: |
           tools/release-features-check.sh -p ppvpn-flutter
           tools/release-features-check.sh -p ppvpn-desktop
-          tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
       - id: build
         name: Build the app
         run: apps/flutter/scripts/ci-build.sh
+      - name: Build the push agent's client
+        run: crates/desktop/scripts/build-apple.sh apps/macos/PPVPNClient
+      # tar keeps the bundle's framework symlinks, which an artifact drops.
+      - name: Pack
+        env:
+          BUNDLE: ${{ steps.build.outputs.bundle }}
+        run: |
+          mkdir -p build/macos-app
+          tar -cf build/macos-app/app.tar -C "$(dirname "$BUNDLE")" "$(basename "$BUNDLE")"
+          tar -cf build/macos-app/client.tar apps/macos/PPVPNClient
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-app
+          if-no-files-found: error
+          retention-days: 1
+          path: build/macos-app
+
+  macos-service:
+    name: macos-service
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+      - name: No test-only features
+        run: tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
+      - name: Build the service helpers
+        run: bash tools/desktop/build-service.sh macos
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-service
+          if-no-files-found: error
+          retention-days: 1
+          path: build/binaries/*-universal-apple-darwin
+
+  macos:
+    name: macos
+    needs: [prepare, approve, macos-app, macos-service]
+    if: >-
+      !cancelled() && needs.macos-app.result == 'success' && needs.macos-service.result == 'success'
+    runs-on: macos-15
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 60
+    env:
+      PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      CI_PROJECT_DIR: ${{ github.workspace }}
+      MACOS_ARCHS: arm64 x86_64
+      PPVPN_PREBUILT: 1
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      # The release signing certificate; without it the build is ad-hoc signed.
+      MACOS_SIGNING_P12_BASE64: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
+      MACOS_SIGNING_P12_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-app
+          path: ${{ runner.temp }}/macos-app
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-service
+          path: build/binaries
+      - id: unpack
+        name: Unpack
+        run: |
+          mkdir -p "$RUNNER_TEMP/bundle"
+          tar -xf "$RUNNER_TEMP/macos-app/app.tar" -C "$RUNNER_TEMP/bundle"
+          tar -xf "$RUNNER_TEMP/macos-app/client.tar"
+          chmod 755 build/binaries/*
+          echo "bundle=$RUNNER_TEMP/bundle/PPVPN.app" >> "$GITHUB_OUTPUT"
       - name: Build DMGs, pkgs and release metadata
         env:
-          PPVPN_FLUTTER_BUNDLE: ${{ steps.build.outputs.bundle }}
+          PPVPN_FLUTTER_BUNDLE: ${{ steps.unpack.outputs.bundle }}
         run: bash tools/desktop/ci/build-macos-native.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
