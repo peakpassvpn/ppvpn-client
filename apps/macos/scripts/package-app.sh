@@ -90,31 +90,29 @@ done <<< "$BUNDLES"
 # hash): the app and ppvpn-service-install check them before running them as
 # root (MacPlatformHooks.swift, install.rs).
 sign() {
-  local req=() id preserve=identifier,entitlements identifier=() entitlements=()
+  local id="" preserve=identifier,entitlements identifier=() entitlements=()
   case "$1" in
     */Contents/MacOS/ppvpn-service | */Contents/MacOS/ppvpn-service-install | */Contents/MacOS/ppvpn-service-uninstall)
       id="com.peakpassvpn.ppvpn.${1##*/ppvpn-}"
       identifier=(--identifier "$id")
       preserve=entitlements
       ;;
-    *)
-      # x86_64 slices carry no linker signature (arm64 ones do): sign ad hoc
-      # first, so that codesign picks the identifier (the bundle id or the
-      # file name) as it does for the arm64 build.
-      codesign -dv "$1" >/dev/null 2>&1 || codesign --sign - "$1"
-      id="$(codesign -dv "$1" 2>&1 | sed -n 's/^Identifier=//p')"
-      ;;
   esac
   if [[ "$1" == "$APP" && -n "$ENTITLEMENTS" ]]; then
     entitlements=(--entitlements "$ENTITLEMENTS")
     preserve=identifier
   fi
-  if [[ -n "$CERT_SHA1" ]]; then
-    req=(--requirements "=designated => identifier \"$id\" and certificate leaf = H\"$CERT_SHA1\"")
-  fi
   codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp=none \
-    --preserve-metadata=$preserve ${identifier[@]+"${identifier[@]}"} ${entitlements[@]+"${entitlements[@]}"} \
-    ${req[@]+"${req[@]}"} "$1"
+    --preserve-metadata=$preserve ${identifier[@]+"${identifier[@]}"} ${entitlements[@]+"${entitlements[@]}"} "$1"
+  [[ -n "$CERT_SHA1" ]] || return 0
+  # Pin the requirement to the identifier this signature carries: read before
+  # signing, it can differ (a linker signature, as the xcframework's
+  # PPVPNClientFFI has, does not keep its identifier; x86_64 code has none).
+  [[ -n "$id" ]] || id="$(codesign -dv "$1" 2>&1 | sed -n 's/^Identifier=//p')"
+  [[ -n "$id" ]] || { echo "error: no identifier in the signature of $1" >&2; exit 1; }
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp=none \
+    --preserve-metadata=entitlements --identifier "$id" ${entitlements[@]+"${entitlements[@]}"} \
+    --requirements "=designated => identifier \"$id\" and certificate leaf = H\"$CERT_SHA1\"" "$1"
 }
 # Loose helpers first (the service helpers, Sparkle's Autoupdate, ...), then bundles.
 while IFS= read -r file; do
