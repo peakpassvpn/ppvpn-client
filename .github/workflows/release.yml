@@ -882,16 +882,24 @@ jobs:
       - id: build
         name: Build the app
         run: apps/flutter/scripts/ci-build.sh
-      - name: Build the push agent's client
-        run: crates/desktop/scripts/build-apple.sh apps/macos/PPVPNClient
-      # tar keeps the bundle's framework symlinks, which an artifact drops.
+      - id: client
+        name: Build the push agent's client
+        run: crates/desktop/scripts/build-apple.sh
+      # The hand-off is what the two builds report writing ($GITHUB_OUTPUT).
+      # tar keeps the bundle's framework symlinks, which an artifact drops;
+      # the client goes back to the same place in the workspace.
       - name: Pack
         env:
           BUNDLE: ${{ steps.build.outputs.bundle }}
+          PACKAGE: ${{ steps.client.outputs.package }}
         run: |
+          for out in "$BUNDLE" "$PACKAGE"; do
+            [[ -n "$out" && -d "$out" ]] || { echo "error: a build reported no output directory ('$out')" >&2; exit 1; }
+          done
+          [[ "$PACKAGE" == "$GITHUB_WORKSPACE"/* ]] || { echo "error: $PACKAGE is outside the workspace" >&2; exit 1; }
           mkdir -p build/macos-app
           tar -cf build/macos-app/app.tar -C "$(dirname "$BUNDLE")" "$(basename "$BUNDLE")"
-          tar -cf build/macos-app/client.tar apps/macos/PPVPNClient
+          tar -cf build/macos-app/client.tar -C "$GITHUB_WORKSPACE" "${PACKAGE#"$GITHUB_WORKSPACE"/}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-app
@@ -963,7 +971,9 @@ jobs:
           tar -xf "$RUNNER_TEMP/macos-app/app.tar" -C "$RUNNER_TEMP/bundle"
           tar -xf "$RUNNER_TEMP/macos-app/client.tar"
           chmod 755 build/binaries/*
-          echo "bundle=$RUNNER_TEMP/bundle/PPVPN.app" >> "$GITHUB_OUTPUT"
+          # The bundle's name as macos-app packed it.
+          bundle="$(tar -tf "$RUNNER_TEMP/macos-app/app.tar" | sed -n 1p)"
+          echo "bundle=$RUNNER_TEMP/bundle/${bundle%%/*}" >> "$GITHUB_OUTPUT"
       - name: Build DMGs, pkgs and release metadata
         env:
           PPVPN_FLUTTER_BUNDLE: ${{ steps.unpack.outputs.bundle }}
