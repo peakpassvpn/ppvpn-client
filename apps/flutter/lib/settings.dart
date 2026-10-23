@@ -86,10 +86,17 @@ class Settings {
   }
 
   /// Reads launch at login from the system (the settings page, when it
-  /// shows and when the window gains focus).
-  static void refreshLaunchAtLogin() {
-    if (!_persist) return;
-    launchAtLogin.value = rust.launchAtLogin();
+  /// shows and when the window gains focus); the error's text when the
+  /// system raised one, the last state kept.
+  static String? refreshLaunchAtLogin() {
+    if (!_persist) return null;
+    try {
+      launchAtLogin.value = rust.launchAtLogin();
+      return null;
+    } catch (error) {
+      debugPrint('launch_at_login: $error');
+      return '$error';
+    }
   }
 
   /// Turns launch at login on or off, then reads it back; the error's text
@@ -103,7 +110,18 @@ class Settings {
       debugPrint('set_launch_at_login: $error');
       failure = '$error';
     }
-    refreshLaunchAtLogin();
-    return failure;
+    return failure ?? refreshLaunchAtLogin();
+  }
+
+  /// Opens where the system holds the entry back; the error's text when
+  /// that failed.
+  static String? openLaunchAtLoginSettings() {
+    try {
+      rust.openLaunchAtLoginSettings();
+      return null;
+    } catch (error) {
+      debugPrint('open_launch_at_login_settings: $error');
+      return '$error';
+    }
   }
 }
