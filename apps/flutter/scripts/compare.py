@@ -337,6 +337,8 @@ def fmt_mib(kib):
 
 
 def main():
+    # The report has non-ASCII text; Windows runners default stdout to cp1252.
+    sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("--flutter", required=True)
     parser.add_argument("--flutter-zip-kib", type=int, required=True)
