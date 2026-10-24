@@ -105,45 +105,62 @@ class OverviewPage extends StatelessWidget {
     valueListenable: app.snapshot,
     builder: (context, snapshot, _) {
       final limited = LimitedAccess.of(snapshot);
-      if (limited != null) return limited;
-      if (snapshot.profile == rust.UiProfile.loading) return const LoadingNodes();
-      return SingleChildScrollView(
-        padding: Tokens.pagePadding,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: Tokens.pageMaxWidth),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (snapshot.profile == rust.UiProfile.invalid) ...[
-                  const ConfigWarning(),
-                  const SizedBox(height: Tokens.cardGap),
-                ],
-                _Hero(app: app, snapshot: snapshot),
-                if (_Problem.of(app, snapshot) case final problem?) ...[
-                  const SizedBox(height: Tokens.cardGap),
-                  problem,
-                ],
-                const SizedBox(height: Tokens.cardGap),
-                _Modes(app: app, snapshot: snapshot),
-                const SizedBox(height: Tokens.cardGap),
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(child: _Traffic(app: app)),
-                      const SizedBox(width: Tokens.cardGap),
-                      Expanded(child: _LocalProxy(app: app, nodeId: snapshot.selectedNodeId)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+      final loading = snapshot.profile == rust.UiProfile.loading;
+      return Swap(
+        id: limited != null || loading ? snapshot.profile : null,
+        expand: true,
+        child: limited ?? (loading ? const LoadingNodes() : _page(snapshot)),
       );
     },
   );
+
+  Widget _page(rust.UiSnapshot snapshot) {
+    final problem = _Problem.of(app, snapshot);
+    return SingleChildScrollView(
+      padding: Tokens.pagePadding,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: Tokens.pageMaxWidth),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Reveal(
+                child: snapshot.profile == rust.UiProfile.invalid
+                    ? const Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [ConfigWarning(), SizedBox(height: Tokens.cardGap)],
+                      )
+                    : null,
+              ),
+              _Hero(app: app, snapshot: snapshot),
+              Reveal(
+                id: problem?.title,
+                child: problem == null
+                    ? null
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [const SizedBox(height: Tokens.cardGap), problem],
+                      ),
+              ),
+              const SizedBox(height: Tokens.cardGap),
+              _Modes(app: app, snapshot: snapshot),
+              const SizedBox(height: Tokens.cardGap),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: _Traffic(app: app)),
+                    const SizedBox(width: Tokens.cardGap),
+                    Expanded(child: _LocalProxy(app: app, nodeId: snapshot.selectedNodeId)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// The connection card.
@@ -170,7 +187,9 @@ class _Hero extends StatelessWidget {
         children: [
           // The tint from the top left, in the state's colour.
           Positioned.fill(
-            child: DecoratedBox(
+            child: AnimatedContainer(
+              duration: Tokens.motion(context, Tokens.motionBase),
+              curve: Tokens.motionCurve,
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   center: Alignment.topLeft,
@@ -202,56 +221,66 @@ class _Hero extends StatelessWidget {
                             child: Text(statusTitle(snapshot), style: t.heroTitle),
                           ),
                           const SizedBox(height: 2),
-                          if (phase == rust.UiPhase.off)
-                            Text(s('d_idle'), style: t.sub)
-                          else if (detail != null)
-                            Text(detail, style: t.sub)
-                          else if (node != null)
-                            Row(
-                              children: [
-                                Flag(countryCode: node.exitCountryCode),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text(
-                                    nodeTitle(node),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: t.sub.copyWith(color: t.t1, fontWeight: FontWeight.w600),
+                          Swap(
+                            id: phase == rust.UiPhase.off ? phase : (detail ?? node?.id),
+                            child: phase == rust.UiPhase.off
+                                ? Text(s('d_idle'), style: t.sub)
+                                : detail != null
+                                ? Text(detail, style: t.sub)
+                                : node == null
+                                ? const SizedBox.shrink()
+                                : Row(
+                                    children: [
+                                      Flag(countryCode: node.exitCountryCode),
+                                      const SizedBox(width: 8),
+                                      Flexible(
+                                        child: Text(
+                                          nodeTitle(node),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: t.sub.copyWith(color: t.t1, fontWeight: FontWeight.w600),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      LatencyPill.ms(snapshot.latencyMs),
+                                    ],
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                LatencyPill.ms(snapshot.latencyMs),
-                              ],
-                            ),
+                          ),
                         ],
                       ),
                     ),
-                    if (connected)
-                      _SessionTimer(since: app.connectedSince)
-                    else if (busy)
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            s(snapshot.connectionMode == rust.UiConnectionMode.enhanced ? 'tunMode' : 'stdMode'),
-                            style: t.sectionTitle.copyWith(color: t.accent),
-                          ),
-                          Text(statusTitle(snapshot), style: t.note),
-                        ],
-                      ),
+                    Swap(
+                      id: connected ? 'timer' : (busy ? 'busy' : null),
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: connected
+                          ? _SessionTimer(since: app.connectedSince)
+                          : busy
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  s(snapshot.connectionMode == rust.UiConnectionMode.enhanced ? 'tunMode' : 'stdMode'),
+                                  style: t.sectionTitle.copyWith(color: t.accent),
+                                ),
+                                Text(statusTitle(snapshot), style: t.note),
+                              ],
+                            )
+                          : const SizedBox.shrink(),
+                    ),
                   ],
                 ),
-                if (node != null && phase != rust.UiPhase.off) ...[
-                  const SizedBox(height: 18),
-                  Padding(
-                    padding: const EdgeInsets.only(left: Tokens.orbSize + 16),
-                    child: _Route(
-                      lines: lineNames(node),
-                      current: node.lines.indexWhere((line) => line.key == snapshot.lineKey),
-                      connected: connected,
-                    ),
-                  ),
-                ],
+                Reveal(
+                  child: node == null || phase == rust.UiPhase.off
+                      ? null
+                      : Padding(
+                          padding: const EdgeInsets.only(top: 18, left: Tokens.orbSize + 16),
+                          child: _Route(
+                            lines: lineNames(node),
+                            current: node.lines.indexWhere((line) => line.key == snapshot.lineKey),
+                            connected: connected,
+                          ),
+                        ),
+                ),
               ],
             ),
           ),
@@ -280,7 +309,9 @@ class _Orb extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          Container(
+          AnimatedContainer(
+            duration: Tokens.motion(context, Tokens.motionBase),
+            curve: Tokens.motionCurve,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: connected && light ? Tokens.connectedOrb : null,
@@ -294,12 +325,15 @@ class _Orb extends StatelessWidget {
             ),
           ),
           if (busy) Spinner(color: tone, size: Tokens.orbSize),
-          if (phase == rust.UiPhase.error || phase == rust.UiPhase.contended)
-            Icon(FLucideIcons.circleAlert, size: 26, color: tone)
-          else if (phase == rust.UiPhase.off)
-            Icon(FLucideIcons.link2Off, size: 24, color: tone)
-          else
-            ShieldCheckIcon(size: 26, stroke: 2.2, color: connected && light ? const Color(0xFFFFFFFF) : tone),
+          Swap(
+            id: (problem: phase == rust.UiPhase.error || phase == rust.UiPhase.contended, off: phase == rust.UiPhase.off, tone: tone),
+            alignment: Alignment.center,
+            child: phase == rust.UiPhase.error || phase == rust.UiPhase.contended
+                ? Icon(FLucideIcons.circleAlert, size: 26, color: tone)
+                : phase == rust.UiPhase.off
+                ? Icon(FLucideIcons.link2Off, size: 24, color: tone)
+                : ShieldCheckIcon(size: 26, stroke: 2.2, color: connected && light ? const Color(0xFFFFFFFF) : tone),
+          ),
         ],
       ),
     );
@@ -634,7 +668,7 @@ class _Problem extends StatelessWidget {
   final List<Widget> actions;
 
   /// The card for the snapshot's connection, or null while there is none.
-  static Widget? of(AppState app, rust.UiSnapshot snapshot) {
+  static _Problem? of(AppState app, rust.UiSnapshot snapshot) {
     final s = S.current;
     final enhanced = snapshot.connectionMode == rust.UiConnectionMode.enhanced;
     final retry = Button(kind: ButtonKind.secondary, label: s('retry'), onPress: app.retry);

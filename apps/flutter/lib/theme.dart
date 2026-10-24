@@ -280,6 +280,26 @@ class Tokens {
   static const logPadding = EdgeInsets.fromLTRB(14, 10, 14, 10);
   static const logFooterHeight = 28.0;
 
+  // Motion (#401, decided on 2026-10-24). Durations go through [motion],
+  // which makes them 0 when the system asks for reduced motion.
+
+  /// Hover and press fills, the switch, segmented selection.
+  static const motionFast = Duration(milliseconds: 120);
+  static const motionFastCurve = Curves.easeOut;
+
+  /// Colour and tone changes, content swaps (a fade).
+  static const motionBase = Duration(milliseconds: 200);
+  static const motionCurve = Curves.easeOutCubic;
+
+  /// The page switch: the new page fades in rising [pageRise]; the old one
+  /// fades out over [motionFast].
+  static const motionPage = Duration(milliseconds: 220);
+  static const pageRise = 6.0;
+
+  /// [duration], or 0 when reduced motion is on.
+  static Duration motion(BuildContext context, Duration duration) =>
+      MediaQuery.disableAnimationsOf(context) ? Duration.zero : duration;
+
   /// The 「正在跟随末尾」 dot: 7 across, breathing 1 ↔ 0.35 in 1.6 s.
   static const pulseDotSize = 7.0;
   static const pulseHalf = Duration(milliseconds: 800);
