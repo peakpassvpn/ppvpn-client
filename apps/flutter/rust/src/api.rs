@@ -64,6 +64,8 @@ pub struct UiSnapshot {
     pub device_code: Option<UiDeviceCode>,
     pub account_name: Option<String>,
     pub team_name: Option<String>,
+    /// The current team's id, one of [`teams`]' [`UiTeam::id`]s.
+    pub team_id: Option<String>,
     pub profile: UiProfile,
     /// Changes when the node list does: read [`nodes`] again.
     pub profile_revision: Option<String>,
@@ -202,6 +204,43 @@ pub async fn probe_all(method: UiProbeMethod) -> Result<(), String> {
     let method = bridge::probe_method(method);
     bridge::get()?
         .call(move |client| async move { client.probe(method, Vec::new()).await })
+        .await
+}
+
+/// A team the account can switch to ([`teams`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiTeam {
+    pub id: String,
+    pub name: String,
+    /// The account's personal space (shown as 个人).
+    pub personal: bool,
+    /// False for a disabled or dissolved team: listed, but switching to it
+    /// is refused.
+    pub active: bool,
+}
+
+/// Teams the account can switch between (the account menu, read each time
+/// it opens); also refreshes the snapshot's team.
+pub async fn teams() -> Result<Vec<UiTeam>, String> {
+    let teams = bridge::get()?
+        .fetch(|client| async move { client.teams().await })
+        .await?;
+    Ok(teams
+        .into_iter()
+        .map(|team| UiTeam {
+            id: team.id,
+            name: team.name,
+            personal: team.personal,
+            active: team.active,
+        })
+        .collect())
+}
+
+/// Switches team: the client fetches the team's profile and restarts
+/// standard mode.
+pub async fn switch_team(team_id: String) -> Result<(), String> {
+    bridge::get()?
+        .call(|client| async move { client.switch_team(team_id).await })
         .await
 }
 

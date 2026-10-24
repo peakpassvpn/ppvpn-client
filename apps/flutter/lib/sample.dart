@@ -94,6 +94,7 @@ AppState sampleState() {
       deviceCode: null,
       accountName: 'Jordan',
       teamName: 'Acme Studio',
+      teamId: 'acme',
       profile: rust.UiProfile.ready,
       profileRevision: 'sample',
       expiresAt: '2027-03-31T00:00:00Z',

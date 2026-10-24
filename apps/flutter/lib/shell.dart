@@ -482,7 +482,9 @@ class _NavItem extends StatelessWidget {
 }
 
 /// Avatar (30), team name and plan, the settings gear; the card opens the
-/// account menu (sign out).
+/// account menu: the teams to switch between (as the native apps' account
+/// menu: the current one checked, the personal space as 个人, a disabled
+/// team greyed with 已停用), then sign out.
 class _AccountCard extends StatelessWidget {
   const _AccountCard({required this.app, required this.snapshot, required this.onSettings});
 
@@ -505,55 +507,80 @@ class _AccountCard extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: FPopoverMenu(
-              menuAnchor: Alignment.bottomLeft,
-              childAnchor: Alignment.topLeft,
-              menu: [
-                FItemGroup(
-                  children: [FItem(title: Text(S.current('signOut')), onPress: app.signOut)],
-                ),
-              ],
-              builder: (context, controller, _) => Pressable(
-                key: const ValueKey('account'),
-                onPress: controller.toggle,
-                label: S.current('account'),
-                builder: (context, hovered) => Row(
-                  children: [
-                    Container(
-                      width: 30,
-                      height: 30,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: t.avatar,
+            child: ValueListenableBuilder(
+              valueListenable: app.teams,
+              builder: (context, teams, _) => FPopoverMenu(
+                menuAnchor: Alignment.bottomLeft,
+                childAnchor: Alignment.topLeft,
+                menu: [
+                  if (teams.isNotEmpty)
+                    FItemGroup(
+                      children: [
+                        for (final team in teams)
+                          FItem(
+                            key: ValueKey('team-${team.id}'),
+                            selected: team.id == snapshot.teamId,
+                            enabled: team.active,
+                            prefix: Icon(FLucideIcons.check, size: 14, color: team.id == snapshot.teamId ? t.accent : const Color(0x00000000)),
+                            title: Text(
+                              team.personal ? S.current('personal') : team.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            suffix: team.active ? null : Text(S.current('teamDisabled'), style: t.note),
+                            onPress: team.id == snapshot.teamId ? null : () => app.switchTeam(team.id),
+                          ),
+                      ],
+                    ),
+                  FItemGroup(
+                    children: [FItem(title: Text(S.current('signOut')), onPress: app.signOut)],
+                  ),
+                ],
+                builder: (context, controller, _) => Pressable(
+                  key: const ValueKey('account'),
+                  onPress: () {
+                    app.refreshTeams();
+                    controller.toggle();
+                  },
+                  label: S.current('account'),
+                  builder: (context, hovered) => Row(
+                    children: [
+                      Container(
+                        width: 30,
+                        height: 30,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: t.avatar,
+                          ),
+                        ),
+                        child: Text(initial, style: t.label.copyWith(fontSize: 13, fontWeight: FontWeight.w700, color: t.onAvatar)),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              snapshot.teamName ?? name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: t.sectionTitle.copyWith(height: 17 / 13),
+                            ),
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: t.note.copyWith(fontSize: 11, height: 14 / 11),
+                            ),
+                          ],
                         ),
                       ),
-                      child: Text(initial, style: t.label.copyWith(fontSize: 13, fontWeight: FontWeight.w700, color: t.onAvatar)),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            snapshot.teamName ?? name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: t.sectionTitle.copyWith(height: 17 / 13),
-                          ),
-                          Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: t.note.copyWith(fontSize: 11, height: 14 / 11),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
