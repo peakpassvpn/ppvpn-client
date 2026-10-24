@@ -293,8 +293,9 @@ class _Tier extends StatelessWidget {
   }
 }
 
-/// The footer card (40 high): the selected node's local proxy, user name,
-/// copy buttons; the node count and testing note at the end.
+/// The footer card (40 high): the selected node's local proxy and its copy
+/// buttons (the addresses carry the credentials); otherwise the node count
+/// and testing note.
 class _Footer extends StatelessWidget {
   const _Footer({required this.app, required this.node, required this.count, required this.testing});
 
@@ -321,7 +322,9 @@ class _Footer extends StatelessWidget {
             return Row(
               children: [
                 if (selected != null && proxy != null) ...[
-                  Flexible(
+                  // All the room the buttons leave: the node's name is the
+                  // only text that can get long.
+                  Expanded(
                     child: Text(
                       s('nodeProxyT', {'n': nodeTitle(selected)}),
                       maxLines: 1,
@@ -330,13 +333,13 @@ class _Footer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Text(proxy.username, style: t.monoText(12, color: t.t3)),
-                ] else
+                ] else ...[
                   Text(
                     [s('nodeCount', {'n': '$count'}), if (testing) s('testing')].join(' · '),
                     style: t.note.copyWith(color: t.t2),
                   ),
-                const Spacer(),
+                  const Spacer(),
+                ],
                 if (proxy != null) ...[
                   CopyButton(
                     text: ProxyRows.url(proxy, 'http'),
