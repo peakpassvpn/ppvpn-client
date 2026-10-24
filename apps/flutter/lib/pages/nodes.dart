@@ -207,7 +207,9 @@ class _Table extends StatelessWidget {
                     label: nodeTitle(node),
                     onPress: () => onSelect(node.id),
                     onDoublePress: () => app.selectNode(node.id),
-                    builder: (context, hovered) => Container(
+                    builder: (context, hovered) => AnimatedContainer(
+                      duration: Tokens.motion(context, Tokens.motionFast),
+                      curve: Tokens.motionFastCurve,
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
                         color: isSelected ? t.accentSoft : (hovered ? t.sunk : null),
@@ -217,7 +219,12 @@ class _Table extends StatelessWidget {
                         ),
                       ),
                       child: _cells([
-                        Text(isCurrent ? '✓' : '', style: t.bodyStrong.copyWith(color: t.accent, fontSize: 13)),
+                        AnimatedOpacity(
+                          opacity: isCurrent ? 1 : 0,
+                          duration: Tokens.motion(context, Tokens.motionBase),
+                          curve: Tokens.motionCurve,
+                          child: Text('✓', style: t.bodyStrong.copyWith(color: t.accent, fontSize: 13)),
+                        ),
                         Row(
                           children: [
                             Flag(countryCode: node.exitCountryCode),

@@ -356,7 +356,9 @@ class _Row extends StatelessWidget {
       radius: 0,
       onPress: onOpen,
       label: [if (unread) s('unread'), message.title, type, ?severity, time].join(', '),
-      builder: (context, hovered) => Container(
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionFast),
+        curve: Tokens.motionFastCurve,
         decoration: BoxDecoration(
           color: hovered ? t.sunk : null,
           border: first ? null : Border(top: BorderSide(color: t.hair)),
@@ -373,7 +375,9 @@ class _Row extends StatelessWidget {
                     width: Tokens.unreadDot,
                     height: Tokens.rowIconSize,
                     child: Center(
-                      child: Container(
+                      child: AnimatedContainer(
+                        duration: Tokens.motion(context, Tokens.motionBase),
+                        curve: Tokens.motionCurve,
                         width: Tokens.unreadDot,
                         height: Tokens.unreadDot,
                         decoration: BoxDecoration(color: unread ? t.accent : null, shape: BoxShape.circle),
@@ -708,7 +712,9 @@ class _Detail extends StatelessWidget {
                       onPress: onBack,
                       label: s('backToList'),
                       radius: 6,
-                      builder: (context, hovered) => Container(
+                      builder: (context, hovered) => AnimatedContainer(
+                        duration: Tokens.motion(context, Tokens.motionFast),
+                        curve: Tokens.motionFastCurve,
                         height: 26,
                         padding: const EdgeInsets.fromLTRB(4, 0, 10, 0),
                         decoration: BoxDecoration(

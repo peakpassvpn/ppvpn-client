@@ -79,6 +79,54 @@ class _PressableState extends State<Pressable> {
   }
 }
 
+/// A content swap: the new child fades in over [Tokens.motionBase] as the
+/// old one fades out. Children are told apart by [id]; [expand] gives both
+/// the whole space (pages and gates).
+class Swap extends StatelessWidget {
+  const Swap({
+    super.key,
+    required this.id,
+    required this.child,
+    this.alignment = AlignmentDirectional.topStart,
+    this.expand = false,
+  });
+
+  final Object? id;
+  final Widget child;
+  final AlignmentGeometry alignment;
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: Tokens.motion(context, Tokens.motionBase),
+    switchInCurve: Tokens.motionCurve,
+    switchOutCurve: Tokens.motionCurve,
+    layoutBuilder: (current, previous) => Stack(
+      alignment: alignment,
+      fit: expand ? StackFit.expand : StackFit.loose,
+      children: [...previous, if (current != null) current],
+    ),
+    child: KeyedSubtree(key: ValueKey(id), child: child),
+  );
+}
+
+/// A part that comes and goes ([child] null): it fades as its height
+/// follows over [Tokens.motionBase]. [id] tells one child from the next.
+class Reveal extends StatelessWidget {
+  const Reveal({super.key, required this.child, this.id});
+
+  final Widget? child;
+  final Object? id;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSize(
+    duration: Tokens.motion(context, Tokens.motionBase),
+    curve: Tokens.motionCurve,
+    alignment: Alignment.topCenter,
+    child: Swap(id: child == null ? null : (id ?? true), child: child ?? const SizedBox(width: double.infinity)),
+  );
+}
+
 enum ButtonKind {
   /// The gradient primary button.
   primary,
@@ -130,7 +178,9 @@ class Button extends StatelessWidget {
     return Pressable(
       onPress: onPress,
       label: semanticsLabel ?? label,
-      builder: (context, hovered) => Container(
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionFast),
+        curve: Tokens.motionFastCurve,
         height: h,
         width: kind == ButtonKind.icon ? h : null,
         padding: kind == ButtonKind.icon ? null : EdgeInsets.symmetric(horizontal: h >= 32 ? 12 : 8),
@@ -200,7 +250,9 @@ class Segmented<T> extends StatelessWidget {
         selected: on,
         label: text,
         radius: 6,
-        builder: (context, hovered) => Container(
+        builder: (context, hovered) => AnimatedContainer(
+          duration: Tokens.motion(context, Tokens.motionFast),
+          curve: Tokens.motionFastCurve,
           height: Tokens.segmentHeight,
           padding: const EdgeInsets.symmetric(horizontal: 11),
           alignment: Alignment.center,
@@ -467,7 +519,8 @@ class TriSwitch extends StatelessWidget {
           child: Opacity(
             opacity: enabled ? 1 : 0.5,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
+              duration: Tokens.motion(context, Tokens.motionFast),
+              curve: Tokens.motionFastCurve,
               width: size.width,
               height: size.height,
               decoration: BoxDecoration(
@@ -478,7 +531,8 @@ class TriSwitch extends StatelessWidget {
               child: busy
                   ? Center(child: Spinner(color: t.accent, size: 10))
                   : AnimatedAlign(
-                      duration: const Duration(milliseconds: 150),
+                      duration: Tokens.motion(context, Tokens.motionFast),
+                      curve: Tokens.motionFastCurve,
                       alignment: on ? Alignment.centerRight : Alignment.centerLeft,
                       child: Container(
                         width: 16,

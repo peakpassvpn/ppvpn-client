@@ -148,13 +148,16 @@ class _ShellState extends State<Shell> {
                   ),
                 ),
                 Expanded(
-                  child: switch (_page) {
-                    _Page.overview => OverviewPage(app: widget.app),
-                    _Page.nodes => NodesPage(app: widget.app),
-                    _Page.logs => const LogsPage(),
-                    _Page.messages => MessagesPage(app: widget.app),
-                    _Page.settings => SettingsPage(app: widget.app),
-                  },
+                  child: _PageSwitch(
+                    page: _page,
+                    child: switch (_page) {
+                      _Page.overview => OverviewPage(app: widget.app),
+                      _Page.nodes => NodesPage(app: widget.app),
+                      _Page.logs => const LogsPage(),
+                      _Page.messages => MessagesPage(app: widget.app),
+                      _Page.settings => SettingsPage(app: widget.app),
+                    },
+                  ),
                 ),
               ],
             ),
@@ -162,6 +165,37 @@ class _ShellState extends State<Shell> {
         ],
       );
     },
+  );
+}
+
+/// The page switch: the new page fades in over [Tokens.motionPage] rising
+/// [Tokens.pageRise]; the old one fades out over [Tokens.motionFast].
+class _PageSwitch extends StatelessWidget {
+  const _PageSwitch({required this.page, required this.child});
+
+  final _Page page;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: Tokens.motion(context, Tokens.motionPage),
+    reverseDuration: Tokens.motion(context, Tokens.motionFast),
+    switchInCurve: Tokens.motionCurve,
+    switchOutCurve: Tokens.motionFastCurve,
+    layoutBuilder: (current, previous) => Stack(
+      fit: StackFit.expand,
+      children: [...previous, if (current != null) current],
+    ),
+    transitionBuilder: (child, animation) => AnimatedBuilder(
+      animation: animation,
+      builder: (context, child) => Transform.translate(
+        // Only the page coming in rises.
+        offset: Offset(0, animation.status == AnimationStatus.reverse ? 0 : (1 - animation.value) * Tokens.pageRise),
+        child: Opacity(opacity: animation.value, child: child),
+      ),
+      child: child,
+    ),
+    child: KeyedSubtree(key: ValueKey(page), child: child),
   );
 }
 
@@ -225,9 +259,17 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final tone = statusColor(t, snapshot);
     final node = app.nodeById(snapshot.selectedNodeId);
     final text = node == null ? statusTitle(snapshot) : '${statusTitle(snapshot)} · ${nodeTitle(node)}';
+    return TweenAnimationBuilder<Color?>(
+      tween: ColorTween(end: statusColor(t, snapshot)),
+      duration: Tokens.motion(context, Tokens.motionBase),
+      curve: Tokens.motionCurve,
+      builder: (context, tone, _) => _pill(t, tone!, text),
+    );
+  }
+
+  Widget _pill(Tokens t, Color tone, String text) {
     return Container(
       height: 24,
       constraints: const BoxConstraints(maxWidth: 260),
@@ -284,7 +326,9 @@ class _Bell extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             Positioned.fill(
-              child: DecoratedBox(
+              child: AnimatedContainer(
+                duration: Tokens.motion(context, Tokens.motionFast),
+                curve: Tokens.motionFastCurve,
                 decoration: BoxDecoration(
                   color: selected || hovered ? t.accentSoft : null,
                   borderRadius: BorderRadius.circular(Tokens.controlRadius),
@@ -356,7 +400,9 @@ class _CaptionButtonsState extends State<_CaptionButtons> with WindowListener {
       onPress: onPress,
       label: label,
       radius: 0,
-      builder: (context, hovered) => Container(
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionFast),
+        curve: Tokens.motionFastCurve,
         width: Tokens.captionButtonWidth,
         height: Tokens.topBarHeight,
         color: hovered ? (close ? const Color(0xFFC42B1C) : t.hair) : null,
@@ -460,7 +506,9 @@ class _NavItem extends StatelessWidget {
       onPress: onPress,
       selected: selected,
       label: label,
-      builder: (context, hovered) => Container(
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionFast),
+        curve: Tokens.motionFastCurve,
         height: Tokens.navItemHeight,
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
