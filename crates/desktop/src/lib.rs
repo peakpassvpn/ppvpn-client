@@ -257,7 +257,10 @@ pub struct ConnectionState {
     /// Enhanced uses every phase; Compatible only Off / Connecting / On /
     /// Disconnecting / Error.
     pub phase: ConnectionPhase,
-    /// Why the phase is `Error`, `Contended` or `Reconnecting`.
+    /// Why the phase is `Error`, `Contended` or `Reconnecting`. While
+    /// enhanced mode is `On`, a problem that leaves it on:
+    /// `ConnectHealthCheckFailed` / `HEALTH_API_UNREACHABLE`, the PPVPN API
+    /// unreachable on the direct path while the tunnel works.
     pub reason: Option<ClientErrorInfo>,
     pub retryable: bool,
     /// Enhanced only: another session of this OS user owns the connection

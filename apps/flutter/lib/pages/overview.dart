@@ -42,6 +42,13 @@ SwitchState switchState(rust.UiSnapshot snapshot, rust.UiConnectionMode mode) =>
     ? SwitchState.busy
     : SwitchState.off;
 
+/// The title of a contended enhanced mode: held by a session or user, or
+/// the network taken by another app (#438).
+String contendedTitle(rust.UiContended? contended) => switch (contended) {
+  rust.UiContended.networkTaken || rust.UiContended.routesTaken => S.current('h_networkTaken'),
+  _ => S.current('h_occupied'),
+};
+
 /// The status title (handoff "状态标题规则"): enhanced mode's while it is
 /// not off, else the system proxy's.
 String statusTitle(rust.UiSnapshot snapshot) {
@@ -51,7 +58,7 @@ String statusTitle(rust.UiSnapshot snapshot) {
     return switch (phase) {
       rust.UiPhase.connected => s('h_on'),
       rust.UiPhase.error => s('h_failed'),
-      rust.UiPhase.contended => s('h_occupied'),
+      rust.UiPhase.contended => contendedTitle(snapshot.contended),
       rust.UiPhase.preparing => s('st_preparing'),
       rust.UiPhase.waitingPermission => s('st_authorizing'),
       rust.UiPhase.connecting => s('st_connecting'),
@@ -689,15 +696,28 @@ class _Problem extends StatelessWidget {
       ),
       rust.UiPhase.contended => _Problem(
         warn: true,
-        title: s('st_occupied'),
-        description: s('d_occupied'),
+        title: contendedTitle(snapshot.contended),
+        description: switch (snapshot.contended) {
+          rust.UiContended.anotherUser => s('d_occupiedUser'),
+          rust.UiContended.networkTaken => s('fr_contended'),
+          rust.UiContended.routesTaken => s('d_routesTaken'),
+          rust.UiContended.anotherSession || null => s('d_occupied'),
+        },
         actions: [
           ...compatible,
           if (snapshot.canTakeOver)
             Button(kind: ButtonKind.secondary, label: s('takeOver'), onPress: app.takeOver)
-          else
+          // Nothing to retry against another OS user's connection.
+          else if (snapshot.contended != rust.UiContended.anotherUser)
             retry,
         ],
+      ),
+      // The tunnel works; only the PPVPN API is unreachable for now (#438).
+      rust.UiPhase.connected when enhanced && snapshot.apiUnreachable => _Problem(
+        warn: true,
+        title: s('h_on'),
+        description: s('d_apiUnreachable'),
+        actions: const [],
       ),
       rust.UiPhase.error => _Problem(
         warn: false,

@@ -40,6 +40,21 @@ pub enum UiPhase {
     Error,
 }
 
+/// Enhanced, `Contended`: what holds the connection or the network; picks
+/// the copy (#438).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiContended {
+    /// Another session of this OS user on this computer: "Use on this
+    /// device" takes it over.
+    AnotherSession,
+    /// Another OS user on this computer.
+    AnotherUser,
+    /// Another VPN or proxy app has the network path.
+    NetworkTaken,
+    /// Another program kept changing the tunnel's routes.
+    RoutesTaken,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiError {
     /// `ErrorCode` as its Rust name, e.g. `NetworkUnreachable`.
@@ -94,6 +109,11 @@ pub struct UiSnapshot {
     pub can_take_over: bool,
     /// Enhanced failed in a way the system proxy avoids: offer it.
     pub suggest_compatible: bool,
+    /// Enhanced, `Contended`: what holds it; `None` in any other phase.
+    pub contended: Option<UiContended>,
+    /// Enhanced, on: the tunnel works but the PPVPN API cannot be reached
+    /// on the direct path; checks go on (#438).
+    pub api_unreachable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
