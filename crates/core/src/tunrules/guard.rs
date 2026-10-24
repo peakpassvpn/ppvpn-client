@@ -198,7 +198,9 @@ impl Worker {
         mut requests: mpsc::Receiver<Request>,
         status: watch::Sender<TunRoutingStatus>,
     ) {
-        let watch = match AsyncFd::new(watch) {
+        // SAFETY: the Watch owns its netlink socket and is moved into the
+        // AsyncFd, so the fd stays open and unchanged until the AsyncFd drops.
+        let watch = match unsafe { AsyncFd::register(watch) } {
             Ok(watch) => watch,
             Err(e) => {
                 tracing::error!(error = %e, "tun routing unguarded");
