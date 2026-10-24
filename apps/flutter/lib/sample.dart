@@ -111,6 +111,7 @@ AppState sampleState() {
       serviceInstalled: false,
       canTakeOver: false,
       suggestCompatible: false,
+      apiUnreachable: false,
     ),
   );
   app.nodes.value = nodes;
