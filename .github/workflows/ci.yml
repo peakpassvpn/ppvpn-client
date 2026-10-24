@@ -602,14 +602,17 @@ jobs:
         run: |
           mkdir -p build
           cargo test --locked --no-run --message-format=json \
-            -p ppvpn-core -p ppvpn-cli -p ppvpn-desktop -p ppvpn-service \
+            -p ppvpn-core -p ppvpn-cli -p ppvpn-desktop -p ppvpn-service -p ppvpn-flutter \
             --lib --bin ppvpn-service --test keystore > build/macos-tests.json
           bin() { python3 tools/test-binary.py "$PWD/build/macos-tests.json" "$1"; }
           core=$(bin ppvpn_core) cli=$(bin ppvpn_cli) desktop=$(bin ppvpn_client) service=$(bin ppvpn-service)
+          flutter=$(bin ppvpn_flutter)
           (cd crates/core && "$core" hostipv6::darwin localdns::source probe::icmp runtime::sail_tests)
           (cd crates/cli && "$cli" identity)
           (cd crates/desktop && "$desktop" detect service sysproxy)
           (cd crates/service && PPVPN_TEST_CODESIGN=1 "$service" macsign)
+          # Objective-C exceptions caught before they reach the bridge (autostart.rs).
+          (cd apps/flutter/rust && "$flutter" autostart)
       - name: macOS tests, the Keychain
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5

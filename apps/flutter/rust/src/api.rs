@@ -516,9 +516,10 @@ pub struct UiLaunchAtLogin {
     pub needs_approval: bool,
 }
 
-/// Read again whenever it is shown: the system can change it.
+/// Read again whenever it is shown: the system can change it. An error
+/// when the system raised one (macOS: an Objective-C exception, caught).
 #[frb(sync)]
-pub fn launch_at_login() -> UiLaunchAtLogin {
+pub fn launch_at_login() -> Result<UiLaunchAtLogin, String> {
     crate::autostart::state()
 }
 
@@ -532,8 +533,8 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
 /// Where the system holds the entry back: Login Items (macOS), Startup
 /// apps (Windows). Nothing on Linux.
 #[frb(sync)]
-pub fn open_launch_at_login_settings() {
-    crate::autostart::open_settings();
+pub fn open_launch_at_login_settings() -> Result<(), String> {
+    crate::autostart::open_settings()
 }
 
 /// At start: points an enabled Windows entry at the current executable

@@ -182,7 +182,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
   void initState() {
     super.initState();
     windowManager.addListener(this);
-    Settings.refreshLaunchAtLogin();
+    _error = Settings.refreshLaunchAtLogin();
   }
 
   @override
@@ -192,7 +192,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
   }
 
   @override
-  void onWindowFocus() => Settings.refreshLaunchAtLogin();
+  void onWindowFocus() => setState(() => _error = Settings.refreshLaunchAtLogin());
 
   void _set(bool enabled) {
     final error = Settings.setLaunchAtLogin(enabled);
@@ -231,7 +231,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
                   height: Tokens.smallButtonHeight,
                   fontSize: 12,
                   label: s(Platform.isWindows ? 'openWinStartup' : 'openSysSettings'),
-                  onPress: rust.openLaunchAtLoginSettings,
+                  onPress: () => setState(() => _error = Settings.openLaunchAtLoginSettings()),
                 ),
               ],
             ),
