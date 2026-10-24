@@ -245,7 +245,11 @@ class _Hero extends StatelessWidget {
                   const SizedBox(height: 18),
                   Padding(
                     padding: const EdgeInsets.only(left: Tokens.orbSize + 16),
-                    child: _Route(lines: node.lines, current: snapshot.line, connected: connected),
+                    child: _Route(
+                      lines: lineNames(node),
+                      current: node.lines.indexWhere((line) => line.key == snapshot.lineKey),
+                      connected: connected,
+                    ),
                   ),
                 ],
               ],
@@ -365,15 +369,18 @@ class _SessionTimerState extends State<_SessionTimer> {
 class _Route extends StatelessWidget {
   const _Route({required this.lines, required this.current, required this.connected});
 
+  /// [lineNames], in failover order.
   final List<String> lines;
-  final String? current;
+
+  /// The line in use, an index into [lines]; -1 when none is.
+  final int current;
   final bool connected;
 
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final tone = connected ? t.ok : t.accent;
-    final reached = current == null ? 0 : lines.indexOf(current!) + 1;
+    final reached = current + 1;
     Widget hop(String text, {IconData? icon, bool lit = false, bool wait = false, bool mono = false}) => Container(
       height: 26,
       padding: const EdgeInsets.symmetric(horizontal: 10),

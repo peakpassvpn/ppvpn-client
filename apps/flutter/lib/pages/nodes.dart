@@ -243,7 +243,7 @@ class _Table extends StatelessWidget {
                           style: t.body.copyWith(fontSize: 13, color: t.t2),
                         ),
                         Text(
-                          node.lines.join(' → '),
+                          linesText(node),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: t.monoText(12, color: t.t2),

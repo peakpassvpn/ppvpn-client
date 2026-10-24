@@ -72,7 +72,7 @@ AppState sampleState() {
     entryLabel: tier,
     entryKey: key,
     udp: true,
-    lines: lines,
+    lines: [for (final line in lines) rust.UiLine(key: line, label: line)],
   );
   final nodes = [
     node('hk1', 'HK', 'Hong Kong 01', 'Hong Kong', ['HKG-A', 'HKG-B', 'SZX-R'], tier: 'Premium', key: 'premium'),
@@ -98,7 +98,7 @@ AppState sampleState() {
       profileRevision: 'sample',
       expiresAt: '2027-03-31T00:00:00Z',
       phase: rust.UiPhase.connected,
-      line: 'HKG-A',
+      lineKey: 'HKG-A',
       latencyMs: 38,
       standardReady: true,
       selectedNodeId: 'hk1',
