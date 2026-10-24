@@ -298,6 +298,8 @@ jobs:
   linux-rpm-smoke:
     name: linux-rpm-smoke
     needs: [prepare, linux]
+    # Explicit: the implicit success() also looks at approve, which a push skips.
+    if: ${{ !cancelled() && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
     container: fedora:latest
     timeout-minutes: 20
@@ -322,6 +324,8 @@ jobs:
   linux-repo:
     name: linux-repo
     needs: [prepare, linux]
+    # Explicit: the implicit success() also looks at approve, which a push skips.
+    if: ${{ !cancelled() && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
