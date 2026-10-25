@@ -242,7 +242,7 @@ class _Table extends StatelessWidget {
                             ),
                           ],
                         ),
-                        _Tier(label: node.entryLabel, entryKey: node.entryKey),
+                        TierTag(label: node.entryLabel, entryKey: node.entryKey),
                         Text(
                           node.exitRegion ?? '',
                           maxLines: 1,
@@ -271,8 +271,8 @@ class _Table extends StatelessWidget {
 
 /// The entry tier tag (20 high, 11/600): optimised entries teal, the rest
 /// (专线) accent.
-class _Tier extends StatelessWidget {
-  const _Tier({required this.label, required this.entryKey});
+class TierTag extends StatelessWidget {
+  const TierTag({required this.label, required this.entryKey});
 
   final String? label;
   final String entryKey;

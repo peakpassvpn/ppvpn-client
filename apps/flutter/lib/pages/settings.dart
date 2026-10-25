@@ -404,7 +404,7 @@ class _Account extends StatelessWidget {
       builder: (context, style, animation) => FDialog(
         animation: animation,
         semanticsLabel: s('signOutQ'),
-        builder: (context, style) => _Confirm(title: s('signOutQ'), body: s('signOutD'), confirm: s('signOut')),
+        builder: (context, style) => ConfirmContent(title: s('signOutQ'), body: s('signOutD'), confirm: s('signOut')),
       ),
     );
     if (confirmed ?? false) await app.signOut();
@@ -413,8 +413,8 @@ class _Account extends StatelessWidget {
 
 /// A confirmation's content: title, text, Cancel and the action. Pops
 /// true for the action.
-class _Confirm extends StatelessWidget {
-  const _Confirm({required this.title, required this.body, required this.confirm});
+class ConfirmContent extends StatelessWidget {
+  const ConfirmContent({required this.title, required this.body, required this.confirm});
 
   final String title;
   final String body;

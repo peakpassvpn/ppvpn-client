@@ -719,9 +719,12 @@ const _flags = {
 /// inner outline (no emoji flags: platforms draw them differently, Windows
 /// as letters). A country without a bundled flag gets its code on a tile.
 class Flag extends StatelessWidget {
-  const Flag({super.key, required this.countryCode});
+  const Flag({super.key, required this.countryCode, this.size = Tokens.flagSize});
 
   final String? countryCode;
+
+  /// 20×15 on the desktop, 28×21 on the phone.
+  final Size size;
 
   @override
   Widget build(BuildContext context) {
@@ -729,8 +732,8 @@ class Flag extends StatelessWidget {
     final code = (countryCode ?? '').toLowerCase();
     return ExcludeSemantics(
       child: Container(
-        width: Tokens.flagSize.width,
-        height: Tokens.flagSize.height,
+        width: size.width,
+        height: size.height,
         clipBehavior: Clip.antiAlias,
         alignment: Alignment.center,
         decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(3)),
@@ -739,7 +742,7 @@ class Flag extends StatelessWidget {
           border: Border.all(color: t.flagOutline, width: 0.5),
         ),
         child: _flags.contains(code)
-            ? SvgPicture.asset('assets/flags/$code.svg', fit: BoxFit.cover, width: Tokens.flagSize.width, height: Tokens.flagSize.height)
+            ? SvgPicture.asset('assets/flags/$code.svg', fit: BoxFit.cover, width: size.width, height: size.height)
             : Text(code.toUpperCase(), style: t.label.copyWith(fontSize: 8, height: 1, color: t.t3)),
       ),
     );
