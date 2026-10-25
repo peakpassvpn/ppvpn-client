@@ -1,10 +1,11 @@
 //! Core API v1 calls: paths with JSON bodies, answered with data or an
 //! error `{"code","message","retryable"}`.
 //!
-//! Two transports implement [`CoreTransport`]: `engine::EngineTransport`
-//! calls the in-process engine (standard mode), and
+//! Three transports implement [`CoreTransport`]: `engine::EngineTransport`
+//! calls the in-process engine (standard mode),
 //! `service::ServiceCoreTransport` forwards through the privileged service
-//! (enhanced mode). The typed helpers and the probe orchestration in this
+//! (enhanced mode), and `tunnel::TunnelTransport` calls the tunnel host in
+//! the phone's VPN process (#448). The typed helpers and the probe orchestration in this
 //! module work over either.
 
 use std::collections::HashSet;
@@ -319,9 +320,14 @@ fn opt_string(value: &Value, key: &str) -> Option<String> {
 
 pub(crate) async fn get_status(core: &dyn CoreTransport) -> Result<CoreStatus, CoreCallError> {
     let data = core.call("/v1/get-status", json!({}), CALL_TIMEOUT).await?;
+    Ok(parse_status(&data))
+}
+
+/// `GetStatus`'s data (also the tunnel host's `status` events).
+pub(crate) fn parse_status(data: &Value) -> CoreStatus {
     // A status nested in a `core` object is accepted too.
-    let status = data.get("core").unwrap_or(&data);
-    Ok(CoreStatus {
+    let status = data.get("core").unwrap_or(data);
+    CoreStatus {
         state: opt_string(status, "state").unwrap_or_default(),
         revision: opt_string(status, "revision"),
         selected_node_id: opt_string(status, "selected_node_id"),
@@ -367,7 +373,7 @@ pub(crate) async fn get_status(core: &dyn CoreTransport) -> Result<CoreStatus, C
             .filter_map(Value::as_str)
             .map(str::to_string)
             .collect(),
-    })
+    }
 }
 
 /// The user's choices every `ApplyProfile` carries with the profile
