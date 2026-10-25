@@ -115,9 +115,15 @@ class PhoneMe extends StatelessWidget {
                   pushPhonePage<void>(context, PhoneScaffold(title: s('logs'), back: true, child: const LogsPage())),
                 ),
               ),
-              _Row(icon: FLucideIcons.receipt, title: s('planWeb'), web: true, onPress: () => _open('/console')),
-              _Row(icon: FLucideIcons.server, title: s('devicesWeb'), web: true, onPress: () => _open('/console/devices')),
-              _Row(icon: FLucideIcons.megaphone, title: s('helpWeb'), web: true, onPress: () => _open('/help')),
+              // The website's console (ppvpn-web apps/client, under /dashboard):
+              // subscriptions, and tickets for help. It has no device page.
+              _Row(
+                icon: FLucideIcons.receipt,
+                title: s('planWeb'),
+                web: true,
+                onPress: () => _open('/dashboard/subscriptions'),
+              ),
+              _Row(icon: FLucideIcons.megaphone, title: s('helpWeb'), web: true, onPress: () => _open('/dashboard/tickets')),
               _Row(
                 icon: FLucideIcons.info,
                 title: s('about'),
