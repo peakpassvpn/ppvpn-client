@@ -152,7 +152,10 @@ impl Client {
 
         // The path in use: the enhanced core's while it is on, otherwise the
         // standard core's (system proxy / local proxy).
-        let enhanced_status = self.enhanced.core_status().await;
+        let enhanced_status = match &self.tunnel {
+            Some(tunnel) => tunnel.core_status().await,
+            None => self.enhanced.core_status().await,
+        };
         let rule_sets_unavailable = match enhanced_status.as_ref() {
             Some(status) => core_ipc::unavailable_rule_sets(&status.rule_sets),
             None => standard_rule_sets,
