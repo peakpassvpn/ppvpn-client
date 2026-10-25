@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Flutter app for the runner's platform (ci.yml, job flutter;
-# release.yml's installer jobs): the platform runner (flutter create, with
+# release.yml's installer jobs), or with FLUTTER_TARGET=android the Android
+# app on Linux (ci.yml, job android; #448): the platform runner (flutter create, with
 # our files from runner/<os> over it and the native app's identity), the
 # bridge glue (flutter_rust_bridge_codegen), analysis, the Rust library
 # (release), the app (release), the library put into the bundle. The
@@ -13,6 +14,8 @@
 #                        its run number, 0-65535 (default 0): the fourth part
 #                        of the Windows file version, and CFBundleVersion
 #                        <version>.<build> on macOS, as for the native apps
+#   FLUTTER_TARGET       android: the APK (needs ANDROID_NDK_HOME and the
+#                        Android SDK), instead of the runner's platform
 #   MACOS_ARCHS          macOS: "arm64 x86_64" builds the library for both and
 #                        joins them, for the release's two DMGs (default: the
 #                        runner's architecture only)
@@ -25,11 +28,12 @@ app=$(cd "$(dirname "$0")/.." && pwd)
 root=$(cd "$app/../.." && pwd)
 cd "$app"
 
-case "$(uname -s)" in
-  Linux) os=linux ;;
-  Darwin) os=macos ;;
-  MINGW* | MSYS*) os=windows ;;
-  *) echo "unsupported: $(uname -s)" >&2; exit 1 ;;
+case "${FLUTTER_TARGET:-}-$(uname -s)" in
+  android-Linux) os=android ;;
+  -Linux) os=linux ;;
+  -Darwin) os=macos ;;
+  -MINGW* | -MSYS*) os=windows ;;
+  *) echo "unsupported: ${FLUTTER_TARGET:-} on $(uname -s)" >&2; exit 1 ;;
 esac
 
 version=${PPVPN_VERSION:-$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml")}
@@ -64,7 +68,8 @@ if [ "$os" = macos ]; then
   rm -rf macos/Runner/Assets.xcassets/AppIcon.appiconset
 fi
 # Our changes to the generated runner (macOS: the activation channel; the
-# icons, from apps/macos and apps/windows).
+# icons, from apps/macos and apps/windows; Android: the activity in our
+# package).
 if [ -d "runner/$os" ]; then
   cp -R "runner/$os/." "$os/"
 fi
@@ -117,6 +122,20 @@ case $os in
       -c 'Add :CFBundleURLTypes:0:CFBundleURLSchemes array' \
       -c 'Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string ppvpn' \
       "$plist" ;;
+  android)
+    # The Play package, as #448 proposes it (the user confirms it before the
+    # first upload: it cannot change afterwards), with our activity in it
+    # (runner/android) instead of the template's; Android 8 and later.
+    gradle=android/app/build.gradle.kts
+    replace "$gradle" 'namespace = "[^"]*"' 'namespace = "com.peakpassvpn.ppvpn"'
+    replace "$gradle" 'applicationId = "[^"]*"' 'applicationId = "com.peakpassvpn.ppvpn"'
+    replace "$gradle" 'minSdk = flutter.minSdkVersion' 'minSdk = 26'
+    rm -r android/app/src/main/kotlin/com/peakpassvpn/ppvpn_flutter
+    manifest=android/app/src/main/AndroidManifest.xml
+    replace "$manifest" 'android:label="[^"]*"' 'android:label="PPVPN"'
+    # The template asks for the network only in its debug and profile
+    # manifests: the release app talks to the API too.
+    replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.INTERNET"/>\n    <application' ;;
   windows)
     # ppvpn.exe and its version resource, as apps/windows
     # (PPVPN.Windows.csproj, Directory.Build.props).
@@ -164,7 +183,28 @@ grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> ru
 flutter analyze --no-fatal-infos
 
 lib="$root/target/release"
-if [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
+if [ "$os" = android ]; then
+  # The bridge for the APK's two ABIs (arm64 phones, x86_64 emulators),
+  # linked by the NDK's clang for API 26, in jniLibs.
+  ndk=${ANDROID_NDK_HOME:?ANDROID_NDK_HOME must name the Android NDK}
+  bin=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin
+  for pair in arm64-v8a:aarch64-linux-android x86_64:x86_64-linux-android; do
+    abi=${pair%%:*}
+    triple=${pair#*:}
+    upper=$(echo "$triple" | tr 'a-z-' 'A-Z_')
+    (cd "$root" && env "CARGO_TARGET_${upper}_LINKER=$bin/${triple}26-clang" \
+      "CC_${triple//-/_}=$bin/${triple}26-clang" "AR_${triple//-/_}=$bin/llvm-ar" \
+      cargo build --release --locked -p ppvpn-flutter --target "$triple")
+    so=$root/target/$triple/release/libppvpn_flutter.so
+    mkdir -p "android/app/src/main/jniLibs/$abi"
+    cp "$so" "android/app/src/main/jniLibs/$abi/"
+    # A C++ dependency linked against the shared libc++ needs it beside.
+    if "$bin/llvm-readelf" -d "$so" | grep -qF 'libc++_shared.so'; then
+      cp "$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$triple/libc++_shared.so" \
+        "android/app/src/main/jniLibs/$abi/"
+    fi
+  done
+elif [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
   # Flutter's release app is universal; package-app.sh thins each DMG's copy.
   slices=()
   for arch in $MACOS_ARCHS; do
@@ -188,9 +228,18 @@ else
   case $os in linux | windows) agent=(-p ppvpn-push-agent) ;; esac
   (cd "$root" && cargo build --release --locked -p ppvpn-flutter ${agent[@]+"${agent[@]}"})
 fi
-flutter build "$os" --release --build-name "$version" --build-number "$build"
+if [ "$os" = android ]; then
+  # versionCode must be positive.
+  flutter build apk --release --target-platform android-arm64,android-x64 \
+    --build-name "$version" --build-number "$((build > 0 ? build : 1))"
+else
+  flutter build "$os" --release --build-name "$version" --build-number "$build"
+fi
 
 case $os in
+  android)
+    bundle=build/app/outputs/flutter-apk/app-release.apk
+    test -f "$bundle" ;;
   linux)
     bundle=build/linux/x64/release/bundle
     test -x "$bundle/ppvpn"

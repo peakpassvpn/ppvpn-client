@@ -179,6 +179,13 @@ pub struct UiEvents {
     pub probes: Vec<UiProbe>,
 }
 
+/// Android and iOS: the app's support directory, before [`start`]; the
+/// data and logs go under it (dirs.rs).
+#[frb(sync)]
+pub fn set_app_dir(path: String) {
+    let _ = crate::dirs::APP_DIR.set(path);
+}
+
 /// Creates the client on the first call and returns the current state.
 #[frb(sync)]
 pub fn start() -> Result<UiSnapshot, String> {

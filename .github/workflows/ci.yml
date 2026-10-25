@@ -6,7 +6,7 @@ name: ci
 #                   (make test-integration)
 #   L3 system       a real TUN, routes, rules and DNS, privileged
 #                   (make test-system), and the desktop end to end
-# Nine jobs, all in parallel, all on every pull request. A job that does not
+# Ten jobs, all in parallel, all on every pull request. A job that does not
 # depend on the platform is named for what it checks (it runs on ubuntu, as
 # an implementation detail); a platform job is named for its OS and covers
 # only that OS's own code. L1 and L2 run once (docs/testing.md, "Platform
@@ -29,6 +29,9 @@ name: ci
 #                build and smoke test, the Linux deb and rpm, only when it
 #                or the client changed; on Windows also its installer,
 #                installed and uninstalled
+#   android      the Flutter app's Android target (#448): the bridge for
+#                arm64 and x86_64, the APK, the app started on an emulator,
+#                only when it or the client changed
 # A pull request that changes only docs/ or Markdown runs every job, and each
 # skips its build and test steps (tools/ci-changes.sh `code`); lint still runs
 # the sensitive check.
@@ -1110,3 +1113,78 @@ jobs:
           name: flutter-${{ matrix.os }}
           path: ${{ runner.temp }}/flutter-out
           if-no-files-found: ignore
+
+  android:
+    # The Flutter app's Android target (#448 step 3): the bridge for arm64
+    # and x86_64 (the NDK's clang), the APK, and the app started on an
+    # emulator. No tunnel yet (#448 steps 2 and 3).
+    name: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FRB_CODEGEN_VERSION: 2.13.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android,x86_64-linux-android
+      # The host's for the bridge codegen, which reads the crate.
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android
+      - uses: ./.github/actions/flutter-toolchain
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
+      - id: build
+        name: Build
+        if: steps.scope.outputs.flutter == 'true'
+        env:
+          FLUTTER_TARGET: android
+        run: |
+          # The runner's JDK 17 (for the emulator's step too) and newest NDK.
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          apps/flutter/scripts/ci-build.sh
+          ls -l "${{ github.workspace }}/apps/flutter/build/app/outputs/flutter-apk"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          name: flutter-apk-android
+          path: ${{ steps.build.outputs.bundle }}
+          if-no-files-found: error
+          retention-days: 14
+      # Hardware acceleration for the emulator.
+      - name: KVM
+        if: steps.scope.outputs.flutter == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # A tablet (1280 dp across in landscape), where the desktop layout fits
+      # until the phone layouts (#448 step 5).
+      - name: Smoke test (emulator)
+        if: steps.scope.outputs.flutter == 'true'
+        timeout-minutes: 30
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: apps/flutter/e2e/android_smoke.sh

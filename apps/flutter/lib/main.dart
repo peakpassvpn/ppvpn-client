@@ -5,7 +5,8 @@
 // entry on Windows and Linux, rust/src/autostart.rs) starts it in the tray
 // with no window. One instance runs: another launch, or a click on a
 // notification, shows its window (activation.dart); the Windows installer
-// has it quit as the tray's Quit does. Updates: updates.dart.
+// has it quit as the tray's Quit does. Updates: updates.dart. On Android
+// and iOS (#448) the app is its one screen: no window, tray or updater.
 
 import 'dart:async';
 import 'dart:io';
@@ -13,12 +14,14 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:forui/forui.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'activation.dart';
 import 'app_state.dart';
 import 'bench.dart';
 import 'e2e.dart';
+import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
 import 'sample.dart';
 import 'settings.dart';
@@ -30,12 +33,13 @@ import 'tray.dart';
 import 'updates.dart';
 
 /// The bridge library ci.yml puts next to the app: beside the executable
-/// (Windows), in the bundle's lib/ (Linux), in Contents/Frameworks (macOS).
-/// PPVPN_FLUTTER_LIB overrides it (the end-to-end test's debug build runs
+/// (Windows), in the bundle's lib/ (Linux), in Contents/Frameworks (macOS),
+/// in the APK's jniLibs (Android, loaded by name). PPVPN_FLUTTER_LIB overrides it (the end-to-end test's debug build runs
 /// with the release library ci-build.sh built).
 String _libraryPath() {
   final override = Platform.environment['PPVPN_FLUTTER_LIB'];
   if (override != null && override.isNotEmpty) return override;
+  if (Platform.isAndroid) return 'libppvpn_flutter.so';
   final dir = File(Platform.resolvedExecutable).parent.path;
   if (Platform.isWindows) return '$dir\\ppvpn_flutter.dll';
   if (Platform.isMacOS) return '$dir/../Frameworks/libppvpn_flutter.dylib';
@@ -52,6 +56,8 @@ Future<void> main() async {
   } else {
     await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
     mark('bridge_loaded');
+    // Before anything reads the app's files.
+    if (mobile) rust.setAppDir(path: (await getApplicationSupportDirectory()).path);
     // Another instance runs (Windows, Linux): it took this launch's
     // arguments and shows its window. Before the window and the client.
     if (!rust.claimInstance()) exit(0);
@@ -61,6 +67,13 @@ Future<void> main() async {
     rust.refreshLaunchAtLogin();
     app = AppState(rust.start());
     mark('client_created');
+  }
+
+  // A phone or tablet: the app is its one screen, with no window to
+  // manage, tray or updater (#448).
+  if (mobile) {
+    runApp(PrototypeApp(app: app));
+    return;
   }
 
   await windowManager.ensureInitialized();
@@ -137,12 +150,12 @@ class _HideOnClose with WindowListener {
 }
 
 class PrototypeApp extends StatefulWidget {
-  const PrototypeApp({super.key, required this.app, required this.tray});
+  const PrototypeApp({super.key, required this.app, this.tray});
 
   final AppState app;
 
-  /// Held for the app's life.
-  final Tray tray;
+  /// Held for the app's life; none on Android and iOS.
+  final Tray? tray;
 
   @override
   State<PrototypeApp> createState() => _PrototypeAppState();

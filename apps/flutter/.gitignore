@@ -2,6 +2,7 @@
 # platform runners (flutter create), and the build.
 /lib/src/rust/
 /rust/src/frb_generated.rs
+/android/
 /linux/
 /macos/
 /windows/
