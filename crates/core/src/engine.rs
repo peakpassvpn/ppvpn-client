@@ -205,12 +205,21 @@ impl Engine {
         runtime: Arc<dyn Runtime>,
         log: Logs,
     ) -> Result<Engine, Error> {
+        Self::assemble_with_rule_sets(config, runtime, log, crate::rulesets::Options::default())
+    }
+
+    fn assemble_with_rule_sets(
+        config: EngineConfig,
+        runtime: Arc<dyn Runtime>,
+        log: Logs,
+        rule_set_options: crate::rulesets::Options,
+    ) -> Result<Engine, Error> {
         let proxies = proxy::Proxies::open(&config)?;
         log.attach(&runtime);
         let inner = Arc::new_cyclic(|weak| Inner {
             this: weak.clone(),
             fatal: fatal::FatalCleanup::default(),
-            rule_sets: rule_sets::manager(&config, weak.clone()),
+            rule_sets: rule_sets::manager(&config, weak.clone(), rule_set_options),
             rule_set_inputs: Mutex::default(),
             closing: rule_sets::Closing::default(),
             tun: tun::TunState::new(&config),

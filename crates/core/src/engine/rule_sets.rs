@@ -53,11 +53,27 @@ impl Closing {
 pub(super) struct RuleSetInputs {
     files: HashMap<String, RuleSetFile>,
     allowed_hosts: Vec<String>,
+    rebuilding: bool,
+}
+
+/// Releases the single-flight slot on completion, cancellation or panic.
+struct RebuildTask(Weak<Inner>);
+
+impl Drop for RebuildTask {
+    fn drop(&mut self) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.rule_set_inputs().rebuilding = false;
+        }
+    }
 }
 
 /// The manager of an instance: its cache in `<state_dir>/rule-sets`, its
 /// downloads direct, its reports to `inner`.
-pub(super) fn manager(config: &EngineConfig, inner: Weak<Inner>) -> Manager {
+pub(super) fn manager(
+    config: &EngineConfig,
+    inner: Weak<Inner>,
+    options: rulesets::Options,
+) -> Manager {
     let on_state = inner.clone();
     let on_rebuild = inner.clone();
     Manager::new(rulesets::Options {
@@ -72,11 +88,9 @@ pub(super) fn manager(config: &EngineConfig, inner: Weak<Inner>) -> Manager {
             let Some(inner) = on_rebuild.upgrade() else {
                 return;
             };
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move { inner.rebuild_rule_sets().await });
-            }
+            inner.queue_rule_set_rebuild();
         })),
-        ..rulesets::Options::default()
+        ..options
     })
 }
 
@@ -186,10 +200,11 @@ impl Inner {
     /// After the translation made from `snapshot` took effect: it is what
     /// the next ones use, and its sets are refreshed from now on.
     pub(super) async fn activate_rule_sets(&self, snapshot: Snapshot, allowed_hosts: Vec<String>) {
-        *self.rule_set_inputs() = RuleSetInputs {
-            files: snapshot.files(),
-            allowed_hosts,
-        };
+        {
+            let mut inputs = self.rule_set_inputs();
+            inputs.files = snapshot.files();
+            inputs.allowed_hosts = allowed_hosts;
+        }
         self.rule_sets.activate(snapshot).await;
         self.settle_rule_sets();
     }
@@ -233,6 +248,27 @@ impl Inner {
         }
     }
 
+    /// Retries may arrive while the prior rebuild still waits on `op` or
+    /// reloads. Keep one task; the manager retries until activation succeeds.
+    fn queue_rule_set_rebuild(self: &Arc<Self>) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        {
+            let mut inputs = self.rule_set_inputs();
+            if inputs.rebuilding {
+                return;
+            }
+            inputs.rebuilding = true;
+        }
+        let completed = RebuildTask(Arc::downgrade(self));
+        let inner = self.clone();
+        handle.spawn(async move {
+            let _completed = completed;
+            inner.rebuild_rule_sets().await;
+        });
+    }
+
     /// The refresh task changed which sets can be used: the configuration
     /// is built again from the cached copies (no downloads), as an apply of
     /// the same profile (Go: `rebuildForRuleSets`).
@@ -264,6 +300,12 @@ impl Inner {
             .prepare(&sets_of(&profile, mode), &allowed_hosts, None)
             .await;
         let files = snapshot.files();
+        if files == self.rule_set_files() {
+            // A newer apply may already have accepted these files while
+            // this task waited for the operation lock. Acknowledge the round.
+            self.activate_rule_sets(snapshot, allowed_hosts).await;
+            return;
+        }
         let build = || {
             let mut options = self.options(mode, &selected, &pins);
             options.rule_sets = files.clone();

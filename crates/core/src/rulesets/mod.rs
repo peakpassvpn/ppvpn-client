@@ -14,7 +14,7 @@ mod cache;
 mod fetch;
 mod srs;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use fetch::{Dial, DirectDial, Stream};
 
@@ -136,6 +136,7 @@ pub(crate) struct Options {
     /// downloads). It must not block; the rebuild goes on its own task.
     /// A changed local copy also needs a rebuild: configurations name
     /// immutable files, never the restart cache that activation replaces.
+    /// Retried with bounded backoff until activation acknowledges it.
     pub on_rebuild: Option<RebuildHook>,
     /// The retry backoff of sets that are not ready: `retry_min`, doubled
     /// per consecutive failure up to `retry_max`, never above the set's
@@ -467,10 +468,11 @@ impl Drop for Manager {
 /// the others with a bounded backoff, the due ones concurrently. When a set
 /// that was not ready recovers, the connectivity it was waiting for is
 /// probably back, so every other set that is not ready is retried at once
-/// instead of on its own backoff. A rebuild is asked for once, after the
-/// refreshes due now have all finished (a rebuild replaces the kernel).
+/// instead of on its own backoff. A rebuild is asked for after the refreshes
+/// due now finish, and retried until activation acknowledges the new files.
 async fn run(inner: Arc<Inner>, generation: u64) {
     let mut rebuild_pending = false;
+    let mut rebuild_backoff = inner.opts.retry_min;
     loop {
         let (due, next, pinned, now) = {
             let shared = inner.lock();
@@ -493,16 +495,18 @@ async fn run(inner: Arc<Inner>, generation: u64) {
             (due, next, current.pinned.clone(), now)
         };
         if due.is_empty() {
-            if rebuild_pending {
-                if let Some(hook) = &inner.opts.on_rebuild {
-                    hook();
-                }
-            }
-            rebuild_pending = false;
             let Some(next) = next else {
                 return;
             };
-            tokio::time::sleep((next - now).to_std().unwrap_or_default()).await;
+            let mut wait = (next - now).to_std().unwrap_or_default();
+            if let Some(hook) = inner.opts.on_rebuild.as_ref().filter(|_| rebuild_pending) {
+                // Calling the host is not an acknowledgement: reload may
+                // fail. Only activate replaces this generation and its task.
+                hook();
+                wait = wait.min(rebuild_backoff);
+                rebuild_backoff = rebuild_backoff.saturating_mul(2).min(inner.opts.retry_max);
+            }
+            tokio::time::sleep(wait).await;
             continue;
         }
         let results: Vec<(bool, bool)> = stream::iter(due)

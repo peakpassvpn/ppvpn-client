@@ -28,7 +28,7 @@ fn fixture(name: &str) -> Vec<u8> {
 
 /// The certificate authority the downloads trust (PEM) and the server's
 /// acceptor, whose certificate it issued for 127.0.0.1.
-fn tls() -> &'static (String, SslAcceptor) {
+pub(crate) fn tls() -> &'static (String, SslAcceptor) {
     static TLS: OnceLock<(String, SslAcceptor)> = OnceLock::new();
     TLS.get_or_init(|| crate::tls::testing::authority("rulesets test ca"))
 }
@@ -40,8 +40,8 @@ struct Served {
 
 /// Serves one .srs with ETag = sha256 and honours If-None-Match, or
 /// redirects every request elsewhere.
-struct RuleSetServer {
-    host: String,
+pub(crate) struct RuleSetServer {
+    pub(crate) host: String,
     served: Mutex<Served>,
     redirect: Option<String>,
     requests: AtomicU32,
@@ -49,7 +49,7 @@ struct RuleSetServer {
 }
 
 impl RuleSetServer {
-    async fn start(body: Vec<u8>) -> Arc<Self> {
+    pub(crate) async fn start(body: Vec<u8>) -> Arc<Self> {
         Self::listen(body, None).await
     }
 
@@ -142,7 +142,7 @@ impl RuleSetServer {
         stream.shutdown().await
     }
 
-    fn set(&self, body: Vec<u8>, fail: bool) {
+    pub(crate) fn set(&self, body: Vec<u8>, fail: bool) {
         *self.served.lock().unwrap() = Served { body, fail };
     }
 
