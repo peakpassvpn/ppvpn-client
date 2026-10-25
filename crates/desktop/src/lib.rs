@@ -38,6 +38,10 @@ mod sysproxy;
 mod test_backend;
 mod testmode;
 mod traffic;
+// Tunnel mode's transport (#448); the client's tunnel mode uses it next.
+#[cfg(unix)]
+#[allow(dead_code)]
+mod tunnel;
 
 pub use detect::ConflictReport;
 pub use errors::{ClientError, ClientErrorInfo, ErrorCode};
