@@ -264,6 +264,20 @@ const _zh = <String, String>{
   'upToDate': '已是最新版本',
   'updCheckFailT': '检查更新失败',
   'copyCommand': '复制命令',
+  // The phone layout (#448 step 5), not in the handoff.
+  'connectBtn': '连接',
+  'disconnectBtn': '断开连接',
+  'me': '我的',
+  'connection': '连接',
+  'support': '支持',
+  'planWeb': '账户与套餐',
+  'helpWeb': '帮助与反馈',
+  'about': '关于',
+  'searchNodes': '搜索节点',
+  'allRegions': '全部',
+  'noMatches': '没有匹配的节点',
+  'back': '返回',
+  'daysLeft': '剩余 {n} 天',
 };
 
 const _en = <String, String>{
@@ -486,5 +500,19 @@ const _en = <String, String>{
   'upToDate': 'You’re up to date',
   'updCheckFailT': 'Couldn’t check for updates',
   'copyCommand': 'Copy Command',
+  // The phone layout (#448 step 5), not in the handoff.
+  'connectBtn': 'Connect',
+  'disconnectBtn': 'Disconnect',
+  'me': 'Me',
+  'connection': 'Connection',
+  'support': 'Support',
+  'planWeb': 'Account & Plan',
+  'helpWeb': 'Help & Feedback',
+  'about': 'About',
+  'searchNodes': 'Search nodes',
+  'allRegions': 'All',
+  'noMatches': 'No matching nodes',
+  'back': 'Back',
+  'daysLeft': '{n} days left',
 };
 

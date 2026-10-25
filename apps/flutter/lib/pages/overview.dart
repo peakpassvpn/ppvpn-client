@@ -122,7 +122,7 @@ class OverviewPage extends StatelessWidget {
   );
 
   Widget _page(rust.UiSnapshot snapshot) {
-    final problem = _Problem.of(app, snapshot);
+    final problem = ProblemCard.of(app, snapshot);
     return SingleChildScrollView(
       padding: Tokens.pagePadding,
       child: Center(
@@ -156,7 +156,7 @@ class OverviewPage extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(child: _Traffic(app: app)),
+                    Expanded(child: TrafficCard(app: app)),
                     const SizedBox(width: Tokens.cardGap),
                     Expanded(child: _LocalProxy(app: app, nodeId: snapshot.selectedNodeId)),
                   ],
@@ -260,7 +260,7 @@ class _Hero extends StatelessWidget {
                       id: connected ? 'timer' : (busy ? 'busy' : null),
                       alignment: AlignmentDirectional.centerEnd,
                       child: connected
-                          ? _SessionTimer(since: app.connectedSince)
+                          ? SessionTimer(since: app.connectedSince)
                           : busy
                           ? Column(
                               crossAxisAlignment: CrossAxisAlignment.end,
@@ -281,7 +281,7 @@ class _Hero extends StatelessWidget {
                       ? null
                       : Padding(
                           padding: const EdgeInsets.only(top: 18, left: Tokens.orbSize + 16),
-                          child: _Route(
+                          child: RouteLine(
                             lines: lineNames(node),
                             current: node.lines.indexWhere((line) => line.key == snapshot.lineKey),
                             connected: connected,
@@ -370,16 +370,16 @@ class _Dots extends CustomPainter {
 }
 
 /// 「本次连接」: hh:mm:ss since the connection came on, once a second.
-class _SessionTimer extends StatefulWidget {
-  const _SessionTimer({required this.since});
+class SessionTimer extends StatefulWidget {
+  const SessionTimer({required this.since});
 
   final DateTime? since;
 
   @override
-  State<_SessionTimer> createState() => _SessionTimerState();
+  State<SessionTimer> createState() => _SessionTimerState();
 }
 
-class _SessionTimerState extends State<_SessionTimer> {
+class _SessionTimerState extends State<SessionTimer> {
   // Started in initState: a `late final` initializer would only run on first
   // access, which was dispose(), so the timer never ticked.
   late final Timer _tick;
@@ -415,8 +415,8 @@ class _SessionTimerState extends State<_SessionTimer> {
 
 /// 本机 → the node's lines → 互联网. The line in use and those before it are
 /// lit while connected; the rest wait (dashed).
-class _Route extends StatelessWidget {
-  const _Route({required this.lines, required this.current, required this.connected});
+class RouteLine extends StatelessWidget {
+  const RouteLine({required this.lines, required this.current, required this.connected});
 
   /// [lineNames], in failover order.
   final List<String> lines;
@@ -673,8 +673,8 @@ class _InstallHint extends StatelessWidget {
 /// A one-line problem card (handoff "异常提示") with its buttons on the
 /// right: enhanced mode failed or is in use elsewhere, or the system proxy
 /// failed.
-class _Problem extends StatelessWidget {
-  const _Problem({required this.warn, required this.title, required this.description, required this.actions});
+class ProblemCard extends StatelessWidget {
+  const ProblemCard({required this.warn, required this.title, required this.description, required this.actions});
 
   /// Warning tone (in use elsewhere) instead of the failure tone.
   final bool warn;
@@ -683,7 +683,7 @@ class _Problem extends StatelessWidget {
   final List<Widget> actions;
 
   /// The card for the snapshot's connection, or null while there is none.
-  static _Problem? of(AppState app, rust.UiSnapshot snapshot) {
+  static ProblemCard? of(AppState app, rust.UiSnapshot snapshot) {
     final s = S.current;
     final enhanced = snapshot.connectionMode == rust.UiConnectionMode.enhanced;
     final retry = Button(kind: ButtonKind.secondary, label: s('retry'), onPress: app.retry);
@@ -696,13 +696,13 @@ class _Problem extends StatelessWidget {
         ),
     ];
     return switch (snapshot.phase) {
-      rust.UiPhase.error when enhanced => _Problem(
+      rust.UiPhase.error when enhanced => ProblemCard(
         warn: false,
         title: '${s('tunMode')} · ${s('st_failed')}',
         description: enhancedReason(snapshot.error),
         actions: [...compatible, retry],
       ),
-      rust.UiPhase.contended => _Problem(
+      rust.UiPhase.contended => ProblemCard(
         warn: true,
         title: contendedTitle(snapshot.contended),
         description: switch (snapshot.contended) {
@@ -721,13 +721,13 @@ class _Problem extends StatelessWidget {
         ],
       ),
       // The tunnel works; only the PPVPN API is unreachable for now (#438).
-      rust.UiPhase.connected when enhanced && snapshot.apiUnreachable => _Problem(
+      rust.UiPhase.connected when enhanced && snapshot.apiUnreachable => ProblemCard(
         warn: true,
         title: s('h_on'),
         description: s('d_apiUnreachable'),
         actions: const [],
       ),
-      rust.UiPhase.error => _Problem(
+      rust.UiPhase.error => ProblemCard(
         warn: false,
         title: s('h_stdFail'),
         description: switch (snapshot.error?.code) {
@@ -786,8 +786,8 @@ class _Problem extends StatelessWidget {
   }
 }
 
-class _Traffic extends StatelessWidget {
-  const _Traffic({required this.app});
+class TrafficCard extends StatelessWidget {
+  const TrafficCard({required this.app});
 
   final AppState app;
 

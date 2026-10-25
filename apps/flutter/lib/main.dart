@@ -22,6 +22,7 @@ import 'app_state.dart';
 import 'bench.dart';
 import 'e2e.dart';
 import 'mobile.dart';
+import 'phone/phone.dart';
 import 'src/rust/api.dart' as rust;
 import 'sample.dart';
 import 'settings.dart';
@@ -213,7 +214,15 @@ class _PrototypeAppState extends State<PrototypeApp> {
             data: t.forui,
             child: DefaultTextStyle(
               style: t.body,
-              child: ColoredBox(color: t.bg, child: Shell(app: widget.app)),
+              // Below 600 wide the phone layout, else the desktop's (#448).
+              child: ColoredBox(
+                color: t.bg,
+                child: LayoutBuilder(
+                  builder: (context, box) => box.maxWidth < Tokens.phoneBreakpoint
+                      ? PhoneShell(app: widget.app)
+                      : Shell(app: widget.app),
+                ),
+              ),
             ),
           );
         },
