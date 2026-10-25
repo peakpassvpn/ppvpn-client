@@ -10,6 +10,7 @@
 //! starts the refresh task, which reports later ones and asks for a rebuild
 //! when a set appears, disappears or changes how it must be rendered.
 
+mod cache;
 mod fetch;
 mod srs;
 #[cfg(test)]
@@ -18,9 +19,7 @@ mod tests;
 pub(crate) use fetch::{Dial, DirectDial, Stream};
 
 use std::collections::{HashMap, HashSet};
-use std::io;
-use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -135,8 +134,8 @@ pub(crate) struct Options {
     /// available or how they must be rendered, once per round: the
     /// configuration must be rebuilt (with [`Manager::prepare`] without
     /// downloads). It must not block; the rebuild goes on its own task.
-    /// A set that only changed content needs none: the file is replaced in
-    /// place.
+    /// A changed local copy also needs a rebuild: configurations name
+    /// immutable files, never the restart cache that activation replaces.
     pub on_rebuild: Option<RebuildHook>,
     /// The retry backoff of sets that are not ready: `retry_min`, doubled
     /// per consecutive failure up to `retry_max`, never above the set's
@@ -174,6 +173,7 @@ struct Inner {
     opts: Options,
     client: fetch::Client,
     shared: Mutex<Shared>,
+    cache: Arc<Mutex<cache::Cache>>,
 }
 
 #[derive(Default)]
@@ -197,7 +197,7 @@ struct Entry {
     state: State,
     updated_at: Option<DateTime<Utc>>,
     err: &'static str,
-    local: Option<LocalCopy>,
+    local: Option<Arc<LocalCopy>>,
     failures: u32,
     due: Option<DateTime<Utc>>,
 }
@@ -207,6 +207,7 @@ struct LocalCopy {
     path: PathBuf,
     sha256: String,
     mirror_dns: bool,
+    modified: Option<DateTime<Utc>>,
 }
 
 impl Snapshot {
@@ -289,11 +290,13 @@ impl Entry {
 impl Manager {
     pub(crate) fn new(opts: Options) -> Self {
         let client = fetch::Client::new(opts.dial.clone(), opts.trust_pem.as_deref());
+        let cache = Arc::new(Mutex::new(cache::Cache::new(opts.dir.clone())));
         Manager {
             inner: Arc::new(Inner {
                 opts,
                 client,
                 shared: Mutex::default(),
+                cache,
             }),
         }
     }
@@ -338,13 +341,18 @@ impl Manager {
             if inner.opts.dir.is_none() {
                 e.err = STORAGE_UNAVAILABLE;
             } else {
-                e.local = inner.read_local(&set.id);
+                let cached_set = set.clone();
+                let before = previous.get(&set.id).and_then(|e| e.local.clone());
+                e.local = inner
+                    .cache(move |cache| cache.read_local(&cached_set, before))
+                    .await
+                    .flatten();
                 match &e.local {
                     Some(local) if local.sha256 == sha256_hex_of(set) => {
                         e.state = State::Ready;
                         e.err = "";
                         e.failures = 0;
-                        e.updated_at = Some(mod_time(&local.path).unwrap_or(now));
+                        e.updated_at = Some(local.modified.unwrap_or(now));
                     }
                     local => {
                         // An older copy stands in only for a set this
@@ -386,9 +394,10 @@ impl Manager {
     /// Makes `snapshot` current: reports state changes, removes the cached
     /// files of sets the profile no longer names, and (re)starts the refresh
     /// task. It must be called within a Tokio runtime.
-    pub(crate) fn activate(&self, snapshot: Snapshot) {
+    pub(crate) async fn activate(&self, snapshot: Snapshot) {
         let inner = &self.inner;
-        let mut keep = HashSet::new();
+        let cached = snapshot.clone();
+        let generation;
         let mut changed = Vec::new();
         {
             let mut shared = inner.lock();
@@ -402,21 +411,29 @@ impl Manager {
                 .map(|e| (e.set.id.as_str(), e.state))
                 .collect();
             for e in &snapshot.entries {
-                keep.insert(format!("{}.srs", e.set.id));
                 if previous.get(e.set.id.as_str()) != Some(&e.state) {
                     changed.push(e.status());
                 }
             }
             shared.generation += 1;
-            let generation = shared.generation;
+            generation = shared.generation;
             let refresh = !snapshot.entries.is_empty();
             shared.current = Some(snapshot);
             if refresh {
                 shared.task = Some(tokio::spawn(run(inner.clone(), generation)));
             }
         }
-        inner.prune(&keep);
         inner.notify(changed);
+        let current = inner.clone();
+        inner
+            .cache(move |cache| {
+                // A newer activation may have overtaken this blocking task.
+                let is_current = current.lock().generation == generation;
+                if is_current {
+                    cache.activate(&cached);
+                }
+            })
+            .await;
     }
 
     /// Stops the refresh task.
@@ -514,6 +531,20 @@ impl Inner {
         self.shared.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Disk access, SRS inspection, hashes and fsync never occupy a runtime
+    /// worker. The cache lock serializes writes/pruning with object leases.
+    async fn cache<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&mut cache::Cache) -> T + Send + 'static,
+    ) -> Option<T> {
+        let cache = self.cache.clone();
+        tokio::task::spawn_blocking(move || {
+            work(&mut cache.lock().unwrap_or_else(|e| e.into_inner()))
+        })
+        .await
+        .ok()
+    }
+
     fn now(&self) -> DateTime<Utc> {
         (self.opts.now)()
     }
@@ -552,7 +583,7 @@ impl Inner {
             let before = std::mem::replace(e, candidate);
             e.due = Some(self.next_due(e, self.now()));
             let rebuild = (before.state == State::Unavailable) != (e.state == State::Unavailable)
-                || matches!((&before.local, &e.local), (Some(a), Some(b)) if a.mirror_dns != b.mirror_dns);
+                || matches!((&before.local, &e.local), (Some(a), Some(b)) if a.path != b.path || a.mirror_dns != b.mirror_dns);
             (before.state, e.status(), rebuild)
         };
         let recovered = before != State::Ready && status.state == State::Ready;
@@ -592,7 +623,7 @@ impl Inner {
             // unless it matches.
             Ok(fetch::Fetched::NotModified) if cached.as_deref() == Some(want.as_str()) => Ok(()),
             Ok(fetch::Fetched::NotModified) => Err(SHA256_MISMATCH),
-            Ok(fetch::Fetched::Body(body)) => self.install(e, &body, &want).await,
+            Ok(fetch::Fetched::Body(body)) => self.install(e, body, &want).await,
             Err(code) => Err(code),
         };
         match outcome {
@@ -609,69 +640,16 @@ impl Inner {
         }
     }
 
-    /// Verifies `body` against `want` and atomically replaces the local copy.
-    async fn install(&self, e: &mut Entry, body: &[u8], want: &str) -> Result<(), &'static str> {
-        if sha256_hex(body) != want {
-            return Err(SHA256_MISMATCH);
-        }
-        let mirror_dns = srs::inspect(body).map_err(|_| INVALID)?;
-        let path = self.path(&e.set.id).ok_or(STORAGE_FAILED)?;
-        write_atomic(&path, body)
-            .await
-            .map_err(|_| STORAGE_FAILED)?;
-        e.local = Some(LocalCopy {
-            path,
-            sha256: want.into(),
-            mirror_dns,
-        });
+    /// A candidate only creates an immutable object. The mutable restart
+    /// cache is not changed until the host activates this snapshot.
+    async fn install(&self, e: &mut Entry, body: Vec<u8>, want: &str) -> Result<(), &'static str> {
+        let want = want.to_owned();
+        e.local = Some(
+            self.cache(move |cache| cache.install(&body, &want))
+                .await
+                .ok_or(STORAGE_FAILED)??,
+        );
         Ok(())
-    }
-
-    /// The file of rule set `id` inside the directory. Profile validation
-    /// already restricts ids to a safe alphabet; this keeps the file inside
-    /// the directory even for an id that skipped it.
-    fn path(&self, id: &str) -> Option<PathBuf> {
-        let dir = self.opts.dir.as_ref()?;
-        let name = format!("{id}.srs");
-        let mut components = Path::new(&name).components();
-        match (components.next(), components.next()) {
-            (Some(Component::Normal(_)), None) => Some(dir.join(name)),
-            _ => None,
-        }
-    }
-
-    /// Loads and inspects the cached copy of `id`.
-    fn read_local(&self, id: &str) -> Option<LocalCopy> {
-        let path = self.path(id)?;
-        let data = std::fs::read(&path).ok()?;
-        if data.len() > MAX_SIZE {
-            return None;
-        }
-        let mirror_dns = srs::inspect(&data).ok()?;
-        Some(LocalCopy {
-            path,
-            sha256: sha256_hex(&data),
-            mirror_dns,
-        })
-    }
-
-    /// Removes the cached sets not in `keep`, and leftover temporary files.
-    fn prune(&self, keep: &HashSet<String>) {
-        let Some(dir) = &self.opts.dir else {
-            return;
-        };
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let file = entry.file_type().is_ok_and(|t| !t.is_dir());
-            if file
-                && ((name.ends_with(".srs") && !keep.contains(&name)) || name.starts_with(".tmp-"))
-            {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
     }
 }
 
@@ -692,68 +670,4 @@ fn after(now: DateTime<Utc>, d: Duration) -> DateTime<Utc> {
         .ok()
         .and_then(|d| now.checked_add_signed(d))
         .unwrap_or(DateTime::<Utc>::MAX_UTC)
-}
-
-fn mod_time(path: &Path) -> Option<DateTime<Utc>> {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .map(DateTime::<Utc>::from)
-}
-
-/// Writes `data` to a private temporary file next to `path` and renames it
-/// over `path`, so readers (sail's file watcher included) only ever see a
-/// complete file.
-async fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
-    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(dir)?;
-    let tmp = dir.join(format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = match write_new(&tmp, data) {
-        Ok(()) => rename(&tmp, path).await,
-        Err(e) => Err(e),
-    };
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
-
-fn write_new(path: &Path, data: &[u8]) -> io::Result<()> {
-    use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(path)?;
-    file.write_all(data)?;
-    file.sync_all()
-}
-
-/// Retries a failed replace briefly: on Windows a file still open without
-/// FILE_SHARE_DELETE cannot be replaced.
-async fn rename(from: &Path, to: &Path) -> io::Result<()> {
-    let mut attempt = 0;
-    loop {
-        match std::fs::rename(from, to) {
-            Ok(()) => return Ok(()),
-            Err(e) if attempt >= 9 => return Err(e),
-            Err(e) if e.kind() != io::ErrorKind::PermissionDenied && !cfg!(windows) => {
-                return Err(e)
-            }
-            Err(_) => {}
-        }
-        attempt += 1;
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }

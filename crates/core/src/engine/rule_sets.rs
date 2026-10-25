@@ -174,14 +174,6 @@ impl Inner {
             return None;
         }
         let sets = sets_of(profile, mode);
-        if !sets.is_empty() {
-            // The cache's directory, made on first use; a failure shows as
-            // the sets' storage error.
-            let dir = rule_set_dir(&self.config);
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                tracing::warn!(error = %e, "rule set cache directory");
-            }
-        }
         let prepare = self
             .rule_sets
             .prepare(&sets, allowed_hosts, Some(rulesets::PREPARE_TIMEOUT));
@@ -193,12 +185,12 @@ impl Inner {
 
     /// After the translation made from `snapshot` took effect: it is what
     /// the next ones use, and its sets are refreshed from now on.
-    pub(super) fn activate_rule_sets(&self, snapshot: Snapshot, allowed_hosts: Vec<String>) {
+    pub(super) async fn activate_rule_sets(&self, snapshot: Snapshot, allowed_hosts: Vec<String>) {
         *self.rule_set_inputs() = RuleSetInputs {
             files: snapshot.files(),
             allowed_hosts,
         };
-        self.rule_sets.activate(snapshot);
+        self.rule_sets.activate(snapshot).await;
         self.settle_rule_sets();
     }
 
@@ -307,7 +299,7 @@ impl Inner {
         if let Some(applied) = self.live().applied.as_mut() {
             applied.translation = translation;
         }
-        self.activate_rule_sets(snapshot, allowed_hosts);
+        self.activate_rule_sets(snapshot, allowed_hosts).await;
         if running.is_some() {
             self.refresh().await;
         }

@@ -146,11 +146,12 @@ fn tun_instance() -> (Engine, Arc<FakeRuntime>) {
     (engine, fake)
 }
 
-/// The profile with its first ingress on another entry IP: the TUN
-/// excludes it from the tunnel.
+/// The first ingress uses its .example domain instead of an explicit IP:
+/// removing that exclusion changes the TUN without adding a public endpoint.
+/// TEST-NET IPs cannot be used here: apply correctly rejects reserved IPs.
 fn moved_entry(revision: &str) -> Vec<u8> {
     profile_with(revision, |p| {
-        p["nodes"][0]["ingresses"][0]["endpoint"]["ip"] = "9.9.9.9".into();
+        p["nodes"][0]["ingresses"][0]["endpoint"]["ip"] = "".into();
     })
 }
 
@@ -177,7 +178,11 @@ async fn a_changed_tun_restarts_instead_of_reloading() {
     assert_eq!(count(&fake, |c| matches!(c, Call::Reload(_))), 0);
     assert_eq!(count(&fake, |c| matches!(c, Call::Stop)), 1);
     assert_eq!(count(&fake, |c| matches!(c, Call::Start(_))), 2);
-    assert!(fake.config().unwrap().contains("9.9.9.9"));
+    let config: Value = serde_json::from_str(&fake.config().unwrap()).unwrap();
+    assert!(!config["inbounds"][0]["route_exclude_address"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("8.8.8.8/32")));
     assert_eq!(engine.status().state, EngineState::Running);
 }
 
@@ -190,6 +195,43 @@ async fn an_unchanged_listener_set_reloads() {
     assert_eq!(result.switch, Some(SwitchKind::KernelSwitch));
     assert_eq!(count(&fake, |c| matches!(c, Call::Reload(_))), 1);
     assert_eq!(count(&fake, |c| matches!(c, Call::Stop)), 0);
+}
+
+/// Node/ingress presentation order does not change the TUN's routes and must
+/// not drop every connection through a full restart.
+#[tokio::test]
+async fn reordered_nodes_and_ingresses_do_not_restart_the_tun() {
+    let (engine, fake) = tun_instance();
+    let initial = profile(R1);
+    engine
+        .apply(ApplyRequest::new(initial.clone()))
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    let mut reordered: Value = serde_json::from_slice(&initial).unwrap();
+    reordered["revision"] = R2.into();
+    reordered["nodes"][0]["ingresses"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    // Profile validation requires primary first and increasing ordinals.
+    for (i, ingress) in reordered["nodes"][0]["ingresses"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        ingress["role"] = if i == 0 { "primary" } else { "backup" }.into();
+        ingress["replica_ordinal"] = i.into();
+    }
+    reordered["nodes"].as_array_mut().unwrap().reverse();
+    let result = engine
+        .apply(ApplyRequest::new(serde_json::to_vec(&reordered).unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(result.switch, Some(SwitchKind::KernelSwitch));
+    assert_eq!(count(&fake, |c| matches!(c, Call::Stop)), 0);
+    assert_eq!(count(&fake, |c| matches!(c, Call::Start(_))), 1);
 }
 
 /// A restart whose new configuration does not start puts the running one
