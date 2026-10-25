@@ -60,7 +60,10 @@ impl Client {
                         .map(|traffic| traffic.totals()),
                     Err(_) => None,
                 };
-                let enhanced = client.enhanced.traffic_totals().await;
+                let enhanced = match &client.tunnel {
+                    Some(tunnel) => tunnel.traffic_totals().await,
+                    None => client.enhanced.traffic_totals().await,
+                };
                 let now = Instant::now();
                 let mut sample = TrafficSample {
                     up_bps: 0,

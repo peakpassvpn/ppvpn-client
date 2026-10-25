@@ -14,9 +14,16 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 use crate::core_ipc::{parse_status, BoxFuture, CoreCallError, CoreStatus, CoreTransport};
+
+/// The phones' socket. Desktop builds have the type too, so the client
+/// compiles everywhere; there a call fails (tunnel mode is only used on
+/// Android and iOS).
+#[cfg(unix)]
+type Stream = tokio::net::UnixStream;
+#[cfg(not(unix))]
+type Stream = tokio::io::DuplexStream;
 
 /// The socket's file name in the app's directory: Android's `filesDir`, the
 /// App Group container on iOS.
@@ -38,10 +45,19 @@ impl TunnelTransport {
         }
     }
 
-    async fn connect(&self) -> Result<UnixStream, CoreCallError> {
-        UnixStream::connect(&self.socket).await.map_err(|error| {
+    #[cfg(unix)]
+    async fn connect(&self) -> Result<Stream, CoreCallError> {
+        Stream::connect(&self.socket).await.map_err(|error| {
             CoreCallError::Transport(format!("connect {}: {error}", self.socket.display()))
         })
+    }
+
+    #[cfg(not(unix))]
+    async fn connect(&self) -> Result<Stream, CoreCallError> {
+        Err(CoreCallError::Transport(format!(
+            "connect {}: no Unix sockets on this platform",
+            self.socket.display()
+        )))
     }
 
     /// The host's events until it stops: the first is the current status.
@@ -78,7 +94,7 @@ impl CoreTransport for TunnelTransport {
 
 /// An open `/v1/watch`.
 pub(crate) struct Watch {
-    stream: UnixStream,
+    stream: Stream,
 }
 
 impl Watch {
@@ -135,7 +151,7 @@ fn answer(frame: &[u8]) -> Result<Value, CoreCallError> {
     })
 }
 
-async fn write_frame<W: AsyncWrite + Unpin>(
+pub(crate) async fn write_frame<W: AsyncWrite + Unpin>(
     stream: &mut W,
     frame: &[u8],
 ) -> Result<(), CoreCallError> {
@@ -153,7 +169,7 @@ async fn write_frame<W: AsyncWrite + Unpin>(
 }
 
 /// The next frame, or `None` when the stream ended before one began.
-async fn read_frame<R: AsyncRead + Unpin>(
+pub(crate) async fn read_frame<R: AsyncRead + Unpin>(
     stream: &mut R,
 ) -> Result<Option<Vec<u8>>, CoreCallError> {
     let lost = |error: std::io::Error| CoreCallError::Transport(format!("read: {error}"));
@@ -181,7 +197,7 @@ async fn read_frame<R: AsyncRead + Unpin>(
     Ok(Some(frame))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use tokio::net::UnixListener;

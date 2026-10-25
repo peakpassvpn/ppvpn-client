@@ -409,6 +409,10 @@ impl Client {
     /// mode is off.
     pub(crate) async fn connect_now(&self) -> Result<(), ClientError> {
         self.current_session()?;
+        if let Some(tunnel) = &self.tunnel {
+            self.prime_enhanced().await?;
+            return tunnel.enable().await;
+        }
         match self.connection_mode() {
             ConnectionMode::Enhanced => {
                 if let Err(error) = self.compat.disconnect().await {
@@ -426,6 +430,9 @@ impl Client {
 
     /// Turns both modes off; the first failure is returned.
     pub(crate) async fn disconnect_now(&self) -> Result<(), ClientError> {
+        if let Some(tunnel) = &self.tunnel {
+            return tunnel.disable().await;
+        }
         let enhanced = self.enhanced.disable().await;
         let compat = self.compat.disconnect().await;
         enhanced.and(compat)
@@ -440,6 +447,10 @@ impl Client {
 
     pub(crate) async fn retry_now(&self) -> Result<(), ClientError> {
         self.current_session()?;
+        if let Some(tunnel) = &self.tunnel {
+            self.prime_enhanced().await?;
+            return tunnel.enable().await;
+        }
         match self.connection_mode() {
             ConnectionMode::Enhanced => {
                 self.prime_enhanced().await?;
@@ -473,7 +484,10 @@ impl Client {
         self.routing.set(mode);
         self.publish_connection(|snapshot| snapshot.routing_mode = mode);
         let standard = self.standard.reapply().await;
-        let enhanced = self.enhanced.reapply().await;
+        let enhanced = match &self.tunnel {
+            Some(tunnel) => tunnel.reapply().await,
+            None => self.enhanced.reapply().await,
+        };
         standard.and(enhanced)
     }
 
