@@ -11,10 +11,10 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:forui/forui.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'activation.dart';
@@ -31,6 +31,11 @@ import 'src/rust/frb_generated.dart';
 import 'theme.dart';
 import 'tray.dart';
 import 'updates.dart';
+
+/// The native side's answers on Android and iOS (runner/android
+/// MainActivity): the app's own directory, where the tunnel's socket also
+/// lives (#448).
+const _app = MethodChannel('com.peakpassvpn.ppvpn/app');
 
 /// The bridge library ci.yml puts next to the app: beside the executable
 /// (Windows), in the bundle's lib/ (Linux), in Contents/Frameworks (macOS),
@@ -57,7 +62,7 @@ Future<void> main() async {
     await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
     mark('bridge_loaded');
     // Before anything reads the app's files.
-    if (mobile) rust.setAppDir(path: (await getApplicationSupportDirectory()).path);
+    if (mobile) rust.setAppDir(path: (await _app.invokeMethod<String>('filesDir'))!);
     // Another instance runs (Windows, Linux): it took this launch's
     // arguments and shows its window. Before the window and the client.
     if (!rust.claimInstance()) exit(0);

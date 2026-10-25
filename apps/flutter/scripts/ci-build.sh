@@ -194,6 +194,7 @@ if [ "$os" = android ]; then
     upper=$(echo "$triple" | tr 'a-z-' 'A-Z_')
     (cd "$root" && env "CARGO_TARGET_${upper}_LINKER=$bin/${triple}26-clang" \
       "CC_${triple//-/_}=$bin/${triple}26-clang" "AR_${triple//-/_}=$bin/llvm-ar" \
+      "BINDGEN_EXTRA_CLANG_ARGS_${triple//-/_}=--target=${triple}26" \
       cargo build --release --locked -p ppvpn-flutter --target "$triple")
     so=$root/target/$triple/release/libppvpn_flutter.so
     mkdir -p "android/app/src/main/jniLibs/$abi"

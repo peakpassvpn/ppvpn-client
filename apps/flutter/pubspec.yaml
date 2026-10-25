@@ -18,8 +18,6 @@ dependencies:
   # tray_manager's own engine: it does not re-export ModifierKey and Size
   # (the menu's accelerators, the menu bar icon's size).
   nativeapi: 0.5.2
-  # The app's directory on Android and iOS (main.dart, #448).
-  path_provider: 2.1.6
   tray_manager: 0.8.0
   window_manager: 0.5.2
 

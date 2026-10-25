@@ -12,8 +12,9 @@ pub(crate) fn home_override() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Android and iOS: the app's own support directory, which only Flutter
-/// knows there (path_provider); `api::set_app_dir` sets it before `start`.
+/// Android and iOS: the app's own directory, which only the native side
+/// knows there (main.dart asks it); `api::set_app_dir` sets it before
+/// `start`.
 pub(crate) static APP_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// `$XDG_*_HOME` when set to an absolute path, else `~/<fallback>`, as the
