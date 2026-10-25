@@ -1178,8 +1178,8 @@ jobs:
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      # A tablet (1280 dp across in landscape), where the desktop layout fits
-      # until the phone layouts (#448 step 5).
+      # A tablet: in landscape (1280 dp across, the desktop layout), then set
+      # to a phone's screen in portrait (the phone layout, #448 step 5).
       - name: Smoke test (emulator)
         if: steps.scope.outputs.flutter == 'true'
         timeout-minutes: 30
