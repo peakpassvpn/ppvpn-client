@@ -1006,7 +1006,7 @@ jobs:
           if [ "${{ matrix.os }}" = ubuntu-latest ]; then
             sudo apt-get install -y --no-install-recommends xdotool >/dev/null
           fi
-          apps/flutter/scripts/native.sh v0.6.3 "$RUNNER_TEMP/native"
+          apps/flutter/scripts/native.sh v0.6.4 "$RUNNER_TEMP/native"
       # The deb and rpm (#401 step 5, apps/flutter/scripts/package-linux.sh),
       # each installed alone in a fresh container by package-smoke.sh: the
       # layout, every library resolved from the package's dependencies, one
@@ -1090,13 +1090,17 @@ jobs:
           CARGO_PROFILE_SERVICE_LTO: 'false'
           CARGO_PROFILE_SERVICE_CODEGEN_UNITS: '16'
         run: apps/flutter/scripts/package-windows.ps1
+      # With stage A of the acceptance (#401): the native 0.6.4 app's signed-in
+      # state across the upgrade, a rollback and the upgrade again; the native
+      # installer is required for it.
       - name: Installer smoke test (Windows)
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           set -- -Installer "$(cygpath -w "$(ls dist/windows/*-setup.exe)")"
           native="${{ steps.native.outputs.installer }}"
-          if [ -n "$native" ]; then set -- "$@" -Native "$(cygpath -w "$native")"; fi
+          [ -n "$native" ] || { echo "::error::no native installer (Fetch the native app): stage A needs it"; exit 1; }
+          set -- "$@" -Native "$(cygpath -w "$native")"
           powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/smoke-installer.ps1 "$@"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
