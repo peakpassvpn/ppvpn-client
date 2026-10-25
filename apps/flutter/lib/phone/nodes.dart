@@ -8,6 +8,7 @@
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart' show CupertinoSliverRefreshControl;
+import 'package:flutter/services.dart' show TextInputAction;
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
