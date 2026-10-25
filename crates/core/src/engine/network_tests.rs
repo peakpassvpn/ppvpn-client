@@ -7,7 +7,7 @@ use super::super::tun::HostIpv6;
 use super::*;
 use crate::config::{EngineConfig, Platform, Role};
 use crate::event::{Event, EventKind};
-use crate::runtime::fake::FakeRuntime;
+use crate::runtime::fake::{Call, FakeRuntime};
 use crate::status::{DegradedReason, EngineState};
 use crate::Engine;
 
@@ -250,4 +250,76 @@ async fn a_start_that_knows_no_network_changes_nothing() {
     fake.set_network(NetworkSnapshot::default());
     running(&engine).await;
     assert!(!no_default_interface(&engine));
+}
+
+/// The calls that gave sail the host's network, in order.
+fn host_networks(fake: &FakeRuntime) -> Vec<String> {
+    fake.calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::NetworkState(json) => Some(json),
+            _ => None,
+        })
+        .collect()
+}
+
+fn mobile() -> (Engine, Arc<FakeRuntime>) {
+    let fake = Arc::new(FakeRuntime::default());
+    let engine = Engine::with_runtime(
+        EngineConfig::new(Role::Tun, Platform::Android, "/nonexistent"),
+        fake.clone(),
+    );
+    (engine, fake)
+}
+
+/// A mobile host's network is kept, given to sail at each start, and given
+/// at once while it runs.
+#[tokio::test]
+async fn the_hosts_network_goes_to_each_run() {
+    let (engine, fake) = mobile();
+    let wlan = crate::NetworkState::new("wlan0", crate::NetworkKind::Wifi);
+    engine.set_network_state(wlan.clone()).unwrap();
+    assert!(host_networks(&fake).is_empty(), "nothing runs yet");
+    running(&engine).await;
+    let wlan_json = serde_json::to_string(&wlan).unwrap();
+    assert_eq!(host_networks(&fake), [wlan_json.clone()]);
+    let start = fake
+        .calls()
+        .iter()
+        .position(|c| matches!(c, Call::Start(_)))
+        .unwrap();
+    let given = fake
+        .calls()
+        .iter()
+        .position(|c| matches!(c, Call::NetworkState(_)))
+        .unwrap();
+    assert!(start < given, "given to the run that started");
+
+    engine
+        .set_network_state(crate::NetworkState::offline())
+        .unwrap();
+    let offline_json = serde_json::to_string(&crate::NetworkState::offline()).unwrap();
+    assert_eq!(
+        host_networks(&fake),
+        [wlan_json.clone(), offline_json.clone()]
+    );
+
+    // The next run starts from the last.
+    engine.stop().await.unwrap();
+    engine.start().await.unwrap();
+    assert_eq!(
+        host_networks(&fake),
+        [wlan_json, offline_json.clone(), offline_json]
+    );
+}
+
+#[tokio::test]
+async fn desktop_hosts_do_not_push_the_network() {
+    let (engine, fake, _) = instance(Role::Tun);
+    running(&engine).await;
+    let err = engine
+        .set_network_state(crate::NetworkState::offline())
+        .unwrap_err();
+    assert_eq!(err.code, crate::codes::CORE_OPERATION_FAILED);
+    assert!(host_networks(&fake).is_empty());
 }

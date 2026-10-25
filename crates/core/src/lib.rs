@@ -15,6 +15,7 @@ mod hostipv6;
 pub(crate) mod localdns;
 mod localproxy;
 mod logfmt;
+pub mod mobile;
 #[allow(dead_code, unused_imports)] // until the Engine calls it (engine.rs)
 mod probe;
 pub(crate) mod profile;
@@ -33,11 +34,13 @@ mod tunrules;
 pub mod types;
 
 pub use config::{
-    EngineConfig, LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform, Role, TunConfig,
+    EngineConfig, LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform, Role, SocketProtect,
+    TunConfig,
 };
 pub use engine::{tracing_layer, Engine, LOCAL_PROXY_CONTRACT_VERSION};
 pub use error::{codes, Error};
 pub use event::{Event, EventItem, EventKind, EventReceiver, LogReceiver};
+pub use mobile::{tun_settings, NetworkKind, NetworkState, TunSettings};
 pub use request::{
     ApplyRequest, ApplyResult, ClearedPin, Pin, PinClearReason, RoutingMode, SwitchKind,
 };

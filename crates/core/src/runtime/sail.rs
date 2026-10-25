@@ -906,6 +906,10 @@ impl Runtime for SailRuntime {
     fn wake(&self) -> Result<(), RuntimeError> {
         self.instance.wake().map_err(error)
     }
+
+    fn set_network_state(&self, json: &str) -> Result<(), RuntimeError> {
+        self.instance.set_network_state(json).map_err(error)
+    }
 }
 
 /// Seconds since the epoch, for tests that compare `started`.

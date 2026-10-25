@@ -570,7 +570,7 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
     let config = value(&translate(&contract(), &mobile).unwrap());
     assert_eq!(
         config["inbounds"][0],
-        json!({"type": "tun", "tag": "tun", "address": ["10.60.159.89/30"]})
+        json!({"type": "tun", "tag": "tun", "address": ["10.60.159.89/30"], "mtu": 9000})
     );
     assert!(config["route"].get("auto_detect_interface").is_none());
 }

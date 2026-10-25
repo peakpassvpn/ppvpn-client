@@ -24,6 +24,7 @@ pub(crate) enum Call {
     ReplaceInboundUsers(String, Vec<(String, String)>),
     Sleep,
     Wake,
+    NetworkState(String),
 }
 
 /// Which call the next failure is for.
@@ -735,6 +736,12 @@ impl Runtime for FakeRuntime {
     fn wake(&self) -> Result<(), RuntimeError> {
         self.running()?;
         self.record(Call::Wake);
+        Ok(())
+    }
+
+    fn set_network_state(&self, json: &str) -> Result<(), RuntimeError> {
+        self.running()?;
+        self.record(Call::NetworkState(json.to_owned()));
         Ok(())
     }
 }

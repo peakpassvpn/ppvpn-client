@@ -59,7 +59,14 @@ const KNOWN_DOMAIN_REGEX: &str = "^[^:]*[^0-9.:][^:]*$";
 /// The tunnel's addresses: fixed, rarely used values (sing-tun's defaults
 /// are every other sing-box client's, and two TUNs with one address fail).
 /// The desktop service hard-codes the same.
-const TUN_INET4_ADDRESS: &str = "10.60.159.89/30";
+pub(crate) const TUN_INET4_ADDRESS: &str = "10.60.159.89/30";
+/// The resolver a mobile host gives the system: the other host address of
+/// the tunnel's /30, routed into the tunnel, where hijack-dns answers it
+/// before the rule that rejects the tunnel's own networks.
+pub(crate) const TUN_DNS_ADDRESS: &str = "10.60.159.90";
+/// A mobile host's tunnel MTU, set in the inbound as the host sets it on
+/// the device (sail's default).
+pub(crate) const TUN_MTU: u16 = 9000;
 const TUN_INET6_ADDRESS: &str = "fde2:ec40:9312:c7fd::1/126";
 const TUN_PREFIXES: &[&str] = &["10.60.159.88/30", "fde2:ec40:9312:c7fd::/126"];
 /// The tunnel networks before 0.5.7; a host may still list them as DNS.
@@ -431,6 +438,8 @@ impl Builder {
             inbound["iproute2_table_index"] = IPROUTE2_TABLE_INDEX.into();
             inbound["iproute2_rule_index"] = IPROUTE2_RULE_INDEX.into();
             self.auto_detect_interface = true;
+        } else {
+            inbound["mtu"] = TUN_MTU.into();
         }
         self.inbounds.push(inbound);
     }
