@@ -380,7 +380,15 @@ class _SessionTimer extends StatefulWidget {
 }
 
 class _SessionTimerState extends State<_SessionTimer> {
-  late final Timer _tick = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  // Started in initState: a `late final` initializer would only run on first
+  // access, which was dispose(), so the timer never ticked.
+  late final Timer _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  }
 
   @override
   void dispose() {
