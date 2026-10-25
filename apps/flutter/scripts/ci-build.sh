@@ -123,9 +123,9 @@ case $os in
       -c 'Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string ppvpn' \
       "$plist" ;;
   android)
-    # The Play package, as #448 proposes it (the user confirms it before the
-    # first upload: it cannot change afterwards), with our activity in it
-    # (runner/android) instead of the template's; Android 8 and later.
+    # The Play package, as the user decided it (#448; it cannot change
+    # after the first upload), with our activity in it (runner/android)
+    # instead of the template's; Android 8 and later.
     gradle=android/app/build.gradle.kts
     replace "$gradle" 'namespace = "[^"]*"' 'namespace = "com.peakpassvpn.ppvpn"'
     replace "$gradle" 'applicationId = "[^"]*"' 'applicationId = "com.peakpassvpn.ppvpn"'
