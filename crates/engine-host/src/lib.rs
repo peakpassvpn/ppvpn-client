@@ -2,7 +2,10 @@
 //! (docs/host-integration.md): the request paths and JSON shapes the desktop
 //! client speaks, answered by engine calls. The client's standard instance
 //! calls [`dispatch`] directly; the privileged service answers the client's
-//! forwarded calls for the TUN instance with it.
+//! forwarded calls for the TUN instance with it. [`health`] is the TUN
+//! instance's health policy, which both hosts of it go by.
+
+pub mod health;
 
 use ppvpn_core::{
     ApplyRequest, Engine, EngineState, Event, EventItem, EventReceiver, Pin,
