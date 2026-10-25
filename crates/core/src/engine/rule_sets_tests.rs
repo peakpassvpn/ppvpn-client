@@ -1,5 +1,5 @@
-//! Rule sets through the Engine, on the fake runtime: no network (a host
-//! that is not pinned is never fetched; a cached copy needs none).
+//! Rule sets through the Engine, on the fake runtime. Most need no network;
+//! the recovery test uses the existing loopback TLS fixture (L2).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -185,6 +185,106 @@ async fn a_rejected_reload_keeps_the_active_rule_set_bytes() {
         .unwrap()
         .contains(&format!("{}.srs", digest(&new))));
     assert_eq!(std::fs::read(dir.join(format!("{SET}.srs"))).unwrap(), new);
+}
+
+/// L2: the existing loopback TLS fixture, with a fake runtime. A recovered
+/// download's first reload is refused; no further apply is needed to use it.
+#[tokio::test]
+async fn a_recovered_rule_set_retries_a_refused_reload_until_activated() {
+    use std::time::Duration;
+
+    use crate::engine::lifecycle_tests::next_event;
+    use crate::rulesets::tests::{tls, RuleSetServer};
+    use crate::runtime::fake::{Call, Op};
+    use crate::runtime::RuntimeError;
+
+    let old = srs();
+    let new = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/rulesets/testdata/domains-more.srs"
+    ))
+    .unwrap();
+    let digest: String = Sha256::digest(&new)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let server = RuleSetServer::start(new.clone()).await;
+    server.set(Vec::new(), true);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("rule-sets");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join(format!("{SET}.srs")), &old).unwrap();
+    let fake = Arc::new(FakeRuntime::default());
+    let engine = Engine::assemble_with_rule_sets(
+        EngineConfig::new(Role::Standard, Platform::Linux, tmp.path()),
+        fake.clone(),
+        crate::engine::Logs::discard(),
+        crate::rulesets::Options {
+            trust_pem: Some(tls().0.clone()),
+            retry_min: Duration::from_millis(100),
+            retry_max: Duration::from_secs(1),
+            ..crate::rulesets::Options::default()
+        },
+    )
+    .unwrap();
+    let mut profile: Value = serde_json::from_slice(&with_set(&digest)).unwrap();
+    profile["routing"]["rule_sets"][0]["url"] = format!("https://{}/{SET}.srs", server.host).into();
+    engine
+        .apply(
+            ApplyRequest::new(serde_json::to_vec(&profile).unwrap())
+                .with_allowed_rule_set_hosts(vec![server.host.clone()]),
+        )
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    assert_eq!(engine.status().rule_sets[0].state, "stale");
+
+    let mut events = engine.subscribe(&[EventKind::ReloadFailed, EventKind::KernelSwitched]);
+    fake.fail_next(Op::Reload, RuntimeError::new("config", "refused once"));
+    server.set(new.clone(), false);
+    assert!(matches!(
+        next_event(&mut events).await,
+        Event::ReloadFailed { .. }
+    ));
+    assert!(matches!(
+        next_event(&mut events).await,
+        Event::KernelSwitched { .. }
+    ));
+    // KernelSwitched precedes activation's cache write; wait for the operation.
+    drop(engine.inner.op.lock().await);
+    assert!(fake.config().unwrap().contains(&format!("{digest}.srs")));
+    assert_eq!(std::fs::read(dir.join(format!("{SET}.srs"))).unwrap(), new);
+    let reloads = || {
+        fake.calls()
+            .iter()
+            .filter(|call| matches!(call, Call::Reload(_)))
+            .count()
+    };
+    assert_eq!(reloads(), 2, "one refused reload, then automatic recovery");
+
+    // Activation cancels the old generation's retries. No network is due
+    // during this interval; advance the timer instead of sleeping.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(reloads(), 2);
+}
+
+/// A busy lifecycle operation cannot accumulate a task for every retry.
+#[tokio::test]
+async fn repeated_rebuild_notifications_queue_only_one_worker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (engine, _) = instance(tmp.path());
+    let op = engine.inner.op.lock().await;
+    let owners = Arc::strong_count(&engine.inner);
+    for _ in 0..32 {
+        engine.inner.queue_rule_set_rebuild();
+    }
+    // Each queued worker owns Inner, and none can finish while `op` is held.
+    assert_eq!(Arc::strong_count(&engine.inner), owners + 1);
+    drop(op);
+    tokio::task::yield_now().await;
+    assert!(!engine.inner.rule_set_inputs().rebuilding);
 }
 
 /// A new list of allowed hosts is a new apply, even for the same
