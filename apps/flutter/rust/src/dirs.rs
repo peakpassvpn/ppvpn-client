@@ -12,6 +12,11 @@ pub(crate) fn home_override() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Android and iOS: the app's own directory, which only the native side
+/// knows there (main.dart asks it); `api::set_app_dir` sets it before
+/// `start`.
+pub(crate) static APP_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// `$XDG_*_HOME` when set to an absolute path, else `~/<fallback>`, as the
 /// native Linux app reads them (apps/linux LinuxPaths).
 pub(crate) fn xdg(variable: &str, fallback: &str) -> Result<String, String> {
@@ -31,7 +36,8 @@ pub(crate) fn xdg(variable: &str, fallback: &str) -> Result<String, String> {
 ///   `~/Library/Logs/PPVPN` (apps/macos AppDirectories);
 /// - Windows: `%LOCALAPPDATA%\PPVPN` and its `logs` (apps/windows AppPaths);
 /// - Linux: `$XDG_DATA_HOME/ppvpn` and `$XDG_STATE_HOME/ppvpn/logs`
-///   (apps/linux LinuxPaths).
+///   (apps/linux LinuxPaths);
+/// - Android and iOS: `data` and `logs` under [`APP_DIR`] (#448).
 ///
 /// [`home_override`] puts both under one directory (the end-to-end test:
 /// HOME and LOCALAPPDATA also hold Flutter's own caches, so it cannot move
@@ -39,6 +45,9 @@ pub(crate) fn xdg(variable: &str, fallback: &str) -> Result<String, String> {
 pub(crate) fn dirs() -> Result<(String, String), String> {
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let (data, logs) = if let Some(base) = home_override() {
+        (format!("{base}/data"), format!("{base}/logs"))
+    } else if cfg!(any(target_os = "android", target_os = "ios")) {
+        let base = APP_DIR.get().ok_or("the app directory is not set")?;
         (format!("{base}/data"), format!("{base}/logs"))
     } else if cfg!(windows) {
         let base = env("LOCALAPPDATA").ok_or("LOCALAPPDATA is not set")? + "\\PPVPN";

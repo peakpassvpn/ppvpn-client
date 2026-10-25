@@ -16,6 +16,7 @@ import 'package:forui/forui.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'mobile.dart';
 import 'pages/logs.dart';
 import 'pages/messages.dart';
 import 'pages/nodes.dart';
@@ -203,7 +204,7 @@ class _Drag extends StatelessWidget {
   const _Drag();
 
   @override
-  Widget build(BuildContext context) => const DragToMoveArea(child: SizedBox.expand());
+  Widget build(BuildContext context) => mobile ? const SizedBox.expand() : const DragToMoveArea(child: SizedBox.expand());
 }
 
 /// The content header (52): title, status pill, bell; the caption buttons
@@ -218,7 +219,7 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final caps = !Platform.isMacOS;
+    final caps = Platform.isWindows || Platform.isLinux;
     return SizedBox(
       height: Tokens.topBarHeight,
       child: Stack(
