@@ -98,7 +98,9 @@ impl TunnelMode {
         }
     }
 
-    pub(crate) fn state(&self) -> EnhancedState {
+    /// The client reads the state through its sink.
+    #[cfg(all(test, unix))]
+    fn state(&self) -> EnhancedState {
         self.inner.with_data(|data| data.state.clone())
     }
 
@@ -432,7 +434,7 @@ impl Inner {
     /// the user can retry, anything else (stopped by the host) too.
     fn on_status(&self, generation: u64, status: &CoreStatus) {
         let phase =
-            self.with_data(|data| (data.generation == generation).then(|| data.state.phase));
+            self.with_data(|data| (data.generation == generation).then_some(data.state.phase));
         if !matches!(phase, Some(ConnectionPhase::On | ConnectionPhase::Error)) {
             return;
         }
