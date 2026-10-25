@@ -126,7 +126,65 @@ async fn a_cached_rule_set_is_used_without_the_network() {
     assert_eq!(status.rule_sets[0].state, "ready");
     assert_eq!(status.state, EngineState::Running);
     assert!(names_set(&fake));
-    assert!(fake.config().unwrap().contains(&format!("{SET}.srs")));
+    assert!(fake.config().unwrap().contains(&format!("{sha256}.srs")));
+}
+
+/// Preparing a valid new set does not commit it when Sail refuses the reload.
+/// A subsequent successful apply switches the object and the restart cache.
+#[tokio::test]
+async fn a_rejected_reload_keeps_the_active_rule_set_bytes() {
+    use crate::runtime::fake::Op;
+    use crate::runtime::RuntimeError;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("rule-sets");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = srs();
+    let digest = |data: &[u8]| -> String {
+        Sha256::digest(data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    std::fs::write(dir.join(format!("{SET}.srs")), &old).unwrap();
+    let (engine, fake) = instance(tmp.path());
+    engine
+        .apply(ApplyRequest::new(with_set(&digest(&old))))
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    let before = fake.config().unwrap();
+    let config: Value = serde_json::from_str(&before).unwrap();
+    let active_path = config["route"]["rule_set"][0]["path"].as_str().unwrap();
+    let new = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/rulesets/testdata/domains-more.srs"
+    ))
+    .unwrap();
+    // A prepared download's immutable cache object (no external server needed).
+    std::fs::write(
+        dir.join("objects").join(format!("{}.srs", digest(&new))),
+        &new,
+    )
+    .unwrap();
+    let mut profile: Value = serde_json::from_slice(&with_set(&digest(&new))).unwrap();
+    profile["revision"] = super::super::lifecycle_tests::R2.into();
+    let profile = serde_json::to_vec(&profile).unwrap();
+    fake.fail_next(Op::Reload, RuntimeError::new("config", "refused"));
+    engine
+        .apply(ApplyRequest::new(profile.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(fake.config().unwrap(), before);
+    assert_eq!(std::fs::read(active_path).unwrap(), old);
+    assert_eq!(std::fs::read(dir.join(format!("{SET}.srs"))).unwrap(), old);
+    assert_eq!(engine.status().revision.as_deref(), Some(R1));
+
+    engine.apply(ApplyRequest::new(profile)).await.unwrap();
+    assert!(fake
+        .config()
+        .unwrap()
+        .contains(&format!("{}.srs", digest(&new))));
+    assert_eq!(std::fs::read(dir.join(format!("{SET}.srs"))).unwrap(), new);
 }
 
 /// A new list of allowed hosts is a new apply, even for the same

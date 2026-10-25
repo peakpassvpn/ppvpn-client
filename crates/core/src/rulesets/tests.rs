@@ -225,7 +225,8 @@ async fn prepare_downloads_verifies_and_reuses_cache() {
     let files = snapshot.files();
     let want = dir
         .path()
-        .join("cn-site.srs")
+        .join("objects")
+        .join(format!("{}.srs", sha256_hex(&body)))
         .to_string_lossy()
         .into_owned();
     match files.get("cn-site") {
@@ -233,8 +234,8 @@ async fn prepare_downloads_verifies_and_reuses_cache() {
         other => panic!("files: {other:?}"),
     }
     assert_eq!(server.requests(), 1);
-    assert_eq!(std::fs::read(dir.path().join("cn-site.srs")).unwrap(), body);
-    manager.activate(snapshot);
+    assert_eq!(std::fs::read(&files["cn-site"].path).unwrap(), body);
+    manager.activate(snapshot).await;
     let status = status_of(&manager.statuses(), "cn-site");
     assert!(
         status.state == State::Ready && status.updated_at.is_some() && status.error.is_empty(),
@@ -264,7 +265,7 @@ async fn prepare_rejects_digest_mismatch_and_foreign_hosts() {
             DOWNLOAD,
         )
         .await;
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     let status = status_of(&manager.statuses(), "cn-site");
     assert!(
         status.state == State::Unavailable && status.error == SHA256_MISMATCH,
@@ -277,7 +278,7 @@ async fn prepare_rejects_digest_mismatch_and_foreign_hosts() {
 
     let requests = server.requests();
     let snapshot = manager.prepare(&[set], &[], DOWNLOAD).await;
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     let status = status_of(&manager.statuses(), "cn-site");
     assert!(
         status.state == State::Unavailable && status.error == HOST_NOT_PINNED,
@@ -303,7 +304,7 @@ async fn prepare_rejects_invalid_rule_set() {
             DOWNLOAD,
         )
         .await;
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     let status = status_of(&manager.statuses(), "bad");
     assert!(
         status.state == State::Unavailable && status.error == INVALID,
@@ -323,7 +324,7 @@ async fn failed_update_keeps_last_good_copy() {
     let snapshot = manager
         .prepare(&[server.rule_set("cn-site", &old_body)], &hosts, DOWNLOAD)
         .await;
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
 
     server.set(Vec::new(), true);
     let snapshot = manager
@@ -331,7 +332,8 @@ async fn failed_update_keeps_last_good_copy() {
         .await;
     let want = dir
         .path()
-        .join("cn-site.srs")
+        .join("objects")
+        .join(format!("{}.srs", sha256_hex(&old_body)))
         .to_string_lossy()
         .into_owned();
     assert!(
@@ -342,7 +344,7 @@ async fn failed_update_keeps_last_good_copy() {
         "stale copy not used: {:?}",
         snapshot.files()
     );
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     let status = status_of(&manager.statuses(), "cn-site");
     assert!(
         status.state == State::Stale && status.error == HTTP_STATUS,
@@ -353,6 +355,151 @@ async fn failed_update_keeps_last_good_copy() {
         old_body,
         "last good copy was replaced"
     );
+}
+
+/// A candidate's download must not change the file the running configuration
+/// watches. The host may reject the candidate after prepare (translate/reload).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_discarded_candidate_keeps_the_active_rules_and_restart_cache() {
+    let old = fixture("domains.srs");
+    let new = fixture("domains-more.srs");
+    let server = RuleSetServer::start(old.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let hosts = [server.host.clone()];
+    let manager = manager(dir.path(), Options::default());
+    let active = manager
+        .prepare(&[server.rule_set("site", &old)], &hosts, DOWNLOAD)
+        .await;
+    let active_path = active.files()["site"].path.clone();
+    manager.activate(active).await;
+
+    server.set(new.clone(), false);
+    let candidate = manager
+        .prepare(&[server.rule_set("site", &new)], &hosts, DOWNLOAD)
+        .await;
+    assert_eq!(std::fs::read(&active_path).unwrap(), old);
+    assert_ne!(candidate.files()["site"].path, active_path);
+    drop(candidate); // translation or reload rejected this profile
+    drop(manager);
+
+    server.set(Vec::new(), true);
+    let restarted = self::manager(dir.path(), Options::default());
+    // A third version cannot be downloaded: the last activated version is
+    // the stale fallback, not the newer but rejected candidate.
+    let fallback = restarted
+        .prepare(
+            &[server.rule_set("site", &fixture("domains-other.srs"))],
+            &hosts,
+            DOWNLOAD,
+        )
+        .await;
+    assert_eq!(fallback.counts(), (0, 1, 0));
+    assert_eq!(std::fs::read(&fallback.files()["site"].path).unwrap(), old);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn activation_keeps_objects_leased_by_another_prepared_snapshot() {
+    let old = fixture("domains.srs");
+    let new = fixture("domains-more.srs");
+    let server = RuleSetServer::start(old.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let hosts = [server.host.clone()];
+    let manager = manager(dir.path(), Options::default());
+    let first = manager
+        .prepare(&[server.rule_set("a", &old)], &hosts, DOWNLOAD)
+        .await;
+    let first_path = first.files()["a"].path.clone();
+    server.set(new.clone(), false);
+    let pending = manager
+        .prepare(&[server.rule_set("b", &new)], &hosts, DOWNLOAD)
+        .await;
+    let pending_path = pending.files()["b"].path.clone();
+
+    manager.activate(first).await;
+    assert_eq!(
+        std::fs::read(&pending_path).unwrap(),
+        new,
+        "cleanup removed a pending apply"
+    );
+    manager.activate(pending).await;
+    assert_eq!(std::fs::read(&pending_path).unwrap(), new);
+    assert!(
+        !Path::new(&first_path).exists(),
+        "unreferenced version was not pruned"
+    );
+    assert!(!dir.path().join("a.srs").exists());
+    assert_eq!(std::fs::read(dir.path().join("b.srs")).unwrap(), new);
+}
+
+/// A slow disk/hash must yield the single runtime worker, even while it holds
+/// the cache lock. Explicit channels, not sleeps, coordinate the two tasks.
+#[tokio::test]
+async fn cache_io_leaves_the_runtime_worker_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = manager(dir.path(), Options::default());
+    let inner = manager.inner.clone();
+    let (started, wait_started) = tokio::sync::oneshot::channel();
+    let (release, wait_release) = std::sync::mpsc::channel();
+    let work = tokio::spawn(async move {
+        inner
+            .cache(move |_| {
+                started.send(()).unwrap();
+                wait_release.recv_timeout(Duration::from_secs(5)).is_ok()
+            })
+            .await
+    });
+    wait_started.await.unwrap();
+    release.send(()).unwrap();
+    assert_eq!(work.await.unwrap(), Some(true));
+}
+
+/// A refreshed stale copy changes its object path even when both versions
+/// contain only domains. It needs a reload; the old file must stay immutable.
+#[tokio::test(flavor = "multi_thread")]
+async fn recovering_a_stale_version_rebuilds_without_mutating_the_old_file() {
+    let old = fixture("domains.srs");
+    let new = fixture("domains-more.srs");
+    let server = RuleSetServer::start(old.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let hosts = [server.host.clone()];
+    let manager = manager(
+        dir.path(),
+        Options {
+            retry_min: Duration::from_secs(3600),
+            retry_max: Duration::from_secs(3600),
+            ..Options::default()
+        },
+    );
+    let first = manager
+        .prepare(&[server.rule_set("site", &old)], &hosts, DOWNLOAD)
+        .await;
+    let old_path = first.files()["site"].path.clone();
+    manager.activate(first).await;
+    server.set(Vec::new(), true);
+    let set = server.rule_set("site", &new);
+    let stale = manager
+        .prepare(std::slice::from_ref(&set), &hosts, DOWNLOAD)
+        .await;
+    assert_eq!(stale.counts(), (0, 1, 0));
+    manager.activate(stale).await;
+
+    server.set(new.clone(), false);
+    let generation = manager.inner.lock().generation;
+    let (rebuild, recovered) = manager
+        .inner
+        .refresh(generation, &hosts.iter().cloned().collect(), 0)
+        .await;
+    assert!(
+        rebuild && recovered,
+        "the new immutable path requires a reload"
+    );
+    assert_eq!(std::fs::read(&old_path).unwrap(), old);
+    assert_eq!(std::fs::read(dir.path().join("site.srs")).unwrap(), old);
+    let next = manager.prepare(&[set], &hosts, None).await;
+    assert_ne!(next.files()["site"].path, old_path);
+    assert!(next.files()["site"].mirror_dns);
+    manager.activate(next).await;
+    assert_eq!(std::fs::read(dir.path().join("site.srs")).unwrap(), new);
 }
 
 /// A ready set is refreshed on its interval with If-None-Match and stays
@@ -379,7 +526,7 @@ async fn refresh_uses_etag() {
         )
         .await;
     clock.add(Duration::from_secs(2 * 3600));
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     eventually("a conditional refresh", || {
         server.not_modified.load(Ordering::SeqCst) > 0
     })
@@ -420,7 +567,7 @@ async fn recovery_triggers_rebuild() {
         .prepare(std::slice::from_ref(&set), &hosts, DOWNLOAD)
         .await;
     assert!(snapshot.files().is_empty(), "files: {:?}", snapshot.files());
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     let first = states.recv().await.unwrap();
     assert!(
         first.state == State::Unavailable && first.error == HTTP_STATUS,
@@ -472,7 +619,7 @@ async fn downloads_refuse_redirects() {
     let snapshot = manager
         .prepare(&[set], std::slice::from_ref(&redirect.host), DOWNLOAD)
         .await;
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     let status = status_of(&manager.statuses(), "cn-site");
     assert!(
         status.state == State::Unavailable && status.error == HTTP_STATUS,
@@ -528,7 +675,7 @@ async fn recovery_sweeps_all_sets_and_rebuilds_once() {
         });
     }
     server.set(body, false);
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     eventually("every set ready and a rebuild", || {
         let ready = manager
             .statuses()
@@ -560,16 +707,20 @@ fn path_stays_inside_dir() {
         ..Options::default()
     });
     assert_eq!(
-        manager.inner.path("geosite-cn"),
+        manager.inner.cache.lock().unwrap().path("geosite-cn"),
         Some(dir.path().join("geosite-cn.srs"))
     );
     for id in ["../escape", "a/b", "..", "/abs", "a\\b"] {
-        if let Some(path) = manager.inner.path(id) {
+        if let Some(path) = manager.inner.cache.lock().unwrap().path(id) {
             assert_eq!(path.parent(), Some(dir.path()), "{id} escapes");
         }
     }
     for id in ["../escape", "a/b"] {
-        assert_eq!(manager.inner.path(id), None, "{id} accepted");
+        assert_eq!(
+            manager.inner.cache.lock().unwrap().path(id),
+            None,
+            "{id} accepted"
+        );
     }
 }
 
@@ -596,12 +747,12 @@ async fn activation_reports_changes_and_prunes() {
     let snapshot = manager.prepare(&[a.clone(), b], &hosts, DOWNLOAD).await;
     assert_eq!(snapshot.counts(), (2, 0, 0));
     std::fs::write(dir.path().join(".tmp-left-over"), b"x").unwrap();
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     assert_eq!(states.recv().await.unwrap().id, "a");
     assert_eq!(states.recv().await.unwrap().id, "b");
 
     let snapshot = manager.prepare(&[a], &hosts, DOWNLOAD).await;
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     assert!(
         states.try_recv().is_err(),
         "an unchanged state was reported"
@@ -639,7 +790,7 @@ async fn without_storage_every_set_is_unavailable() {
     };
     let snapshot = manager.prepare(&[set], &[], DOWNLOAD).await;
     assert!(snapshot.files().is_empty());
-    manager.activate(snapshot);
+    manager.activate(snapshot).await;
     let status = status_of(&manager.statuses(), "cn-site");
     assert!(
         status.state == State::Unavailable

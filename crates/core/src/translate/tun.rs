@@ -425,6 +425,10 @@ impl Builder {
                     excluded.extend(without(private, TUN_PREFIXES));
                 }
             }
+            // Routes are a set. A profile that only reorders nodes/ingresses
+            // must not change the TUN inbound and force a full restart.
+            excluded.sort_unstable();
+            excluded.dedup();
             inbound["auto_route"] = true.into();
             inbound["strict_route"] = true.into();
             inbound["route_exclude_address"] = json!(excluded);
