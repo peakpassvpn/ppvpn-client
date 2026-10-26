@@ -150,14 +150,17 @@ mod platform {
         unsafe { objc_getClass(c"SMAppService".as_ptr()) }
     }
 
-    /// `[SMAppService mainApp]`; null before macOS 13.
+    /// `[SMAppService mainAppService]`, Swift's `SMAppService.mainApp`;
+    /// null before macOS 13.
     fn main_app() -> Id {
         let class = class();
         if class.is_null() {
             return std::ptr::null_mut();
         }
-        // SAFETY: `+ (SMAppService *)mainApp`.
-        unsafe { send_id(class, c"mainApp") }
+        // SAFETY: `@property(class, readonly) SMAppService *mainAppService`.
+        // Swift renames it mainApp; that selector does not exist, and sending
+        // it raised NSInvalidArgumentException (0.7.0 acceptance).
+        unsafe { send_id(class, c"mainAppService") }
     }
 
     pub(crate) fn state() -> Result<UiLaunchAtLogin, String> {
@@ -259,11 +262,15 @@ mod platform {
             assert_eq!(catching(|| 7), Ok(7));
         }
 
-        /// Read from a test binary, outside any app bundle: a state or an
-        /// error, not an abort.
+        /// Read from a test binary, outside any app bundle: the selectors
+        /// exist (macOS 13 and later), so the state reads without an
+        /// exception.
         #[test]
-        fn the_state_is_read_without_aborting() {
-            let _ = state();
+        fn the_state_is_read() {
+            assert!(!main_app().is_null());
+            if let Err(error) = state() {
+                panic!("{error}");
+            }
         }
     }
 }
