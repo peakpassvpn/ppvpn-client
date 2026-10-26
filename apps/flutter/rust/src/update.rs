@@ -88,6 +88,7 @@ mod platform {
     use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
     use windows_sys::Win32::System::LibraryLoader::{
         GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_APPLICATION_DIR,
+        LOAD_LIBRARY_SEARCH_SYSTEM32,
     };
 
     use crate::api::{UiActivation, UiLanguage, UiUpdater};
@@ -142,17 +143,22 @@ mod platform {
 
     fn load() -> Result<WinSparkle, String> {
         let name = wide("WinSparkle.dll");
-        // SAFETY: a NUL-terminated name; only the app's own directory is
-        // searched. The library stays loaded for the process's life.
+        // SAFETY: a NUL-terminated name; the app's own directory and
+        // System32 are searched. The flags apply to WinSparkle's own imports
+        // too, so without System32 its system DLLs are not found (error 126)
+        // and the load fails. The library stays loaded for the process's life.
         let library = unsafe {
             LoadLibraryExW(
                 name.as_ptr(),
                 std::ptr::null_mut(),
-                LOAD_LIBRARY_SEARCH_APPLICATION_DIR,
+                LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
             )
         };
         if library.is_null() {
-            return Err("no WinSparkle.dll beside the app".into());
+            return Err(format!(
+                "WinSparkle.dll beside the app did not load: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         macro_rules! symbol {
             ($name:literal) => {{
