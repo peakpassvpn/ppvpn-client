@@ -261,7 +261,7 @@ elif [ "$os" = ios ]; then
   esac
   touch rust/src/lib.rs
   mkdir -p build
-  if ! (cd "$root" && IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo rustc --release --locked -p ppvpn-flutter --lib \
+  if ! (cd "$root" && IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo rustc --color never --release --locked -p ppvpn-flutter --lib \
       --target "$triple" --crate-type staticlib -- --print native-static-libs) 2>build/ios-rustc.log; then
     cat build/ios-rustc.log >&2
     exit 1
