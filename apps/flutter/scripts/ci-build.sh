@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Flutter app for the runner's platform (ci.yml, job flutter;
 # release.yml's installer jobs), or with FLUTTER_TARGET=android the Android
-# app on Linux (ci.yml, job android; #448): the platform runner (flutter create, with
+# app on Linux (ci.yml, job android; #448), or with FLUTTER_TARGET=ios the
+# iOS app on macOS (ci.yml, job ios): the platform runner (flutter create, with
 # our files from runner/<os> over it and the native app's identity), the
 # bridge glue (flutter_rust_bridge_codegen), analysis, the Rust library
 # (release), the app (release), the library put into the bundle. The
@@ -15,7 +16,10 @@
 #                        of the Windows file version, and CFBundleVersion
 #                        <version>.<build> on macOS, as for the native apps
 #   FLUTTER_TARGET       android: the APK (needs ANDROID_NDK_HOME and the
-#                        Android SDK), instead of the runner's platform
+#                        Android SDK), ios: the iOS app, unsigned, instead of
+#                        the runner's platform
+#   IOS_SDK              ios: simulator (a debug build for Apple silicon's
+#                        simulator, ci.yml) or device (release; the default)
 #   MACOS_ARCHS          macOS: the library's slices, "arm64 x86_64" joined
 #                        into one, or one of them (release.yml builds each
 #                        architecture's DMG in a job of its own, #459)
@@ -31,6 +35,7 @@ cd "$app"
 
 case "${FLUTTER_TARGET:-}-$(uname -s)" in
   android-Linux) os=android ;;
+  ios-Darwin) os=ios ;;
   -Linux) os=linux ;;
   -Darwin) os=macos ;;
   -MINGW* | -MSYS*) os=windows ;;
@@ -140,6 +145,41 @@ case $os in
     # The system VPN (runner/android TunnelService), in its own process:
     # only the system binds it.
     replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>' ;;
+  ios)
+    # The App Store id, as the user decided it (#448), and iOS 15 and later.
+    # The app's channels (runner/ios PPVPNPlugin.swift) go into the
+    # generated AppDelegate.swift, which the Runner target compiles, and
+    # register next to the generated plugins.
+    python3 - <<'PY'
+import re
+path = "ios/Runner.xcodeproj/project.pbxproj"
+text = open(path).read()
+generated = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpnFlutter;"
+if text.count(generated) != 3:
+    raise SystemExit(f"{path}: not the three Runner configurations' bundle id")
+text = text.replace(generated, "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;")
+text, targets = re.subn(r"IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;", "IPHONEOS_DEPLOYMENT_TARGET = 15.0;", text)
+if not targets:
+    raise SystemExit(f"{path}: no deployment target")
+open(path, "w").write(text)
+
+delegate = "ios/Runner/AppDelegate.swift"
+code = open(delegate).read()
+plugin = open("runner/ios/Runner/PPVPNPlugin.swift").read()
+imports = [line for line in plugin.splitlines() if line.startswith("import ")]
+body = "\n".join(line for line in plugin.splitlines() if not line.startswith("import "))
+code, registered = re.subn(
+    r"^([ \t]*)GeneratedPluginRegistrant\.register\(with: ([^)]+)\)\n",
+    lambda m: m.group(0) + f'{m.group(1)}PPVPNPlugin.register(with: {m.group(2)}.registrar(forPlugin: "PPVPNPlugin")!)\n',
+    code, count=1, flags=re.M)
+if not registered:
+    raise SystemExit(f"{delegate}: no GeneratedPluginRegistrant.register to follow")
+missing = [line for line in imports if line not in code.splitlines()]
+open(delegate, "w").write("\n".join(missing) + "\n" + code + "\n" + body + "\n")
+PY
+    rm ios/Runner/PPVPNPlugin.swift
+    plist=ios/Runner/Info.plist
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName PPVPN' -c 'Set :CFBundleName PPVPN' "$plist" ;;
   windows)
     # ppvpn.exe and its version resource, as apps/windows
     # (PPVPN.Windows.csproj, Directory.Build.props).
@@ -209,6 +249,40 @@ if [ "$os" = android ]; then
         "android/app/src/main/jniLibs/$abi/"
     fi
   done
+elif [ "$os" = ios ]; then
+  # iOS takes no loose dynamic library: the bridge is a static library the
+  # Runner links whole (-force_load), its symbols exported for the Dart
+  # side's lookup (ExternalLibrary.process), with the system libraries it
+  # needs as rustc prints them (the lib is touched so that it prints).
+  case ${IOS_SDK:-device} in
+    simulator) triple=aarch64-apple-ios-sim ;;
+    device) triple=aarch64-apple-ios ;;
+    *) echo "IOS_SDK must be simulator or device, got '$IOS_SDK'" >&2; exit 1 ;;
+  esac
+  touch rust/src/lib.rs
+  mkdir -p build
+  if ! (cd "$root" && IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo rustc --release --locked -p ppvpn-flutter --lib \
+      --target "$triple" --crate-type staticlib -- --print native-static-libs) 2>build/ios-rustc.log; then
+    cat build/ios-rustc.log >&2
+    exit 1
+  fi
+  native=$(sed -n 's/.*native-static-libs: //p' build/ios-rustc.log | tail -1)
+  [ -n "$native" ] || { cat build/ios-rustc.log >&2; echo "rustc printed no native-static-libs" >&2; exit 1; }
+  echo "native-static-libs: $native"
+  mkdir -p ios/rust
+  cp "$root/target/$triple/release/libppvpn_flutter.a" ios/rust/
+  NATIVE="$native" python3 - <<'PY'
+import json, os
+path = "ios/Runner.xcodeproj/project.pbxproj"
+text = open(path).read()
+flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a", "-Wl,-export_dynamic"]
+flags += os.environ["NATIVE"].split()
+setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flags) + ");"
+bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
+if text.count(bundle) != 3:
+    raise SystemExit(f"{path}: not the three Runner configurations")
+open(path, "w").write(text.replace(bundle, bundle + "\n\t\t\t\t" + setting))
+PY
 elif [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
   # Flutter's release app is universal; package-app.sh thins each DMG's copy.
   slices=()
@@ -241,6 +315,13 @@ if [ "$os" = android ]; then
   # versionCode must be positive.
   flutter build apk --release --target-platform android-arm64,android-x64 \
     --build-name "$version" --build-number "$((build > 0 ? build : 1))"
+elif [ "$os" = ios ]; then
+  # The simulator runs debug builds only.
+  if [ "${IOS_SDK:-device}" = simulator ]; then
+    flutter build ios --simulator --debug --build-name "$version" --build-number "$build"
+  else
+    flutter build ios --release --no-codesign --build-name "$version" --build-number "$build"
+  fi
 else
   flutter build "$os" --release --build-name "$version" --build-number "$build"
 fi
@@ -249,6 +330,13 @@ case $os in
   android)
     bundle=build/app/outputs/flutter-apk/app-release.apk
     test -f "$bundle" ;;
+  ios)
+    if [ "${IOS_SDK:-device}" = simulator ]; then
+      bundle=build/ios/iphonesimulator/Runner.app
+    else
+      bundle=build/ios/iphoneos/Runner.app
+    fi
+    test -x "$bundle/Runner" ;;
   linux)
     bundle=build/linux/x64/release/bundle
     test -x "$bundle/ppvpn"

@@ -1189,3 +1189,49 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: apps/flutter/e2e/android_smoke.sh
+
+  ios:
+    # The Flutter app's iOS target (#448): the bridge as a static library
+    # for Apple silicon's simulator (BoringSSL built from source: btls has
+    # no iOS prebuilts), the app (debug, unsigned), and the app started on
+    # an iPhone simulator. No packet tunnel yet (#448 step 2).
+    name: ios
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      FRB_CODEGEN_VERSION: 2.13.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios-sim
+      # The host's for the bridge codegen, which reads the crate.
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
+      - id: build
+        name: Build
+        if: steps.scope.outputs.flutter == 'true'
+        env:
+          FLUTTER_TARGET: ios
+          IOS_SDK: simulator
+        run: apps/flutter/scripts/ci-build.sh
+      - name: Smoke test (simulator)
+        if: steps.scope.outputs.flutter == 'true'
+        timeout-minutes: 30
+        run: apps/flutter/e2e/ios_smoke.sh

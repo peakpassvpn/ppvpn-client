@@ -3,6 +3,7 @@
 /lib/src/rust/
 /rust/src/frb_generated.rs
 /android/
+/ios/
 /linux/
 /macos/
 /windows/

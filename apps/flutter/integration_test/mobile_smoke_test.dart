@@ -1,8 +1,9 @@
-// The Android app starts (#448 step 3): the bridge library loads from the
-// APK, the client starts in the app's own directory, and a fresh install
-// shows the sign-in page. Run by e2e/android_smoke.sh on ci.yml's emulator,
-// as a tablet in landscape (the desktop layout) and as a phone in portrait
-// (the phone layout, step 5).
+// The phone app starts (#448 step 3): the bridge library loads (from the
+// APK; on iOS it is linked in), the client starts in the app's own
+// directory, and a fresh install shows the sign-in page. Run by
+// e2e/android_smoke.sh on ci.yml's emulator, as a tablet in landscape (the
+// desktop layout) and as a phone in portrait (the phone layout, step 5),
+// and by e2e/ios_smoke.sh on an iPhone simulator.
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
