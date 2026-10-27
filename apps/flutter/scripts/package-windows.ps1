@@ -30,6 +30,11 @@
 
   It builds and signs only; it never uploads.
 
+  release.yml builds the service in a job of its own, beside the app's (#459):
+  -ServiceOnly builds just step 2 into -OutDir (default build\windows-service),
+  and the packaging job passes that directory as -ServiceDir and the app job's
+  push agent as -PushAgent, so that it compiles nothing.
+
   Environment:
     PPVPN_VERSION, PPVPN_BUILD_NUMBER                version and build number (see above)
     PPVPN_RELEASE_CHANNEL                            dev | stable | empty (no channel in release-meta)
@@ -38,6 +43,7 @@
     PPVPN_UPDATE_PUBLIC_KEY / PPVPN_SPARKLE_PUBLIC_KEY  checks the signature when set
     PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT              0/1 for the service build; defaults to 1
                                                      unless Authenticode signing is configured
+                                                     (required with -ServiceOnly, which cannot tell)
     PPVPN_WINDOWS_PUBLISHER_SHA256 (+ _NEXT_)        publisher pins, required when signed
     WINDOWS_SIGN_COMMAND or WINDOWS_CERTIFICATE (+ _PASSWORD, WINDOWS_TIMESTAMP_URL)
 
@@ -55,7 +61,13 @@ param(
   [ValidateSet("", "dev", "stable")]
   [string] $Channel = "",
   # Dev loops: zlib, non-solid (much faster makensis, bigger installer).
-  [switch] $FastCompression
+  [switch] $FastCompression,
+  # Build only the service helpers (step 2) into -OutDir, for -ServiceDir.
+  [switch] $ServiceOnly,
+  # The service helpers of a -ServiceOnly run, instead of building them.
+  [string] $ServiceDir,
+  # ppvpn-push-agent.exe built with the bundle, instead of building it.
+  [string] $PushAgent
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,16 +98,19 @@ $nsi = Join-Path $windowsDir "installer\ppvpn.nsi"
 $signScript = Join-Path $windowsDir "scripts\sign-file.ps1"
 $target = "x86_64-pc-windows-msvc"
 if (-not $Bundle) { $Bundle = Join-Path $flutterDir "build\windows\x64\runner\Release" }
-if (-not $OutDir) { $OutDir = Join-Path $repo "dist\windows" }
+if (-not $OutDir) { $OutDir = Join-Path $repo $(if ($ServiceOnly) { "build\windows-service" } else { "dist\windows" }) }
+if ($ServiceOnly -and ($ServiceDir -or $PushAgent)) { throw "-ServiceOnly builds the service; it takes no -ServiceDir or -PushAgent." }
 $work = Join-Path $repo "staging\windows-flutter"
 $stage = Join-Path $work "app"
 
 if (-not $Channel -and $env:PPVPN_RELEASE_CHANNEL) { $Channel = $env:PPVPN_RELEASE_CHANNEL }
 if ($Channel -notin @("", "dev", "stable")) { throw "Channel must be dev or stable, not '$Channel'." }
-if (-not (Test-Path -LiteralPath (Join-Path $Bundle "ppvpn.exe"))) {
-  throw "no ppvpn.exe in $Bundle; build it with apps/flutter/scripts/ci-build.sh"
+if (-not $ServiceOnly) {
+  if (-not (Test-Path -LiteralPath (Join-Path $Bundle "ppvpn.exe"))) {
+    throw "no ppvpn.exe in $Bundle; build it with apps/flutter/scripts/ci-build.sh"
+  }
+  $Bundle = (Resolve-Path -LiteralPath $Bundle).Path
 }
-$Bundle = (Resolve-Path -LiteralPath $Bundle).Path
 
 # --- 1. version ------------------------------------------------------------------
 $version = $env:PPVPN_VERSION
@@ -110,11 +125,16 @@ $build = if ($env:PPVPN_BUILD_NUMBER) { $env:PPVPN_BUILD_NUMBER } else { "0" }
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "version must be x.y.z, not '$version'" }
 if ($build -notmatch '^\d+$' -or [int]$build -gt 65535) { throw "build number must be 0-65535, not '$build'" }
 $buildVersion = "$version.$build"
+function Get-FileVersion([string] $Path) {
+  $info = (Get-Item -LiteralPath $Path).VersionInfo
+  "$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart).$($info.FilePrivatePart)"
+}
 # flutter build --build-name/--build-number (ci-build.sh) -> the version resource.
-$info = (Get-Item -LiteralPath (Join-Path $Bundle "ppvpn.exe")).VersionInfo
-$exeVersion = "$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart).$($info.FilePrivatePart)"
-if ($exeVersion -ne $buildVersion) {
-  throw "the bundle's ppvpn.exe is $exeVersion, not ${buildVersion}: build it with the same PPVPN_VERSION and PPVPN_BUILD_NUMBER"
+if (-not $ServiceOnly) {
+  $exeVersion = Get-FileVersion (Join-Path $Bundle "ppvpn.exe")
+  if ($exeVersion -ne $buildVersion) {
+    throw "the bundle's ppvpn.exe is $exeVersion, not ${buildVersion}: build it with the same PPVPN_VERSION and PPVPN_BUILD_NUMBER"
+  }
 }
 Write-Host "PPVPN $version (build $buildVersion), Flutter"
 $installerName = "PPVPN-$version-windows-x64-setup.exe"
@@ -127,13 +147,15 @@ function Invoke-Sign([string] $Path) {
 }
 
 if (-not $env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT) {
+  # Without the signing configuration a service-only build cannot tell.
+  if ($ServiceOnly) { throw "-ServiceOnly needs PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT (0 for a signed release)." }
   $env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT = if ($signing) { "0" } else { "1" }
 }
 if ($env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT -notin @("0", "1")) {
   throw "PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT must be 0 or 1."
 }
 if ($env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT -eq "0") {
-  if (-not $signing) {
+  if (-not $signing -and -not $ServiceOnly) {
     throw "PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=0 needs Authenticode signing, or the service rejects ppvpn.exe."
   }
   if ($env:PPVPN_WINDOWS_PUBLISHER_SHA256 -notmatch '^[0-9a-fA-F]{64}$') {
@@ -144,23 +166,58 @@ if ($env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT -eq "0") {
 }
 
 # --- 2. service helpers (as package.ps1) --------------------------------------------
-Write-Host "==> cargo build ppvpn-service ($target)"
-# Version resource of ppvpn-service*.exe (crates/service/build.rs), the same as ppvpn.exe.
-$env:PPVPN_BUILD_VERSION = $buildVersion
-Push-Location $repo
-try {
-  Invoke-Native "cargo" @("build", "--locked", "-p", "ppvpn-service", "--profile", "service", "--target", $target)
-  # --- 3. the push agent ---------------------------------------------------------
+# What the service was built for, kept beside -ServiceOnly's binaries: the packaging
+# run must sign as the service expects (an unsigned ppvpn.exe is refused otherwise).
+$serviceBins = @("ppvpn-service", "ppvpn-service-install", "ppvpn-service-uninstall")
+$serviceRecord = "allow-unsigned-client.txt"
+if ($ServiceDir) {
+  $serviceOut = (Resolve-Path -LiteralPath $ServiceDir).Path
+  $built = (Get-Content -Raw -LiteralPath (Join-Path $serviceOut $serviceRecord)).Trim()
+  if ($built -ne $env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT) {
+    throw "the service in $ServiceDir was built with PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=$built, this package with $env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT"
+  }
+  foreach ($bin in $serviceBins) {
+    $binVersion = Get-FileVersion (Join-Path $serviceOut "$bin.exe")
+    if ($binVersion -ne $buildVersion) { throw "$ServiceDir\$bin.exe is $binVersion, not $buildVersion" }
+  }
+} else {
+  Write-Host "==> cargo build ppvpn-service ($target)"
+  # Version resource of ppvpn-service*.exe (crates/service/build.rs), the same as ppvpn.exe.
+  $env:PPVPN_BUILD_VERSION = $buildVersion
+  Push-Location $repo
+  try {
+    Invoke-Native "cargo" @("build", "--locked", "-p", "ppvpn-service", "--profile", "service", "--target", $target)
+  } finally {
+    Pop-Location
+  }
+  $serviceOut = Join-Path $repo "target\$target\service"
+}
+if ($ServiceOnly) {
+  New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+  foreach ($bin in $serviceBins) {
+    Copy-Item -LiteralPath (Join-Path $serviceOut "$bin.exe") -Destination (Join-Path $OutDir "$bin.exe")
+  }
+  Write-Utf8NoBom (Join-Path $OutDir $serviceRecord) "$env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT`n"
+  Write-Host "service helpers: $OutDir"
+  return
+}
+
+# --- 3. the push agent -------------------------------------------------------------
+if ($PushAgent) {
+  $agentExe = (Resolve-Path -LiteralPath $PushAgent).Path
+} else {
   # The host's release build with the bridge, the command ci-build.sh runs: alone, its
   # features (the windows crate's) differ from the bridge's, and everything that shares
   # them would be built again.
   Write-Host "==> cargo build ppvpn-flutter ppvpn-push-agent (release)"
-  Invoke-Native "cargo" @("build", "--release", "--locked", "-p", "ppvpn-flutter", "-p", "ppvpn-push-agent")
-} finally {
-  Pop-Location
+  Push-Location $repo
+  try {
+    Invoke-Native "cargo" @("build", "--release", "--locked", "-p", "ppvpn-flutter", "-p", "ppvpn-push-agent")
+  } finally {
+    Pop-Location
+  }
+  $agentExe = Join-Path $repo "target\release\ppvpn-push-agent.exe"
 }
-$serviceOut = Join-Path $repo "target\$target\service"
-$agentExe = Join-Path $repo "target\release\ppvpn-push-agent.exe"
 
 # --- 4. stage ------------------------------------------------------------------------
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
@@ -176,7 +233,7 @@ foreach ($required in @("ppvpn.exe", "flutter_windows.dll", "ppvpn_flutter.dll",
   if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) { throw "the bundle lacks $required" }
 }
 Copy-Item -LiteralPath $agentExe -Destination (Join-Path $stage "ppvpn-push-agent.exe")
-foreach ($bin in @("ppvpn-service", "ppvpn-service-install", "ppvpn-service-uninstall")) {
+foreach ($bin in $serviceBins) {
   Copy-Item -LiteralPath (Join-Path $serviceOut "$bin.exe") -Destination (Join-Path $stage "$bin.exe")
 }
 # The icon the notifications show (the app's and the push agent's registration,
