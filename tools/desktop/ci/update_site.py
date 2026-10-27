@@ -206,7 +206,10 @@ def check_pointer(pointer, channel):
 
 def appcast(pointer, platform):
     """The platform's feed with this release as its one item. The version
-    Sparkle compares is "<version>.<build>", the apps' bundle and file version."""
+    Sparkle compares is "<version>.<build>", the apps' bundle and file version.
+    The item has no sparkle:releaseNotesLink: the releases have no notes for
+    users, and both Sparkle and WinSparkle would show the whole GitHub release
+    page in their notes pane; without the link they show a plain update prompt."""
     entry = pointer["platforms"][platform]
     published = datetime.datetime.strptime(pointer["published_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
     attributes = [("url", entry["url"])]
@@ -233,7 +236,6 @@ def appcast(pointer, platform):
       <pubDate>{format_datetime(published)}</pubDate>
       <sparkle:version>{escape(pointer['version'])}.{pointer['build']}</sparkle:version>
       <sparkle:shortVersionString>{escape(pointer['version'])}</sparkle:shortVersionString>{minimum}
-      <sparkle:releaseNotesLink>{escape(pointer['release_notes_url'])}</sparkle:releaseNotesLink>
       <enclosure
 {enclosure} />
     </item>

@@ -27,7 +27,8 @@
   verifies sparkle:edSignature against the downloaded bytes with the public key
   compiled into the app (PPVPN_UPDATE_PUBLIC_KEY); an enclosure with a missing or
   wrong signature is rejected and nothing is run. The feed has one item, the
-  release the channel points at; sparkle:releaseNotesLink is the GitHub Release.
+  release the channel points at. It has no sparkle:releaseNotesLink: WinSparkle would
+  show the whole GitHub Release page in its notes pane.
 
   Apps before 0.6.0 read the backend's legacy feed,
   https://www.peakpassvpn.com/api/v1/desktop/releases/windows-x64/appcast.xml,
@@ -46,7 +47,6 @@
       <sparkle:version>0.6.1.165</sparkle:version>
       <sparkle:shortVersionString>0.6.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.0.17763</sparkle:minimumSystemVersion>
-      <sparkle:releaseNotesLink>https://github.com/peakpassvpn/ppvpn-client/releases/tag/v0.6.1</sparkle:releaseNotesLink>
       <enclosure
         url="https://pkg.peakpassvpn.com/desktop/stable/0.6.1/165/PPVPN-0.6.1-windows-x64-setup.exe"
         sparkle:os="windows-x64"
