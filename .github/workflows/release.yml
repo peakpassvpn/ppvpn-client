@@ -765,9 +765,18 @@ jobs:
         if: always()
         run: cat "$RUNNER_TEMP/linux-repo/server.out" 2>/dev/null || true
 
-  # The NSIS installer. See apps/windows/README.md ("Packaging").
-  windows:
-    name: windows
+  # The NSIS installer. See apps/windows/README.md ("Packaging"). Three jobs
+  # (#459): the service's profile shares no build with the app's release
+  # build, so it compiles beside it, and the packaging job compiles nothing:
+  #   windows-app      the app (apps/flutter/scripts/ci-build.sh), with the
+  #                    push agent in the same cargo invocation; it needs the
+  #                    backend's address, so the environment
+  #   windows-service  the service helpers (package-windows.ps1 -ServiceOnly);
+  #                    the environment only tells whether the release is
+  #                    signed, which the service is built for
+  #   windows          package-windows.ps1 signs and packages the two
+  windows-app:
+    name: windows-app
     needs: [prepare, approve]
     if: >-
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
@@ -779,14 +788,6 @@ jobs:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
-      SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
-      # Optional Authenticode through apps/windows/scripts/sign-file.ps1; off
-      # unless these are configured.
-      WINDOWS_CERTIFICATE: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE || '' }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
-      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
-      PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
-      PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
       # bindgen's libclang (btls-sys), from the runner's LLVM.
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     defaults:
@@ -800,6 +801,97 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/flutter-toolchain
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        run: tools/release-features-check.sh -p ppvpn-flutter -p ppvpn-push-agent
+      - name: Build the app
+        run: apps/flutter/scripts/ci-build.sh
+      # The bundle at its default path and the push agent, at their paths in
+      # the workspace (the artifact keeps them relative to its root).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-app
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            apps/flutter/build/windows/x64/runner/Release
+            target/release/ppvpn-push-agent.exe
+
+  windows-service:
+    name: windows-service
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    runs-on: windows-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 90
+    env:
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      # What package-windows.ps1 derives from the signing configuration in the
+      # windows job (0 when Authenticode signs), which checks it against this.
+      PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE && '0' || '1' }}
+      PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
+      PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: No test-only features
+        run: tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
+      - name: Build the service helpers
+        shell: powershell
+        run: apps/flutter/scripts/package-windows.ps1 -ServiceOnly
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-service
+          if-no-files-found: error
+          retention-days: 1
+          path: build/windows-service
+
+  windows:
+    name: windows
+    needs: [prepare, approve, windows-app, windows-service]
+    if: >-
+      !cancelled() && needs.windows-app.result == 'success' && needs.windows-service.result == 'success'
+    runs-on: windows-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 60
+    env:
+      PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
+      # Optional Authenticode through apps/windows/scripts/sign-file.ps1; off
+      # unless these are configured.
+      WINDOWS_CERTIFICATE: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE || '' }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+      PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
+      PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Ensure NSIS
         shell: powershell
         run: |
@@ -811,22 +903,17 @@ jobs:
             $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           }
           & $makensis /VERSION
-      - uses: ./.github/actions/prebuilt-boringssl
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          targets: x86_64-pc-windows-msvc
-      - uses: ./.github/actions/flutter-toolchain
-      # A test-only cargo feature (fault injection, test runtime, lab hooks)
-      # never ships: the release graph is refused if one is on.
-      - name: No test-only features
-        run: |
-          tools/release-features-check.sh -p ppvpn-flutter -p ppvpn-push-agent
-          tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
-      - name: Build the app
-        run: apps/flutter/scripts/ci-build.sh
-      # The bundle at its default path (ci-build.sh's output is a bash path).
+          name: windows-app
+          path: .
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-service
+          path: build/windows-service
       - name: Build installer and release metadata
         shell: powershell
-        run: apps/flutter/scripts/package-windows.ps1
+        run: apps/flutter/scripts/package-windows.ps1 -ServiceDir build\windows-service -PushAgent target\release\ppvpn-push-agent.exe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-windows-x64
@@ -838,26 +925,29 @@ jobs:
             dist/windows/*-setup.exe
             dist/windows/release-meta-windows-x64.json
 
-  # Both DMGs and .pkgs of the Flutter app (#401), built on Apple silicon
-  # runners in three jobs (#429). The service's profile shares no build with
-  # the app's release build, so it compiles beside it:
-  #   macos-app      the app universal (apps/flutter/scripts/ci-build.sh) and
-  #                  the push agent's client, PPVPNClient
-  #                  (crates/desktop/scripts/build-apple.sh), which reuses that
-  #                  build; it needs the backend's address, so the environment
-  #   macos-service  the service helpers universal (tools/desktop/build-service.sh),
-  #                  no secret
-  #   macos          tools/desktop/ci/build-macos-native.sh packages and signs
-  #                  each architecture's copy (apps/flutter/scripts/package-macos.sh)
-  #                  from the two
-  # Not one job per architecture: the Swift bindings' generator runs on the
-  # host (arm64), so an x86_64 job would build the client's dependencies a
-  # second time, for arm64.
+  # One DMG and .pkg per architecture of the Flutter app (#401), each built
+  # end to end in its own chain of jobs (#459), all on Apple silicon runners;
+  # nothing is joined into a universal binary. Per architecture:
+  #   macos-app      the app (apps/flutter/scripts/ci-build.sh, that slice of
+  #                  the library in Flutter's universal bundle) and the push
+  #                  agent's client, PPVPNClient (crates/desktop/scripts/build-apple.sh),
+  #                  which reuses that build; it needs the backend's address,
+  #                  so the environment. The x86_64 job runs the bindings'
+  #                  generator, built for x86_64, under Rosetta.
+  #   macos-service  the service helpers (tools/desktop/build-service.sh), no
+  #                  secret; their profile shares no build with the app's
+  #   macos          tools/desktop/ci/build-macos-native.sh thins the bundle,
+  #                  signs and packages (apps/flutter/scripts/package-macos.sh)
   macos-app:
-    name: macos-app
+    name: macos-app (${{ matrix.arch }})
     needs: [prepare, approve]
     if: >-
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    strategy:
+      matrix:
+        include:
+          - { arch: arm64, triple: aarch64-apple-darwin }
+          - { arch: x86_64, triple: x86_64-apple-darwin }
     runs-on: macos-15
     environment: ${{ needs.prepare.outputs.environment }}
     timeout-minutes: 90
@@ -865,18 +955,23 @@ jobs:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      MACOS_ARCHS: arm64 x86_64
+      MACOS_ARCHS: ${{ matrix.arch }}
+      PPVPN_APPLE_TARGETS: ${{ matrix.triple }}
       PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
-          targets: aarch64-apple-darwin x86_64-apple-darwin
+          targets: ${{ matrix.triple }}
       - uses: ./.github/actions/prebuilt-boringssl
         with:
-          targets: aarch64-apple-darwin x86_64-apple-darwin
+          targets: ${{ matrix.triple }}
       - uses: ./.github/actions/flutter-toolchain
+      # build-apple.sh runs the bindings' generator built for the slice.
+      - name: Rosetta
+        if: matrix.arch == 'x86_64'
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
@@ -906,16 +1001,21 @@ jobs:
           tar -cf build/macos-app/client.tar -C "$GITHUB_WORKSPACE" "${PACKAGE#"$GITHUB_WORKSPACE"/}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macos-app
+          name: macos-app-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 1
           path: build/macos-app
 
   macos-service:
-    name: macos-service
+    name: macos-service (${{ matrix.arch }})
     needs: [prepare, approve]
     if: >-
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
+    strategy:
+      matrix:
+        include:
+          - { arch: arm64, triple: aarch64-apple-darwin }
+          - { arch: x86_64, triple: x86_64-apple-darwin }
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -923,26 +1023,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
-          targets: aarch64-apple-darwin x86_64-apple-darwin
+          targets: ${{ matrix.triple }}
       - uses: ./.github/actions/prebuilt-boringssl
         with:
-          targets: aarch64-apple-darwin x86_64-apple-darwin
+          targets: ${{ matrix.triple }}
       - name: No test-only features
         run: tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
       - name: Build the service helpers
-        run: bash tools/desktop/build-service.sh macos
+        run: bash tools/desktop/build-service.sh macos-${{ matrix.arch }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macos-service
+          name: macos-service-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 1
-          path: build/binaries/*-universal-apple-darwin
+          path: build/binaries/*-${{ matrix.triple }}
 
   macos:
-    name: macos
+    name: macos (${{ matrix.arch }})
     needs: [prepare, approve, macos-app, macos-service]
     if: >-
       !cancelled() && needs.macos-app.result == 'success' && needs.macos-service.result == 'success'
+    strategy:
+      matrix:
+        include:
+          - { arch: arm64, platform: macos-arm64 }
+          - { arch: x86_64, platform: macos-x64 }
     runs-on: macos-15
     environment: ${{ needs.prepare.outputs.environment }}
     timeout-minutes: 60
@@ -951,7 +1056,7 @@ jobs:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       CI_PROJECT_DIR: ${{ github.workspace }}
-      MACOS_ARCHS: arm64 x86_64
+      MACOS_ARCHS: ${{ matrix.arch }}
       PPVPN_PREBUILT: 1
       PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
       SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
@@ -962,11 +1067,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: macos-app
+          name: macos-app-${{ matrix.arch }}
           path: ${{ runner.temp }}/macos-app
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: macos-service
+          name: macos-service-${{ matrix.arch }}
           path: build/binaries
       - id: unpack
         name: Unpack
@@ -978,13 +1083,13 @@ jobs:
           # The bundle's name as macos-app packed it.
           bundle="$(tar -tf "$RUNNER_TEMP/macos-app/app.tar" | sed -n 1p)"
           echo "bundle=$RUNNER_TEMP/bundle/${bundle%%/*}" >> "$GITHUB_OUTPUT"
-      - name: Build DMGs, pkgs and release metadata
+      - name: Build the DMG, pkg and release metadata
         env:
           PPVPN_FLUTTER_BUNDLE: ${{ steps.unpack.outputs.bundle }}
         run: bash tools/desktop/ci/build-macos-native.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-macos
+          name: desktop-${{ matrix.platform }}
           if-no-files-found: error
           # A release run's packages are not kept long: a stable build's are in the
           # release, a dev build's are for testing. Other builds: the default.
