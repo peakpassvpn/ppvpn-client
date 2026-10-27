@@ -21,7 +21,8 @@
     4. stages the bundle (ppvpn.exe, flutter_windows.dll, ppvpn_flutter.dll, the plugins' DLLs,
        data\), the agent, the service binaries, wintun.dll (pinned release, sha256-checked),
        WinSparkle.dll (the updater, rust/src/update.rs: the WinSparkle package the native app
-       references), Assets\AppLogo.png (the notifications' icon, the native app's) and LICENSE.txt
+       references), the Visual C++ runtime (app-local; every import is then checked to be
+       staged or part of Windows), Assets\AppLogo.png (the notifications' icon, the native app's) and LICENSE.txt
     5. optional Authenticode signing (apps/windows/scripts/sign-file.ps1, the same environment)
     6. install-files.txt, makensis (solid LZMA, or zlib with -FastCompression)
     7. EdDSA signature for the update feed (winsparkle-tool, as the native app's feed is
@@ -264,6 +265,45 @@ $winSparkleDll = Join-Path $winSparkleDir "runtimes\win-x64\native\WinSparkle.dl
 if (-not (Test-Path -LiteralPath $winSparkleDll)) { throw "WinSparkle.dll (win-x64) not found in WinSparkle $winSparkleVersion" }
 Copy-Item -LiteralPath $winSparkleDll -Destination (Join-Path $stage "WinSparkle.dll")
 Write-Host "WinSparkle.dll $winSparkleVersion staged"
+
+# The Visual C++ runtime beside the binaries (app-local deployment): the app, the plugins
+# and the Rust binaries import MSVCP140, VCRUNTIME140 and VCRUNTIME140_1, which Windows
+# does not ship. Without them, ppvpn-service-install.exe exits 0xC0000135 (-1073741515,
+# DLL not found) on a machine without the redistributable and setup stops. From the
+# Visual Studio that built them, so the version is at least the build's.
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $vs) { throw "no Visual Studio with the C++ x64 tools (vswhere)" }
+$crt = Get-ChildItem -Path (Join-Path $vs "VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT") -Directory |
+  Sort-Object FullName | Select-Object -Last 1
+if (-not $crt) { throw "no Microsoft.VC14*.CRT under $vs\VC\Redist\MSVC" }
+foreach ($dll in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+  Copy-Item -LiteralPath (Join-Path $crt.FullName $dll) -Destination (Join-Path $stage $dll)
+}
+Write-Host "Visual C++ runtime staged from $($crt.FullName)"
+
+# Every DLL a staged binary imports is staged too, or part of Windows: a dependency
+# that only the build machine has fails on the user's (the runners have the VC++
+# redistributable installed, as most test machines do).
+$dumpbin = Get-ChildItem -Path (Join-Path $vs "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe") |
+  Sort-Object FullName | Select-Object -Last 1
+if (-not $dumpbin) { throw "dumpbin.exe not found under $vs" }
+$staged = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object { $_.Name.ToLowerInvariant() })
+# In System32 only where the redistributable is installed, not part of Windows.
+$redist = '^(msvcp140.*|vcruntime140.*|concrt140.*|vccorlib140.*|vcomp140.*|ucrtbased)\.dll$'
+$missing = @()
+foreach ($pe in Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Extension -in @(".exe", ".dll") }) {
+  $imports = & $dumpbin.FullName /nologo /dependents $pe.FullName |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[^\s\\]+\.dll$' } | ForEach-Object { $_.ToLowerInvariant() }
+  foreach ($dll in $imports) {
+    if ($staged -contains $dll) { continue }
+    if ($dll -like "api-ms-win-*" -or $dll -like "ext-ms-*") { continue }
+    if ($dll -notmatch $redist -and (Test-Path -LiteralPath (Join-Path "$env:SystemRoot\System32" $dll))) { continue }
+    $missing += "$($pe.Name) -> $dll"
+  }
+}
+if ($missing) { throw "imports neither staged nor part of Windows:`n  $($missing -join "`n  ")" }
+Write-Host "imports: every DLL is staged or part of Windows"
 
 # --- 5. Authenticode (optional) --------------------------------------------------------
 # Ours: the app, the bridge, the plugins built with it, the agent, the service.
