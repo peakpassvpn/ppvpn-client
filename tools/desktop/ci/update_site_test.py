@@ -108,6 +108,7 @@ class Build(unittest.TestCase):
             self.assertEqual(item.find(f"{SPARKLE_NS}shortVersionString").text, "0.4.0")
             self.assertEqual(item.find(f"{SPARKLE_NS}minimumSystemVersion").text, MIN_OS[platform])
             self.assertEqual(item.find("pubDate").text, "Sun, 01 Nov 2026 08:00:00 +0000")
+            self.assertIsNone(item.find(f"{SPARKLE_NS}releaseNotesLink"))
             enclosure = item.find("enclosure")
             self.assertEqual(enclosure.get("url"), f"{DOWNLOAD}/v0.4.0/{FILES[platform]}")
             self.assertEqual(enclosure.get(f"{SPARKLE_NS}edSignature"), "c2lnbmF0dXJl")
