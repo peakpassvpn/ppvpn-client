@@ -21,10 +21,6 @@ serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 
-[build-dependencies]
-# build.rs: src/objc_catch.m on macOS.
-cc = "1"
-
 [target.'cfg(windows)'.dependencies]
 # The shell link's property store, for the installer's
 # `--set-shortcut-aumid` (aumid.rs), as the push agent's WinRT toasts use

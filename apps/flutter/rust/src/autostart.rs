@@ -1,7 +1,8 @@
 //! Launch at login (#401 step 4), as the native apps do it: macOS through
-//! `SMAppService.mainApp` (apps/macos LoginItem), Windows through the
-//! per-user Run key (apps/windows LaunchAtLogin), Linux through an XDG
-//! autostart entry (apps/linux Autostart). The system holds the state: it is
+//! `SMAppService.mainApp` (apps/macos LoginItem), in the runner's Swift and
+//! not here; Windows through the per-user Run key (apps/windows
+//! LaunchAtLogin), Linux through an XDG autostart entry (apps/linux
+//! Autostart). The system holds the state: it is
 //! read back each time, never kept in the app's settings. Off by default.
 //!
 //! The Windows and Linux entries start the app with `--background`: the tray
@@ -20,259 +21,29 @@ pub(crate) fn started_in_background() -> bool {
 
 pub(crate) use platform::{open_settings, refresh, set, state};
 
-/// macOS 13+: the app itself as a login item. Called through the
-/// Objective-C runtime (no bindings crate for four messages).
-///
-/// Every message goes through [`catching`]: an Objective-C exception must
-/// not unwind into the bridge, whose `catch_unwind` aborts on a foreign
-/// exception (0.7.0 acceptance: Settings crashed the app each time).
+/// macOS: the runner's Swift holds the login item (`SMAppService.mainApp`,
+/// MainFlutterWindow.swift's LoginItem on channel ppvpn/login-item), and
+/// lib/settings.dart calls it there, not here.
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ffi::{c_char, c_void, CStr};
-
     use crate::api::UiLaunchAtLogin;
 
-    type Id = *mut c_void;
-    type Sel = *mut c_void;
-
-    #[link(name = "objc")]
-    extern "C" {
-        fn objc_getClass(name: *const c_char) -> Id;
-        fn sel_registerName(name: *const c_char) -> Sel;
-        fn objc_autoreleasePoolPush() -> *mut c_void;
-        fn objc_autoreleasePoolPop(pool: *mut c_void);
-        fn free(pointer: *mut c_void);
-    }
-
-    // "C-unwind": an Objective-C exception may unwind through these calls,
-    // up to ppvpn_objc_catch.
-    #[link(name = "objc")]
-    extern "C-unwind" {
-        /// No signature of its own: each call casts it to the method's.
-        fn objc_msgSend();
-    }
-
-    extern "C-unwind" {
-        /// src/objc_catch.m (build.rs): runs `body(context)` in `@try`;
-        /// null, or the exception it raised as text the caller frees.
-        fn ppvpn_objc_catch(
-            body: unsafe extern "C-unwind" fn(*mut c_void),
-            context: *mut c_void,
-        ) -> *mut c_char;
-    }
-
-    // Loads SMAppService for objc_getClass.
-    #[link(name = "ServiceManagement", kind = "framework")]
-    extern "C" {}
-
-    /// SMAppServiceStatus.
-    const ENABLED: isize = 1;
-    const REQUIRES_APPROVAL: isize = 2;
-
-    // SAFETY (the four below): `receiver` is a live object or class that
-    // answers `selector` with exactly this signature.
-    unsafe fn send_id(receiver: Id, selector: &CStr) -> Id {
-        let send = std::mem::transmute::<
-            unsafe extern "C-unwind" fn(),
-            unsafe extern "C-unwind" fn(Id, Sel) -> Id,
-        >(objc_msgSend);
-        send(receiver, sel_registerName(selector.as_ptr()))
-    }
-
-    unsafe fn send_int(receiver: Id, selector: &CStr) -> isize {
-        let send = std::mem::transmute::<
-            unsafe extern "C-unwind" fn(),
-            unsafe extern "C-unwind" fn(Id, Sel) -> isize,
-        >(objc_msgSend);
-        send(receiver, sel_registerName(selector.as_ptr()))
-    }
-
-    unsafe fn send_void(receiver: Id, selector: &CStr) {
-        let send = std::mem::transmute::<
-            unsafe extern "C-unwind" fn(),
-            unsafe extern "C-unwind" fn(Id, Sel),
-        >(objc_msgSend);
-        send(receiver, sel_registerName(selector.as_ptr()));
-    }
-
-    /// `- (BOOL)…AndReturnError:(NSError **)error`; BOOL is one byte on
-    /// both architectures.
-    unsafe fn send_with_error(receiver: Id, selector: &CStr, error: *mut Id) -> bool {
-        let send = std::mem::transmute::<
-            unsafe extern "C-unwind" fn(),
-            unsafe extern "C-unwind" fn(Id, Sel, *mut Id) -> i8,
-        >(objc_msgSend);
-        send(receiver, sel_registerName(selector.as_ptr()), error) != 0
-    }
-
-    /// Runs `body` in an autorelease pool: the calls come from the bridge's
-    /// threads, which have none.
-    fn in_pool<T>(body: impl FnOnce() -> T) -> T {
-        // SAFETY: the pool is popped once, after the body.
-        let pool = unsafe { objc_autoreleasePoolPush() };
-        let result = body();
-        // SAFETY: as above.
-        unsafe { objc_autoreleasePoolPop(pool) };
-        result
-    }
-
-    /// Runs `body` with Objective-C exceptions caught: one it raises is the
-    /// error, its name and reason.
-    fn catching<T>(body: impl FnOnce() -> T) -> Result<T, String> {
-        unsafe extern "C-unwind" fn run<F: FnOnce()>(context: *mut c_void) {
-            // SAFETY: `context` is the `Option<F>` of `call`, alive for the call.
-            if let Some(body) = unsafe { (*context.cast::<Option<F>>()).take() } {
-                body();
-            }
-        }
-        fn call<F: FnOnce()>(body: F) -> *mut c_char {
-            let mut body = Some(body);
-            // SAFETY: `run::<F>` takes the `Option<F>` it is given.
-            unsafe { ppvpn_objc_catch(run::<F>, (&mut body as *mut Option<F>).cast()) }
-        }
-        let mut output = None;
-        let error = call(|| output = Some(body()));
-        if error.is_null() {
-            return output.ok_or_else(|| "Objective-C call did not return".into());
-        }
-        // SAFETY: a NUL-terminated string from strdup, freed once.
-        let text = unsafe { CStr::from_ptr(error) }
-            .to_string_lossy()
-            .into_owned();
-        // SAFETY: as above.
-        unsafe { free(error.cast()) };
-        Err(text)
-    }
-
-    /// The SMAppService class; null before macOS 13.
-    fn class() -> Id {
-        // SAFETY: a NUL-terminated name.
-        unsafe { objc_getClass(c"SMAppService".as_ptr()) }
-    }
-
-    /// `[SMAppService mainAppService]`, Swift's `SMAppService.mainApp`;
-    /// null before macOS 13.
-    fn main_app() -> Id {
-        let class = class();
-        if class.is_null() {
-            return std::ptr::null_mut();
-        }
-        // SAFETY: `@property(class, readonly) SMAppService *mainAppService`.
-        // Swift renames it mainApp; that selector does not exist, and sending
-        // it raised NSInvalidArgumentException (0.7.0 acceptance).
-        unsafe { send_id(class, c"mainAppService") }
-    }
+    const IN_THE_RUNNER: &str = "launch at login is the runner's on macOS";
 
     pub(crate) fn state() -> Result<UiLaunchAtLogin, String> {
-        let status = in_pool(|| {
-            catching(|| {
-                let app = main_app();
-                if app.is_null() {
-                    return 0;
-                }
-                // SAFETY: `@property(readonly) SMAppServiceStatus status`, an NSInteger.
-                unsafe { send_int(app, c"status") }
-            })
-        })?;
-        Ok(UiLaunchAtLogin {
-            enabled: status == ENABLED,
-            needs_approval: status == REQUIRES_APPROVAL,
-        })
+        Err(IN_THE_RUNNER.into())
     }
 
-    pub(crate) fn set(enabled: bool) -> Result<(), String> {
-        in_pool(|| catching(|| register(enabled)))?
+    pub(crate) fn set(_enabled: bool) -> Result<(), String> {
+        Err(IN_THE_RUNNER.into())
     }
 
-    fn register(enabled: bool) -> Result<(), String> {
-        let app = main_app();
-        if app.is_null() {
-            return Err("launch at login needs macOS 13 or later".into());
-        }
-        let selector = if enabled {
-            c"registerAndReturnError:"
-        } else {
-            c"unregisterAndReturnError:"
-        };
-        let mut error: Id = std::ptr::null_mut();
-        // SAFETY: `- (BOOL)registerAndReturnError:(NSError **)error`,
-        // and the same for unregister.
-        if unsafe { send_with_error(app, selector, &mut error) } {
-            return Ok(());
-        }
-        Err(description(error))
-    }
-
-    /// The error's `localizedDescription`; inside the pool that holds it.
-    fn description(error: Id) -> String {
-        if error.is_null() {
-            return "SMAppService failed".into();
-        }
-        // SAFETY: an NSError, its NSString, and that string's UTF-8 bytes,
-        // which live as long as the pool.
-        unsafe {
-            let text = send_id(error, c"localizedDescription");
-            if text.is_null() {
-                return "SMAppService failed".into();
-            }
-            let bytes = send_id(text, c"UTF8String") as *const c_char;
-            if bytes.is_null() {
-                return "SMAppService failed".into();
-            }
-            CStr::from_ptr(bytes).to_string_lossy().into_owned()
-        }
-    }
-
-    /// System Settings › General › Login Items.
     pub(crate) fn open_settings() -> Result<(), String> {
-        let class = class();
-        if class.is_null() {
-            return Ok(());
-        }
-        // SAFETY: `+ (void)openSystemSettingsLoginItems`.
-        in_pool(|| catching(|| unsafe { send_void(class, c"openSystemSettingsLoginItems") }))
+        Err(IN_THE_RUNNER.into())
     }
 
     /// The login item follows the bundle: nothing to point anywhere.
     pub(crate) fn refresh() {}
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn an_objective_c_exception_is_an_error() {
-            // `[[NSArray array] objectAtIndex:1]` raises NSRangeException.
-            let result = in_pool(|| {
-                catching(|| unsafe {
-                    let array = send_id(objc_getClass(c"NSArray".as_ptr()), c"array");
-                    let send = std::mem::transmute::<
-                        unsafe extern "C-unwind" fn(),
-                        unsafe extern "C-unwind" fn(Id, Sel, usize) -> Id,
-                    >(objc_msgSend);
-                    send(array, sel_registerName(c"objectAtIndex:".as_ptr()), 1)
-                })
-            });
-            let error = result.expect_err("objectAtIndex: past the end raises");
-            assert!(error.starts_with("NSRangeException: "), "{error}");
-        }
-
-        #[test]
-        fn a_call_without_an_exception_returns_its_value() {
-            assert_eq!(catching(|| 7), Ok(7));
-        }
-
-        /// Read from a test binary, outside any app bundle: the selectors
-        /// exist (macOS 13 and later), so the state reads without an
-        /// exception.
-        #[test]
-        fn the_state_is_read() {
-            assert!(!main_app().is_null());
-            if let Err(error) = state() {
-                panic!("{error}");
-            }
-        }
-    }
 }
 
 /// Windows: HKCU\…\Run, value `PPVPN` = `"<exe>" --background`.
