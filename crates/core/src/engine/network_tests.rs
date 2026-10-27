@@ -282,7 +282,7 @@ async fn the_hosts_network_goes_to_each_run() {
     assert!(host_networks(&fake).is_empty(), "nothing runs yet");
     running(&engine).await;
     let wlan_json = serde_json::to_string(&wlan).unwrap();
-    assert_eq!(host_networks(&fake), [wlan_json.clone()]);
+    assert_eq!(host_networks(&fake), std::slice::from_ref(&wlan_json));
     let start = fake
         .calls()
         .iter()
