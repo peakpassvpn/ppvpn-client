@@ -3,6 +3,7 @@
 //! `with_*` setters, or deserialise them (FFI).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +54,16 @@ pub struct EngineConfig {
     pub tun: Option<TunConfig>,
     #[serde(default)]
     pub log: LogConfig,
+    /// sail's cap on live proxied sessions (`inbound.max_connections`):
+    /// connections, UDP sessions and multiplexed streams; 0 = no cap. None:
+    /// sail's profile's (none on desktop, 512 on mobile). An iOS network
+    /// extension sets 128 (#388: the system ends it at 50 MiB).
+    #[serde(default)]
+    pub max_connections: Option<u32>,
+    /// Android: keeps each outbound socket out of the VPN before it
+    /// connects (`VpnService.protect`). Not serialised: an FFI layer sets it.
+    #[serde(skip)]
+    pub socket_protect: Option<SocketProtect>,
 }
 
 impl EngineConfig {
@@ -65,6 +76,8 @@ impl EngineConfig {
             system_proxy: false,
             tun: None,
             log: LogConfig::default(),
+            max_connections: None,
+            socket_protect: None,
         }
     }
     pub fn with_local_proxy(mut self, local_proxy: LocalProxyConfig) -> Self {
@@ -82,6 +95,42 @@ impl EngineConfig {
     pub fn with_log(mut self, log: LogConfig) -> Self {
         self.log = log;
         self
+    }
+    pub fn with_max_connections(mut self, max: u32) -> Self {
+        self.max_connections = Some(max);
+        self
+    }
+    pub fn with_socket_protect(mut self, protect: SocketProtect) -> Self {
+        self.socket_protect = Some(protect);
+        self
+    }
+}
+
+/// The host's socket protection (mobile hosts, section 11): called with
+/// each outbound socket's descriptor before it connects, on sail's threads;
+/// an error fails that dial. It must not call the instance. Clones share
+/// the callback; two are equal when they are the same callback.
+#[derive(Clone)]
+pub struct SocketProtect(Arc<dyn Fn(i32) -> std::io::Result<()> + Send + Sync>);
+
+impl SocketProtect {
+    pub fn new(protect: impl Fn(i32) -> std::io::Result<()> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(protect))
+    }
+    pub(crate) fn protect(&self, fd: i32) -> std::io::Result<()> {
+        (self.0)(fd)
+    }
+}
+
+impl std::fmt::Debug for SocketProtect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SocketProtect(..)")
+    }
+}
+
+impl PartialEq for SocketProtect {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -131,6 +180,13 @@ pub struct TunConfig {
     /// `WINTUN_VERSION`); the engine never downloads or embeds it.
     #[serde(default)]
     pub wintun_dll: Option<PathBuf>,
+    /// iOS and Android: the TUN the host opened with
+    /// [`crate::tun_settings`]. The engine hands sail a duplicate at each
+    /// start and never closes this one: the host closes it after
+    /// `shutdown`. Without it sail opens the device itself, which only a
+    /// lab host may (Linux, privileged).
+    #[serde(default)]
+    pub fd: Option<i32>,
 }
 
 impl TunConfig {
@@ -143,6 +199,10 @@ impl TunConfig {
     }
     pub fn with_wintun_dll(mut self, path: impl Into<PathBuf>) -> Self {
         self.wintun_dll = Some(path.into());
+        self
+    }
+    pub fn with_fd(mut self, fd: i32) -> Self {
+        self.fd = Some(fd);
         self
     }
 }

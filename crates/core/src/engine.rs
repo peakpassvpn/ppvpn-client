@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 use crate::config::{EngineConfig, LogLevel, Role};
 use crate::error::{codes, Error};
 use crate::event::{Event, EventKind, EventReceiver, LogReceiver};
+use crate::mobile::NetworkState;
 use crate::request::{validate_request, ApplyRequest, ApplyResult, RoutingMode};
 use crate::runtime::sail::SailRuntime;
 use crate::runtime::{Runtime, RuntimeError};
@@ -182,7 +183,7 @@ impl Engine {
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         log.span().in_scope(|| cleanup::sweep(&config))?;
         give_back_freed_memory();
-        let options = sail_options()
+        let options = sail_options(&config)?
             .run_dir(cleanup::run_dir(&config))
             .runtime(sail_runtime());
         let runtime = SailRuntime::new(options).map_err(|e| e.to_error_on(config.platform))?;
@@ -350,6 +351,25 @@ impl Engine {
         self.inner.host_wake();
     }
 
+    /// The network the host is on (section 11): mobile hosts push it at
+    /// start and at each change, `NetworkState::offline()` included. Kept,
+    /// and given to sail at each start of the runtime; sail then goes by it
+    /// instead of its own detection, and a change is seen as sail's are
+    /// (NetworkChanged, the offline state). `CORE_OPERATION_FAILED` on a
+    /// desktop platform, where sail's own monitor is the source.
+    pub fn set_network_state(&self, state: NetworkState) -> Result<(), Error> {
+        self.inner.admit()?;
+        if !crate::mobile::mobile(self.inner.config.platform) {
+            return Err(Error::new(
+                codes::CORE_OPERATION_FAILED,
+                false,
+                "only iOS and Android hosts push the network",
+            ));
+        }
+        self.inner.set_host_network(&state);
+        Ok(())
+    }
+
     /// The authoritative snapshot (section 5).
     pub fn status(&self) -> Status {
         self.inner.host_read();
@@ -453,7 +473,10 @@ impl Engine {
     ) -> Result<Vec<EntranceResult>, Error> {
         self.inner.admit()?;
         self.inner
-            .probe_entrances(request, &crate::probe::SystemNet)
+            .probe_entrances(
+                request,
+                &crate::probe::SystemNet::protected(self.inner.config.socket_protect.clone()),
+            )
             .await
     }
 
@@ -656,19 +679,54 @@ fn sail_runtime() -> sail::embed::Runtime {
     }
 }
 
-/// sail's options before the run directory and the runtime: its defaults,
-/// or in a lab build (`lab`) the start settings in PPVPN_LAB_SAIL_SETTINGS
-/// (`{"profile": .., "set": ["relay.buffer_size=8"]}`), for ne-mem to
-/// measure tunings side by side (#388); settings it refuses end the lab
-/// process.
-fn sail_options() -> sail::embed::Options {
+/// sail's options before the run directory and the runtime: the start
+/// settings of [`sail_settings`], or in a lab build (`lab`) those in
+/// PPVPN_LAB_SAIL_SETTINGS instead (`{"profile": .., "set":
+/// ["relay.buffer_size=8"]}`), for ne-mem to measure tunings side by side
+/// (#388; settings it refuses end the lab process); and the host's TUN and
+/// socket protection on mobile.
+fn sail_options(config: &EngineConfig) -> Result<sail::embed::Options, Error> {
     #[cfg(feature = "lab")]
-    if let Ok(json) = std::env::var("PPVPN_LAB_SAIL_SETTINGS") {
-        return sail::embed::Options::new()
+    let lab = std::env::var("PPVPN_LAB_SAIL_SETTINGS").ok();
+    #[cfg(not(feature = "lab"))]
+    let lab: Option<String> = None;
+    let mut options = sail::embed::Options::new();
+    if let Some(json) = lab {
+        options = options
             .settings_json(&json)
             .expect("PPVPN_LAB_SAIL_SETTINGS");
+    } else if let Some(settings) = sail_settings(config) {
+        options = options.settings_json(&settings.to_string()).map_err(|e| {
+            Error::new(
+                codes::CORE_OPERATION_FAILED,
+                false,
+                format!("sail settings: {e}"),
+            )
+        })?;
     }
-    sail::embed::Options::new()
+    if let Some(platform) = crate::mobile::platform(config) {
+        options = options.platform(Arc::new(platform));
+    }
+    Ok(options)
+}
+
+/// sail's start settings for `config`; None: its defaults (the desktop
+/// profile, no cap on sessions). iOS and Android run sail's mobile profile
+/// (one thread, small buffers and windows), which `sail::embed` leaves to
+/// the embedder; the host's cap on live sessions (`max_connections`)
+/// replaces the profile's.
+fn sail_settings(config: &EngineConfig) -> Option<serde_json::Value> {
+    let mut settings = serde_json::Map::new();
+    if crate::mobile::mobile(config.platform) {
+        settings.insert("profile".into(), "mobile".into());
+    }
+    if let Some(max) = config.max_connections {
+        settings.insert(
+            "set".into(),
+            serde_json::json!([format!("inbound.max_connections={max}")]),
+        );
+    }
+    (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
 }
 
 /// glibc's malloc keeps what a load freed (a start, a reload, a rule
@@ -875,5 +933,42 @@ mod tests {
         // And it reads back.
         let back: Status = serde_json::from_str(&serde_json::to_string(&status).unwrap()).unwrap();
         assert_eq!(back, status);
+    }
+
+    #[test]
+    fn mobile_runs_sails_mobile_profile_and_the_hosts_cap() {
+        let settings = |platform, max: Option<u32>| {
+            let mut config = EngineConfig::new(Role::Tun, platform, "/x");
+            if let Some(max) = max {
+                config = config.with_max_connections(max);
+            }
+            sail_settings(&config)
+        };
+        // Desktop: sail's defaults.
+        assert_eq!(settings(Platform::Macos, None), None);
+        for platform in [Platform::Ios, Platform::Android] {
+            assert_eq!(
+                settings(platform, None),
+                Some(serde_json::json!({"profile": "mobile"}))
+            );
+        }
+        // The host's cap replaces the profile's; 0 lifts it.
+        assert_eq!(
+            settings(Platform::Ios, Some(128)),
+            Some(serde_json::json!({"profile": "mobile", "set": ["inbound.max_connections=128"]}))
+        );
+        assert_eq!(
+            settings(Platform::Android, Some(0)),
+            Some(serde_json::json!({"profile": "mobile", "set": ["inbound.max_connections=0"]}))
+        );
+        assert_eq!(
+            settings(Platform::Linux, Some(64)),
+            Some(serde_json::json!({"set": ["inbound.max_connections=64"]}))
+        );
+        // sail takes them.
+        for platform in [Platform::Ios, Platform::Android, Platform::Linux] {
+            let config = EngineConfig::new(Role::Tun, platform, "/x").with_max_connections(64);
+            sail_options(&config).unwrap();
+        }
     }
 }

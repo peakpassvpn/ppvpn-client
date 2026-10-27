@@ -8,7 +8,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
-pub(super) use dgram::ping;
+pub(super) use dgram::{ping, ping_protected};
 #[cfg(windows)]
 pub(super) use windows::ping;
 
@@ -20,6 +20,17 @@ pub(super) use windows::ping;
 )))]
 pub(super) async fn ping(_to: IpAddr, _timeout: Duration) -> Result<Duration, &'static str> {
     Err(super::result_codes::ICMP_UNSUPPORTED)
+}
+
+/// `ping` with its socket kept out of the host's VPN first: only mobile
+/// hosts protect sockets, so elsewhere it is `ping`.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+pub(super) async fn ping_protected(
+    to: IpAddr,
+    timeout: Duration,
+    _protect: &crate::config::SocketProtect,
+) -> Result<Duration, &'static str> {
+    ping(to, timeout).await
 }
 
 /// Bytes nobody can guess, to match a reply to its request.
@@ -134,19 +145,38 @@ mod dgram {
     use tokio::net::UdpSocket;
 
     use super::wire::{classify, echo_request};
+    use crate::config::SocketProtect;
     use crate::probe::result_codes as rc;
 
     pub(in crate::probe) async fn ping(
         to: IpAddr,
         timeout: Duration,
     ) -> Result<Duration, &'static str> {
-        match tokio::time::timeout(timeout, echo(to.to_canonical())).await {
+        ping_with(to, timeout, None).await
+    }
+
+    /// `ping`, its socket given to the host's protection before it sends
+    /// (Android: kept out of the VPN, which would answer for the node).
+    pub(in crate::probe) async fn ping_protected(
+        to: IpAddr,
+        timeout: Duration,
+        protect: &SocketProtect,
+    ) -> Result<Duration, &'static str> {
+        ping_with(to, timeout, Some(protect)).await
+    }
+
+    async fn ping_with(
+        to: IpAddr,
+        timeout: Duration,
+        protect: Option<&SocketProtect>,
+    ) -> Result<Duration, &'static str> {
+        match tokio::time::timeout(timeout, echo(to.to_canonical(), protect)).await {
             Ok(outcome) => outcome,
             Err(_) => Err(rc::ICMP_TIMEOUT),
         }
     }
 
-    async fn echo(to: IpAddr) -> Result<Duration, &'static str> {
+    async fn echo(to: IpAddr, protect: Option<&SocketProtect>) -> Result<Duration, &'static str> {
         let v6 = to.is_ipv6();
         let (domain, protocol) = if v6 {
             (Domain::IPV6, Protocol::ICMPV6)
@@ -155,6 +185,12 @@ mod dgram {
         };
         let socket =
             Socket::new(domain, Type::DGRAM, Some(protocol)).map_err(|e| socket_code(&e))?;
+        if let Some(protect) = protect {
+            use std::os::fd::AsRawFd;
+            protect
+                .protect(socket.as_raw_fd())
+                .map_err(|_| rc::ICMP_FAILED)?;
+        }
         socket.set_nonblocking(true).map_err(|_| rc::ICMP_FAILED)?;
         let socket = UdpSocket::from_std(socket.into()).map_err(|_| rc::ICMP_FAILED)?;
         let random: [u8; 20] = super::random_bytes();

@@ -16,9 +16,10 @@
 #                        <version>.<build> on macOS, as for the native apps
 #   FLUTTER_TARGET       android: the APK (needs ANDROID_NDK_HOME and the
 #                        Android SDK), instead of the runner's platform
-#   MACOS_ARCHS          macOS: "arm64 x86_64" builds the library for both and
-#                        joins them, for the release's two DMGs (default: the
-#                        runner's architecture only)
+#   MACOS_ARCHS          macOS: the library's slices, "arm64 x86_64" joined
+#                        into one, or one of them (release.yml builds each
+#                        architecture's DMG in a job of its own, #459)
+#                        (default: the runner's architecture only)
 #   and what rust/src/update.rs and bridge.rs bake into the library:
 #   PPVPN_UPDATE_SITE, PPVPN_RELEASE_CHANNEL, PPVPN_SPARKLE_PUBLIC_KEY,
 #   PPVPN_API_BASE_DEFAULT
@@ -219,7 +220,11 @@ elif [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
   done
   lib="$root/target/universal-apple-darwin/release"
   mkdir -p "$lib"
-  lipo -create "${slices[@]}" -output "$lib/libppvpn_flutter.dylib"
+  if [ ${#slices[@]} = 1 ]; then
+    cp "${slices[0]}" "$lib/libppvpn_flutter.dylib"
+  else
+    lipo -create "${slices[@]}" -output "$lib/libppvpn_flutter.dylib"
+  fi
 else
   # Linux and Windows ship the push agent: built in the same invocation, its
   # features unify with the bridge's (tokio's signal, the windows crate's),

@@ -36,10 +36,15 @@ WORK="$TARGET_DIR/apple-package"
 rm -rf "$WORK" && mkdir -p "$WORK/bindings"
 
 # Bindings are generated from the compiled library so they always match it.
-# The generator is built like the library (profile, and the host's target
-# named), so that it reuses the library's build when the host is one slice.
+# The generator is built like the library (profile, and a target named), so
+# that it reuses the library's build: for the host when the host is one of
+# the slices, else for the first slice, which an Apple silicon host runs
+# under Rosetta (release.yml's x86_64 job, #459), rather than compiling
+# everything once more for the host.
 HOST="$(rustc -vV | sed -n 's/^host: //p')"
-cargo run ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} --quiet --target "$HOST" --bin uniffi-bindgen -- generate \
+GENERATOR_TARGET="${TARGETS[0]}"
+for target in "${TARGETS[@]}"; do [[ "$target" == "$HOST" ]] && GENERATOR_TARGET="$HOST"; done
+cargo run ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} --quiet --target "$GENERATOR_TARGET" --bin uniffi-bindgen -- generate \
   --library "$TARGET_DIR/${TARGETS[0]}/$PROFILE/$LIB" \
   --language swift --out-dir "$WORK/bindings"
 

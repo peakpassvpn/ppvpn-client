@@ -12,8 +12,9 @@ As root: sail opens the TUN. Runs on macOS and Linux.
 A variant is a run with sail's start settings in PPVPN_LAB_SAIL_SETTINGS
 (ne-mem built with ppvpn-core's `lab` feature): one of VARIANTS by name, or
 NAME='{"profile":"desktop","set":["relay.buffer_size=8"]}'. `default`, the
-first, is core's own options (--no-default leaves it out). Each variant
-runs once per --workers value.
+first, is core's own options (--no-default leaves it out): sail's mobile
+profile, as on iOS and Android, without the cap an iOS host adds (the
+`cap` variants). Each variant runs once per --workers value.
 
 --dhat (ne-mem built with its `dhat` feature) writes each run's heap
 profile to PREFIX-<variant>-w<workers>.json; dhat's view of it takes the
@@ -87,8 +88,9 @@ RULE_SETS = {
     "cn-ip": (f"{RAW}/SagerNet/sing-geoip/rule-set/geoip-cn.srs",) * 2,
 }
 
-# sail's mobile profile in parts, over the desktop one core runs (sail's
-# runtime/options.rs has the values and why).
+# sail's mobile profile in parts, over the desktop one (sail's
+# runtime/options.rs has the values and why); core runs the whole mobile
+# profile on iOS and Android, which `default` measures.
 _MOBILE_RELAY = ["relay.buffer_size=8", "relay.buffer_max_size=64", "relay.buffer_pool=256"]
 VARIANTS = {
     "relay": {"profile": "desktop", "set": _MOBILE_RELAY},
