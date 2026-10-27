@@ -8,8 +8,9 @@
 // before Dart asks ("ready") is held until then.
 //
 // It also keeps the bundled push agent registered (PushAgentService below),
-// in a packaged app (scripts/package-macos.sh), and runs Sparkle (Updater
-// below, the channel lib/updates.dart calls).
+// in a packaged app (scripts/package-macos.sh), runs Sparkle (Updater
+// below, the channel lib/updates.dart calls) and holds launch at login
+// (LoginItem below, the channel lib/settings.dart calls).
 
 import Cocoa
 import FlutterMacOS
@@ -20,6 +21,7 @@ class MainFlutterWindow: NSWindow {
   private var activation: Activation?
   private var pushAgent: PushAgentService?
   private var updater: Updater?
+  private var loginItem: LoginItem?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -35,6 +37,7 @@ class MainFlutterWindow: NSWindow {
     updater = Updater(messenger: flutterViewController.engine.binaryMessenger) { [weak pushAgent] in
       pushAgent?.prepareForUpdate()
     }
+    loginItem = LoginItem(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }
@@ -347,6 +350,48 @@ private final class PushAgentService {
         agentLog.info("push agent: re-registered, status \(self.service.status.rawValue)")
       } catch {
         agentLog.error("push agent: register failed: \(error.localizedDescription, privacy: .public)")
+      }
+    }
+  }
+}
+
+/// Launch at login through `SMAppService.mainApp`, as the native app's
+/// apps/macos/PPVPN/Platform/LoginItem.swift: the system holds the state,
+/// read back on each `state`.
+///
+/// Channel ppvpn/login-item: `state` → {enabled, needsApproval}, `set` (a
+/// Bool; a FlutterError with the system's description when it refused),
+/// `openSettings` (System Settings › General › Login Items).
+@MainActor
+private final class LoginItem {
+  private let channel: FlutterMethodChannel
+
+  init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "ppvpn/login-item", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "state":
+        let status = SMAppService.mainApp.status
+        result(["enabled": status == .enabled, "needsApproval": status == .requiresApproval])
+      case "set":
+        guard let enabled = call.arguments as? Bool else {
+          return result(FlutterError(code: "arguments", message: "set takes a Bool", details: nil))
+        }
+        do {
+          if enabled {
+            try SMAppService.mainApp.register()
+          } else {
+            try SMAppService.mainApp.unregister()
+          }
+          result(nil)
+        } catch {
+          result(FlutterError(code: "failed", message: error.localizedDescription, details: nil))
+        }
+      case "openSettings":
+        SMAppService.openSystemSettingsLoginItems()
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
       }
     }
   }

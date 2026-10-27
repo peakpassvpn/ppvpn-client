@@ -110,13 +110,15 @@ any release.
   the routing mode, and shows the account, the version and the system
   service's status. Update checks and installing the service come in later
   steps: their rows are shown, disabled.
-- Launch at login (#401 step 4, `rust/src/autostart.rs`) is the native
-  apps' own, off by default, its state read from the system:
-  `SMAppService.mainApp` on macOS (with the approval hint and System
-  Settings › Login Items), the `PPVPN` value under HKCU's `Run` key on
-  Windows (with the hint when Settings › Apps › Startup turned it off; the
-  value is pointed at the current executable at every start), and
-  `$XDG_CONFIG_HOME/autostart/com.peakpassvpn.ppvpn.desktop` on Linux. The
+- Launch at login (#401 step 4) is the native apps' own, off by default,
+  its state read from the system: `SMAppService.mainApp` on macOS, in the
+  runner's Swift (`LoginItem` in `MainFlutterWindow.swift`, channel
+  `ppvpn/login-item`; with the approval hint and System Settings › Login
+  Items); in `rust/src/autostart.rs` the `PPVPN` value under HKCU's
+  `Run` key on Windows (with the hint when Settings › Apps › Startup
+  turned it off; the value is pointed at the current executable at every
+  start), and `$XDG_CONFIG_HOME/autostart/com.peakpassvpn.ppvpn.desktop`
+  on Linux. The
   Windows and Linux entries pass `--background`: the app starts in the
   tray with no window. For that, `scripts/ci-build.sh` takes the
   first-frame show out of those two runners, and `main.dart` shows the

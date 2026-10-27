@@ -182,7 +182,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
   void initState() {
     super.initState();
     windowManager.addListener(this);
-    _error = Settings.refreshLaunchAtLogin();
+    unawaited(_refresh());
   }
 
   @override
@@ -192,11 +192,16 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
   }
 
   @override
-  void onWindowFocus() => setState(() => _error = Settings.refreshLaunchAtLogin());
+  void onWindowFocus() => unawaited(_refresh());
 
-  void _set(bool enabled) {
-    final error = Settings.setLaunchAtLogin(enabled);
-    setState(() => _error = error);
+  Future<void> _refresh() => _show(Settings.refreshLaunchAtLogin());
+
+  Future<void> _set(bool enabled) => _show(Settings.setLaunchAtLogin(enabled));
+
+  /// The call's error, once it ends, unless the page has closed.
+  Future<void> _show(Future<String?> call) async {
+    final error = await call;
+    if (mounted) setState(() => _error = error);
   }
 
   @override
@@ -214,7 +219,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
             trailing: TriSwitch(
               label: s('launchAtLogin'),
               state: state.enabled ? SwitchState.on : SwitchState.off,
-              onChanged: _set,
+              onChanged: (enabled) => unawaited(_set(enabled)),
             ),
           ),
           if (state.needsApproval)
@@ -231,7 +236,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
                   height: Tokens.smallButtonHeight,
                   fontSize: 12,
                   label: s(Platform.isWindows ? 'openWinStartup' : 'openSysSettings'),
-                  onPress: () => setState(() => _error = Settings.openLaunchAtLoginSettings()),
+                  onPress: () => unawaited(_show(Settings.openLaunchAtLoginSettings())),
                 ),
               ],
             ),

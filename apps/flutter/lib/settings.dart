@@ -3,12 +3,18 @@
 // (rust/src/settings.rs). The routing mode is the client's and comes with
 // the snapshot. Theme (Tokens.of) and strings (S.current) follow the
 // notifiers here; main.dart rebuilds the app when they change. Launch at
-// login (#401 step 4) is the system's (rust/src/autostart.rs): read back,
-// never saved here.
+// login (#401 step 4) is the system's, read back and never saved here:
+// rust/src/autostart.rs on Windows and Linux, the runner's LoginItem
+// (MainFlutterWindow.swift, channel ppvpn/login-item) on macOS.
+
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'src/rust/api.dart' as rust;
+
+const _loginItem = MethodChannel('ppvpn/login-item');
 
 class Settings {
   Settings._();
@@ -88,40 +94,59 @@ class Settings {
   /// Reads launch at login from the system (the settings page, when it
   /// shows and when the window gains focus); the error's text when the
   /// system raised one, the last state kept.
-  static String? refreshLaunchAtLogin() {
+  static Future<String?> refreshLaunchAtLogin() async {
     if (!_persist) return null;
     try {
-      launchAtLogin.value = rust.launchAtLogin();
+      if (Platform.isMacOS) {
+        final state = (await _loginItem.invokeMapMethod<String, bool>('state'))!;
+        launchAtLogin.value = rust.UiLaunchAtLogin(
+          enabled: state['enabled'] ?? false,
+          needsApproval: state['needsApproval'] ?? false,
+        );
+      } else {
+        launchAtLogin.value = rust.launchAtLogin();
+      }
       return null;
     } catch (error) {
       debugPrint('launch_at_login: $error');
-      return '$error';
+      return _text(error);
     }
   }
 
   /// Turns launch at login on or off, then reads it back; the error's text
   /// when the system refused.
-  static String? setLaunchAtLogin(bool enabled) {
+  static Future<String?> setLaunchAtLogin(bool enabled) async {
     if (!_persist) return null;
     String? failure;
     try {
-      rust.setLaunchAtLogin(enabled: enabled);
+      if (Platform.isMacOS) {
+        await _loginItem.invokeMethod<void>('set', enabled);
+      } else {
+        rust.setLaunchAtLogin(enabled: enabled);
+      }
     } catch (error) {
       debugPrint('set_launch_at_login: $error');
-      failure = '$error';
+      failure = _text(error);
     }
-    return failure ?? refreshLaunchAtLogin();
+    return failure ?? await refreshLaunchAtLogin();
   }
 
   /// Opens where the system holds the entry back; the error's text when
   /// that failed.
-  static String? openLaunchAtLoginSettings() {
+  static Future<String?> openLaunchAtLoginSettings() async {
     try {
-      rust.openLaunchAtLoginSettings();
+      if (Platform.isMacOS) {
+        await _loginItem.invokeMethod<void>('openSettings');
+      } else {
+        rust.openLaunchAtLoginSettings();
+      }
       return null;
     } catch (error) {
       debugPrint('open_launch_at_login_settings: $error');
-      return '$error';
+      return _text(error);
     }
   }
+
+  /// The runner's error is the system's description alone.
+  static String _text(Object error) => error is PlatformException ? (error.message ?? error.code) : '$error';
 }

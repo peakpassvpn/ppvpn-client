@@ -2859,7 +2859,6 @@ dependencies = [
 name = "ppvpn-flutter"
 version = "0.7.0"
 dependencies = [
- "cc",
  "flutter_rust_bridge",
  "ppvpn-desktop",
  "serde",

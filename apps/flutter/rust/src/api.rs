@@ -592,8 +592,8 @@ pub struct UiLaunchAtLogin {
     pub needs_approval: bool,
 }
 
-/// Read again whenever it is shown: the system can change it. An error
-/// when the system raised one (macOS: an Objective-C exception, caught).
+/// Read again whenever it is shown: the system can change it. Windows and
+/// Linux: on macOS lib/settings.dart asks the runner (ppvpn/login-item).
 #[frb(sync)]
 pub fn launch_at_login() -> Result<UiLaunchAtLogin, String> {
     crate::autostart::state()
