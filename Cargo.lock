@@ -1744,7 +1744,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -3441,8 +3441,8 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail"
-version = "0.21.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.21.0#aa84fef2a4d6106a2847904f7a0bd4061e109222"
+version = "0.22.0"
+source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.22.0#7513c15139e3c8cddb59952d93a8f8b59ec934f1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3532,7 +3532,7 @@ dependencies = [
 [[package]]
 name = "sail-netstack"
 version = "0.1.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.21.0#aa84fef2a4d6106a2847904f7a0bd4061e109222"
+source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.22.0#7513c15139e3c8cddb59952d93a8f8b59ec934f1"
 dependencies = [
  "foldhash",
 ]
