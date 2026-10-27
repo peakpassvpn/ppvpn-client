@@ -16,6 +16,7 @@ use tokio::time::Instant;
 
 use super::result_codes as rc;
 use super::{icmp, require_online, timeout_of, Cancel, DefaultInterface};
+use crate::config::SocketProtect;
 use crate::error::{codes, Error};
 use crate::event::Event;
 use crate::profile::{Endpoint, Ingress, Profile};
@@ -37,16 +38,33 @@ pub(crate) trait Net: Send + Sync {
 }
 
 /// The operating system's sockets and resolver.
-pub(crate) struct SystemNet;
+#[derive(Default)]
+pub(crate) struct SystemNet {
+    /// A mobile host's socket protection: the probes' sockets stay out of
+    /// its VPN, whose TUN would otherwise answer a TCP handshake itself.
+    protect: Option<SocketProtect>,
+}
+
+impl SystemNet {
+    pub(crate) fn protected(protect: Option<SocketProtect>) -> Self {
+        Self { protect }
+    }
+}
 
 #[async_trait]
 impl Net for SystemNet {
     async fn connect(&self, to: SocketAddr) -> io::Result<()> {
-        tokio::net::TcpStream::connect(to).await.map(drop)
+        match &self.protect {
+            None => tokio::net::TcpStream::connect(to).await.map(drop),
+            Some(protect) => connect_protected(to, protect).await,
+        }
     }
 
     async fn ping(&self, to: IpAddr, timeout: Duration) -> Result<Duration, &'static str> {
-        icmp::ping(to, timeout).await
+        match &self.protect {
+            None => icmp::ping(to, timeout).await,
+            Some(protect) => icmp::ping_protected(to, timeout, protect).await,
+        }
     }
 
     async fn resolve(&self, host: &str) -> io::Result<Vec<IpAddr>> {
@@ -55,6 +73,25 @@ impl Net for SystemNet {
             .map(|a| a.ip())
             .collect())
     }
+}
+
+/// A TCP connect whose socket the host protects before it connects.
+#[cfg(unix)]
+async fn connect_protected(to: SocketAddr, protect: &SocketProtect) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let socket = if to.is_ipv4() {
+        tokio::net::TcpSocket::new_v4()?
+    } else {
+        tokio::net::TcpSocket::new_v6()?
+    };
+    protect.protect(socket.as_raw_fd())?;
+    socket.connect(to).await.map(drop)
+}
+
+/// Only mobile hosts protect sockets.
+#[cfg(not(unix))]
+async fn connect_protected(to: SocketAddr, _protect: &SocketProtect) -> io::Result<()> {
+    tokio::net::TcpStream::connect(to).await.map(drop)
 }
 
 /// Measures every ingress of the nodes `request` names (all when none), at
@@ -302,7 +339,7 @@ mod tests {
             }
             let outcome = match &self.connect {
                 Some(connect) => connect(to),
-                None => SystemNet.connect(to).await,
+                None => SystemNet::default().connect(to).await,
             };
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
             outcome
@@ -791,5 +828,29 @@ mod tests {
     fn _assert_send(p: &Profile, r: &ProbeEntrancesRequest, net: Arc<dyn Net>, c: Cancel) {
         fn send<T: Send>(_: T) {}
         send(async move { probe_entrances(p, r, DefaultInterface::Present, &*net, &c).await });
+    }
+
+    /// A mobile host's protection sees each probe socket before it
+    /// connects, and a socket it refuses never connects.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn protected_probes_go_through_the_host() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let to = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        let net = SystemNet::protected(Some(SocketProtect::new(move |fd| {
+            record.lock().unwrap().push(fd);
+            Ok(())
+        })));
+        net.connect(to).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(seen.lock().unwrap()[0] >= 0);
+
+        let refusing = SystemNet::protected(Some(SocketProtect::new(|_| {
+            Err(io::Error::other("refused"))
+        })));
+        let err = refusing.connect(to).await.unwrap_err();
+        assert_eq!(err.to_string(), "refused");
     }
 }

@@ -67,8 +67,33 @@ impl TunState {
     }
 }
 
-/// What `Engine::new` refuses in a TUN instance's configuration.
+/// What `Engine::new` refuses in a configuration: a TUN instance's bad
+/// dns-local servers, and what only a mobile TUN host gives (its TUN, its
+/// socket protection) anywhere else.
 pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
+    let fd = config.tun.as_ref().and_then(|tun| tun.fd);
+    let mobile_tun = config.role == Role::Tun && crate::mobile::mobile(config.platform);
+    if fd.is_some() && !mobile_tun {
+        return Err(Error::invalid(
+            codes::CORE_OPERATION_FAILED,
+            "tun.fd",
+            "only a TUN instance on iOS or Android takes the host's TUN",
+        ));
+    }
+    if fd.is_some_and(|fd| fd < 0) {
+        return Err(Error::invalid(
+            codes::CORE_OPERATION_FAILED,
+            "tun.fd",
+            "not a file descriptor",
+        ));
+    }
+    if config.socket_protect.is_some() && !mobile_tun {
+        return Err(Error::invalid(
+            codes::CORE_OPERATION_FAILED,
+            "socket_protect",
+            "only a TUN instance on iOS or Android protects its sockets",
+        ));
+    }
     if config.role == Role::Tun {
         local_dns(config)?;
     }
@@ -412,7 +437,7 @@ impl Inner {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     use super::super::lifecycle_tests::{drain, kinds, running, R1};
     use super::*;
@@ -500,6 +525,49 @@ mod tests {
         assert_eq!(inbounds[0].get("auto_route"), None);
         assert_eq!(inbounds[0].get("interface_name"), None);
         assert_eq!(host.asked(), 0);
+        // The tunnel the host built from tun_settings.
+        let settings = crate::tun_settings(Platform::Android).unwrap();
+        assert_eq!(inbounds[0]["address"], json!([settings.ipv4_address]));
+        assert_eq!(inbounds[0]["mtu"], settings.mtu);
+    }
+
+    #[test]
+    fn only_a_mobile_tun_takes_the_hosts_tun_and_protection() {
+        let protect = || crate::SocketProtect::new(|_| Ok(()));
+        let field = |config: EngineConfig| check(&config).unwrap_err().field;
+        for platform in [Platform::Ios, Platform::Android] {
+            let tun = EngineConfig::new(Role::Tun, platform, "/x");
+            check(
+                &tun.clone()
+                    .with_tun(TunConfig::new().with_fd(3))
+                    .with_socket_protect(protect()),
+            )
+            .unwrap();
+            // Without them sail opens the device (lab hosts).
+            check(&tun.clone().with_tun(TunConfig::new())).unwrap();
+            assert_eq!(
+                field(tun.with_tun(TunConfig::new().with_fd(-1))).as_deref(),
+                Some("tun.fd")
+            );
+            let standard = EngineConfig::new(Role::Standard, platform, "/x");
+            assert_eq!(
+                field(standard.clone().with_tun(TunConfig::new().with_fd(3))).as_deref(),
+                Some("tun.fd")
+            );
+            assert_eq!(
+                field(standard.with_socket_protect(protect())).as_deref(),
+                Some("socket_protect")
+            );
+        }
+        let desktop = EngineConfig::new(Role::Tun, Platform::Linux, "/x");
+        assert_eq!(
+            field(desktop.clone().with_tun(TunConfig::new().with_fd(3))).as_deref(),
+            Some("tun.fd")
+        );
+        assert_eq!(
+            field(desktop.with_socket_protect(protect())).as_deref(),
+            Some("socket_protect")
+        );
     }
 
     #[tokio::test]

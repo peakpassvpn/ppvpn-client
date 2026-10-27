@@ -3,6 +3,11 @@
 //! NO_DEFAULT_INTERFACE) and, on a TUN instance, the host IPv6 re-probe
 //! REPROBE_DELAY after the last change of a burst.
 //!
+//! On mobile the host pushes the network (`Engine::set_network_state`):
+//! the engine keeps the last and gives it to sail at each start, and sail
+//! reports it as it reports its own detection, so everything below is the
+//! same on both.
+//!
 //! Transitional (rust-parity, "过渡实现"): the source is sail's network
 //! watch (`Runtime::network_changes`), which keeps the latest change only.
 //! A reader that falls behind sees a jump in `generation`; when the change's
@@ -27,6 +32,8 @@ pub(super) const REPROBE_DELAY: Duration = Duration::from_secs(2);
 #[derive(Default)]
 pub(super) struct NetworkState {
     track: Mutex<Track>,
+    /// The mobile host's last network, as sail's network state JSON.
+    host: Mutex<Option<String>>,
 }
 
 #[derive(Default)]
@@ -47,6 +54,10 @@ struct Track {
 impl NetworkState {
     fn track(&self) -> MutexGuard<'_, Track> {
         self.track.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn host(&self) -> MutexGuard<'_, Option<String>> {
+        self.host.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -89,10 +100,39 @@ fn log_default_interface(event: &str, snapshot: &NetworkSnapshot) {
 }
 
 impl Inner {
+    /// The mobile host's network: kept for the next start, and given to
+    /// the runtime now if it runs. One that stops in between misses it;
+    /// its next start gives it again.
+    pub(super) fn set_host_network(&self, state: &crate::mobile::NetworkState) {
+        let json = serde_json::to_string(state).expect("network state");
+        *self.network.host() = Some(json.clone());
+        let running = {
+            let live = self.live();
+            live.running && !live.restarting
+        };
+        if running {
+            if let Err(e) = self.runtime.set_network_state(&json) {
+                tracing::warn!(error = %e, "host network not taken");
+            }
+        }
+    }
+
+    /// At each start of the runtime, before its network is read: the mobile
+    /// host's network, which sail goes by from now on in this run.
+    fn give_host_network(&self) {
+        let Some(json) = self.network.host().clone() else {
+            return;
+        };
+        if let Err(e) = self.runtime.set_network_state(&json) {
+            tracing::warn!(error = %e, "host network not taken");
+        }
+    }
+
     /// After a start: the network as sail has it now. Not a change, so no
     /// NetworkChanged; the offline state follows it. A change this run has
     /// already reported is newer than the snapshot and stays.
     pub(super) fn network_started(&self) {
+        self.give_host_network();
         let mut track = self.network.track();
         if track.generation > 0 {
             return;

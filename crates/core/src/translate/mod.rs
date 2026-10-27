@@ -36,7 +36,7 @@ mod tun;
 #[allow(unused_imports)] // the Engine's, once it is wired to the runtime
 pub(crate) use tun::{
     interface_name, local_dns_servers, LocalDns, Tun, DNS_LOCAL_TAG, IPROUTE2_RULE_INDEX,
-    IPROUTE2_TABLE_INDEX, TUN_INBOUND_TAG,
+    IPROUTE2_TABLE_INDEX, TUN_DNS_ADDRESS, TUN_INBOUND_TAG, TUN_INET4_ADDRESS, TUN_MTU,
 };
 
 /// The selector over every node, in profile order.

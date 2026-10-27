@@ -8,14 +8,14 @@
 
 - **形态**：`ppvpn-core` 是 Rust 库，宿主从源码编译并直接链接它，在自己的进程里运行。没有 IPC，也没有会话密钥。宿主之间的进程边界由宿主自己负责，例如 desktop 的 client ↔ service IPC。
 - **版本**：遵循 crate 的 semver。1.0 之前，破坏性变更升中间位版本号（0.x → 0.(x+1)），这和 Sail 的约定一致。状态、事件和错误的枚举在同一个版本内**只增加、不修改**，并且都标了 `#[non_exhaustive]`，所以宿主遇到不认识的取值必须能容忍。
-- **能映射到 FFI**：将来的 `ppvpn-core-ffi`（C ABI 或 UniFFI）要能直接包装本接口，所以公开 API 遵守下面几条：
+- **能映射到 FFI**：本接口要能直接包装成 C ABI 或 JNI（移动端的隧道宿主就是这样包装的，第 11 节），所以公开 API 遵守下面几条：
   - 公开类型都是值类型，能用 serde 序列化成 JSON，字段名用 snake_case；
-  - 公开接口不暴露泛型、生命周期参数和 trait 对象，句柄是不透明的 `Engine`；
+  - 公开接口不暴露泛型、生命周期参数和 trait 对象，句柄是不透明的 `Engine`。唯一的例外是移动端的 socket 保护（`SocketProtect`，第 11 节）：它是宿主给的回调，fd 没法做成值，所以不参与序列化；
   - 事件按种类订阅，每种一个有界通道（见第 6 节），不用回调闭包；
   - Profile 以原始 JSON 字节传入，宿主不解析它；
   - 异步方法是普通的 `async fn`，FFI 层自己决定是用回调还是阻塞包装。
 - **公开面**：只有 `Engine` 和本文列出的值类型（在 crate 根导出）。profile 解析、dns-local 等实现都是 crate 内部的，宿主看不到它们，改动它们也不算破坏性变更。`ppvpn_core::internal` 只给本 crate 的测试和 `ppvpn-core-lab` 用，**不稳定，宿主不得使用**，任何版本都可能改动它而不另行通知。
-- **语义贴近 Core API v1**：方法和 Core API v1 一一对应（见第 12 节对照表），错误码沿用现有的字符串。这样宿主迁移时，基本只需要把 IPC 调用换成函数调用。
+- **语义贴近 Core API v1**：方法和 Core API v1 一一对应（见第 13 节对照表），错误码沿用现有的字符串。这样宿主迁移时，基本只需要把 IPC 调用换成函数调用。
 
 ## 2. 实例与拓扑
 
@@ -43,12 +43,14 @@ CLI 只运行标准实例，而且不开 7891。
 ```rust
 pub struct EngineConfig {
     pub role: Role,                         // Standard | Tun
-    pub platform: Platform,                 // Linux | Macos | Windows | Ios | Android（移动端只影响 TUN 配置，FFI 还没有，见 mobile.md）
+    pub platform: Platform,                 // Linux | Macos | Windows | Ios | Android（移动端见第 11 节）
     pub state_dir: PathBuf,                 // 私有目录：规则集缓存、本地代理状态
     pub local_proxy: Option<LocalProxyConfig>, // 仅 Standard：listen（默认 127.0.0.1）、preferred_port（默认 7890；0 = 任意空闲端口，供测试）
     pub system_proxy: bool,                 // 仅 Standard：是否允许 set_system_proxy_listener（CLI 设为 false）
-    pub tun: Option<TunConfig>,             // 仅 Tun：local_dns_servers 覆盖（等同 --local-dns-servers）；Windows 上 wintun_dll 路径
+    pub tun: Option<TunConfig>,             // 仅 Tun：local_dns_servers 覆盖（等同 --local-dns-servers）；Windows 上 wintun_dll 路径；移动端 fd（宿主打开的 TUN，第 11 节）
     pub log: LogConfig,                     // 级别（info/debug）和日志行的接收端，见第 10 节
+    pub max_connections: Option<u32>,       // Sail 的并发会话上限（inbound.max_connections）；None 用 profile 的，0 不限（第 11 节）
+    pub socket_protect: Option<SocketProtect>, // 仅移动端的 Tun：出站 socket 的保护回调，不序列化（第 11 节）
 }
 
 impl Engine {
@@ -263,6 +265,14 @@ pub async fn wake(&self);   // 系统已唤醒
 - 两者都不返回错误。Core API v1 路径是 `/v1/sleep`、`/v1/wake`（请求体为空对象，回 `{}`）。
 - 实例重建（`shutdown` 后 `new`）或重新 `start` 之后，新的运行没收到过 `sleep`，`wake` 对它什么都不做，Sail 仍自己检测休眠。
 
+### 4.8 网络状态（仅移动端）
+
+```rust
+pub fn set_network_state(&self, state: NetworkState) -> Result<(), Error>;
+```
+
+移动端的宿主推送当前网络，语义见第 11 节。桌面平台上返回 `CORE_OPERATION_FAILED`。实例已 `shutdown` 或 `Fatal` 时，和其他生命周期调用一样返回错误。它不经过 Core API v1：由隧道宿主在同一进程里直接调用。
+
 ## 5. 状态
 
 ```rust
@@ -403,7 +413,7 @@ pub struct Error {
   - `STATE_DIR_IN_USE`：retryable=false，`state_dir` 已被另一个实例使用；
   - `PERMISSION_DENIED`：retryable=false，Tun 实例的权限不足（见第 2 节）；
   - `WINTUN_UNAVAILABLE`：retryable=false，找不到或加载不了宿主传入的 wintun.dll；
-  - `TUN_NAME_TAKEN`：`start` 时 TUN 网卡名被其他程序占用（第 11 节）。message 里有被占用的名字；名字由 Sail 选时，还有它试过的次数。名字由我们配置时（Linux `ppvpn0`、Windows `PPVPN`）retryable=false，多半是另一个 ppvpn-core 正在运行；名字由 Sail 选时（macOS）retryable=true，再次 `start` 可能成功。和 `TUN_INSTANCE_EXISTS` 不同：后者是同一进程里重复创建 Tun 实例，在 `new` 时返回；
+  - `TUN_NAME_TAKEN`：`start` 时 TUN 网卡名被其他程序占用（第 12 节）。message 里有被占用的名字；名字由 Sail 选时，还有它试过的次数。名字由我们配置时（Linux `ppvpn0`、Windows `PPVPN`）retryable=false，多半是另一个 ppvpn-core 正在运行；名字由 Sail 选时（macOS）retryable=true，再次 `start` 可能成功。和 `TUN_INSTANCE_EXISTS` 不同：后者是同一进程里重复创建 Tun 实例，在 `new` 时返回；
   - `PINS_INVALID`：retryable=false，`pins` 里同一个节点出现多次，field=`pins[i].node_id`；
   - `PROFILE_MALFORMED`：retryable=false，Profile 不是合法 JSON 或者字段类型不对（D5）message 只说错误类别（`Syntax`、`Data`、`Eof`、`Io`），语法错误再加行列号，不带 Profile 里的任何值。
 - **`CORE_OPERATION_FAILED`**：只用于真正的内部错误，原因写进日志。Go 版有几种本该是结构化错误的情况会折叠成这个码，Rust 版改成具体的码（D1、D2）。
@@ -471,7 +481,42 @@ pub struct Error {
 - **级别**：默认 info；debug 级别会记录每个连接和每次 DNS 查询（含域名），只在排障时开启。`ppvpn-core` 的行由引擎按 `LogConfig.level` 过滤，Sail 的行由 Sail 按同一级别过滤。
 - **脱敏**：任何级别都不记录凭据（本地代理的密码、节点的密钥和密码）。本地代理状态文件损坏时，日志只写解析错误的类别和位置，不写文件内容。
 
-## 11. 内部结构（不是契约，供评审参考）
+## 11. 移动端宿主
+
+iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android 是 `VpnService`，iOS 是 `NEPacketTunnelProvider`。持有引擎的是一个小的 Rust 隧道宿主，界面进程经 Unix socket 说 Core API v1（#448）。本节是隧道宿主和引擎之间的约定。
+
+- **实例**：一个 `Role::Tun` 实例，`platform` 为 `Ios` 或 `Android`，没有本地代理。
+- **隧道由宿主建立**：
+  - 先调 `ppvpn_core::tun_settings(platform)`，得到 `TunSettings { mtu, ipv4_address, ipv4_routes, dns_servers }`，再照着它建隧道：
+    - Android：用 `VpnService.Builder` 的 `setMtu`、`addAddress`、`addRoute`、`addDnsServer`，然后 `establish()`；
+    - iOS：在 `NEPacketTunnelNetworkSettings` 里设 IPv4 地址、`includedRoutes`、DNS 和 MTU，然后取 utun 的 fd。
+
+    桌面上这个函数返回 `None`。引擎生成的 TUN 配置用的是同一组值，所以两边不会对不上。
+  - 隧道只有 IPv4，路由是全部流量。私网目的地按路由规则直连，经保护过的 socket（Android）或扩展自己的 socket（iOS）出去，不靠路由排除。DNS 地址在隧道网段内，引擎劫持所有查询，宿主不另设解析器。
+  - 建好以后，把 fd 放进 `TunConfig::with_fd(fd)`。
+    - 每次启动 Sail（`start`、完整重启、热切换失败后的回退），引擎都交给 Sail 一个 `dup` 的副本，Sail 停止时关闭副本。
+    - 原 fd 引擎**不关**，由宿主在 `shutdown` 返回后关闭。所以引擎重启时不需要重建隧道，系统的 VPN 图标也不会闪。
+  - 不给 fd 时，Sail 自己打开设备。只有有权限的 Linux 能这样运行（lab 的 `ne-mem`）；在手机上这样做，`start` 会失败。
+  - `tun.fd` 只有移动端的 Tun 实例接受。其他组合以及负数，`new` 都返回 `CORE_OPERATION_FAILED`（field=`tun.fd`）。
+- **socket 保护（Android）**：用 `EngineConfig::with_socket_protect(SocketProtect::new(|fd| ...))` 设置，宿主在回调里调 `VpnService.protect(fd)`。
+  - **覆盖范围**：引擎的每个出站 socket 连接前都先经过它：Sail 的出站（节点、直连、DNS 上游、规则集下载），以及入口探测的 TCP 和 ICMP。不保护的话，探测会进隧道，TUN 会自己应答 TCP 握手。
+  - **失败与线程**：回调返回错误时，这次拨号或探测失败。回调在 Sail 或探测的线程上执行，里面不能再调用实例。
+  - **适用平台**：iOS 不需要，因为扩展自己的流量本来就不进隧道。只有移动端的 Tun 实例接受，其他情况 `new` 返回 `CORE_OPERATION_FAILED`（field=`socket_protect`）。
+  - **不序列化**：它是 `#[serde(skip)]` 字段，由 FFI 层直接设置。
+- **网络状态**：宿主监听 `ConnectivityManager` 或 `NWPathMonitor`，在 `start` 之前和每次变化时调 `Engine::set_network_state(NetworkState)`；断网时传 `NetworkState::offline()`。
+  - **格式**：`NetworkState` 的字段是 `interface`、`type`（wifi、cellular、ethernet、other）、`addresses`、`gateway`、`expensive`、`constrained`，序列化后就是 Sail 的网络状态 JSON。`interface` 为空表示断网。
+  - **传递**：引擎保存最后一次的状态，每次启动 Sail 时先交给它；运行中调用时立即交给 Sail。
+  - **之后的行为**：从此 Sail 按宿主的说法判断网络，不再自己探测。变化照常经 `NetworkChanged` 事件和离线状态（`Degraded{NoDefaultInterface}`）报告，和桌面一样。
+  - **桌面**：调用返回 `CORE_OPERATION_FAILED`，因为桌面上 Sail 自己的监视器是唯一来源（第 12 节）。
+- **内存**：
+  - 移动端的实例用 Sail 的 mobile profile：单线程，小缓冲和小窗口，`inbound.max_connections` 为 512。`sail::embed` 默认是 desktop profile，所以由引擎按 `platform` 设置。
+  - `EngineConfig::with_max_connections(n)` 替换 profile 的上限，0 表示不限。**iOS 网络扩展设 128**：系统在 50 MiB 时结束扩展进程，#388 在这组参数下测得各场景峰值 28.8 MiB。Android 用 profile 的 512。
+  - 没有内存告警接口，因为 Sail 没有收缩缓存的手段。内存上限靠 profile 加并发上限保证。
+- **休眠**：iOS 的 `sleep()` / `wake()` 照转 `Engine::sleep` / `Engine::wake`（第 4.7 节）。
+- **Profile**：经 `apply` 传入，只放在内存里（`docs/mobile.md`）。
+- **健康检查和恢复**：由隧道宿主负责，因为界面进程在后台会被挂起。规则同 #438，见 #448。
+
+## 12. 内部结构（不是契约，供评审参考）
 
 - **运行时**：启停、原地 reload、事件、日志和经指定出站拨号，都在一个内部 trait 后面实现。Sail 的嵌入式 API（`sail::embed`，E1）就绪后接到这个 trait 上，在那之前不依赖 Sail 的内部模块。
 - **配置检查**：Profile 到 Sail 配置（sing-box JSON）的翻译是纯函数，只通过 `translate::check` 一处调用 Sail 的配置检查。E1 之前用 Sail 内部的检查函数，之后换成 `sail::embed::check`。
@@ -481,14 +526,14 @@ pub struct Error {
   - `local_dns_servers` 每项是 IP、`IP:port` 或 `[IPv6]:port`，默认端口 53；IPv6 可以带 zone（网卡名或编号），如 `fe80::1%en0`、`[fe80::1%en0]:53`。其他写法（域名、端口 0、未指定地址、IPv4 带 zone、`[IPv6%zone]` 不带端口）让 `new` 失败：`CORE_OPERATION_FAILED`，field=`tun.local_dns_servers`。隧道网段内的地址（宿主残留的旧系统 DNS）被去掉，其余按原顺序使用；一个都不剩时与没给一样，读默认网卡。带 zone 的链路本地服务器只在 zone 是当前默认网卡时使用（按该网卡的编号发出），别的网卡的被跳过。移动端没有自己的 dns-local，服务器直接交给 Sail：Sail 的 DNS 服务器地址不接受 zone，带 zone 的项被跳过，不剩时用 Sail 的 `local`。
   - Sail 的 dns-local 服务器渲染成指向这个监听的 **tcp** 服务器。Sail 的 udp 客户端遇到截断应答不会改走 TCP，用 tcp 能拿到完整应答。
   - 服务器列表变化不需要 reload Sail；网卡变化的触发来自 Sail 的网络事件（只用 Sail 一个网卡监视器），监听收到后让缓存失效。
-  - Engine 不向 Sail 推送网络状态（`set_network_state`），Sail 自己的监视器是唯一来源。将来移动端经 FFI 推送网络状态时需要重新评估：Sail 目前在"宿主推送"加 `auto_detect_interface` 时，两边都会宣告网络变化（#214）。
+  - 桌面上 Engine 不向 Sail 推送网络状态，Sail 自己的监视器是唯一来源。移动端由宿主推送（`Engine::set_network_state`，第 11 节）。Sail 在"宿主推送"加 `auto_detect_interface` 时两边都会宣告网络变化（#214），移动端的 TUN 不设 `auto_detect_interface`，所以不会这样。
   - 上游查询优先经 Runtime 的 `dial_udp`/`dial_tcp` 走 direct 出站，由 Sail 的默认拨号器绑定物理网卡，不进 TUN。
 - **TUN 网卡名**：Linux 固定为 `ppvpn0`，Windows 固定为 `PPVPN`（Wintun 适配器名，按名字复用；适配器 GUID 由名字确定生成，不会每次变化）。名字要显式交给 Sail，原因是 Sail 只有在名字显式给出时，才会把这块网卡当作自己的：选默认网卡和过滤 DNS 服务器时都要排除它；名字也便于日志和抓包。
   - macOS 不写名字，由 Sail 选：取比现有最大的 `utunN` 大一的编号，并通过 embed 报告实际拿到的名字（`tun_names()`），Runtime 读出来用于日志和状态。选好的名字在打开前被别的程序抢走时，Sail 换下一个空闲的名字重试，最多试 3 个；仍然失败时 `start` 返回 `TUN_NAME_TAKEN`（retryable=true）。排除隧道网段由 Sail 的这一行为保证，再加上 `ppvpn-core` 自己的 dns-local 的隧道地址过滤。
   - Linux 和 Windows 的名字是配置的，被占用时不换名，`start` 直接返回 `TUN_NAME_TAKEN`（retryable=false）。
   - 宿主不依赖这个名字：Desktop 靠地址、规则优先级和表号识别自己的 TUN。
 
-## 12. 与 Core API v1 的对照
+## 13. 与 Core API v1 的对照
 
 | Core API v1 | Rust `ppvpn-core` |
 | --- | --- |
@@ -506,16 +551,17 @@ pub struct Error {
 | `set-system-proxy` / `get-system-proxy-endpoints` | `set_system_proxy_listener()` / `status().system_proxy` |
 | `get-traffic` / `get-connections` | `traffic()` / `connections()` |
 | `watch-events` | `subscribe(kinds)` |
+| （无） | `set_network_state()`：移动端的隧道宿主直接调用（第 11 节） |
 | 会话密钥、`X-Core-API-Version` | 不需要（进程内调用） |
 
-## 13. 已定的问题（Core 第一轮审阅）
+## 14. 已定的问题（Core 第一轮审阅）
 
 1. **cleared_pins 和 `NodeIngressPinCleared` 事件都保留**：内容相同，宿主幂等处理（第 4.1 节）。
 2. **去掉 `reload`**：规则集的刷新和恢复由引擎内部完成，并发出 `RuleSetChanged`（第 4.1 节）。
 3. **"流量是否进了 TUN"**：路由和规则层面的完整性归引擎，端到端的可达性归宿主，只用于提示用户（第 9 节）。
 4. **实例数量**：只限制 Tun 实例（`TUN_INSTANCE_EXISTS`），Standard 实例不限（第 3 节）。
 
-## 14. 评审结论（Desktop、CLI 第一轮）
+## 15. 评审结论（Desktop、CLI 第一轮）
 
 已写进正文的：
 
