@@ -280,6 +280,49 @@ class Tokens {
   static const logPadding = EdgeInsets.fromLTRB(14, 10, 14, 10);
   static const logFooterHeight = 28.0;
 
+  // Phone (#448 step 5): the signed-off table's phone column (#387), used
+  // below [phoneBreakpoint] wide; wider windows keep the desktop layout.
+  static const phoneBreakpoint = 600.0;
+  static const phonePadding = 16.0;
+
+  /// The top bar and the tab bar, each plus the safe area.
+  static const phoneTopBar = 56.0;
+  static const phoneTabBar = 50.0;
+
+  /// Touch targets, at least 44.
+  static const phoneControl = 44.0;
+
+  /// The connection card's main button.
+  static const phoneMainButton = 52.0;
+  static const phoneRow = 50.0;
+  static const phoneRowTwoLines = 62.0;
+  static const phoneCardRadius = 16.0;
+  static const phoneConnectionRadius = 28.0;
+  static const phoneAccountRadius = 18.0;
+  static const phoneControlRadius = 12.0;
+  static const phoneSwitchSize = Size(51, 31);
+  static const phoneFlagSize = Size(28, 21);
+
+  // Motion (#401, decided on 2026-10-24). Durations go through [motion],
+  // which makes them 0 when the system asks for reduced motion.
+
+  /// Hover and press fills, the switch, segmented selection.
+  static const motionFast = Duration(milliseconds: 120);
+  static const motionFastCurve = Curves.easeOut;
+
+  /// Colour and tone changes, content swaps (a fade).
+  static const motionBase = Duration(milliseconds: 200);
+  static const motionCurve = Curves.easeOutCubic;
+
+  /// The page switch: the new page fades in rising [pageRise]; the old one
+  /// fades out over [motionFast].
+  static const motionPage = Duration(milliseconds: 220);
+  static const pageRise = 6.0;
+
+  /// [duration], or 0 when reduced motion is on.
+  static Duration motion(BuildContext context, Duration duration) =>
+      MediaQuery.disableAnimationsOf(context) ? Duration.zero : duration;
+
   /// The 「正在跟随末尾」 dot: 7 across, breathing 1 ↔ 0.35 in 1.6 s.
   static const pulseDotSize = 7.0;
   static const pulseHalf = Duration(milliseconds: 800);
@@ -365,6 +408,14 @@ class Tokens {
   /// A message's title in the detail, 17/22 · 700.
   TextStyle get detailTitle => _text(17, 22, FontWeight.w700, t1);
 
+  /// Phone: the page title 28/34 · 700, body 16/22, body strong, notes
+  /// 13/18, a settings row's title 17.
+  TextStyle get phoneTitle => _text(28, 34, FontWeight.w700, t1, tracking: -0.02);
+  TextStyle get phoneBody => _text(16, 22, FontWeight.w400, t1);
+  TextStyle get phoneBodyStrong => _text(16, 22, FontWeight.w600, t1);
+  TextStyle get phoneNote => _text(13, 18, FontWeight.w400, t3);
+  TextStyle get phoneRowTitle => _text(17, 22, FontWeight.w400, t1);
+
   /// Labels and badges, 11/16 · 600.
   TextStyle get label => _text(11, 16, FontWeight.w600, t1);
 
@@ -432,6 +483,29 @@ class Tokens {
     border: Border.all(color: hair),
     boxShadow: cardShadow,
   );
+}
+
+/// Phone values that are not the desktop's.
+extension PhoneTokens on Tokens {
+  /// Inset fields on the phone: a shade darker in light.
+  Color get phoneSunk => brightness == Brightness.light ? const Color(0xFFECEFF3) : sunk;
+
+  /// A phone card: [radius] (16, the connection card 28, the account card
+  /// 18), the hair outline; in light the card shadow with its second layer
+  /// at 0 4px 14px, in dark the desktop's [Tokens.cardShadow].
+  BoxDecoration phoneCardDecoration({double radius = Tokens.phoneCardRadius, Color? color, Gradient? gradient}) =>
+      BoxDecoration(
+        color: gradient == null ? (color ?? card) : null,
+        gradient: gradient,
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: hair),
+        boxShadow: brightness == Brightness.light
+            ? const [
+                BoxShadow(color: Color(0x0A0F172A), offset: Offset(0, 1), blurRadius: 2),
+                BoxShadow(color: Color(0x0D0F172A), offset: Offset(0, 4), blurRadius: 14),
+              ]
+            : cardShadow,
+      );
 }
 
 /// A card ([Tokens.cardDecoration]) around [child].

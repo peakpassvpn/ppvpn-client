@@ -89,8 +89,8 @@ class Tray {
   final void Function() onOpen;
   final Future<void> Function() onQuit;
 
-  /// Shows 「检查更新…」; null where the app does not update itself (in-app
-  /// update is #401 step 5).
+  /// Shows 「检查更新…」; null where the app does not install updates itself
+  /// (Linux, builds without a feed: updates.dart).
   final void Function()? onCheckForUpdates;
 
   TrayIcon? _icon;

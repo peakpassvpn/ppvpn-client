@@ -1,5 +1,5 @@
 #!/bin/sh
-# postinstall of PPVPN-<version>-<platform>.pkg (apps/macos/scripts/package-dmg.sh).
+# postinstall of PPVPN-<version>-<platform>.pkg (apps/macos/scripts/package-app.sh).
 # Installer leaves /Applications/PPVPN.app owned by root; Sparkle could then
 # only update it behind an administrator prompt. Hand the bundle to the user
 # at the console, which is what dragging it from the DMG gives. Nothing else:

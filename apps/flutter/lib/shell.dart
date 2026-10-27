@@ -16,6 +16,7 @@ import 'package:forui/forui.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'mobile.dart';
 import 'pages/logs.dart';
 import 'pages/messages.dart';
 import 'pages/nodes.dart';
@@ -148,13 +149,16 @@ class _ShellState extends State<Shell> {
                   ),
                 ),
                 Expanded(
-                  child: switch (_page) {
-                    _Page.overview => OverviewPage(app: widget.app),
-                    _Page.nodes => NodesPage(app: widget.app),
-                    _Page.logs => const LogsPage(),
-                    _Page.messages => MessagesPage(app: widget.app),
-                    _Page.settings => SettingsPage(app: widget.app),
-                  },
+                  child: _PageSwitch(
+                    page: _page,
+                    child: switch (_page) {
+                      _Page.overview => OverviewPage(app: widget.app),
+                      _Page.nodes => NodesPage(app: widget.app),
+                      _Page.logs => const LogsPage(),
+                      _Page.messages => MessagesPage(app: widget.app),
+                      _Page.settings => SettingsPage(app: widget.app),
+                    },
+                  ),
                 ),
               ],
             ),
@@ -165,11 +169,42 @@ class _ShellState extends State<Shell> {
   );
 }
 
+/// The page switch: the new page fades in over [Tokens.motionPage] rising
+/// [Tokens.pageRise]; the old one fades out over [Tokens.motionFast].
+class _PageSwitch extends StatelessWidget {
+  const _PageSwitch({required this.page, required this.child});
+
+  final _Page page;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: Tokens.motion(context, Tokens.motionPage),
+    reverseDuration: Tokens.motion(context, Tokens.motionFast),
+    switchInCurve: Tokens.motionCurve,
+    switchOutCurve: Tokens.motionFastCurve,
+    layoutBuilder: (current, previous) => Stack(
+      fit: StackFit.expand,
+      children: [...previous, if (current != null) current],
+    ),
+    transitionBuilder: (child, animation) => AnimatedBuilder(
+      animation: animation,
+      builder: (context, child) => Transform.translate(
+        // Only the page coming in rises.
+        offset: Offset(0, animation.status == AnimationStatus.reverse ? 0 : (1 - animation.value) * Tokens.pageRise),
+        child: Opacity(opacity: animation.value, child: child),
+      ),
+      child: child,
+    ),
+    child: KeyedSubtree(key: ValueKey(page), child: child),
+  );
+}
+
 class _Drag extends StatelessWidget {
   const _Drag();
 
   @override
-  Widget build(BuildContext context) => const DragToMoveArea(child: SizedBox.expand());
+  Widget build(BuildContext context) => mobile ? const SizedBox.expand() : const DragToMoveArea(child: SizedBox.expand());
 }
 
 /// The content header (52): title, status pill, bell; the caption buttons
@@ -184,25 +219,29 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final caps = !Platform.isMacOS;
+    final caps = Platform.isWindows || Platform.isLinux;
     return SizedBox(
       height: Tokens.topBarHeight,
       child: Stack(
         children: [
           const Positioned.fill(child: _Drag()),
-          Padding(
-            padding: EdgeInsets.only(left: Tokens.pageInset, right: caps ? 0 : Tokens.pageInset),
-            child: Row(
-              children: [
-                Expanded(
-                  child: title == null
-                      ? const SizedBox()
-                      : Semantics(header: true, child: Text(title!, style: t.pageTitle)),
-                ),
-                if (status != null) ...[status!, const SizedBox(width: 12)],
-                ?bell,
-                if (caps) ...[const SizedBox(width: 8), const _CaptionButtons()],
-              ],
+          // Filled: the row is the bar's height and centres the title, the
+          // pill and the bell in it (not at the window's top edge).
+          Positioned.fill(
+            child: Padding(
+              padding: EdgeInsets.only(left: Tokens.pageInset, right: caps ? 0 : Tokens.pageInset),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: title == null
+                        ? const SizedBox()
+                        : Semantics(header: true, child: Text(title!, style: t.pageTitle)),
+                  ),
+                  if (status != null) ...[status!, const SizedBox(width: 12)],
+                  ?bell,
+                  if (caps) ...[const SizedBox(width: 8), const _CaptionButtons()],
+                ],
+              ),
             ),
           ),
         ],
@@ -221,9 +260,17 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final tone = statusColor(t, snapshot);
     final node = app.nodeById(snapshot.selectedNodeId);
     final text = node == null ? statusTitle(snapshot) : '${statusTitle(snapshot)} · ${nodeTitle(node)}';
+    return TweenAnimationBuilder<Color?>(
+      tween: ColorTween(end: statusColor(t, snapshot)),
+      duration: Tokens.motion(context, Tokens.motionBase),
+      curve: Tokens.motionCurve,
+      builder: (context, tone, _) => _pill(t, tone!, text),
+    );
+  }
+
+  Widget _pill(Tokens t, Color tone, String text) {
     return Container(
       height: 24,
       constraints: const BoxConstraints(maxWidth: 260),
@@ -280,7 +327,9 @@ class _Bell extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             Positioned.fill(
-              child: DecoratedBox(
+              child: AnimatedContainer(
+                duration: Tokens.motion(context, Tokens.motionFast),
+                curve: Tokens.motionFastCurve,
                 decoration: BoxDecoration(
                   color: selected || hovered ? t.accentSoft : null,
                   borderRadius: BorderRadius.circular(Tokens.controlRadius),
@@ -352,7 +401,9 @@ class _CaptionButtonsState extends State<_CaptionButtons> with WindowListener {
       onPress: onPress,
       label: label,
       radius: 0,
-      builder: (context, hovered) => Container(
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionFast),
+        curve: Tokens.motionFastCurve,
         width: Tokens.captionButtonWidth,
         height: Tokens.topBarHeight,
         color: hovered ? (close ? const Color(0xFFC42B1C) : t.hair) : null,
@@ -456,7 +507,9 @@ class _NavItem extends StatelessWidget {
       onPress: onPress,
       selected: selected,
       label: label,
-      builder: (context, hovered) => Container(
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionFast),
+        curve: Tokens.motionFastCurve,
         height: Tokens.navItemHeight,
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
@@ -478,7 +531,9 @@ class _NavItem extends StatelessWidget {
 }
 
 /// Avatar (30), team name and plan, the settings gear; the card opens the
-/// account menu (sign out).
+/// account menu: the teams to switch between (as the native apps' account
+/// menu: the current one checked, the personal space as 个人, a disabled
+/// team greyed with 已停用), then sign out.
 class _AccountCard extends StatelessWidget {
   const _AccountCard({required this.app, required this.snapshot, required this.onSettings});
 
@@ -501,55 +556,80 @@ class _AccountCard extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: FPopoverMenu(
-              menuAnchor: Alignment.bottomLeft,
-              childAnchor: Alignment.topLeft,
-              menu: [
-                FItemGroup(
-                  children: [FItem(title: Text(S.current('signOut')), onPress: app.signOut)],
-                ),
-              ],
-              builder: (context, controller, _) => Pressable(
-                key: const ValueKey('account'),
-                onPress: controller.toggle,
-                label: S.current('account'),
-                builder: (context, hovered) => Row(
-                  children: [
-                    Container(
-                      width: 30,
-                      height: 30,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: t.avatar,
+            child: ValueListenableBuilder(
+              valueListenable: app.teams,
+              builder: (context, teams, _) => FPopoverMenu(
+                menuAnchor: Alignment.bottomLeft,
+                childAnchor: Alignment.topLeft,
+                menu: [
+                  if (teams.isNotEmpty)
+                    FItemGroup(
+                      children: [
+                        for (final team in teams)
+                          FItem(
+                            key: ValueKey('team-${team.id}'),
+                            selected: team.id == snapshot.teamId,
+                            enabled: team.active,
+                            prefix: Icon(FLucideIcons.check, size: 14, color: team.id == snapshot.teamId ? t.accent : const Color(0x00000000)),
+                            title: Text(
+                              team.personal ? S.current('personal') : team.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            suffix: team.active ? null : Text(S.current('teamDisabled'), style: t.note),
+                            onPress: team.id == snapshot.teamId ? null : () => app.switchTeam(team.id),
+                          ),
+                      ],
+                    ),
+                  FItemGroup(
+                    children: [FItem(title: Text(S.current('signOut')), onPress: app.signOut)],
+                  ),
+                ],
+                builder: (context, controller, _) => Pressable(
+                  key: const ValueKey('account'),
+                  onPress: () {
+                    app.refreshTeams();
+                    controller.toggle();
+                  },
+                  label: S.current('account'),
+                  builder: (context, hovered) => Row(
+                    children: [
+                      Container(
+                        width: 30,
+                        height: 30,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: t.avatar,
+                          ),
+                        ),
+                        child: Text(initial, style: t.label.copyWith(fontSize: 13, fontWeight: FontWeight.w700, color: t.onAvatar)),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              snapshot.teamName ?? name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: t.sectionTitle.copyWith(height: 17 / 13),
+                            ),
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: t.note.copyWith(fontSize: 11, height: 14 / 11),
+                            ),
+                          ],
                         ),
                       ),
-                      child: Text(initial, style: t.label.copyWith(fontSize: 13, fontWeight: FontWeight.w700, color: t.onAvatar)),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            snapshot.teamName ?? name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: t.sectionTitle.copyWith(height: 17 / 13),
-                          ),
-                          Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: t.note.copyWith(fontSize: 11, height: 14 / 11),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -38,6 +38,8 @@ mod sysproxy;
 mod test_backend;
 mod testmode;
 mod traffic;
+mod tunnel;
+mod tunnel_mode;
 
 pub use detect::ConflictReport;
 pub use errors::{ClientError, ClientErrorInfo, ErrorCode};
@@ -257,7 +259,10 @@ pub struct ConnectionState {
     /// Enhanced uses every phase; Compatible only Off / Connecting / On /
     /// Disconnecting / Error.
     pub phase: ConnectionPhase,
-    /// Why the phase is `Error`, `Contended` or `Reconnecting`.
+    /// Why the phase is `Error`, `Contended` or `Reconnecting`. While
+    /// enhanced mode is `On`, a problem that leaves it on:
+    /// `ConnectHealthCheckFailed` / `HEALTH_API_UNREACHABLE`, the PPVPN API
+    /// unreachable on the direct path while the tunnel works.
     pub reason: Option<ClientErrorInfo>,
     pub retryable: bool,
     /// Enhanced only: another session of this OS user owns the connection
@@ -581,6 +586,9 @@ pub struct Client {
     standard: standard::StandardCore,
     /// Enhanced mode through the privileged service.
     enhanced: enhanced::Enhanced,
+    /// Phones: tunnel mode in place of enhanced mode (#448), see
+    /// [`cores::PHONE`].
+    tunnel: Option<tunnel_mode::TunnelMode>,
     /// Compatible mode: OS system proxy on the standard core's endpoint.
     compat: compat::Compat,
     /// Rules / global, shared with both cores (`snapshot.routing_mode`).
@@ -988,7 +996,12 @@ impl Client {
         );
         let snapshot = ClientSnapshot {
             selected_node_id: session::load_selection(&config.data_dir),
-            connection_mode: connection::load_mode(&config.data_dir),
+            // Phones have one mode, the system VPN, folded as enhanced.
+            connection_mode: if cores::PHONE {
+                ConnectionMode::Enhanced
+            } else {
+                connection::load_mode(&config.data_dir)
+            },
             routing_mode: connection::load_routing_mode(&config.data_dir),
             ingress_pins: ingress::records(&ingress::load(&config.data_dir)),
             ..ClientSnapshot::default()
@@ -1006,6 +1019,7 @@ impl Client {
                 ingress_pins.clone(),
                 this,
             );
+            let tunnel = cores::build_tunnel(&config, routing.clone(), ingress_pins.clone(), this);
             Self {
                 config,
                 platform,
@@ -1018,6 +1032,7 @@ impl Client {
                 session: Mutex::new(session::SessionState::default()),
                 standard,
                 enhanced,
+                tunnel,
                 compat,
                 routing,
                 ingress_pins,

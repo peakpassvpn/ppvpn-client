@@ -4,11 +4,14 @@
 // it; the app stays in the tray until "Quit". `--background` (the login
 // entry on Windows and Linux, rust/src/autostart.rs) starts it in the tray
 // with no window. One instance runs: another launch, or a click on a
-// notification, shows its window (activation.dart).
+// notification, shows its window (activation.dart); the Windows installer
+// has it quit as the tray's Quit does. Updates: updates.dart. On Android
+// and iOS (#448) the app is its one screen: no window, tray or updater.
 
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:forui/forui.dart';
@@ -18,6 +21,8 @@ import 'activation.dart';
 import 'app_state.dart';
 import 'bench.dart';
 import 'e2e.dart';
+import 'mobile.dart';
+import 'phone/phone.dart';
 import 'src/rust/api.dart' as rust;
 import 'sample.dart';
 import 'settings.dart';
@@ -26,14 +31,21 @@ import 'strings.dart';
 import 'src/rust/frb_generated.dart';
 import 'theme.dart';
 import 'tray.dart';
+import 'updates.dart';
+
+/// The native side's answers on Android and iOS (runner/android
+/// MainActivity): the app's own directory, where the tunnel's socket also
+/// lives (#448).
+const _app = MethodChannel('com.peakpassvpn.ppvpn/app');
 
 /// The bridge library ci.yml puts next to the app: beside the executable
-/// (Windows), in the bundle's lib/ (Linux), in Contents/Frameworks (macOS).
-/// PPVPN_FLUTTER_LIB overrides it (the end-to-end test's debug build runs
+/// (Windows), in the bundle's lib/ (Linux), in Contents/Frameworks (macOS),
+/// in the APK's jniLibs (Android, loaded by name). PPVPN_FLUTTER_LIB overrides it (the end-to-end test's debug build runs
 /// with the release library ci-build.sh built).
 String _libraryPath() {
   final override = Platform.environment['PPVPN_FLUTTER_LIB'];
   if (override != null && override.isNotEmpty) return override;
+  if (Platform.isAndroid) return 'libppvpn_flutter.so';
   final dir = File(Platform.resolvedExecutable).parent.path;
   if (Platform.isWindows) return '$dir\\ppvpn_flutter.dll';
   if (Platform.isMacOS) return '$dir/../Frameworks/libppvpn_flutter.dylib';
@@ -50,6 +62,8 @@ Future<void> main() async {
   } else {
     await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
     mark('bridge_loaded');
+    // Before anything reads the app's files.
+    if (mobile) rust.setAppDir(path: (await _app.invokeMethod<String>('filesDir'))!);
     // Another instance runs (Windows, Linux): it took this launch's
     // arguments and shows its window. Before the window and the client.
     if (!rust.claimInstance()) exit(0);
@@ -59,6 +73,13 @@ Future<void> main() async {
     rust.refreshLaunchAtLogin();
     app = AppState(rust.start());
     mark('client_created');
+  }
+
+  // A phone or tablet: the app is its one screen, with no window to
+  // manage, tray or updater (#448).
+  if (mobile) {
+    runApp(PrototypeApp(app: app));
+    return;
   }
 
   await windowManager.ensureInitialized();
@@ -98,7 +119,14 @@ Future<void> main() async {
     await windowManager.focus();
   }
 
-  final tray = Tray(app: app, onOpen: () => unawaited(open()), onQuit: quit);
+  // Before the tray, whose menu offers a check where the app installs updates.
+  if (samplePage == null) await Updates.start();
+  final tray = Tray(
+    app: app,
+    onOpen: () => unawaited(open()),
+    onQuit: quit,
+    onCheckForUpdates: Updates.installs ? () => unawaited(Updates.check()) : null,
+  );
   windowManager.addListener(_HideOnClose());
   mark('tray_created');
   // Off unless PPVPN_FLUTTER_E2E is set (e2e/linux_enhanced.sh).
@@ -109,6 +137,13 @@ Future<void> main() async {
       onShow: () => unawaited(open()),
       onPush: (pushId) => unawaited(() async {
         if (await app.openPush(pushId)) await open();
+      }()),
+      // The installer is about to replace the app's files.
+      onQuit: () => unawaited(quit()),
+      // The update's installer runs: out of sight until it asks the app to quit.
+      onUpdate: () => unawaited(() async {
+        tray.dispose();
+        await windowManager.hide();
       }()),
     );
   }
@@ -121,12 +156,12 @@ class _HideOnClose with WindowListener {
 }
 
 class PrototypeApp extends StatefulWidget {
-  const PrototypeApp({super.key, required this.app, required this.tray});
+  const PrototypeApp({super.key, required this.app, this.tray});
 
   final AppState app;
 
-  /// Held for the app's life.
-  final Tray tray;
+  /// Held for the app's life; none on Android and iOS.
+  final Tray? tray;
 
   @override
   State<PrototypeApp> createState() => _PrototypeAppState();
@@ -179,7 +214,15 @@ class _PrototypeAppState extends State<PrototypeApp> {
             data: t.forui,
             child: DefaultTextStyle(
               style: t.body,
-              child: ColoredBox(color: t.bg, child: Shell(app: widget.app)),
+              // Below 600 wide the phone layout, else the desktop's (#448).
+              child: ColoredBox(
+                color: t.bg,
+                child: LayoutBuilder(
+                  builder: (context, box) => box.maxWidth < Tokens.phoneBreakpoint
+                      ? PhoneShell(app: widget.app)
+                      : Shell(app: widget.app),
+                ),
+              ),
             ),
           );
         },

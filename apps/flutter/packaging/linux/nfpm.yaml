@@ -1,0 +1,129 @@
+# deb and rpm for PPVPN with the Flutter app (#401), built by
+# ../../scripts/package-linux.sh (which fills in every $-brace placeholder).
+# The native package's (apps/linux/packaging/nfpm.yaml) name, layout,
+# maintainer scripts and autostart entry, so either upgrades the other in
+# place; only the app and its dependencies differ.
+#
+#   /usr/lib/ppvpn/ppvpn            the Flutter runner; ppvpn-service only talks to this path
+#   /usr/lib/ppvpn/lib/, data/      the rest of the bundle (libflutter_linux_gtk.so, libapp.so,
+#                                   the plugins, libppvpn_flutter.so; flutter_assets,
+#                                   icudtl.dat): the runner finds them from /proc/self/exe,
+#                                   so through the /usr/bin/ppvpn link too
+#   /usr/lib/ppvpn/ppvpn-service{,-install,-uninstall}
+#                                   the service is copied into /usr/lib/ppvpn-service by
+#                                   the install helper (pkexec)
+#   /usr/lib/ppvpn/package-format   "deb" or "rpm", as in the native package
+#   /usr/lib/ppvpn/ppvpn-push-agent shows backend pushes as notifications; per user session
+#                                   from /etc/xdg/autostart (and started by the app)
+#
+# Minimum: glibc 2.35, GTK 3.24 (Ubuntu 22.04, Debian 12, Fedora 36).
+name: ppvpn
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${PPVPN_VERSION}
+release: ${PPVPN_BUILD_NUMBER}
+section: net
+priority: optional
+maintainer: ${PPVPN_PACKAGE_MAINTAINER}
+vendor: PeakPass Labs LLC
+homepage: https://www.peakpassvpn.com
+license: GPL-3.0-or-later
+description: |-
+  PPVPN desktop client
+  Connects to PeakPass VPN nodes through local proxies or, in Enhanced Mode,
+  routes all traffic of this computer (TUN) through a privileged system service.
+
+contents:
+  - src: ${PPVPN_STAGE_DIR}/app/
+    dst: /usr/lib/ppvpn
+    type: tree
+  - src: /usr/lib/ppvpn/ppvpn
+    dst: /usr/bin/ppvpn
+    type: symlink
+  - src: ${PPVPN_STAGE_DIR}/package-format.deb
+    dst: /usr/lib/ppvpn/package-format
+    packager: deb
+  - src: ${PPVPN_STAGE_DIR}/package-format.rpm
+    dst: /usr/lib/ppvpn/package-format
+    packager: rpm
+  # The native entry plus StartupWMClass: the runner sets its program name (the X11
+  # WM_CLASS) to the application id.
+  - src: ${PPVPN_FLUTTER_PACKAGING_DIR}/com.peakpassvpn.ppvpn.desktop.desktop
+    dst: /usr/share/applications/com.peakpassvpn.ppvpn.desktop.desktop
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_PACKAGING_DIR}/com.peakpassvpn.ppvpn.push-agent.desktop
+    dst: /etc/xdg/autostart/com.peakpassvpn.ppvpn.push-agent.desktop
+    type: config
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_STAGE_DIR}/icons/
+    dst: /usr/share/icons/hicolor
+    type: tree
+  # The GPL text (license: above), copied from the repository's LICENSE by package-linux.sh:
+  # Debian's copyright file, and the license directory rpm-based distributions use.
+  - src: ${PPVPN_STAGE_DIR}/LICENSE
+    dst: /usr/share/doc/ppvpn/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ${PPVPN_STAGE_DIR}/LICENSE
+    dst: /usr/share/licenses/ppvpn/LICENSE
+    packager: rpm
+    type: license
+    file_info:
+      mode: 0644
+
+# The native package's: the same service and push agent paths.
+scripts:
+  postinstall: ${PPVPN_PACKAGING_DIR}/postinstall.sh
+  preremove: ${PPVPN_PACKAGING_DIR}/preremove.sh
+  postremove: ${PPVPN_PACKAGING_DIR}/postremove.sh
+
+# What the runner, the engine and the plugins link (GTK 3; nativeapi, under tray_manager:
+# X11 and XInput, its tray is StatusNotifierItem over GDBus, no appindicator library) and
+# what the app runs. The sign-in store is the Secret Service over D-Bus (zbus), TLS is the
+# bridge's own BoringSSL: no libsecret, OpenSSL or ICU.
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      - libstdc++6
+      # libgtk-3-0t64 from Ubuntu 24.04 and Debian 13 on.
+      - libgtk-3-0 (>= 3.24) | libgtk-3-0t64
+      - libx11-6
+      - libxi6
+      - libegl1
+      # The engine loads libGLESv2.so.2 at run time (dlopen, so ldd misses it).
+      - libgles2
+      # The logs page's "open folder".
+      - xdg-utils
+      - pkexec | policykit-1
+    recommends:
+      - systemd
+      # The engine renders with OpenGL through EGL.
+      - libegl-mesa0
+      - libgl1-mesa-dri
+  rpm:
+    depends:
+      - glibc >= 2.35
+      - libstdc++
+      - gtk3 >= 3.24
+      - libX11
+      - libXi
+      - libglvnd-egl
+      # The engine loads libGLESv2.so.2 at run time (dlopen, so ldd misses it).
+      - libglvnd-gles
+      - xdg-utils
+      - polkit
+    recommends:
+      - systemd
+      - mesa-libEGL
+      - mesa-dri-drivers
+
+deb:
+  fields:
+    Bugs: https://www.peakpassvpn.com
+rpm:
+  group: Applications/Internet
+  compression: zstd

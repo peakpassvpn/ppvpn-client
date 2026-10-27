@@ -28,6 +28,7 @@
 
 - `ci.yml`：PR 推送时跑全部测试，7 个 job 并行（`lint`、`unit`、`integration`、`desktop`、`linux`、`macos`、`windows`）。
 - `release.yml`：
+  - 安装包是 Flutter 版（`apps/flutter`，#401），文件名、更新源和签名与原生版相同；原生版不再发行。
   - 每次合入 main：三个平台的安装包（`linux`、`macos`、`windows`，不读任何密钥：Windows 不签名、macOS ad-hoc 签名、
     没有更新签名），rpm 在 dnf 下安装一次，apt/dnf 仓库自测（`linux-rpm-smoke`、`linux-repo`）；依赖变了时保存
     `ci.yml` 恢复的构建缓存（`cache-*`）。什么都不发布。

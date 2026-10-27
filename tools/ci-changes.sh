@@ -9,7 +9,12 @@
 #         app builds (the macOS Debug app, the Windows C# bindings and app)
 #         depend on. ci.yml skips those builds when it is false.
 #   flutter  apps/flutter/ (the Flutter desktop app, #401), crates/desktop/
-#         (what it links), the dependencies or the workflows. ci.yml's
+#         (what it links), apps/linux/packaging/ (its deb and rpm take the
+#         native package's scripts), what its macOS packaging takes from
+#         apps/macos (the scripts, the push agent and what it builds from,
+#         the LaunchAgent, the .pkg's postinstall), the Windows installer
+#         script it shares with the native app (apps/windows/installer/,
+#         scripts/sign-file.ps1), the dependencies or the workflows. ci.yml's
 #         flutter job builds only when it is true. apps/flutter/ alone
 #         does not set desktop: the native apps do not depend on it.
 #         And outside apps/flutter/rust/ it does not set code either: a
@@ -20,7 +25,8 @@
 #         set code for the workspace's clippy and tests.
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
-#         release.yml warms the caches on main only when it is true.
+#         release.yml warms the caches on main only when it is true; ci.yml's
+#         advisories job fails on an advisory only then.
 #   memory  the memory harness (ne-mem, tools/perf/{ne_mem,dhat_top}.py, test/perf/)
 #         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
 #         then build it in release and measure (#388).
@@ -57,6 +63,12 @@ while IFS= read -r f; do
     apps/flutter/rust/* | apps/flutter/push-agent/*) flutter=true code=true ;;
     apps/flutter/*) flutter=true ;;
     crates/desktop/*) desktop=true flutter=true code=true ;;
+    # The maintainer scripts and autostart entry both Linux packages ship.
+    apps/linux/packaging/*) desktop=true flutter=true code=true ;;
+    apps/macos/scripts/* | apps/macos/PPVPNAgent/* | apps/macos/AppLogic/* | \
+    apps/macos/LaunchAgents/* | apps/macos/packaging/* | apps/macos/project.yml | \
+    apps/windows/installer/* | apps/windows/scripts/sign-file.ps1)
+      desktop=true flutter=true code=true ;;
     apps/* | crates/engine-host/* | crates/service/* | tools/desktop/*)
       desktop=true code=true ;;
     *) code=true ;;

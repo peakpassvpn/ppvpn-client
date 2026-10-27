@@ -385,7 +385,8 @@ Two workflows at the repository root (`docs/desktop/ci.md`):
   `dotnet build` of the app (`-warnaserror`; NuGet advisories NU1901/NU1902, low and
   moderate, stay warnings, `Directory.Build.props`), and a warning-free NativeAOT
   `dotnet publish` of the push agent.
-- `release.yml`'s `windows` job, on every merge to main and in a release run:
+- `release.yml`'s `windows` job (until #401 step 6; it now packages the Flutter
+  app with `apps/flutter/scripts/package-windows.ps1`), on every merge to main and in a release run:
   `scripts/ci-build.ps1`, which runs `package.ps1` with `-ApiBase <api_base>`
   (the app's backend) and, for a channel build, the feed
   `<PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-windows-x64.xml`,

@@ -79,21 +79,23 @@
 
 只有两个 workflow：`.github/workflows/ci.yml` 在 PR 推送时跑全部测试，`.github/workflows/release.yml` 在合入 main 时构建安装包（见 [release.md](./release.md)）。没有合并队列，没有定时运行。
 
-`ci.yml` 在每个 PR 的每次推送上并行跑 7 个 job。命名规则：与平台无关的 job 按它检查的内容命名（实际跑在 ubuntu 上，只是实现细节）；平台 job 以系统命名，只覆盖该系统自己的代码。
+`ci.yml` 在每个 PR 的每次推送上并行跑 9 个 job。命名规则：与平台无关的 job 按它检查的内容命名（实际跑在 ubuntu 上，只是实现细节）；平台 job 以系统命名，只覆盖该系统自己的代码。
 
 | job | 内容 |
 |---|---|
 | `lint` | 敏感信息检查（tree 和新增提交）、`cargo fmt`、clippy、Sail 的 patch 与 lock 核对、发行 feature 检查 |
+| `advisories` | cargo-deny（`deny.toml`）：Cargo.lock 对 RustSec 安全公告，以及依赖来源（只许 crates.io 和列出的 git 仓库，git 依赖要钉 tag 或 rev）。公告只在改了依赖的 PR（`tools/ci-changes.sh` 的 `deps`）上算失败，其他 PR 上是警告；暂时修不了的公告列在 `deny.toml` 的 `ignore` 里，写明原因和修复它的 issue 或 PR |
 | `unit` | L1（`make test-unit`） |
 | `integration` | L2（`make test-integration`），与 L1 并行 |
 | `desktop` | 桌面各层：特权 service 和客户端 crate 的测试与 clippy、桌面脚本、C# 绑定和 App.Core / Linux 测试、Swift 绑定和 AppLogic 测试 |
 | `linux` | Linux 自己的：网络命名空间里的 L3（`make test-system`：tun 及 G7、network-change），以及桌面增强模式端到端 |
 | `macos` | macOS 自己的：整个 workspace 在 aarch64 和 x86_64 上的 clippy、macOS 平台测试、Debug app 构建 |
 | `windows` | Windows 自己的：桌面链接的 crate 在 MSVC 上的 clippy、Windows 平台测试、G7 Windows、C# 绑定、App.Core 测试、app 和推送代理构建 |
+| `flutter` | Flutter 桌面 app（#401）在 Linux、macOS、Windows 上构建和冒烟测试，只在它或客户端变了的时候 |
 
 L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重跑，只编译（clippy 覆盖各平台 `cfg` 的代码）并跑平台测试。
 
-只改了 `docs/` 或 Markdown 的 PR，7 个 job 照样运行并报告，但都跳过构建和测试步骤（`tools/ci-changes.sh` 的 `code`）；`lint` 仍做敏感信息检查。
+只改了 `docs/` 或 Markdown 的 PR，各 job 照样运行并报告，但都跳过构建和测试步骤（`tools/ci-changes.sh` 的 `code`）；`lint` 仍做敏感信息检查，`advisories` 照常检查（只读 Cargo.lock，约一分钟）。
 
 手动重跑：`gh workflow run ci.yml --ref <分支>`（`windows` 的 G7 Windows 这时跑 5 遍）。
 

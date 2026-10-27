@@ -1,8 +1,6 @@
 //! The platform hooks, in Rust for the prototype: the client calls them from
 //! its own threads, where a call into Dart would have to wait for the UI
-//! isolate. The native apps keep the credential in the keychain or keyring;
-//! the prototype keeps it in a file of its own data directory (owner only on
-//! macOS and Linux), apart from the native apps'.
+//! isolate. The saved sign-in is the native apps' own (credentials.rs).
 //!
 //! The privileged service (enhanced mode) is the native apps' own: the same
 //! paths, helpers and admin prompts as apps/linux LinuxPlatformHooks,
@@ -10,27 +8,23 @@
 //! the service (crates/service) accepts this app as it does those. The
 //! helpers sit next to the app's executable, as in the native packages.
 
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ppvpn_client::{PlatformError, PlatformHooks};
 
+use crate::credentials;
+
 pub(crate) struct Hooks {
-    credential: PathBuf,
+    credentials: credentials::Store,
 }
 
 impl Hooks {
     pub(crate) fn new(data_dir: &str) -> Self {
         Self {
-            credential: PathBuf::from(data_dir).join("credential.json"),
+            credentials: credentials::Store::new(data_dir),
         }
     }
-}
-
-fn failed(error: std::io::Error) -> PlatformError {
-    failure(error.to_string())
 }
 
 fn failure(message: impl Into<String>) -> PlatformError {
@@ -48,31 +42,15 @@ fn exe_dir() -> Option<PathBuf> {
 
 impl PlatformHooks for Hooks {
     fn credential_load(&self) -> Result<Option<Vec<u8>>, PlatformError> {
-        match fs::read(&self.credential) {
-            Ok(blob) => Ok(Some(blob)),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(failed(error)),
-        }
+        self.credentials.load()
     }
 
     fn credential_save(&self, blob: Vec<u8>) -> Result<(), PlatformError> {
-        let partial = self.credential.with_extension("partial");
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(&partial).map_err(failed)?;
-        std::io::Write::write_all(&mut file, &blob).map_err(failed)?;
-        file.sync_all().map_err(failed)?;
-        fs::rename(&partial, &self.credential).map_err(failed)
+        self.credentials.save(blob)
     }
 
     fn credential_delete(&self) -> Result<(), PlatformError> {
-        match fs::remove_file(&self.credential) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(failed(error)),
-        }
+        self.credentials.delete()
     }
 
     fn open_url(&self, url: String) -> bool {
@@ -284,7 +262,7 @@ mod service {
 
     /// The SHA-1 of the certificate this app is signed with, from its
     /// designated requirement (`certificate leaf = H"…"`, which
-    /// package-dmg.sh pins to crates/service/src/macos_client_cert.sha1).
+    /// package-app.sh pins to crates/service/src/macos_client_cert.sha1).
     /// `directory` is the bundle's Contents/MacOS.
     fn signing_certificate_sha1(directory: &Path) -> Option<String> {
         let bundle = directory.parent()?.parent()?;

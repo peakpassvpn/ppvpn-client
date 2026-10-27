@@ -63,7 +63,7 @@ any release.
 
   The version is `PPVPN_VERSION` (default: the workspace's, `Cargo.toml`)
   and the build number `PPVPN_BUILD_NUMBER` (default 0), the names
-  release.yml gives the native builds. macOS's `CFBundleVersion` is
+  release.yml gives the installer jobs. macOS's `CFBundleVersion` is
   `<version>.<build>`, as the native app's. The Dart package stays
   `ppvpn_flutter`, and so does the bridge library (`libppvpn_flutter`).
 - `assets/tray/`: the shipped tray icons, copied from the native apps: the
@@ -81,18 +81,31 @@ any release.
   helpers: `rust/src/hooks.rs`). The helpers (`ppvpn-service-install`,
   `-uninstall`, and on macOS `ppvpn-service`) must sit next to the app's
   executable; `scripts/ci-build.sh` does not put them there. On Linux,
-  `scripts/install-linux-layout.sh` does (see below).
+  `scripts/install-linux-layout.sh` does, on macOS
+  `scripts/package-macos.sh` (see below).
 - Quitting from the tray puts the system proxy back (`Client::shutdown`).
   Closing the window only hides it.
-- The sign-in is kept in a file in the prototype's own data directory,
-  readable only by the owner on macOS and Linux. The native apps use the
-  keychain or keyring instead. The data, logs and sign-in are separate from
-  the native apps':
-  - macOS: `~/Library/Application Support/PPVPN Flutter`, logs in
-    `~/Library/Logs/PPVPN Flutter`;
-  - Linux: `$XDG_DATA_HOME/ppvpn-flutter`, logs in
-    `$XDG_STATE_HOME/ppvpn-flutter/logs`;
-  - Windows: `%LOCALAPPDATA%\PPVPN Flutter`.
+- The app takes over the native apps' data in place (#401 step 5): the
+  same data and log directories (`rust/src/dirs.rs`), so the client's own
+  files there (node, connection and routing mode, push agent state) carry
+  over both ways, and an upgrade from the native app, or a rollback to it,
+  needs no copy:
+  - macOS: `~/Library/Application Support/PPVPN` (0700), logs in
+    `~/Library/Logs/PPVPN`;
+  - Linux: `$XDG_DATA_HOME/ppvpn`, logs in `$XDG_STATE_HOME/ppvpn/logs`;
+  - Windows: `%LOCALAPPDATA%\PPVPN`, logs in its `logs` folder.
+- The sign-in is the native apps' own too, the same bytes in the same
+  store (`rust/src/credentials.rs`):
+  - macOS: the 0600 file `credentials` in the data directory, excluded
+    from Time Machine (the native app's release name; its Debug builds
+    use `credentials.debug`);
+  - Windows: the Credential Manager's generic credential
+    `PPVPN/desktop.credentials` (user `PPVPN`);
+  - Linux: the Secret Service item the native app stores through
+    libsecret (schema `com.peakpassvpn.ppvpn.desktop`, attributes
+    `service`, `account` = `credentials`, `xdg:schema`), reached over
+    D-Bus; the 0600 file `credentials` in the data directory when the
+    session has no Secret Service.
 - The settings page (#401 step 3) sets the appearance, the language and
   the routing mode, and shows the account, the version and the system
   service's status. Update checks and installing the service come in later
@@ -108,12 +121,20 @@ any release.
   tray with no window. For that, `scripts/ci-build.sh` takes the
   first-frame show out of those two runners, and `main.dart` shows the
   window otherwise.
-- Appearance, language and the API override are kept in `settings.json` in
-  the data directory above. The API override (Settings → Advanced) takes
-  effect on the next launch; `PPVPN_API_BASE` wins over it. Without either
-  the backend is `https://www.peakpassvpn.com`.
-- Quit the native app before trying it: both write the same system proxy
-  setting, and both have the same identity (bundle id, executable names).
+- Appearance and the API override are the native apps' settings
+  (`rust/src/settings.rs`): on macOS the user defaults of
+  `com.peakpassvpn.ppvpn.desktop` (`appearance`, `apiBaseOverride`), on
+  Windows `app-settings.json` in the data directory and on Linux
+  `$XDG_CONFIG_HOME/ppvpn/settings.json` (`Appearance`,
+  `ApiBaseOverride`; the native apps' other keys are kept). The native
+  apps have no language setting: this app keeps its own next to those
+  (`language` or `Language`), which they ignore. The API override
+  (Settings → Advanced) takes effect on the next launch; `PPVPN_API_BASE`
+  wins over it. Without either the backend is
+  `https://www.peakpassvpn.com`.
+- Quit the native app before trying it: both use the same data, sign-in
+  and system proxy setting, and both have the same identity (bundle id,
+  executable names).
 - Flags are 4:3 images from flag-icons (MIT, `assets/flags/LICENSE`), only
   for the countries we expect; any other country gets its code on a tile.
   There are no emoji flags: platforms draw them differently, and Windows
@@ -151,7 +172,9 @@ setup is:
 - the real client and core, against `e2e/mock_backend.py` (Python standard
   library, on loopback) and `test/fakenode` as the node;
 - `integration_test/signed_in_test.dart` drives the UI;
-- `PPVPN_FLUTTER_HOME` keeps the app's data apart, and
+- `PPVPN_FLUTTER_HOME` keeps the app's data apart (its sign-in and
+  settings too, as plain files in that home: never the keyring or the
+  native apps' settings), and
   `PPVPN_TEST_TRUST_LOCAL_BACKEND=1` lets the client accept the loopback
   backend.
 
@@ -166,6 +189,110 @@ Pinned versions:
 | nativeapi | 0.5.2 | `pubspec.yaml` |
 | window_manager | 0.5.2 | `pubspec.yaml` |
 
+## macOS packaging
+
+`scripts/package-macos.sh <PPVPN.app> arm64|x86_64` packages the app that
+`scripts/ci-build.sh` built as the native release packages
+`apps/macos` (#401 step 5), into the same artifacts in `dist/macos`. Into a
+copy of the bundle, at the native app's paths, it puts:
+
+- the Swift push agent (`apps/macos`, target `PPVPNAgent`, built with the
+  app's version) at `Contents/Library/LoginItems/PPVPN Agent.app`;
+- its launchd job at `Contents/Library/LaunchAgents`;
+- the client framework the agent links at `Contents/Frameworks`;
+- the service helpers in `Contents/MacOS`, where `rust/src/hooks.rs` looks
+  for them;
+- Sparkle (the native project's package) at `Contents/Frameworks`, and the
+  Info.plist keys the native build sets: the appcast (`PPVPN_UPDATE_FEED_URL`,
+  else the channel's feed from `PPVPN_UPDATE_SITE` and
+  `PPVPN_RELEASE_CHANNEL`) and the EdDSA key (`PPVPN_SPARKLE_PUBLIC_KEY`).
+
+Then `apps/macos/scripts/package-app.sh`, which the native
+`package-dmg.sh` also uses, does the rest. It thins the bundle to the one
+architecture and signs it inside out with the hardened runtime and the
+native app's entitlements. It signs with the fixed certificate the service
+pins when `PPVPN_CODESIGN_IDENTITY` is set, ad-hoc otherwise. It then writes
+`PPVPN-<version>-<platform>.dmg` (with the Sparkle signature when
+`SPARKLE_PRIVATE_KEY_FILE` is set), the `.pkg` (id
+`com.peakpassvpn.ppvpn.desktop.pkg`, with the native postinstall) and
+`release-meta-<platform>.json`.
+
+An installed app keeps the agent registered as the native app does
+(`runner/macos/Runner/MainFlutterWindow.swift`, `PushAgentService`): it
+uses `SMAppService.agent` from `/Applications`, registers again once per
+build, and checks the heartbeat every five minutes, with `launchctl
+kickstart` and a rate-limited re-registration.
+
+CI (job `flutter`, macOS) packages the arm64 slice ad-hoc with the client
+and the helpers in debug. It checks the bundle, the signatures, the DMG,
+the expanded `.pkg` and release-meta. release.yml's `macos` job builds the
+app universal (`MACOS_ARCHS="arm64 x86_64"`) and packages both
+architectures through `tools/desktop/ci/build-macos-native.sh`
+(`PPVPN_FLUTTER_BUNDLE`), with the release's signing and Sparkle keys.
+
+## Windows installer
+
+`scripts/package-windows.ps1` (Windows, after `scripts/ci-build.sh`) builds
+the installer the native Windows release ships, from this app: the same
+NSIS script (`apps/windows/installer/ppvpn.nsi`), install directory
+(`C:\Program Files\PPVPN`), service handling, shortcuts, uninstall entry
+and `/PURGE`, and the same artifacts,
+`dist/windows/PPVPN-<version>-windows-x64-setup.exe` (+ `.sha256`) and
+`release-meta-windows-x64.json`. It stages the release bundle (`ppvpn.exe`,
+`flutter_windows.dll`, `ppvpn_flutter.dll`, the plugins' DLLs, `data\`), the
+Rust push agent, `ppvpn-service`, `-install` and `-uninstall` (built as
+`apps/windows/scripts/package.ps1` builds them), `wintun.dll`,
+`WinSparkle.dll` (the native app's WinSparkle version) and the
+notifications' icon (`Assets\AppLogo.png`). `install-files.txt` lists what
+it installs, so an upgrade from the native app removes the native app's
+files, and the next upgrade this app's. Authenticode signing and the
+update feed's EdDSA signature take the native build's environment
+(`WINDOWS_SIGN_COMMAND` or `WINDOWS_CERTIFICATE`, `SPARKLE_PRIVATE_KEY`);
+the version is `PPVPN_VERSION` and `PPVPN_BUILD_NUMBER`, as for
+`ci-build.sh`, and the bundle's `ppvpn.exe` must carry it.
+
+What the installer expects of the app, as of the native one:
+
+- the quit event `Local\PPVPN.Desktop.Quit`: the running instance creates
+  it (`rust/src/instance.rs`); set, the app quits as the tray's Quit does.
+  The installer and uninstaller set it before replacing or removing the
+  files;
+- `ppvpn.exe --set-shortcut-aumid <.lnk>` stamps the AppUserModelID
+  `PeakPass.PPVPN` on the shortcut the installer created and exits
+  (`rust/src/aumid.rs`). At every start the app also sets it as the
+  process's AppUserModelID and writes its notification registration
+  (display name, icon, `ppvpn.exe --toast-activated` as the click
+  activator), as the push agent does; the uninstaller removes it.
+
+In CI (`ci.yml`, job `flutter` on Windows) the installer is built
+unsigned, then `scripts/smoke-installer.ps1` installs it over the native
+app of the latest release, checks the installation, sets the quit event,
+and uninstalls with `/PURGE`. The artifact `flutter-installer-windows`
+holds the installer.
+
+## Updates
+
+From the native apps' feeds, as they update (`lib/updates.dart`):
+
+- macOS: Sparkle, which the runner loads from `Contents/Frameworks` when
+  `scripts/package-macos.sh` bundled it (`MainFlutterWindow.swift`,
+  `Updater`). It unregisters the push agent before it replaces the app.
+- Windows: WinSparkle (`rust/src/update.rs`) with the feed and key baked
+  into the bridge when it is built (`PPVPN_UPDATE_FEED_URL`, else
+  `PPVPN_UPDATE_SITE` and `PPVPN_RELEASE_CHANNEL`; `PPVPN_SPARKLE_PUBLIC_KEY`),
+  its state under the native app's registry key and the automatic-check
+  switch as `AutoCheckUpdates` in `app-settings.json`. Once its installer
+  runs, the app hides and waits for the installer's quit event, then
+  quits on its own after 30 s.
+- Linux: a notice in the settings page with the upgrade command, when the
+  repository's `latest.json` (`PPVPN_UPDATE_FEED`, else the channel's, else
+  stable's on the update site) has a newer build than `PPVPN_VERSION` and
+  `PPVPN_BUILD_NUMBER` baked into the bridge. A build without a build number
+  or outside a package has no notice.
+
+Builds without a feed (CI's, local ones) have updates off and no
+「检查更新…」.
+
 ## Linux layout and the enhanced-mode end-to-end test
 
 `scripts/install-linux-layout.sh <bundle> <service-bin-dir>` (root, Linux
@@ -175,8 +302,21 @@ only) installs the bundle as the native packages do
 client the privileged service accepts. `lib/` and `data/` sit beside it,
 and so do `ppvpn-service`, `ppvpn-service-install` and
 `ppvpn-service-uninstall`, which is where `rust/src/hooks.rs` looks for
-them. There is no deb or rpm yet. To remove it, run
+them. To remove it, run
 `/usr/lib/ppvpn/ppvpn-service-uninstall` and then `rm -rf /usr/lib/ppvpn`.
+
+`scripts/package-linux.sh <bundle>` makes the deb and rpm in that layout
+(`packaging/linux/nfpm.yaml`): the files the native release makes
+(`PPVPN-<version>-linux-x64.{deb,rpm}` and their `release-meta-linux-x64-*.json`),
+under the native package's name `ppvpn`, version and release (the build
+number), with its maintainer scripts and push agent autostart entry
+(`apps/linux/packaging`), so it upgrades the native package in place. The
+dependencies are GTK 3, X11 and XInput, EGL, xdg-utils and pkexec instead of
+GTK 4, libadwaita and .NET's. It builds the service and the push agent
+itself. CI builds both in the Linux `flutter` job and checks each in a fresh
+container (`scripts/package-smoke.sh`, ubuntu:24.04 and fedora:latest): the
+libraries resolve from the dependencies, the app starts, it is removed
+cleanly, and the deb upgrades the native release in place.
 
 `e2e/linux_enhanced.sh` is the enhanced-mode test (#401 step 2), the
 counterpart of `crates/desktop/src/e2e_linux.rs`. CI runs it in the Linux
@@ -190,8 +330,8 @@ the host's namespace. The script then:
 1. starts `test/fakenode` in the uplink namespace,
    `/usr/lib/ppvpn-service/ppvpn-service` in the test namespace and
    `e2e/linux_enhanced_backend.py` on loopback;
-2. writes a saved sign-in (`credential.json`) to a temporary
-   `XDG_DATA_HOME`;
+2. writes a saved sign-in (`data/credentials`) to a temporary
+   `PPVPN_FLUTTER_HOME`;
 3. starts the installed release app under its own Xvfb and D-Bus session,
    with `PPVPN_FLUTTER_E2E=enhanced`;
 4. checks the TUN, the policy rules (9091–9101) and table 2091 while

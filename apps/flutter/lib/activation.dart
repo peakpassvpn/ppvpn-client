@@ -8,7 +8,9 @@
 //   again), and holds what arrives before Dart asks.
 // - Windows and Linux: the bridge keeps the app to one instance and hands
 //   over the toast activator's clicks and other launches' arguments
-//   (rust/src/instance.rs).
+//   (rust/src/instance.rs). On Windows also the installer's request to
+//   quit (its quit event), before it replaces the app's files, and the
+//   update's installer starting (rust/src/update.rs).
 
 import 'dart:async';
 import 'dart:io';
@@ -21,8 +23,15 @@ import 'src/rust/api.dart' as rust;
 const _channel = MethodChannel('ppvpn/activation');
 
 /// For the app's life: [onShow] for another launch or a reopen, [onPush]
-/// with a clicked notification's push id.
-void listenForActivations({required void Function() onShow, required void Function(int pushId) onPush}) {
+/// with a clicked notification's push id, [onQuit] when the installer asks
+/// the app to quit (Windows), [onUpdate] when an update's installer has
+/// started and the app should step out of sight until then (Windows).
+void listenForActivations({
+  required void Function() onShow,
+  required void Function(int pushId) onPush,
+  required void Function() onQuit,
+  required void Function() onUpdate,
+}) {
   if (Platform.isMacOS) {
     void take(Object? item) {
       if (item == 'show') {
@@ -48,7 +57,11 @@ void listenForActivations({required void Function() onShow, required void Functi
     while (true) {
       final activation = await rust.nextActivation();
       final id = activation.pushId;
-      if (id == null) {
+      if (activation.quit) {
+        onQuit();
+      } else if (activation.update) {
+        onUpdate();
+      } else if (id == null) {
         onShow();
       } else {
         onPush(id);

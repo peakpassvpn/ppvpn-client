@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Build the native macOS app (apps/macos) as one DMG per architecture, plus
-# release metadata for each: macos-arm64 (Apple silicon) and macos-x64
-# (Intel), both built on an Apple silicon runner.
+# Build the macOS app as one DMG (and .pkg) per architecture, plus release
+# metadata for each: macos-arm64 (Apple silicon) and macos-x64 (Intel), both
+# built on an Apple silicon runner. The app is the Flutter one when
+# PPVPN_FLUTTER_BUNDLE is given (apps/flutter/scripts/package-macos.sh, #401),
+# else the native one (apps/macos, package-dmg.sh); the signing, the checks
+# and the output are the same.
 #
 # Required: CI_PROJECT_DIR
 # Optional:
+#   PPVPN_FLUTTER_BUNDLE       the universal PPVPN.app of apps/flutter/scripts/ci-build.sh
+#                              (built with MACOS_ARCHS and this script's environment)
 #   MACOS_ARCHS                "arm64 x86_64" (default), or one of them
 #   RUST_TOOLCHAIN             default stable
 #   PPVPN_BUILD_NUMBER         monotonic counter shared by the release
@@ -20,6 +25,11 @@
 #   MACOS_SIGNING_P12_BASE64   the fixed self-signed "PPVPN Code Signing"
 #   MACOS_SIGNING_P12_PASSWORD   certificate + key; without them builds are ad-hoc
 #   MACOS_STAGING_DIR          output directory (default staging/macos-native)
+#   PPVPN_PREBUILT=1           the Rust is built already, by other jobs (release.yml):
+#                              the service helpers in build/binaries
+#                              (tools/desktop/build-service.sh macos) and
+#                              apps/macos/PPVPNClient (crates/desktop/scripts/build-apple.sh);
+#                              only the Xcode project is generated here
 set -euo pipefail
 
 : "${CI_PROJECT_DIR:?CI_PROJECT_DIR is required}"
@@ -33,14 +43,17 @@ for arch in $MACOS_ARCHS; do
 done
 
 cd "$CI_PROJECT_DIR"
-rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-rustup default "$RUST_TOOLCHAIN"
-# ppvpn-client's build-apple.sh builds both slices; each package is thinned.
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
 command -v xcodegen >/dev/null || brew install xcodegen
-
-# Universal service helpers; package-dmg.sh thins them per build.
-bash tools/desktop/build-service.sh macos
+if [[ "${PPVPN_PREBUILT:-}" == 1 ]]; then
+  (cd apps/macos && xcodegen generate)
+else
+  rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+  rustup default "$RUST_TOOLCHAIN"
+  # ppvpn-client's build-apple.sh builds both slices; each package is thinned.
+  rustup target add aarch64-apple-darwin x86_64-apple-darwin
+  # Universal service helpers; package-dmg.sh thins them per build.
+  bash tools/desktop/build-service.sh macos
+fi
 
 # A build for a channel updates from that channel's feed; one without has no feed.
 if [[ -n "${PPVPN_RELEASE_CHANNEL:-}" && -z "${PPVPN_UPDATE_SITE:-}" ]]; then
@@ -112,14 +125,20 @@ rm -rf "$staging_dir"
 mkdir -p "$staging_dir"
 
 bootstrap=0
+[[ "${PPVPN_PREBUILT:-}" == 1 ]] && bootstrap=1
 for arch in $MACOS_ARCHS; do
   platform=macos-arm64
   [[ "$arch" == x86_64 ]] && platform=macos-x64
   # The client package is built once (universal) and reused.
-  SKIP_BOOTSTRAP=$bootstrap apps/macos/scripts/package-dmg.sh "$arch"
+  if [[ -n "${PPVPN_FLUTTER_BUNDLE:-}" ]]; then
+    SKIP_BOOTSTRAP=$bootstrap apps/flutter/scripts/package-macos.sh "$PPVPN_FLUTTER_BUNDLE" "$arch"
+    app="apps/flutter/build/macos-package-$arch/PPVPN.app"
+  else
+    SKIP_BOOTSTRAP=$bootstrap apps/macos/scripts/package-dmg.sh "$arch"
+    app="apps/macos/build/release-$arch/Build/Products/Release/PPVPN.app"
+  fi
   bootstrap=1
 
-  app="apps/macos/build/release-$arch/Build/Products/Release/PPVPN.app"
   expected_signature='Signature=adhoc'
   [[ -n "${PPVPN_CODESIGN_IDENTITY:-}" ]] && expected_signature="Authority=$PPVPN_CODESIGN_IDENTITY"
   if ! codesign -dv --verbose=4 "$app" 2>&1 | grep -qx "$expected_signature"; then

@@ -18,12 +18,15 @@
 //! the phase is `Contended` (`TUN_ROUTING_TAKEN_OVER`) until the user
 //! retries.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use ppvpn_engine_host::health::{
+    Health, HealthTiming, RecoveryEpisode, Round, RoutingReconnects, Verdict,
+    TUN_ROUTING_RECONNECTS, TUN_ROUTING_WINDOW,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
@@ -147,12 +150,19 @@ const NETWORK_RECHECK: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(2)
 };
-/// Automatic reconnects for TUN routing another program changed (another
-/// VPN taking the routes): at most this many in any [`TUN_ROUTING_WINDOW`]
-/// (docs/host-integration.md, `Degraded{TunRoutingBroken}`). Past that the
-/// client stops fighting the other program and asks the user.
-const TUN_ROUTING_RECONNECTS: usize = 3;
-const TUN_ROUTING_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// Pause before the quick recheck of a periodic check that failed on the
+/// network path: a lost probe on a lossy link is not a broken tunnel, so a
+/// path failure is recovered from only when the recheck and the next round
+/// fail too (#438).
+const HEALTH_RECHECK: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_secs(5)
+};
+/// Detail of the health failure where the direct request to the API host
+/// failed and the tunnel's own steps passed (see [`official_verdict`]), and
+/// of the reason `On` carries meanwhile.
+const API_UNREACHABLE: &str = "HEALTH_API_UNREACHABLE";
 /// Detail of the `Contended` that ends those reconnects.
 const TUN_ROUTING_TAKEN_OVER: &str = "TUN_ROUTING_TAKEN_OVER";
 const PREFLIGHT_BUDGET: Duration = if cfg!(test) {
@@ -160,6 +170,11 @@ const PREFLIGHT_BUDGET: Duration = if cfg!(test) {
 } else {
     Duration::from_millis(1_500)
 };
+
+/// The official host's direct and proxied results, scripted (tests).
+#[cfg(test)]
+pub(crate) type OfficialSteps =
+    Arc<dyn Fn() -> (Result<(), ClientErrorInfo>, Result<(), ClientErrorInfo>) + Send + Sync>;
 
 /// Looks for other apps' tunnels (blocking; run off the async threads).
 pub(crate) type Detector = Arc<dyn Fn() -> ConflictReport + Send + Sync>;
@@ -310,69 +325,6 @@ impl Machine {
 
     pub(crate) fn is(&self, generation: u64, phase: ConnectionPhase) -> bool {
         self.generation == generation && self.phase == phase
-    }
-}
-
-/// One automatic reconnect per episode; the episode ends after two
-/// consecutive healthy checks or an explicit user action.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct RecoveryEpisode {
-    used: bool,
-    stable_checks: u8,
-}
-
-impl RecoveryEpisode {
-    pub(crate) fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    pub(crate) fn note_health_success(&mut self) {
-        self.stable_checks = self.stable_checks.saturating_add(1);
-        if self.stable_checks >= 2 {
-            self.used = false;
-        }
-    }
-
-    pub(crate) fn claim(&mut self) -> bool {
-        self.stable_checks = 0;
-        if self.used {
-            return false;
-        }
-        self.used = true;
-        true
-    }
-}
-
-/// Automatic reconnects because another program changed the TUN's routing
-/// (`tun_routing` broken: macOS, Windows), at most [`TUN_ROUTING_RECONNECTS`]
-/// in any [`TUN_ROUTING_WINDOW`]. The routing stays broken until the next
-/// start, so each one is a reconnect; another VPN that keeps taking the
-/// routes back would otherwise be fought forever. A user's connect, retry
-/// or take-over starts afresh.
-#[derive(Debug, Default)]
-pub(crate) struct RoutingReconnects {
-    at: VecDeque<Instant>,
-}
-
-impl RoutingReconnects {
-    pub(crate) fn reset(&mut self) {
-        self.at.clear();
-    }
-
-    /// Takes one reconnect at `now`; `false` when the window's are used up.
-    pub(crate) fn claim(&mut self, now: Instant) -> bool {
-        while self
-            .at
-            .front()
-            .is_some_and(|at| now.saturating_duration_since(*at) >= TUN_ROUTING_WINDOW)
-        {
-            self.at.pop_front();
-        }
-        if self.at.len() >= TUN_ROUTING_RECONNECTS {
-            return false;
-        }
-        self.at.push_back(now);
-        true
     }
 }
 
@@ -674,6 +626,9 @@ struct Inner {
     detector: Mutex<Detector>,
     /// Pause between data-plane health checks ([`HEALTH_INTERVAL`]).
     health_interval: Mutex<Duration>,
+    /// Replaces the official host's direct and proxied steps (tests).
+    #[cfg(test)]
+    official_steps: Mutex<Option<OfficialSteps>>,
     /// For [`RoutingReconnects`].
     clock: Mutex<Clock>,
     /// Woken by [`Enhanced::network_changed`]: brings the next health check
@@ -714,6 +669,8 @@ impl Enhanced {
                 on_error,
                 detector: Mutex::new(default_detector()),
                 health_interval: Mutex::new(HEALTH_INTERVAL),
+                #[cfg(test)]
+                official_steps: Mutex::new(None),
                 clock: Mutex::new(system_clock()),
                 network_changed: tokio::sync::Notify::new(),
                 operation: tokio::sync::Mutex::new(()),
@@ -760,6 +717,17 @@ impl Enhanced {
             .health_interval
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = interval;
+    }
+
+    /// Scripts the official host's steps of the health check (tests): each
+    /// check calls `steps` for the direct and the proxied results.
+    #[cfg(test)]
+    pub(crate) fn set_official_steps(&self, steps: OfficialSteps) {
+        *self
+            .inner
+            .official_steps
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(steps);
     }
 
     /// Replaces the clock of the TUN-routing reconnect budget (tests).
@@ -1274,7 +1242,7 @@ impl Inner {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let now = clock();
-        self.with_data(|data| data.routing_reconnects.claim(now))
+        self.with_data(|data| data.routing_reconnects.claim(now.into_std()))
     }
 
     fn with_data<T>(&self, change: impl FnOnce(&mut Data) -> T) -> T {
@@ -1920,6 +1888,16 @@ impl Inner {
             return Err(health_error("HEALTH_ENTRANCE_FAILED"));
         }
 
+        #[cfg(test)]
+        if let Some(scripted) = self
+            .official_steps
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
+            let (direct, proxied) = scripted();
+            return official_verdict(direct, proxied);
+        }
         let Some(target) = health_url(&self.config.api_base) else {
             return Ok(());
         };
@@ -1929,12 +1907,30 @@ impl Inner {
         let direct = direct_health_request(target.clone()).await;
         let done = SystemTime::now();
         steps.done("direct request");
-        let remote = direct?;
-        capture_verdict(core, before, done, remote, host).await?;
-        steps.done("capture check");
+        // A failed direct request leaves nothing to judge the capture by;
+        // the proxied path still runs and decides what the failure means.
+        let direct = match direct {
+            Ok(remote) => {
+                capture_verdict(core, before, done, remote, host).await?;
+                steps.done("capture check");
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
+        let proxied = self.proxied_path(&node_id, &target).await;
+        steps.done("proxied-path probe");
+        official_verdict(direct, proxied)
+    }
 
-        // The privileged core runs TUN only (`--local-proxy=false`), so the
-        // proxied path is exercised through the standard core.
+    /// The proxied-path step: the selected node reached through the standard
+    /// core's local proxy. The privileged core runs TUN only
+    /// (`--local-proxy=false`), so the path is exercised through the
+    /// standard core.
+    async fn proxied_path(
+        &self,
+        node_id: &str,
+        target: &reqwest::Url,
+    ) -> Result<(), ClientErrorInfo> {
         let standard = self
             .standard
             .as_ref()
@@ -1942,15 +1938,32 @@ impl Inner {
             .transport()
             .map_err(|_| health_error("HEALTH_PROXY_PATH_FAILED: STANDARD_NOT_READY"))?;
         let availability =
-            core_ipc::probe_availability(standard.as_ref(), &node_id, target.as_str(), 8_000).await;
-        steps.done("proxied-path probe");
-        let availability = availability.map_err(|error| {
-            health_error(format!("HEALTH_PROXY_PATH_FAILED: {}", error.detail()))
-        })?;
+            core_ipc::probe_availability(standard.as_ref(), node_id, target.as_str(), 8_000)
+                .await
+                .map_err(|error| {
+                    health_error(format!("HEALTH_PROXY_PATH_FAILED: {}", error.detail()))
+                })?;
         if availability.get("success").and_then(Value::as_bool) != Some(true) {
             return Err(health_error("HEALTH_PROXY_PATH_FAILED"));
         }
         Ok(())
+    }
+
+    /// While on: `On` carries [`API_UNREACHABLE`] as its reason while only
+    /// the API host is unreachable on the direct path, and none once a
+    /// check passes. Nothing changes for another generation or phase.
+    fn note_api_unreachable(&self, generation: u64, unreachable: bool) {
+        let reason = unreachable.then(|| service_unreachable(API_UNREACHABLE));
+        let applied = self.with_data(|data| {
+            data.machine.is(generation, ConnectionPhase::On)
+                && data.machine.reason != reason
+                && data
+                    .machine
+                    .transition(generation, ConnectionPhase::On, reason, false)
+        });
+        if applied {
+            self.emit();
+        }
     }
 
     fn start_loops(self: &Arc<Self>, generation: u64) {
@@ -2249,6 +2262,59 @@ fn is_path_cause(info: &ClientErrorInfo) -> bool {
             .iter()
             .any(|step| info.detail.starts_with(step)),
         _ => false,
+    }
+}
+
+/// What the official host's direct request and proxied-path probe say
+/// together. The proxied path failing is the tunnel's failure (with the
+/// direct request's reason when that failed too, as before). The proxied
+/// path working while the direct request failed means the API host is not
+/// reachable on the direct path, e.g. a lossy route from the ISP to it
+/// (the profile routes it DIRECT): the tunnel works (#438).
+fn official_verdict(
+    direct: Result<(), ClientErrorInfo>,
+    proxied: Result<(), ClientErrorInfo>,
+) -> Result<(), ClientErrorInfo> {
+    match (direct, proxied) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(direct), Err(_)) => Err(direct),
+        (Ok(()), Err(proxied)) => Err(proxied),
+        (Err(direct), Ok(())) => Err(service_unreachable(format!(
+            "{API_UNREACHABLE}: {}",
+            direct.detail
+        ))),
+    }
+}
+
+/// Only the API host is unreachable on the direct path (see
+/// [`official_verdict`]).
+fn is_api_unreachable(info: &ClientErrorInfo) -> bool {
+    info.code == ErrorCode::ConnectHealthCheckFailed && info.detail.starts_with(API_UNREACHABLE)
+}
+
+/// Traffic bypasses the TUN: the capture check failed, or its routing is
+/// broken. Recovered from at once, never put down to the network.
+fn is_leak(info: &ClientErrorInfo) -> bool {
+    info.detail.contains("HEALTH_CAPTURE_PATH_FAILED") || is_tun_routing_broken(info)
+}
+
+/// The health policy's pauses: the production ones, scaled down in tests.
+fn health_timing() -> HealthTiming {
+    HealthTiming {
+        recheck: HEALTH_RECHECK,
+        network_recheck: NETWORK_RECHECK,
+        network_grace: NETWORK_GRACE,
+        ..HealthTiming::default()
+    }
+}
+
+/// A round's result as the health policy takes it.
+fn health_round(result: &Result<(), ClientErrorInfo>) -> Round {
+    match result {
+        Ok(()) => Round::Healthy,
+        Err(error) if is_api_unreachable(error) => Round::ApiUnreachable,
+        Err(error) if is_path_cause(error) && !is_leak(error) => Round::PathFailed,
+        Err(_) => Round::Failed,
     }
 }
 
@@ -2593,22 +2659,17 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
         session,
     };
     let mut awaiting_verdict = false;
-    // Until when a path failure is put down to a recent network change.
-    let mut settling_until: Option<Instant> = None;
+    let mut health = Health::new(health_timing());
     loop {
-        let settling = settling_until.is_some_and(|until| Instant::now() < until);
-        let interval = if settling {
-            NETWORK_RECHECK
-        } else {
-            *inner
-                .health_interval
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-        };
+        let base = *inner
+            .health_interval
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let interval = health.interval(base, Instant::now().into_std());
         tokio::select! {
             () = tokio::time::sleep(interval) => {}
             () = inner.network_changed.notified() => {
-                settling_until = Some(Instant::now() + NETWORK_GRACE);
+                health.network_changed(Instant::now().into_std());
                 tokio::time::sleep(NETWORK_SETTLE).await;
                 tracing::info!(generation, "enhanced health: network changed; checking now");
             }
@@ -2625,30 +2686,27 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
         let Some(revision) = inner.with_data(|data| data.machine.revision.clone()) else {
             break;
         };
-        let settling = settling_until.is_some_and(|until| Instant::now() < until);
-        let timeout = if settling {
+        let checked_at = Instant::now().into_std();
+        let timeout = if health.settling(checked_at) {
             SETTLING_ENTRANCE_PROBE_TIMEOUT_MS
         } else {
             ENTRANCE_PROBE_TIMEOUT_MS
         };
         let result = inner.run_health(&core, &revision, false, timeout).await;
-        if let Err(error) = &result {
-            // Traffic that bypasses the TUN (its routing rules gone, e.g.
-            // systemd-networkd dropping foreign rules on a link change) is a
-            // leak, not the network settling: no grace, recover now.
-            let leaking =
-                error.detail.contains("HEALTH_CAPTURE_PATH_FAILED") || is_tun_routing_broken(error);
-            if is_path_cause(error) && settling && !leaking {
+        let round = health_round(&result);
+        // Traffic that bypasses the TUN (its routing rules gone, e.g.
+        // systemd-networkd dropping foreign rules on a link change) is a
+        // leak, not the network settling: no grace, recover now.
+        if health.in_grace(round, checked_at) {
+            if let Err(error) = &result {
                 tracing::info!(
                     generation,
                     detail = %error.detail,
                     "enhanced health failed while the network settles; checking again in {} ms",
                     NETWORK_RECHECK.as_millis()
                 );
-                continue;
             }
-        } else {
-            settling_until = None;
+            continue;
         }
         // A path failure of a node the user pinned to a line that is down is
         // that choice, not a broken tunnel: stay on (the notice says so)
@@ -2680,6 +2738,42 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
             }
         }
         awaiting_verdict = false;
+        match health.judge(round) {
+            // The tunnel works; only the API host is unreachable on the
+            // direct path. Restarting the core cannot fix that route: stay
+            // on, say so, and check less often (#438).
+            Verdict::ApiUnreachable { misses } => {
+                tracing::info!(
+                    generation,
+                    misses,
+                    detail = %result.as_ref().err().map_or("", |e| e.detail.as_str()),
+                    "enhanced health: the tunnel works but the API host is unreachable on the direct path; staying on"
+                );
+                inner.note_api_unreachable(generation, true);
+                // A healthy round for the tunnel (and the recovery episode).
+                if !inner.on_health_result(generation, Ok(())) {
+                    break;
+                }
+                continue;
+            }
+            // A path failure that is no leak: a lost probe on a lossy link
+            // must not restart the core. Recheck shortly; recover only when
+            // the recheck and the next round fail too (#438).
+            Verdict::Recheck => {
+                tracing::info!(
+                    generation,
+                    detail = %result.as_ref().err().map_or("", |e| e.detail.as_str()),
+                    "enhanced health failed on the path; checking again before recovering"
+                );
+                continue;
+            }
+            Verdict::Healthy { api_cleared } => {
+                if api_cleared {
+                    inner.note_api_unreachable(generation, false);
+                }
+            }
+            Verdict::Recover => {}
+        }
         if !inner.on_health_result(generation, result) {
             break;
         }
@@ -2777,44 +2871,6 @@ mod tests {
             machine.begin_connect("r").unwrap_err().code,
             ErrorCode::Internal
         );
-    }
-
-    #[test]
-    fn automatic_recovery_is_bounded_until_two_stable_health_checks() {
-        let mut episode = RecoveryEpisode::default();
-        assert!(episode.claim());
-        assert!(!episode.claim());
-        episode.note_health_success();
-        assert!(
-            !episode.claim(),
-            "one healthy check is not enough (and claim resets the streak)"
-        );
-        episode.note_health_success();
-        episode.note_health_success();
-        assert!(episode.claim());
-        episode.reset();
-        assert!(episode.claim());
-    }
-
-    #[test]
-    fn tun_routing_reconnects_are_bounded_per_rolling_window() {
-        let start = Instant::now();
-        let at = |seconds: u64| start + Duration::from_secs(seconds);
-        let mut budget = RoutingReconnects::default();
-        assert!(budget.claim(at(0)));
-        assert!(budget.claim(at(60)));
-        assert!(budget.claim(at(120)));
-        assert!(!budget.claim(at(180)), "a fourth within 10 minutes");
-        assert!(!budget.claim(at(599)));
-        // The first one left the window: one more.
-        assert!(budget.claim(at(600)));
-        assert!(!budget.claim(at(601)));
-        // A user's retry starts afresh.
-        budget.reset();
-        assert!(budget.claim(at(602)));
-        assert!(budget.claim(at(602)));
-        assert!(budget.claim(at(602)));
-        assert!(!budget.claim(at(602)));
     }
 
     #[test]
@@ -3842,6 +3898,9 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
 
+        // Short rounds from the change on: past the window, a path failure
+        // still takes its recheck and one more round (#438).
+        h.enhanced.set_health_interval(Duration::from_millis(20));
         h.enhanced.network_changed();
         // Checked at once, then re-checked while the network settles
         // (NETWORK_GRACE); still failing after that, recovery reconnects.
@@ -4050,6 +4109,154 @@ mod tests {
             .store(usize::MAX, Ordering::SeqCst);
         h.enhanced.set_health_interval(Duration::from_millis(20));
         wait_connects_above(&h, 1, "recovered").await;
+    }
+
+    /// A probe lost now and then on a lossy link (#438): the entrance probe
+    /// fails in one round out of four, for many rounds. The core stays,
+    /// with no reconnect and no notice.
+    #[tokio::test]
+    async fn periodic_probe_loss_keeps_one_core() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        for _ in 0..12 {
+            h.service.entrance_failures.store(1, Ordering::SeqCst);
+            // The failing round, its recheck and two passing rounds.
+            while h.service.entrance_failures.load(Ordering::SeqCst) > 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        }
+        let state = h.enhanced.state();
+        assert_eq!((state.phase, state.reason), (ConnectionPhase::On, None));
+        assert_eq!(
+            h.service.connects.load(Ordering::SeqCst),
+            1,
+            "one core throughout"
+        );
+    }
+
+    /// A path failure that lasts: the round, its recheck and the next round
+    /// fail, then exactly one recovery reconnects.
+    #[tokio::test]
+    async fn a_lasting_path_failure_recovers_after_the_recheck_and_the_next_round() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        // Two failures (a round and its recheck): no recovery.
+        h.service.entrance_failures.store(2, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            h.service.connects.load(Ordering::SeqCst),
+            1,
+            "two failures are not enough"
+        );
+        // Three in a row: recovered, once.
+        h.service.entrance_failures.store(3, Ordering::SeqCst);
+        wait_connects_above(&h, 1, "recovered after three failures").await;
+        wait_phase(&h, ConnectionPhase::On).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 2, "one recovery");
+    }
+
+    /// Only the API host is unreachable on the direct path, the tunnel's
+    /// steps pass: the core stays, `On` says so, and the notice goes once a
+    /// direct request passes again (#438).
+    #[tokio::test]
+    async fn a_direct_only_failure_stays_on_with_a_notice() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        let direct_down = Arc::new(AtomicBool::new(true));
+        let checks = Arc::new(AtomicUsize::new(0));
+        h.enhanced.set_official_steps(Arc::new({
+            let direct_down = direct_down.clone();
+            let checks = checks.clone();
+            move || {
+                checks.fetch_add(1, Ordering::SeqCst);
+                let direct = if direct_down.load(Ordering::SeqCst) {
+                    Err(service_unreachable("HEALTH_DIRECT_PATH_FAILED"))
+                } else {
+                    Ok(())
+                };
+                (direct, Ok(()))
+            }
+        }));
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        let state = wait_phase_reason(&h, |state| state.reason.is_some()).await;
+        assert_eq!(state.phase, ConnectionPhase::On);
+        let reason = state.reason.unwrap();
+        assert_eq!(
+            (reason.code, reason.detail.as_str()),
+            (ErrorCode::ConnectHealthCheckFailed, API_UNREACHABLE)
+        );
+        // Backing off: 20, 40, 80, 160, 320 ms between checks.
+        let before = checks.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let during = checks.load(Ordering::SeqCst) - before;
+        assert!(during <= 5, "backed off ({during} checks in 600 ms)");
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1, "no restart");
+
+        direct_down.store(false, Ordering::SeqCst);
+        let state = wait_phase_reason(&h, |state| state.reason.is_none()).await;
+        assert_eq!(state.phase, ConnectionPhase::On);
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+    }
+
+    /// The proxied path failing is the tunnel's failure, whatever the
+    /// direct request did: recovered from as a path failure.
+    #[tokio::test]
+    async fn a_failing_proxied_path_still_recovers() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        h.enhanced.set_official_steps(Arc::new(|| {
+            (
+                Err(service_unreachable("HEALTH_DIRECT_PATH_FAILED")),
+                Err(health_error("HEALTH_PROXY_PATH_FAILED")),
+            )
+        }));
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        wait_connects_above(&h, 1, "recovered").await;
+    }
+
+    #[test]
+    fn official_verdicts() {
+        let direct = || Err(service_unreachable("HEALTH_DIRECT_PATH_FAILED"));
+        let proxied = || Err(health_error("HEALTH_PROXY_PATH_FAILED"));
+        assert_eq!(official_verdict(Ok(()), Ok(())), Ok(()));
+        let only_direct = official_verdict(direct(), Ok(())).unwrap_err();
+        assert!(is_api_unreachable(&only_direct), "{only_direct:?}");
+        assert_eq!(
+            only_direct.detail,
+            format!("{API_UNREACHABLE}: HEALTH_DIRECT_PATH_FAILED")
+        );
+        assert_eq!(official_verdict(direct(), proxied()), direct());
+        assert_eq!(official_verdict(Ok(()), proxied()), proxied());
+        assert!(!is_api_unreachable(&direct().unwrap_err()));
+        assert!(is_leak(&service_unreachable(
+            "HEALTH_CAPTURE_PATH_FAILED: x"
+        )));
+        assert!(is_leak(&service_unreachable(TUN_ROUTING_BROKEN)));
+        assert!(!is_leak(&only_direct));
+    }
+
+    /// Waits until the controller's state matches `done`.
+    async fn wait_phase_reason(
+        h: &Harness,
+        done: impl Fn(&EnhancedState) -> bool,
+    ) -> EnhancedState {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = h.enhanced.state();
+            if done(&state) {
+                return state;
+            }
+            assert!(std::time::Instant::now() < deadline, "stuck in {state:?}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     #[tokio::test]

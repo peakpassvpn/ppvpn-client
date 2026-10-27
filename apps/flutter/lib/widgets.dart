@@ -79,6 +79,54 @@ class _PressableState extends State<Pressable> {
   }
 }
 
+/// A content swap: the new child fades in over [Tokens.motionBase] as the
+/// old one fades out. Children are told apart by [id]; [expand] gives both
+/// the whole space (pages and gates).
+class Swap extends StatelessWidget {
+  const Swap({
+    super.key,
+    required this.id,
+    required this.child,
+    this.alignment = AlignmentDirectional.topStart,
+    this.expand = false,
+  });
+
+  final Object? id;
+  final Widget child;
+  final AlignmentGeometry alignment;
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: Tokens.motion(context, Tokens.motionBase),
+    switchInCurve: Tokens.motionCurve,
+    switchOutCurve: Tokens.motionCurve,
+    layoutBuilder: (current, previous) => Stack(
+      alignment: alignment,
+      fit: expand ? StackFit.expand : StackFit.loose,
+      children: [...previous, if (current != null) current],
+    ),
+    child: KeyedSubtree(key: ValueKey(id), child: child),
+  );
+}
+
+/// A part that comes and goes ([child] null): it fades as its height
+/// follows over [Tokens.motionBase]. [id] tells one child from the next.
+class Reveal extends StatelessWidget {
+  const Reveal({super.key, required this.child, this.id});
+
+  final Widget? child;
+  final Object? id;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSize(
+    duration: Tokens.motion(context, Tokens.motionBase),
+    curve: Tokens.motionCurve,
+    alignment: Alignment.topCenter,
+    child: Swap(id: child == null ? null : (id ?? true), child: child ?? const SizedBox(width: double.infinity)),
+  );
+}
+
 enum ButtonKind {
   /// The gradient primary button.
   primary,
@@ -130,7 +178,9 @@ class Button extends StatelessWidget {
     return Pressable(
       onPress: onPress,
       label: semanticsLabel ?? label,
-      builder: (context, hovered) => Container(
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionFast),
+        curve: Tokens.motionFastCurve,
         height: h,
         width: kind == ButtonKind.icon ? h : null,
         padding: kind == ButtonKind.icon ? null : EdgeInsets.symmetric(horizontal: h >= 32 ? 12 : 8),
@@ -200,7 +250,9 @@ class Segmented<T> extends StatelessWidget {
         selected: on,
         label: text,
         radius: 6,
-        builder: (context, hovered) => Container(
+        builder: (context, hovered) => AnimatedContainer(
+          duration: Tokens.motion(context, Tokens.motionFast),
+          curve: Tokens.motionFastCurve,
           height: Tokens.segmentHeight,
           padding: const EdgeInsets.symmetric(horizontal: 11),
           alignment: Alignment.center,
@@ -467,7 +519,8 @@ class TriSwitch extends StatelessWidget {
           child: Opacity(
             opacity: enabled ? 1 : 0.5,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
+              duration: Tokens.motion(context, Tokens.motionFast),
+              curve: Tokens.motionFastCurve,
               width: size.width,
               height: size.height,
               decoration: BoxDecoration(
@@ -478,7 +531,8 @@ class TriSwitch extends StatelessWidget {
               child: busy
                   ? Center(child: Spinner(color: t.accent, size: 10))
                   : AnimatedAlign(
-                      duration: const Duration(milliseconds: 150),
+                      duration: Tokens.motion(context, Tokens.motionFast),
+                      curve: Tokens.motionFastCurve,
                       alignment: on ? Alignment.centerRight : Alignment.centerLeft,
                       child: Container(
                         width: 16,
@@ -643,6 +697,17 @@ String nodeTitle(rust.UiNode node) {
   return String.fromCharCodes(runes.skip(start)).trim();
 }
 
+/// A node's lines in failover order, by name: the label, else 线路 N by
+/// place (keys are internal and never shown), as in the native apps.
+List<String> lineNames(rust.UiNode node) => [
+  for (final (i, line) in node.lines.indexed) line.label ?? S.current('routeN', {'n': '${i + 1}'}),
+];
+
+/// The lines as one text, "HKG-A → 线路 2"; a single line without a label
+/// shows nothing.
+String linesText(rust.UiNode node) =>
+    node.lines.length == 1 ? (node.lines.single.label ?? '') : lineNames(node).join(' → ');
+
 /// Flags bundled under assets/flags (flag-icons, 4:3).
 const _flags = {
   'ae', 'ar', 'at', 'au', 'be', 'ca', 'ch', 'cn', 'de', 'dk', 'fi', 'fr', 'gb', 'hk',
@@ -654,9 +719,12 @@ const _flags = {
 /// inner outline (no emoji flags: platforms draw them differently, Windows
 /// as letters). A country without a bundled flag gets its code on a tile.
 class Flag extends StatelessWidget {
-  const Flag({super.key, required this.countryCode});
+  const Flag({super.key, required this.countryCode, this.size = Tokens.flagSize});
 
   final String? countryCode;
+
+  /// 20×15 on the desktop, 28×21 on the phone.
+  final Size size;
 
   @override
   Widget build(BuildContext context) {
@@ -664,8 +732,8 @@ class Flag extends StatelessWidget {
     final code = (countryCode ?? '').toLowerCase();
     return ExcludeSemantics(
       child: Container(
-        width: Tokens.flagSize.width,
-        height: Tokens.flagSize.height,
+        width: size.width,
+        height: size.height,
         clipBehavior: Clip.antiAlias,
         alignment: Alignment.center,
         decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(3)),
@@ -674,68 +742,36 @@ class Flag extends StatelessWidget {
           border: Border.all(color: t.flagOutline, width: 0.5),
         ),
         child: _flags.contains(code)
-            ? SvgPicture.asset('assets/flags/$code.svg', fit: BoxFit.cover, width: Tokens.flagSize.width, height: Tokens.flagSize.height)
+            ? SvgPicture.asset('assets/flags/$code.svg', fit: BoxFit.cover, width: size.width, height: size.height)
             : Text(code.toUpperCase(), style: t.label.copyWith(fontSize: 8, height: 1, color: t.t3)),
       ),
     );
   }
 }
 
-/// The brand mark: a rounded tile with the mountain (DesktopLogin and the
-/// sidebar). [tile] is the tile's fill, [mountain] and [snow] the shapes'.
+/// The brand mark: the app icon, the double P (sign-in and the sidebar).
+/// Drawn 1.22 times [size], as the native login did, so that the mark
+/// itself fills [size] and the icon's transparent margin overflows it.
 class BrandMark extends StatelessWidget {
-  const BrandMark({super.key, required this.size, this.light = false});
+  const BrandMark({super.key, required this.size});
 
   final double size;
 
-  /// White tile with a blue mountain (on the brand gradient); otherwise the
-  /// blue gradient tile with a white mountain.
-  final bool light;
-
   @override
-  Widget build(BuildContext context) => CustomPaint(size: Size.square(size), painter: _BrandMarkPainter(light));
-}
-
-class _BrandMarkPainter extends CustomPainter {
-  _BrandMarkPainter(this.light);
-  final bool light;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.scale(size.width / 24);
-    final tile = RRect.fromRectAndRadius(const Rect.fromLTWH(0, 0, 24, 24), const Radius.circular(6.5));
-    final fill = Paint();
-    if (light) {
-      fill.color = const Color(0xFFFFFFFF);
-    } else {
-      fill.shader = const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF3D63C9), Color(0xFF1F4390)],
-      ).createShader(const Rect.fromLTWH(0, 0, 24, 24));
-    }
-    canvas.drawRRect(tile, fill);
-    // M3.5 17.5 9.2 9l3.3 4.8 2.1-2.9 5.9 6.6z
-    final mountain = Path()
-      ..moveTo(3.5, 17.5)
-      ..lineTo(9.2, 9)
-      ..lineTo(12.5, 13.8)
-      ..lineTo(14.6, 10.9)
-      ..lineTo(20.5, 17.5)
-      ..close();
-    // M9.2 9l1.4 2.1-1.4.8-1.3-1z
-    final snow = Path()
-      ..moveTo(9.2, 9)
-      ..lineTo(10.6, 11.1)
-      ..lineTo(9.2, 11.9)
-      ..lineTo(7.9, 10.9)
-      ..close();
-    canvas.drawPath(mountain, Paint()..color = light ? const Color(0xFF1F4390) : const Color(0xFFFFFFFF));
-    canvas.drawPath(snow, Paint()..color = light ? const Color(0xFF8FA8F5) : const Color(0xFFC9D6FF));
-  }
-
-  @override
-  bool shouldRepaint(_BrandMarkPainter old) => old.light != light;
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: OverflowBox(
+      maxWidth: size * 1.22,
+      maxHeight: size * 1.22,
+      child: Image.asset(
+        'assets/brand/app-icon.png',
+        width: size * 1.22,
+        height: size * 1.22,
+        filterQuality: FilterQuality.medium,
+        excludeFromSemantics: true,
+      ),
+    ),
+  );
 }
 
 /// The overview's icon: the shield `M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10

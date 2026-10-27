@@ -12,20 +12,25 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use ppvpn_client::{
     AuthState, Client, ClientConfig, ClientError, ClientErrorInfo, ClientListener, ClientSnapshot,
-    ConnectionMode, ConnectionPhase, ErrorCode, Node, ProbeMethod, ProbeResult, ProfileStatus,
-    RoutingMode, StandardState, TrafficSample,
+    ConnectionMode, ConnectionPhase, ConnectionState, ErrorCode, Node, ProbeMethod, ProbeResult,
+    ProfileStatus, RoutingMode, StandardState, TrafficSample,
 };
 use tokio::sync::Notify;
 
 use crate::api::{
-    UiAuth, UiConnectionMode, UiDeviceCode, UiError, UiEvents, UiLocalProxy, UiNode, UiPhase,
-    UiProbe, UiProbeMethod, UiProfile, UiRoutingMode, UiSnapshot, UiTraffic,
+    UiAuth, UiConnectionMode, UiContended, UiDeviceCode, UiError, UiEvents, UiLine, UiLocalProxy,
+    UiNode, UiPhase, UiProbe, UiProbeMethod, UiProfile, UiRoutingMode, UiSnapshot, UiTraffic,
 };
 use crate::hooks::Hooks;
 
-/// The backend the prototype signs in to; `PPVPN_API_BASE` overrides it,
-/// else the settings page's API override (`settings.json`).
-const DEFAULT_API_BASE: &str = "https://www.peakpassvpn.com";
+/// The backend the app signs in to; `PPVPN_API_BASE` overrides it, else the
+/// settings page's API override (`settings.json`). A release build bakes in
+/// its channel's backend with `PPVPN_API_BASE_DEFAULT` (release.yml, as for
+/// the native macOS app; a dev build's is the dev backend).
+const DEFAULT_API_BASE: &str = match option_env!("PPVPN_API_BASE_DEFAULT") {
+    Some(base) if !base.is_empty() => base,
+    _ => "https://www.peakpassvpn.com",
+};
 
 pub(crate) struct Bridge {
     pub(crate) client: Arc<Client>,
@@ -235,6 +240,34 @@ fn ui_error(info: &ClientErrorInfo) -> UiError {
     }
 }
 
+/// What holds enhanced mode while it is contended (`ppvpn_client`'s
+/// `ServiceBusy`, `ServiceOwnedByAnotherUser`, or `NetworkPathContended`
+/// with `TUN_ROUTING_TAKEN_OVER` or another detail).
+fn ui_contended(connection: &ConnectionState) -> Option<UiContended> {
+    if connection.phase != ConnectionPhase::Contended {
+        return None;
+    }
+    let reason = connection.reason.as_ref();
+    Some(match reason.map(|reason| reason.code) {
+        Some(ErrorCode::ServiceBusy) => UiContended::AnotherSession,
+        Some(ErrorCode::ServiceOwnedByAnotherUser) => UiContended::AnotherUser,
+        _ if reason.is_some_and(|reason| reason.detail == "TUN_ROUTING_TAKEN_OVER") => {
+            UiContended::RoutesTaken
+        }
+        _ => UiContended::NetworkTaken,
+    })
+}
+
+/// Enhanced is on and its reason says only the API host is unreachable on
+/// the direct path (`HEALTH_API_UNREACHABLE`).
+fn api_unreachable(connection: &ConnectionState) -> bool {
+    connection.phase == ConnectionPhase::On
+        && connection
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.detail == "HEALTH_API_UNREACHABLE")
+}
+
 pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
     let (auth, device_code) = match &snapshot.auth {
         AuthState::Restoring => (UiAuth::Restoring, None),
@@ -268,6 +301,7 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             .as_ref()
             .map(|account| account.name.clone()),
         team_name: snapshot.team.as_ref().map(|team| team.name.clone()),
+        team_id: snapshot.team.as_ref().map(|team| team.id.clone()),
         profile,
         profile_revision: snapshot.profile.as_ref().map(|p| p.revision.clone()),
         expires_at: snapshot.profile.as_ref().map(|p| p.expires_at.clone()),
@@ -282,11 +316,7 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
             ConnectionPhase::Disconnecting => UiPhase::Disconnecting,
             ConnectionPhase::Error => UiPhase::Error,
         },
-        line: connection
-            .detail
-            .endpoint_label
-            .clone()
-            .or_else(|| connection.detail.endpoint_key.clone()),
+        line_key: connection.detail.endpoint_key.clone(),
         latency_ms: connection.detail.latency_ms,
         standard_ready: matches!(snapshot.standard, StandardState::Ready { .. }),
         selected_node_id: snapshot.selected_node_id.clone(),
@@ -307,6 +337,8 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
         service_installed: snapshot.service_installed,
         can_take_over: connection.can_take_over,
         suggest_compatible: connection.suggest_compatible,
+        contended: ui_contended(connection),
+        api_unreachable: api_unreachable(connection),
     }
 }
 
@@ -322,7 +354,10 @@ pub(crate) fn ui_node(node: Node) -> UiNode {
         lines: node
             .replicas
             .into_iter()
-            .map(|replica| replica.label.unwrap_or(replica.endpoint_key))
+            .map(|replica| UiLine {
+                key: replica.endpoint_key,
+                label: replica.label.filter(|label| !label.is_empty()),
+            })
             .collect(),
     }
 }

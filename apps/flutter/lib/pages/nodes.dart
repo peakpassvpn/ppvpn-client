@@ -207,7 +207,9 @@ class _Table extends StatelessWidget {
                     label: nodeTitle(node),
                     onPress: () => onSelect(node.id),
                     onDoublePress: () => app.selectNode(node.id),
-                    builder: (context, hovered) => Container(
+                    builder: (context, hovered) => AnimatedContainer(
+                      duration: Tokens.motion(context, Tokens.motionFast),
+                      curve: Tokens.motionFastCurve,
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
                         color: isSelected ? t.accentSoft : (hovered ? t.sunk : null),
@@ -217,7 +219,12 @@ class _Table extends StatelessWidget {
                         ),
                       ),
                       child: _cells([
-                        Text(isCurrent ? '✓' : '', style: t.bodyStrong.copyWith(color: t.accent, fontSize: 13)),
+                        AnimatedOpacity(
+                          opacity: isCurrent ? 1 : 0,
+                          duration: Tokens.motion(context, Tokens.motionBase),
+                          curve: Tokens.motionCurve,
+                          child: Text('✓', style: t.bodyStrong.copyWith(color: t.accent, fontSize: 13)),
+                        ),
                         Row(
                           children: [
                             Flag(countryCode: node.exitCountryCode),
@@ -235,7 +242,7 @@ class _Table extends StatelessWidget {
                             ),
                           ],
                         ),
-                        _Tier(label: node.entryLabel, entryKey: node.entryKey),
+                        TierTag(label: node.entryLabel, entryKey: node.entryKey),
                         Text(
                           node.exitRegion ?? '',
                           maxLines: 1,
@@ -243,7 +250,7 @@ class _Table extends StatelessWidget {
                           style: t.body.copyWith(fontSize: 13, color: t.t2),
                         ),
                         Text(
-                          node.lines.join(' → '),
+                          linesText(node),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: t.monoText(12, color: t.t2),
@@ -264,8 +271,8 @@ class _Table extends StatelessWidget {
 
 /// The entry tier tag (20 high, 11/600): optimised entries teal, the rest
 /// (专线) accent.
-class _Tier extends StatelessWidget {
-  const _Tier({required this.label, required this.entryKey});
+class TierTag extends StatelessWidget {
+  const TierTag({required this.label, required this.entryKey});
 
   final String? label;
   final String entryKey;
@@ -293,8 +300,9 @@ class _Tier extends StatelessWidget {
   }
 }
 
-/// The footer card (40 high): the selected node's local proxy, user name,
-/// copy buttons; the node count and testing note at the end.
+/// The footer card (40 high): the selected node's local proxy and its copy
+/// buttons (the addresses carry the credentials); otherwise the node count
+/// and testing note.
 class _Footer extends StatelessWidget {
   const _Footer({required this.app, required this.node, required this.count, required this.testing});
 
@@ -321,7 +329,9 @@ class _Footer extends StatelessWidget {
             return Row(
               children: [
                 if (selected != null && proxy != null) ...[
-                  Flexible(
+                  // All the room the buttons leave: the node's name is the
+                  // only text that can get long.
+                  Expanded(
                     child: Text(
                       s('nodeProxyT', {'n': nodeTitle(selected)}),
                       maxLines: 1,
@@ -330,13 +340,13 @@ class _Footer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Text(proxy.username, style: t.monoText(12, color: t.t3)),
-                ] else
+                ] else ...[
                   Text(
                     [s('nodeCount', {'n': '$count'}), if (testing) s('testing')].join(' · '),
                     style: t.note.copyWith(color: t.t2),
                   ),
-                const Spacer(),
+                  const Spacer(),
+                ],
                 if (proxy != null) ...[
                   CopyButton(
                     text: ProxyRows.url(proxy, 'http'),

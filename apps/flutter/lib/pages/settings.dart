@@ -1,12 +1,14 @@
 // Settings (handoff "6. 设置", #401 step 3): a page of the main window, in
 // the overview's column, with three grouped cards. General: appearance,
 // language, routing mode, launch at login (step 4, the system's state), the
-// version (update checks are step 5). Account: user, team, service expiry,
+// version with the update check and the automatic-check switch where the
+// app installs updates, or the Linux notice (step 5, updates.dart). Account: user, team, service expiry,
 // sign out with a confirmation. Advanced: the API override (next launch)
 // and the system service's status (install and uninstall disabled:
 // enhanced mode is step 2). Appearance, language and the override are the
 // app's own (settings.dart); the routing mode is the client's.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
@@ -18,6 +20,7 @@ import '../settings.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
 import '../theme.dart';
+import '../updates.dart';
 import '../widgets.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -154,12 +157,7 @@ class _General extends StatelessWidget {
           ),
         ),
         const _LaunchAtLogin(),
-        SettingRow(
-          icon: FLucideIcons.info,
-          title: s('versionT'),
-          divider: true,
-          trailing: _Value(Settings.version.isEmpty ? '—' : Settings.version, mono: true),
-        ),
+        const _Version(),
       ],
     );
   }
@@ -184,7 +182,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
   void initState() {
     super.initState();
     windowManager.addListener(this);
-    Settings.refreshLaunchAtLogin();
+    _error = Settings.refreshLaunchAtLogin();
   }
 
   @override
@@ -194,7 +192,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
   }
 
   @override
-  void onWindowFocus() => Settings.refreshLaunchAtLogin();
+  void onWindowFocus() => setState(() => _error = Settings.refreshLaunchAtLogin());
 
   void _set(bool enabled) {
     final error = Settings.setLaunchAtLogin(enabled);
@@ -233,7 +231,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
                   height: Tokens.smallButtonHeight,
                   fontSize: 12,
                   label: s(Platform.isWindows ? 'openWinStartup' : 'openSysSettings'),
-                  onPress: rust.openLaunchAtLoginSettings,
+                  onPress: () => setState(() => _error = Settings.openLaunchAtLoginSettings()),
                 ),
               ],
             ),
@@ -250,6 +248,91 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// The version, with 「检查更新…」 where the app checks; the
+/// automatic-check switch where it installs updates; on Linux the newer
+/// build's notice with the upgrade command, and how a check ended.
+class _Version extends StatelessWidget {
+  const _Version();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final s = S.current;
+    return Column(
+      children: [
+        SettingRow(
+          icon: FLucideIcons.info,
+          title: s('versionT'),
+          divider: true,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _Value(Settings.version.isEmpty ? '—' : Settings.version, mono: true),
+              if (Updates.installs || Updates.notices) ...[
+                const SizedBox(width: 8),
+                Button(
+                  kind: ButtonKind.text,
+                  height: Tokens.smallButtonHeight,
+                  fontSize: 12,
+                  label: s('checkUpdates'),
+                  onPress: () => unawaited(Updates.check()),
+                ),
+              ],
+            ],
+          ),
+        ),
+        ValueListenableBuilder(
+          valueListenable: Updates.notice,
+          builder: (context, notice, _) => notice == null
+              ? ValueListenableBuilder(
+                  valueListenable: Updates.checked,
+                  builder: (context, checked, _) => switch (checked) {
+                    CheckResult.upToDate => _SubRow(children: [Text(s('upToDate'), style: t.note)]),
+                    CheckResult.failed => _SubRow(
+                      children: [Text(s('updCheckFailT'), style: t.note.copyWith(color: t.bad))],
+                    ),
+                    _ => const SizedBox.shrink(),
+                  },
+                )
+              : _SubRow(
+                  children: [
+                    Icon(FLucideIcons.arrowDown, size: 14, color: t.accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(s('updAvailT', {'v': notice.version}), style: t.note),
+                          Text(s('updAvailD'), style: t.note),
+                          Text(notice.command, style: t.monoText(12, color: t.t2)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    CopyButton(text: notice.command, label: s('copyCommand')),
+                  ],
+                ),
+        ),
+        ValueListenableBuilder(
+          valueListenable: Updates.autoCheck,
+          builder: (context, autoCheck, _) => autoCheck == null
+              ? const SizedBox.shrink()
+              : SettingRow(
+                  icon: FLucideIcons.calendarClock,
+                  title: s('autoUpdate'),
+                  divider: true,
+                  trailing: TriSwitch(
+                    label: s('autoUpdate'),
+                    state: autoCheck ? SwitchState.on : SwitchState.off,
+                    onChanged: (enabled) => unawaited(Updates.setAutoCheck(enabled)),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 }
@@ -321,7 +404,7 @@ class _Account extends StatelessWidget {
       builder: (context, style, animation) => FDialog(
         animation: animation,
         semanticsLabel: s('signOutQ'),
-        builder: (context, style) => _Confirm(title: s('signOutQ'), body: s('signOutD'), confirm: s('signOut')),
+        builder: (context, style) => ConfirmContent(title: s('signOutQ'), body: s('signOutD'), confirm: s('signOut')),
       ),
     );
     if (confirmed ?? false) await app.signOut();
@@ -330,8 +413,8 @@ class _Account extends StatelessWidget {
 
 /// A confirmation's content: title, text, Cancel and the action. Pops
 /// true for the action.
-class _Confirm extends StatelessWidget {
-  const _Confirm({required this.title, required this.body, required this.confirm});
+class ConfirmContent extends StatelessWidget {
+  const ConfirmContent({required this.title, required this.body, required this.confirm});
 
   final String title;
   final String body;

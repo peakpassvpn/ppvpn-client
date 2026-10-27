@@ -15,9 +15,12 @@ import '../theme.dart';
 import '../widgets.dart';
 
 class SignInPage extends StatelessWidget {
-  const SignInPage({super.key, required this.app});
+  const SignInPage({super.key, required this.app, this.inset = Tokens.signInPadding});
 
   final AppState app;
+
+  /// Either side: 56 beside the brand panel, the page padding on a phone.
+  final double inset;
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
@@ -35,7 +38,7 @@ class SignInPage extends StatelessWidget {
       return Align(
         alignment: Alignment.centerLeft,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: Tokens.signInPadding, vertical: 20),
+          padding: EdgeInsets.symmetric(horizontal: inset, vertical: 20),
           child: body,
         ),
       );
@@ -347,7 +350,7 @@ class SignInBrand extends StatelessWidget {
                 const SizedBox(height: 36),
                 Row(
                   children: [
-                    const BrandMark(size: 40, light: true),
+                    const BrandMark(size: 40),
                     const SizedBox(width: 12),
                     Text(S.current('app'), style: text(22, 28, FontWeight.w700, white, -0.02)),
                   ],

@@ -65,6 +65,10 @@ class AppState {
   /// The latest failed action, for the one-time error dialog.
   final ValueNotifier<String?> actionError = ValueNotifier(null);
 
+  /// Teams the account can switch between: read when the account menu
+  /// opens ([refreshTeams]).
+  final ValueNotifier<List<rust.UiTeam>> teams = ValueNotifier(const []);
+
   /// The message center's list.
   late final MessagesState messages = MessagesState(fixed: fixed, onError: (error) => actionError.value = error);
   /// Bumped when the tray turns enhanced mode on before the service is
@@ -233,6 +237,8 @@ class AppState {
   Future<void> installService() => _run(rust.serviceInstall);
   Future<void> refreshNodes() => _run(rust.refreshNodes);
   Future<void> selectNode(String id) => _run(() => rust.selectNode(nodeId: id));
+  Future<void> refreshTeams() => _run(() async => teams.value = await rust.teams());
+  Future<void> switchTeam(String id) => _run(() => rust.switchTeam(teamId: id));
   Future<void> setRoutingMode(rust.UiRoutingMode mode) => _run(() => rust.setRoutingMode(mode: mode));
 
   Future<void> testAll(rust.UiProbeMethod method) async {

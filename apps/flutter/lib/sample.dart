@@ -33,10 +33,10 @@ final Brightness? forcedBrightness = switch (Platform.environment['PPVPN_FLUTTER
 /// The logs page in the screenshot mode: its directory (as the footer shows
 /// it), its "today" and its lines.
 final String sampleLogDir = Platform.isMacOS
-    ? '~/Library/Logs/PPVPN Flutter'
+    ? '~/Library/Logs/PPVPN'
     : Platform.isWindows
-    ? r'%LOCALAPPDATA%\PPVPN Flutter\logs'
-    : '~/.local/state/ppvpn-flutter/logs';
+    ? r'%LOCALAPPDATA%\PPVPN\logs'
+    : '~/.local/state/ppvpn/logs';
 final DateTime sampleLogDate = DateTime.utc(2026, 10, 20);
 const sampleLogLines = [
   '2026-10-20T14:30:02.418Z  INFO ppvpn_desktop: client created app_version=0.7.0',
@@ -72,7 +72,7 @@ AppState sampleState() {
     entryLabel: tier,
     entryKey: key,
     udp: true,
-    lines: lines,
+    lines: [for (final line in lines) rust.UiLine(key: line, label: line)],
   );
   final nodes = [
     node('hk1', 'HK', 'Hong Kong 01', 'Hong Kong', ['HKG-A', 'HKG-B', 'SZX-R'], tier: 'Premium', key: 'premium'),
@@ -94,11 +94,12 @@ AppState sampleState() {
       deviceCode: null,
       accountName: 'Jordan',
       teamName: 'Acme Studio',
+      teamId: 'acme',
       profile: rust.UiProfile.ready,
       profileRevision: 'sample',
       expiresAt: '2027-03-31T00:00:00Z',
       phase: rust.UiPhase.connected,
-      line: 'HKG-A',
+      lineKey: 'HKG-A',
       latencyMs: 38,
       standardReady: true,
       selectedNodeId: 'hk1',
@@ -110,6 +111,7 @@ AppState sampleState() {
       serviceInstalled: false,
       canTakeOver: false,
       suggestCompatible: false,
+      apiUnreachable: false,
     ),
   );
   app.nodes.value = nodes;

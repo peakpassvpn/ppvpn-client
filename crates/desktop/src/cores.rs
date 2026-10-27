@@ -15,8 +15,13 @@ use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
 use crate::service::ServiceApi;
 use crate::session::{ClientRef, SelectionSource};
 use crate::standard::{CoreLauncher, StandardCore, StandardSettings};
+use crate::tunnel_mode::{TunnelConfig, TunnelMode};
 use crate::StandardState;
 use crate::{Client, ClientConfig, PlatformHooks};
+
+/// Android and iOS: the connection is the system VPN, whose process runs the
+/// engine (tunnel mode, [`crate::tunnel_mode`]), in place of enhanced mode.
+pub(crate) const PHONE: bool = cfg!(any(target_os = "android", target_os = "ios"));
 
 /// State guarded by [`Client::cores`].
 #[derive(Default)]
@@ -137,6 +142,37 @@ pub(crate) fn build_cores(
         }),
     );
     (standard, enhanced, compat)
+}
+
+/// The phones' tunnel mode, with the host's socket in the data directory
+/// (Android's `filesDir`, the App Group container on iOS); `None` elsewhere.
+pub(crate) fn build_tunnel(
+    config: &ClientConfig,
+    routing: crate::routing::RoutingModeCell,
+    ingress_pins: crate::ingress::PinsCell,
+    this: &Weak<Client>,
+) -> Option<TunnelMode> {
+    if !PHONE {
+        return None;
+    }
+    let weak_selection = this.clone();
+    let weak_state = this.clone();
+    Some(TunnelMode::new(
+        std::path::Path::new(&config.data_dir),
+        TunnelConfig {
+            rule_set_hosts: crate::core_ipc::rule_set_hosts(&config.api_base),
+            routing,
+            ingress_pins,
+            selection: SelectionSource::new(move || {
+                ClientRef::upgrade(&weak_selection).and_then(|client| client.selected_node())
+            }),
+        },
+        Arc::new(move |state| {
+            if let Some(client) = ClientRef::upgrade(&weak_state) {
+                client.on_enhanced_state(state);
+            }
+        }),
+    ))
 }
 
 impl Client {
@@ -282,10 +318,14 @@ impl Client {
                 }
             }
         }
-        let enhanced = self
-            .enhanced
-            .set_profile(&current.raw, &current.revision)
-            .await;
+        let enhanced = match &self.tunnel {
+            Some(tunnel) => tunnel.set_profile(&current.raw, &current.revision).await,
+            None => {
+                self.enhanced
+                    .set_profile(&current.raw, &current.revision)
+                    .await
+            }
+        };
         if let Some(info) = enhanced.err().and_then(|error| error.info()) {
             if is_profile_rejection(&info) {
                 self.mark_core_rejected(&current.revision, info);
@@ -297,6 +337,15 @@ impl Client {
 
     /// Launch-time enhanced-mode restore, after the saved sign-in restored.
     pub(crate) async fn restore_enhanced(&self) {
+        if let Some(tunnel) = &self.tunnel {
+            // The system VPN outlives the app; signed out, the app stops it
+            // when the phase turns off.
+            tunnel.restore().await;
+            if !self.is_signed_in() {
+                let _ = tunnel.disable().await;
+            }
+            return;
+        }
         self.enhanced.restore().await;
         if self.connection_mode() == crate::ConnectionMode::Compatible {
             // Mutually exclusive: a session re-attached in compatible mode is
@@ -313,9 +362,14 @@ impl Client {
     /// needs it (the background sync may not have run yet).
     pub(crate) async fn prime_enhanced(&self) -> Result<(), ClientError> {
         if let Some(current) = self.current_profile() {
-            self.enhanced
-                .set_profile(&current.raw, &current.revision)
-                .await?;
+            match &self.tunnel {
+                Some(tunnel) => tunnel.set_profile(&current.raw, &current.revision).await?,
+                None => {
+                    self.enhanced
+                        .set_profile(&current.raw, &current.revision)
+                        .await?
+                }
+            }
         }
         Ok(())
     }
@@ -333,7 +387,10 @@ impl Client {
     /// The next apply or connect carries it anyway.
     pub(crate) async fn apply_selection(&self, node_id: &str) -> Result<(), ClientError> {
         self.select_standard_node(node_id).await;
-        self.enhanced.select_node(node_id).await
+        match &self.tunnel {
+            Some(tunnel) => tunnel.select_node(node_id).await,
+            None => self.enhanced.select_node(node_id).await,
+        }
     }
 
     /// Best-effort `select-node` on the standard core (when it runs).
@@ -382,6 +439,9 @@ impl Client {
             if let Some(task) = state.monitor_task.take() {
                 task.abort();
             }
+        }
+        if let Some(tunnel) = &self.tunnel {
+            tunnel.shutdown();
         }
         let standard = self.standard.clone();
         let enhanced = self.enhanced.clone();

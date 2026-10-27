@@ -6,13 +6,15 @@ name: ci
 #                   (make test-integration)
 #   L3 system       a real TUN, routes, rules and DNS, privileged
 #                   (make test-system), and the desktop end to end
-# Eight jobs, all in parallel, all on every pull request. A job that does not
+# Ten jobs, all in parallel, all on every pull request. A job that does not
 # depend on the platform is named for what it checks (it runs on ubuntu, as
 # an implementation detail); a platform job is named for its OS and covers
 # only that OS's own code. L1 and L2 run once (docs/testing.md, "Platform
 # tests"):
 #   lint         the sensitive check, format, clippy, sail's pins, the
 #                release feature check
+#   advisories   cargo-deny: RustSec advisories and dependency sources
+#                (deny.toml)
 #   unit         L1
 #   integration  L2
 #   desktop      the desktop layers: the service and the client, the
@@ -24,7 +26,12 @@ name: ci
 #   windows      clippy (MSVC), the Windows-only tests, G7 on Windows, the
 #                C# bindings, App.Core, the app and push agent builds
 #   flutter      the Flutter prototype (#387) on Linux, macOS and Windows:
-#                build and smoke test, only when it or the client changed
+#                build and smoke test, the Linux deb and rpm, only when it
+#                or the client changed; on Windows also its installer,
+#                installed and uninstalled
+#   android      the Flutter app's Android target (#448): the bridge for
+#                arm64 and x86_64, the APK, the app started on an emulator,
+#                only when it or the client changed
 # A pull request that changes only docs/ or Markdown runs every job, and each
 # skips its build and test steps (tools/ci-changes.sh `code`); lint still runs
 # the sensitive check.
@@ -148,6 +155,43 @@ jobs:
       - name: scripts
         if: steps.scope.outputs.code == 'true'
         run: bash -n tools/*.sh test/netns/*.sh
+
+  # cargo-deny against Cargo.lock (deny.toml): the RustSec advisories, then
+  # where the dependencies come from. A new advisory can appear on any day:
+  # it fails only a pull request that changes the dependencies (scope deps)
+  # and is a warning on the others, so that it shows without blocking
+  # unrelated work. The binary is cargo-deny's release, checked by hash.
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      # cargo-deny reads the graph with cargo metadata: rust-toolchain.toml's.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - name: cargo-deny
+        env:
+          VERSION: 0.20.2
+          SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          name=cargo-deny-$VERSION-x86_64-unknown-linux-musl
+          curl -sSfL -o "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$VERSION/$name.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+      - name: advisories
+        continue-on-error: ${{ steps.scope.outputs.deps != 'true' }}
+        run: cargo deny --all-features --locked check advisories
+      - name: sources
+        run: cargo deny --all-features --locked check sources
 
   # L1 on Linux.
   unit:
@@ -561,14 +605,17 @@ jobs:
         run: |
           mkdir -p build
           cargo test --locked --no-run --message-format=json \
-            -p ppvpn-core -p ppvpn-cli -p ppvpn-desktop -p ppvpn-service \
+            -p ppvpn-core -p ppvpn-cli -p ppvpn-desktop -p ppvpn-service -p ppvpn-flutter \
             --lib --bin ppvpn-service --test keystore > build/macos-tests.json
           bin() { python3 tools/test-binary.py "$PWD/build/macos-tests.json" "$1"; }
           core=$(bin ppvpn_core) cli=$(bin ppvpn_cli) desktop=$(bin ppvpn_client) service=$(bin ppvpn-service)
+          flutter=$(bin ppvpn_flutter)
           (cd crates/core && "$core" hostipv6::darwin localdns::source probe::icmp runtime::sail_tests)
           (cd crates/cli && "$cli" identity)
           (cd crates/desktop && "$desktop" detect service sysproxy)
           (cd crates/service && PPVPN_TEST_CODESIGN=1 "$service" macsign)
+          # Objective-C exceptions caught before they reach the bridge (autostart.rs).
+          (cd apps/flutter/rust && "$flutter" autostart)
       - name: macOS tests, the Keychain
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5
@@ -753,7 +800,8 @@ jobs:
   # apps/flutter/scripts/ci-build.sh (platform runner, bridge codegen,
   # analysis, the Rust library and the app in release), then smoke.sh (still
   # running after 20 s, a screenshot, resident memory, bundle sizes; Linux
-  # in Xvfb without a GPU). Only when apps/flutter/ or crates/desktop
+  # in Xvfb without a GPU); on Windows also the installer, installed over
+  # the native app and uninstalled. Only when apps/flutter/ or crates/desktop
   # changed (tools/ci-changes.sh `flutter`); not in release.yml. Its caches
   # are read-only like the others', and nothing saves them: the Rust release
   # build starts from scratch.
@@ -805,27 +853,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config \
             libgtk-3-dev libx11-dev libxi-dev xvfb imagemagick libgl1-mesa-dri mesa-vulkan-drivers \
             gsettings-desktop-schemas dconf-gsettings-backend dconf-service
-      - name: Cache Flutter
+      - uses: ./.github/actions/flutter-toolchain
         if: steps.scope.outputs.flutter == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/flutter-sdk
-          key: flutter-${{ hashFiles('apps/flutter/scripts/install-flutter.sh') }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Install Flutter
-        if: steps.scope.outputs.flutter == 'true'
-        run: apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/flutter-sdk"
-      - name: Cache flutter_rust_bridge_codegen
-        if: steps.scope.outputs.flutter == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/flutter_rust_bridge_codegen*
-          key: frb-codegen-${{ env.FRB_CODEGEN_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Install flutter_rust_bridge_codegen
-        if: steps.scope.outputs.flutter == 'true'
-        run: |
-          if ! flutter_rust_bridge_codegen --version 2>/dev/null | grep -qF "$FRB_CODEGEN_VERSION"; then
-            cargo install flutter_rust_bridge_codegen --version "$FRB_CODEGEN_VERSION" --locked --force
-          fi
+          frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
       - id: build
         name: Build
         if: steps.scope.outputs.flutter == 'true'
@@ -864,6 +895,77 @@ jobs:
             apps/flutter/scripts/smoke.sh "${{ steps.build.outputs.bundle }}" "$RUNNER_TEMP/flutter-out"
           fi
           { echo '```'; cat "$RUNNER_TEMP/flutter-out/results.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # The macOS packaging (#401 step 5, scripts/package-macos.sh), as the
+      # native release's: the Swift push agent, its client framework, the
+      # LaunchAgent and the service helpers in the bundle, inside-out
+      # signing (ad-hoc here), the DMG, the .pkg and release-meta. The
+      # runner's slice only (arm64), with the client and the helpers in
+      # debug: the packaging is what is checked, and debug builds the
+      # quickest. Then the shipped app as the .pkg holds it. Nothing uploaded.
+      - name: Package (macOS)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
+        timeout-minutes: 45
+        env:
+          PPVPN_APPLE_TARGETS: aarch64-apple-darwin
+        run: |
+          triple=aarch64-apple-darwin
+          command -v xcodegen >/dev/null || brew install xcodegen
+          apps/macos/scripts/bootstrap.sh
+          cargo build --locked -p ppvpn-service --bins --target "$triple"
+          mkdir -p build/binaries
+          for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
+            install -m 755 "target/$triple/debug/$bin" "build/binaries/$bin-$triple"
+          done
+          # Sign with a throwaway self-signed identity, as a release signs with
+          # its own (pinned designated requirements), not ad hoc.
+          key_dir="$RUNNER_TEMP/ci-signing"
+          mkdir -p "$key_dir"
+          printf '%s\n' '[req]' 'distinguished_name=dn' 'x509_extensions=ext' 'prompt=no' \
+            '[dn]' 'CN=PPVPN CI Signing' \
+            '[ext]' 'basicConstraints=critical,CA:false' 'keyUsage=critical,digitalSignature' \
+            'extendedKeyUsage=critical,codeSigning' > "$key_dir/req.cnf"
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 2 -config "$key_dir/req.cnf" \
+            -keyout "$key_dir/key.pem" -out "$key_dir/cert.pem" 2>/dev/null
+          /usr/bin/openssl pkcs12 -export -inkey "$key_dir/key.pem" -in "$key_dir/cert.pem" \
+            -out "$key_dir/id.p12" -passout pass:ci
+          keychain="$key_dir/ci.keychain-db"
+          security create-keychain -p ci "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p ci "$keychain"
+          security import "$key_dir/id.p12" -k "$keychain" -P ci -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$keychain" >/dev/null
+          keychains=("$keychain")
+          while IFS= read -r line; do keychains+=("$(echo "$line" | tr -d ' "')"); done \
+            < <(security list-keychains -d user)
+          security list-keychains -d user -s "${keychains[@]}"
+          PPVPN_CODESIGN_IDENTITY="PPVPN CI Signing" \
+            SKIP_BOOTSTRAP=1 apps/flutter/scripts/package-macos.sh "${{ steps.build.outputs.bundle }}" arm64
+          ls -l dist/macos
+          python3 - dist/macos/release-meta-macos-arm64.json <<'PY'
+          import hashlib, json, os, sys
+          meta = json.load(open(sys.argv[1]))
+          keys = {"schema", "platform", "channel", "version", "build", "file", "length", "sha256",
+                  "ed_signature", "install_file", "install_length", "install_sha256", "min_os",
+                  "published_at"}
+          assert set(meta) == keys, sorted(set(meta) ^ keys)
+          assert meta["platform"] == "macos-arm64" and meta["min_os"] == "13.0", meta
+          base = os.path.dirname(sys.argv[1])
+          for file, length, sha in (("file", "length", "sha256"),
+                                    ("install_file", "install_length", "install_sha256")):
+              data = open(os.path.join(base, meta[file]), "rb").read()
+              assert len(data) == meta[length] and hashlib.sha256(data).hexdigest() == meta[sha], file
+          print(json.dumps(meta, indent=2))
+          PY
+          hdiutil verify dist/macos/PPVPN-*-macos-arm64.dmg
+          pkg="$RUNNER_TEMP/flutter-pkg"
+          pkgutil --expand-full dist/macos/PPVPN-*-macos-arm64.pkg "$pkg"
+          grep -q 'identifier="com.peakpassvpn.ppvpn.desktop.pkg"' "$pkg/PackageInfo"
+          cmp apps/macos/packaging/postinstall "$pkg/Scripts/postinstall"
+          app="$pkg/Payload/PPVPN.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dvv "$app" 2>&1 | grep -qx 'Authority=PPVPN CI Signing'
+          codesign -d --entitlements - --xml "$app" | grep -q 'com.apple.security.cs.disable-library-validation'
+          ls -R "$app/Contents/Library" "$app/Contents/MacOS"
       # Enhanced mode end to end on Linux (#401 step 2): the release bundle
       # in the packages' layout (/usr/lib/ppvpn/ppvpn, the only client the
       # service accepts) with the service built in its shipping profile and
@@ -904,7 +1006,43 @@ jobs:
           if [ "${{ matrix.os }}" = ubuntu-latest ]; then
             sudo apt-get install -y --no-install-recommends xdotool >/dev/null
           fi
-          apps/flutter/scripts/native.sh v0.6.3 "$RUNNER_TEMP/native"
+          apps/flutter/scripts/native.sh v0.6.4 "$RUNNER_TEMP/native"
+      # The deb and rpm (#401 step 5, apps/flutter/scripts/package-linux.sh),
+      # each installed alone in a fresh container by package-smoke.sh: the
+      # layout, every library resolved from the package's dependencies, one
+      # start on Xvfb, the removal; the deb then upgrades the native package
+      # fetched above in place. Built on this runner, so the glibc floor is
+      # only reported (the release builds on Ubuntu 22.04).
+      - name: Linux packages
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        timeout-minutes: 30
+        env:
+          NFPM_VERSION: '2.47.0'
+          PPVPN_GLIBC_FLOOR: ''
+          PPVPN_DIST_DIR: ${{ runner.temp }}/flutter-pkg
+          NATIVE_DEB: ${{ steps.native.outputs.installer }}
+        run: |
+          curl -sSfL "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nfpm
+          apps/flutter/scripts/package-linux.sh "${{ steps.build.outputs.bundle }}"
+          cat "$PPVPN_DIST_DIR"/release-meta-linux-*.json
+          native=()
+          if [ -n "$NATIVE_DEB" ]; then
+            native=(-v "$(dirname "$NATIVE_DEB"):/native:ro")
+          fi
+          smoke() {
+            docker run --rm -v "$PWD:/src:ro" -v "$PPVPN_DIST_DIR:/pkg:ro" "${native[@]}" -w /src "$1" \
+              bash apps/flutter/scripts/package-smoke.sh "${@:2}"
+          }
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          smoke ubuntu:24.04 "/pkg/PPVPN-$version-linux-x64.deb" ${NATIVE_DEB:+"/native/$(basename "$NATIVE_DEB")"}
+          smoke fedora:latest "/pkg/PPVPN-$version-linux-x64.rpm"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        with:
+          name: flutter-packages-linux
+          path: ${{ runner.temp }}/flutter-pkg
+          retention-days: 7
       - name: Compare with the native app
         if: steps.scope.outputs.flutter == 'true' && steps.native.outcome == 'success'
         continue-on-error: true
@@ -925,9 +1063,132 @@ jobs:
           else
             "$@"
           fi
+      # The Windows installer (#401 step 5): package-windows.ps1 packages
+      # the release bundle with the native app's installer script
+      # (apps/windows/installer/ppvpn.nsi), unsigned, as release.yml's
+      # windows job will; the service in its shipping profile without LTO,
+      # to keep the job short. smoke-installer.ps1 then installs it over the
+      # native app of the latest release (when fetched above), checks the
+      # installation, has the app quit on the installer's quit event and
+      # uninstalls it with /PURGE.
+      - name: Ensure NSIS
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
+            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          }
+          & $makensis /VERSION
+      - name: Installer (Windows)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        shell: powershell
+        env:
+          CARGO_PROFILE_SERVICE_LTO: 'false'
+          CARGO_PROFILE_SERVICE_CODEGEN_UNITS: '16'
+        run: apps/flutter/scripts/package-windows.ps1
+      # With stage A of the acceptance (#401): the native 0.6.4 app's signed-in
+      # state across the upgrade, a rollback and the upgrade again; the native
+      # installer is required for it.
+      - name: Installer smoke test (Windows)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        timeout-minutes: 30
+        run: |
+          set -- -Installer "$(cygpath -w "$(ls dist/windows/*-setup.exe)")"
+          native="${{ steps.native.outputs.installer }}"
+          [ -n "$native" ] || { echo "::error::no native installer (Fetch the native app): stage A needs it"; exit 1; }
+          set -- "$@" -Native "$(cygpath -w "$native")"
+          powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/smoke-installer.ps1 "$@"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
+        with:
+          name: flutter-installer-windows
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/windows/*-setup.exe
+            dist/windows/release-meta-windows-x64.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.scope.outputs.flutter == 'true'
         with:
           name: flutter-${{ matrix.os }}
           path: ${{ runner.temp }}/flutter-out
           if-no-files-found: ignore
+
+  android:
+    # The Flutter app's Android target (#448 step 3): the bridge for arm64
+    # and x86_64 (the NDK's clang), the APK, and the app started on an
+    # emulator. No tunnel yet (#448 steps 2 and 3).
+    name: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FRB_CODEGEN_VERSION: 2.13.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android,x86_64-linux-android
+      # The host's for the bridge codegen, which reads the crate.
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android
+      - uses: ./.github/actions/flutter-toolchain
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
+      - id: build
+        name: Build
+        if: steps.scope.outputs.flutter == 'true'
+        env:
+          FLUTTER_TARGET: android
+        run: |
+          # The runner's JDK 17 (for the emulator's step too) and newest NDK.
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          apps/flutter/scripts/ci-build.sh
+          ls -l "${{ github.workspace }}/apps/flutter/build/app/outputs/flutter-apk"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          name: flutter-apk-android
+          path: ${{ steps.build.outputs.bundle }}
+          if-no-files-found: error
+          retention-days: 14
+      # Hardware acceleration for the emulator.
+      - name: KVM
+        if: steps.scope.outputs.flutter == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # A tablet: in landscape (1280 dp across, the desktop layout), then set
+      # to a phone's screen in portrait (the phone layout, #448 step 5).
+      - name: Smoke test (emulator)
+        if: steps.scope.outputs.flutter == 'true'
+        timeout-minutes: 30
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: apps/flutter/e2e/android_smoke.sh

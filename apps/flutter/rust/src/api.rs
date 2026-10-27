@@ -40,6 +40,21 @@ pub enum UiPhase {
     Error,
 }
 
+/// Enhanced, `Contended`: what holds the connection or the network; picks
+/// the copy (#438).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiContended {
+    /// Another session of this OS user on this computer: "Use on this
+    /// device" takes it over.
+    AnotherSession,
+    /// Another OS user on this computer.
+    AnotherUser,
+    /// Another VPN or proxy app has the network path.
+    NetworkTaken,
+    /// Another program kept changing the tunnel's routes.
+    RoutesTaken,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiError {
     /// `ErrorCode` as its Rust name, e.g. `NetworkUnreachable`.
@@ -64,14 +79,17 @@ pub struct UiSnapshot {
     pub device_code: Option<UiDeviceCode>,
     pub account_name: Option<String>,
     pub team_name: Option<String>,
+    /// The current team's id, one of [`teams`]' [`UiTeam::id`]s.
+    pub team_id: Option<String>,
     pub profile: UiProfile,
     /// Changes when the node list does: read [`nodes`] again.
     pub profile_revision: Option<String>,
     /// Service paid-until, RFC 3339.
     pub expires_at: Option<String>,
     pub phase: UiPhase,
-    /// Line (replica) in use: its label, else its key.
-    pub line: Option<String>,
+    /// Line (replica) in use: its endpoint key, one of the current node's
+    /// [`UiLine::key`]s.
+    pub line_key: Option<String>,
     pub latency_ms: Option<u32>,
     /// The standard-mode core runs: local proxies and speed tests work.
     pub standard_ready: bool,
@@ -91,6 +109,11 @@ pub struct UiSnapshot {
     pub can_take_over: bool,
     /// Enhanced failed in a way the system proxy avoids: offer it.
     pub suggest_compatible: bool,
+    /// Enhanced, `Contended`: what holds it; `None` in any other phase.
+    pub contended: Option<UiContended>,
+    /// Enhanced, on: the tunnel works but the PPVPN API cannot be reached
+    /// on the direct path; checks go on (#438).
+    pub api_unreachable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,8 +126,17 @@ pub struct UiNode {
     /// Entry key, e.g. `cn-optimized`: picks the tier tag's colour.
     pub entry_key: String,
     pub udp: bool,
-    /// Lines (replicas) in failover order: label, else key.
-    pub lines: Vec<String>,
+    /// Lines (replicas) in failover order.
+    pub lines: Vec<UiLine>,
+}
+
+/// One of a node's lines. Keys are internal and never shown: a line
+/// without a label is named by its place (线路 2), as in the native apps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiLine {
+    pub key: String,
+    /// The backend's label; None when it gives none (or an empty one).
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,6 +177,13 @@ pub struct UiEvents {
     pub traffic: Option<UiTraffic>,
     /// Speed-test results since the previous call, the latest per node.
     pub probes: Vec<UiProbe>,
+}
+
+/// Android and iOS: the app's own directory, before [`start`]; the data
+/// and logs go under it (dirs.rs).
+#[frb(sync)]
+pub fn set_app_dir(path: String) {
+    let _ = crate::dirs::APP_DIR.set(path);
 }
 
 /// Creates the client on the first call and returns the current state.
@@ -192,6 +231,43 @@ pub async fn probe_all(method: UiProbeMethod) -> Result<(), String> {
     let method = bridge::probe_method(method);
     bridge::get()?
         .call(move |client| async move { client.probe(method, Vec::new()).await })
+        .await
+}
+
+/// A team the account can switch to ([`teams`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiTeam {
+    pub id: String,
+    pub name: String,
+    /// The account's personal space (shown as 个人).
+    pub personal: bool,
+    /// False for a disabled or dissolved team: listed, but switching to it
+    /// is refused.
+    pub active: bool,
+}
+
+/// Teams the account can switch between (the account menu, read each time
+/// it opens); also refreshes the snapshot's team.
+pub async fn teams() -> Result<Vec<UiTeam>, String> {
+    let teams = bridge::get()?
+        .fetch(|client| async move { client.teams().await })
+        .await?;
+    Ok(teams
+        .into_iter()
+        .map(|team| UiTeam {
+            id: team.id,
+            name: team.name,
+            personal: team.personal,
+            active: team.active,
+        })
+        .collect())
+}
+
+/// Switches team: the client fetches the team's profile and restarts
+/// standard mode.
+pub async fn switch_team(team_id: String) -> Result<(), String> {
+    bridge::get()?
+        .call(|client| async move { client.switch_team(team_id).await })
         .await
 }
 
@@ -411,14 +487,27 @@ pub struct UiActivation {
     /// The clicked notification's push id ([`shown_push`]); `None`: only
     /// show the window.
     pub push_id: Option<i64>,
+    /// The installer asks the app to quit (Windows): quit as the tray's
+    /// Quit does, `push_id` is `None`.
+    pub quit: bool,
+    /// The update's installer runs (Windows, [`start_updater`]): hide the
+    /// window and the tray icon and wait for `quit`, which comes from the
+    /// installer or, 30 s later, from the bridge. `push_id` is `None`.
+    pub update: bool,
 }
 
 /// Makes this process the app's one instance (Windows and Linux; on macOS
 /// the system keeps one, and clicks come through the runner). False when
 /// another one runs: it got this launch's arguments and shows its window,
 /// so quit at once. Call once, before [`start`].
+///
+/// On Windows it first gives the process the app's AppUserModelID and
+/// registers it for notifications, and a launch by the installer with
+/// `--set-shortcut-aumid <.lnk>` only stamps that shortcut and exits here
+/// (`aumid.rs`).
 #[frb(sync)]
 pub fn claim_instance() -> bool {
+    crate::aumid::prepare();
     crate::instance::claim()
 }
 
@@ -503,9 +592,10 @@ pub struct UiLaunchAtLogin {
     pub needs_approval: bool,
 }
 
-/// Read again whenever it is shown: the system can change it.
+/// Read again whenever it is shown: the system can change it. An error
+/// when the system raised one (macOS: an Objective-C exception, caught).
 #[frb(sync)]
-pub fn launch_at_login() -> UiLaunchAtLogin {
+pub fn launch_at_login() -> Result<UiLaunchAtLogin, String> {
     crate::autostart::state()
 }
 
@@ -519,8 +609,8 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
 /// Where the system holds the entry back: Login Items (macOS), Startup
 /// apps (Windows). Nothing on Linux.
 #[frb(sync)]
-pub fn open_launch_at_login_settings() {
-    crate::autostart::open_settings();
+pub fn open_launch_at_login_settings() -> Result<(), String> {
+    crate::autostart::open_settings()
 }
 
 /// At start: points an enabled Windows entry at the current executable
@@ -535,4 +625,46 @@ pub fn refresh_launch_at_login() {
 #[frb(sync)]
 pub fn started_in_background() -> bool {
     crate::autostart::started_in_background()
+}
+
+// --- updates ---
+
+/// How this build updates itself (#401 step 5, `update.rs`). macOS: the
+/// runner's Sparkle, nothing here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiUpdater {
+    /// Windows: WinSparkle runs; the app shows 「检查更新…」
+    /// ([`check_for_updates`]) and the automatic-check switch.
+    pub installs: bool,
+    /// Windows: WinSparkle checks on its own schedule
+    /// ([`set_auto_check_updates`]).
+    pub auto_check: bool,
+    /// Linux: the repository's latest.json, to compare with `build` (a
+    /// notice, the package manager upgrades); `None` in a development build.
+    pub notice_feed: Option<String>,
+    /// This build, `<version>.<build number>`, as latest.json's `build`.
+    pub build: String,
+    /// Linux: the upgrade command for this install's package format.
+    pub upgrade_command: String,
+}
+
+/// Starts the updater (Windows: WinSparkle, with its scheduled check) and
+/// says what this build can do. Call once the window exists.
+#[frb(sync)]
+pub fn start_updater() -> UiUpdater {
+    crate::update::start()
+}
+
+/// A check the user asked for, with WinSparkle's own progress and result
+/// windows (Windows; nothing elsewhere).
+#[frb(sync)]
+pub fn check_for_updates() {
+    crate::update::check();
+}
+
+/// Turns WinSparkle's scheduled checks on or off and saves it as the native
+/// app does (Windows).
+#[frb(sync)]
+pub fn set_auto_check_updates(enabled: bool) -> Result<(), String> {
+    crate::update::set_auto_check(enabled)
 }
