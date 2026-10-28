@@ -1166,9 +1166,9 @@ jobs:
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      # The system image and the rest from the cache release.yml saves
-      # (.github/actions/android-sdk); a miss downloads them and fails on an
-      # incomplete one instead of booting without it.
+      # The system image (checksummed) and the rest, installed by
+      # .github/actions/android-sdk, which fails on an incomplete one instead
+      # of booting without it.
       - uses: ./.github/actions/android-sdk
         if: steps.scope.outputs.flutter == 'true'
         with:
