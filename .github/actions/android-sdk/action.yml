@@ -59,7 +59,9 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.sdk.outputs.paths }}
-        key: android-sdk-${{ inputs.api-level }}-${{ inputs.target }}-${{ inputs.arch }}-bt${{ inputs.build-tools }}-${{ runner.os }}-${{ runner.arch }}
+        # With the installer's hash: what it writes (package.xml) is part of
+        # the entry.
+        key: android-sdk-${{ inputs.api-level }}-${{ inputs.target }}-${{ inputs.arch }}-bt${{ inputs.build-tools }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/actions/android-sdk/system-image.py') }}
         lookup-only: ${{ inputs.lookup-only }}
     - name: Install the packages
       if: steps.cache.outputs.cache-hit != 'true'
