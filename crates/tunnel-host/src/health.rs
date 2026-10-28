@@ -74,7 +74,7 @@ pub(crate) async fn run(
                 }
                 continue;
             }
-            _ = shutdown.wait_for(|stopped| *stopped) => return,
+            _ = shutdown.changed() => return,
         }
 
         let now = std::time::Instant::now();

@@ -69,7 +69,7 @@ pub(crate) async fn serve(listener: UnixListener, shared: Shared) {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             },
-            _ = shutdown.wait_for(|stopped| *stopped) => return,
+            _ = shutdown.changed() => return,
         }
     }
 }
@@ -155,7 +155,7 @@ async fn watch(stream: UnixStream, shared: Shared) {
                 Ok(0) | Err(_) => return,
                 Ok(_) => continue,
             },
-            _ = shutdown.wait_for(|stopped| *stopped) => return,
+            _ = shutdown.changed() => return,
         };
         if write_frame(&mut writer, &frame).await.is_err() {
             return;
