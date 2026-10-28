@@ -324,6 +324,19 @@ function Show-UninstallState($Process) {
       Write-Host "running: $($_.ProcessName) (pid $($_.Id)) $path"
     }
   Get-Service $service -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "service ${service}: $($_.Status)" }
+  # Whatever else still has a file of the install loaded (a crash report, a
+  # scanner), and the app's crashes in the last minutes.
+  Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+    $process = $_
+    $held = try { @($process.Modules | Where-Object { $_.FileName -like "$dir\*" }) } catch { @() }
+    if ($held.Count -gt 0) {
+      Write-Host "holds files: $($process.ProcessName) (pid $($process.Id)): $(($held | ForEach-Object { Split-Path -Leaf $_.FileName }) -join ', ')"
+    }
+  }
+  Get-WinEvent -FilterHashtable @{ LogName = "Application"; Id = 1000, 1001, 1002; StartTime = (Get-Date).AddMinutes(-10) } `
+    -ErrorAction SilentlyContinue |
+    Where-Object { $_.Message -like "*ppvpn*" } |
+    ForEach-Object { Write-Host "event $($_.Id) at $($_.TimeCreated): $(($_.Message -split "`n")[0..3] -join ' | ')" }
 }
 
 try {

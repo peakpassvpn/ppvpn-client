@@ -915,8 +915,10 @@ jobs:
           for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
             install -m 755 "target/$triple/debug/$bin" "build/binaries/$bin-$triple"
           done
-          # Sign with a throwaway self-signed identity, as a release signs with
-          # its own (pinned designated requirements), not ad hoc.
+          # Sign with a throwaway self-signed identity, not ad hoc: the path
+          # of package-app.sh without a Team ID (pinned designated
+          # requirements). Releases sign with our Developer ID and notarize
+          # (#471), which needs the release environment's secrets.
           key_dir="$RUNNER_TEMP/ci-signing"
           mkdir -p "$key_dir"
           printf '%s\n' '[req]' 'distinguished_name=dn' 'x509_extensions=ext' 'prompt=no' \

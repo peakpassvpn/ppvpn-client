@@ -1,14 +1,17 @@
 //! macOS client identity: the code signature of the process at the other end
 //! of the socket (docs/security.md, "桌面 IPC").
 //!
-//! Our certificate is self-signed and has no Team ID, so the requirement pins
-//! the certificate itself (`certificate leaf = H"<SHA-1>"`), never its subject:
-//! anyone can make a certificate with the same common name. The hash lives in
-//! macos_client_cert.sha1 only; the release build refuses a signing
-//! certificate that does not match it (tools/desktop/ci/build-macos-native.sh).
+//! Releases are signed with our Apple Developer ID (#471), so the requirement
+//! is Apple's for a Developer ID signature of our team: anchored at Apple's
+//! root, the Developer ID intermediate and leaf, and the Team ID in the
+//! leaf's subject (OU), which only Apple issues. Unlike a pin of one
+//! certificate, it holds across certificate renewals. The Team ID lives in
+//! macos_team_id only; the release builds refuse a signing identity of
+//! another team (tools/desktop/ci/build-macos-native.sh,
+//! tools/cli/build-release.sh).
 //!
-//! ppvpn-service-install checks the service binary against the same pin
-//! before it copies it to root (src/install.rs).
+//! ppvpn-service-install checks the service binary against the same
+//! requirement before it copies it to root (src/install.rs).
 // Both binaries include this module and use different parts of it.
 #![allow(dead_code)]
 
@@ -28,7 +31,7 @@ pub const CLIENT_IDENTIFIER: &str = "com.peakpassvpn.ppvpn.desktop";
 /// The service binary's signing identifier (apps/macos/scripts/package-app.sh).
 pub const SERVICE_IDENTIFIER: &str = "com.peakpassvpn.ppvpn.service";
 
-const PINNED_CERT_SHA1: &str = include_str!("macos_client_cert.sha1");
+const TEAM_ID: &str = include_str!("macos_team_id");
 
 /// kSecCodeSignatureRuntime: the hardened runtime, which keeps other code
 /// (DYLD_INSERT_LIBRARIES, unsigned libraries) out of the client.
@@ -46,23 +49,38 @@ extern "C" {
     ) -> i32;
 }
 
-pub fn pinned_cert_sha1() -> &'static str {
-    PINNED_CERT_SHA1.trim()
+/// Our Apple Developer Team ID.
+pub fn team_id() -> &'static str {
+    TEAM_ID.trim()
 }
 
-/// The requirement a client must meet: our identifier, signed by the pinned
-/// certificate.
-pub fn client_requirement(cert_sha1: &str) -> Result<SecRequirement> {
-    requirement(CLIENT_IDENTIFIER, cert_sha1)
+/// The requirement a client must meet: our identifier, signed with a
+/// Developer ID of `team`.
+pub fn client_requirement(team: &str) -> Result<SecRequirement> {
+    requirement(CLIENT_IDENTIFIER, team)
 }
 
-/// `identifier`, signed by the certificate `cert_sha1`.
-pub fn requirement(identifier: &str, cert_sha1: &str) -> Result<SecRequirement> {
-    if cert_sha1.len() != 40 || !cert_sha1.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(anyhow!("CLIENT_CERT_PIN_INVALID"));
+/// `identifier`, signed with a Developer ID Application certificate of
+/// `team` (the designated requirement codesign gives such a signature).
+pub fn requirement(identifier: &str, team: &str) -> Result<SecRequirement> {
+    SecRequirement::from_str(&requirement_text(identifier, team)?)
+        .map_err(|e| anyhow!("CLIENT_REQUIREMENT_INVALID:{e}"))
+}
+
+fn requirement_text(identifier: &str, team: &str) -> Result<String> {
+    if team.len() != 10
+        || !team
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
+        return Err(anyhow!("TEAM_ID_INVALID"));
     }
-    let text = format!("identifier \"{identifier}\" and certificate leaf = H\"{cert_sha1}\"");
-    SecRequirement::from_str(&text).map_err(|e| anyhow!("CLIENT_REQUIREMENT_INVALID:{e}"))
+    Ok(format!(
+        "anchor apple generic and identifier \"{identifier}\" \
+         and certificate 1[field.1.2.840.113635.100.6.2.6] \
+         and certificate leaf[field.1.2.840.113635.100.6.1.13] \
+         and certificate leaf[subject.OU] = \"{team}\""
+    ))
 }
 
 /// Checks the running process behind an audit token (from LOCAL_PEERTOKEN):
@@ -118,16 +136,21 @@ fn require_runtime(code: *const std::ffi::c_void) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_file, client_requirement, pinned_cert_sha1, CLIENT_IDENTIFIER, SERVICE_IDENTIFIER,
+        check_file, client_requirement, requirement, team_id, CLIENT_IDENTIFIER, SERVICE_IDENTIFIER,
     };
+    use security_framework::os::macos::code_signing::SecRequirement;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::str::FromStr;
 
     #[test]
-    fn pinned_hash_is_a_sha1() {
-        assert!(client_requirement(pinned_cert_sha1()).is_ok());
+    fn the_team_id_is_one() {
+        assert_eq!(team_id(), "HSVMRQBQJ2");
+        assert!(client_requirement(team_id()).is_ok());
         assert!(client_requirement("PPVPN Code Signing").is_err());
-        assert!(client_requirement("e677633cfd8e675a02f901c811d7d8df7a6ecd6").is_err());
+        assert!(client_requirement("hsvmrqbqj2").is_err());
+        assert!(client_requirement("HSVMRQBQJ").is_err());
+        assert!(client_requirement("HSVMRQBQJ2\" or true").is_err());
     }
 
     fn run(command: &mut Command) -> String {
@@ -141,7 +164,8 @@ mod tests {
     }
 
     /// A throwaway keychain holding one self-signed code-signing certificate
-    /// whose common name is the release one.
+    /// that names itself our Developer ID: the release's common name and our
+    /// Team ID as its OU.
     struct Signer {
         keychain: PathBuf,
         sha1: String,
@@ -153,7 +177,8 @@ mod tests {
             std::fs::write(
                 &config,
                 "[req]\ndistinguished_name=dn\nprompt=no\nx509_extensions=v3\n\
-                 [dn]\nCN=PPVPN Code Signing\n\
+                 [dn]\nCN=Developer ID Application: PeakPass Labs LLC (HSVMRQBQJ2)\n\
+                 OU=HSVMRQBQJ2\n\
                  [v3]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\n\
                  extendedKeyUsage=critical,codeSigning\n",
             )
@@ -267,15 +292,60 @@ mod tests {
         }
     }
 
-    /// Two certificates with the same common name: only the pinned one
-    /// passes, and only with our identifier and the hardened runtime.
+    /// A Developer ID-signed app on the runner (its own identifier and
+    /// team), to check the requirement's form against a real signature.
+    fn developer_id_app() -> (PathBuf, String, String) {
+        for app in [
+            "/Applications/Google Chrome.app",
+            "/Applications/Firefox.app",
+            "/Applications/Microsoft Edge.app",
+        ] {
+            let path = PathBuf::from(app);
+            if !path.exists() {
+                continue;
+            }
+            let output = Command::new("codesign")
+                .args(["-dv", "--verbose=2"])
+                .arg(&path)
+                .output()
+                .expect("spawn");
+            let text = String::from_utf8_lossy(&output.stderr).into_owned();
+            let field = |name: &str| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .map(str::to_string)
+            };
+            if let (Some(identifier), Some(team)) = (field("Identifier="), field("TeamIdentifier="))
+            {
+                return (path, identifier, team);
+            }
+        }
+        panic!("no Developer ID-signed app on this machine");
+    }
+
+    /// Only a Developer ID signature of our team passes, with our
+    /// identifier and the hardened runtime; a self-signed certificate that
+    /// names itself ours does not.
     /// Touches keychains, so it runs where PPVPN_TEST_CODESIGN=1 (CI).
     #[test]
-    fn only_the_pinned_certificate_passes() {
+    fn only_a_developer_id_signature_of_the_team_passes() {
         if std::env::var_os("PPVPN_TEST_CODESIGN").is_none() {
             eprintln!("skipped: set PPVPN_TEST_CODESIGN=1");
             return;
         }
+        // The form, against a real Developer ID signature.
+        let (app, identifier, team) = developer_id_app();
+        check_file(&app, &requirement(&identifier, &team).unwrap())
+            .expect("its identifier and team");
+        let error = check_file(&app, &requirement(&identifier, "ABCDE12345").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
+        let error = check_file(&app, &requirement(CLIENT_IDENTIFIER, &team).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
+
         let dir = std::env::temp_dir().join(format!("ppvpn-macsign-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -290,48 +360,44 @@ mod tests {
         // release build does it); the runner's list comes back afterwards.
         let _search_list = SearchList::with(&[&ours.keychain, &other.keychain]);
         assert_ne!(ours.sha1, other.sha1);
-        let requirement = client_requirement(&ours.sha1).unwrap();
 
-        let good = dir.join("good");
-        ours.sign(&binary, &good, CLIENT_IDENTIFIER, true);
-        check_file(&good, &requirement).expect("pinned certificate, our identifier, runtime");
-
-        let same_name = dir.join("same-name");
-        other.sign(&binary, &same_name, CLIENT_IDENTIFIER, true);
-        let error = check_file(&same_name, &requirement)
+        // Not anchored at Apple: refused, whatever it calls itself.
+        let client = client_requirement(team_id()).unwrap();
+        let service = requirement(SERVICE_IDENTIFIER, team_id()).unwrap();
+        let forged = dir.join("forged");
+        ours.sign(&binary, &forged, CLIENT_IDENTIFIER, true);
+        let error = check_file(&forged, &client).unwrap_err().to_string();
+        assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
+        let forged_service = dir.join("forged-service");
+        ours.sign(&binary, &forged_service, SERVICE_IDENTIFIER, true);
+        let error = check_file(&forged_service, &service)
             .unwrap_err()
             .to_string();
         assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
-
-        let wrong_id = dir.join("wrong-id");
-        ours.sign(&binary, &wrong_id, "com.example.other", true);
-        let error = check_file(&wrong_id, &requirement).unwrap_err().to_string();
+        let error = check_file(&binary, &client).unwrap_err().to_string();
         assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
 
+        // The hardened runtime is required on top of the requirement (here
+        // one pinning the throwaway certificate).
+        let pinned = |sha1: &str| {
+            SecRequirement::from_str(&format!(
+                "identifier \"{CLIENT_IDENTIFIER}\" and certificate leaf = H\"{sha1}\""
+            ))
+            .unwrap()
+        };
+        let good = dir.join("good");
+        ours.sign(&binary, &good, CLIENT_IDENTIFIER, true);
+        check_file(&good, &pinned(&ours.sha1)).expect("the certificate, the runtime");
+        let error = check_file(&good, &pinned(&other.sha1))
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
         let no_runtime = dir.join("no-runtime");
         ours.sign(&binary, &no_runtime, CLIENT_IDENTIFIER, false);
-        let error = check_file(&no_runtime, &requirement)
+        let error = check_file(&no_runtime, &pinned(&ours.sha1))
             .unwrap_err()
             .to_string();
         assert_eq!(error, "CLIENT_NOT_HARDENED_RUNTIME");
-
-        let error = check_file(&binary, &requirement).unwrap_err().to_string();
-        assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
-
-        // The service binary, as ppvpn-service-install checks it.
-        let service = super::requirement(SERVICE_IDENTIFIER, &ours.sha1).unwrap();
-        let service_binary = dir.join("service");
-        ours.sign(&binary, &service_binary, SERVICE_IDENTIFIER, true);
-        check_file(&service_binary, &service)
-            .expect("the pinned certificate, the service's identifier");
-        assert!(check_file(&service_binary, &requirement).is_err());
-        assert!(check_file(&good, &service).is_err());
-        let other_service = dir.join("other-service");
-        other.sign(&binary, &other_service, SERVICE_IDENTIFIER, true);
-        let error = check_file(&other_service, &service)
-            .unwrap_err()
-            .to_string();
-        assert!(error.starts_with("CLIENT_SIGNATURE_REJECTED"), "{error}");
 
         drop((_search_list, ours, other));
         let _ = std::fs::remove_dir_all(&dir);

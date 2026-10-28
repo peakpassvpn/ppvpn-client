@@ -13,7 +13,8 @@
 #   PPVPN_SPARKLE_PUBLIC_KEY   Sparkle EdDSA public key
 #   SPARKLE_PRIVATE_KEY_FILE   when set, sign the DMG for Sparkle (sign_update)
 #   PPVPN_CODESIGN_IDENTITY    signing identity in the keychain search list, e.g.
-#                              "PPVPN Code Signing" (default: ad-hoc "-")
+#                              "Developer ID Application: … (<team>)" (default: ad-hoc "-");
+#                              package-app.sh lists the rest of the signing environment
 #   PPVPN_RELEASE_CHANNEL      dev | stable, recorded in release-meta (unset: null)
 #   PPVPN_VERSION              x.y.z overriding the project's MARKETING_VERSION
 #   PPVPN_BUILD_NUMBER         monotonic build counter (CI run number; default 0);
