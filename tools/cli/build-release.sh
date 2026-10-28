@@ -181,16 +181,8 @@ macos)
 			# A bare binary takes no stapled ticket: Gatekeeper looks it up
 			# online.
 			ditto -c -k "$bin" "$work/ppvpn.zip"
-			out=$(xcrun notarytool submit "$work/ppvpn.zip" --key "$key_dir/notary.p8" --key-id "$ASC_KEY_ID" \
-				--issuer "$ASC_ISSUER_ID" --wait --timeout 45m --output-format json 2>&1) || true
-			id=$(python3 -c 'import json, sys; print(json.loads(sys.stdin.read()).get("id", ""))' <<<"$out" 2>/dev/null || true)
-			status=$(python3 -c 'import json, sys; print(json.loads(sys.stdin.read()).get("status", ""))' <<<"$out" 2>/dev/null || true)
-			if [ "$status" != Accepted ]; then
-				[ -z "$id" ] || xcrun notarytool log "$id" --key "$key_dir/notary.p8" --key-id "$ASC_KEY_ID" \
-					--issuer "$ASC_ISSUER_ID" >&2 || true
-				fail "notarizing ppvpn: ${status:-no answer}: $out"
-			fi
-			echo "notarized ppvpn ($id)"
+			"$root/tools/notarize.sh" "$work/ppvpn.zip" "$key_dir/notary.p8" "$ASC_KEY_ID" "$ASC_ISSUER_ID" ||
+				fail "notarizing ppvpn failed"
 		else
 			[ "${CHANNEL:-}" != stable ] || fail "a stable build must be notarized (ASC_KEY_P8)"
 			echo "warning: ASC_KEY_P8 not set; signed but not notarized"

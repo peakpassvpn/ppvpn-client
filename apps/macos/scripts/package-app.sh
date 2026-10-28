@@ -225,21 +225,10 @@ if [[ -n "$TEAM" ]]; then
 fi
 
 # --- Notarization --------------------------------------------------------
-# Apple's notary service, with an App Store Connect API key; a submission
-# that is not Accepted fails the build and prints its log.
+# Apple's notary service, with an App Store Connect API key
+# (tools/notarize.sh): a submission that is not Accepted fails the build.
 notarize() {
-  local out id status
-  out="$(xcrun notarytool submit "$1" --key "$PPVPN_NOTARY_KEY_FILE" --key-id "$PPVPN_NOTARY_KEY_ID" \
-    --issuer "$PPVPN_NOTARY_ISSUER" --wait --timeout 45m --output-format json 2>&1)" || true
-  id="$(python3 -c 'import json, sys; print(json.loads(sys.stdin.read()).get("id", ""))' <<< "$out" 2>/dev/null || true)"
-  status="$(python3 -c 'import json, sys; print(json.loads(sys.stdin.read()).get("status", ""))' <<< "$out" 2>/dev/null || true)"
-  if [[ "$status" != Accepted ]]; then
-    echo "error: notarizing $(basename "$1"): ${status:-no answer}: $out" >&2
-    [[ -z "$id" ]] || xcrun notarytool log "$id" --key "$PPVPN_NOTARY_KEY_FILE" --key-id "$PPVPN_NOTARY_KEY_ID" \
-      --issuer "$PPVPN_NOTARY_ISSUER" >&2 || true
-    return 1
-  fi
-  echo "notarized $(basename "$1") ($id)"
+  "$REPO_DIR/tools/notarize.sh" "$1" "$PPVPN_NOTARY_KEY_FILE" "$PPVPN_NOTARY_KEY_ID" "$PPVPN_NOTARY_ISSUER"
 }
 # The app first, and its ticket stapled to it: a copy of the app outside the
 # DMG and the pkg (and the one Sparkle unpacks) opens offline too.

@@ -1050,7 +1050,10 @@ jobs:
           - { arch: x86_64, platform: macos-x64 }
     runs-on: macos-15
     environment: ${{ needs.prepare.outputs.environment }}
-    timeout-minutes: 90  # notarization: three submissions
+    # Packaging (~15 min), then two notarization waits one after the other
+    # (the app, then the DMG and pkg together), each up to an hour
+    # (tools/notarize.sh): a new team's first submissions are slow.
+    timeout-minutes: 150
     env:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
@@ -1162,7 +1165,9 @@ jobs:
     runs-on: macos-15
     # The desktop app's signing certificate (and, for dev, the backend).
     environment: ${{ needs.prepare.outputs.environment }}
-    timeout-minutes: 60
+    # The build (~22 min), then one notarization wait of up to an hour
+    # (tools/notarize.sh).
+    timeout-minutes: 100
     env:
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
