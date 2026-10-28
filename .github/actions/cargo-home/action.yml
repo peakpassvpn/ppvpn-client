@@ -1,0 +1,52 @@
+name: Cargo home
+description: >-
+  The crates Cargo.lock names, for every target, and its git dependencies
+  (~/.cargo/registry/index, registry/cache and git/db), from the Actions
+  cache, so that a release build downloads nothing: a run that fetched the
+  whole registry cold failed on one crate's download (run 40736773393,
+  #459). Saved on main only (release.yml, cache-cargo-home). A miss fetches
+  them with `cargo fetch --locked` (no --target: every target's) and saves
+  them on main. Either way Cargo is offline for the rest of the job
+  (CARGO_NET_OFFLINE), so the job's checks and builds use exactly these
+  crates; run it after the steps that install tools with cargo. Linux and
+  macOS share one entry (the same paths and archive format); Windows has
+  its own.
+inputs:
+  lookup-only:
+    description: Only check for the cache (release.yml), fetching and saving on a miss
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - id: cache
+      name: Restore the cargo home
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-home-v1-${{ runner.os == 'Windows' && 'windows' || 'unix' }}-${{ hashFiles('Cargo.lock') }}
+        lookup-only: ${{ inputs.lookup-only }}
+    - name: Fetch the crates
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo fetch --locked
+    - name: Size
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: du -sh ~/.cargo/registry/index ~/.cargo/registry/cache ~/.cargo/git/db
+    - name: Save the cargo home
+      if: steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+    - name: Offline from here
+      if: inputs.lookup-only != 'true'
+      shell: bash
+      run: echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"

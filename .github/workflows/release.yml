@@ -265,12 +265,14 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
       - uses: ./.github/actions/flutter-toolchain
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
         run: |
-          tools/release-features-check.sh -p ppvpn-flutter -p ppvpn-push-agent
-          tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
+          tools/release-features-check.sh --target x86_64-unknown-linux-gnu -p ppvpn-flutter -p ppvpn-push-agent
+          tools/release-features-check.sh --target x86_64-unknown-linux-gnu --manifest-path crates/service/Cargo.toml
       - id: build
         name: Build the app
         run: apps/flutter/scripts/ci-build.sh
@@ -805,10 +807,12 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - uses: ./.github/actions/flutter-toolchain
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
-        run: tools/release-features-check.sh -p ppvpn-flutter -p ppvpn-push-agent
+        run: tools/release-features-check.sh --target x86_64-pc-windows-msvc -p ppvpn-flutter -p ppvpn-push-agent
       - name: Build the app
         run: apps/flutter/scripts/ci-build.sh
       # The bundle at its default path and the push agent, at their paths in
@@ -853,8 +857,10 @@ jobs:
       - uses: ./.github/actions/prebuilt-boringssl
         with:
           targets: x86_64-pc-windows-msvc
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
       - name: No test-only features
-        run: tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
+        run: tools/release-features-check.sh --target x86_64-pc-windows-msvc --manifest-path crates/service/Cargo.toml
       - name: Build the service helpers
         shell: powershell
         run: apps/flutter/scripts/package-windows.ps1 -ServiceOnly
@@ -972,12 +978,14 @@ jobs:
       - name: Rosetta
         if: matrix.arch == 'x86_64'
         run: arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
         run: |
-          tools/release-features-check.sh -p ppvpn-flutter
-          tools/release-features-check.sh -p ppvpn-desktop
+          tools/release-features-check.sh --target ${{ matrix.triple }} -p ppvpn-flutter
+          tools/release-features-check.sh --target ${{ matrix.triple }} -p ppvpn-desktop
       - id: build
         name: Build the app
         run: apps/flutter/scripts/ci-build.sh
@@ -1027,8 +1035,10 @@ jobs:
       - uses: ./.github/actions/prebuilt-boringssl
         with:
           targets: ${{ matrix.triple }}
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
       - name: No test-only features
-        run: tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
+        run: tools/release-features-check.sh --target ${{ matrix.triple }} --manifest-path crates/service/Cargo.toml
       - name: Build the service helpers
         run: bash tools/desktop/build-service.sh macos-${{ matrix.arch }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1144,10 +1154,12 @@ jobs:
       - uses: ./.github/actions/prebuilt-boringssl
         with:
           targets: ${{ matrix.target }}
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
-        run: tools/release-features-check.sh -p ppvpn-cli
+        run: tools/release-features-check.sh --target ${{ matrix.target }} -p ppvpn-cli
       - name: Build the archive
         run: tools/cli/build-release.sh linux ${{ matrix.target }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1187,10 +1199,12 @@ jobs:
       - uses: ./.github/actions/prebuilt-boringssl
         with:
           targets: aarch64-apple-darwin x86_64-apple-darwin
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
-        run: tools/release-features-check.sh -p ppvpn-cli
+        run: tools/release-features-check.sh --target aarch64-apple-darwin --target x86_64-apple-darwin -p ppvpn-cli
       - name: Build the archive
         run: tools/cli/build-release.sh macos
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1779,6 +1793,28 @@ jobs:
             missing=" "
           fi
           echo "missing=$missing" >> "$GITHUB_OUTPUT"
+
+  # The release builds' crates (.github/actions/cargo-home, #459): every
+  # target's crates and git dependencies, one entry for Linux and macOS and
+  # one for Windows, made when Cargo.lock changes. A lookup when the entry
+  # is there, so on every merge.
+  cache-cargo-home:
+    name: cache-cargo-home (${{ matrix.os }})
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+      - uses: ./.github/actions/cargo-home
+        with:
+          lookup-only: 'true'
 
   # lint and linux.
   cache-linux:
