@@ -20,12 +20,18 @@
 #                        the runner's platform
 #   IOS_SDK              ios: simulator (a debug build for Apple silicon's
 #                        simulator, ci.yml) or device (release; the default)
-#   IOS_TEAM_ID, IOS_APP_PROFILE
+#   IOS_TEAM_ID, IOS_APP_PROFILE, IOS_TUNNEL_PROFILE
 #                        ios device: signed for the App Store by this team
-#                        with this provisioning profile (installed, its
-#                        certificate in a keychain: tools/desktop/ci/
-#                        ios-signing.sh), and exported as an IPA, the
-#                        bundle; without them the app is unsigned (#470)
+#                        with these provisioning profiles (the app's, the
+#                        packet tunnel's; installed, their certificate in a
+#                        keychain: tools/desktop/ci/ios-signing.sh), and
+#                        exported as an IPA, the bundle; without them the
+#                        app is unsigned (#470)
+#   PPVPN_TUNNEL_XCFRAMEWORK, PPVPN_TUNNEL_LIBS
+#                        ios: the tunnel host and its system libraries,
+#                        linked into the packet tunnel extension
+#                        (scripts/ios-tunnel-target.rb); without it the
+#                        extension is built but cannot start
 #   MACOS_ARCHS          macOS: the library's slices, "arm64 x86_64" joined
 #                        into one, or one of them (release.yml builds each
 #                        architecture's DMG in a job of its own, #459)
@@ -326,10 +332,17 @@ PY
     plist 'Add :signingCertificate string Apple Distribution'
     plist 'Add :provisioningProfiles dict'
     plist "Add :provisioningProfiles:com.peakpassvpn.ppvpn string $IOS_APP_PROFILE"
+    : "${IOS_TUNNEL_PROFILE:?IOS_TUNNEL_PROFILE is required with IOS_TEAM_ID}"
+    plist "Add :provisioningProfiles:com.peakpassvpn.ppvpn.tunnel string $IOS_TUNNEL_PROFILE"
     # CFBundleVersion is the release's build number, as built.
     plist 'Add :manageAppVersionAndBuildNumber bool false'
     plist 'Add :uploadSymbols bool true'
   fi
+  # The packet tunnel extension, last: Xcodeproj rewrites the whole project
+  # file, which the text edits above rely on the generated form of.
+  # xcodeproj is CocoaPods' gem, on the runners; else this version.
+  ruby -e 'require "xcodeproj"' 2>/dev/null || gem install --user-install --no-document xcodeproj -v 1.27.0
+  ruby scripts/ios-tunnel-target.rb ios/Runner.xcodeproj "$version" "$build"
 elif [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
   # Flutter's release app is universal; package-app.sh thins each DMG's copy.
   slices=()

@@ -6,7 +6,8 @@
 #                            the App Store Connect API (asc_profiles.py, which
 #                            creates one that is missing) and
 #                            the API key where altool finds it; then
-#                            IOS_TEAM_ID and IOS_APP_PROFILE, which
+#                            IOS_TEAM_ID, IOS_APP_PROFILE and
+#                            IOS_TUNNEL_PROFILE, which
 #                            apps/flutter/scripts/ci-build.sh signs with, and
 #                            ASC_KEY_DIR into $GITHUB_ENV
 #   ios-signing.sh cleanup   the keychain and the key gone again
@@ -16,9 +17,8 @@
 # is in no variable.
 set -euo pipefail
 
-# The profiles' names in the account, one per bundle ID. The tunnel's is
-# made and installed already; the build signs with it once the packet tunnel
-# extension target exists (#448 step 2).
+# The profiles' names in the account, one per bundle ID: the app's and the
+# packet tunnel extension's.
 APP_PROFILE="PPVPN iOS App Store"
 TUNNEL_PROFILE="PPVPN iOS Tunnel App Store"
 
@@ -59,6 +59,7 @@ case "${1:-}" in
     {
       echo "IOS_TEAM_ID=$team"
       echo "IOS_APP_PROFILE=$APP_PROFILE"
+      echo "IOS_TUNNEL_PROFILE=$TUNNEL_PROFILE"
       echo "ASC_KEY_DIR=$key_dir"
     } >>"$GITHUB_ENV"
     echo "signing for team $team with $APP_PROFILE" ;;
