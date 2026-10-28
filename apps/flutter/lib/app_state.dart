@@ -1,12 +1,16 @@
 // The UI's view of the client. The state lives in Rust; this only holds the
-// latest copies it pushed (ValueNotifier per kind) and forwards actions.
+// latest copies it pushed (ValueNotifier per kind) and forwards actions. On
+// a phone it also starts and stops the system VPN around the client's
+// connection (vpn.dart).
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
 import 'messages_state.dart';
+import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
+import 'vpn.dart';
 
 /// A speed-test result as the nodes page shows it.
 sealed class Latency {
@@ -36,6 +40,7 @@ enum WindowPage { messages, settings }
 class AppState {
   AppState(rust.UiSnapshot initial) : fixed = false, snapshot = ValueNotifier(initial) {
     _refreshNodes(initial);
+    if (mobile) SystemVpn.listen();
     unawaited(_pump());
   }
 
@@ -148,6 +153,7 @@ class AppState {
       }
       final next = events.snapshot;
       if (next != null) {
+        _followVpn(snapshot.value.phase, next.phase);
         if (next.phase == rust.UiPhase.connected) {
           connectedSince ??= DateTime.now();
         } else if (next.phase != rust.UiPhase.reconnecting) {
@@ -174,6 +180,32 @@ class AppState {
         }
         latency.value = map;
       }
+    }
+  }
+
+  /// Phone: the client's connection ended (off, or an error such as the
+  /// host not coming up or stopping): the system VPN goes too, so that no
+  /// tunnel is left up with no engine behind it. Retry starts it again.
+  void _followVpn(rust.UiPhase before, rust.UiPhase after) {
+    if (!mobile || before == after) return;
+    if (after == rust.UiPhase.off || after == rust.UiPhase.error) unawaited(_stopVpn());
+  }
+
+  /// Phone: the permission (the system asks the first time), then the
+  /// system VPN; false when the user declined and the client should not
+  /// connect. Elsewhere true.
+  Future<bool> _startVpn() async {
+    if (!mobile) return true;
+    if (!await SystemVpn.prepare()) return false;
+    await SystemVpn.start();
+    return true;
+  }
+
+  Future<void> _stopVpn() async {
+    try {
+      await SystemVpn.stop();
+    } catch (error) {
+      debugPrint('vpn stop: $error');
     }
   }
 
@@ -217,9 +249,22 @@ class AppState {
   Future<void> signIn() => _run(rust.signIn);
   void cancelSignIn() => rust.cancelSignIn();
   Future<void> signOut() => _run(rust.signOut);
-  Future<void> connect() => _run(rust.connect);
-  Future<void> disconnect() => _run(rust.disconnect);
-  Future<void> retry() => _run(rust.retry);
+  Future<void> connect() => _run(() async {
+    if (await _startVpn()) await rust.connect();
+  });
+
+  /// Phone: the client first (it stops the tunnel host), then the system VPN.
+  Future<void> disconnect() => _run(() async {
+    try {
+      await rust.disconnect();
+    } finally {
+      if (mobile) await _stopVpn();
+    }
+  });
+
+  Future<void> retry() => _run(() async {
+    if (await _startVpn()) await rust.retry();
+  });
 
   /// Turns the connection on in [mode] (the overview's switches, the tray,
   /// "use the system proxy"). From the other mode while it is not off, the
@@ -227,7 +272,7 @@ class AppState {
   Future<void> connectIn(rust.UiConnectionMode mode) => _run(() async {
     final before = snapshot.value;
     await rust.setConnectionMode(mode: mode);
-    if (before.connectionMode == mode || before.phase == rust.UiPhase.off) await rust.connect();
+    if ((before.connectionMode == mode || before.phase == rust.UiPhase.off) && await _startVpn()) await rust.connect();
   });
 
   /// "Use on this device" while enhanced mode is contended.

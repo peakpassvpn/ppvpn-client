@@ -136,7 +136,10 @@ case $os in
     replace "$manifest" 'android:label="[^"]*"' 'android:label="PPVPN"'
     # The template asks for the network only in its debug and profile
     # manifests: the release app talks to the API too.
-    replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.INTERNET"/>\n    <application' ;;
+    replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.INTERNET"/>\n    <application'
+    # The system VPN (runner/android TunnelService), in its own process:
+    # only the system binds it.
+    replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>' ;;
   windows)
     # ppvpn.exe and its version resource, as apps/windows
     # (PPVPN.Windows.csproj, Directory.Build.props).
