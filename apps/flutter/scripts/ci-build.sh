@@ -24,6 +24,7 @@
 #                        into one, or one of them (release.yml builds each
 #                        architecture's DMG in a job of its own, #459)
 #                        (default: the runner's architecture only)
+#   PPVPN_SKIP_ANALYZE   1: no flutter analyze (ci.yml analyzes on Linux)
 #   and what rust/src/update.rs and bridge.rs bake into the library:
 #   PPVPN_UPDATE_SITE, PPVPN_RELEASE_CHANNEL, PPVPN_SPARKLE_PUBLIC_KEY,
 #   PPVPN_API_BASE_DEFAULT
@@ -227,7 +228,11 @@ esac
 
 flutter_rust_bridge_codegen generate
 grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> rust/src/lib.rs
-flutter analyze --no-fatal-infos
+# Analysis once per pull request, in ci.yml's Linux flutter job: the
+# others set PPVPN_SKIP_ANALYZE=1 (#459).
+if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
+  flutter analyze --no-fatal-infos
+fi
 
 lib="$root/target/release"
 if [ "$os" = android ]; then
