@@ -482,6 +482,20 @@ Section "Uninstall"
   Delete "$INSTDIR\uninstall.exe"
   ; The directory is fixed and owned by this installer.
   RMDir /r "$INSTDIR"
+  ; The app's images can stay locked for a moment after it is gone (its
+  ; exit, a crash report, a scan): try again for up to 15 s, then leave what
+  ; is left to the next restart rather than in place.
+  StrCpy $1 0
+  ${DoWhile} ${FileExists} "$INSTDIR\*.*"
+    IntOp $1 $1 + 1
+    ${If} $1 > 15
+      DetailPrint "$INSTDIR: in use, removed at the next restart"
+      RMDir /r /REBOOTOK "$INSTDIR"
+      ${Break}
+    ${EndIf}
+    Sleep 1000
+    RMDir /r "$INSTDIR"
+  ${Loop}
   DeleteRegKey HKLM "${UNINST_KEY}"
 
   ${If} $RemoveData == ${BST_CHECKED}
