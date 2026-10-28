@@ -1882,6 +1882,8 @@ jobs:
           (cd crates/desktop && cargo test --locked --no-run && cargo clippy --locked --all-targets)
           cargo test --locked -p ppvpn-push-agent --no-run
           cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets
+          cargo test --locked -p ppvpn-tunnel-host --no-run
+          cargo clippy --locked -p ppvpn-tunnel-host --all-targets
 
   # macos.
   cache-macos:

@@ -1,0 +1,23 @@
+[package]
+name = "ppvpn-tunnel-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The PPVPN engine in the mobile tunnel process (iOS packet tunnel, Android VpnService): Core API v1 on a Unix socket and a few C functions (#448)"
+
+[lib]
+name = "ppvpn_tunnel"
+# staticlib: iOS links it into the packet tunnel extension
+# (scripts/build-xcframework.sh); rlib: the tests.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+ppvpn-core = { path = "../core" }
+ppvpn-engine-host = { path = "../engine-host" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

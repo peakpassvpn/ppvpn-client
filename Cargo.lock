@@ -2926,6 +2926,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppvpn-tunnel-host"
+version = "0.7.1"
+dependencies = [
+ "ppvpn-core",
+ "ppvpn-engine-host",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
