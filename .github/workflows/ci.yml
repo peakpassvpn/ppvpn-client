@@ -1322,3 +1322,48 @@ jobs:
             ${{ runner.temp }}/tunnel/PPVPNTunnel.ldflags
           if-no-files-found: error
           retention-days: 14
+
+  tunnel-android:
+    # The mobile tunnel host for Android's VpnService (#448):
+    # crates/tunnel-host/scripts/build-android.sh, arm64-v8a only (the
+    # emulator's x86_64 builds the same code), with clippy for Android: its
+    # JNI binding compiles for Android only. BoringSSL prebuilt, profile
+    # mobile. Only when the tunnel host or its dependencies changed
+    # (tools/ci-changes.sh `tunnel`). Uncached, as `tunnel (ios)`.
+    name: tunnel (android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          targets: aarch64-linux-android
+      - name: Build libppvpn_tunnel.so
+        if: steps.scope.outputs.tunnel == 'true'
+        env:
+          PPVPN_TUNNEL_CLIPPY: "1"
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          crates/tunnel-host/scripts/build-android.sh "$RUNNER_TEMP/tunnel" arm64-v8a
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          name: tunnel-android
+          path: ${{ runner.temp }}/tunnel
+          if-no-files-found: error
+          retention-days: 14

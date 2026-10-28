@@ -28,9 +28,9 @@
   - 隧道 socket 上的 Core API v1，报文格式见 #448；
   - 隧道进程里的健康检查（见下）；
   - iOS 的 XCFramework：`scripts/build-xcframework.sh <输出目录>`，产物是 `PPVPNTunnel.xcframework`（真机和模拟器的静态库，模块名 `PPVPNTunnel`）和 `PPVPNTunnel.ldflags`（扩展要链接的系统库）。只放进网络扩展，不放进 app。
+  - Android 的 JNI：`scripts/build-android.sh <输出目录>` 产出 `<abi>/libppvpn_tunnel.so`（arm64-v8a、x86_64，放进 app 的 jniLibs），Kotlin 类 `com.peakpassvpn.ppvpn.tunnel.TunnelHost`（`apps/flutter/runner/android`）。只有 `:tunnel` 进程的 TunnelService 加载它。函数同 C ABI，错误同样以 JSON 字符串返回；`Listener` 的 `protect(fd)` 转给 `VpnService.protect`，`onExit(reason)` 即 C ABI 的 on_exit。
 - **还没有：**
-  - Android 的 JNI（`libppvpn_tunnel.so`，Kotlin 类 `com.peakpassvpn.ppvpn.tunnel.TunnelHost`）和交叉编译；
-  - 隧道宿主的 CI 只有 iOS 构建和 Linux 上的测试，还没有在设备上跑的测试。
+  - 隧道宿主的 CI 只有 iOS、Android 的构建和 Linux 上的测试，还没有在设备上跑的测试。
 
 ## 隧道进程里的健康检查
 

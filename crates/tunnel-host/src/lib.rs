@@ -7,9 +7,13 @@
 //! the UI process cannot run from the background ([`health`]).
 //!
 //! One host per process, in [`host`]. Every C function catches panics: an
-//! unwind must not cross into Swift or Kotlin.
+//! unwind must not cross into Swift or Kotlin. iOS links the C functions
+//! (a static library); Android loads libppvpn_tunnel.so and calls them
+//! through JNI ([`android`]).
 #![cfg(unix)]
 
+#[cfg(target_os = "android")]
+mod android;
 mod health;
 mod host;
 mod log;
@@ -151,13 +155,16 @@ pub extern "C" fn ppvpn_tunnel_stop() {
 #[no_mangle]
 pub unsafe extern "C" fn ppvpn_tunnel_network_changed(network_state: *const c_char) -> *mut c_char {
     result(catch_unwind(AssertUnwindSafe(|| {
-        let json = text(network_state, "network_state")?;
-        let value: Value = serde_json::from_str(json)
-            .map_err(|error| request_invalid(format!("network_state: {error}")))?;
-        let state = serde_json::from_value(value)
-            .map_err(|error| request_invalid(format!("network_state: {error}")))?;
-        host::network_changed(state)
+        network_changed(text(network_state, "network_state")?)
     })))
+}
+
+pub(crate) fn network_changed(json: &str) -> Result<(), ApiError> {
+    let value: Value = serde_json::from_str(json)
+        .map_err(|error| request_invalid(format!("network_state: {error}")))?;
+    let state = serde_json::from_value(value)
+        .map_err(|error| request_invalid(format!("network_state: {error}")))?;
+    host::network_changed(state)
 }
 
 #[no_mangle]
