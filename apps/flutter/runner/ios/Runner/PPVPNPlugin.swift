@@ -12,8 +12,8 @@
 // - com.peakpassvpn.ppvpn/vpn-state: the tunnel's NEVPNStatus as off /
 //   connecting / on / disconnecting, the current one first.
 //
-// A debug build on the simulator also prints the Dart VM service's address
-// for flutter test (VMServiceAnnouncer below).
+// A build for the simulator also prints the Dart VM service's address for
+// flutter test (VMServiceAnnouncer below).
 //
 // The packet tunnel itself (com.peakpassvpn.ppvpn.tunnel) is not in the
 // app yet: it comes with the tunnel host's C functions (#448 step 2).
@@ -34,7 +34,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   static func register(with registrar: FlutterPluginRegistrar) {
     let plugin = PPVPNPlugin()
     let messenger = registrar.messenger()
-    #if DEBUG && targetEnvironment(simulator)
+    #if targetEnvironment(simulator)
       VMServiceAnnouncer.start(registrar)
     #endif
     FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/app", binaryMessenger: messenger)
@@ -166,7 +166,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   }
 }
 
-#if DEBUG && targetEnvironment(simulator)
+#if targetEnvironment(simulator)
   /// flutter test on the simulator (e2e/ios_smoke.sh) learns the app's VM
   /// service address from the simulator's log, through a `log stream` it
   /// spawns while it launches the app, and the engine prints the address
@@ -177,6 +177,10 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   /// minute, in the form the tool looks for, from the Runner executable
   /// (the tool's predicate takes the app's own image or Flutter's; ci-build.sh
   /// turns off the debug dylib for that). The tool takes the first it reads.
+  ///
+  /// Not `#if DEBUG`: flutter's Runner target does not set that condition
+  /// (only its RunnerTests do), so the announcer was compiled out (#484).
+  /// A release build has no VM service, and its vmServiceUrl stays nil.
   enum VMServiceAnnouncer {
     private static let log = Logger(subsystem: "com.peakpassvpn.ppvpn", category: "vm-service")
 
