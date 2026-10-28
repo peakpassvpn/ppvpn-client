@@ -20,6 +20,12 @@
 #                        the runner's platform
 #   IOS_SDK              ios: simulator (a debug build for Apple silicon's
 #                        simulator, ci.yml) or device (release; the default)
+#   IOS_TEAM_ID, IOS_APP_PROFILE
+#                        ios device: signed for the App Store by this team
+#                        with this provisioning profile (installed, its
+#                        certificate in a keychain: tools/desktop/ci/
+#                        ios-signing.sh), and exported as an IPA, the
+#                        bundle; without them the app is unsigned (#470)
 #   MACOS_ARCHS          macOS: the library's slices, "arm64 x86_64" joined
 #                        into one, or one of them (release.yml builds each
 #                        architecture's DMG in a job of its own, #459)
@@ -283,6 +289,44 @@ if text.count(bundle) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations")
 open(path, "w").write(text.replace(bundle, bundle + "\n\t\t\t\t" + setting))
 PY
+  if [ -n "${IOS_TEAM_ID:-}" ]; then
+    : "${IOS_APP_PROFILE:?IOS_APP_PROFILE is required with IOS_TEAM_ID}"
+    [ "${IOS_SDK:-device}" = device ] || { echo "IOS_TEAM_ID signs device builds only" >&2; exit 1; }
+    [ "$build" -gt 0 ] || { echo "an App Store build needs PPVPN_BUILD_NUMBER" >&2; exit 1; }
+    # Manual signing of the Runner target (its three configurations), with
+    # the entitlements from runner/ios: the system VPN and the App Group.
+    python3 - <<'PY'
+import json, os
+path = "ios/Runner.xcodeproj/project.pbxproj"
+text = open(path).read()
+settings = {
+    "CODE_SIGN_STYLE": "Manual",
+    "DEVELOPMENT_TEAM": os.environ["IOS_TEAM_ID"],
+    "CODE_SIGN_IDENTITY": "Apple Distribution",
+    '"CODE_SIGN_IDENTITY[sdk=iphoneos*]"': "Apple Distribution",
+    "PROVISIONING_PROFILE_SPECIFIER": os.environ["IOS_APP_PROFILE"],
+    "CODE_SIGN_ENTITLEMENTS": "Runner/Runner.entitlements",
+}
+lines = "".join(f"\n\t\t\t\t{key} = {json.dumps(value)};" for key, value in settings.items())
+bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
+if text.count(bundle) != 3:
+    raise SystemExit(f"{path}: not the three Runner configurations")
+open(path, "w").write(text.replace(bundle, bundle + lines))
+PY
+    IOS_EXPORT_OPTIONS="$app/build/ExportOptions.plist"
+    rm -f "$IOS_EXPORT_OPTIONS"
+    plist() { /usr/libexec/PlistBuddy -c "$1" "$IOS_EXPORT_OPTIONS" >/dev/null; }
+    plist 'Add :method string app-store-connect'
+    plist 'Add :destination string export'
+    plist "Add :teamID string $IOS_TEAM_ID"
+    plist 'Add :signingStyle string manual'
+    plist 'Add :signingCertificate string Apple Distribution'
+    plist 'Add :provisioningProfiles dict'
+    plist "Add :provisioningProfiles:com.peakpassvpn.ppvpn string $IOS_APP_PROFILE"
+    # CFBundleVersion is the release's build number, as built.
+    plist 'Add :manageAppVersionAndBuildNumber bool false'
+    plist 'Add :uploadSymbols bool true'
+  fi
 elif [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
   # Flutter's release app is universal; package-app.sh thins each DMG's copy.
   slices=()
@@ -319,6 +363,9 @@ elif [ "$os" = ios ]; then
   # The simulator runs debug builds only.
   if [ "${IOS_SDK:-device}" = simulator ]; then
     flutter build ios --simulator --debug --build-name "$version" --build-number "$build"
+  elif [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
+    flutter build ipa --release --export-options-plist="$IOS_EXPORT_OPTIONS" \
+      --build-name "$version" --build-number "$build"
   else
     flutter build ios --release --no-codesign --build-name "$version" --build-number "$build"
   fi
@@ -333,10 +380,14 @@ case $os in
   ios)
     if [ "${IOS_SDK:-device}" = simulator ]; then
       bundle=build/ios/iphonesimulator/Runner.app
+      test -x "$bundle/Runner"
+    elif [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
+      bundle=$(ls build/ios/ipa/*.ipa)
+      test -f "$bundle"
     else
       bundle=build/ios/iphoneos/Runner.app
-    fi
-    test -x "$bundle/Runner" ;;
+      test -x "$bundle/Runner"
+    fi ;;
   linux)
     bundle=build/linux/x64/release/bundle
     test -x "$bundle/ppvpn"
