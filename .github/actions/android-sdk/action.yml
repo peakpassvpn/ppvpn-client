@@ -1,0 +1,106 @@
+name: Android SDK packages
+description: >-
+  The SDK packages ci.yml's android job boots its emulator from
+  (reactivecircus/android-emulator-runner), installed before that action
+  runs so that its own sdkmanager calls find them: the system image (about
+  1.5 GB from Google), the platform and the build tools the action asks
+  for. That action sends sdkmanager's output to /dev/null and goes on
+  after a failed download, so a truncated zip surfaced only as adb failing
+  to reach the emulator (run 40718438632). Here the packages come from the
+  Actions cache, saved only on main (release.yml, cache-android-sdk: a pull
+  request's cache would serve that pull request alone); a miss installs
+  them and fails, naming the package, unless each one is complete. The AVD
+  is not cached: the action makes it locally in seconds, and the emulator
+  starts without snapshots.
+inputs:
+  api-level:
+    description: The emulator's API level, as the runner action's api-level
+    required: true
+  target:
+    description: The system image's target, as the runner action's target
+    required: true
+  arch:
+    description: The system image's ABI, as the runner action's arch
+    required: true
+  build-tools:
+    description: The build tools the runner action installs (its BUILD_TOOLS_VERSION)
+    required: false
+    default: 37.0.0
+  lookup-only:
+    description: Only check for the cache (release.yml), installing and saving on a miss
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - id: sdk
+      name: Locate the SDK
+      shell: bash
+      env:
+        PACKAGES: >-
+          system-images;android-${{ inputs.api-level }};${{ inputs.target }};${{ inputs.arch }}
+          platforms;android-${{ inputs.api-level }}
+          build-tools;${{ inputs.build-tools }}
+      run: |
+        set -euo pipefail
+        sdk=${ANDROID_HOME:-$ANDROID_SDK_ROOT}
+        echo "root=$sdk" >> "$GITHUB_OUTPUT"
+        # Each package's directory ("a;b;c" is a/b/c), for the cache.
+        {
+          echo 'paths<<EOF'
+          for package in $PACKAGES; do echo "$sdk/${package//;//}"; done
+          echo EOF
+        } >> "$GITHUB_OUTPUT"
+    - id: cache
+      name: Restore the packages
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.sdk.outputs.paths }}
+        key: android-sdk-${{ inputs.api-level }}-${{ inputs.target }}-${{ inputs.arch }}-bt${{ inputs.build-tools }}-${{ runner.os }}-${{ runner.arch }}
+        lookup-only: ${{ inputs.lookup-only }}
+    - name: Install the packages
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SDK: ${{ steps.sdk.outputs.root }}
+        PACKAGES: >-
+          system-images;android-${{ inputs.api-level }};${{ inputs.target }};${{ inputs.arch }}
+          platforms;android-${{ inputs.api-level }}
+          build-tools;${{ inputs.build-tools }}
+      run: |
+        set -euo pipefail
+        sdkmanager="$SDK/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$sdkmanager" --licenses > /dev/null || true
+        for package in $PACKAGES; do
+          echo "installing $package"
+          "$sdkmanager" --install "$package" > "$RUNNER_TEMP/sdkmanager.log" 2>&1 || true
+          # It exits 0 after a failed download, which it reports as a
+          # warning; a complete package has its package.xml.
+          if [ ! -s "$SDK/${package//;//}/package.xml" ]; then
+            grep -E '^(Warning|Error): ' "$RUNNER_TEMP/sdkmanager.log" || tail -20 "$RUNNER_TEMP/sdkmanager.log"
+            echo "::error::sdkmanager did not install $package"
+            exit 1
+          fi
+        done
+    # sdkmanager writes a package's package.xml after unpacking it, so a
+    # package without one is incomplete, whether installed or restored.
+    - name: Check the packages
+      if: inputs.lookup-only != 'true' || steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PATHS: ${{ steps.sdk.outputs.paths }}
+        SYSTEM_IMAGE: ${{ steps.sdk.outputs.root }}/system-images/android-${{ inputs.api-level }}/${{ inputs.target }}/${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        while read -r dir; do
+          [ -n "$dir" ] || continue
+          [ -s "$dir/package.xml" ] || { echo "::error::$dir: not installed (no package.xml)"; exit 1; }
+          echo "$dir: $(du -sh "$dir" | cut -f1)"
+        done <<<"$PATHS"
+        [ -s "$SYSTEM_IMAGE/system.img" ] || { echo "::error::$SYSTEM_IMAGE: no system.img"; exit 1; }
+    - name: Save the packages
+      if: steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.sdk.outputs.paths }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}

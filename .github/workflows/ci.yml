@@ -1166,6 +1166,15 @@ jobs:
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      # The system image and the rest from the cache release.yml saves
+      # (.github/actions/android-sdk); a miss downloads them and fails on an
+      # incomplete one instead of booting without it.
+      - uses: ./.github/actions/android-sdk
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
       # A tablet: in landscape (1280 dp across, the desktop layout), then set
       # to a phone's screen in portrait (the phone layout, #448 step 5).
       - name: Smoke test (emulator)
