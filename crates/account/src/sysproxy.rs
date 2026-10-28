@@ -43,9 +43,17 @@ fn matcher() -> Matcher {
 #[cfg(windows)]
 fn matcher() -> Matcher {
     const ENV: &[&str] = &[
-        "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
     ];
-    if ENV.iter().any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty())) {
+    if ENV
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
+    {
         return Matcher::from_env();
     }
     let Ok(settings) = windows_registry::CURRENT_USER
@@ -64,7 +72,11 @@ fn matcher() -> Matcher {
         .get_string("ProxyOverride")
         .map(|value| wininet_no_proxy(&value))
         .unwrap_or_default();
-    Matcher::builder().http(proxy.clone()).https(proxy).no(no).build()
+    Matcher::builder()
+        .http(proxy.clone())
+        .https(proxy)
+        .no(no)
+        .build()
 }
 
 /// The proxy for HTTPS in a WinINet `ProxyServer` value, as a URL: the

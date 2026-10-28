@@ -312,7 +312,7 @@ impl Api {
         };
         // The OS proxy, as the native apps' HTTP stacks used it (#476).
         let http = builder()
-            .proxy(reqwest::Proxy::custom(|url| crate::sysproxy::for_url(url)))
+            .proxy(reqwest::Proxy::custom(crate::sysproxy::for_url))
             .build()
             .unwrap_or_default();
         let direct = builder().no_proxy().build().unwrap_or_default();
