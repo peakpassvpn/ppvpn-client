@@ -60,7 +60,12 @@ Future<void> main() async {
   if (samplePage != null) {
     app = sampleState();
   } else {
-    await RustLib.init(externalLibrary: ExternalLibrary.open(_libraryPath()));
+    // iOS: linked into the app itself (scripts/ci-build.sh).
+    await RustLib.init(
+      externalLibrary: Platform.isIOS
+          ? ExternalLibrary.process(iKnowHowToUseIt: true)
+          : ExternalLibrary.open(_libraryPath()),
+    );
     mark('bridge_loaded');
     // Before anything reads the app's files.
     if (mobile) rust.setAppDir(path: (await _app.invokeMethod<String>('filesDir'))!);

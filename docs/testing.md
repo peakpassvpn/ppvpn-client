@@ -117,7 +117,8 @@ PR 只读缓存，不写；`ci.yml` 里没有任何一步保存缓存（setup-go
 
 - `linux`（`lint` 和 `linux` 共用）、`unit`、`integration`、`desktop`、`macos`、`windows`；
 - `flutter`（每个系统一个，`cache-flutter-linux`、`-macos`、`-windows`）：bridge 代码生成用的 cargo expand、release 的 Rust 库，以及 flutter job 后面步骤构建的 service 和客户端；
-- `android`：两个 ABI 的 bridge。
+- `android`：两个 ABI 的 bridge；
+- `ios`：模拟器（Apple silicon）的 bridge，连同从源码编译的 BoringSSL（btls 没有 iOS 的预编译包）。
 
 rust-cache 只缓存依赖，所以依赖不变时，旧缓存一直有效。Flutter SDK 不缓存（每个系统 1.4 到 1.9 GB，恢复和下载一样慢）；flutter_rust_bridge_codegen 和 cargo-expand 的二进制按版本缓存，也只在 main 上保存。
 

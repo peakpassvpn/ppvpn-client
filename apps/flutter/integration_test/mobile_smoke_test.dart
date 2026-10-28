@@ -1,0 +1,49 @@
+// The phone app starts (#448 step 3): the bridge library loads (from the
+// APK; on iOS it is linked in), the client starts in the app's own
+// directory, and a fresh install shows the sign-in page. Run by
+// e2e/android_smoke.sh on ci.yml's emulator, as a tablet in landscape (the
+// desktop layout) and as a phone in portrait (the phone layout, step 5),
+// and by e2e/ios_smoke.sh on an iPhone simulator.
+
+import 'dart:async';
+import 'dart:developer' as developer;
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+
+import 'package:ppvpn_flutter/main.dart' as app;
+
+/// iOS simulator: flutter test learns the app's VM service address from the
+/// simulator's log, through a `log stream` it spawns while it launches the
+/// app, and the engine prints the address once. A stream still attaching at
+/// that moment never sees it, and the tool waits until it gives up. So the
+/// address is printed again every 2 s for the first minute, in the line the
+/// tool's discovery looks for; it takes the first it reads.
+void _announceVmService() {
+  if (!Platform.isIOS) return;
+  var left = 30;
+  Timer.periodic(const Duration(seconds: 2), (timer) async {
+    if (--left == 0) timer.cancel();
+    final uri = (await developer.Service.getInfo()).serverUri;
+    // The tool reads it from the device log, where print goes.
+    // ignore: avoid_print
+    if (uri != null) print('The Dart VM service is listening on $uri');
+  });
+}
+
+void main() {
+  _announceVmService();
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('starts signed out', (tester) async {
+    await app.main();
+    // The client restores nothing, then signs out: real time, its threads.
+    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    while (find.text('Sign In with Browser').evaluate().isEmpty) {
+      if (DateTime.now().isAfter(deadline)) fail('the sign-in page did not show');
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+      await tester.pump();
+    }
+  });
+}
