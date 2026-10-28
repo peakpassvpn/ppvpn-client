@@ -1052,7 +1052,10 @@ jobs:
           - { arch: x86_64, platform: macos-x64 }
     runs-on: macos-15
     environment: ${{ needs.prepare.outputs.environment }}
-    timeout-minutes: 90  # notarization: three submissions
+    # Packaging (~15 min), then two notarization waits one after the other
+    # (the app, then the DMG and pkg together), each up to an hour
+    # (tools/notarize.sh): a new team's first submissions are slow.
+    timeout-minutes: 150
     env:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
@@ -1237,7 +1240,9 @@ jobs:
     runs-on: macos-15
     # The desktop app's signing certificate (and, for dev, the backend).
     environment: ${{ needs.prepare.outputs.environment }}
-    timeout-minutes: 60
+    # The build (~22 min), then one notarization wait of up to an hour
+    # (tools/notarize.sh).
+    timeout-minutes: 100
     env:
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -1952,6 +1957,8 @@ jobs:
           (cd crates/desktop && cargo test --locked --no-run && cargo clippy --locked --all-targets)
           cargo test --locked -p ppvpn-push-agent --no-run
           cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets
+          cargo test --locked -p ppvpn-tunnel-host --no-run
+          cargo clippy --locked -p ppvpn-tunnel-host --all-targets
 
   # macos.
   cache-macos:
@@ -2162,6 +2169,26 @@ jobs:
 
   # ci.yml's ios job, key ios: BoringSSL (from source: btls has no iOS
   # prebuilts) and the bridge for Apple silicon's simulator.
+  # ci.yml android's emulator packages (.github/actions/android-sdk), not a
+  # Rust cache: looked up on every merge, which takes seconds, and
+  # downloaded and saved only when the key is missing. Same inputs as
+  # ci.yml's.
+  cache-android-sdk:
+    name: cache-android-sdk
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/android-sdk
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          lookup-only: 'true'
+
   cache-ios:
     name: cache-ios
     needs: changes

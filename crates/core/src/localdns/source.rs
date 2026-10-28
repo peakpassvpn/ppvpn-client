@@ -24,11 +24,12 @@ pub(crate) fn system(iface: &Interface) -> Discovered {
     return super::scutil::discover(iface);
     #[cfg(windows)]
     return windows::discover(iface);
+    // Linux reads one list for every interface; iOS and Android have no
+    // source here (their resolver is the tunnel's, DNS hijacked).
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = iface;
     #[cfg(target_os = "linux")]
-    {
-        let _ = iface;
-        return linux::discover();
-    }
+    return linux::discover();
     #[allow(unreachable_code)]
     Discovered::failed("system", "no DNS source on this platform".into())
 }

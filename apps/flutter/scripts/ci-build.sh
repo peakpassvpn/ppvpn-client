@@ -30,6 +30,7 @@
 #                        into one, or one of them (release.yml builds each
 #                        architecture's DMG in a job of its own, #459)
 #                        (default: the runner's architecture only)
+#   PPVPN_SKIP_ANALYZE   1: no flutter analyze (ci.yml analyzes on Linux)
 #   and what rust/src/update.rs and bridge.rs bake into the library:
 #   PPVPN_UPDATE_SITE, PPVPN_RELEASE_CHANNEL, PPVPN_SPARKLE_PUBLIC_KEY,
 #   PPVPN_API_BASE_DEFAULT
@@ -163,7 +164,10 @@ text = open(path).read()
 generated = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpnFlutter;"
 if text.count(generated) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations' bundle id")
-text = text.replace(generated, "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;")
+# Without the debug dylib: the app's code in the Runner executable itself,
+# which flutter test's log predicate needs (PPVPNPlugin's VMServiceAnnouncer).
+text = re.sub(r"\n\t*ENABLE_DEBUG_DYLIB = \w+;", "", text)
+text = text.replace(generated, "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;\n\t\t\t\tENABLE_DEBUG_DYLIB = NO;")
 text, targets = re.subn(r"IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;", "IPHONEOS_DEPLOYMENT_TARGET = 15.0;", text)
 if not targets:
     raise SystemExit(f"{path}: no deployment target")
@@ -233,7 +237,11 @@ esac
 
 flutter_rust_bridge_codegen generate
 grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> rust/src/lib.rs
-flutter analyze --no-fatal-infos
+# Analysis once per pull request, in ci.yml's Linux flutter job: the
+# others set PPVPN_SKIP_ANALYZE=1 (#459).
+if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
+  flutter analyze --no-fatal-infos
+fi
 
 lib="$root/target/release"
 if [ "$os" = android ]; then

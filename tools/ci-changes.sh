@@ -28,6 +28,14 @@
 #         the two workflows: what the build caches are keyed on or built by.
 #         release.yml warms the caches on main only when it is true; ci.yml's
 #         advisories job fails on an advisory only then.
+#   tunnel  the mobile tunnel host (crates/tunnel-host/, #448),
+#         crates/engine-host/, the dependencies (Cargo.toml, crates/core's
+#         target-specific ones, Cargo.lock) or ci.yml, and the only core code
+#         that iOS compiles and macOS does not (the fallbacks of
+#         hostipv6/mod.rs and localdns/source.rs; the rest builds the same
+#         as on macOS, which the macos job's clippy covers): ci.yml's
+#         `tunnel (ios)` builds it for iOS only then (~25 min cold, on the
+#         scarce macOS runners).
 #   memory  the memory harness (ne-mem, tools/perf/{ne_mem,dhat_top}.py, test/perf/)
 #         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
 #         then build it in release and measure (#388).
@@ -36,7 +44,7 @@
 # everything.
 set -euo pipefail
 
-all() { printf '%s=true\n' code desktop flutter deps memory; exit 0; }
+all() { printf '%s=true\n' code desktop flutter deps memory tunnel; exit 0; }
 
 case "${GITHUB_EVENT_NAME:-}" in
   pull_request) base=${PR_BASE_SHA:-} ;;
@@ -50,11 +58,17 @@ files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
 n=$(grep -c . <<<"$files" || true)
 (( n > 0 && n < 300 )) || all
 
-code=false desktop=false flutter=false deps=false memory=false
+code=false desktop=false flutter=false deps=false memory=false tunnel=false
 while IFS= read -r f; do
   case $f in
     Cargo.lock | crates/core-lab/src/bin/ne-mem.rs | tools/perf/ne_mem.py | tools/perf/dhat_top.py | \
     test/perf/*) memory=true ;;
+  esac
+  case $f in
+    *.md) ;;
+    Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/workflows/ci.yml | crates/core/Cargo.toml | \
+    crates/core/src/hostipv6/mod.rs | crates/core/src/localdns/source.rs | \
+    crates/engine-host/* | crates/tunnel-host/*) tunnel=true ;;
   esac
   case $f in
     docs/* | *.md) ;;
@@ -81,3 +95,4 @@ echo "desktop=$desktop"
 echo "flutter=$flutter"
 echo "deps=$deps"
 echo "memory=$memory"
+echo "tunnel=$tunnel"
