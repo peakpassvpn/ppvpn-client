@@ -254,8 +254,8 @@ fn main() -> Result<(), anyhow::Error> {
     .ok_or_else(|| anyhow!("ppvpn-service binary not found next to {}", exe.display()))?;
 
     // The app bundle belongs to the user (a drag install, or the pkg's
-    // postinstall), so the binary about to run as root must be signed with
-    // the pinned certificate: checked here, before the running service is
+    // postinstall), so the binary about to run as root must carry our
+    // Developer ID signature (macsign.rs): checked here, before the running service is
     // touched, and again on the root-owned copy, before it replaces the old
     // one (the user could swap the file in between). A debug build installs
     // the ad-hoc signed debug service.
@@ -263,8 +263,7 @@ fn main() -> Result<(), anyhow::Error> {
         if cfg!(debug_assertions) {
             return Ok(());
         }
-        let requirement =
-            macsign::requirement(macsign::SERVICE_IDENTIFIER, macsign::pinned_cert_sha1())?;
+        let requirement = macsign::requirement(macsign::SERVICE_IDENTIFIER, macsign::team_id())?;
         macsign::check_file(path, &requirement)
             .with_context(|| format!("{} is not the signed PPVPN service", path.display()))
     };

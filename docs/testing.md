@@ -91,7 +91,7 @@
 | `linux` | Linux 自己的：网络命名空间里的 L3（`make test-system`：tun 及 G7、network-change），以及桌面增强模式端到端 |
 | `macos` | macOS 自己的：整个 workspace 在 aarch64 和 x86_64 上的 clippy、macOS 平台测试、Debug app 构建 |
 | `windows` | Windows 自己的：桌面链接的 crate 在 MSVC 上的 clippy、Windows 平台测试、G7 Windows、C# 绑定、App.Core 测试、app 和推送代理构建 |
-| `flutter` | Flutter 桌面 app（#401）在 Linux、macOS、Windows 上构建和冒烟测试，只在它或客户端变了的时候 |
+| `flutter` | Flutter 桌面 app（#401）在 Linux、macOS、Windows 上构建和冒烟测试，只在它或它构建所用的 crate（客户端、core、account、engine-host、service）变了的时候 |
 
 L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重跑，只编译（clippy 覆盖各平台 `cfg` 的代码）并跑平台测试。
 
@@ -111,7 +111,16 @@ L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重�
 
 ### 缓存
 
-PR 只读缓存，不写。缓存在合入 main 时由 `release.yml` 的 `cache-*` job 保存，而且只在 `Cargo.toml`、`Cargo.lock`、工具链或共享 action 变了的时候（`tools/ci-changes.sh` 的 `deps`）。每个缓存键（`shared-key`）对应一个 `cache-*` job：`linux`（`lint` 和 `linux` 共用）、`unit`、`integration`、`desktop`、`macos`、`windows`。rust-cache 只缓存依赖，所以依赖不变时，旧缓存一直有效。
+PR 只读缓存，不写；`ci.yml` 里没有任何一步保存缓存（setup-go 的也关了）。缓存在合入 main 时由 `release.yml` 的 `cache-*` job 保存，在两种情况下运行：`Cargo.toml`、`Cargo.lock`、工具链或共享 action 变了（`tools/ci-changes.sh` 的 `deps`），或者 main 上已经没有这个键（被挤掉了）。仓库的缓存总共 10 GB，超出时 GitHub 先删最久没用的；总量超过 9.5 GB 时只在 `deps` 变化时重建，免得重建一个又挤掉另一个。
+
+每个缓存键（`shared-key`）对应一个 `cache-*` job，跑与 `ci.yml` 里对应 job 相同的 cargo 命令（命令或特性组合不同，依赖就会重新编译）：
+
+- `linux`（`lint` 和 `linux` 共用）、`unit`、`integration`、`desktop`、`macos`、`windows`；
+- `flutter`（每个系统一个，`cache-flutter-linux`、`-macos`、`-windows`）：bridge 代码生成用的 cargo expand、release 的 Rust 库，以及 flutter job 后面步骤构建的 service 和客户端；
+- `android`：两个 ABI 的 bridge；
+- `ios`：模拟器（Apple silicon）的 bridge，连同从源码编译的 BoringSSL（btls 没有 iOS 的预编译包）。
+
+rust-cache 只缓存依赖，所以依赖不变时，旧缓存一直有效。Flutter SDK 不缓存（每个系统 1.4 到 1.9 GB，恢复和下载一样慢）；flutter_rust_bridge_codegen 和 cargo-expand 的二进制按版本缓存，也只在 main 上保存。
 
 ## 不是测试层的东西
 

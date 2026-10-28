@@ -5,12 +5,35 @@
 // desktop layout) and as a phone in portrait (the phone layout, step 5),
 // and by e2e/ios_smoke.sh on an iPhone simulator.
 
+import 'dart:async';
+import 'dart:developer' as developer;
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
 import 'package:ppvpn_flutter/main.dart' as app;
 
+/// iOS simulator: flutter test learns the app's VM service address from the
+/// simulator's log, through a `log stream` it spawns while it launches the
+/// app, and the engine prints the address once. A stream still attaching at
+/// that moment never sees it, and the tool waits until it gives up. So the
+/// address is printed again every 2 s for the first minute, in the line the
+/// tool's discovery looks for; it takes the first it reads.
+void _announceVmService() {
+  if (!Platform.isIOS) return;
+  var left = 30;
+  Timer.periodic(const Duration(seconds: 2), (timer) async {
+    if (--left == 0) timer.cancel();
+    final uri = (await developer.Service.getInfo()).serverUri;
+    // The tool reads it from the device log, where print goes.
+    // ignore: avoid_print
+    if (uri != null) print('The Dart VM service is listening on $uri');
+  });
+}
+
 void main() {
+  _announceVmService();
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('starts signed out', (tester) async {
