@@ -960,8 +960,7 @@ jobs:
       # Enhanced mode end to end on Linux (#401 step 2): the release bundle
       # in the packages' layout (/usr/lib/ppvpn/ppvpn, the only client the
       # service accepts) with the service built in its shipping profile (LTO
-  # off, as on Windows) and
-      # installed by its own helper, then stopped: e2e/linux_enhanced.sh runs
+      # off, as on Windows) and installed by its own helper, then stopped: e2e/linux_enhanced.sh runs
       # it inside test/netns/run.sh's namespace, with a mock backend, a saved
       # sign-in and test/fakenode, and checks the TUN, the rules and table,
       # traffic through the node and the cleanup after a disconnect. Removed
