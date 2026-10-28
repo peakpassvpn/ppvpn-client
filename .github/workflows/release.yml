@@ -1794,12 +1794,14 @@ jobs:
           fi
           echo "missing=$missing" >> "$GITHUB_OUTPUT"
 
-  # The release builds' crates (.github/actions/cargo-home, #459): every
-  # target's crates and git dependencies, one entry for Linux and macOS and
-  # one for Windows, made when Cargo.lock changes. A lookup when the entry
-  # is there, so on every merge.
-  cache-cargo-home:
-    name: cache-cargo-home (${{ matrix.os }})
+  # Downloads, so that builds do not depend on a registry answering (#459):
+  # the release builds' crates (.github/actions/cargo-home: every target's
+  # crates and git dependencies) and the modules of ci.yml's Go helpers
+  # (.github/actions/go-modules), one entry each for Linux and macOS and one
+  # each for Windows, made when Cargo.lock or test/go.sum changes. A lookup
+  # when the entry is there, so on every merge.
+  cache-downloads:
+    name: cache-downloads (${{ matrix.os }})
     needs: changes
     strategy:
       fail-fast: false
@@ -1813,6 +1815,13 @@ jobs:
         with:
           toolchain: 1.98.1
       - uses: ./.github/actions/cargo-home
+        with:
+          lookup-only: 'true'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: test/go.mod
+          cache: false
+      - uses: ./.github/actions/go-modules
         with:
           lookup-only: 'true'
 

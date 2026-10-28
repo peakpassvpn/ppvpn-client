@@ -4,7 +4,7 @@ description: >-
   (~/.cargo/registry/index, registry/cache and git/db), from the Actions
   cache, so that a release build downloads nothing: a run that fetched the
   whole registry cold failed on one crate's download (run 40736773393,
-  #459). Saved on main only (release.yml, cache-cargo-home). A miss fetches
+  #459). Saved on main only (release.yml, cache-downloads). A miss fetches
   them with `cargo fetch --locked` (no --target: every target's) and saves
   them on main. Either way Cargo is offline for the rest of the job
   (CARGO_NET_OFFLINE), so the job's checks and builds use exactly these
