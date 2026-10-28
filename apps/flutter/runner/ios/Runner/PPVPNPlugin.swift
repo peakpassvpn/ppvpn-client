@@ -12,12 +12,16 @@
 // - com.peakpassvpn.ppvpn/vpn-state: the tunnel's NEVPNStatus as off /
 //   connecting / on / disconnecting, the current one first.
 //
+// A debug build on the simulator also prints the Dart VM service's address
+// for flutter test (VMServiceAnnouncer below).
+//
 // The packet tunnel itself (com.peakpassvpn.ppvpn.tunnel) is not in the
 // app yet: it comes with the tunnel host's C functions (#448 step 2).
 
 import Flutter
 import NetworkExtension
 import UIKit
+import os
 
 final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   static let appGroup = "group.com.peakpassvpn.ppvpn"
@@ -30,6 +34,9 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   static func register(with registrar: FlutterPluginRegistrar) {
     let plugin = PPVPNPlugin()
     let messenger = registrar.messenger()
+    #if DEBUG && targetEnvironment(simulator)
+      VMServiceAnnouncer.start(registrar)
+    #endif
     FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/app", binaryMessenger: messenger)
       .setMethodCallHandler { call, result in
         switch call.method {
@@ -158,3 +165,35 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
   }
 }
+
+#if DEBUG && targetEnvironment(simulator)
+  /// flutter test on the simulator (e2e/ios_smoke.sh) learns the app's VM
+  /// service address from the simulator's log, through a `log stream` it
+  /// spawns while it launches the app, and the engine prints the address
+  /// once, about a second after launch. A stream still attaching then never
+  /// sees it, and the tool waits until it gives up. The test's own Dart code
+  /// cannot help: flutter test's bootstrap runs it only once the tool has
+  /// connected. So the app prints the line again every second for its first
+  /// minute, in the form the tool looks for, from the Runner executable
+  /// (the tool's predicate takes the app's own image or Flutter's; ci-build.sh
+  /// turns off the debug dylib for that). The tool takes the first it reads.
+  enum VMServiceAnnouncer {
+    private static let log = Logger(subsystem: "com.peakpassvpn.ppvpn", category: "vm-service")
+
+    static func start(_ registrar: FlutterPluginRegistrar) {
+      var left = 60
+      Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+        left -= 1
+        if left == 0 { timer.invalidate() }
+        guard let url = engine(registrar)?.vmServiceUrl else { return }
+        log.notice("The Dart VM service is listening on \(url.absoluteString, privacy: .public)")
+      }
+    }
+
+    private static func engine(_ registrar: FlutterPluginRegistrar) -> FlutterEngine? {
+      if let controller = registrar.viewController as? FlutterViewController { return controller.engine }
+      let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+      return windows.lazy.compactMap { $0.rootViewController as? FlutterViewController }.first?.engine
+    }
+  }
+#endif
