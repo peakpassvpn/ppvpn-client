@@ -105,11 +105,22 @@ identity() {
     | sed -n 's/^ *[0-9][0-9]*) [0-9A-F]\{40\} "\(.*\)"$/\1/p' \
     | grep -x "$1: .* ($team)" || true
 }
+# Why `security import` refuses a .p12 whose password is right: it reads
+# only the legacy PKCS#12 algorithms (3DES, SHA-1 MAC), and reports OpenSSL
+# 3's defaults (PBES2/AES-256, SHA-256 MAC) as "MAC verification failed
+# ... (wrong password?)".
+p12_hint() { # <secret>
+  echo "$1 could not be imported. If the password is right and the .p12 came from OpenSSL 3, re-export it with \`openssl pkcs12 -export -legacy\` or from Keychain Access." >&2
+}
 # Imports a .p12 and prints its identity: one "<kind>: … (<team>)", or fails.
-import_identity() { # <kind> <p12 base64> <password>
+import_identity() { # <kind> <p12 base64> <password> <secret>
   printf '%s' "$2" | base64 --decode > "$key_dir/identity.p12"
-  security import "$key_dir/identity.p12" -k "$keychain" -P "$3" \
-    -T /usr/bin/codesign -T /usr/bin/productsign >/dev/null
+  if ! security import "$key_dir/identity.p12" -k "$keychain" -P "$3" \
+    -T /usr/bin/codesign -T /usr/bin/productsign >/dev/null; then
+    rm -f "$key_dir/identity.p12"
+    p12_hint "$4"
+    return 1
+  fi
   rm -f "$key_dir/identity.p12"
   local found
   found="$(identity "$1")"
@@ -131,7 +142,7 @@ if [[ -n "${MACOS_SIGNING_P12_BASE64:-}" ]]; then
   security set-keychain-settings -lut 21600 "$keychain"
   security unlock-keychain -p "$keychain_password" "$keychain"
   if PPVPN_CODESIGN_IDENTITY="$(import_identity "Developer ID Application" \
-    "$MACOS_SIGNING_P12_BASE64" "$MACOS_SIGNING_P12_PASSWORD")"; then
+    "$MACOS_SIGNING_P12_BASE64" "$MACOS_SIGNING_P12_PASSWORD" MACOS_SIGNING_P12_BASE64)"; then
     signed=1
   elif [[ "${PPVPN_RELEASE_CHANNEL:-}" == stable ]]; then
     exit 5
@@ -147,7 +158,7 @@ if [[ "$signed" == 1 ]]; then
   if [[ -n "${MACOS_INSTALLER_P12_BASE64:-}" ]]; then
     : "${MACOS_INSTALLER_P12_PASSWORD:?MACOS_INSTALLER_P12_PASSWORD is required with MACOS_INSTALLER_P12_BASE64}"
     PPVPN_INSTALLER_IDENTITY="$(import_identity "Developer ID Installer" \
-      "$MACOS_INSTALLER_P12_BASE64" "$MACOS_INSTALLER_P12_PASSWORD")"
+      "$MACOS_INSTALLER_P12_BASE64" "$MACOS_INSTALLER_P12_PASSWORD" MACOS_INSTALLER_P12_BASE64)"
     export PPVPN_INSTALLER_IDENTITY
   else
     echo "warning: MACOS_INSTALLER_P12_BASE64 not set; the pkg is unsigned"
