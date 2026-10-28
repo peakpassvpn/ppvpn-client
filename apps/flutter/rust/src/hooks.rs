@@ -9,7 +9,6 @@
 //! helpers sit next to the app's executable, as in the native packages.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use ppvpn_client::{PlatformError, PlatformHooks};
 
@@ -70,7 +69,18 @@ impl PlatformHooks for Hooks {
     }
 }
 
+/// iOS and Android cannot start a browser process: the app opens the page
+/// itself (lib/links.dart; the sign-in's from app_state.dart as soon as it
+/// shows), so the client is told it opened.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+pub(crate) fn open_url(_url: &str) -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub(crate) fn open_url(url: &str) -> bool {
+    use std::process::Command;
+
     let mut command = if cfg!(target_os = "macos") {
         Command::new("open")
     } else if cfg!(windows) {
