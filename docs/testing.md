@@ -92,7 +92,7 @@
 | `macos` | macOS 自己的：整个 workspace 在 aarch64 和 x86_64 上的 clippy、macOS 平台测试、Debug app 构建 |
 | `windows` | Windows 自己的：桌面链接的 crate 在 MSVC 上的 clippy、Windows 平台测试、G7 Windows、C# 绑定、App.Core 测试、app 和推送代理构建 |
 | `flutter` | Flutter 桌面 app（#401）在 Linux、macOS、Windows 上构建和冒烟测试，只在它或它构建所用的 crate（客户端、core、account、engine-host、service）变了的时候 |
-| `tunnel (ios)`、`tunnel (simulator)` | 移动端隧道宿主给 iOS 网络扩展的 XCFramework（#448，`crates/tunnel-host/scripts/build-xcframework.sh`），真机和模拟器各一片；只在隧道宿主、core、engine-host、依赖或 ci.yml 变了的时候（`tools/ci-changes.sh` 的 `tunnel`）。不缓存，冷构建每片约 25 分钟 |
+| `tunnel (ios)` | 移动端隧道宿主给 iOS 网络扩展的 XCFramework（#448，`crates/tunnel-host/scripts/build-xcframework.sh`），PR 上只构建真机一片（网络扩展不在模拟器里运行；完整的 XCFramework 由 `release.yml` 给 TestFlight 构建）。只在隧道宿主、engine-host、依赖、ci.yml 或只有 iOS 才编译的 core 代码变了的时候（`tools/ci-changes.sh` 的 `tunnel`），因为 macOS runner 很少。不缓存，冷构建约 25 分钟 |
 
 L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重跑，只编译（clippy 覆盖各平台 `cfg` 的代码）并跑平台测试。
 

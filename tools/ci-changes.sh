@@ -28,10 +28,14 @@
 #         the two workflows: what the build caches are keyed on or built by.
 #         release.yml warms the caches on main only when it is true; ci.yml's
 #         advisories job fails on an advisory only then.
-#   tunnel  the mobile tunnel host (crates/tunnel-host/, #448) and what it
-#         links (crates/{core,engine-host}), the dependencies, the shared
-#         actions or ci.yml: ci.yml's tunnel jobs build it for iOS only then
-#         (a cold slice takes ~25 min).
+#   tunnel  the mobile tunnel host (crates/tunnel-host/, #448),
+#         crates/engine-host/, the dependencies (Cargo.toml, crates/core's
+#         target-specific ones, Cargo.lock) or ci.yml, and the only core code
+#         that iOS compiles and macOS does not (the fallbacks of
+#         hostipv6/mod.rs and localdns/source.rs; the rest builds the same
+#         as on macOS, which the macos job's clippy covers): ci.yml's
+#         `tunnel (ios)` builds it for iOS only then (~25 min cold, on the
+#         scarce macOS runners).
 #   memory  the memory harness (ne-mem, tools/perf/{ne_mem,dhat_top}.py, test/perf/)
 #         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
 #         then build it in release and measure (#388).
@@ -62,8 +66,9 @@ while IFS= read -r f; do
   esac
   case $f in
     *.md) ;;
-    Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | .github/workflows/ci.yml | \
-    crates/core/* | crates/engine-host/* | crates/tunnel-host/*) tunnel=true ;;
+    Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/workflows/ci.yml | crates/core/Cargo.toml | \
+    crates/core/src/hostipv6/mod.rs | crates/core/src/localdns/source.rs | \
+    crates/engine-host/* | crates/tunnel-host/*) tunnel=true ;;
   esac
   case $f in
     docs/* | *.md) ;;

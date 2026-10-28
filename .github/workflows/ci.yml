@@ -1236,17 +1236,16 @@ jobs:
 
   tunnel:
     # The mobile tunnel host for the iOS packet tunnel extension (#448):
-    # crates/tunnel-host/scripts/build-xcframework.sh, one slice per job
-    # (each ~25 min cold: sail and BoringSSL from source, profile mobile).
-    # Only when it or what it links changed (tools/ci-changes.sh `tunnel`).
-    # Uncached: the 10 GB cache budget has no room for it yet.
-    name: tunnel (${{ matrix.slice }})
+    # crates/tunnel-host/scripts/build-xcframework.sh, the device slice only
+    # (a network extension never runs in the simulator; the full
+    # XCFramework is built for TestFlight in release.yml). ~25 min cold:
+    # sail and BoringSSL from source, profile mobile. Only when the tunnel
+    # host or what iOS alone compiles changed (tools/ci-changes.sh
+    # `tunnel`): macOS runners are few. Uncached: the 10 GB cache budget
+    # has no room for it yet.
+    name: tunnel (ios)
     runs-on: macos-15
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        slice: [ios, simulator]
     defaults:
       run:
         shell: bash
@@ -1261,14 +1260,14 @@ jobs:
         if: steps.scope.outputs.tunnel == 'true'
         with:
           toolchain: 1.98.1
-          targets: ${{ matrix.slice == 'ios' && 'aarch64-apple-ios' || 'aarch64-apple-ios-sim' }}
+          targets: aarch64-apple-ios
       - name: Build the XCFramework
         if: steps.scope.outputs.tunnel == 'true'
-        run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ${{ matrix.slice }}
+        run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ios
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: steps.scope.outputs.tunnel == 'true'
         with:
-          name: tunnel-${{ matrix.slice }}
+          name: tunnel-ios
           path: |
             ${{ runner.temp }}/tunnel/PPVPNTunnel.xcframework
             ${{ runner.temp }}/tunnel/PPVPNTunnel.ldflags
