@@ -1014,7 +1014,7 @@ pub async fn run_ipc_server() -> Result<()> {
 
     // The socket is connectable by local users, but every accepted connection
     // is bound to the peer PID and must come from a process signed as PPVPN.app
-    // with the pinned certificate (macsign.rs) before it can obtain a
+    // with our Developer ID (macsign.rs) before it can obtain a
     // short-lived HMAC session.
     set_socket_permissions(IPC_SOCKET_PATH);
 
@@ -1108,7 +1108,7 @@ fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
         return Err(anyhow!("CLIENT_PID_UNAVAILABLE"));
     }
     let bytes: Vec<u8> = token.iter().flat_map(|word| word.to_ne_bytes()).collect();
-    let requirement = crate::macsign::client_requirement(crate::macsign::pinned_cert_sha1())?;
+    let requirement = crate::macsign::client_requirement(crate::macsign::team_id())?;
     match crate::macsign::check_process(&bytes, &requirement) {
         Ok(()) => Ok(pid as u32),
         // A debug service also takes an ad-hoc signed debug app, from the
@@ -1118,7 +1118,7 @@ fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
             if !macos_client_path_allowed(std::path::Path::new(&path)) {
                 return Err(anyhow!("{error}; CLIENT_IMAGE_NOT_ALLOWED:{path}"));
             }
-            log::warn!("debug build: accepting {path} without the pinned signature ({error})");
+            log::warn!("debug build: accepting {path} without the release signature ({error})");
             Ok(pid as u32)
         }
         Err(error) => Err(match macos_process_path(pid) {

@@ -15,7 +15,8 @@
 #                              when both the site and the channel are given; otherwise
 #                              updates are off (as apps/macos/scripts/package-dmg.sh)
 #   PPVPN_SPARKLE_PUBLIC_KEY   Sparkle EdDSA public key
-#   and package-app.sh's: PPVPN_CODESIGN_IDENTITY, PPVPN_RELEASE_CHANNEL,
+#   and package-app.sh's: PPVPN_CODESIGN_IDENTITY, PPVPN_CODESIGN_TEAM,
+#   PPVPN_INSTALLER_IDENTITY, PPVPN_NOTARY_*, PPVPN_RELEASE_CHANNEL,
 #   SPARKLE_PRIVATE_KEY_FILE.
 #
 # Into the copy, at the native app's paths (apps/macos/project.yml):

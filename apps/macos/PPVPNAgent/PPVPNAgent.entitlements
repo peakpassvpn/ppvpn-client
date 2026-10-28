@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Releases are signed with a self-signed certificate (or ad-hoc), neither
-     with a Team ID, and hardened-runtime library validation refuses every
-     non-system library without one: the shared PPVPNClientFFI.framework and
-     Sparkle.
-     TODO: drop this once builds are signed with an Apple Developer ID. -->
+<!-- Local and CI builds are signed ad-hoc or with a self-signed certificate,
+     neither with a Team ID, and hardened-runtime library validation refuses
+     every non-system library without one: the shared PPVPNClientFFI.framework
+     and Sparkle. Releases are signed with our Developer ID, where every
+     library carries the Team ID: package-app.sh takes this entitlement out
+     there (#471). -->
 <plist version="1.0">
 <dict>
     <key>com.apple.security.cs.disable-library-validation</key>

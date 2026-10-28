@@ -26,8 +26,12 @@
 #   DEV_API_BASE  dev: the dev backend, compiled in as the default origin
 #                 (PPVPN_BUILD_PROFILE=dev); a dev archive is never published
 #   MACOS_SIGNING_P12_BASE64, MACOS_SIGNING_P12_PASSWORD
-#                 macOS: the "PPVPN Code Signing" certificate and key, as the
-#                 desktop app is signed; without them ad-hoc (refused for stable)
+#                 macOS: our Developer ID Application certificate and key, as the
+#                 desktop app is signed (#471); without them ad-hoc (refused for
+#                 stable)
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8
+#                 macOS: App Store Connect API key, notarizes the binary (required
+#                 for stable)
 set -euo pipefail
 
 os=${1:?usage: $0 linux <target> | macos}
@@ -126,14 +130,14 @@ macos)
 	done
 	strip "$bin"
 	! nm -arch arm64 "$bin" 2>/dev/null | grep 'ppvpn_cli8commands3run' >/dev/null || fail "the shipped ppvpn still has symbols"
-	# The desktop app's certificate (tools/desktop/ci/build-macos-native.sh):
-	# self-signed, so the designated requirement is pinned to the identifier
-	# and the certificate, and the Keychain item's access carries across
-	# updates. A temporary keychain holds it for this build only.
+	# The desktop app's Developer ID (tools/desktop/ci/build-macos-native.sh):
+	# Apple's designated requirement (identifier, Team ID) carries across
+	# updates and certificate renewals, and with it the Keychain item's
+	# access. A temporary keychain holds it for this build only.
 	identifier=com.peakpassvpn.ppvpn.cli
+	team=$(tr -d '[:space:]' <crates/service/src/macos_team_id)
 	if [ -n "${MACOS_SIGNING_P12_BASE64:-}" ]; then
 		: "${MACOS_SIGNING_P12_PASSWORD:?MACOS_SIGNING_P12_PASSWORD is required with MACOS_SIGNING_P12_BASE64}"
-		identity="PPVPN Code Signing"
 		key_dir=$(mktemp -d)
 		keychain=$key_dir/signing.keychain-db
 		keychain_password=$(uuidgen)
@@ -154,11 +158,36 @@ macos)
 		rm -f "$key_dir/signing.p12"
 		security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
 		security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
-		cert_sha1=$(security find-certificate -c "$identity" -Z "$keychain" | awk '/^SHA-1 hash:/ { print $NF; exit }')
-		[ -n "$cert_sha1" ] || fail "no certificate for \"$identity\" in the signing keychain"
-		codesign --force --sign "$identity" --identifier "$identifier" --options runtime --timestamp=none \
-			--requirements "=designated => identifier \"$identifier\" and certificate leaf = H\"$cert_sha1\"" "$bin"
-		codesign -dv --verbose=4 "$bin" 2>&1 | grep -qx "Authority=$identity" || fail "ppvpn is not signed by $identity"
+		identity=$(security find-identity -v "$keychain" |
+			sed -n 's/^ *[0-9][0-9]*) [0-9A-F]\{40\} "\(.*\)"$/\1/p' |
+			grep -x "Developer ID Application: .* ($team)" || true)
+		if [ -z "$identity" ] || [ "$(printf '%s\n' "$identity" | wc -l)" -ne 1 ]; then
+			security find-identity -v "$keychain" >&2
+			fail "the certificate is not one \"Developer ID Application: … ($team)\" identity"
+		fi
+		codesign --force --sign "$identity" --identifier "$identifier" --options runtime --timestamp "$bin"
+		codesign -dv --verbose=4 "$bin" 2>&1 | grep -qx "TeamIdentifier=$team" || fail "ppvpn is not signed by $team"
+		if [ -n "${ASC_KEY_P8:-}" ]; then
+			: "${ASC_KEY_ID:?ASC_KEY_ID is required with ASC_KEY_P8}"
+			: "${ASC_ISSUER_ID:?ASC_ISSUER_ID is required with ASC_KEY_P8}"
+			(umask 077 && printf '%s\n' "$ASC_KEY_P8" >"$key_dir/notary.p8")
+			# A bare binary takes no stapled ticket: Gatekeeper looks it up
+			# online.
+			ditto -c -k "$bin" "$work/ppvpn.zip"
+			out=$(xcrun notarytool submit "$work/ppvpn.zip" --key "$key_dir/notary.p8" --key-id "$ASC_KEY_ID" \
+				--issuer "$ASC_ISSUER_ID" --wait --timeout 45m --output-format json 2>&1) || true
+			id=$(python3 -c 'import json, sys; print(json.loads(sys.stdin.read()).get("id", ""))' <<<"$out" 2>/dev/null || true)
+			status=$(python3 -c 'import json, sys; print(json.loads(sys.stdin.read()).get("status", ""))' <<<"$out" 2>/dev/null || true)
+			if [ "$status" != Accepted ]; then
+				[ -z "$id" ] || xcrun notarytool log "$id" --key "$key_dir/notary.p8" --key-id "$ASC_KEY_ID" \
+					--issuer "$ASC_ISSUER_ID" >&2 || true
+				fail "notarizing ppvpn: ${status:-no answer}: $out"
+			fi
+			echo "notarized ppvpn ($id)"
+		else
+			[ "${CHANNEL:-}" != stable ] || fail "a stable build must be notarized (ASC_KEY_P8)"
+			echo "warning: ASC_KEY_P8 not set; signed but not notarized"
+		fi
 	else
 		[ "${CHANNEL:-}" != stable ] || fail "a stable build must be signed (MACOS_SIGNING_P12_BASE64)"
 		echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
