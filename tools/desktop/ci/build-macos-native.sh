@@ -30,7 +30,8 @@
 #   ASC_KEY_ID, ASC_ISSUER_ID, App Store Connect API key (contents of the .p8):
 #   ASC_KEY_P8                 notarizes the app, the DMG and the pkg
 #   A stable build needs all three; anything else signs and notarizes with
-#   what it has.
+#   what it has, and builds ad hoc (with a warning) when the certificate is
+#   not our Developer ID Application (the dev environment's old one).
 #   MACOS_STAGING_DIR          output directory (default staging/macos-native)
 #   PPVPN_PREBUILT=1           the Rust is built already, by other jobs (release.yml):
 #                              the service helpers in build/binaries
@@ -104,6 +105,7 @@ identity() {
     | sed -n 's/^ *[0-9][0-9]*) [0-9A-F]\{40\} "\(.*\)"$/\1/p' \
     | grep -x "$1: .* ($team)" || true
 }
+# Imports a .p12 and prints its identity: one "<kind>: … (<team>)", or fails.
 import_identity() { # <kind> <p12 base64> <password>
   printf '%s' "$2" | base64 --decode > "$key_dir/identity.p12"
   security import "$key_dir/identity.p12" -k "$keychain" -P "$3" \
@@ -114,10 +116,11 @@ import_identity() { # <kind> <p12 base64> <password>
   if [[ -z "$found" || "$found" == *$'\n'* ]]; then
     echo "the certificate is not one \"$1: … ($team)\" identity; the keychain holds:" >&2
     security find-identity -v "$keychain" >&2
-    exit 5
+    return 1
   fi
   echo "$found"
 }
+signed=0
 if [[ -n "${MACOS_SIGNING_P12_BASE64:-}" ]]; then
   : "${MACOS_SIGNING_P12_PASSWORD:?MACOS_SIGNING_P12_PASSWORD is required with MACOS_SIGNING_P12_BASE64}"
   keychain="$key_dir/signing.keychain-db"
@@ -127,8 +130,20 @@ if [[ -n "${MACOS_SIGNING_P12_BASE64:-}" ]]; then
   security create-keychain -p "$keychain_password" "$keychain"
   security set-keychain-settings -lut 21600 "$keychain"
   security unlock-keychain -p "$keychain_password" "$keychain"
-  PPVPN_CODESIGN_IDENTITY="$(import_identity "Developer ID Application" \
-    "$MACOS_SIGNING_P12_BASE64" "$MACOS_SIGNING_P12_PASSWORD")"
+  if PPVPN_CODESIGN_IDENTITY="$(import_identity "Developer ID Application" \
+    "$MACOS_SIGNING_P12_BASE64" "$MACOS_SIGNING_P12_PASSWORD")"; then
+    signed=1
+  elif [[ "${PPVPN_RELEASE_CHANNEL:-}" == stable ]]; then
+    exit 5
+  else
+    # A dev build whose environment still holds another certificate (the
+    # self-signed one of 0.7.x): built ad hoc, as without one. The service
+    # it ships accepts only our Developer ID, so its enhanced mode needs
+    # the dev environment to sign with it too.
+    echo "::warning::MACOS_SIGNING_P12_BASE64 is not our Developer ID Application certificate; signing ad-hoc (not for release)"
+  fi
+fi
+if [[ "$signed" == 1 ]]; then
   if [[ -n "${MACOS_INSTALLER_P12_BASE64:-}" ]]; then
     : "${MACOS_INSTALLER_P12_PASSWORD:?MACOS_INSTALLER_P12_PASSWORD is required with MACOS_INSTALLER_P12_BASE64}"
     PPVPN_INSTALLER_IDENTITY="$(import_identity "Developer ID Installer" \
@@ -151,11 +166,10 @@ if [[ -n "${MACOS_SIGNING_P12_BASE64:-}" ]]; then
   else
     echo "warning: ASC_KEY_P8 not set; signed but not notarized (Gatekeeper refuses a download)"
   fi
-elif [[ -n "${MACOS_INSTALLER_P12_BASE64:-}${ASC_KEY_P8:-}" ]]; then
-  echo "MACOS_INSTALLER_P12_BASE64 or ASC_KEY_P8 set without MACOS_SIGNING_P12_BASE64" >&2
-  exit 5
 else
-  echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
+  unset PPVPN_CODESIGN_IDENTITY
+  [[ -n "${MACOS_SIGNING_P12_BASE64:-}" ]] \
+    || echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
 fi
 if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
   [[ -n "$PPVPN_SPARKLE_PUBLIC_KEY" ]] || { echo "SPARKLE_PRIVATE_KEY set without PPVPN_SPARKLE_PUBLIC_KEY" >&2; exit 3; }

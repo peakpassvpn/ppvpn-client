@@ -136,6 +136,7 @@ macos)
 	# access. A temporary keychain holds it for this build only.
 	identifier=com.peakpassvpn.ppvpn.cli
 	team=$(tr -d '[:space:]' <crates/service/src/macos_team_id)
+	identity=""
 	if [ -n "${MACOS_SIGNING_P12_BASE64:-}" ]; then
 		: "${MACOS_SIGNING_P12_PASSWORD:?MACOS_SIGNING_P12_PASSWORD is required with MACOS_SIGNING_P12_BASE64}"
 		key_dir=$(mktemp -d)
@@ -163,8 +164,14 @@ macos)
 			grep -x "Developer ID Application: .* ($team)" || true)
 		if [ -z "$identity" ] || [ "$(printf '%s\n' "$identity" | wc -l)" -ne 1 ]; then
 			security find-identity -v "$keychain" >&2
-			fail "the certificate is not one \"Developer ID Application: … ($team)\" identity"
+			[ "${CHANNEL:-}" != stable ] || fail "the certificate is not one \"Developer ID Application: … ($team)\" identity"
+			# A dev build whose environment still holds another certificate
+			# (the self-signed one of 0.7.x): built ad hoc, as without one.
+			echo "::warning::MACOS_SIGNING_P12_BASE64 is not our Developer ID Application certificate; signing ad-hoc (not for release)"
+			identity=""
 		fi
+	fi
+	if [ -n "$identity" ]; then
 		codesign --force --sign "$identity" --identifier "$identifier" --options runtime --timestamp "$bin"
 		codesign -dv --verbose=4 "$bin" 2>&1 | grep -qx "TeamIdentifier=$team" || fail "ppvpn is not signed by $team"
 		if [ -n "${ASC_KEY_P8:-}" ]; then
@@ -190,7 +197,8 @@ macos)
 		fi
 	else
 		[ "${CHANNEL:-}" != stable ] || fail "a stable build must be signed (MACOS_SIGNING_P12_BASE64)"
-		echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
+		[ -n "${MACOS_SIGNING_P12_BASE64:-}" ] ||
+			echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
 		codesign --force --sign - --identifier "$identifier" --options runtime "$bin"
 	fi
 	codesign --verify --strict --verbose=2 "$bin"
