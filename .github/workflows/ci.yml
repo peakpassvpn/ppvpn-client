@@ -32,6 +32,9 @@ name: ci
 #   android      the Flutter app's Android target (#448): the bridge for
 #                arm64 and x86_64, the APK, the app started on an emulator,
 #                only when it or what it builds from changed
+#   ios          the Flutter app's iOS target (#448): the bridge for Apple
+#                silicon's simulator, the app, started on an iPhone
+#                simulator, only when it or what it builds from changed
 # A pull request that changes only docs/ or Markdown runs every job, and each
 # skips its build and test steps (tools/ci-changes.sh `code`); lint still runs
 # the sensitive check.
@@ -1172,7 +1175,9 @@ jobs:
     # The Flutter app's iOS target (#448): the bridge as a static library
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
-    # an iPhone simulator. No packet tunnel yet (#448 step 2).
+    # an iPhone simulator. No packet tunnel yet (#448 step 2). Its Rust
+    # cache (key ios) is release.yml's cache-ios: the codegen's cargo
+    # expand, BoringSSL and the bridge for the simulator.
     name: ios
     runs-on: macos-15
     timeout-minutes: 90
@@ -1193,6 +1198,11 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          shared-key: ios
+          save-if: false
       # The host's for the bridge codegen, which reads the crate.
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.flutter == 'true'

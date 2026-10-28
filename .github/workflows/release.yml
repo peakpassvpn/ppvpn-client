@@ -1754,7 +1754,7 @@ jobs:
             --jq '.actions_caches[].key')
           missing=" "
           for want in linux-Linux unit-Linux integration-Linux desktop-Linux macos-Darwin windows-Windows \
-                      flutter-Linux flutter-Darwin flutter-Windows android-Linux; do
+                      flutter-Linux flutter-Darwin flutter-Windows android-Linux ios-Darwin; do
             grep -q "^v0-rust-$want-" <<<"$keys" || missing="$missing$want "
           done
           echo "cache usage: $((used / 1048576)) MiB; missing:$missing"
@@ -2073,3 +2073,33 @@ jobs:
           export JAVA_HOME="$JAVA_HOME_17_X64"
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
           apps/flutter/scripts/ci-build.sh
+
+  # ci.yml's ios job, key ios: BoringSSL (from source: btls has no iOS
+  # prebuilts) and the bridge for Apple silicon's simulator.
+  cache-ios:
+    name: cache-ios
+    needs: changes
+    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' ios-Darwin ')
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ios
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+      - name: what ios builds
+        env:
+          FLUTTER_TARGET: ios
+          IOS_SDK: simulator
+        run: apps/flutter/scripts/ci-build.sh
