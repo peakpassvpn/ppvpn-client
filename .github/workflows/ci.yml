@@ -461,6 +461,14 @@ jobs:
         run: |
           cargo test --locked -p ppvpn-push-agent
           cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets -- -D warnings
+      # The mobile tunnel host (#448) on Linux: its C functions, socket and
+      # host with an engine that is never started. Its iOS build is the
+      # tunnel job's.
+      - name: Tunnel host
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          cargo test --locked -p ppvpn-tunnel-host
+          cargo clippy --locked -p ppvpn-tunnel-host --all-targets -- -D warnings
       - name: Check scripts
         if: steps.scope.outputs.code == 'true'
         run: |
@@ -1225,3 +1233,44 @@ jobs:
         if: steps.scope.outputs.flutter == 'true'
         timeout-minutes: 30
         run: apps/flutter/e2e/ios_smoke.sh
+
+  tunnel:
+    # The mobile tunnel host for the iOS packet tunnel extension (#448):
+    # crates/tunnel-host/scripts/build-xcframework.sh, one slice per job
+    # (each ~25 min cold: sail and BoringSSL from source, profile mobile).
+    # Only when it or what it links changed (tools/ci-changes.sh `tunnel`).
+    # Uncached: the 10 GB cache budget has no room for it yet.
+    name: tunnel (${{ matrix.slice }})
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [ios, simulator]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.slice == 'ios' && 'aarch64-apple-ios' || 'aarch64-apple-ios-sim' }}
+      - name: Build the XCFramework
+        if: steps.scope.outputs.tunnel == 'true'
+        run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ${{ matrix.slice }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          name: tunnel-${{ matrix.slice }}
+          path: |
+            ${{ runner.temp }}/tunnel/PPVPNTunnel.xcframework
+            ${{ runner.temp }}/tunnel/PPVPNTunnel.ldflags
+          if-no-files-found: error
+          retention-days: 14

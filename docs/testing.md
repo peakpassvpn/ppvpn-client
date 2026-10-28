@@ -87,11 +87,12 @@
 | `advisories` | cargo-deny（`deny.toml`）：Cargo.lock 对 RustSec 安全公告，以及依赖来源（只许 crates.io 和列出的 git 仓库，git 依赖要钉 tag 或 rev）。公告只在改了依赖的 PR（`tools/ci-changes.sh` 的 `deps`）上算失败，其他 PR 上是警告；暂时修不了的公告列在 `deny.toml` 的 `ignore` 里，写明原因和修复它的 issue 或 PR |
 | `unit` | L1（`make test-unit`） |
 | `integration` | L2（`make test-integration`），与 L1 并行 |
-| `desktop` | 桌面各层：特权 service 和客户端 crate 的测试与 clippy、桌面脚本、C# 绑定和 App.Core / Linux 测试、Swift 绑定和 AppLogic 测试 |
+| `desktop` | 桌面各层：特权 service、客户端 crate 和移动端隧道宿主（`crates/tunnel-host`，Linux 上）的测试与 clippy、桌面脚本、C# 绑定和 App.Core / Linux 测试、Swift 绑定和 AppLogic 测试 |
 | `linux` | Linux 自己的：网络命名空间里的 L3（`make test-system`：tun 及 G7、network-change），以及桌面增强模式端到端 |
 | `macos` | macOS 自己的：整个 workspace 在 aarch64 和 x86_64 上的 clippy、macOS 平台测试、Debug app 构建 |
 | `windows` | Windows 自己的：桌面链接的 crate 在 MSVC 上的 clippy、Windows 平台测试、G7 Windows、C# 绑定、App.Core 测试、app 和推送代理构建 |
 | `flutter` | Flutter 桌面 app（#401）在 Linux、macOS、Windows 上构建和冒烟测试，只在它或它构建所用的 crate（客户端、core、account、engine-host、service）变了的时候 |
+| `tunnel (ios)`、`tunnel (simulator)` | 移动端隧道宿主给 iOS 网络扩展的 XCFramework（#448，`crates/tunnel-host/scripts/build-xcframework.sh`），真机和模拟器各一片；只在隧道宿主、core、engine-host、依赖或 ci.yml 变了的时候（`tools/ci-changes.sh` 的 `tunnel`）。不缓存，冷构建每片约 25 分钟 |
 
 L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重跑，只编译（clippy 覆盖各平台 `cfg` 的代码）并跑平台测试。
 
