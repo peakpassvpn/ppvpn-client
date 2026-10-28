@@ -64,28 +64,44 @@ class TokenTest(unittest.TestCase):
             asc_profiles.der_to_raw(b"\x31\x06\x02\x01\x01\x02\x01\x01")
 
 
-PROFILES = [
-    {"attributes": {"name": "PPVPN iOS App Store", "uuid": "AAAA-1", "expirationDate": "2027-10-28",
-                    "profileContent": base64.b64encode(b"app profile").decode()}},
-    {"attributes": {"name": "PPVPN iOS App Store Old", "uuid": "BBBB-2",
-                    "profileContent": base64.b64encode(b"other").decode()}},
-]
+PROFILE = {"name": "PPVPN iOS App Store", "uuid": "AAAA-1", "expirationDate": "2027-10-28",
+           "profileContent": base64.b64encode(b"app profile").decode()}
 
 
 class FakeAPI(http.server.BaseHTTPRequestHandler):
+    """The four calls asc_profiles.py makes; FakeAPI.profiles is the account's."""
+    profiles = []
     requests = []
 
-    def do_GET(self):
-        url = urllib.parse.urlparse(self.path)
-        query = urllib.parse.parse_qs(url.query)
-        FakeAPI.requests.append((url.path, query, self.headers.get("Authorization")))
-        name = query["filter[name]"][0]
-        data = [item for item in PROFILES if name in item["attributes"]["name"]]
+    def reply(self, data):
         body = json.dumps({"data": data}).encode()
-        self.send_response(200)
+        self.send_response(201 if self.command == "POST" else 200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):
+        url = urllib.parse.urlparse(self.path)
+        query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
+        FakeAPI.requests.append(("GET", url.path, query, self.headers.get("Authorization")))
+        if url.path == "/v1/profiles":
+            self.reply([{"attributes": p} for p in FakeAPI.profiles if query["filter[name]"] in p["name"]])
+        elif url.path == "/v1/bundleIds":
+            ids = [("B1", "com.peakpassvpn.ppvpn"), ("B2", "com.peakpassvpn.ppvpn.tunnel")]
+            self.reply([{"id": i, "attributes": {"identifier": b, "platform": "IOS"}}
+                        for i, b in ids if b.startswith(query["filter[identifier]"])])
+        elif url.path == "/v1/certificates":
+            self.reply([{"id": "C-old", "attributes": {"serialNumber": "11AA"}},
+                        {"id": "C1", "attributes": {"serialNumber": "7F00BEEF"}}])
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeAPI.requests.append(("POST", self.path, body, self.headers.get("Authorization")))
+        attributes = dict(PROFILE, name=body["data"]["attributes"]["name"], uuid="NEW-1")
+        FakeAPI.profiles.append(attributes)
+        self.reply({"attributes": attributes})
 
     def log_message(self, *args):
         pass
@@ -97,6 +113,7 @@ class ProfileTest(unittest.TestCase):
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.api, asc_profiles.API = asc_profiles.API, f"http://127.0.0.1:{self.server.server_port}"
         FakeAPI.requests = []
+        FakeAPI.profiles = [PROFILE, dict(PROFILE, name="PPVPN iOS App Store Old", uuid="BBBB-2")]
 
     def tearDown(self):
         asc_profiles.API = self.api
@@ -106,10 +123,10 @@ class ProfileTest(unittest.TestCase):
     def test_exact_name_installed_in_each_dir(self):
         attributes = asc_profiles.find_profile("PPVPN iOS App Store", "token")
         self.assertEqual(attributes["uuid"], "AAAA-1")
-        path, query, auth = FakeAPI.requests[0]
-        self.assertEqual(path, "/v1/profiles")
-        self.assertEqual(query["filter[profileState]"], ["ACTIVE"])
-        self.assertEqual(query["filter[profileType]"], ["IOS_APP_STORE"])
+        method, path, query, auth = FakeAPI.requests[0]
+        self.assertEqual((method, path), ("GET", "/v1/profiles"))
+        self.assertEqual(query["filter[profileState]"], "ACTIVE")
+        self.assertEqual(query["filter[profileType]"], "IOS_APP_STORE")
         self.assertEqual(auth, "Bearer token")
         with tempfile.TemporaryDirectory() as home:
             dirs = [pathlib.Path(home, "a"), pathlib.Path(home, "b")]
@@ -117,9 +134,23 @@ class ProfileTest(unittest.TestCase):
             for directory in dirs:
                 self.assertEqual((directory / "AAAA-1.mobileprovision").read_bytes(), b"app profile")
 
-    def test_missing_profile_fails(self):
+    def test_missing_profile_is_none(self):
+        self.assertIsNone(asc_profiles.find_profile("PPVPN iOS Tunnel App Store", "token"))
+
+    def test_create_on_the_exact_bundle_and_certificate(self):
+        attributes = asc_profiles.create_profile("PPVPN iOS Tunnel App Store", "com.peakpassvpn.ppvpn",
+                                                 "007f00beef", "token")
+        self.assertEqual(attributes["uuid"], "NEW-1")
+        method, path, body, _ = FakeAPI.requests[-1]
+        self.assertEqual((method, path), ("POST", "/v1/profiles"))
+        self.assertEqual(body["data"]["attributes"], {"name": "PPVPN iOS Tunnel App Store", "profileType": "IOS_APP_STORE"})
+        # com.peakpassvpn.ppvpn's prefix match also returns .tunnel; the exact one is B1.
+        self.assertEqual(body["data"]["relationships"]["bundleId"]["data"], {"type": "bundleIds", "id": "B1"})
+        self.assertEqual(body["data"]["relationships"]["certificates"]["data"], [{"type": "certificates", "id": "C1"}])
+
+    def test_unknown_certificate_fails(self):
         with self.assertRaises(SystemExit):
-            asc_profiles.find_profile("PPVPN iOS Tunnel App Store", "token")
+            asc_profiles.create_profile("x", "com.peakpassvpn.ppvpn", "DEAD", "token")
 
 
 if __name__ == "__main__":

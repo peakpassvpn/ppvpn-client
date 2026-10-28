@@ -185,7 +185,10 @@ open(delegate, "w").write("\n".join(missing) + "\n" + code + "\n" + body + "\n")
 PY
     rm ios/Runner/PPVPNPlugin.swift
     plist=ios/Runner/Info.plist
-    /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName PPVPN' -c 'Set :CFBundleName PPVPN' "$plist" ;;
+    # The export compliance answer (#470): only the system's and standard
+    # encryption, so no question per TestFlight build.
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName PPVPN' -c 'Set :CFBundleName PPVPN' \
+      -c 'Add :ITSAppUsesNonExemptEncryption bool false' "$plist" ;;
   windows)
     # ppvpn.exe and its version resource, as apps/windows
     # (PPVPN.Windows.csproj, Directory.Build.props).

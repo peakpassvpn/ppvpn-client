@@ -3,7 +3,8 @@
 #
 #   ios-signing.sh setup     the Apple Distribution certificate into a
 #                            temporary keychain, the App Store profiles from
-#                            the App Store Connect API (asc_profiles.py) and
+#                            the App Store Connect API (asc_profiles.py, which
+#                            creates one that is missing) and
 #                            the API key where altool finds it; then
 #                            IOS_TEAM_ID and IOS_APP_PROFILE, which
 #                            apps/flutter/scripts/ci-build.sh signs with, and
@@ -15,9 +16,11 @@
 # is in no variable.
 set -euo pipefail
 
-# The profiles' names in the account, one per bundle ID. The tunnel's joins
-# once the packet tunnel extension target exists (#448 step 2).
+# The profiles' names in the account, one per bundle ID. The tunnel's is
+# made and installed already; the build signs with it once the packet tunnel
+# extension target exists (#448 step 2).
 APP_PROFILE="PPVPN iOS App Store"
+TUNNEL_PROFILE="PPVPN iOS Tunnel App Store"
 
 keychain="$RUNNER_TEMP/ios-signing.keychain-db"
 key_dir="$HOME/.appstoreconnect/private_keys"
@@ -46,7 +49,10 @@ case "${1:-}" in
       sed -n 's/.*"Apple Distribution: .* (\([A-Z0-9]\{10\}\))".*/\1/p')
     [ -n "$team" ] || { echo "IOS_DIST_P12: no team ID in the identity's name" >&2; exit 1; }
 
-    python3 -I "$(dirname "$0")/asc_profiles.py" "$APP_PROFILE"
+    serial=$(security find-certificate -c "Apple Distribution: " -p "$keychain" | openssl x509 -noout -serial)
+    serial=${serial#serial=}
+    python3 -I "$(dirname "$0")/asc_profiles.py" --serial "$serial" \
+      "$APP_PROFILE=com.peakpassvpn.ppvpn" "$TUNNEL_PROFILE=com.peakpassvpn.ppvpn.tunnel"
 
     mkdir -p "$key_dir"
     (umask 077 && printf '%s\n' "$ASC_KEY_P8" >"$key_dir/AuthKey_$ASC_KEY_ID.p8")

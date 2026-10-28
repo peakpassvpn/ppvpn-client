@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Installs App Store provisioning profiles by name from the App Store Connect API.
 
-release.yml's ios job (#470): the profiles are made in the account once, and
-the build downloads them each time with the release environment's API key,
-so a renewed profile needs no secret change.
+release.yml's ios job (#470), with the release environment's API key, so a
+renewed profile needs no secret change:
 
-    asc_profiles.py <profile name>...
+    asc_profiles.py --serial <certificate serial> <name>=<bundle id>...
 
 The key from the environment: ASC_KEY_ID, ASC_ISSUER_ID (a team key) and
-ASC_KEY_P8 (the .p8 file's text). Each name must match exactly one active
-App Store profile; it is installed where Xcode looks for profiles, under its
-UUID, and its name, UUID and expiry are printed. Only the standard library
-and openssl (for the ES256 signature) are used.
+ASC_KEY_P8 (the .p8 file's text). A name must match at most one active App
+Store profile. Without one, the profile is created for that bundle ID on the
+Apple Distribution certificate with the given serial (the one the job signs
+with), which is the only change it makes in the account: the bundle IDs and
+the certificate are made by hand. Each profile is installed where Xcode looks
+for profiles, under its UUID, and its name, UUID and expiry are printed. Only
+the standard library and openssl (for the ES256 signature) are used.
 """
 
 import base64
@@ -22,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -72,20 +75,58 @@ def token(key_id, issuer, p8, now=None):
     return f"{signing_input}.{b64url(der_to_raw(der))}"
 
 
+def call(bearer, path, query=None, body=None):
+    url = f"{API}{path}" + (f"?{urllib.parse.urlencode(query)}" if query else "")
+    headers = {"Authorization": f"Bearer {bearer}"}
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode()
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if body is not None else "GET")
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.load(response)["data"]
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f"{request.method} {path}: HTTP {error.code}: {error.read().decode(errors='replace')[:2000]}")
+
+
 def find_profile(name, bearer):
-    query = urllib.parse.urlencode({
+    """The active App Store profile with exactly this name, or None."""
+    data = call(bearer, "/v1/profiles", {
         "filter[name]": name,
         "filter[profileState]": "ACTIVE",
         "filter[profileType]": "IOS_APP_STORE",
     })
-    request = urllib.request.Request(f"{API}/v1/profiles?{query}", headers={"Authorization": f"Bearer {bearer}"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        data = json.load(response)["data"]
     # The filter matches substrings too.
     exact = [item for item in data if item["attributes"]["name"] == name]
-    if len(exact) != 1:
-        raise SystemExit(f"{len(exact)} active App Store profiles named {name!r}, need exactly 1")
-    return exact[0]["attributes"]
+    if len(exact) > 1:
+        raise SystemExit(f"{len(exact)} active App Store profiles named {name!r}, need at most 1")
+    return exact[0]["attributes"] if exact else None
+
+
+def find_one(bearer, path, query, keep, what):
+    found = [item for item in call(bearer, path, query) if keep(item["attributes"])]
+    if len(found) != 1:
+        raise SystemExit(f"{len(found)} {what}, need exactly 1")
+    return found[0]["id"]
+
+
+def create_profile(name, bundle, serial, bearer):
+    # The identifier filter matches by prefix: com.peakpassvpn.ppvpn finds .tunnel too.
+    bundle_id = find_one(bearer, "/v1/bundleIds", {"filter[identifier]": bundle},
+                         lambda a: a["identifier"] == bundle and a["platform"] in ("IOS", "UNIVERSAL"),
+                         f"iOS bundle IDs {bundle}")
+    certificate_id = find_one(bearer, "/v1/certificates", {"filter[certificateType]": "DISTRIBUTION"},
+                              lambda a: a["serialNumber"].lstrip("0").upper() == serial.lstrip("0").upper(),
+                              f"Apple Distribution certificates with serial {serial}")
+    return call(bearer, "/v1/profiles", body={"data": {
+        "type": "profiles",
+        "attributes": {"name": name, "profileType": "IOS_APP_STORE"},
+        "relationships": {
+            "bundleId": {"data": {"type": "bundleIds", "id": bundle_id}},
+            "certificates": {"data": [{"type": "certificates", "id": certificate_id}]},
+        },
+    }})["attributes"]
 
 
 def install(attributes, dirs=PROFILE_DIRS):
@@ -95,14 +136,19 @@ def install(attributes, dirs=PROFILE_DIRS):
         (directory / f"{attributes['uuid']}.mobileprovision").write_bytes(content)
 
 
-def main(names):
-    if not names:
-        raise SystemExit("usage: asc_profiles.py <profile name>...")
+def main(args):
+    if len(args) < 3 or args[0] != "--serial" or not all("=" in arg for arg in args[2:]):
+        raise SystemExit("usage: asc_profiles.py --serial <certificate serial> <name>=<bundle id>...")
+    serial = args[1]
     bearer = token(os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"], os.environ["ASC_KEY_P8"])
-    for name in names:
+    for arg in args[2:]:
+        name, bundle = arg.split("=", 1)
         attributes = find_profile(name, bearer)
+        made = attributes is None
+        if made:
+            attributes = create_profile(name, bundle, serial, bearer)
         install(attributes)
-        print(f"{name}: {attributes['uuid']}, expires {attributes.get('expirationDate', '?')}")
+        print(f"{name}: {'created, ' if made else ''}{attributes['uuid']}, expires {attributes.get('expirationDate', '?')}")
 
 
 if __name__ == "__main__":
