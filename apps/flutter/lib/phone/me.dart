@@ -1,8 +1,9 @@
 // 我的 (#448 step 5): the account card (radius 18 on the brand gradient; a
 // press switches teams), then grouped 50-high rows with 17 titles and the
 // accent-tinted icon tiles: 连接 (routing), 通用 (appearance, language), 支持
-// (日志, pushed; the web pages ↗ with the version on 关于), and 退出登录 in
-// red after a confirmation. A row with a value pushes its choices.
+// (日志, pushed; the web pages ↗, account deletion among them, with the
+// version on 关于), and 退出登录 in red after a confirmation. A row with a
+// value pushes its choices.
 
 import 'dart:async';
 import 'dart:io';
@@ -130,6 +131,15 @@ class PhoneMe extends StatelessWidget {
                   onPress: () => _open('/dashboard/subscriptions'),
                 ),
               _Row(icon: FLucideIcons.megaphone, title: s('helpWeb'), web: true, onPress: () => _open('/dashboard/tickets')),
+              // The site's deletion page (signed out, it signs in first, then
+              // comes back): it confirms again and deletes the account.
+              // App Store and Play need it reachable from the app (#473).
+              _Row(
+                icon: FLucideIcons.userX,
+                title: s('deleteAccountWeb'),
+                web: true,
+                onPress: () => _open('/account/delete'),
+              ),
               _Row(
                 icon: FLucideIcons.info,
                 title: s('about'),
