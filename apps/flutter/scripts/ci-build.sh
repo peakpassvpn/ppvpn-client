@@ -157,7 +157,10 @@ text = open(path).read()
 generated = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpnFlutter;"
 if text.count(generated) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations' bundle id")
-text = text.replace(generated, "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;")
+# Without the debug dylib: the app's code in the Runner executable itself,
+# which flutter test's log predicate needs (PPVPNPlugin's VMServiceAnnouncer).
+text = re.sub(r"\n\t*ENABLE_DEBUG_DYLIB = \w+;", "", text)
+text = text.replace(generated, "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;\n\t\t\t\tENABLE_DEBUG_DYLIB = NO;")
 text, targets = re.subn(r"IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;", "IPHONEOS_DEPLOYMENT_TARGET = 15.0;", text)
 if not targets:
     raise SystemExit(f"{path}: no deployment target")
