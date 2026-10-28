@@ -66,42 +66,51 @@ builds both on an Apple silicon runner into one artifact.
 
 ## Signing and installing
 
-Releases are signed with one fixed self-signed certificate, "PPVPN Code
-Signing" (no Apple Developer ID yet), and are not notarized. CI imports it
-into a temporary keychain from the `MACOS_SIGNING_P12_BASE64` /
-`MACOS_SIGNING_P12_PASSWORD` secrets; `package-dmg.sh` signs with
-`PPVPN_CODESIGN_IDENTITY` and pins every designated requirement to
-`identifier "<bundle id>" and certificate leaf = H"<certificate SHA-1>"`, so
-the push agent's SMAppService registration and the notification permission
-carry over from one build to the next. Without the certificate (local
-builds, pull requests) signing falls back to ad-hoc.
+Releases are signed with our Apple Developer ID (Team ID in
+`crates/service/src/macos_team_id`, #471) and notarized. CI
+(`tools/desktop/ci/build-macos-native.sh`) imports the Developer ID
+Application and Installer identities into a temporary keychain from the
+`MACOS_SIGNING_P12_*` and `MACOS_INSTALLER_P12_*` secrets, refuses
+identities of any other kind or team, and passes the App Store Connect API
+key (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`) to notarytool.
+`package-app.sh` then:
 
-The login keychain partitions the items of an app without a Team ID by its
-cdhash, which every build changes, so a keychain-stored sign-in would ask for
-the keychain password after each update. As a trade-off for having no Team
-ID, the sign-in is kept in `~/Library/Application Support/PPVPN/credentials`
-instead: 0600 in a 0700 directory, written atomically, excluded from Time
-Machine and deleted on sign-out (Debug builds use `credentials.debug`). Any
-process of the same user can read it, much like a keychain item set to
-"Always Allow". TODO: move back to the keychain (`KeychainCredentialStore`)
-once builds are signed with a Developer ID.
+- signs every piece of code inside out with the hardened runtime and a
+  secure timestamp, keeping codesign's own designated requirements
+  (identifier, Apple's anchor, the Team ID), which carry across builds and
+  certificate renewals (keychain access, the push agent's SMAppService
+  registration, the notification permission);
+- takes `com.apple.security.cs.disable-library-validation` out of the
+  entitlements: every embedded library carries the same Team ID;
+- notarizes the app and staples its ticket, builds the DMG (signed) and the
+  pkg (`productsign`, Developer ID Installer) from it, notarizes and staples
+  both, and checks Gatekeeper's verdict on all three;
+- only then signs the DMG for Sparkle and writes the release metadata.
 
-With no Team ID, hardened-runtime library validation would refuse the
-embedded frameworks, so the app and the agent carry
-`com.apple.security.cs.disable-library-validation` (TODO: drop it with a
-Developer ID).
+A stable build without the identities or the API key fails. Without them
+(local builds, pull requests) signing falls back to ad-hoc; CI's packaging
+check signs with a throwaway self-signed identity, where each designated
+requirement pins that certificate and the entitlements keep
+disable-library-validation (no Team ID).
 
-Installing: open the downloaded .pkg; Gatekeeper blocks it once. Dismiss
-the alert, open **System Settings → Privacy & Security**, click **Open
-Anyway**, and Installer puts the app in /Applications. The installed app has
-no quarantine attribute, opens without asking and is not translocated. From
-the DMG instead, drag the app to Applications in Finder and approve it on
-first open; a copy made by a program (ditto, a Finder Apple Event) needs a
-second approval and runs translocated. Do not strip the
-quarantine attribute instead: AMFI still rejects the self-signed chain
-(-423), and without the Gatekeeper approval the app never gets past
-`_dyld_start`. Updates installed by Sparkle keep the same signature and open
-without asking again.
+The privileged service accepts only a client with our Developer ID signature
+(`crates/service/src/macsign.rs`). A service installed by a release before
+the Developer ID (0.7.x and older pin the old self-signed certificate)
+refuses the new app, which then reinstalls it once, behind the usual
+administrator prompt.
+
+The sign-in is kept in `~/Library/Application Support/PPVPN/credentials`:
+0600 in a 0700 directory, written atomically, excluded from Time Machine and
+deleted on sign-out (Debug builds use `credentials.debug`). Builds without a
+Team ID could not keep it in the login keychain (it partitions their items by
+cdhash, which every build changes). TODO: move back to the keychain
+(`KeychainCredentialStore`) now that releases carry a Developer ID.
+
+Installing: open the downloaded .pkg; Installer puts the app in
+/Applications. The installed app has no quarantine attribute, opens without
+asking and is not translocated. From the DMG instead, drag the app to
+Applications in Finder. Updates installed by Sparkle keep the same
+signature.
 
 ## Updates
 

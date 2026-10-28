@@ -215,6 +215,10 @@ pub(crate) struct EnhancedConfig {
     /// reports another one, or none (older services), is reinstalled before
     /// the next connect. `None` (id unknown) never reinstalls.
     pub expected_service_build_id: Option<String>,
+    /// An installed service that refuses this client is reinstalled once
+    /// before a connect (macOS: a service from before the Developer ID
+    /// signature pins the old certificate, #471).
+    pub reinstall_rejecting_service: bool,
     /// Sent with every Connect / UpdateProfile (shared with the client).
     pub routing: crate::routing::RoutingModeCell,
     /// Ingress pins, sent with every Connect / UpdateProfile (shared with
@@ -231,6 +235,7 @@ impl EnhancedConfig {
             api_base: config.api_base.clone(),
             state_file: PathBuf::from(&config.data_dir).join(crate::storage::ENHANCED_STATE_FILE),
             expected_service_build_id: crate::service::expected_service_build_id(),
+            reinstall_rejecting_service: cfg!(target_os = "macos"),
             routing: Default::default(),
             ingress_pins: Default::default(),
             selection: Default::default(),
@@ -1448,7 +1453,14 @@ impl Inner {
                     }
                     return Ok(());
                 }
-                // The service refused this executable: reinstalling cannot help.
+                // The service refused this executable: one reinstall, where
+                // the installed service may predate this client's signature.
+                Ok(Err(error @ ServiceError::Rejected(_)))
+                    if allow_install && self.config.reinstall_rejecting_service =>
+                {
+                    return self.replace_rejecting_service(generation, error).await;
+                }
+                // Otherwise reinstalling cannot help.
                 Ok(Err(error @ (ServiceError::Rejected(_) | ServiceError::Protocol(_)))) => {
                     return Err(error.info());
                 }
@@ -1556,6 +1568,29 @@ impl Inner {
         Ok(())
     }
 
+    /// Reinstalls an installed service that refused this client, once per
+    /// connect (each one a user's): a service installed before this build's
+    /// signature, such as one pinning the self-signed certificate of the
+    /// releases before the Developer ID (#471). The new installer checks
+    /// the service it installs against this build's signature, so this
+    /// widens nothing. A failed or declined reinstall fails the connect with
+    /// its error; a service that still refuses, with the refusal.
+    async fn replace_rejecting_service(
+        &self,
+        generation: u64,
+        rejected: ServiceError,
+    ) -> Result<(), ClientErrorInfo> {
+        tracing::warn!(detail = %rejected.detail(),
+            "privileged service refused this client; reinstalling it once");
+        self.transition(generation, ConnectionPhase::WaitingPermission, None, false);
+        let installed = self.install().await;
+        self.transition(generation, ConnectionPhase::Preparing, None, false);
+        installed?;
+        self.wait_for_service().await?;
+        tracing::info!("privileged service reinstalled; it accepts this client");
+        Ok(())
+    }
+
     /// Notes (once) that the service answering a connected session is
     /// outdated; it is replaced before the next connect, never mid-session.
     fn note_service_build(&self, status: &crate::service::ServiceStatus) {
@@ -1606,6 +1641,10 @@ impl Inner {
         loop {
             match tokio::time::timeout(Duration::from_secs(2), self.service.get_version()).await {
                 Ok(Ok(_)) => return Ok(()),
+                // Answering, but not for this client: waiting cannot help.
+                Ok(Err(error @ (ServiceError::Rejected(_) | ServiceError::Protocol(_)))) => {
+                    return Err(error.info())
+                }
                 Ok(Err(error)) => last = error.detail(),
                 Err(_) => last = "get_version timed out".to_string(),
             }
@@ -3228,11 +3267,19 @@ mod tests {
         /// Watches opened, and watches dropped by the client (cancelled).
         watches: AtomicUsize,
         watches_dropped: Arc<AtomicUsize>,
+        /// The service refuses the client (its signature), and whether the
+        /// one a (re)install leaves behind does.
+        rejects: AtomicBool,
+        rejects_after_install: AtomicBool,
     }
 
     impl FakeService {
         fn check(&self) -> Result<(), ServiceError> {
-            if self.available.load(Ordering::SeqCst) {
+            if self.available.load(Ordering::SeqCst) && self.rejects.load(Ordering::SeqCst) {
+                Err(ServiceError::Rejected(
+                    "CLIENT_SIGNATURE_REJECTED:test".into(),
+                ))
+            } else if self.available.load(Ordering::SeqCst) {
                 Ok(())
             } else {
                 Err(ServiceError::Unavailable(
@@ -3578,6 +3625,10 @@ mod tests {
                 self.service.available.store(true, Ordering::SeqCst);
                 *self.service.build_id.lock().unwrap() =
                     self.service.installed_build_id.lock().unwrap().clone();
+                self.service.rejects.store(
+                    self.service.rejects_after_install.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
             }
             result
         }
@@ -3615,6 +3666,14 @@ mod tests {
     }
 
     fn harness_expecting(installed: bool, expected_build: Option<&str>) -> Harness {
+        harness_with(installed, expected_build, true)
+    }
+
+    fn harness_with(
+        installed: bool,
+        expected_build: Option<&str>,
+        reinstall_rejecting_service: bool,
+    ) -> Harness {
         let service = Arc::new(FakeService::default());
         service.available.store(installed, Ordering::SeqCst);
         *service.build_id.lock().unwrap() = Some(BUILD.into());
@@ -3636,6 +3695,7 @@ mod tests {
             api_base: "http://localhost:8080".into(),
             state_file: dir.join(crate::storage::ENHANCED_STATE_FILE),
             expected_service_build_id: expected_build.map(String::from),
+            reinstall_rejecting_service,
             routing: Default::default(),
             ingress_pins: Default::default(),
             selection: crate::session::SelectionSource::new({
@@ -4930,6 +4990,90 @@ mod tests {
         h.enhanced.retry().await.unwrap();
         assert_eq!(h.hooks.installs.load(Ordering::SeqCst), 1);
         assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+    }
+
+    // --- a service that refuses this client (#471) ---------------------------
+
+    fn rejected(error: &ClientError) -> bool {
+        matches!(
+            error,
+            ClientError::Failed {
+                code: ErrorCode::ServiceClientRejected,
+                ..
+            }
+        )
+    }
+
+    #[tokio::test]
+    async fn a_refusing_service_is_reinstalled_before_connect() {
+        let h = harness(true);
+        h.service.rejects.store(true, Ordering::SeqCst);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        assert_eq!(h.hooks.installs.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            h.phases.lock().unwrap().clone(),
+            vec![
+                ConnectionPhase::Preparing,
+                ConnectionPhase::WaitingPermission,
+                ConnectionPhase::Preparing,
+                ConnectionPhase::Connecting,
+                ConnectionPhase::On
+            ]
+        );
+        reconnect(&h).await;
+        assert_eq!(h.hooks.installs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_service_still_refusing_after_the_reinstall_fails_with_the_refusal() {
+        let h = harness(true);
+        h.service.rejects.store(true, Ordering::SeqCst);
+        h.service
+            .rejects_after_install
+            .store(true, Ordering::SeqCst);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        let started = Instant::now();
+        let error = h.enhanced.enable().await.unwrap_err();
+        assert!(rejected(&error), "{error:?}");
+        // One reinstall, and no wait for a service that answers.
+        assert_eq!(h.hooks.installs.load(Ordering::SeqCst), 1);
+        assert!(started.elapsed() < SERVICE_START_TIMEOUT);
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 0);
+        // The user's next connect tries once more.
+        let _ = h.enhanced.retry().await;
+        assert_eq!(h.hooks.installs.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_declined_reinstall_of_a_refusing_service_fails_the_connect() {
+        let h = harness(true);
+        h.service.rejects.store(true, Ordering::SeqCst);
+        *h.hooks.install_result.lock().unwrap() = Err(PlatformError::Cancelled);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        let error = h.enhanced.enable().await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ClientError::Failed {
+                    code: ErrorCode::ServiceInstallCancelled,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(h.hooks.installs.load(Ordering::SeqCst), 1);
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_refusing_service_is_final_where_reinstalling_is_off() {
+        let h = harness_with(true, Some(BUILD), false);
+        h.service.rejects.store(true, Ordering::SeqCst);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        let error = h.enhanced.enable().await.unwrap_err();
+        assert!(rejected(&error), "{error:?}");
+        assert_eq!(h.hooks.installs.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
