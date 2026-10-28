@@ -253,7 +253,10 @@ impl ApiConfig {
 
 /// HTTP client bound to one configured API base.
 pub struct Api {
+    /// Through the OS proxy ([`crate::sysproxy`]), read at each request.
     http: reqwest::Client,
+    /// No proxy: when the OS proxy cannot be reached.
+    direct: reqwest::Client,
     base: String,
     header_audience: Option<String>,
     token_audience: String,
@@ -298,17 +301,24 @@ impl Api {
         // Building only fails when the TLS backend cannot initialise; fall
         // back to the default client instead of panicking (hosts may call
         // this across an FFI boundary).
-        let http = reqwest::Client::builder()
-            .default_headers(headers)
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(20))
-            // A local mock backend may use a self-signed certificate; only
-            // ever for a loopback base under the test switch.
-            .danger_accept_invalid_certs(trust_local)
+        let builder = || {
+            reqwest::Client::builder()
+                .default_headers(headers.clone())
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(20))
+                // A local mock backend may use a self-signed certificate;
+                // only ever for a loopback base under the test switch.
+                .danger_accept_invalid_certs(trust_local)
+        };
+        // The OS proxy, as the native apps' HTTP stacks used it (#476).
+        let http = builder()
+            .proxy(reqwest::Proxy::custom(crate::sysproxy::for_url))
             .build()
             .unwrap_or_default();
+        let direct = builder().no_proxy().build().unwrap_or_default();
         Self {
             http,
+            direct,
             base: config.base.trim().to_string(),
             header_audience: config.header_audience,
             token_audience: config.token_audience,
@@ -347,6 +357,31 @@ impl Api {
         Ok(url)
     }
 
+    /// Sends through the OS proxy; when that proxy cannot be reached (a
+    /// proxy app quit and left the setting on), this request goes direct.
+    async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let request = request.build()?;
+        let fallback = crate::sysproxy::for_url(request.url())
+            .and_then(|proxy| Some((proxy, request.try_clone()?)));
+        match self.http.execute(request).await {
+            Err(error) if error.is_connect() => match fallback {
+                Some((proxy, request)) => {
+                    tracing::warn!(
+                        proxy = %proxy.host_str().unwrap_or_default(),
+                        port = proxy.port_or_known_default().unwrap_or_default(),
+                        "API: the system proxy is unreachable, going direct"
+                    );
+                    self.direct.execute(request).await
+                }
+                None => Err(error),
+            },
+            result => result,
+        }
+    }
+
     /// Unauthenticated device-authorization call.
     pub async fn post_public<T: DeserializeOwned>(
         &self,
@@ -357,7 +392,7 @@ impl Api {
         if let Some(audience) = &self.header_audience {
             request = request.header("X-Product-Aud", audience);
         }
-        decode("POST", request.json(body).send().await).await
+        decode("POST", self.send(request.json(body)).await).await
     }
 
     async fn get_bearer<T: DeserializeOwned>(
@@ -366,7 +401,7 @@ impl Api {
         token: &str,
     ) -> Result<T, ApiError> {
         let request = self.http.get(self.endpoint(path)?).bearer_auth(token);
-        decode("GET", request.send().await).await
+        decode("GET", self.send(request).await).await
     }
 
     /// `GET /users/me`.
@@ -393,7 +428,7 @@ impl Api {
             .post(self.endpoint(PATH_SWITCH_TEAM)?)
             .bearer_auth(token)
             .json(&serde_json::json!({ "team_id": team_id }));
-        decode("POST", request.send().await).await
+        decode("POST", self.send(request).await).await
     }
 
     async fn get_query<T: DeserializeOwned>(
@@ -406,7 +441,7 @@ impl Api {
         url.query_pairs_mut()
             .extend_pairs(query.iter().map(|(key, value)| (*key, value.as_str())));
         let request = self.http.get(url).bearer_auth(token);
-        decode("GET", request.send().await).await
+        decode("GET", self.send(request).await).await
     }
 
     async fn put_query<T: DeserializeOwned>(
@@ -421,7 +456,7 @@ impl Api {
                 .extend_pairs(query.iter().map(|(key, value)| (*key, value.as_str())));
         }
         let request = self.http.put(url).bearer_auth(token);
-        decode("PUT", request.send().await).await
+        decode("PUT", self.send(request).await).await
     }
 
     /// `GET /messages?page=&page_size=`: newest first.
@@ -468,18 +503,16 @@ impl Api {
             .post(self.endpoint(PATH_DEVICES_REGISTER)?)
             .bearer_auth(token)
             .json(body);
-        decode("POST", request.send().await).await
+        decode("POST", self.send(request).await).await
     }
 
     /// `DELETE /devices/{id}`; an unknown device counts as deleted.
     pub async fn delete_device(&self, token: &str, id: u64) -> Result<(), ApiError> {
-        let response = self
+        let request = self
             .http
             .delete(self.endpoint(&format!("{PATH_DEVICES}/{id}"))?)
-            .bearer_auth(token)
-            .send()
-            .await
-            .map_err(ApiError::Transport)?;
+            .bearer_auth(token);
+        let response = self.send(request).await.map_err(ApiError::Transport)?;
         match check_status("DELETE", response).await {
             Ok(_) => Ok(()),
             Err(ApiError::Status { status, .. }) if status == StatusCode::NOT_FOUND => Ok(()),
@@ -510,14 +543,12 @@ impl Api {
 
     /// `GET /me/proxy-profile` as raw bytes; the core validates the document.
     pub async fn proxy_profile(&self, token: &str) -> Result<Vec<u8>, ApiError> {
-        let response = self
+        let request = self
             .http
             .get(self.endpoint(PATH_PROXY_PROFILE)?)
             .bearer_auth(token)
-            .header("Cache-Control", "no-cache")
-            .send()
-            .await
-            .map_err(ApiError::Transport)?;
+            .header("Cache-Control", "no-cache");
+        let response = self.send(request).await.map_err(ApiError::Transport)?;
         let response = check_status("GET", response).await?;
         let bytes = response.bytes().await.map_err(ApiError::Transport)?;
         Ok(bytes.to_vec())
