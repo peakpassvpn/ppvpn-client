@@ -56,10 +56,13 @@ for slice in "${slices[@]}"; do
 	ldflags=$native
 	lib="$root/target/$triple/mobile/libppvpn_tunnel.a"
 	[ -f "$lib" ] || { echo "no $lib" >&2; exit 1; }
-	# Every C function of the header is in the library.
+	# Every C function of the header is in the library. nm's list is read
+	# from a file: grep -q ending a pipe early fails the pipe (pipefail).
+	nm -gU "$lib" 2>/dev/null >"$headers/symbols" || true
 	for symbol in $(sed -n 's/^[^#/ *].*\(ppvpn_tunnel_[a-z_]*\)(.*/\1/p' crates/tunnel-host/include/ppvpn_tunnel.h); do
-		nm -gU "$lib" 2>/dev/null | grep -q " _$symbol\$" || { echo "$lib lacks $symbol" >&2; exit 1; }
+		grep -q " _$symbol\$" "$headers/symbols" || { echo "$lib lacks $symbol; its ppvpn_tunnel symbols:" >&2; grep ppvpn_tunnel "$headers/symbols" >&2 || true; exit 1; }
 	done
+	rm -f "$headers/symbols"
 	ls -l "$lib"
 	args+=(-library "$lib" -headers "$headers")
 done
