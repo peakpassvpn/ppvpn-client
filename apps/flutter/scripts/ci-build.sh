@@ -28,10 +28,13 @@
 #                        exported as an IPA, the bundle; without them the
 #                        app is unsigned (#470)
 #   PPVPN_TUNNEL_XCFRAMEWORK, PPVPN_TUNNEL_LIBS
-#                        ios: the tunnel host and its system libraries,
-#                        linked into the packet tunnel extension
-#                        (scripts/ios-tunnel-target.rb); without it the
-#                        extension is built but cannot start
+#                        ios: a tunnel host built already and its linker
+#                        flags, linked into the packet tunnel extension
+#                        (scripts/ios-tunnel-target.rb). Without them it is
+#                        built here for the SDK's slice (crates/tunnel-host
+#                        scripts/build-xcframework.sh); a tree without
+#                        crates/tunnel-host gets an extension that cannot
+#                        start
 #   MACOS_ARCHS          macOS: the library's slices, "arm64 x86_64" joined
 #                        into one, or one of them (release.yml builds each
 #                        architecture's DMG in a job of its own, #459)
@@ -337,6 +340,18 @@ PY
     # CFBundleVersion is the release's build number, as built.
     plist 'Add :manageAppVersionAndBuildNumber bool false'
     plist 'Add :uploadSymbols bool true'
+  fi
+  # The tunnel host for the packet tunnel extension only (the engine runs
+  # in the tunnel's process, docs/mobile.md): its static library and the
+  # system libraries rustc says it needs.
+  tunnel_script="$root/crates/tunnel-host/scripts/build-xcframework.sh"
+  if [ -z "${PPVPN_TUNNEL_XCFRAMEWORK:-}" ] && [ -x "$tunnel_script" ]; then
+    slice=ios
+    [ "${IOS_SDK:-device}" = simulator ] && slice=simulator
+    IPHONEOS_DEPLOYMENT_TARGET=15.0 "$tunnel_script" "$app/build/tunnel" "$slice"
+    export PPVPN_TUNNEL_XCFRAMEWORK="$app/build/tunnel/PPVPNTunnel.xcframework"
+    PPVPN_TUNNEL_LIBS=$(cat "$app/build/tunnel/PPVPNTunnel.ldflags")
+    export PPVPN_TUNNEL_LIBS
   fi
   # The packet tunnel extension, last: Xcodeproj rewrites the whole project
   # file, which the text edits above rely on the generated form of.
