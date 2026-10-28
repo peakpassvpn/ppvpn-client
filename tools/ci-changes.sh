@@ -8,8 +8,9 @@
 #         the dependencies or the workflows: what the desktop
 #         app builds (the macOS Debug app, the Windows C# bindings and app)
 #         depend on. ci.yml skips those builds when it is false.
-#   flutter  apps/flutter/ (the Flutter desktop app, #401), crates/desktop/
-#         (what it links), apps/linux/packaging/ (its deb and rpm take the
+#   flutter  apps/flutter/ (the Flutter desktop app, #401), the crates it
+#         links (crates/{desktop,account,core,engine-host}) and the service
+#         its installers ship (crates/service), apps/linux/packaging/ (its deb and rpm take the
 #         native package's scripts), what its macOS packaging takes from
 #         apps/macos (the scripts, the push agent and what it builds from,
 #         the LaunchAgent, the .pkg's postinstall), the Windows installer
@@ -62,14 +63,15 @@ while IFS= read -r f; do
       deps=true desktop=true flutter=true code=true ;;
     apps/flutter/rust/* | apps/flutter/push-agent/*) flutter=true code=true ;;
     apps/flutter/*) flutter=true ;;
-    crates/desktop/*) desktop=true flutter=true code=true ;;
+    crates/desktop/* | crates/engine-host/* | crates/service/*) desktop=true flutter=true code=true ;;
+    crates/account/* | crates/core/*) flutter=true code=true ;;
     # The maintainer scripts and autostart entry both Linux packages ship.
     apps/linux/packaging/*) desktop=true flutter=true code=true ;;
     apps/macos/scripts/* | apps/macos/PPVPNAgent/* | apps/macos/AppLogic/* | \
     apps/macos/LaunchAgents/* | apps/macos/packaging/* | apps/macos/project.yml | \
     apps/windows/installer/* | apps/windows/scripts/sign-file.ps1)
       desktop=true flutter=true code=true ;;
-    apps/* | crates/engine-host/* | crates/service/* | tools/desktop/*)
+    apps/* | tools/desktop/*)
       desktop=true code=true ;;
     *) code=true ;;
   esac
