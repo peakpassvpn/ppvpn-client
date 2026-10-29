@@ -42,10 +42,12 @@
                                                      EdDSA private key (file / base64 contents)
     PPVPN_UPDATE_PUBLIC_KEY / PPVPN_SPARKLE_PUBLIC_KEY  checks the signature when set
     PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT              0/1 for the service build; defaults to 1
-                                                     unless Authenticode signing is configured
+                                                     unless signing and the publisher pin are set
                                                      (required with -ServiceOnly, which cannot tell)
-    PPVPN_WINDOWS_PUBLISHER_SHA256 (+ _NEXT_)        publisher pins, required when signed
-    WINDOWS_SIGN_COMMAND or WINDOWS_CERTIFICATE (+ _PASSWORD, WINDOWS_TIMESTAMP_URL)
+    PPVPN_WINDOWS_PUBLISHER_EKU (+ _NEXT_)           the signer's identity EKU (1.3.6.1.4.1.311.97.*),
+                                                     the service's publisher pin; signed builds
+                                                     enforce Authenticode only with it (#489)
+    WINDOWS_SIGN_COMMAND                             signs one file (%1), see sign-file.ps1
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File apps\flutter\scripts\package-windows.ps1
@@ -95,7 +97,8 @@ $flutterDir = Join-Path $repo "apps\flutter"
 $windowsDir = Join-Path $repo "apps\windows"
 # The native app's installer script and assets, shared until the native app goes.
 $nsi = Join-Path $windowsDir "installer\ppvpn.nsi"
-$signScript = Join-Path $windowsDir "scripts\sign-file.ps1"
+$windowsScripts = Join-Path $windowsDir "scripts"
+$signScript = Join-Path $windowsScripts "sign-file.ps1"
 $target = "x86_64-pc-windows-msvc"
 if (-not $Bundle) { $Bundle = Join-Path $flutterDir "build\windows\x64\runner\Release" }
 if (-not $OutDir) { $OutDir = Join-Path $repo $(if ($ServiceOnly) { "build\windows-service" } else { "dist\windows" }) }
@@ -140,7 +143,7 @@ Write-Host "PPVPN $version (build $buildVersion), Flutter"
 $installerName = "PPVPN-$version-windows-x64-setup.exe"
 
 # --- signing configuration (as package.ps1) -----------------------------------------
-$signing = [bool]($env:WINDOWS_SIGN_COMMAND -or $env:WINDOWS_CERTIFICATE)
+$signing = [bool]$env:WINDOWS_SIGN_COMMAND
 function Invoke-Sign([string] $Path) {
   if (-not $signing) { return }
   Invoke-Native "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $signScript, $Path)
@@ -149,7 +152,7 @@ function Invoke-Sign([string] $Path) {
 if (-not $env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT) {
   # Without the signing configuration a service-only build cannot tell.
   if ($ServiceOnly) { throw "-ServiceOnly needs PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT (0 for a signed release)." }
-  $env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT = if ($signing) { "0" } else { "1" }
+  $env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT = if ($signing -and $env:PPVPN_WINDOWS_PUBLISHER_EKU) { "0" } else { "1" }
 }
 if ($env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT -notin @("0", "1")) {
   throw "PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT must be 0 or 1."
@@ -158,9 +161,12 @@ if ($env:PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT -eq "0") {
   if (-not $signing -and -not $ServiceOnly) {
     throw "PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=0 needs Authenticode signing, or the service rejects ppvpn.exe."
   }
-  if ($env:PPVPN_WINDOWS_PUBLISHER_SHA256 -notmatch '^[0-9a-fA-F]{64}$') {
-    throw "Signed builds require PPVPN_WINDOWS_PUBLISHER_SHA256 (64 hex characters)."
+  if ($env:PPVPN_WINDOWS_PUBLISHER_EKU -notmatch '^1\.3\.6\.1\.4\.1\.311\.97(\.\d+)+$') {
+    throw "PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=0 needs PPVPN_WINDOWS_PUBLISHER_EKU, the signer's identity EKU (1.3.6.1.4.1.311.97.*)."
   }
+} elseif ($signing) {
+  # The first signed build: the identity EKU is read from its signature (#489).
+  Write-Warning "Signed, but without PPVPN_WINDOWS_PUBLISHER_EKU: ppvpn-service accepts ppvpn.exe from its install directory without checking its signature."
 } else {
   Write-Warning "Unsigned build: ppvpn-service accepts the unsigned ppvpn.exe from its install directory."
 }
@@ -311,6 +317,11 @@ $ownBinaries = @("ppvpn.exe", "ppvpn_flutter.dll", "ppvpn-push-agent.exe", "ppvp
   "ppvpn-service-install.exe", "ppvpn-service-uninstall.exe") +
   @(Get-ChildItem -LiteralPath $stage -File -Filter *_plugin.dll | ForEach-Object { $_.Name })
 foreach ($name in $ownBinaries) { Invoke-Sign (Join-Path $stage $name) }
+# The signer, as the service will check it (and its identity EKU, for the pin).
+if ($signing) {
+  Invoke-Native "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+    (Join-Path $windowsScripts "check-publisher.ps1"), (Join-Path $stage "ppvpn.exe"))
+}
 
 # The GPL text, as package.ps1 (CRLF, for the installer's text box and Notepad).
 $license = Join-Path $repo "LICENSE"

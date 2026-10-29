@@ -308,8 +308,9 @@ and build number). `-Channel` is recorded in the release metadata.
    (`dotnet msbuild -getProperty`).
 2. Builds `ppvpn-service`, `ppvpn-service-install` and `ppvpn-service-uninstall`
    from `crates/service` (`cargo build --release --target x86_64-pc-windows-msvc`).
-   Unsigned builds set `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=1`; signed builds
-   need `PPVPN_WINDOWS_PUBLISHER_SHA256`.
+   Unsigned builds set `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT=1`; a signed build
+   checks its client's signature with `PPVPN_WINDOWS_PUBLISHER_EKU` (the
+   signer's identity EKU, #489) and accepts it unchecked without it.
 3. Builds the crate and its bindings (`crates/desktop/scripts/build-dotnet.ps1 -Release`),
    then `dotnet publish` (Release, win-x64, self-contained) into `staging/windows-native/app`
    with `-p:PPVPN_API_BASE` from `-ApiBase` (else the environment, else the Release
@@ -321,8 +322,9 @@ and build number). `-Channel` is recorded in the release metadata.
    its sha256) beside the service, which runs the enhanced-mode engine in
    process.
 4. Optional Authenticode signing through `sign-file.ps1`: `WINDOWS_SIGN_COMMAND`
-   (with `%1`) or `WINDOWS_CERTIFICATE` (+ password, timestamp URL) for
-   `tools/desktop/sign-windows.ps1`. Nothing is signed when neither is set. makensis
+   (with `%1`; release.yml's is `tools/desktop/ci/artifact-signing.ps1`).
+   Nothing is signed without it. `check-publisher.ps1` then prints the
+   signer of `ppvpn.exe` and checks it against the pin. makensis
    signs the installer and the uninstaller with `!finalize`/`!uninstfinalize`.
    `ppvpn_client.dll` and `ppvpn-push-agent.exe` are signed with the executables.
 5. Writes `install-files.txt` (what this version installs) and runs makensis:
@@ -398,8 +400,9 @@ Two workflows at the repository root (`docs/desktop/ci.md`):
   The build number defaults to the run number.
 - Uploads the artifact `desktop-windows-x64`: the setup exe and
   `release-meta-windows-x64.json`; a stable release run publishes it.
-- Authenticode stays off unless `WINDOWS_CERTIFICATE` (+ password secret) and
-  `vars.WINDOWS_TIMESTAMP_URL` / `vars.PPVPN_WINDOWS_PUBLISHER_SHA256` are set.
+- Authenticode stays off unless the Artifact Signing variables are set
+  (`docs/release.md`); the service checks its client's signature once
+  `vars.PPVPN_WINDOWS_PUBLISHER_EKU` is set too.
 
 `ci-build.ps1` takes the same values as parameters or environment variables
 (`PPVPN_RELEASE_CHANNEL`, `PPVPN_API_BASE`, `PPVPN_VERSION`, `PPVPN_BUILD_NUMBER`,

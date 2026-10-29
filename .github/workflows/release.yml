@@ -851,11 +851,12 @@ jobs:
     env:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      # What package-windows.ps1 derives from the signing configuration in the
-      # windows job (0 when Authenticode signs), which checks it against this.
-      PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE && '0' || '1' }}
-      PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
-      PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
+      # What package-windows.ps1 derives in the windows job, which checks it
+      # against this: 0 when Artifact Signing signs (the windows job's
+      # ARTIFACT_SIGNING) and the publisher pin is set (#489).
+      PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT: ${{ needs.prepare.outputs.environment && vars.AZURE_CLIENT_ID && vars.AZURE_TENANT_ID && vars.AZURE_SUBSCRIPTION_ID && vars.ARTIFACT_SIGNING_ENDPOINT && vars.ARTIFACT_SIGNING_ACCOUNT && vars.ARTIFACT_SIGNING_PROFILE && vars.PPVPN_WINDOWS_PUBLISHER_EKU && '0' || '1' }}
+      PPVPN_WINDOWS_PUBLISHER_EKU: ${{ vars.PPVPN_WINDOWS_PUBLISHER_EKU }}
+      PPVPN_WINDOWS_NEXT_PUBLISHER_EKU: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_EKU }}
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     defaults:
       run:
@@ -893,18 +894,27 @@ jobs:
     runs-on: windows-latest
     environment: ${{ needs.prepare.outputs.environment }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      # azure/login's OIDC token, for Artifact Signing.
+      id-token: write
     env:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
-      # Optional Authenticode through apps/windows/scripts/sign-file.ps1; off
-      # unless these are configured.
-      WINDOWS_CERTIFICATE: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE || '' }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
-      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
-      PPVPN_WINDOWS_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_PUBLISHER_SHA256 }}
-      PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256 }}
+      # Authenticode through Azure Artifact Signing (#489,
+      # tools/desktop/ci/artifact-signing.ps1): in a release environment
+      # with all of its variables (docs/release.md), else unsigned.
+      ARTIFACT_SIGNING: ${{ needs.prepare.outputs.environment && vars.AZURE_CLIENT_ID && vars.AZURE_TENANT_ID && vars.AZURE_SUBSCRIPTION_ID && vars.ARTIFACT_SIGNING_ENDPOINT && vars.ARTIFACT_SIGNING_ACCOUNT && vars.ARTIFACT_SIGNING_PROFILE && 'true' || '' }}
+      ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+      ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+      ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+      # The service's publisher pin: the signer's identity EKU, read from the
+      # first signed build's log (check-publisher.ps1). Until it is set the
+      # service accepts its client unchecked, as an unsigned build's.
+      PPVPN_WINDOWS_PUBLISHER_EKU: ${{ vars.PPVPN_WINDOWS_PUBLISHER_EKU }}
+      PPVPN_WINDOWS_NEXT_PUBLISHER_EKU: ${{ vars.PPVPN_WINDOWS_NEXT_PUBLISHER_EKU }}
     defaults:
       run:
         shell: bash
@@ -923,9 +933,28 @@ jobs:
         with:
           name: windows-service
           path: build/windows-service
+      # The signing client signs as the Azure CLI's login: the Entra app's
+      # federated credential for this environment, which holds the
+      # certificate profile's signer role.
+      - name: Sign in to Azure
+        if: env.ARTIFACT_SIGNING == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Set up Artifact Signing
+        if: env.ARTIFACT_SIGNING == 'true'
+        shell: powershell
+        run: tools/desktop/ci/artifact-signing.ps1 -Setup
+      # Signs the binaries, the uninstaller and the installer (sign-file.ps1).
       - name: Build installer and release metadata
         shell: powershell
         run: apps/flutter/scripts/package-windows.ps1 -ServiceDir build\windows-service -PushAgent target\release\ppvpn-push-agent.exe
+      - name: The installer's signer
+        if: env.ARTIFACT_SIGNING == 'true'
+        shell: powershell
+        run: apps/windows/scripts/check-publisher.ps1 (Get-Item dist\windows\*-setup.exe).FullName
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-windows-x64

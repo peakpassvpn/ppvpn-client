@@ -21,8 +21,8 @@
     PPVPN_VERSION           x.y.z overriding VersionPrefix
     PPVPN_SPARKLE_PUBLIC_KEY  base64 ed25519 public key baked into the app (shared with macOS)
     SPARKLE_PRIVATE_KEY     base64 private key; written to a temporary file, never printed
-  Optional Authenticode: WINDOWS_CERTIFICATE (+ _PASSWORD, WINDOWS_TIMESTAMP_URL) or
-  WINDOWS_SIGN_COMMAND, with PPVPN_WINDOWS_PUBLISHER_SHA256 (see package.ps1).
+  Optional Authenticode: WINDOWS_SIGN_COMMAND, with PPVPN_WINDOWS_PUBLISHER_EKU
+  (see package.ps1).
 
 .EXAMPLE
   $env:PPVPN_SPARKLE_PUBLIC_KEY = "..."; $env:SPARKLE_PRIVATE_KEY = Get-Content key.txt

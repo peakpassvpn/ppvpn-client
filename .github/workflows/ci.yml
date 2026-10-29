@@ -732,6 +732,34 @@ jobs:
           cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc -- hostipv6::windows localdns::source probe::icmp
           cargo test -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc -- detect service sysproxy
           cargo test -p ppvpn-push-agent --locked --target x86_64-pc-windows-msvc
+      # The release's Windows signing scripts (#489), which sign only in a
+      # release environment: they parse, the signing client downloads and
+      # checks out (no signing: that needs Azure), and the signer check
+      # reads a signed file and refuses a signer that is not ours.
+      - name: Windows signing scripts
+        if: steps.scope.outputs.code == 'true'
+        shell: powershell
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+          ARTIFACT_SIGNING_ACCOUNT: ci
+          ARTIFACT_SIGNING_PROFILE: ci
+        run: |
+          foreach ($script in Get-ChildItem apps\windows\scripts\*.ps1, apps\flutter\scripts\*.ps1, tools\desktop\ci\*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { throw "$($script.Name): $($errors -join '; ')" }
+          }
+          # -Setup's variables into a file of this step's own.
+          $env:GITHUB_ENV = "$env:RUNNER_TEMP\artifact-signing.env"
+          tools\desktop\ci\artifact-signing.ps1 -Setup
+          Get-Content $env:GITHUB_ENV
+          $signTool = (Get-Content $env:GITHUB_ENV | Where-Object { $_ -like "ARTIFACT_SIGNING_SIGNTOOL=*" }) -replace "^[^=]*=", ""
+          # SignTool itself: signed, by Microsoft.
+          apps\windows\scripts\check-publisher.ps1 $signTool
+          $env:PPVPN_WINDOWS_PUBLISHER_EKU = "1.3.6.1.4.1.311.97.1"
+          $refused = $false
+          try { apps\windows\scripts\check-publisher.ps1 $signTool } catch { $refused = $true; Write-Host "refused: $_" }
+          if (-not $refused) { throw "check-publisher.ps1 accepted a signer that is not ours" }
       - name: L3, build the failure tests
         if: steps.scope.outputs.code == 'true'
         run: cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
