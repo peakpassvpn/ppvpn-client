@@ -43,7 +43,11 @@ name: ci
 # caches, so the cache keys here (shared-key) are the ones release.yml saves
 # (its cache-* jobs). The repository has 10 GB of cache: nothing here saves
 # one, not even setup-go's; test/go.mod's modules come from release.yml's
-# cache too (.github/actions/go-modules).
+# cache too (.github/actions/go-modules). The Rust caches are one per
+# runner OS's group of jobs (macos, flutter (macos) and ios; windows and
+# flutter (windows); flutter (ubuntu) and android) and tunnel (ios)'s; lint,
+# unit, integration, linux and desktop build without one, as the budget is
+# short (#459).
 # By hand: gh workflow run ci.yml --ref <branch>.
 
 on:
@@ -108,11 +112,8 @@ jobs:
         with:
           toolchain: 1.98.1
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: linux
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -210,11 +211,8 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         with:
           toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: unit
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -241,11 +239,8 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         with:
           toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: integration
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -295,11 +290,8 @@ jobs:
         with:
           toolchain: 1.98.1
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: linux
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -438,11 +430,8 @@ jobs:
           toolchain: 1.98.1
           components: clippy
           targets: x86_64-unknown-linux-gnu
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: desktop
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -487,10 +476,9 @@ jobs:
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs
           key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
-      # Either cache (this one or rust-cache, which keeps ~/.cargo/bin) may
-      # have restored the binary: install only when it is missing or of
-      # another version, and then over whatever is there. Not for the target
-      # triple the job builds: a host tool.
+      # The cache may have restored the binary: install only when it is
+      # missing or of another version, and then over whatever is there. Not
+      # for the target triple the job builds: a host tool.
       - name: Install uniffi-bindgen-cs
         if: steps.scope.outputs.code == 'true'
         run: |
@@ -574,6 +562,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
         with:
+          prefix-key: v1-rust
           shared-key: macos
           save-if: false
       - uses: ./.github/actions/prebuilt-boringssl
@@ -711,6 +700,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
         with:
+          prefix-key: v1-rust
           shared-key: windows
           save-if: false
       - uses: ./.github/actions/prebuilt-boringssl
@@ -823,7 +813,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
         with:
-          shared-key: flutter
+          # Each runner OS's key is shared with its other jobs: macos and
+          # ios, windows, android (release.yml builds each in one job).
+          prefix-key: v1-rust
+          shared-key: ${{ runner.os == 'macOS' && 'macos' || runner.os == 'Windows' && 'windows' || 'flutter' }}
           save-if: false
       # bindgen's libclang (btls-sys) on Windows, as in the windows job.
       - name: libclang
@@ -1128,7 +1121,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
         with:
-          shared-key: android
+          prefix-key: v1-rust
+          shared-key: flutter
           save-if: false
       # The host's for the bridge codegen, which reads the crate.
       - uses: ./.github/actions/prebuilt-boringssl
@@ -1196,8 +1190,8 @@ jobs:
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
     # an iPhone simulator. No packet tunnel yet (#448 step 2). Its Rust
-    # cache (key ios) is release.yml's cache-ios: the codegen's cargo
-    # expand, BoringSSL and the bridge for the simulator.
+    # cache is the macOS jobs' (key macos, release.yml's cache-macos): with
+    # the codegen's cargo expand, BoringSSL and the bridge for the simulator.
     name: ios
     runs-on: macos-15
     timeout-minutes: 90
@@ -1221,7 +1215,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
         with:
-          shared-key: ios
+          prefix-key: v1-rust
+          shared-key: macos
           save-if: false
       # The host's for the bridge codegen, which reads the crate.
       - uses: ./.github/actions/prebuilt-boringssl
@@ -1252,8 +1247,9 @@ jobs:
     # XCFramework is built for TestFlight in release.yml). ~25 min cold:
     # sail and BoringSSL from source, profile mobile. Only when the tunnel
     # host or what iOS alone compiles changed (tools/ci-changes.sh
-    # `tunnel`): macOS runners are few. Uncached: the 10 GB cache budget
-    # has no room for it yet.
+    # `tunnel`): macOS runners are few. Its Rust cache, key tunnel, is
+    # release.yml's cache-tunnel: of its own, so that the other macOS jobs
+    # do not restore the mobile profile's artifacts.
     name: tunnel (ios)
     runs-on: macos-15
     timeout-minutes: 60
@@ -1272,6 +1268,12 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          prefix-key: v1-rust
+          shared-key: tunnel
+          save-if: false
       - name: Build the XCFramework
         if: steps.scope.outputs.tunnel == 'true'
         run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ios

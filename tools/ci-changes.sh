@@ -26,8 +26,11 @@
 #         set code for the workspace's clippy and tests.
 #   deps  Cargo.toml, Cargo.lock, rust-toolchain.toml, the shared actions or
 #         the two workflows: what the build caches are keyed on or built by.
-#         release.yml warms the caches on main only when it is true; ci.yml's
-#         advisories job fails on an advisory only then.
+#         ci.yml's advisories job fails on an advisory only when it is true.
+#   lock  what rust-cache's keys hash (#459): a Cargo.toml, Cargo.lock,
+#         rust-toolchain.toml or .cargo/config.toml. release.yml looks the
+#         caches up on main only when it is true (or one is missing): a
+#         change to them makes new keys.
 #   tunnel  the mobile tunnel host (crates/tunnel-host/, #448),
 #         crates/engine-host/, the dependencies (Cargo.toml, crates/core's
 #         target-specific ones, Cargo.lock) or ci.yml, and the only core code
@@ -44,7 +47,7 @@
 # everything.
 set -euo pipefail
 
-all() { printf '%s=true\n' code desktop flutter deps memory tunnel; exit 0; }
+all() { printf '%s=true\n' code desktop flutter deps lock memory tunnel; exit 0; }
 
 case "${GITHUB_EVENT_NAME:-}" in
   pull_request) base=${PR_BASE_SHA:-} ;;
@@ -58,8 +61,11 @@ files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
 n=$(grep -c . <<<"$files" || true)
 (( n > 0 && n < 300 )) || all
 
-code=false desktop=false flutter=false deps=false memory=false tunnel=false
+code=false desktop=false flutter=false deps=false lock=false memory=false tunnel=false
 while IFS= read -r f; do
+  case $f in
+    Cargo.toml | */Cargo.toml | Cargo.lock | rust-toolchain.toml | .cargo/config.toml) lock=true ;;
+  esac
   case $f in
     Cargo.lock | crates/core-lab/src/bin/ne-mem.rs | tools/perf/ne_mem.py | tools/perf/dhat_top.py | \
     test/perf/*) memory=true ;;
@@ -94,5 +100,6 @@ echo "code=$code"
 echo "desktop=$desktop"
 echo "flutter=$flutter"
 echo "deps=$deps"
+echo "lock=$lock"
 echo "memory=$memory"
 echo "tunnel=$tunnel"

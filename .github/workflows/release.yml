@@ -1826,11 +1826,20 @@ jobs:
   # ---- On a merge only: the build caches ci.yml restores. One job per
   # ci.yml cache key (shared-key), building what the ci.yml jobs on that key
   # build, so that a pull request after a dependency change does not build
-  # sail cold. rust-cache keeps the dependencies only and saves when its key
-  # is new; ci.yml never saves. A job runs when the merge changed what the
-  # keys are made of (`deps`), or when its key is missing on main: the
-  # repository's 10 GB evicts the least recently used. Not while the caches
-  # are over 9.5 GB: rebuilding one would evict another.
+  # sail cold. rust-cache keeps the dependencies only; ci.yml never saves.
+  # The key hashes the toolchain, the CARGO*/RUST*/CC* environment and the
+  # manifests and lock file, so a job runs only when the merge changed one
+  # of those (`lock`) or its key is missing on main (the repository's 10 GB
+  # evicts the least recently used), and then looks its exact key up first:
+  # it builds, from scratch, and saves only on a miss. Not for a missing key
+  # while the caches are over 9.5 GB: rebuilding one would evict another.
+  # The 10 GB holds four keys (#459): macos, windows, flutter and tunnel;
+  # lint, unit, integration, linux and desktop build uncached.
+  # A workflow change that alters what a key's jobs build, without a lock
+  # change, keeps the old entry: delete it (gh cache delete <key>; gh cache
+  # list --key v1-rust-macos- lists them) and the next merge rebuilds it as
+  # missing. All of them at once: a new prefix-key (here and in ci.yml), the
+  # old entries then the least recently used.
   changes:
     name: changes
     if: github.event_name == 'push'
@@ -1840,7 +1849,7 @@ jobs:
       contents: read
       actions: read
     outputs:
-      deps: ${{ steps.diff.outputs.deps }}
+      lock: ${{ steps.diff.outputs.lock }}
       missing: ${{ steps.caches.outputs.missing }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1851,7 +1860,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
-      # The keys rust-cache made on main, by prefix (v0-rust-<shared-key>-<OS>);
+      # The keys rust-cache made on main, by prefix (v1-rust-<shared-key>-<OS>);
       # `missing` lists the absent ones between spaces.
       - id: caches
         env:
@@ -1859,12 +1868,11 @@ jobs:
         run: |
           set -euo pipefail
           used=$(gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" --jq .active_caches_size_in_bytes)
-          keys=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=v0-rust-&per_page=100" \
+          keys=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=v1-rust-&per_page=100" \
             --jq '.actions_caches[].key')
           missing=" "
-          for want in linux-Linux unit-Linux integration-Linux desktop-Linux macos-Darwin windows-Windows \
-                      flutter-Linux flutter-Darwin flutter-Windows android-Linux ios-Darwin; do
-            grep -q "^v0-rust-$want-" <<<"$keys" || missing="$missing$want "
+          for want in macos-Darwin tunnel-Darwin windows-Windows_NT flutter-Linux; do
+            grep -q "^v1-rust-$want-" <<<"$keys" || missing="$missing$want "
           done
           echo "cache usage: $((used / 1048576)) MiB; missing:$missing"
           if [ "$used" -gt $((9500 * 1048576)) ]; then
@@ -1904,118 +1912,16 @@ jobs:
         with:
           lookup-only: 'true'
 
-  # lint and linux.
-  cache-linux:
-    name: cache-linux
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' linux-Linux ')
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: linux
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - name: what lint and linux build
-        run: |
-          cargo clippy --all-targets --locked
-          cargo test -p ppvpn-core --lib --no-run --locked --features fault-injection
-          cargo build -p ppvpn-core-lab --locked
-          (cd crates/service && cargo build --locked --bin ppvpn-service)
-          (cd crates/desktop && cargo test --locked --features linux-e2e --lib --no-run)
-
-  cache-unit:
-    name: cache-unit
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' unit-Linux ')
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: unit
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - run: cargo test --locked --no-run
-
-  cache-integration:
-    name: cache-integration
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' integration-Linux ')
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: integration
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - run: cargo test --locked -p ppvpn-cli --test keystore --no-run
-
-  cache-desktop:
-    name: cache-desktop
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' desktop-Linux ')
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-          components: clippy
-          targets: x86_64-unknown-linux-gnu
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: desktop
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - run: |
-          (cd crates/service && cargo test --locked --no-run && cargo clippy --locked --all-targets)
-          (cd crates/desktop && cargo test --locked --no-run && cargo clippy --locked --all-targets)
-          cargo test --locked -p ppvpn-push-agent --no-run
-          cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets
-          cargo test --locked -p ppvpn-tunnel-host --no-run
-          cargo clippy --locked -p ppvpn-tunnel-host --all-targets
-
-  # macos.
+  # macos, flutter (macos-15) and ios: one key, macos, which the three
+  # restore, built in one job, so that what they share (the registry, the
+  # codegen's cargo expand, build scripts and proc-macros, the client crate
+  # for Apple silicon) is in it once. In the order the jobs build.
   cache-macos:
     name: cache-macos
     needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' macos-Darwin ')
+    if: needs.changes.outputs.lock == 'true' || contains(needs.changes.outputs.missing, ' macos-Darwin ')
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       # As in ci.yml: part of the cache key.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -2025,14 +1931,23 @@ jobs:
         with:
           toolchain: 1.98.1
           components: clippy
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios-sim
+      # The key looked up only; on a miss the build below fills it from
+      # scratch and the post step saves it.
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          prefix-key: v1-rust
           shared-key: macos
+          lookup-only: true
       - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.cache.outputs.cache-hit != 'true'
         with:
           targets: aarch64-apple-darwin x86_64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
       - name: what macos builds
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cargo clippy --workspace --all-targets --locked
           cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin
@@ -2042,14 +1957,63 @@ jobs:
           cargo test --locked --no-run -p ppvpn-core -p ppvpn-cli -p ppvpn-desktop -p ppvpn-service \
             --lib --bin ppvpn-service --test keystore
           (cd crates/desktop && for t in aarch64-apple-darwin x86_64-apple-darwin; do cargo build --lib --locked --target "$t"; done)
+      - name: what flutter (macos-15) builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          PPVPN_APPLE_TARGETS: aarch64-apple-darwin
+        run: |
+          apps/flutter/scripts/ci-build.sh
+          # Package (macOS): bootstrap.sh's client package, then the helpers.
+          crates/desktop/scripts/build-apple.sh apps/macos/PPVPNClient --debug
+          cargo build --locked -p ppvpn-service --bins --target aarch64-apple-darwin
+      # ci-build.sh makes the platform runner in apps/flutter (flutter
+      # create): the iOS one from a clean tree, as in ci.yml.
+      - name: what ios builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          FLUTTER_TARGET: ios
+          IOS_SDK: simulator
+        run: |
+          git clean -ffdxq apps/flutter && git checkout -- apps/flutter
+          apps/flutter/scripts/ci-build.sh
 
-  # windows.
+  # tunnel (ios): a key of its own, as the mobile profile's artifacts are
+  # of no use to the other macOS jobs.
+  cache-tunnel:
+    name: cache-tunnel
+    needs: changes
+    if: needs.changes.outputs.lock == 'true' || contains(needs.changes.outputs.missing, ' tunnel-Darwin ')
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-rust
+          shared-key: tunnel
+          lookup-only: true
+      - name: what tunnel (ios) builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ios
+
+  # windows and flutter (windows-latest): one key, windows.
   cache-windows:
     name: cache-windows
     needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' windows-Windows ')
+    if: needs.changes.outputs.lock == 'true' || contains(needs.changes.outputs.missing, ' windows-Windows_NT ')
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     env:
       # As in ci.yml: part of the cache key.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -2067,13 +2031,20 @@ jobs:
           toolchain: 1.98.1
           components: clippy
           targets: x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          prefix-key: v1-rust
           shared-key: windows
+          lookup-only: true
       - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.cache.outputs.cache-hit != 'true'
         with:
           targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/flutter-toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
       - name: what windows builds
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cargo clippy -p ppvpn-core -p ppvpn-account -p ppvpn-desktop -p ppvpn-engine-host -p ppvpn-service \
             -p ppvpn-flutter -p ppvpn-push-agent --all-targets --locked --target x86_64-pc-windows-msvc
@@ -2083,101 +2054,8 @@ jobs:
           cargo test -p ppvpn-push-agent --locked --target x86_64-pc-windows-msvc --no-run
           cargo build -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc
           cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
-
-  # ci.yml's flutter job, key flutter (one per runner OS): ci-build.sh (the
-  # codegen's cargo expand, the release library, with the push agent on
-  # Linux and Windows), then what the job's later steps build.
-  cache-flutter-linux:
-    name: cache-flutter-linux
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' flutter-Linux ')
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: flutter
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - name: Linux build dependencies
-        run: |
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config \
-            libgtk-3-dev libx11-dev libxi-dev
-      - uses: ./.github/actions/flutter-toolchain
-      - name: what flutter (ubuntu-latest) builds
-        run: |
-          apps/flutter/scripts/ci-build.sh
-          # Enhanced mode end to end and the Linux packages.
-          cargo build --locked -p ppvpn-service --profile service --bins
-
-  cache-flutter-macos:
-    name: cache-flutter-macos
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' flutter-Darwin ')
-    runs-on: macos-15
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: flutter
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: aarch64-apple-darwin
-      - uses: ./.github/actions/flutter-toolchain
-      - name: what flutter (macos-15) builds
-        env:
-          PPVPN_APPLE_TARGETS: aarch64-apple-darwin
-        run: |
-          apps/flutter/scripts/ci-build.sh
-          # Package (macOS): bootstrap.sh's client package, then the helpers.
-          crates/desktop/scripts/build-apple.sh apps/macos/PPVPNClient --debug
-          cargo build --locked -p ppvpn-service --bins --target aarch64-apple-darwin
-
-  cache-flutter-windows:
-    name: cache-flutter-windows
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' flutter-Windows ')
-    runs-on: windows-latest
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      LIBCLANG_PATH: C:\Program Files\LLVM\bin
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: LF checkout
-        run: git config --global core.autocrlf false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: flutter
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-pc-windows-msvc
-      - uses: ./.github/actions/flutter-toolchain
       - name: what flutter (windows-latest) builds
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           apps/flutter/scripts/ci-build.sh
           # Installer (Windows): package-windows.ps1's service, with the
@@ -2185,13 +2063,14 @@ jobs:
           CARGO_PROFILE_SERVICE_LTO=false CARGO_PROFILE_SERVICE_CODEGEN_UNITS=16 \
             cargo build --locked -p ppvpn-service --profile service --target x86_64-pc-windows-msvc
 
-  # ci.yml's android job, key android: the bridge for both ABIs.
-  cache-android:
-    name: cache-android
+  # flutter (ubuntu-latest) and android: one key, flutter. The codegen's
+  # cargo expand, build scripts and proc-macros are the same for both.
+  cache-flutter-linux:
+    name: cache-flutter-linux
     needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' android-Linux ')
+    if: needs.changes.outputs.lock == 'true' || contains(needs.changes.outputs.missing, ' flutter-Linux ')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       # As in ci.yml: part of the cache key.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -2201,23 +2080,42 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: aarch64-linux-android,x86_64-linux-android
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: android
+          prefix-key: v1-rust
+          shared-key: flutter
+          lookup-only: true
       - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.cache.outputs.cache-hit != 'true'
         with:
           targets: x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android
+      - name: Linux build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config \
+            libgtk-3-dev libx11-dev libxi-dev
       - uses: ./.github/actions/flutter-toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+      - name: what flutter (ubuntu-latest) builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          apps/flutter/scripts/ci-build.sh
+          # Enhanced mode end to end and the Linux packages.
+          cargo build --locked -p ppvpn-service --profile service --bins
+      # The Android runner from a clean tree, as in ci.yml.
       - name: what android builds
+        if: steps.cache.outputs.cache-hit != 'true'
         env:
           FLUTTER_TARGET: android
         run: |
+          git clean -ffdxq apps/flutter && git checkout -- apps/flutter
           export JAVA_HOME="$JAVA_HOME_17_X64"
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
           apps/flutter/scripts/ci-build.sh
 
-  # ci.yml's ios job, key ios: BoringSSL (from source: btls has no iOS
-  # prebuilts) and the bridge for Apple silicon's simulator.
   # ci.yml android's emulator packages (.github/actions/android-sdk), not a
   # Rust cache: looked up on every merge, which takes seconds, and
   # downloaded and saved only when the key is missing. Same inputs as
@@ -2237,31 +2135,3 @@ jobs:
           target: google_apis
           arch: x86_64
           lookup-only: 'true'
-
-  cache-ios:
-    name: cache-ios
-    needs: changes
-    if: needs.changes.outputs.deps == 'true' || contains(needs.changes.outputs.missing, ' ios-Darwin ')
-    runs-on: macos-15
-    timeout-minutes: 90
-    env:
-      # As in ci.yml: part of the cache key.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: 1.98.1
-          targets: aarch64-apple-ios-sim
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: ios
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: aarch64-apple-darwin
-      - uses: ./.github/actions/flutter-toolchain
-      - name: what ios builds
-        env:
-          FLUTTER_TARGET: ios
-          IOS_SDK: simulator
-        run: apps/flutter/scripts/ci-build.sh
