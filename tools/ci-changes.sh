@@ -31,6 +31,14 @@
 #         rust-toolchain.toml or .cargo/config.toml. release.yml looks the
 #         caches up on main only when it is true (or one is missing): a
 #         change to them makes new keys.
+#   macpkg  what the flutter job's Package (macOS) step builds and checks
+#         beyond the app the Build step made (#459): apps/macos/ (its
+#         scripts, packaging, project, client package and agent), the
+#         packaging and build scripts in apps/flutter/scripts/, the macOS
+#         runner (apps/flutter/runner/macos/), the client crate, the service,
+#         tools/desktop/, or ci.yml, the shared actions and the dependencies.
+#         ~5 min on a cache hit, ~15 on a miss, on the scarce macOS runners;
+#         a Dart-only change, for one, does not set it.
 #   tunnel  the mobile tunnel host (crates/tunnel-host/, #448),
 #         crates/engine-host/, the dependencies (Cargo.toml, crates/core's
 #         target-specific ones, Cargo.lock) or ci.yml, and the only core code
@@ -47,7 +55,7 @@
 # everything.
 set -euo pipefail
 
-all() { printf '%s=true\n' code desktop flutter deps lock memory tunnel; exit 0; }
+all() { printf '%s=true\n' code desktop flutter deps lock macpkg memory tunnel; exit 0; }
 
 case "${GITHUB_EVENT_NAME:-}" in
   pull_request) base=${PR_BASE_SHA:-} ;;
@@ -61,8 +69,14 @@ files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
 n=$(grep -c . <<<"$files" || true)
 (( n > 0 && n < 300 )) || all
 
-code=false desktop=false flutter=false deps=false lock=false memory=false tunnel=false
+code=false desktop=false flutter=false deps=false lock=false macpkg=false memory=false tunnel=false
 while IFS= read -r f; do
+  case $f in
+    *.md) ;;
+    Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | .github/workflows/ci.yml | \
+    apps/macos/* | apps/flutter/scripts/* | apps/flutter/runner/macos/* | \
+    crates/desktop/* | crates/service/* | tools/desktop/*) macpkg=true ;;
+  esac
   case $f in
     Cargo.toml | */Cargo.toml | Cargo.lock | rust-toolchain.toml | .cargo/config.toml) lock=true ;;
   esac
@@ -101,5 +115,6 @@ echo "desktop=$desktop"
 echo "flutter=$flutter"
 echo "deps=$deps"
 echo "lock=$lock"
+echo "macpkg=$macpkg"
 echo "memory=$memory"
 echo "tunnel=$tunnel"
