@@ -36,8 +36,10 @@
 #         beyond the app the Build step made (#459): apps/macos/ (its
 #         scripts, packaging, project, client package and agent), the
 #         packaging and build scripts in apps/flutter/scripts/, the macOS
-#         runner (apps/flutter/runner/macos/), the client crate, the service,
-#         tools/desktop/, or ci.yml, the shared actions and the dependencies.
+#         runner (apps/flutter/runner/macos/), the Flutter plugins (their
+#         frameworks are signed in the bundle: pubspec), the client crate,
+#         the service, tools/desktop/, or ci.yml, the shared actions and the
+#         dependencies.
 #         ~5 min on a cache hit, ~15 on a miss, on the scarce macOS runners;
 #         a Dart-only change, for one, does not set it.
 #   tunnel  the mobile tunnel host (crates/tunnel-host/, #448),
@@ -75,7 +77,7 @@ while IFS= read -r f; do
   case $f in
     *.md) ;;
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | .github/workflows/ci.yml | \
-    apps/macos/* | apps/flutter/scripts/* | apps/flutter/runner/macos/* | \
+    apps/macos/* | apps/flutter/scripts/* | apps/flutter/runner/macos/* | apps/flutter/pubspec.* | \
     crates/desktop/* | crates/service/* | tools/desktop/*) macpkg=true ;;
   esac
   case $f in
