@@ -230,12 +230,32 @@ fi
 notarize() {
   "$REPO_DIR/tools/notarize.sh" "$1" "$PPVPN_NOTARY_KEY_FILE" "$PPVPN_NOTARY_KEY_ID" "$PPVPN_NOTARY_ISSUER"
 }
+# stapler fetches each ticket from Apple's CloudKit in one request and
+# gives up when the connection drops (exit 68, NSURLErrorDomain -1005), as
+# it did right after notarization in release runs 40911475488 and
+# 40929635549. Only that exit is tried again (three tries in all, 15 s and
+# 45 s apart), an exception to fixing flakes at the root that was agreed for
+# this outside service; any other exit, such as 65 (no ticket), fails at once.
+staple() {
+  local status
+  for pause in 15 45 0; do
+    status=0
+    xcrun stapler staple "$1" || status=$?
+    [[ "$status" != 0 ]] || return 0
+    if [[ "$status" != 68 || "$pause" == 0 ]]; then
+      echo "error: stapler staple $1 exited $status" >&2
+      return "$status"
+    fi
+    echo "warning: stapler staple $1 exited 68 (connection to Apple lost), again in ${pause}s" >&2
+    sleep "$pause"
+  done
+}
 # The app first, and its ticket stapled to it: a copy of the app outside the
 # DMG and the pkg (and the one Sparkle unpacks) opens offline too.
 if [[ "$NOTARIZE" == 1 ]]; then
   ditto -c -k --keepParent "$APP" "$WORK/PPVPN.zip"
   notarize "$WORK/PPVPN.zip"
-  xcrun stapler staple "$APP"
+  staple "$APP"
   xcrun stapler validate "$APP"
 fi
 
@@ -312,7 +332,7 @@ if [[ "$NOTARIZE" == 1 ]]; then
   wait "$pkg_job" || failed=1
   [[ "$failed" == 0 ]] || exit 1
   for file in "$DMG" "$PKG"; do
-    xcrun stapler staple "$file"
+    staple "$file"
     xcrun stapler validate "$file"
   done
   # Gatekeeper's verdicts, as a download gets them.
