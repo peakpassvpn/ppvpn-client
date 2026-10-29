@@ -155,7 +155,10 @@ macos)
 		security set-keychain-settings -lut 21600 "$keychain"
 		security unlock-keychain -p "$keychain_password" "$keychain"
 		printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode >"$key_dir/signing.p12"
-		security import "$key_dir/signing.p12" -k "$keychain" -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+		# security import reads only the legacy PKCS#12 algorithms and reports
+		# OpenSSL 3's defaults as "MAC verification failed ... (wrong password?)".
+		security import "$key_dir/signing.p12" -k "$keychain" -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign >/dev/null ||
+			fail "MACOS_SIGNING_P12_BASE64 could not be imported. If the password is right and the .p12 came from OpenSSL 3, re-export it with \`openssl pkcs12 -export -legacy\` or from Keychain Access."
 		rm -f "$key_dir/signing.p12"
 		security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
 		security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
