@@ -2930,6 +2930,7 @@ dependencies = [
 name = "ppvpn-tunnel-host"
 version = "0.7.1"
 dependencies = [
+ "jni",
  "ppvpn-core",
  "ppvpn-engine-host",
  "serde",

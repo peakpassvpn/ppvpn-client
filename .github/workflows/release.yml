@@ -112,6 +112,8 @@ jobs:
       publish: ${{ steps.resolve.outputs.publish }}
       environment: ${{ steps.resolve.outputs.environment }}
       package: ${{ steps.resolve.outputs.package }}
+      macos: ${{ steps.resolve.outputs.macos }}
+      cli_macos: ${{ steps.resolve.outputs.cli_macos }}
     steps:
       - id: resolve
         env:
@@ -209,6 +211,16 @@ jobs:
             echo "publish=$publish"
             echo "environment=$environment"
             echo "package=$package"
+            # The macOS slices (#459): a merge builds Apple silicon only, to
+            # spare the macOS runners; every run by hand builds both, and so
+            # does every release.
+            if [ "$EVENT" = push ]; then
+              echo 'macos=[{"arch":"arm64","triple":"aarch64-apple-darwin","platform":"macos-arm64"}]'
+              echo "cli_macos=aarch64-apple-darwin"
+            else
+              echo 'macos=[{"arch":"arm64","triple":"aarch64-apple-darwin","platform":"macos-arm64"},{"arch":"x86_64","triple":"x86_64-apple-darwin","platform":"macos-x64"}]'
+              echo "cli_macos=aarch64-apple-darwin x86_64-apple-darwin"
+            fi
           } >>"$GITHUB_OUTPUT"
           echo "$CHANNEL ${version:-(the projects version)} build $build, tag ${tag:-none}, publish: $publish" >>"$GITHUB_STEP_SUMMARY"
           if [ "$REHEARSAL" = true ]; then
@@ -900,17 +912,9 @@ jobs:
       - name: LF checkout
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Ensure NSIS
-        shell: powershell
-        run: |
-          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
-            Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $makensis) {
-            choco install nsis --no-progress -y
-            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
-            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          }
-          & $makensis /VERSION
+      # NSIS from a pinned, checksummed installer, not Chocolatey's feed.
+      - name: NSIS
+        uses: ./.github/actions/nsis
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-app
@@ -935,7 +939,8 @@ jobs:
 
   # One DMG and .pkg per architecture of the Flutter app (#401), each built
   # end to end in its own chain of jobs (#459), all on Apple silicon runners;
-  # nothing is joined into a universal binary. Per architecture:
+  # nothing is joined into a universal binary. A merge builds arm64 only
+  # (prepare's macos, #459); runs by hand build both. Per architecture:
   #   macos-app      the app (apps/flutter/scripts/ci-build.sh, that slice of
   #                  the library in Flutter's universal bundle) and the push
   #                  agent's client, PPVPNClient (crates/desktop/scripts/build-apple.sh),
@@ -953,9 +958,7 @@ jobs:
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
     strategy:
       matrix:
-        include:
-          - { arch: arm64, triple: aarch64-apple-darwin }
-          - { arch: x86_64, triple: x86_64-apple-darwin }
+        include: ${{ fromJSON(needs.prepare.outputs.macos) }}
     runs-on: macos-15
     environment: ${{ needs.prepare.outputs.environment }}
     timeout-minutes: 90
@@ -1023,9 +1026,7 @@ jobs:
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
     strategy:
       matrix:
-        include:
-          - { arch: arm64, triple: aarch64-apple-darwin }
-          - { arch: x86_64, triple: x86_64-apple-darwin }
+        include: ${{ fromJSON(needs.prepare.outputs.macos) }}
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -1057,9 +1058,7 @@ jobs:
       !cancelled() && needs.macos-app.result == 'success' && needs.macos-service.result == 'success'
     strategy:
       matrix:
-        include:
-          - { arch: arm64, platform: macos-arm64 }
-          - { arch: x86_64, platform: macos-x64 }
+        include: ${{ fromJSON(needs.prepare.outputs.macos) }}
     runs-on: macos-15
     environment: ${{ needs.prepare.outputs.environment }}
     # Packaging (~15 min), then two notarization waits one after the other
@@ -1260,6 +1259,9 @@ jobs:
     # (tools/notarize.sh).
     timeout-minutes: 100
     env:
+      # A merge builds aarch64 only (#459), every run by hand the
+      # universal binary.
+      TARGETS: ${{ needs.prepare.outputs.cli_macos }}
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
       DEV_API_BASE: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || '' }}
@@ -1274,21 +1276,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ needs.prepare.outputs.cli_macos }}
       - uses: ./.github/actions/prebuilt-boringssl
         with:
-          targets: aarch64-apple-darwin x86_64-apple-darwin
+          targets: ${{ needs.prepare.outputs.cli_macos }}
       # The crates from the cache; Cargo offline from here (#459).
       - uses: ./.github/actions/cargo-home
       # A test-only cargo feature (fault injection, test runtime, lab hooks)
       # never ships: the release graph is refused if one is on.
       - name: No test-only features
-        run: tools/release-features-check.sh --target aarch64-apple-darwin --target x86_64-apple-darwin -p ppvpn-cli
+        run: |
+          args=()
+          for target in $TARGETS; do args+=(--target "$target"); done
+          tools/release-features-check.sh "${args[@]}" -p ppvpn-cli
       - name: Build the archive
-        run: tools/cli/build-release.sh macos
+        run: |
+          # shellcheck disable=SC2086 # the targets, one word each
+          tools/cli/build-release.sh macos $TARGETS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cli-macos-universal
+          name: cli-macos
           if-no-files-found: error
           retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
           path: dist/cli/*.tar.gz
@@ -1950,7 +1957,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cargo clippy --workspace --all-targets --locked
-          cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin
+          cargo check --locked -p btls-sys --target x86_64-apple-darwin
           # The same cargo invocation as ci.yml's macos tests: another
           # combination of packages unifies features differently and its
           # artifacts would not be reused.

@@ -31,6 +31,8 @@ sail = { git = "https://github.com/peakpassvpn/sail.git", tag = "v0.22.0", featu
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 idna = "1"
+# JNI for the Android libraries (the tunnel host, the Flutter bridge).
+jni = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
