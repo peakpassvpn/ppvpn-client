@@ -92,7 +92,7 @@
 | `macos` | macOS 自己的：整个 workspace 在 aarch64 上的 clippy（x86_64 只检查 btls-sys 用的是预编译的 BoringSSL：我们没有按架构区分的代码，构建脚本要 Apple SDK，也搬不到 Linux 上）、macOS 平台测试（原生版 app 不再构建，#459） |
 | `windows` | Windows 自己的：桌面链接的 crate 在 MSVC 上的 clippy、Windows 平台测试、G7 Windows、C# 绑定、App.Core 测试（原生版 app 和推送代理不再构建，#459） |
 | `flutter` | Flutter 桌面 app（#401）在 Linux、macOS、Windows 上构建和冒烟测试，只在它或它构建所用的 crate（客户端、core、account、engine-host、service）变了的时候；`flutter analyze` 只在 Linux 上跑（#459） |
-| `tunnel (ios)` | 移动端隧道宿主给 iOS 网络扩展的 XCFramework（#448，`crates/tunnel-host/scripts/build-xcframework.sh`），PR 上只构建真机一片（网络扩展不在模拟器里运行；完整的 XCFramework 由 `release.yml` 给 TestFlight 构建）。只在隧道宿主、engine-host、依赖、ci.yml 或只有 iOS 才编译的 core 代码变了的时候（`tools/ci-changes.sh` 的 `tunnel`），因为 macOS runner 很少。不缓存，冷构建约 25 分钟 |
+| `tunnel (ios)` | 移动端隧道宿主给 iOS 网络扩展的 XCFramework（#448，`crates/tunnel-host/scripts/build-xcframework.sh`），PR 上只构建真机一片（网络扩展不在模拟器里运行；完整的 XCFramework 由 `release.yml` 给 TestFlight 构建）。只在隧道宿主、engine-host、依赖、ci.yml 或只有 iOS 才编译的 core 代码变了的时候（`tools/ci-changes.sh` 的 `tunnel`），因为 macOS runner 很少。冷构建约 25 分钟，Rust 缓存用自己的 `tunnel` 键 |
 | `tunnel (android)` | 移动端隧道宿主给 Android VpnService 的 `libppvpn_tunnel.so`（#448，`crates/tunnel-host/scripts/build-android.sh`），PR 上只构建 arm64-v8a，并对 Android 目标跑 clippy（JNI 绑定只在 Android 上编译）。触发条件同 `tunnel (ios)`，跑在 Linux runner 上，不缓存 |
 
 L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重跑，只编译（clippy 覆盖各平台 `cfg` 的代码）并跑平台测试。
@@ -113,14 +113,18 @@ L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重�
 
 ### 缓存
 
-PR 只读缓存，不写；`ci.yml` 里没有任何一步保存缓存（setup-go 的也关了）。缓存在合入 main 时由 `release.yml` 的 `cache-*` job 保存，在两种情况下运行：`Cargo.toml`、`Cargo.lock`、工具链或共享 action 变了（`tools/ci-changes.sh` 的 `deps`），或者 main 上已经没有这个键（被挤掉了）。仓库的缓存总共 10 GB，超出时 GitHub 先删最久没用的；总量超过 9.5 GB 时只在 `deps` 变化时重建，免得重建一个又挤掉另一个。
+PR 只读缓存，不写；`ci.yml` 里没有任何一步保存缓存（setup-go 的也关了）。缓存在合入 main 时由 `release.yml` 的 `cache-*` job 保存。rust-cache 的键里有工具链、`CARGO*`/`RUST*`/`CC*` 环境变量和所有清单与锁文件的哈希，所以 job 只在两种情况下运行：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml` 或 `.cargo/config.toml` 变了（`tools/ci-changes.sh` 的 `lock`），或者 main 上已经没有这个键（被挤掉了）。运行时先只查确切的键，命中就什么都不编；没命中才从零编译并保存。仓库的缓存总共 10 GB，超出时 GitHub 先删最久没用的；总量超过 9.5 GB 时，缺的键也不重建，免得重建一个又挤掉另一个。
 
-每个缓存键（`shared-key`）对应一个 `cache-*` job，跑与 `ci.yml` 里对应 job 相同的 cargo 命令（命令或特性组合不同，依赖就会重新编译）：
+10 GB 只放得下四个 Rust 键（#459），每个系统的几个 job 共用一个，由一个 `cache-*` job 依次跑这些 job 的 cargo 命令（命令或特性组合不同，依赖就会重新编译）：
 
-- `linux`（`lint` 和 `linux` 共用）、`unit`、`integration`、`desktop`、`macos`、`windows`；
-- `flutter`（每个系统一个，`cache-flutter-linux`、`-macos`、`-windows`）：bridge 代码生成用的 cargo expand、release 的 Rust 库，以及 flutter job 后面步骤构建的 service 和客户端；
-- `android`：两个 ABI 的 bridge；
-- `ios`：模拟器（Apple silicon）的 bridge，连同从源码编译的 BoringSSL（btls 没有 iOS 的预编译包）。
+- `macos`（`cache-macos`）：`macos`、`flutter (macos-15)` 和 `ios` 共用，含 bridge 代码生成用的 cargo expand、release 的 Rust 库、模拟器（Apple silicon）的 bridge 和从源码编译的 BoringSSL（btls 没有 iOS 的预编译包）；
+- `tunnel`（`cache-tunnel`）：`tunnel (ios)` 的 mobile profile，单独一个键，免得其他 macOS job 恢复用不上的产物；
+- `windows`（`cache-windows`）：`windows` 和 `flutter (windows-latest)` 共用；
+- `flutter`（`cache-flutter-linux`）：`flutter (ubuntu-latest)` 和 `android`（两个 ABI 的 bridge）共用。
+
+`lint`、`unit`、`integration`、`linux` 和 `desktop` 不用 Rust 缓存：都在 Linux runner 上，冷编译多花的时间在 PR 总时长之内。
+
+只改了 workflow、改变了某个键的 job 编译的内容而锁文件没变时，旧条目会一直留着：删掉它（`gh cache delete <key>`，`gh cache list --key v1-rust-macos-` 列出），下次合入 main 就会当作缺失的键重建。要全部重建，就换掉两个 workflow 里的 `prefix-key`，旧条目随后作为最久没用的被删掉。
 
 rust-cache 只缓存依赖，所以依赖不变时，旧缓存一直有效。Flutter SDK 不缓存（每个系统 1.4 到 1.9 GB，恢复和下载一样慢）；flutter_rust_bridge_codegen 和 cargo-expand 的二进制按版本缓存，也只在 main 上保存。
 
