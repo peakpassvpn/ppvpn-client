@@ -1,0 +1,48 @@
+name: NSIS
+description: >-
+  makensis for the Windows installer. The runner image
+  (windows-2025-vs2026) has no NSIS, and installing it from the Chocolatey
+  community feed failed when the feed answered 503 (run 40822332854);
+  Chocolatey then exits 0 with "installed 0/0 packages". Here the NSIS
+  installer comes from the Actions cache, or on a miss from SourceForge,
+  and is checked against the SHA-256 winget's manifest gives for it
+  (microsoft/winget-pkgs, NSIS.NSIS) before it runs. Saved by the first
+  job that downloads it (about 2 MB), so it is downloaded once per
+  version, not once per run. package-windows.ps1 finds makensis in
+  its default directory.
+runs:
+  using: composite
+  steps:
+    - id: cache
+      name: Restore the NSIS installer
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/nsis
+        key: nsis-3.13-setup-db9a1038
+    - name: Install NSIS
+      shell: powershell
+      env:
+        VERSION: '3.13'
+        SHA256: DB9A1038BBC0E53FEF24F423FD609979BD578E942F1BE1198DB186D1C42652A3
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $dir = Join-Path $HOME '.cache\nsis'
+        $setup = Join-Path $dir "nsis-$env:VERSION-setup.exe"
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        if (-not (Test-Path $setup)) {
+          $url = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$env:VERSION/nsis-$env:VERSION-setup.exe"
+          curl.exe --fail --location --silent --show-error --output $setup $url
+          if ($LASTEXITCODE -ne 0) { throw "download of $url failed" }
+        }
+        $sha = (Get-FileHash -Algorithm SHA256 $setup).Hash
+        if ($sha -ne $env:SHA256) {
+          Remove-Item $setup
+          throw "nsis-$env:VERSION-setup.exe: SHA-256 $sha, expected $env:SHA256"
+        }
+        $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+        if ($p.ExitCode -ne 0) { throw "the NSIS installer exited $($p.ExitCode)" }
+        $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+        if (-not (Test-Path $makensis)) { throw "${makensis}: not installed" }
+        $version = & $makensis /VERSION
+        if ($version -ne "v$env:VERSION") { throw "makensis is $version, expected v$env:VERSION" }
+        Write-Output "makensis $version"

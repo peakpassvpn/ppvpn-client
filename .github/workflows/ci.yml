@@ -1057,18 +1057,10 @@ jobs:
       # native app 0.6.4 (fetched above), checks the
       # installation, has the app quit on the installer's quit event and
       # uninstalls it with /PURGE.
-      - name: Ensure NSIS
+      # NSIS from a pinned, checksummed installer, not Chocolatey's feed.
+      - name: NSIS
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
-            Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $makensis) {
-            choco install nsis --no-progress -y
-            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
-            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          }
-          & $makensis /VERSION
+        uses: ./.github/actions/nsis
       - name: Installer (Windows)
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
         shell: powershell
