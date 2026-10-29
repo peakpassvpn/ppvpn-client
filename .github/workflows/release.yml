@@ -1153,8 +1153,12 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - uses: ./.github/actions/flutter-toolchain
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
       - name: No test-only features
-        run: tools/release-features-check.sh -p ppvpn-flutter
+        run: tools/release-features-check.sh --target aarch64-apple-ios -p ppvpn-flutter
       - name: Signing
         if: env.SIGNED == 'true'
         env:
