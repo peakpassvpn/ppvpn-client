@@ -13,6 +13,8 @@ name: release
 #     from. Nothing is published.
 #   - the CLI's archives (tar.gz): Linux x86_64 and aarch64, static, and
 #     macOS universal, ad-hoc signed; tools/cli/build-release.sh.
+#   - the iOS app, unsigned (job ios; a stable run signs it and uploads it
+#     to TestFlight instead, #470).
 #   - the build caches ci.yml's jobs restore (pull requests only read
 #     caches), when the merge changed what they are keyed on (Cargo.toml,
 #     Cargo.lock, the toolchain, the shared actions; tools/ci-changes.sh
@@ -1115,6 +1117,83 @@ jobs:
           # release, a dev build's are for testing. Other builds: the default.
           retention-days: ${{ needs.prepare.outputs.environment && 3 || 0 }}
           path: staging/macos-native
+
+  # The iOS app (#448, #470), on its own: in no GitHub Release and on no
+  # update site. A merge builds it unsigned, without any secret, so that a
+  # break shows before a release. A stable run (the release and the
+  # rehearsal alike), after the approval, signs it for the App Store in
+  # desktop-release-stable (the Apple Distribution certificate, the App
+  # Store Connect key; tools/desktop/ci/ios-signing.sh) and uploads it to
+  # TestFlight, where only the internal testers see it. CFBundleVersion is
+  # the release's build number, so each upload is new. A dev run builds
+  # nothing for iOS. Its failure stops no other job.
+  ios:
+    name: ios
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      (github.event_name == 'push' || (needs.prepare.outputs.channel == 'stable' && needs.approve.result == 'success'))
+    runs-on: macos-15
+    environment: ${{ needs.prepare.outputs.channel == 'stable' && 'desktop-release-stable' || '' }}
+    timeout-minutes: 90
+    env:
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      SIGNED: ${{ needs.prepare.outputs.channel == 'stable' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios
+      # The host's for the bridge codegen, which reads the crate; the
+      # device's BoringSSL is built from source (btls has no iOS prebuilts).
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        run: tools/release-features-check.sh --target aarch64-apple-ios -p ppvpn-flutter
+      - name: Signing
+        if: env.SIGNED == 'true'
+        env:
+          IOS_DIST_P12: ${{ secrets.IOS_DIST_P12 }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: tools/desktop/ci/ios-signing.sh setup
+      - id: build
+        name: Build the app
+        env:
+          FLUTTER_TARGET: ios
+          IOS_SDK: device
+        run: apps/flutter/scripts/ci-build.sh
+      - name: Upload to TestFlight
+        if: env.SIGNED == 'true'
+        env:
+          IPA: ${{ steps.build.outputs.bundle }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          [[ "$IPA" == *.ipa && -f "$IPA" ]] || { echo "error: no IPA ('$IPA')" >&2; exit 1; }
+          # altool finds the key in ~/.appstoreconnect/private_keys (ios-signing.sh).
+          xcrun altool --upload-app --type ios --file "$IPA" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+      - name: Remove the signing keychain and key
+        if: always() && env.SIGNED == 'true'
+        run: tools/desktop/ci/ios-signing.sh cleanup
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: env.SIGNED == 'true'
+        with:
+          name: ios-ipa
+          if-no-files-found: error
+          retention-days: 3
+          path: ${{ steps.build.outputs.bundle }}
 
   # The CLI (crates/cli, the binary ppvpn) as tar.gz archives, built by
   # tools/cli/build-release.sh: Linux x86_64 and aarch64, static (musl), and
