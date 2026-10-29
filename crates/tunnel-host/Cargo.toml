@@ -9,7 +9,8 @@ description = "The PPVPN engine in the mobile tunnel process (iOS packet tunnel,
 [lib]
 name = "ppvpn_tunnel"
 # staticlib: iOS links it into the packet tunnel extension
-# (scripts/build-xcframework.sh); rlib: the tests.
+# (scripts/build-xcframework.sh); rlib: the tests. Android's
+# libppvpn_tunnel.so is built as a cdylib by scripts/build-android.sh.
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
@@ -18,6 +19,9 @@ ppvpn-engine-host = { path = "../engine-host" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

@@ -516,7 +516,7 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 - **休眠**：iOS 的 `sleep()` / `wake()` 照转 `Engine::sleep` / `Engine::wake`（第 4.7 节）。
 - **Profile**：经 `apply` 传入，只放在内存里（`docs/mobile.md`）。
 - **健康检查和恢复**：由隧道宿主负责，因为界面进程在后台会被挂起。规则同 #438，在手机上怎么做见 `docs/mobile.md`。
-- **隧道宿主**：`crates/tunnel-host`。原生层调用的 C 函数以 `crates/tunnel-host/include/ppvpn_tunnel.h` 为契约；Android 经 JNI 调用同样的函数。引擎的 `max_connections` 在 iOS 上由它设为 128。
+- **隧道宿主**：`crates/tunnel-host`。原生层调用的 C 函数以 `crates/tunnel-host/include/ppvpn_tunnel.h` 为契约；Android 经 JNI 调用同样的函数（Kotlin 类 `com.peakpassvpn.ppvpn.tunnel.TunnelHost`，socket 保护经它的 `Listener.protect`）。引擎的 `max_connections` 在 iOS 上由它设为 128。
 
 ## 12. 内部结构（不是契约，供评审参考）
 

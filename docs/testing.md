@@ -93,6 +93,7 @@
 | `windows` | Windows 自己的：桌面链接的 crate 在 MSVC 上的 clippy、Windows 平台测试、G7 Windows、C# 绑定、App.Core 测试（原生版 app 和推送代理不再构建，#459） |
 | `flutter` | Flutter 桌面 app（#401）在 Linux、macOS、Windows 上构建和冒烟测试，只在它或它构建所用的 crate（客户端、core、account、engine-host、service）变了的时候；`flutter analyze` 只在 Linux 上跑（#459） |
 | `tunnel (ios)` | 移动端隧道宿主给 iOS 网络扩展的 XCFramework（#448，`crates/tunnel-host/scripts/build-xcframework.sh`），PR 上只构建真机一片（网络扩展不在模拟器里运行；完整的 XCFramework 由 `release.yml` 给 TestFlight 构建）。只在隧道宿主、engine-host、依赖、ci.yml 或只有 iOS 才编译的 core 代码变了的时候（`tools/ci-changes.sh` 的 `tunnel`），因为 macOS runner 很少。不缓存，冷构建约 25 分钟 |
+| `tunnel (android)` | 移动端隧道宿主给 Android VpnService 的 `libppvpn_tunnel.so`（#448，`crates/tunnel-host/scripts/build-android.sh`），PR 上只构建 arm64-v8a，并对 Android 目标跑 clippy（JNI 绑定只在 Android 上编译）。触发条件同 `tunnel (ios)`，跑在 Linux runner 上，不缓存 |
 
 L1 和 L2 只跑一遍（`unit`、`integration`）；`macos`、`windows` 不重跑，只编译（clippy 覆盖各平台 `cfg` 的代码）并跑平台测试。
 
