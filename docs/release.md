@@ -30,7 +30,8 @@
 - `release.yml`：
   - 安装包是 Flutter 版（`apps/flutter`，#401），文件名、更新源和签名与原生版相同；原生版不再发行。
   - 每次合入 main：三个平台的安装包（`linux`、`macos`、`windows`，不读任何密钥：Windows 不签名、macOS ad-hoc 签名、
-    没有更新签名），rpm 在 dnf 下安装一次，apt/dnf 仓库自测（`linux-rpm-smoke`、`linux-repo`）；依赖变了时保存
+    没有更新签名；macOS 的安装包和 CLI 只构建 arm64，x86_64 只在手动触发的运行里构建，#459），
+    rpm 在 dnf 下安装一次，apt/dnf 仓库自测（`linux-rpm-smoke`、`linux-repo`）；依赖变了时保存
     `ci.yml` 恢复的构建缓存（`cache-*`）。什么都不发布。
   - 手动触发：`channel=stable` 在 tag `vX.Y.Z` 上、经 `desktop-release-approval` 审批后，在
     `desktop-release-stable` 里构建并签名，`release-files` 整体核对，`publish` 发 GitHub Release（安装包和 CLI，
