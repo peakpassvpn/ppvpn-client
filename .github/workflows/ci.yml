@@ -939,8 +939,11 @@ jobs:
       # runner's slice only (arm64), with the client and the helpers in
       # debug: the packaging is what is checked, and debug builds the
       # quickest. Then the shipped app as the .pkg holds it. Nothing uploaded.
+      # Only when what it packages beyond the app changed
+      # (tools/ci-changes.sh `macpkg`): the Build step above has built and
+      # the end-to-end step has run the app either way.
       - name: Package (macOS)
-        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
+        if: steps.scope.outputs.flutter == 'true' && steps.scope.outputs.macpkg == 'true' && matrix.os == 'macos-15'
         timeout-minutes: 45
         env:
           PPVPN_APPLE_TARGETS: aarch64-apple-darwin
