@@ -15,8 +15,9 @@
 #         apps/macos (the scripts, the push agent and what it builds from,
 #         the LaunchAgent, the .pkg's postinstall), the Windows installer
 #         script it shares with the native app (apps/windows/installer/,
-#         scripts/sign-file.ps1), the dependencies or the workflows. ci.yml's
-#         flutter job builds only when it is true. apps/flutter/ alone
+#         scripts/sign-file.ps1, check-publisher.ps1), the dependencies
+#         or the workflows. ci.yml's flutter job builds only when it is
+#         true. apps/flutter/ alone
 #         does not set desktop: the native apps do not depend on it.
 #         And outside apps/flutter/rust/ it does not set code either: a
 #         change to the Flutter app's Dart, scripts or assets runs only the
@@ -83,7 +84,7 @@ while IFS= read -r f; do
     apps/linux/packaging/*) desktop=true flutter=true code=true ;;
     apps/macos/scripts/* | apps/macos/PPVPNAgent/* | apps/macos/AppLogic/* | \
     apps/macos/LaunchAgents/* | apps/macos/packaging/* | apps/macos/project.yml | \
-    apps/windows/installer/* | apps/windows/scripts/sign-file.ps1)
+    apps/windows/installer/* | apps/windows/scripts/sign-file.ps1 | apps/windows/scripts/check-publisher.ps1)
       desktop=true flutter=true code=true ;;
     apps/* | tools/desktop/*)
       desktop=true code=true ;;
