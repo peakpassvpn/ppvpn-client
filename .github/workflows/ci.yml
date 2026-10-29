@@ -21,7 +21,7 @@ name: ci
 #                scripts, the C# and Swift bindings with their tests
 #   linux        Linux's own: L3 in network namespaces (tun with G7,
 #                network-change) and the desktop's enhanced mode end to end
-#   macos        clippy for aarch64 and x86_64, the macOS-only tests
+#   macos        clippy (aarch64), the macOS-only tests
 #   windows      clippy (MSVC), the Windows-only tests, G7 on Windows, the
 #                C# bindings, App.Core
 #   flutter      the Flutter prototype (#387) on Linux, macOS and Windows:
@@ -539,10 +539,13 @@ jobs:
         run: swift test --package-path apps/macos/AppLogic
 
   # macOS, for what Linux cannot cover (L1 and L2 run once, on Linux):
-  #   - clippy over the whole workspace for aarch64 and x86_64-apple-darwin,
-  #     so that every cfg'd macOS path compiles; and that btls-sys links the
-  #     prebuilt BoringSSL (Desktop ships an Intel package, the one target
-  #     btls's own CI does not use);
+  #   - clippy over the whole workspace for aarch64-apple-darwin, so that
+  #     every cfg'd macOS path compiles. Not again for x86_64 (#459): no
+  #     code of ours is cfg'd by architecture, and the build scripts need
+  #     the Apple SDK (oslog's C includes <os/log.h>), so it cannot move to
+  #     Linux either. Only btls-sys is checked for x86_64-apple-darwin, that
+  #     it takes the prebuilt BoringSSL (Desktop ships an Intel package, the
+  #     one target btls's own CI does not use); release.yml links it;
   #   - the macOS-only tests, by filter (docs/testing.md, "Platform tests").
   # Not the native app's build (#459): the Flutter app replaced it, and the
   # upgrade from it is tested with its last release (0.6.4).
@@ -580,12 +583,12 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         with:
           targets: aarch64-apple-darwin x86_64-apple-darwin
-      - name: clippy, aarch64
+      - name: clippy
         if: steps.scope.outputs.code == 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: clippy, x86_64
+      - name: btls-sys, x86_64
         if: steps.scope.outputs.code == 'true'
-        run: cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin -- -D warnings
+        run: cargo check --locked -p btls-sys --target x86_64-apple-darwin
       # btls-sys's build script points the linker at the downloaded library
       # (BORING_BSSL_PATH_<target>/lib), and no BoringSSL build tree exists.
       - name: x86_64, the prebuilt BoringSSL is the one linked

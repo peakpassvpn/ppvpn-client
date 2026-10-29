@@ -2035,7 +2035,7 @@ jobs:
       - name: what macos builds
         run: |
           cargo clippy --workspace --all-targets --locked
-          cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin
+          cargo check --locked -p btls-sys --target x86_64-apple-darwin
           # The same cargo invocation as ci.yml's macos tests: another
           # combination of packages unifies features differently and its
           # artifacts would not be reused.
