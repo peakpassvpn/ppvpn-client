@@ -1874,8 +1874,11 @@ jobs:
   # A workflow change that alters what a key's jobs build, without a lock
   # change, keeps the old entry: delete it (gh cache delete <key>; gh cache
   # list --key v1-rust-macos- lists them) and the next merge rebuilds it as
-  # missing. All of them at once: a new prefix-key (here and in ci.yml), the
-  # old entries then the least recently used.
+  # missing. All of them at once: a new prefix-key (here and in ci.yml).
+  # The changes job deletes main's Rust entries no key uses any more (another
+  # prefix-key, or a family's older entries once a newer one is saved):
+  # left to the LRU they kept the caches over 9.5 GB, so the new keys were
+  # never built (#496's merge, 7.9 GB of v0-rust-* left).
   changes:
     name: changes
     if: github.event_name == 'push'
@@ -1883,7 +1886,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: read
+      # Deletes the Rust cache entries nothing uses (see above).
+      actions: write
     outputs:
       lock: ${{ steps.diff.outputs.lock }}
       missing: ${{ steps.caches.outputs.missing }}
@@ -1903,6 +1907,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Main's Rust entries no key uses: another prefix-key than v1-rust,
+          # or not a family's newest (v1-rust-<shared-key>-<OS>-<arch>, newest
+          # first). Before the usage is read, so their space counts as free.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&per_page=100&sort=created_at&direction=desc" \
+            --jq '.actions_caches[] | select(.key | test("^v[0-9]+-rust-")) | "\(.id) \(.key)"' |
+            while read -r id key; do
+              family=$(cut -d- -f1-5 <<<"$key")
+              if [[ $key != v1-rust-* ]] || grep -qxF "$family" "$RUNNER_TEMP/families" 2>/dev/null; then
+                echo "deleting the unused cache entry $key"
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" --silent
+              else
+                echo "$family" >> "$RUNNER_TEMP/families"
+              fi
+            done
           used=$(gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" --jq .active_caches_size_in_bytes)
           keys=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=v1-rust-&per_page=100" \
             --jq '.actions_caches[].key')
