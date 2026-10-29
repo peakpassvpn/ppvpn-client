@@ -30,7 +30,8 @@
 - `release.yml`：
   - 安装包是 Flutter 版（`apps/flutter`，#401），文件名、更新源和签名与原生版相同；原生版不再发行。
   - 每次合入 main：三个平台的安装包（`linux`、`macos`、`windows`，不读任何密钥：Windows 不签名、macOS ad-hoc 签名、
-    没有更新签名），rpm 在 dnf 下安装一次，apt/dnf 仓库自测（`linux-rpm-smoke`、`linux-repo`）；依赖变了时保存
+    没有更新签名；macOS 的安装包和 CLI 只构建 arm64，x86_64 只在手动触发的运行里构建，#459），
+    rpm 在 dnf 下安装一次，apt/dnf 仓库自测（`linux-rpm-smoke`、`linux-repo`）；依赖变了时保存
     `ci.yml` 恢复的构建缓存（`cache-*`）。什么都不发布。
   - 手动触发：`channel=stable` 在 tag `vX.Y.Z` 上、经 `desktop-release-approval` 审批后，在
     `desktop-release-stable` 里构建并签名，`release-files` 整体核对，`publish` 发 GitHub Release（安装包和 CLI，
@@ -38,6 +39,26 @@
     `channel=dev` 在 main 上、`desktop-release-dev` 里构建，从不发布。`channel=site` 经同一审批，只按已发布的
     Release 重建并上传更新站点。
   - 构建号是 `DESKTOP_BUILD_OFFSET` 加 `release.yml` 的 run number，只增不减。
+
+## Windows 签名（Azure Artifact Signing）
+
+`windows` job 在发布环境（`desktop-release-dev`、`desktop-release-stable`）里、下表的变量都在时用
+Azure Artifact Signing 给程序、安装包和卸载程序签 Authenticode（#489）：`azure/login` 用 OIDC 登录 Entra 应用
+（它对每个环境有 federated credential，并在证书配置上有 Certificate Profile Signer 角色），
+`tools/desktop/ci/artifact-signing.ps1` 装好 SignTool 的签名插件（版本和 SHA-256 钉在脚本里），
+`apps/windows/scripts/sign-file.ps1` 逐个文件签名、加时间戳并验证。缺任何一个就不签名，和以前一样。
+都不是 secret，放在两个环境里：
+
+| 名称 | 内容 |
+| --- | --- |
+| `AZURE_CLIENT_ID`、`AZURE_TENANT_ID`、`AZURE_SUBSCRIPTION_ID` | Entra 应用、租户和签名账号所在的订阅 |
+| `ARTIFACT_SIGNING_ENDPOINT` | 签名账号所在区域的端点，`https://eus.codesigning.azure.net/` |
+| `ARTIFACT_SIGNING_ACCOUNT`、`ARTIFACT_SIGNING_PROFILE` | 签名账号和证书配置的名字 |
+| `PPVPN_WINDOWS_PUBLISHER_EKU` | 服务的发布者钉：签名证书的身份 EKU（`1.3.6.1.4.1.311.97.*`，[安全](security.md)） |
+
+`PPVPN_WINDOWS_PUBLISHER_EKU` 在第一次签名的 dev 构建之后才设：那次构建的日志（`check-publisher.ps1`）
+打印签名证书的主题和 EKU。设上之前，签过名的构建里的服务照未签名构建那样接受安装目录里的客户端；设上之后
+打包时先核对签名符合这个钉，服务也只接受符合的客户端。
 
 ## 更新站点（R2）
 

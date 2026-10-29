@@ -2,8 +2,8 @@ include!("build_id.rs");
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT");
-    println!("cargo:rerun-if-env-changed=PPVPN_WINDOWS_PUBLISHER_SHA256");
-    println!("cargo:rerun-if-env-changed=PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256");
+    println!("cargo:rerun-if-env-changed=PPVPN_WINDOWS_PUBLISHER_EKU");
+    println!("cargo:rerun-if-env-changed=PPVPN_WINDOWS_NEXT_PUBLISHER_EKU");
 
     // Clients reinstall a service whose build id differs from the one they
     // were built with (crates/desktop/build.rs computes the same value).

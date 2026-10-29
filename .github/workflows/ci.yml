@@ -21,7 +21,7 @@ name: ci
 #                scripts, the C# and Swift bindings with their tests
 #   linux        Linux's own: L3 in network namespaces (tun with G7,
 #                network-change) and the desktop's enhanced mode end to end
-#   macos        clippy for aarch64 and x86_64, the macOS-only tests
+#   macos        clippy (aarch64), the macOS-only tests
 #   windows      clippy (MSVC), the Windows-only tests, G7 on Windows, the
 #                C# bindings, App.Core
 #   flutter      the Flutter prototype (#387) on Linux, macOS and Windows:
@@ -69,6 +69,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A cache download that stalls is given up after 5 minutes per segment
+  # (@actions/cache's default is 10), as a cache miss; the rust-cache steps
+  # also end after 10 minutes and the job goes on without the cache. A
+  # restore hung on 2026-10-29 until lint's 30-minute limit (#482).
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 5
   # Line numbers in a failing test's backtrace without full debug info. Part
   # of the cache key: release.yml's cache jobs set the same.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -527,10 +532,13 @@ jobs:
         run: swift test --package-path apps/macos/AppLogic
 
   # macOS, for what Linux cannot cover (L1 and L2 run once, on Linux):
-  #   - clippy over the whole workspace for aarch64 and x86_64-apple-darwin,
-  #     so that every cfg'd macOS path compiles; and that btls-sys links the
-  #     prebuilt BoringSSL (Desktop ships an Intel package, the one target
-  #     btls's own CI does not use);
+  #   - clippy over the whole workspace for aarch64-apple-darwin, so that
+  #     every cfg'd macOS path compiles. Not again for x86_64 (#459): no
+  #     code of ours is cfg'd by architecture, and the build scripts need
+  #     the Apple SDK (oslog's C includes <os/log.h>), so it cannot move to
+  #     Linux either. Only btls-sys is checked for x86_64-apple-darwin, that
+  #     it takes the prebuilt BoringSSL (Desktop ships an Intel package, the
+  #     one target btls's own CI does not use); release.yml links it;
   #   - the macOS-only tests, by filter (docs/testing.md, "Platform tests").
   # Not the native app's build (#459): the Flutter app replaced it, and the
   # upgrade from it is tested with its last release (0.6.4).
@@ -561,6 +569,9 @@ jobs:
         if: steps.scope.outputs.memory == 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           prefix-key: v1-rust
           shared-key: macos
@@ -569,12 +580,12 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         with:
           targets: aarch64-apple-darwin x86_64-apple-darwin
-      - name: clippy, aarch64
+      - name: clippy
         if: steps.scope.outputs.code == 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: clippy, x86_64
+      - name: btls-sys, x86_64
         if: steps.scope.outputs.code == 'true'
-        run: cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin -- -D warnings
+        run: cargo check --locked -p btls-sys --target x86_64-apple-darwin
       # btls-sys's build script points the linker at the downloaded library
       # (BORING_BSSL_PATH_<target>/lib), and no BoringSSL build tree exists.
       - name: x86_64, the prebuilt BoringSSL is the one linked
@@ -699,6 +710,9 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           prefix-key: v1-rust
           shared-key: windows
@@ -718,6 +732,34 @@ jobs:
           cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc -- hostipv6::windows localdns::source probe::icmp
           cargo test -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc -- detect service sysproxy
           cargo test -p ppvpn-push-agent --locked --target x86_64-pc-windows-msvc
+      # The release's Windows signing scripts (#489), which sign only in a
+      # release environment: they parse, the signing client downloads and
+      # checks out (no signing: that needs Azure), and the signer check
+      # reads a signed file and refuses a signer that is not ours.
+      - name: Windows signing scripts
+        if: steps.scope.outputs.code == 'true'
+        shell: powershell
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+          ARTIFACT_SIGNING_ACCOUNT: ci
+          ARTIFACT_SIGNING_PROFILE: ci
+        run: |
+          foreach ($script in Get-ChildItem apps\windows\scripts\*.ps1, apps\flutter\scripts\*.ps1, tools\desktop\ci\*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { throw "$($script.Name): $($errors -join '; ')" }
+          }
+          # -Setup's variables into a file of this step's own.
+          $env:GITHUB_ENV = "$env:RUNNER_TEMP\artifact-signing.env"
+          tools\desktop\ci\artifact-signing.ps1 -Setup
+          Get-Content $env:GITHUB_ENV
+          $signTool = (Get-Content $env:GITHUB_ENV | Where-Object { $_ -like "ARTIFACT_SIGNING_SIGNTOOL=*" }) -replace "^[^=]*=", ""
+          # SignTool itself: signed, by Microsoft.
+          apps\windows\scripts\check-publisher.ps1 $signTool
+          $env:PPVPN_WINDOWS_PUBLISHER_EKU = "1.3.6.1.4.1.311.97.1"
+          $refused = $false
+          try { apps\windows\scripts\check-publisher.ps1 $signTool } catch { $refused = $true; Write-Host "refused: $_" }
+          if (-not $refused) { throw "check-publisher.ps1 accepted a signer that is not ours" }
       - name: L3, build the failure tests
         if: steps.scope.outputs.code == 'true'
         run: cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
@@ -812,6 +854,9 @@ jobs:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           # Each runner OS's key is shared with its other jobs: macos and
           # ios, windows, android (release.yml builds each in one job).
@@ -1050,18 +1095,10 @@ jobs:
       # native app 0.6.4 (fetched above), checks the
       # installation, has the app quit on the installer's quit event and
       # uninstalls it with /PURGE.
-      - name: Ensure NSIS
+      # NSIS from a pinned, checksummed installer, not Chocolatey's feed.
+      - name: NSIS
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
-            Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $makensis) {
-            choco install nsis --no-progress -y
-            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
-            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          }
-          & $makensis /VERSION
+        uses: ./.github/actions/nsis
       - name: Installer (Windows)
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
         shell: powershell
@@ -1123,6 +1160,9 @@ jobs:
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           prefix-key: v1-rust
           shared-key: flutter
@@ -1164,9 +1204,9 @@ jobs:
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      # The system image and the rest from the cache release.yml saves
-      # (.github/actions/android-sdk); a miss downloads them and fails on an
-      # incomplete one instead of booting without it.
+      # The system image (checksummed) and the rest, installed by
+      # .github/actions/android-sdk, which fails on an incomplete one instead
+      # of booting without it.
       - uses: ./.github/actions/android-sdk
         if: steps.scope.outputs.flutter == 'true'
         with:
@@ -1217,6 +1257,9 @@ jobs:
           targets: aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           prefix-key: v1-rust
           shared-key: macos
@@ -1273,6 +1316,9 @@ jobs:
           targets: aarch64-apple-ios
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.tunnel == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           prefix-key: v1-rust
           shared-key: tunnel
@@ -1287,5 +1333,51 @@ jobs:
           path: |
             ${{ runner.temp }}/tunnel/PPVPNTunnel.xcframework
             ${{ runner.temp }}/tunnel/PPVPNTunnel.ldflags
+          if-no-files-found: error
+          retention-days: 14
+
+  tunnel-android:
+    # The mobile tunnel host for Android's VpnService (#448):
+    # crates/tunnel-host/scripts/build-android.sh, arm64-v8a only (the
+    # emulator's x86_64 builds the same code), with clippy for Android: its
+    # JNI binding compiles for Android only. BoringSSL prebuilt, profile
+    # mobile. Only when the tunnel host or its dependencies changed
+    # (tools/ci-changes.sh `tunnel`). No Rust cache, as the
+    # other Linux jobs (#459).
+    name: tunnel (android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          targets: aarch64-linux-android
+      - name: Build libppvpn_tunnel.so
+        if: steps.scope.outputs.tunnel == 'true'
+        env:
+          PPVPN_TUNNEL_CLIPPY: "1"
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          crates/tunnel-host/scripts/build-android.sh "$RUNNER_TEMP/tunnel" arm64-v8a
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          name: tunnel-android
+          path: ${{ runner.temp }}/tunnel
           if-no-files-found: error
           retention-days: 14

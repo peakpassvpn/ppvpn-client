@@ -341,34 +341,44 @@ class SignInBrand extends StatelessWidget {
             ),
           ),
           const Positioned(left: 0, right: 0, bottom: 0, height: 250, child: CustomPaint(painter: _Mountains())),
-          Padding(
-            padding: Tokens.signInBrandPadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // The traffic lights' row (macOS draws them over it).
-                const SizedBox(height: Tokens.trafficLightsHeight),
-                const SizedBox(height: 36),
-                Row(
-                  children: [
-                    const BrandMark(size: 40),
-                    const SizedBox(width: 12),
-                    Text(S.current('app'), style: text(22, 28, FontWeight.w700, white, -0.02)),
-                  ],
+          // A window lower than the panel's content (a phone in landscape
+          // gets this layout from 600 wide) scrolls it rather than
+          // overflowing; a taller one keeps the Spacer's gap.
+          LayoutBuilder(
+            builder: (context, box) => SingleChildScrollView(
+              padding: Tokens.signInBrandPadding,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: box.maxHeight - Tokens.signInBrandPadding.vertical),
+                child: IntrinsicHeight(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // The traffic lights' row (macOS draws them over it).
+                      const SizedBox(height: Tokens.trafficLightsHeight),
+                      const SizedBox(height: 36),
+                      Row(
+                        children: [
+                          const BrandMark(size: 40),
+                          const SizedBox(width: 12),
+                          Text(S.current('app'), style: text(22, 28, FontWeight.w700, white, -0.02)),
+                        ],
+                      ),
+                      const Spacer(),
+                      Semantics(
+                        header: true,
+                        child: Text(S.current('signInTitle'), style: text(24, 32, FontWeight.w700, white, -0.02)),
+                      ),
+                      const SizedBox(height: 10),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 280),
+                        child: Text(S.current('signInLine'), style: text(13, 20, FontWeight.w400, const Color(0xC7FFFFFF))),
+                      ),
+                      const SizedBox(height: Tokens.signInMountains),
+                      Text('© PeakPass Labs LLC', style: text(11, 16, FontWeight.w400, const Color(0xA6FFFFFF))),
+                    ],
+                  ),
                 ),
-                const Spacer(),
-                Semantics(
-                  header: true,
-                  child: Text(S.current('signInTitle'), style: text(24, 32, FontWeight.w700, white, -0.02)),
-                ),
-                const SizedBox(height: 10),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 280),
-                  child: Text(S.current('signInLine'), style: text(13, 20, FontWeight.w400, const Color(0xC7FFFFFF))),
-                ),
-                const SizedBox(height: Tokens.signInMountains),
-                Text('© PeakPass Labs LLC', style: text(11, 16, FontWeight.w400, const Color(0xA6FFFFFF))),
-              ],
+              ),
             ),
           ),
         ],

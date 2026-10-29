@@ -55,22 +55,60 @@ fn refused_while_stopping(command: &Command) -> bool {
     )
 }
 
+/// The subject O of the certificates that sign the Windows client: Artifact
+/// Signing issues them for our validated organization (#489).
 #[cfg(any(windows, test))]
-fn decode_publisher_pins(
+const PUBLISHER_ORGANIZATION: &str = "PeakPass Labs LLC";
+
+/// Artifact Signing puts one EKU under this arc in every certificate of an
+/// identity validation, and only Microsoft issues them: the pin.
+#[cfg(any(windows, test))]
+const IDENTITY_EKU_ARC: &str = "1.3.6.1.4.1.311.97.";
+
+/// The identity pins (`PPVPN_WINDOWS_PUBLISHER_EKU`, and `_NEXT_` for a new
+/// validation): full EKU OIDs under [`IDENTITY_EKU_ARC`].
+#[cfg(any(windows, test))]
+fn decode_publisher_ekus(
     values: &[Option<&str>],
-) -> std::result::Result<Vec<Vec<u8>>, &'static str> {
+) -> std::result::Result<Vec<String>, &'static str> {
     values
         .iter()
         .flatten()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| {
-            if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Err("CLIENT_PUBLISHER_PIN_INVALID");
+            let arcs = value
+                .strip_prefix(IDENTITY_EKU_ARC)
+                .ok_or("CLIENT_PUBLISHER_PIN_INVALID")?;
+            if arcs
+                .split('.')
+                .all(|arc| !arc.is_empty() && arc.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                Ok(value.to_string())
+            } else {
+                Err("CLIENT_PUBLISHER_PIN_INVALID")
             }
-            hex::decode(value).map_err(|_| "CLIENT_PUBLISHER_PIN_INVALID")
         })
         .collect()
+}
+
+/// The signer is ours: subject O is [`PUBLISHER_ORGANIZATION`] and one of
+/// its EKUs is a pinned identity EKU. The certificate renews (Artifact
+/// Signing issues a new one about daily); both stay the same for one
+/// validation.
+#[cfg(any(windows, test))]
+fn check_publisher(
+    organization: Option<&str>,
+    ekus: &[String],
+    pins: &[String],
+) -> std::result::Result<(), &'static str> {
+    if organization != Some(PUBLISHER_ORGANIZATION) {
+        return Err("CLIENT_PUBLISHER_ORGANIZATION_MISMATCH");
+    }
+    if !ekus.iter().any(|eku| pins.contains(eku)) {
+        return Err("CLIENT_PUBLISHER_IDENTITY_MISMATCH");
+    }
+    Ok(())
 }
 
 #[cfg(any(windows, test))]
@@ -845,16 +883,16 @@ fn verify_publisher_certificate(path: &std::path::Path) -> Result<()> {
     use std::ptr;
     use winapi::ctypes::c_void;
     use winapi::um::wincrypt::{
-        CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext,
-        CertGetCertificateContextProperty, CryptMsgClose, CryptMsgGetParam, CryptQueryObject,
-        CERT_FIND_SUBJECT_CERT, CERT_INFO, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-        CERT_QUERY_FORMAT_FLAG_BINARY, CERT_QUERY_OBJECT_FILE, CERT_SHA256_HASH_PROP_ID,
-        CMSG_SIGNER_INFO, CMSG_SIGNER_INFO_PARAM, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
+        CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext, CryptMsgClose,
+        CryptMsgGetParam, CryptQueryObject, CERT_FIND_SUBJECT_CERT, CERT_INFO,
+        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
+        CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO, CMSG_SIGNER_INFO_PARAM, PKCS_7_ASN_ENCODING,
+        X509_ASN_ENCODING,
     };
 
-    let expected = decode_publisher_pins(&[
-        option_env!("PPVPN_WINDOWS_PUBLISHER_SHA256"),
-        option_env!("PPVPN_WINDOWS_NEXT_PUBLISHER_SHA256"),
+    let expected = decode_publisher_ekus(&[
+        option_env!("PPVPN_WINDOWS_PUBLISHER_EKU"),
+        option_env!("PPVPN_WINDOWS_NEXT_PUBLISHER_EKU"),
     ])
     .map_err(|code| anyhow!(code))?;
     if expected.is_empty() {
@@ -948,43 +986,11 @@ fn verify_publisher_certificate(path: &std::path::Path) -> Result<()> {
             return Err(anyhow!("CLIENT_PUBLISHER_CERTIFICATE_UNAVAILABLE"));
         }
 
-        let hash_result = (|| -> Result<Vec<u8>> {
-            let mut hash_bytes = 0u32;
-            if unsafe {
-                CertGetCertificateContextProperty(
-                    certificate,
-                    CERT_SHA256_HASH_PROP_ID,
-                    ptr::null_mut(),
-                    &mut hash_bytes,
-                )
-            } == 0
-                || hash_bytes != 32
-            {
-                return Err(anyhow!("CLIENT_PUBLISHER_HASH_UNAVAILABLE"));
-            }
-            let mut hash = vec![0u8; hash_bytes as usize];
-            if unsafe {
-                CertGetCertificateContextProperty(
-                    certificate,
-                    CERT_SHA256_HASH_PROP_ID,
-                    hash.as_mut_ptr().cast(),
-                    &mut hash_bytes,
-                )
-            } == 0
-            {
-                return Err(anyhow!("CLIENT_PUBLISHER_HASH_UNAVAILABLE"));
-            }
-            Ok(hash)
-        })();
+        // Safety: certificate is a valid context until it is freed below.
+        let organization = unsafe { certificate_organization(certificate) };
+        let ekus = unsafe { certificate_ekus(certificate) };
         unsafe { CertFreeCertificateContext(certificate) };
-        let actual = hash_result?;
-        if !expected
-            .iter()
-            .any(|allowed| actual.as_slice() == allowed.as_slice())
-        {
-            return Err(anyhow!("CLIENT_PUBLISHER_MISMATCH"));
-        }
-        Ok(())
+        check_publisher(organization.as_deref(), &ekus?, &expected).map_err(|code| anyhow!(code))
     })();
 
     unsafe {
@@ -992,6 +998,95 @@ fn verify_publisher_certificate(path: &std::path::Path) -> Result<()> {
         CertCloseStore(store, 0);
     }
     result
+}
+
+/// The certificate's subject O (the first one), if it has one.
+///
+/// # Safety
+/// `certificate` is a valid certificate context.
+#[cfg(windows)]
+unsafe fn certificate_organization(
+    certificate: winapi::um::wincrypt::PCCERT_CONTEXT,
+) -> Option<String> {
+    use winapi::um::wincrypt::{CertGetNameStringW, CERT_NAME_ATTR_TYPE};
+
+    // szOID_ORGANIZATION_NAME, NUL-terminated for CryptoAPI.
+    let oid = b"2.5.4.10\0";
+    let para = oid.as_ptr() as *mut winapi::ctypes::c_void;
+    // The length with the NUL; 1 (an empty string) when there is none.
+    let length = CertGetNameStringW(
+        certificate,
+        CERT_NAME_ATTR_TYPE,
+        0,
+        para,
+        std::ptr::null_mut(),
+        0,
+    );
+    if length <= 1 {
+        return None;
+    }
+    let mut name = vec![0u16; length as usize];
+    let written = CertGetNameStringW(
+        certificate,
+        CERT_NAME_ATTR_TYPE,
+        0,
+        para,
+        name.as_mut_ptr(),
+        length,
+    );
+    if written <= 1 {
+        return None;
+    }
+    String::from_utf16(&name[..written as usize - 1]).ok()
+}
+
+/// The OIDs in the certificate's own EKU extension.
+///
+/// # Safety
+/// `certificate` is a valid certificate context.
+#[cfg(windows)]
+unsafe fn certificate_ekus(
+    certificate: winapi::um::wincrypt::PCCERT_CONTEXT,
+) -> Result<Vec<String>> {
+    use anyhow::anyhow;
+    use std::ffi::CStr;
+    use std::mem;
+    use winapi::um::wincrypt::{
+        CertGetEnhancedKeyUsage, CERT_ENHKEY_USAGE, CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG,
+    };
+
+    let mut bytes = 0u32;
+    if CertGetEnhancedKeyUsage(
+        certificate,
+        CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG,
+        std::ptr::null_mut(),
+        &mut bytes,
+    ) == 0
+        || bytes < mem::size_of::<CERT_ENHKEY_USAGE>() as u32
+    {
+        return Err(anyhow!("CLIENT_PUBLISHER_EKU_UNAVAILABLE"));
+    }
+    // usize storage, aligned for CERT_ENHKEY_USAGE and its pointers.
+    let mut storage = vec![0usize; (bytes as usize).div_ceil(mem::size_of::<usize>())];
+    let usage = storage.as_mut_ptr().cast::<CERT_ENHKEY_USAGE>();
+    if CertGetEnhancedKeyUsage(
+        certificate,
+        CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG,
+        usage,
+        &mut bytes,
+    ) == 0
+    {
+        return Err(anyhow!("CLIENT_PUBLISHER_EKU_UNAVAILABLE"));
+    }
+    let usage = &*usage;
+    let mut ekus = Vec::with_capacity(usage.cUsageIdentifier as usize);
+    for index in 0..usage.cUsageIdentifier as usize {
+        let oid = *usage.rgpszUsageIdentifier.add(index);
+        if !oid.is_null() {
+            ekus.push(CStr::from_ptr(oid).to_string_lossy().into_owned());
+        }
+    }
+    Ok(ekus)
 }
 
 #[cfg(unix)]
@@ -1269,8 +1364,9 @@ fn set_socket_permissions(path: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_publisher_pins, handle, handle_with, linux_client_image, linux_client_path_allowed,
-        macos_client_path_allowed, parse_allow_unsigned_client, ReplayWindow, SERVICE_STOPPING,
+        check_publisher, decode_publisher_ekus, handle, handle_with, linux_client_image,
+        linux_client_path_allowed, macos_client_path_allowed, parse_allow_unsigned_client,
+        ReplayWindow, SERVICE_STOPPING,
     };
     use crate::protocol::{Command, HandshakeResponse, Request, VersionInfo};
 
@@ -1386,27 +1482,68 @@ mod tests {
     }
 
     #[test]
-    fn publisher_pin_decoder_accepts_rotation_pair() {
-        let primary = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let next = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        let pins = decode_publisher_pins(&[Some(primary), Some(next)]).unwrap();
-        assert_eq!(pins.len(), 2);
-        assert_eq!(pins[0].len(), 32);
-        assert_eq!(pins[1], vec![0xff; 32]);
+    fn publisher_eku_decoder_accepts_rotation_pair() {
+        let pins = decode_publisher_ekus(&[
+            Some(" 1.3.6.1.4.1.311.97.123456789.987654321 "),
+            None,
+            Some(""),
+            Some("1.3.6.1.4.1.311.97.1.2.3"),
+        ])
+        .unwrap();
+        assert_eq!(
+            pins,
+            [
+                "1.3.6.1.4.1.311.97.123456789.987654321",
+                "1.3.6.1.4.1.311.97.1.2.3"
+            ]
+        );
     }
 
     #[test]
-    fn publisher_pin_decoder_rejects_non_sha256_values() {
+    fn publisher_eku_decoder_rejects_other_oids() {
+        for value in [
+            // Code signing itself, every Authenticode certificate has it.
+            "1.3.6.1.5.5.7.3.3",
+            "1.3.6.1.4.1.311.97",
+            "1.3.6.1.4.1.311.97.",
+            "1.3.6.1.4.1.311.97.1..2",
+            "1.3.6.1.4.1.311.97.1a",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ] {
+            assert_eq!(
+                decode_publisher_ekus(&[Some(value)]),
+                Err("CLIENT_PUBLISHER_PIN_INVALID"),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn publisher_needs_our_organization_and_a_pinned_identity() {
+        let pin = "1.3.6.1.4.1.311.97.1.2".to_string();
+        let ekus = ["1.3.6.1.5.5.7.3.3".to_string(), pin.clone()];
+        let pins = std::slice::from_ref(&pin);
         assert_eq!(
-            decode_publisher_pins(&[Some("abcd")]),
-            Err("CLIENT_PUBLISHER_PIN_INVALID")
+            check_publisher(Some("PeakPass Labs LLC"), &ekus, pins),
+            Ok(())
         );
-        assert_eq!(
-            decode_publisher_pins(&[Some(
-                "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-            )]),
-            Err("CLIENT_PUBLISHER_PIN_INVALID")
-        );
+        for organization in [None, Some("PeakPass"), Some("peakpass labs llc")] {
+            assert_eq!(
+                check_publisher(organization, &ekus, pins),
+                Err("CLIENT_PUBLISHER_ORGANIZATION_MISMATCH")
+            );
+        }
+        // Another validation (a prefix of ours, too), or none at all.
+        for ekus in [
+            ["1.3.6.1.5.5.7.3.3".to_string()],
+            ["1.3.6.1.4.1.311.97.1".to_string()],
+            ["1.3.6.1.4.1.311.97.1.2.3".to_string()],
+        ] {
+            assert_eq!(
+                check_publisher(Some("PeakPass Labs LLC"), &ekus, pins),
+                Err("CLIENT_PUBLISHER_IDENTITY_MISMATCH")
+            );
+        }
     }
 
     #[test]
