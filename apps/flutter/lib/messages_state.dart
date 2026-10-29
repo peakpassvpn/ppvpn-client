@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'links.dart';
 import 'src/rust/api.dart' as rust;
 
 /// What the message center shows.
@@ -221,7 +222,7 @@ class MessagesState {
   void openLink(rust.UiMessage message) {
     final link = message.deepLink;
     if (link == null) return;
-    if (!fixed) rust.openUrl(url: link);
+    if (!fixed) unawaited(openUrl(link));
     unawaited(setRead(message, true));
   }
 

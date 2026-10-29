@@ -21,6 +21,10 @@ serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 
+# The saved sign-in in the app's Keychain (credentials.rs, #473).
+[target.'cfg(target_os = "ios")'.dependencies]
+security-framework = "3"
+
 [target.'cfg(windows)'.dependencies]
 # The shell link's property store, for the installer's
 # `--set-shortcut-aumid` (aumid.rs), as the push agent's WinRT toasts use

@@ -6,7 +6,9 @@
 // - com.peakpassvpn.ppvpn/app: `filesDir`, the app's own directory: the
 //   App Group's container, which the packet tunnel shares (tunnel.sock),
 //   or Application Support in a build without the App Group (unsigned,
-//   the simulator).
+//   the simulator). `openUrl` -> Bool: an http(s) page in an
+//   SFSafariViewController over the app (lib/links.dart, #473), anything
+//   else through the system. `closeBrowser`: that page dismissed, if up.
 // - com.peakpassvpn.ppvpn/vpn: `prepare` -> Bool (the VPN configuration is
 //   saved; the system asks the user the first time), `start`, `stop`.
 // - com.peakpassvpn.ppvpn/vpn-state: the tunnel's NEVPNStatus as off /
@@ -20,6 +22,7 @@
 
 import Flutter
 import NetworkExtension
+import SafariServices
 import UIKit
 import os
 
@@ -30,6 +33,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var manager: NETunnelProviderManager?
   private var sink: FlutterEventSink?
   private var observer: NSObjectProtocol?
+  private weak var browser: SFSafariViewController?
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let plugin = PPVPNPlugin()
@@ -41,6 +45,10 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       .setMethodCallHandler { call, result in
         switch call.method {
         case "filesDir": result(filesDir())
+        case "openUrl": plugin.open(call.arguments as? String, result: result)
+        case "closeBrowser":
+          plugin.browser?.dismiss(animated: true)
+          result(nil)
         default: result(FlutterMethodNotImplemented)
         }
       }
@@ -58,6 +66,30 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     guard let dir else { return nil }
     try? files.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir.path
+  }
+
+  private func open(_ text: String?, result: @escaping FlutterResult) {
+    guard let text, let url = URL(string: text) else { return result(false) }
+    guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let top = Self.topController() else {
+      return UIApplication.shared.open(url) { ok in result(ok) }
+    }
+    browser?.dismiss(animated: false)
+    let page = SFSafariViewController(url: url)
+    page.dismissButtonStyle = .close
+    top.present(page, animated: true)
+    browser = page
+    result(true)
+  }
+
+  /// The controller on top of the app's key window, to present over.
+  private static func topController() -> UIViewController? {
+    let window = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+      .first(where: \.isKeyWindow)
+    var top = window?.rootViewController
+    while let presented = top?.presentedViewController { top = presented }
+    return top
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

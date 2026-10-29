@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'links.dart';
 import 'messages_state.dart';
 import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
@@ -105,7 +106,7 @@ class AppState {
     final messageId = push?.messageId;
     final link = push?.message.deepLink;
     if (link != null) {
-      rust.openUrl(url: link);
+      unawaited(openUrl(link));
       if (messageId != null && signedIn) {
         try {
           await rust.markNotificationRead(id: messageId);
@@ -154,6 +155,7 @@ class AppState {
       final next = events.snapshot;
       if (next != null) {
         _followVpn(snapshot.value.phase, next.phase);
+        _followSignIn(snapshot.value, next);
         if (next.phase == rust.UiPhase.connected) {
           connectedSince ??= DateTime.now();
         } else if (next.phase != rust.UiPhase.reconnecting) {
@@ -180,6 +182,17 @@ class AppState {
         }
         latency.value = map;
       }
+    }
+  }
+
+  /// Phone: the client hands the sign-in's page to the app (rust/src/hooks.rs
+  /// open_url), which opens each new one; the page goes once signed in.
+  void _followSignIn(rust.UiSnapshot before, rust.UiSnapshot after) {
+    if (!mobile) return;
+    final url = after.deviceCode?.verificationUrl;
+    if (url != null && url != before.deviceCode?.verificationUrl) unawaited(openUrl(url));
+    if (after.auth == rust.UiAuth.signedIn && before.auth == rust.UiAuth.awaitingBrowser) {
+      unawaited(closeBrowser());
     }
   }
 
