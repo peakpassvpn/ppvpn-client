@@ -45,8 +45,20 @@ watchdog=$!
 status=0
 wait "$test_pid" || status=$?
 kill "$watchdog" 2>/dev/null || true
+# The app's own announcements (PPVPNPlugin's VMServiceAnnouncer), as
+# flutter test's log predicate selects them: from the Runner executable
+# itself. Without them the test depends on its log stream attaching before
+# the engine's single line again.
+announced=$(xcrun simctl spawn "$udid" log show --last 15m --style json --predicate \
+  'processImagePath ENDSWITH "Runner" AND processImageUUID == senderImageUUID AND eventMessage CONTAINS "The Dart VM service is listening on"' \
+  2>/dev/null | grep -c '"eventMessage" : "The Dart VM service is listening on' || true)
+echo "VM service announcements from the app: $announced"
 if [ "$status" -ne 0 ]; then
   diagnose
   exit "$status"
+fi
+if [ "$announced" -eq 0 ]; then
+  echo "the app announced no VM service address (VMServiceAnnouncer)" >&2
+  exit 1
 fi
 grep -E '^\[ *\+?[0-9]+ ms\] (All tests passed|[0-9]+:[0-9]+ \+)' "$log" | tail -5 || tail -20 "$log"

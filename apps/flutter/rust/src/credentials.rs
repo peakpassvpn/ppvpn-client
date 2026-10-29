@@ -9,7 +9,10 @@
 //! - Linux: the Secret Service item libsecret stores for the native app
 //!   (schema `com.peakpassvpn.ppvpn.desktop`), else the 0600 file
 //!   `credentials` in the data directory when the session has no Secret
-//!   Service (apps/linux CredentialStores).
+//!   Service (apps/linux CredentialStores);
+//! - iOS: one generic password in the app's Keychain (#473), out of the
+//!   App Group container the data directory is: the packet tunnel does not
+//!   need the sign-in.
 //!
 //! With `PPVPN_FLUTTER_HOME` (the end-to-end tests) it is always the file,
 //! in that home, so a test never touches a keyring.
@@ -39,6 +42,8 @@ pub(crate) enum Store {
     CredentialManager,
     #[cfg(target_os = "linux")]
     Keyring(secret_service::Fallback),
+    #[cfg(target_os = "ios")]
+    Keychain,
 }
 
 impl Store {
@@ -61,7 +66,12 @@ impl Store {
         Self::Keyring(secret_service::Fallback::new(file()))
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "ios")]
+    fn native(_file: impl FnOnce() -> FileStore) -> Self {
+        Self::Keychain
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "ios")))]
     fn native(file: impl FnOnce() -> FileStore) -> Self {
         Self::File(file())
     }
@@ -73,6 +83,8 @@ impl Store {
             Self::CredentialManager => credential_manager::load(),
             #[cfg(target_os = "linux")]
             Self::Keyring(keyring) => keyring.load(),
+            #[cfg(target_os = "ios")]
+            Self::Keychain => keychain::load(),
         }
     }
 
@@ -83,6 +95,8 @@ impl Store {
             Self::CredentialManager => credential_manager::save(blob),
             #[cfg(target_os = "linux")]
             Self::Keyring(keyring) => keyring.save(blob),
+            #[cfg(target_os = "ios")]
+            Self::Keychain => keychain::save(&blob),
         }
     }
 
@@ -93,6 +107,8 @@ impl Store {
             Self::CredentialManager => credential_manager::delete(),
             #[cfg(target_os = "linux")]
             Self::Keyring(keyring) => keyring.delete(),
+            #[cfg(target_os = "ios")]
+            Self::Keychain => keychain::delete(),
         }
     }
 }
@@ -236,6 +252,65 @@ mod credential_manager {
         match unsafe { GetLastError() } {
             ERROR_NOT_FOUND => Ok(()),
             error => Err(os_failure(error)),
+        }
+    }
+}
+
+/// iOS: a generic password of the app alone (no access group: the app's
+/// own), readable after the first unlock since the device started, never
+/// restored to another device (#473).
+#[cfg(target_os = "ios")]
+mod keychain {
+    use ppvpn_client::PlatformError;
+    use security_framework::access_control::{ProtectionMode, SecAccessControl};
+    use security_framework::base::Error;
+    use security_framework::passwords::{
+        delete_generic_password_options, generic_password, set_generic_password_options,
+        PasswordOptions,
+    };
+
+    use super::failure;
+
+    const SERVICE: &str = "com.peakpassvpn.ppvpn";
+    const ACCOUNT: &str = "credentials";
+    /// errSecItemNotFound.
+    const NOT_FOUND: i32 = -25300;
+
+    fn options() -> PasswordOptions {
+        PasswordOptions::new_generic_password(SERVICE, ACCOUNT)
+    }
+
+    fn keychain_failure(error: Error) -> PlatformError {
+        failure(format!("keychain: {error} ({})", error.code()))
+    }
+
+    pub(super) fn load() -> Result<Option<Vec<u8>>, PlatformError> {
+        match generic_password(options()) {
+            Ok(blob) => Ok(Some(blob)),
+            Err(error) if error.code() == NOT_FOUND => Ok(None),
+            Err(error) => Err(keychain_failure(error)),
+        }
+    }
+
+    /// A new item each time: an update would keep the old item's
+    /// accessibility, and a query with access control matches nothing.
+    pub(super) fn save(blob: &[u8]) -> Result<(), PlatformError> {
+        delete()?;
+        let access = SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
+            0,
+        )
+        .map_err(keychain_failure)?;
+        let mut options = options();
+        options.set_access_control(access);
+        set_generic_password_options(blob, options).map_err(keychain_failure)
+    }
+
+    /// Deleting a missing item is not an error.
+    pub(super) fn delete() -> Result<(), PlatformError> {
+        match delete_generic_password_options(options()) {
+            Err(error) if error.code() != NOT_FOUND => Err(keychain_failure(error)),
+            _ => Ok(()),
         }
     }
 }

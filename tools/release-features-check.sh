@@ -4,19 +4,26 @@
 # fault-injection, testing (the in-memory runtime) and lab (test hooks).
 # They reach a build through a --features flag or through any crate in the
 # graph that names them; this asks Cargo which features the build resolves,
-# for every target, without dev-dependencies (a test build's are allowed).
+# without dev-dependencies (a test build's are allowed): for every target,
+# or for the build's own with --target (release.yml's jobs, which then need
+# only the crates their build needs; ci.yml checks every target).
 #
 # Usage: run it before the build, with the build's own package and feature
 # options (and --manifest-path for a crate outside the root workspace):
 #   tools/release-features-check.sh -p ppvpn-desktop
+#   tools/release-features-check.sh --target aarch64-apple-darwin -p ppvpn-cli
 #   tools/release-features-check.sh --manifest-path crates/service/Cargo.toml
 #   tools/release-features-check.sh -p ppvpn-core --features fault-injection   # fails
 set -euo pipefail
 
 forbidden='^(sail|ppvpn-core) feature "(fault-injection|testing|lab)"'
+targets=(--target all)
+for arg in "$@"; do
+	case $arg in --target | --target=*) targets=() ;; esac
+done
 found=""
 for crate in sail ppvpn-core; do
-	if ! out=$(cargo tree --locked -e features,no-dev --target all --prefix none -i "$crate" "$@" 2>&1); then
+	if ! out=$(cargo tree --locked -e features,no-dev ${targets[@]+"${targets[@]}"} --prefix none -i "$crate" "$@" 2>&1); then
 		# Not in the graph at all: nothing of it is turned on.
 		if grep -q "did not match any packages" <<<"$out"; then
 			continue

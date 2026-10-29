@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../links.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
 import '../theme.dart';
@@ -261,7 +262,7 @@ class _WaitingState extends State<_Waiting> {
               kind: ButtonKind.primary,
               fontSize: 14,
               label: s('reopen'),
-              onPress: () => rust.openUrl(url: widget.code.verificationUrl),
+              onPress: () => unawaited(openUrl(widget.code.verificationUrl)),
             ),
           ],
         ),
