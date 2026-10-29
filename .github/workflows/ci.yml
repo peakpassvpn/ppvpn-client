@@ -65,6 +65,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A cache download that stalls is given up after 5 minutes per segment
+  # (@actions/cache's default is 10), as a cache miss; the rust-cache steps
+  # also end after 10 minutes and the job goes on without the cache. A
+  # restore hung on 2026-10-29 until lint's 30-minute limit (#482).
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 5
   # Line numbers in a failing test's backtrace without full debug info. Part
   # of the cache key: release.yml's cache jobs set the same.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -110,6 +115,9 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: linux
           save-if: false
@@ -212,6 +220,9 @@ jobs:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: unit
           save-if: false
@@ -243,6 +254,9 @@ jobs:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: integration
           save-if: false
@@ -297,6 +311,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: linux
           save-if: false
@@ -440,6 +457,9 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: desktop
           save-if: false
@@ -576,6 +596,9 @@ jobs:
         if: steps.scope.outputs.memory == 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: macos
           save-if: false
@@ -713,6 +736,9 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: windows
           save-if: false
@@ -825,6 +851,9 @@ jobs:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: flutter
           save-if: false
@@ -1122,6 +1151,9 @@ jobs:
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: android
           save-if: false
@@ -1215,6 +1247,9 @@ jobs:
           targets: aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: ios
           save-if: false
