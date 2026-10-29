@@ -249,7 +249,7 @@ notifications' icon (`Assets\AppLogo.png`). `install-files.txt` lists what
 it installs, so an upgrade from the native app removes the native app's
 files, and the next upgrade this app's. Authenticode signing and the
 update feed's EdDSA signature take the native build's environment
-(`WINDOWS_SIGN_COMMAND` or `WINDOWS_CERTIFICATE`, `SPARKLE_PRIVATE_KEY`);
+(`WINDOWS_SIGN_COMMAND`, `PPVPN_WINDOWS_PUBLISHER_EKU`, `SPARKLE_PRIVATE_KEY`);
 the version is `PPVPN_VERSION` and `PPVPN_BUILD_NUMBER`, as for
 `ci-build.sh`, and the bundle's `ppvpn.exe` must carry it.
 

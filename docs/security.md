@@ -40,6 +40,17 @@ Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任
   已安装的服务拒绝本应用时（例如 0.7.x 及以前的服务钉的是旧的自签名证书），应用在连接前重装服务一次
   （同样的管理员授权）；新的 `ppvpn-service-install` 只装我们 Team 签名的服务，所以这不放宽任何检查。
   重装被拒绝或失败就以它的错误结束这次连接，重装后仍被拒绝就以原来的拒绝结束，不循环（`enhanced.rs`）。
+- Windows 特权服务认客户端（`crates/service/src/ipc.rs`）：进程映像必须是服务安装目录里的 `ppvpn.exe`，
+  签名过 `WinVerifyTrust`（链到受信任的根，运行时不在线查吊销），且叶证书满足发布者钉：主题 O 是
+  `PeakPass Labs LLC`，并带有钉住的身份 EKU（#489）。证书由 Azure Artifact Signing 签发，约每天换一张、
+  有效约三天，所以不钉叶证书本身；Artifact Signing 在同一次身份验证签发的每张证书里放同一个
+  `1.3.6.1.4.1.311.97.*` EKU，这个 EKU 只有微软会签发，换证书时不变。钉的是完整的 EKU，构建时由
+  `PPVPN_WINDOWS_PUBLISHER_EKU`（换一次身份验证时另加 `PPVPN_WINDOWS_NEXT_PUBLISHER_EKU`）给出；
+  钉编进服务，安装包升级时替换服务程序即生效。打包时 `check-publisher.ps1` 按同样的规则核对签好的
+  `ppvpn.exe`，不符即失败，不会发出拒绝自己客户端的服务。
+  没有钉时：发布构建（即使已签名）把 `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT` 设为 1，只认安装目录里的
+  `ppvpn.exe`（Program Files 只有管理员能写）加会话握手；第一次签名的构建就是这样，从它的日志读出
+  EKU 后设上钉。debug 构建签了名但没有钉时只要求 `WinVerifyTrust` 通过（记一条 warn）。
 - macOS 的应用包属于用户（拖进「应用程序」的安装如此，.pkg 安装也由 postinstall 交给用户，见下），用户身份的代码
   能改动包里的文件。所以以 root 运行的东西都先核对签名：
   - 应用请求管理员授权时，root 的 shell 先把 `ppvpn-service-install`/`ppvpn-service-uninstall`（安装时连同
@@ -308,4 +319,6 @@ CLI `render` 会对已知敏感 JSON 键和代理 URL 认证信息脱敏，但�
 - macOS 签名证书（`MACOS_SIGNING_P12_BASE64`）必须是 `crates/service/src/macos_team_id` 这个 Team 的
   Developer ID Application，安装包证书（`MACOS_INSTALLER_P12_BASE64`）是同一 Team 的 Developer ID Installer，
   否则发布构建失败；同一 Team 的证书续期只换这两个 secret。
+- Windows 由 Azure Artifact Signing 签名（[构建与发布](release.md)）；换一次身份验证（组织信息变了或验证到期）
+  身份 EKU 就变：先把新 EKU 设为 `PPVPN_WINDOWS_NEXT_PUBLISHER_EKU` 发一版，再改用新验证签名。
 - 发布前执行 race 测试、跨平台构建和校验和验证，详见 [构建与发布](release.md)。

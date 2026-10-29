@@ -54,7 +54,7 @@ RequestExecutionLevel admin
 !insertmacro REQUIRE_DEFINE OUT_FILE
 
 !ifdef SIGN_COMMAND
-  ; Optional Authenticode signing (scripts/sign-windows.ps1 or WINDOWS_SIGN_COMMAND).
+  ; Optional Authenticode signing (scripts/sign-file.ps1, WINDOWS_SIGN_COMMAND).
   !finalize `${SIGN_COMMAND}`
   !uninstfinalize `${SIGN_COMMAND}`
 !endif
