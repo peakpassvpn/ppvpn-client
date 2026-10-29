@@ -134,6 +134,7 @@ Go 内核的构建、移动端产物和 Go 时代的发布流程见 tag `v0.5.21
 - Sail：`Cargo.toml` 按提交固定（`[workspace.dependencies]`），`[patch.crates-io]` 与该提交的 Sail 保持一致，
   CI 的 lint job 会核对。
 - BoringSSL：用 btls 为所固定提交发布的预编译库（校验 `SHA256SUMS` 和构建 attestation），不在 CI 里编译。
+- 发行构建的 crate 来自 Actions 缓存（`.github/actions/cargo-home`，键为 Cargo.lock 的哈希，只在 main 上保存），之后 Cargo 离线，构建用的正是缓存里的 crate；缓存未命中时先 `cargo fetch --locked`。
 - 测试工具里的 Go（`test/go.mod`）：只用于测试时启动的辅助程序（假节点、`ldnslab` 等），不进入任何发行物。
 
 ## 发布检查表（Desktop 和 CLI 的发行）
