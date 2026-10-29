@@ -12,12 +12,14 @@
 #   tools/cli/build-release.sh linux x86_64-unknown-linux-musl     # linux-x86_64
 #   tools/cli/build-release.sh linux aarch64-unknown-linux-musl    # linux-aarch64
 #   tools/cli/build-release.sh macos                               # macos-universal
+#   tools/cli/build-release.sh macos aarch64-apple-darwin          # macos-arm64 (a merge, #459)
 #
 # Linux builds are static (musl, with mimalloc: crates/cli/Cargo.toml), made
 # on an x86_64 Linux host as sail builds its musl releases: with sail's own
 # scripts at the commit Cargo.lock pins (a pinned, hash-checked musl-cross
 # GCC; BoringSSL as the prebuilt-boringssl action sets it up). The macOS
-# build is one universal binary of aarch64 and x86_64, made on macOS.
+# build is one universal binary of aarch64 and x86_64, made on macOS; with
+# one target named, that slice alone (never for stable).
 #
 # Environment:
 #   CHANNEL       empty (a merge: the crate's version, production API), dev or stable
@@ -34,7 +36,7 @@
 #                 for stable)
 set -euo pipefail
 
-os=${1:?usage: $0 linux <target> | macos}
+os=${1:?usage: $0 linux <target> | macos [<target>...]}
 cd "$(dirname "$0")/../.."
 root=$(pwd)
 work=$(mktemp -d)
@@ -111,20 +113,35 @@ linux)
 	esac
 	;;
 macos)
-	platform=macos-universal
-	for target in aarch64-apple-darwin x86_64-apple-darwin; do
+	shift
+	targets=("$@")
+	[ ${#targets[@]} -gt 0 ] || targets=(aarch64-apple-darwin x86_64-apple-darwin)
+	archs=()
+	for target in "${targets[@]}"; do
+		case $target in
+		aarch64-apple-darwin) archs+=(arm64) ;;
+		x86_64-apple-darwin) archs+=(x86_64) ;;
+		*) fail "unsupported target $target" ;;
+		esac
 		cargo build --release --locked -p ppvpn-cli --target "$target"
 	done
-	bin=$root/target/universal-apple-darwin/ppvpn
+	case "${archs[*]}" in
+	"arm64 x86_64") platform=macos-universal ;;
+	arm64) platform=macos-arm64 ;;
+	*) fail "macos builds aarch64-apple-darwin, or it and x86_64-apple-darwin in that order" ;;
+	esac
+	[ "$platform" = macos-universal ] || [ "${CHANNEL:-}" != stable ] || fail "a stable build is universal"
+	bin=$root/target/$platform/ppvpn
 	mkdir -p "$(dirname "$bin")"
-	lipo -create -output "$bin" \
-		target/aarch64-apple-darwin/release/ppvpn target/x86_64-apple-darwin/release/ppvpn
-	lipo "$bin" -verify_arch arm64 x86_64
+	slices=()
+	for target in "${targets[@]}"; do slices+=("target/$target/release/ppvpn"); done
+	lipo -create -output "$bin" "${slices[@]}"
+	lipo "$bin" -verify_arch "${archs[@]}"
 	# Symbols out before signing: a dSYM (the symbol tables of both slices;
 	# release builds carry no DWARF, which dsymutil warns about), then strip.
 	symbols=$work/ppvpn.dSYM
 	dsymutil "$bin" -o "$symbols" 2>&1 | grep -v 'no debug symbols in executable' || true
-	for arch in arm64 x86_64; do
+	for arch in "${archs[@]}"; do
 		nm -arch "$arch" "$symbols/Contents/Resources/DWARF/ppvpn" | grep 'ppvpn_cli8commands3run' >/dev/null \
 			|| fail "the dSYM lacks the CLI's symbols ($arch)"
 	done
