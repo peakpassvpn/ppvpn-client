@@ -35,7 +35,7 @@
 #         hostipv6/mod.rs and localdns/source.rs; the rest builds the same
 #         as on macOS, which the macos job's clippy covers): ci.yml's
 #         `tunnel (ios)` builds it for iOS only then (~25 min cold, on the
-#         scarce macOS runners).
+#         scarce macOS runners), and `tunnel (android)` for Android.
 #   memory  the memory harness (ne-mem, tools/perf/{ne_mem,dhat_top}.py, test/perf/)
 #         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
 #         then build it in release and measure (#388).
