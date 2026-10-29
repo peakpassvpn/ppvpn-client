@@ -1940,7 +1940,9 @@ jobs:
   # crates and git dependencies) and the modules of ci.yml's Go helpers
   # (.github/actions/go-modules), one entry each for Linux and macOS and one
   # each for Windows, made when Cargo.lock or test/go.sum changes. A lookup
-  # when the entry is there, so on every merge.
+  # when the entry is there, so on every merge. The keys hash Cargo.lock and
+  # test/go.sum, so the checkout is LF as in the jobs that restore them: a
+  # CRLF one on Windows saved entries under keys no job looks up.
   cache-downloads:
     name: cache-downloads (${{ matrix.os }})
     needs: changes
@@ -1951,6 +1953,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
