@@ -65,6 +65,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A cache download that stalls is given up after 5 minutes per segment
+  # (@actions/cache's default is 10), as a cache miss; the rust-cache steps
+  # also end after 10 minutes and the job goes on without the cache. A
+  # restore hung on 2026-10-29 until lint's 30-minute limit (#482).
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 5
   # Line numbers in a failing test's backtrace without full debug info. Part
   # of the cache key: release.yml's cache jobs set the same.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -110,6 +115,9 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: linux
           save-if: false
@@ -212,6 +220,9 @@ jobs:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: unit
           save-if: false
@@ -243,6 +254,9 @@ jobs:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: integration
           save-if: false
@@ -297,6 +311,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: linux
           save-if: false
@@ -440,6 +457,9 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: desktop
           save-if: false
@@ -576,6 +596,9 @@ jobs:
         if: steps.scope.outputs.memory == 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: macos
           save-if: false
@@ -713,6 +736,9 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: windows
           save-if: false
@@ -825,6 +851,9 @@ jobs:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: flutter
           save-if: false
@@ -1057,18 +1086,10 @@ jobs:
       # native app 0.6.4 (fetched above), checks the
       # installation, has the app quit on the installer's quit event and
       # uninstalls it with /PURGE.
-      - name: Ensure NSIS
+      # NSIS from a pinned, checksummed installer, not Chocolatey's feed.
+      - name: NSIS
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
-            Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $makensis) {
-            choco install nsis --no-progress -y
-            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
-            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          }
-          & $makensis /VERSION
+        uses: ./.github/actions/nsis
       - name: Installer (Windows)
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
         shell: powershell
@@ -1130,6 +1151,9 @@ jobs:
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: android
           save-if: false
@@ -1223,6 +1247,9 @@ jobs:
           targets: aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
           shared-key: ios
           save-if: false
@@ -1285,5 +1312,50 @@ jobs:
           path: |
             ${{ runner.temp }}/tunnel/PPVPNTunnel.xcframework
             ${{ runner.temp }}/tunnel/PPVPNTunnel.ldflags
+          if-no-files-found: error
+          retention-days: 14
+
+  tunnel-android:
+    # The mobile tunnel host for Android's VpnService (#448):
+    # crates/tunnel-host/scripts/build-android.sh, arm64-v8a only (the
+    # emulator's x86_64 builds the same code), with clippy for Android: its
+    # JNI binding compiles for Android only. BoringSSL prebuilt, profile
+    # mobile. Only when the tunnel host or its dependencies changed
+    # (tools/ci-changes.sh `tunnel`). Uncached, as `tunnel (ios)`.
+    name: tunnel (android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          targets: aarch64-linux-android
+      - name: Build libppvpn_tunnel.so
+        if: steps.scope.outputs.tunnel == 'true'
+        env:
+          PPVPN_TUNNEL_CLIPPY: "1"
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          crates/tunnel-host/scripts/build-android.sh "$RUNNER_TEMP/tunnel" arm64-v8a
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          name: tunnel-android
+          path: ${{ runner.temp }}/tunnel
           if-no-files-found: error
           retention-days: 14
