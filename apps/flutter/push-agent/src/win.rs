@@ -76,7 +76,7 @@ pub(crate) fn main() -> ExitCode {
             data_dir,
             log_dir,
             platform: "windows".into(),
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            app_version: crate::version().into(),
         },
         notifier.clone(),
     );
@@ -104,7 +104,7 @@ pub(crate) fn main() -> ExitCode {
 
     tracing::info!(
         "push agent {} starting, pid {}, {}",
-        env!("CARGO_PKG_VERSION"),
+        crate::version(),
         std::process::id(),
         exe_dir()
             .map(|dir| dir.display().to_string())

@@ -35,11 +35,16 @@ fn baked(value: Option<&'static str>) -> Option<&'static str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+/// This build's version: a release's `PPVPN_VERSION` (a dev run's comes
+/// before Cargo.toml's bump), else the workspace's.
+pub(crate) fn version() -> &'static str {
+    baked(option_env!("PPVPN_VERSION")).unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
 /// `<version>.<build>`, as the native builds number theirs.
-fn build_version() -> String {
-    let version = baked(option_env!("PPVPN_VERSION")).unwrap_or(env!("CARGO_PKG_VERSION"));
+pub(crate) fn build_version() -> String {
     let build = baked(option_env!("PPVPN_BUILD_NUMBER")).unwrap_or("0");
-    format!("{version}.{build}")
+    format!("{}.{build}", version())
 }
 
 /// The channel's feed on the update site, `<site>/<path>` with `{channel}`

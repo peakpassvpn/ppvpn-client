@@ -619,7 +619,7 @@ impl Client {
         platform: Arc<dyn PlatformHooks>,
         listener: Arc<dyn ClientListener>,
     ) -> Arc<Self> {
-        logging::install(&config.log_dir);
+        logging::install(&config.log_dir, &config.app_version);
         tracing::info!(app_version = %config.app_version, api = %config.api_base, "client created");
         let launcher: Arc<dyn standard::CoreLauncher> =
             Arc::new(engine::EngineLauncher::new(&config));

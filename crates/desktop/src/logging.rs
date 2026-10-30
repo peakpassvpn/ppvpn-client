@@ -108,12 +108,12 @@ fn prune(log_dir: &Path) {
 
 /// Installs the process-wide file subscriber once; later calls (a second
 /// `Client`, or an app that installed its own subscriber) are no-ops.
-pub(crate) fn install(log_dir: &str) {
-    install_with_prefix(log_dir, CLIENT_PREFIX);
+pub(crate) fn install(log_dir: &str, app_version: &str) {
+    install_with_prefix(log_dir, CLIENT_PREFIX, app_version);
 }
 
 /// [`install`] writing `<log_dir>/<prefix>.YYYY-MM-DD.log`.
-pub(crate) fn install_with_prefix(log_dir: &str, prefix: &'static str) {
+pub(crate) fn install_with_prefix(log_dir: &str, prefix: &'static str, app_version: &str) {
     INSTALLED.get_or_init(|| {
         let dir = Path::new(log_dir);
         if std::fs::create_dir_all(dir).is_err() {
@@ -148,7 +148,7 @@ pub(crate) fn install_with_prefix(log_dir: &str, prefix: &'static str) {
             tracing::error!("panic: {info}");
             previous(info);
         }));
-        tracing::info!(version = env!("CARGO_PKG_VERSION"), "{prefix} started");
+        tracing::info!(version = %app_version, "{prefix} started");
     });
 }
 
@@ -204,8 +204,8 @@ mod tests {
     fn install_is_idempotent_and_writes_the_daily_file() {
         let dir = std::env::temp_dir().join(format!("ppvpn-log-test-{}", uuid::Uuid::new_v4()));
         let dir_text = dir.to_string_lossy().into_owned();
-        install(&dir_text);
-        install(&dir_text);
+        install(&dir_text, "0.0.0-test");
+        install(&dir_text, "0.0.0-test");
         // Only the first test process-wide install wins; when it was ours the
         // file exists with the expected name.
         if let Ok(entries) = std::fs::read_dir(&dir) {
