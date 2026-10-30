@@ -257,8 +257,10 @@ staple() {
 if [[ "$NOTARIZE" == 1 ]]; then
   ditto -c -k --keepParent "$APP" "$WORK/PPVPN.zip"
   notarize "$WORK/PPVPN.zip"
+  # staple validates what it stapled ("The staple and validate action
+  # worked!"); a separate stapler validate asks Apple again and lost that
+  # connection after a good staple in release run 41018796202.
   staple "$APP"
-  xcrun stapler validate "$APP"
 fi
 
 plist() { /usr/libexec/PlistBuddy -c "Print $1" "$APP/Contents/Info.plist"; }
@@ -335,7 +337,6 @@ if [[ "$NOTARIZE" == 1 ]]; then
   [[ "$failed" == 0 ]] || exit 1
   for file in "$DMG" "$PKG"; do
     staple "$file"
-    xcrun stapler validate "$file"
   done
   # Gatekeeper's verdicts, as a download gets them.
   spctl -a -vv -t exec "$APP"
