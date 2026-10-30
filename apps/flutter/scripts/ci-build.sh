@@ -153,6 +153,10 @@ case $os in
     # The template asks for the network only in its debug and profile
     # manifests: the release app talks to the API too.
     replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.INTERNET"/>\n    <application'
+    # TunnelService follows the best non-VPN network: reading it, and on
+    # Android 8 to 11 requestNetwork, which needs the change permission.
+    # Both are normal permissions, granted at install.
+    replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>\n    <application'
     # The system VPN (runner/android TunnelService), in its own process:
     # only the system binds it.
     replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>' ;;

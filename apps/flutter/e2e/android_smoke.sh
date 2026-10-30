@@ -61,25 +61,24 @@ wait_for() { # landscape|portrait
 # the tests, flutter test uninstalls the app, and that fails when the
 # emulator has gone offline in the meantime, after both legs had passed
 # (job 124155824780). The JSON report (one event per line): every test
-# that started, loading ones aside, finished with success (a skipped one
-# too), and at least one ran. A failed, errored or unfinished test fails
-# the leg.
+# that started finished, none failed or errored, and at least one that
+# was not hidden (loading) or skipped passed. A failed, errored or
+# unfinished test fails the leg.
 leg() { # name
-  local report="$PWD/build/smoke-$1.json" status=0 started passed ran bad
+  local report="$PWD/build/smoke-$1.json" status=0 unfinished ran bad
   rm -f "$report"
   flutter test integration_test/mobile_smoke_test.dart -d "$device" \
     --file-reporter "json:$report" || status=$?
   [ "$status" -eq 0 ] && return
   [ -s "$report" ] || { echo "$1: flutter test exited $status, no report" >&2; exit 1; }
-  started=$(jq -s '[.[] | select(.type == "testStart" and (.test.name | startswith("loading ") | not))] | length' "$report")
-  passed=$(jq -s '[.[] | select(.type == "testDone" and .hidden != true and .result == "success")] | length' "$report")
+  unfinished=$(jq -s '([.[] | select(.type == "testStart") | .test.id] - [.[] | select(.type == "testDone") | .testID]) | length' "$report")
   ran=$(jq -s '[.[] | select(.type == "testDone" and .hidden != true and .skipped != true and .result == "success")] | length' "$report")
   bad=$(jq -s '[.[] | select(.type == "testDone" and .result != "success")] | length' "$report")
-  if [ "$bad" -eq 0 ] && [ "$ran" -gt 0 ] && [ "$passed" -eq "$started" ]; then
+  if [ "$bad" -eq 0 ] && [ "$ran" -gt 0 ] && [ "$unfinished" -eq 0 ]; then
     echo "$1: flutter test exited $status after its $ran test(s) passed (the uninstall afterwards); the leg passed"
     return
   fi
-  echo "$1: flutter test exited $status: $started started, $passed passed, $bad failed" >&2
+  echo "$1: flutter test exited $status: $ran passed, $bad failed, $unfinished unfinished" >&2
   exit 1
 }
 
