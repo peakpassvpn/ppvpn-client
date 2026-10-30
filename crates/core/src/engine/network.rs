@@ -117,6 +117,16 @@ impl Inner {
         }
     }
 
+    /// Whether the mobile host's last network reaches the IPv6 internet
+    /// (`mobile::NetworkState::ipv6_route`): None before it pushed one, and
+    /// offline.
+    pub(super) fn host_ipv6_route(&self) -> Option<bool> {
+        let json = self.network.host().clone()?;
+        serde_json::from_str::<crate::mobile::NetworkState>(&json)
+            .ok()?
+            .ipv6_route()
+    }
+
     /// At each start of the runtime, before its network is read: the mobile
     /// host's network, which sail goes by from now on in this run.
     fn give_host_network(&self) {
