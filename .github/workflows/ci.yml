@@ -1110,8 +1110,8 @@ jobs:
       # windows job will; the service in its shipping profile without LTO,
       # to keep the job short. smoke-installer.ps1 then installs it over the
       # native app 0.6.4 (fetched above), checks the
-      # installation, has the app quit on the installer's quit event and
-      # uninstalls it with /PURGE.
+      # installation, has an upgrade stop on a file held open, has the app
+      # quit on the installer's quit event and uninstalls it with /PURGE.
       # NSIS from a pinned, checksummed installer, not Chocolatey's feed.
       - name: NSIS
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
