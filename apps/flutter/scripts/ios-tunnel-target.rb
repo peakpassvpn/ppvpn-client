@@ -60,6 +60,11 @@ tunnel.build_configurations.each do |config|
   settings["APPLICATION_EXTENSION_API_ONLY"] = "YES"
   # The system limits the extension to 50 MiB (#388): no debug dylib.
   settings["ENABLE_DEBUG_DYLIB"] = "NO"
+  # Apple silicon's simulator only: the XCFramework's simulator slice is
+  # arm64, and a simulator build for x86_64 too would link without it
+  # (the Runner's architectures come from flutter's xcconfig, which this
+  # target does not have).
+  settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "i386 x86_64"
   libs = ENV["PPVPN_TUNNEL_LIBS"].to_s.split
   settings["OTHER_LDFLAGS"] = ["$(inherited)", *libs] unless libs.empty?
   next if team.empty?
