@@ -3,6 +3,8 @@
 //! `mod frb_generated;` here; nothing generated is committed.
 
 pub mod api;
+#[cfg(target_os = "android")]
+mod android;
 mod aumid;
 mod autostart;
 mod bridge;

@@ -52,6 +52,13 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val CUSTOM_TABS_SESSION = "android.support.customtabs.extra.SESSION"
+
+        // The bridge, before Dart opens it by the same name (main.dart),
+        // which then gets this copy: loaded here, its JNI_OnLoad finds the
+        // app's classes (rust/src/android.rs, the saved sign-in's key).
+        init {
+            System.loadLibrary("ppvpn_flutter")
+        }
     }
 
     @Deprecated("Deprecated in Java")
