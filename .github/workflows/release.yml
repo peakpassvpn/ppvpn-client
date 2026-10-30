@@ -1231,6 +1231,109 @@ jobs:
           retention-days: 3
           path: ${{ steps.build.outputs.bundle }}
 
+  # The Android app (#448), on its own like iOS: an App Bundle for Google
+  # Play, in no GitHub Release and on no update site. A merge builds it
+  # signed with the debug key, without any secret, so that a break shows
+  # before a release. A stable run (the release and the rehearsal alike),
+  # after the approval, signs it with the Play upload key and uploads it to
+  # the internal testing track, where only the internal testers see it;
+  # versionCode is the release's build number, so each upload is new. Until
+  # the upload key and the service account are in desktop-release-stable,
+  # a stable run builds it debug-signed and says so (a warning) instead.
+  # Play takes a new app's first bundle only through Play Console, by hand:
+  # the stable run's bundle is an artifact for that. Release status:
+  # vars.PLAY_RELEASE_STATUS (default completed; draft while the app has
+  # never been published). A dev run builds nothing for Android. Its
+  # failure stops no other job.
+  android:
+    name: android
+    needs: [prepare, approve]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      (github.event_name == 'push' || (needs.prepare.outputs.channel == 'stable' && needs.approve.result == 'success'))
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.channel == 'stable' && 'desktop-release-stable' || '' }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
+      PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      STABLE: ${{ needs.prepare.outputs.channel == 'stable' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android,x86_64-linux-android
+      # The host's for the bridge codegen, which reads the crate.
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android
+      - uses: ./.github/actions/flutter-toolchain
+      # The crates from the cache; Cargo offline from here (#459).
+      - uses: ./.github/actions/cargo-home
+      # A test-only cargo feature (fault injection, test runtime, lab hooks)
+      # never ships: the release graph is refused if one is on.
+      - name: No test-only features
+        run: |
+          for target in aarch64-linux-android x86_64-linux-android; do
+            tools/release-features-check.sh --target "$target" -p ppvpn-flutter
+            tools/release-features-check.sh --target "$target" -p ppvpn-tunnel-host
+          done
+      # The upload key from its secrets, into the runner's temp directory
+      # (removed with the runner); SIGNED says whether the build uses it.
+      - name: Upload key
+        if: env.STABLE == 'true'
+        env:
+          ANDROID_UPLOAD_KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$ANDROID_UPLOAD_KEYSTORE" ] || [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::warning::no Play upload key or service account in this environment: the App Bundle is debug-signed and not uploaded"
+            echo "SIGNED=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          keystore="$RUNNER_TEMP/upload.jks"
+          (umask 077 && base64 -d <<<"$ANDROID_UPLOAD_KEYSTORE" > "$keystore")
+          echo "ANDROID_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+          echo "SIGNED=true" >> "$GITHUB_ENV"
+      - id: build
+        name: Build the App Bundle
+        env:
+          FLUTTER_TARGET: android
+          ANDROID_FORMAT: aab
+          ANDROID_KEYSTORE_PASSWORD: ${{ env.SIGNED == 'true' && secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD || '' }}
+          ANDROID_KEY_ALIAS: ${{ env.SIGNED == 'true' && secrets.ANDROID_UPLOAD_KEY_ALIAS || '' }}
+          ANDROID_KEY_PASSWORD: ${{ env.SIGNED == 'true' && secrets.ANDROID_UPLOAD_KEY_PASSWORD || '' }}
+        run: |
+          # The runner's JDK 17 and newest NDK, as ci.yml's android job.
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          apps/flutter/scripts/ci-build.sh
+      - name: Upload to Google Play (internal testing)
+        if: env.SIGNED == 'true'
+        env:
+          AAB: ${{ steps.build.outputs.bundle }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_RELEASE_STATUS: ${{ vars.PLAY_RELEASE_STATUS }}
+        run: >-
+          tools/desktop/ci/play_upload.py com.peakpassvpn.ppvpn "$AAB" internal
+          "$PPVPN_VERSION ($PPVPN_BUILD_NUMBER)"
+      - name: Remove the upload key
+        if: always() && env.ANDROID_KEYSTORE_FILE != ''
+        run: rm -f "$ANDROID_KEYSTORE_FILE"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
+        if: env.STABLE == 'true'
+        with:
+          name: android-aab
+          if-no-files-found: error
+          retention-days: 3
+          path: ${{ steps.build.outputs.bundle }}
+
   # The CLI (crates/cli, the binary ppvpn) as tar.gz archives, built by
   # tools/cli/build-release.sh: Linux x86_64 and aarch64, static (musl), and
   # macOS universal. No Windows. The channels are the installers': a merge

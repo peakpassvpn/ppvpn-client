@@ -18,6 +18,15 @@
 #   FLUTTER_TARGET       android: the APK (needs ANDROID_NDK_HOME and the
 #                        Android SDK), ios: the iOS app, unsigned, instead of
 #                        the runner's platform
+#   ANDROID_FORMAT       android: apk (the default; arm64 and x86_64, for a
+#                        phone or the emulator) or aab (the App Bundle for
+#                        Google Play: release.yml)
+#   ANDROID_KEYSTORE_FILE, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+#   ANDROID_KEY_PASSWORD
+#                        android: signed with this upload key (the Play
+#                        upload key, release.yml); without them with the
+#                        template's debug key, which installs by hand but
+#                        which Play refuses
 #   PPVPN_TUNNEL_ANDROID android: the tunnel host already built, a directory
 #                        of <abi>/libppvpn_tunnel.so as crates/tunnel-host/
 #                        scripts/build-android.sh leaves it (default: built
@@ -159,7 +168,18 @@ case $os in
     replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>\n    <application'
     # The system VPN (runner/android TunnelService), in its own process:
     # only the system binds it.
-    replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>' ;;
+    replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>'
+    # The release build's signature: the upload key when one is given (its
+    # path and secrets read by Gradle from the environment, never written
+    # into the project), else the template's debug key.
+    if [ -n "${ANDROID_KEYSTORE_FILE:-}" ]; then
+      for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+        [ -n "${!name:-}" ] || { echo "$name is required with ANDROID_KEYSTORE_FILE" >&2; exit 1; }
+      done
+      [ -f "$ANDROID_KEYSTORE_FILE" ] || { echo "no keystore at $ANDROID_KEYSTORE_FILE" >&2; exit 1; }
+      replace "$gradle" '^    buildTypes {' '    signingConfigs {\n        create("upload") {\n            storeFile = file(System.getenv("ANDROID_KEYSTORE_FILE"))\n            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")\n            keyAlias = System.getenv("ANDROID_KEY_ALIAS")\n            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")\n        }\n    }\n    buildTypes {'
+      replace "$gradle" 'signingConfig = signingConfigs.getByName("debug")' 'signingConfig = signingConfigs.getByName("upload")'
+    fi ;;
   ios)
     # The App Store id, as the user decided it (#448), and iOS 15 and later.
     # The app's channels (runner/ios PPVPNPlugin.swift) go into the
@@ -388,8 +408,13 @@ else
 fi
 if [ "$os" = android ]; then
   # versionCode must be positive.
-  flutter build apk --release --target-platform android-arm64,android-x64 \
-    --build-name "$version" --build-number "$((build > 0 ? build : 1))"
+  case ${ANDROID_FORMAT:-apk} in
+    apk) flutter build apk --release --target-platform android-arm64,android-x64 \
+      --build-name "$version" --build-number "$((build > 0 ? build : 1))" ;;
+    aab) flutter build appbundle --release --target-platform android-arm64,android-x64 \
+      --build-name "$version" --build-number "$((build > 0 ? build : 1))" ;;
+    *) echo "ANDROID_FORMAT must be apk or aab, got '$ANDROID_FORMAT'" >&2; exit 1 ;;
+  esac
 elif [ "$os" = ios ]; then
   # The simulator runs debug builds only.
   if [ "${IOS_SDK:-device}" = simulator ]; then
@@ -406,15 +431,30 @@ fi
 
 case $os in
   android)
-    bundle=build/app/outputs/flutter-apk/app-release.apk
+    # An App Bundle keeps the APK's files under base/ (lib/, and dex/ for
+    # the classes).
+    if [ "${ANDROID_FORMAT:-apk}" = aab ]; then
+      bundle=build/app/outputs/bundle/release/app-release.aab
+      inner=base/ dexes='base/dex/classes*.dex'
+    else
+      bundle=build/app/outputs/flutter-apk/app-release.apk
+      inner='' dexes='classes*.dex'
+    fi
     test -f "$bundle"
-    # Both libraries for both ABIs, in the APK.
+    # Both libraries for both ABIs, in the package.
     listing=$(unzip -l "$bundle")
     for abi in arm64-v8a x86_64; do
       for so in libppvpn_flutter.so libppvpn_tunnel.so; do
-        grep -qF "lib/$abi/$so" <<<"$listing" || { echo "$bundle lacks lib/$abi/$so" >&2; exit 1; }
+        grep -qF "${inner}lib/$abi/$so" <<<"$listing" || { echo "$bundle lacks ${inner}lib/$abi/$so" >&2; exit 1; }
       done
     done
+    # Signed with the upload key when one was given, not the debug key
+    # (Play refuses a debug-signed upload).
+    if [ -n "${ANDROID_KEYSTORE_FILE:-}" ]; then
+      signer=$(keytool -printcert -jarfile "$bundle")
+      grep -q 'Owner:' <<<"$signer" || { echo "$bundle is not signed" >&2; exit 1; }
+      ! grep -q 'CN=Android Debug' <<<"$signer" || { echo "$bundle is signed with the debug key" >&2; exit 1; }
+    fi
     # What native code calls back by name, kept through R8
     # (runner/android/app/proguard-rules.pro).
     sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:?the Android SDK is needed}}
@@ -423,7 +463,7 @@ case $os in
     dex=$app/build/apk-dex
     rm -rf "$dex"
     mkdir -p "$dex"
-    unzip -q -o "$bundle" 'classes*.dex' -d "$dex"
+    unzip -q -o -j "$bundle" "$dexes" -d "$dex"
     "$dexdump" "$dex"/classes*.dex >"$dex/dump.txt"
     for method in protect onExit; do
       awk -v want="$method" '
