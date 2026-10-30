@@ -1058,7 +1058,7 @@ jobs:
       # fetched above in place. Built on this runner, so the glibc floor is
       # only reported (the release builds on Ubuntu 22.04). What the checks
       # install comes from these caches, not the mirrors (package-smoke.sh);
-      # release.yml's linux-rpm-smoke saves the rpm's on main.
+      # release.yml's linux-smoke saves them on main (the native tag there too).
       - name: Smoke packages (deb)
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
