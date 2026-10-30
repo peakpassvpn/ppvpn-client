@@ -1056,7 +1056,21 @@ jobs:
       # layout, every library resolved from the package's dependencies, one
       # start on Xvfb, the removal; the deb then upgrades the native package
       # fetched above in place. Built on this runner, so the glibc floor is
-      # only reported (the release builds on Ubuntu 22.04).
+      # only reported (the release builds on Ubuntu 22.04). What the checks
+      # install comes from these caches, not the mirrors (package-smoke.sh);
+      # release.yml's linux-rpm-smoke saves the rpm's on main.
+      - name: Smoke packages (deb)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/smoke-pkgs/deb
+          key: linux-smoke-deb-v1-native-v0.6.4-${{ hashFiles('apps/flutter/scripts/package-smoke.sh', 'apps/flutter/packaging/linux/nfpm.yaml', 'apps/flutter/packaging/linux/smoke-images.sh') }}
+      - name: Smoke packages (rpm)
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/smoke-pkgs/rpm
+          key: linux-smoke-rpm-v1-${{ hashFiles('apps/flutter/scripts/package-smoke.sh', 'apps/flutter/packaging/linux/nfpm.yaml', 'apps/flutter/packaging/linux/smoke-images.sh') }}
       - name: Linux packages
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         timeout-minutes: 30
@@ -1074,13 +1088,16 @@ jobs:
           if [ -n "$NATIVE_DEB" ]; then
             native=(-v "$(dirname "$NATIVE_DEB"):/native:ro")
           fi
+          source apps/flutter/packaging/linux/smoke-images.sh
           smoke() {
-            docker run --rm -v "$PWD:/src:ro" -v "$PPVPN_DIST_DIR:/pkg:ro" "${native[@]}" -w /src "$1" \
-              bash apps/flutter/scripts/package-smoke.sh "${@:2}"
+            mkdir -p "$RUNNER_TEMP/smoke-pkgs/$1"
+            docker run --rm -v "$PWD:/src:ro" -v "$PPVPN_DIST_DIR:/pkg:ro" "${native[@]}" \
+              -v "$RUNNER_TEMP/smoke-pkgs/$1:/smoke-pkgs" -e PPVPN_SMOKE_PKGS=/smoke-pkgs -w /src "$2" \
+              bash apps/flutter/scripts/package-smoke.sh "${@:3}"
           }
           version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
-          smoke ubuntu:24.04 "/pkg/PPVPN-$version-linux-x64.deb" ${NATIVE_DEB:+"/native/$(basename "$NATIVE_DEB")"}
-          smoke fedora:latest "/pkg/PPVPN-$version-linux-x64.rpm"
+          smoke deb "$SMOKE_IMAGE_DEB" "/pkg/PPVPN-$version-linux-x64.deb" ${NATIVE_DEB:+"/native/$(basename "$NATIVE_DEB")"}
+          smoke rpm "$SMOKE_IMAGE_RPM" "/pkg/PPVPN-$version-linux-x64.rpm"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         with:

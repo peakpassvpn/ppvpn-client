@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks a package from package-linux.sh in a throwaway container, as root
-# (ci.yml: ubuntu:24.04 for the deb, fedora:latest for the rpm):
+# (ci.yml, release.yml: the images in ../packaging/linux/smoke-images.sh):
 #
 # 1. installs it alone (no recommended packages) and checks the layout and
 #    that every binary resolves its libraries (ldd) from its dependencies;
@@ -10,26 +10,73 @@
 # 4. deb, with a native package given: installs that, then upgrades it in
 #    place to this one.
 #
-# Usage: apps/flutter/scripts/package-smoke.sh <package.deb|package.rpm> [<native deb>]
+# The checks install nothing from the distribution's mirrors: every package
+# they need comes from PPVPN_SMOKE_PKGS (the workflows keep it in the Actions
+# cache), with the repositories off. A mirror that fails mid-download failed
+# the rpm smoke on main (release run 41001515285). Only a set missing from
+# there is fetched first (step 0), for this package and image, so that
+# happens when the image, this script or the package's dependencies change.
+#
+# Usage: [PPVPN_SMOKE_PKGS=<dir>] apps/flutter/scripts/package-smoke.sh <package.deb|package.rpm> [<native deb>]
 set -euo pipefail
+shopt -s nullglob
 
 package=$(realpath "${1:?usage: package-smoke.sh <package> [<native deb>]}")
 native=${2:+$(realpath "$2")}
 format=${package##*.}
+pkgs=${PPVPN_SMOKE_PKGS:-$(mktemp -d)}
 case $format in
   deb)
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
+    # What a desktop has anyway: a display (here Xvfb), Mesa for the engine's EGL, a font.
+    desktop=(xvfb dbus libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core)
+    pkg_fetch() {
+      local dir=$1; shift
+      mkdir -p "$dir/partial"
+      apt-get install -y -qq --no-install-recommends --download-only \
+        -o Dir::Cache::archives="$dir" "$@" >/dev/null
+      rm -rf "$dir/partial" "$dir/lock"
+    }
     pkg_install() { apt-get install -y -qq --no-install-recommends "$@" >/dev/null; }
     pkg_remove() { apt-get remove -y -qq ppvpn >/dev/null; } ;;
   rpm)
-    pkg_install() { dnf install -y -q --setopt=install_weak_deps=False "$@"; }
-    pkg_remove() { dnf remove -y -q ppvpn; } ;;
+    desktop=(xorg-x11-server-Xvfb dbus-daemon mesa-libEGL mesa-dri-drivers dejavu-sans-fonts)
+    pkg_fetch() {
+      local dir=$1; shift
+      dnf install -y -q --setopt=install_weak_deps=False --downloadonly --destdir "$dir" "$@"
+    }
+    pkg_install() { dnf install -y -q --setopt=install_weak_deps=False --disablerepo='*' "$@"; }
+    pkg_remove() { dnf remove -y -q --disablerepo='*' ppvpn; } ;;
   *) echo "FAIL: not a deb or rpm: $package" >&2; exit 2 ;;
 esac
 
+# --- 0. the packages the checks install ---------------------------------------------------
+# Each set is what its install below needs on top of the image: the package's
+# dependencies, the desktop's, the native package's. Fetched without being
+# installed, so each set is complete on its own.
+sets=(app desktop)
+[[ $format == deb && -n "$native" ]] && sets+=(native)
+fetched=
+for set in "${sets[@]}"; do
+  [[ -e "$pkgs/$set.complete" ]] && continue
+  if [[ $format == deb && -z "$fetched" ]]; then apt-get update -qq; fi
+  fetched=1
+  rm -rf "${pkgs:?}/$set"; mkdir -p "$pkgs/$set"
+  case $set in
+    app) pkg_fetch "$pkgs/app" "$package" ;;
+    desktop) pkg_fetch "$pkgs/desktop" "${desktop[@]}" ;;
+    native) pkg_fetch "$pkgs/native" "$native" ;;
+  esac
+  touch "$pkgs/$set.complete"
+  files=("$pkgs/$set"/*)
+  echo "fetched the $set set: ${#files[@]} packages"
+done
+# From here on, nothing from the mirrors: apt without its lists, dnf without
+# its repositories.
+if [[ $format == deb ]]; then rm -rf /var/lib/apt/lists/*; fi
+
 # --- 1. install, layout, libraries --------------------------------------------------------
-pkg_install "$package"
+pkg_install "$package" "$pkgs"/app/*."$format"
 APP=/usr/lib/ppvpn/ppvpn
 [[ -x "$APP" ]] || { echo "FAIL: $APP is not installed" >&2; exit 1; }
 [[ "$(readlink -f /usr/bin/ppvpn)" == "$APP" ]] || { echo "FAIL: /usr/bin/ppvpn does not point at $APP" >&2; exit 1; }
@@ -70,11 +117,7 @@ done
 echo "OK: the package's dependencies resolve every library"
 
 # --- 2. start it once ---------------------------------------------------------------------
-# What a desktop has anyway: a display (here Xvfb), Mesa for the engine's EGL, a font.
-case $format in
-  deb) pkg_install xvfb dbus libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core ;;
-  rpm) pkg_install xorg-x11-server-Xvfb dbus-daemon mesa-libEGL mesa-dri-drivers dejavu-sans-fonts ;;
-esac
+pkg_install "$pkgs"/desktop/*."$format"
 WORK=$(mktemp -d)
 trap 'kill "${XVFB_PID:-}" 2>/dev/null || true' EXIT
 export HOME="$WORK/home" XDG_RUNTIME_DIR="$WORK/run"
@@ -119,10 +162,10 @@ echo "OK: removed"
 
 # --- 4. upgrade the native package in place -----------------------------------------------
 if [[ $format == deb && -n "$native" ]]; then
-  pkg_install "$native"
+  pkg_install "$native" "$pkgs"/native/*.deb
   before=$(dpkg-query -W -f '${Version}' ppvpn)
   [[ -d /usr/lib/ppvpn/runtimes ]] || { echo "FAIL: $native is not the native package" >&2; exit 1; }
-  pkg_install "$package"
+  pkg_install "$package" "$pkgs"/app/*.deb
   after=$(dpkg-query -W -f '${Version}' ppvpn)
   [[ "$after" == "$(dpkg-deb -f "$package" Version)" ]] || { echo "FAIL: ppvpn is $after after the upgrade" >&2; exit 1; }
   [[ -e /usr/lib/ppvpn/lib/libflutter_linux_gtk.so && ! -e /usr/lib/ppvpn/runtimes ]] ||
