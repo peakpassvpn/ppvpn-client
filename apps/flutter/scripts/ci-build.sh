@@ -410,6 +410,23 @@ case $os in
       for so in libppvpn_flutter.so libppvpn_tunnel.so; do
         grep -qF "lib/$abi/$so" <<<"$listing" || { echo "$bundle lacks lib/$abi/$so" >&2; exit 1; }
       done
+    done
+    # What native code calls back by name, kept through R8
+    # (runner/android/app/proguard-rules.pro).
+    sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:?the Android SDK is needed}}
+    dexdump=$(find "$sdk/build-tools" -name dexdump -type f | sort -V | tail -1)
+    [ -n "$dexdump" ] || { echo "no dexdump in $sdk/build-tools" >&2; exit 1; }
+    dex=$app/build/apk-dex
+    rm -rf "$dex"
+    mkdir -p "$dex"
+    unzip -q -o "$bundle" 'classes*.dex' -d "$dex"
+    "$dexdump" "$dex"/classes*.dex >"$dex/dump.txt"
+    for method in protect onExit; do
+      awk -v want="$method" '
+        /Class descriptor/ { inside = index($0, "Lcom/peakpassvpn/ppvpn/tunnel/TunnelHost$Listener;") > 0 }
+        inside && /name +:/ && index($0, "'"'"'" want "'"'"'") { found = 1 }
+        END { exit !found }' "$dex/dump.txt" ||
+        { echo "$bundle: R8 renamed or dropped TunnelHost.Listener.$method" >&2; exit 1; }
     done ;;
   ios)
     if [ "${IOS_SDK:-device}" = simulator ]; then
