@@ -425,12 +425,13 @@ case $os in
     mkdir -p "$dex"
     unzip -q -o "$bundle" 'classes*.dex' -d "$dex"
     "$dexdump" "$dex"/classes*.dex >"$dex/dump.txt"
-    for method in protect onExit; do
-      awk -v want="$method" '
-        /Class descriptor/ { inside = index($0, "Lcom/peakpassvpn/ppvpn/tunnel/TunnelHost$Listener;") > 0 }
+    for kept in tunnel/TunnelHost\$Listener.protect tunnel/TunnelHost\$Listener.onExit \
+        Credentials.seal Credentials.open; do
+      awk -v class="Lcom/peakpassvpn/ppvpn/${kept%.*};" -v want="${kept##*.}" '
+        /Class descriptor/ { inside = index($0, "'"'"'" class "'"'"'") > 0 }
         inside && /name +:/ && index($0, "'"'"'" want "'"'"'") { found = 1 }
         END { exit !found }' "$dex/dump.txt" ||
-        { echo "$bundle: R8 renamed or dropped TunnelHost.Listener.$method" >&2; exit 1; }
+        { echo "$bundle: R8 renamed or dropped ${kept//\//.}" >&2; exit 1; }
     done ;;
   ios)
     if [ "${IOS_SDK:-device}" = simulator ]; then
