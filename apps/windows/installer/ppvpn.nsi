@@ -326,13 +326,13 @@ Function HoldersOfR1
     ; service short name (64 WCHAR), type, status, session, restartable (4 each): 668 bytes.
     System::Alloc 5344
     Pop $3
-    System::Call 'rstrtmgr::RmGetList(i R6, *i .r4, *i 8 .r5, p r3, *i .r6) i .R8'
+    System::Call 'rstrtmgr::RmGetList(i R6, *i .r4, *i 8 r5, p r3, *i .r6) i .R8'
     ${If} $R8 == 0
       StrCpy $7 0
       ${DoWhile} $7 < $5
         IntOp $8 $7 * 668
         IntPtrOp $9 $3 + $8
-        System::Call '*$9(i .r1, i, i, &w256 .r2, &w64 .r0)'
+        System::Call '*$9(i .r1, i .r8, i .r8, &w256 .r2, &w64 .r0)'
         ${If} $0 != ""
           StrCpy $2 "$2 (pid $1, service $0)"
         ${Else}
