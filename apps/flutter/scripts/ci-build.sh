@@ -18,6 +18,10 @@
 #   FLUTTER_TARGET       android: the APK (needs ANDROID_NDK_HOME and the
 #                        Android SDK), ios: the iOS app, unsigned, instead of
 #                        the runner's platform
+#   PPVPN_TUNNEL_ANDROID android: the tunnel host already built, a directory
+#                        of <abi>/libppvpn_tunnel.so as crates/tunnel-host/
+#                        scripts/build-android.sh leaves it (default: built
+#                        here, into build/tunnel-android)
 #   IOS_SDK              ios: simulator (a debug build for Apple silicon's
 #                        simulator, ci.yml) or device (release; the default)
 #   IOS_TEAM_ID, IOS_APP_PROFILE
@@ -266,6 +270,18 @@ if [ "$os" = android ]; then
         "android/app/src/main/jniLibs/$abi/"
     fi
   done
+  # The tunnel host for TunnelService (runner/android, the :tunnel
+  # process), beside the bridge: libppvpn_tunnel.so (and libc++_shared.so
+  # if it needs it, the same file as the bridge's).
+  tunnel=${PPVPN_TUNNEL_ANDROID:-}
+  if [ -z "$tunnel" ]; then
+    tunnel=$app/build/tunnel-android
+    "$root/crates/tunnel-host/scripts/build-android.sh" "$tunnel" arm64-v8a x86_64
+  fi
+  for abi in arm64-v8a x86_64; do
+    test -f "$tunnel/$abi/libppvpn_tunnel.so" || { echo "no $tunnel/$abi/libppvpn_tunnel.so" >&2; exit 1; }
+    cp "$tunnel/$abi/"*.so "android/app/src/main/jniLibs/$abi/"
+  done
 elif [ "$os" = ios ]; then
   # iOS takes no loose dynamic library: the bridge is a static library the
   # Runner links whole (-force_load), its symbols exported for the Dart
@@ -387,7 +403,14 @@ fi
 case $os in
   android)
     bundle=build/app/outputs/flutter-apk/app-release.apk
-    test -f "$bundle" ;;
+    test -f "$bundle"
+    # Both libraries for both ABIs, in the APK.
+    listing=$(unzip -l "$bundle")
+    for abi in arm64-v8a x86_64; do
+      for so in libppvpn_flutter.so libppvpn_tunnel.so; do
+        grep -qF "lib/$abi/$so" <<<"$listing" || { echo "$bundle lacks lib/$abi/$so" >&2; exit 1; }
+      done
+    done ;;
   ios)
     if [ "${IOS_SDK:-device}" = simulator ]; then
       bundle=build/ios/iphonesimulator/Runner.app

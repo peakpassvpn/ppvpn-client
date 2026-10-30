@@ -2,7 +2,7 @@
 # The Android smoke test (#448 steps 3 and 5) on a running emulator (ci.yml,
 # job android, after ci-build.sh with FLUTTER_TARGET=android):
 # integration_test/mobile_smoke_test.dart twice, its debug APK carrying the
-# release bridge ci-build.sh put in jniLibs. First a tablet's screen in
+# release bridge and tunnel host ci-build.sh put in jniLibs. First a tablet's screen in
 # landscape (1280 dp across: the desktop layout), then a phone's, about
 # 390 dp across in portrait (the phone layout below 600).
 set -euo pipefail
@@ -18,8 +18,21 @@ device=$(adb devices | awk 'NR > 1 && $2 == "device" { print $1; exit }')
 # 40828057797).
 adb shell settings put system accelerometer_rotation 0
 adb shell settings put system user_rotation 0
+# The test's system VPN, allowed as soon as flutter test has installed the
+# app (it installs it for each leg and uninstalls it after), long before
+# the test gets to it: no consent dialog, which the test cannot answer.
+(
+  while true; do
+    adb shell appops set com.peakpassvpn.ppvpn ACTIVATE_VPN allow >/dev/null 2>&1 || true
+    sleep 0.5
+  done
+) &
+grant=$!
+adb logcat -c || true
 # The emulator can be gone by the time this runs, after both legs passed.
-trap 'adb shell wm size reset || true; adb shell wm density reset || true' EXIT
+# TunnelService's lines (tag PPVPN), for a failed leg.
+trap 'kill "$grant" 2>/dev/null || true; adb logcat -d -s PPVPN:V || true
+  adb shell wm size reset || true; adb shell wm density reset || true' EXIT
 
 # A size applies some time after wm size; a leg that started before then
 # would lay out for the other shape. Waits until the app area the window

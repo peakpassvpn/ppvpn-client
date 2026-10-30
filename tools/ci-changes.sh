@@ -50,6 +50,9 @@
 #         as on macOS, which the macos job's clippy covers): ci.yml's
 #         `tunnel (ios)` builds it for iOS only then (~25 min cold, on the
 #         scarce macOS runners), and `tunnel (android)` for Android.
+#   android  flutter or tunnel: the Android app packs the tunnel host for
+#         its VpnService (#448), so ci.yml's android job builds and tests
+#         when either changed.
 #   memory  the memory harness (ne-mem, tools/perf/{ne_mem,dhat_top}.py, test/perf/)
 #         or Cargo.lock (a sail upgrade): ci.yml's macos and linux jobs
 #         then build it in release and measure (#388).
@@ -58,7 +61,7 @@
 # everything.
 set -euo pipefail
 
-all() { printf '%s=true\n' code desktop flutter deps lock macpkg memory tunnel; exit 0; }
+all() { printf '%s=true\n' code desktop flutter deps lock macpkg memory tunnel android; exit 0; }
 
 case "${GITHUB_EVENT_NAME:-}" in
   pull_request) base=${PR_BASE_SHA:-} ;;
@@ -121,3 +124,8 @@ echo "lock=$lock"
 echo "macpkg=$macpkg"
 echo "memory=$memory"
 echo "tunnel=$tunnel"
+if [ "$flutter" = true ] || [ "$tunnel" = true ]; then
+  echo "android=true"
+else
+  echo "android=false"
+fi
