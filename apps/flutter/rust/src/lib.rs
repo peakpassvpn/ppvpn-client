@@ -2,9 +2,9 @@
 //! generates the Dart side from [`api`]. ci.yml runs the codegen, which adds
 //! `mod frb_generated;` here; nothing generated is committed.
 
-pub mod api;
 #[cfg(target_os = "android")]
 mod android;
+pub mod api;
 mod aumid;
 mod autostart;
 mod bridge;
