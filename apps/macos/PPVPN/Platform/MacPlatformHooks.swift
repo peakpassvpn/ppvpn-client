@@ -66,8 +66,9 @@ final class MacPlatformHooks: PlatformHooks, @unchecked Sendable {
     /// The bundle belongs to the user, so in a release the root shell first
     /// copies the helper (and the files it installs) into a directory only
     /// root can write, checks the copy with /usr/bin/codesign against the
-    /// helper's identifier and the certificate that signed this app, and
-    /// runs the copy: a helper changed on disk is never run as root.
+    /// helper's identifier and a Developer ID signature of the team that
+    /// signed this app, and runs the copy: a helper changed on disk is never
+    /// run as root.
     /// ppvpn-service-install checks the service binary the same way
     /// (crates/service/src/install.rs).
     private func runHelperAsAdmin(_ name: String, alongside: [String] = []) throws {
@@ -83,11 +84,15 @@ final class MacPlatformHooks: PlatformHooks, @unchecked Sendable {
         // Ad-hoc signed: nothing to check against.
         let script = quoted(directory.appending(path: name).path)
         #else
-        guard let leaf = Self.signingCertificateSHA1() else {
+        guard let team = Self.signingTeamIdentifier() else {
             throw PlatformError.Failed(message: "MACOS_PRIVILEGED_HELPER_UNSIGNED")
         }
         let identifier = "com.peakpassvpn.ppvpn." + name.replacingOccurrences(of: "ppvpn-", with: "")
-        let requirement = "=identifier \"\(identifier)\" and certificate leaf = H\"\(leaf)\""
+        // The service's requirement (crates/service/src/macsign.rs).
+        let requirement = "=anchor apple generic and identifier \"\(identifier)\""
+            + " and certificate 1[field.1.2.840.113635.100.6.2.6]"
+            + " and certificate leaf[field.1.2.840.113635.100.6.1.13]"
+            + " and certificate leaf[subject.OU] = \"\(team)\""
         let copies = ([name] + alongside)
             .map { "/bin/cp \(quoted(directory.appending(path: $0).path)) \"$d/\"" }
             .joined(separator: " && ")
@@ -115,22 +120,19 @@ final class MacPlatformHooks: PlatformHooks, @unchecked Sendable {
         throw PlatformError.Failed(message: "MACOS_ADMIN_AUTHORIZATION_FAILED:\(message.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
 
-    /// The SHA-1 of the certificate this app is signed with, from its
-    /// designated requirement (`certificate leaf = H"…"`, which
-    /// package-dmg.sh pins to crates/service/src/macos_client_cert.sha1).
-    private static func signingCertificateSHA1() -> String? {
+    /// The Team ID of this app's Developer ID signature (#471): ten
+    /// upper-case letters and digits, nil without one.
+    private static func signingTeamIdentifier() -> String? {
         var code: SecCode?
         var staticCode: SecStaticCode?
-        var requirement: SecRequirement?
-        var text: CFString?
+        var information: CFDictionary?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
               SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
-              SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement,
-              SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+                == errSecSuccess,
+              let team = (information as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String,
+              team.range(of: "^[A-Z0-9]{10}$", options: .regularExpression) != nil
         else { return nil }
-        let designated = text as String
-        guard let match = designated.range(of: #"certificate leaf = H"[0-9a-fA-F]{40}""#, options: .regularExpression)
-        else { return nil }
-        return String(designated[match].dropFirst(#"certificate leaf = H""#.count).dropLast()).lowercased()
+        return team
     }
 }

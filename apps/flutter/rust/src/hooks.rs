@@ -9,7 +9,6 @@
 //! helpers sit next to the app's executable, as in the native packages.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use ppvpn_client::{PlatformError, PlatformHooks};
 
@@ -70,17 +69,73 @@ impl PlatformHooks for Hooks {
     }
 }
 
+/// iOS and Android cannot start a browser process: the app opens the page
+/// itself (lib/links.dart; the sign-in's from app_state.dart as soon as it
+/// shows), so the client is told it opened.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+pub(crate) fn open_url(_url: &str) -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android", windows)))]
 pub(crate) fn open_url(url: &str) -> bool {
-    let mut command = if cfg!(target_os = "macos") {
-        Command::new("open")
-    } else if cfg!(windows) {
-        let mut command = Command::new("rundll32");
-        command.arg("url.dll,FileProtocolHandler");
-        command
+    use std::process::Command;
+
+    let program = if cfg!(target_os = "macos") {
+        "open"
     } else {
-        Command::new("xdg-open")
+        "xdg-open"
     };
-    command.arg(url).spawn().is_ok()
+    Command::new(program).arg(url).spawn().is_ok()
+}
+
+/// Windows: the shell's own "open", which reports whether the default
+/// browser was started. `rundll32 url.dll,FileProtocolHandler` started
+/// nothing on Windows 11 while its spawn succeeded, so the sign-in never
+/// offered the link to open by hand.
+#[cfg(windows)]
+pub(crate) fn open_url(url: &str) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(text: &str) -> Vec<u16> {
+        OsStr::new(text).encode_wide().chain(Some(0)).collect()
+    }
+
+    let verb = wide("open");
+    let file = wide(url);
+    // SAFETY: COM for the shell's protocol handlers, as ShellExecute's
+    // documentation asks; undone below only when this call initialized it
+    // (S_OK or S_FALSE), not when the thread was already in another mode.
+    let com = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    } >= 0;
+    // SAFETY: NUL-terminated strings that outlive the call; no window.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if com {
+        // SAFETY: pairs with the successful CoInitializeEx above.
+        unsafe { CoUninitialize() };
+    }
+    // Greater than 32 on success; an error code otherwise.
+    result as isize > 32
 }
 
 /// Linux: a systemd unit, installed by a helper run as root through pkexec
@@ -192,8 +247,9 @@ mod service {
     /// The bundle belongs to the user, so in a release the root shell first
     /// copies the helper (and the files it installs) into a directory only
     /// root can write, checks the copy with /usr/bin/codesign against the
-    /// helper's identifier and the certificate that signed this app, and
-    /// runs the copy: a helper changed on disk is never run as root.
+    /// helper's identifier and a Developer ID signature of the team that
+    /// signed this app, and runs the copy: a helper changed on disk is never
+    /// run as root.
     /// ppvpn-service-install checks the service binary the same way
     /// (crates/service/src/install.rs).
     fn run_helper_as_admin(name: &str, alongside: &[&str]) -> Result<(), PlatformError> {
@@ -218,11 +274,10 @@ mod service {
             // Ad-hoc signed: nothing to check against.
             path(name)?
         } else {
-            let leaf = signing_certificate_sha1(&directory)
+            let team = signing_team(&directory)
                 .ok_or_else(|| failure("MACOS_PRIVILEGED_HELPER_UNSIGNED"))?;
             let identifier = format!("com.peakpassvpn.ppvpn.{}", name.replace("ppvpn-", ""));
-            let requirement =
-                format!("=identifier \"{identifier}\" and certificate leaf = H\"{leaf}\"");
+            let requirement = developer_id_requirement(&identifier, &team);
             let copies = std::iter::once(name)
                 .chain(alongside.iter().copied())
                 .map(|file| Ok(format!("/bin/cp {} \"$d/\"", path(file)?)))
@@ -260,14 +315,13 @@ mod service {
         )))
     }
 
-    /// The SHA-1 of the certificate this app is signed with, from its
-    /// designated requirement (`certificate leaf = H"…"`, which
-    /// package-app.sh pins to crates/service/src/macos_client_cert.sha1).
-    /// `directory` is the bundle's Contents/MacOS.
-    fn signing_certificate_sha1(directory: &Path) -> Option<String> {
+    /// The Team ID of the Developer ID signature of this app (#471), from
+    /// codesign's description of it. `directory` is the bundle's
+    /// Contents/MacOS.
+    fn signing_team(directory: &Path) -> Option<String> {
         let bundle = directory.parent()?.parent()?;
         let output = Command::new("/usr/bin/codesign")
-            .args(["-d", "-r-"])
+            .args(["-dv", "--verbose=2"])
             .arg(bundle)
             .stdin(Stdio::null())
             .output()
@@ -275,39 +329,59 @@ mod service {
         if !output.status.success() {
             return None;
         }
-        // The requirement goes to stdout; older codesign versions wrote it
-        // to stderr with the rest.
-        let text = String::from_utf8_lossy(&output.stdout).into_owned()
-            + &String::from_utf8_lossy(&output.stderr);
-        leaf_sha1(&text)
+        // The description goes to stderr.
+        team_of(&String::from_utf8_lossy(&output.stderr))
     }
 
-    /// The 40 hex digits of the first `certificate leaf = H"…"`, lower case.
-    fn leaf_sha1(designated: &str) -> Option<String> {
-        const MARK: &str = "certificate leaf = H\"";
-        designated.match_indices(MARK).find_map(|(at, _)| {
-            let rest = &designated[at + MARK.len()..];
-            let hex = rest.get(..40)?;
-            (hex.bytes().all(|byte| byte.is_ascii_hexdigit()) && rest[40..].starts_with('"'))
-                .then(|| hex.to_ascii_lowercase())
-        })
+    /// The `TeamIdentifier=` of a codesign description: ten upper-case
+    /// letters and digits ("not set" without a team).
+    fn team_of(description: &str) -> Option<String> {
+        let team = description
+            .lines()
+            .find_map(|line| line.strip_prefix("TeamIdentifier="))?;
+        (team.len() == 10
+            && team
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()))
+        .then(|| team.to_string())
+    }
+
+    /// `identifier`, signed with a Developer ID Application certificate of
+    /// `team`: the service's requirement (crates/service/src/macsign.rs).
+    fn developer_id_requirement(identifier: &str, team: &str) -> String {
+        format!(
+            "=anchor apple generic and identifier \"{identifier}\" \
+             and certificate 1[field.1.2.840.113635.100.6.2.6] \
+             and certificate leaf[field.1.2.840.113635.100.6.1.13] \
+             and certificate leaf[subject.OU] = \"{team}\""
+        )
     }
 
     #[cfg(test)]
     mod tests {
-        use super::{leaf_sha1, quoted};
+        use super::{developer_id_requirement, quoted, team_of};
 
         #[test]
-        fn reads_the_leaf_from_a_designated_requirement() {
+        fn reads_the_team_from_a_codesign_description() {
             let text = "Executable=/Applications/PPVPN.app/Contents/MacOS/PPVPN\n\
-                designated => identifier \"com.peakpassvpn.ppvpn\" and anchor apple generic \
-                and certificate leaf = H\"0123456789ABCDEF0123456789abcdef01234567\"\n";
+                Identifier=com.peakpassvpn.ppvpn.desktop\n\
+                Authority=Developer ID Application: PeakPass Labs LLC (HSVMRQBQJ2)\n\
+                TeamIdentifier=HSVMRQBQJ2\n";
+            assert_eq!(team_of(text).as_deref(), Some("HSVMRQBQJ2"));
+            assert_eq!(team_of("TeamIdentifier=not set\n"), None);
+            assert_eq!(team_of("Signature=adhoc\n"), None);
+            assert_eq!(team_of("TeamIdentifier=HSVMRQBQJ2\" or true\n"), None);
+        }
+
+        #[test]
+        fn the_requirement_is_the_services() {
             assert_eq!(
-                leaf_sha1(text).as_deref(),
-                Some("0123456789abcdef0123456789abcdef01234567")
+                developer_id_requirement("com.peakpassvpn.ppvpn.service-install", "HSVMRQBQJ2"),
+                "=anchor apple generic and identifier \"com.peakpassvpn.ppvpn.service-install\" \
+                 and certificate 1[field.1.2.840.113635.100.6.2.6] \
+                 and certificate leaf[field.1.2.840.113635.100.6.1.13] \
+                 and certificate leaf[subject.OU] = \"HSVMRQBQJ2\""
             );
-            assert_eq!(leaf_sha1("certificate leaf = H\"0123\""), None);
-            assert_eq!(leaf_sha1("designated => anchor apple"), None);
         }
 
         #[test]

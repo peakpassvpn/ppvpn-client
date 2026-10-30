@@ -28,22 +28,40 @@ Profile 可能由宿主暂存以完成进程间交接，但这属于宿主责任
   改回成功时在核心诊断日志记一行 info（路径、原 DACL 与新 DACL 的 SDDL，不含文件内容）；
   无法修改时报错并在日志中给出路径和处理方法（管理员执行 `icacls "<路径>" /reset /t /c` 或删除该目录），不会删除任何文件。
 - macOS 特权服务按代码签名认客户端，不按路径：用 socket 对端的 audit token（`LOCAL_PEERTOKEN`）取到连接进程本身，
-  要求它满足 `identifier "com.peakpassvpn.ppvpn.desktop" and certificate leaf = H"<SHA-1>"`，并启用 hardened runtime。
-  我们的证书是自签名、没有 Team ID，所以钉的是证书本身的 SHA-1，不认主题或通用名（谁都能签出同名的 “PPVPN Code Signing”）。
-  钉的哈希只在 `crates/service/src/macos_client_cert.sha1` 一处；发布构建导入签名证书后与它比对，不一致即失败。
+  要求它满足 `anchor apple generic and identifier "com.peakpassvpn.ppvpn.desktop" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "HSVMRQBQJ2"`
+  （即 codesign 给我们 Developer ID 签名的指定要求），并启用 hardened runtime。
+  它要求证书链锚定在 Apple 根证书、经 Developer ID 中间证书签发，且叶证书主题的 OU 是我们的 Team ID：
+  这个 OU 只有 Apple 会签发，自签名证书写同样的 OU 或通用名也过不了；证书续期后要求不变（#471）。
+  Team ID 只在 `crates/service/src/macos_team_id` 一处；发布构建导入签名证书后核对它是这个 Team 的
+  “Developer ID Application”，不是即失败。
   因此从 DMG 直接运行或被系统移位（translocation）的同一份应用也能连接。debug 构建的服务在签名不符时仍接受
   `/Applications/PPVPN.app` 下 ad-hoc 签名的 debug 应用（并记一条 warn），发布构建没有这条退路。
-  换签名证书时在同一版里改这个文件：它属于服务的 build id，新版应用首次增强连接时会替换旧服务（需管理员授权）。
+  改 Team ID 时在同一版里改这个文件：它属于服务的 build id，新版应用首次增强连接时会替换旧服务（需管理员授权）。
+  已安装的服务拒绝本应用时（例如 0.7.x 及以前的服务钉的是旧的自签名证书），应用在连接前重装服务一次
+  （同样的管理员授权）；新的 `ppvpn-service-install` 只装我们 Team 签名的服务，所以这不放宽任何检查。
+  重装被拒绝或失败就以它的错误结束这次连接，重装后仍被拒绝就以原来的拒绝结束，不循环（`enhanced.rs`）。
+- Windows 特权服务认客户端（`crates/service/src/ipc.rs`）：进程映像必须是服务安装目录里的 `ppvpn.exe`，
+  签名过 `WinVerifyTrust`（链到受信任的根，运行时不在线查吊销），且叶证书满足发布者钉：主题 O 是
+  `PeakPass Labs LLC`，并带有钉住的身份 EKU（#489）。证书由 Azure Artifact Signing 签发，约每天换一张、
+  有效约三天，所以不钉叶证书本身；Artifact Signing 在同一次身份验证签发的每张证书里放同一个
+  `1.3.6.1.4.1.311.97.*` EKU，这个 EKU 只有微软会签发，换证书时不变。钉的是完整的 EKU，构建时由
+  `PPVPN_WINDOWS_PUBLISHER_EKU`（换一次身份验证时另加 `PPVPN_WINDOWS_NEXT_PUBLISHER_EKU`）给出；
+  钉编进服务，安装包升级时替换服务程序即生效。打包时 `check-publisher.ps1` 按同样的规则核对签好的
+  `ppvpn.exe`，不符即失败，不会发出拒绝自己客户端的服务。
+  没有钉时：发布构建（即使已签名）把 `PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT` 设为 1，只认安装目录里的
+  `ppvpn.exe`（Program Files 只有管理员能写）加会话握手；第一次签名的构建就是这样，从它的日志读出
+  EKU 后设上钉。debug 构建签了名但没有钉时只要求 `WinVerifyTrust` 通过（记一条 warn）。
 - macOS 的应用包属于用户（拖进「应用程序」的安装如此，.pkg 安装也由 postinstall 交给用户，见下），用户身份的代码
   能改动包里的文件。所以以 root 运行的东西都先核对签名：
   - 应用请求管理员授权时，root 的 shell 先把 `ppvpn-service-install`/`ppvpn-service-uninstall`（安装时连同
     `ppvpn-service`）复制到只有 root 可写的临时目录，用系统的 `/usr/bin/codesign --verify --strict --test-requirement`
-    核对副本满足 `identifier "com.peakpassvpn.ppvpn.service-install"`（或 `…service-uninstall`）`and certificate leaf = H"<SHA-1>"`，
-    再运行这个副本（`MacPlatformHooks.swift`）。SHA-1 取自应用自身的指定要求，即打包时钉住的那张证书。
+    核对副本满足上面同样形式、标识为 `com.peakpassvpn.ppvpn.service-install`（或 `…service-uninstall`）的要求，
+    再运行这个副本（Flutter 应用的 `apps/flutter/rust/src/hooks.rs`，原生应用的 `MacPlatformHooks.swift`）。
+    Team ID 取自应用自身的签名。
   - `ppvpn-service-install` 在停掉旧服务之前，以及把 root 所有的暂存副本换上去之前，各按
-    `identifier "com.peakpassvpn.ppvpn.service" and certificate leaf = H"<SHA-1>"` 核对一次服务程序，
-    SHA-1 来自 `macos_client_cert.sha1`；不满足就拒绝，旧服务保持原样（`install.rs`）。
-  - 三个服务程序在打包时用固定的标识签名（`package-dmg.sh`），不再是链接器带哈希的默认标识。debug 构建不做这些检查。
+    同样形式、标识为 `com.peakpassvpn.ppvpn.service` 的要求核对一次服务程序，
+    Team ID 来自 `macos_team_id`；不满足就拒绝，旧服务保持原样（`install.rs`）。
+  - 三个服务程序在打包时用固定的标识签名（`package-app.sh`），不再是链接器带哈希的默认标识。debug 构建不做这些检查。
   这挡住的是只改了包里文件的情况；能替换整个应用并重新签名的代码本来就能自己弹出管理员授权，不在这道防线之内。
 - macOS 首次安装用的 `.pkg` 只装 `/Applications/PPVPN.app`（不可重定位，不会装到别处同标识的副本上），
   唯一的脚本是 `apps/macos/packaging/postinstall`：用 `stat -f %Su /dev/console` 取当前控制台用户，
@@ -298,5 +316,9 @@ CLI `render` 会对已知敏感 JSON 键和代理 URL 认证信息脱敏，但�
 - 崩溃采集器排除 Profile、session secret 文件、`local-proxies.json` 和 API 原始 body/header。
 - 密钥文件、socket、Named Pipe 名称不放入全局可读目录。
 - API 客户端对认证失败重新握手，不复用上一次进程的 secret。
-- 换 macOS 签名证书（`MACOS_SIGNING_P12_BASE64`）时同时更新 `crates/service/src/macos_client_cert.sha1`，否则发布构建失败。
+- macOS 签名证书（`MACOS_SIGNING_P12_BASE64`）必须是 `crates/service/src/macos_team_id` 这个 Team 的
+  Developer ID Application，安装包证书（`MACOS_INSTALLER_P12_BASE64`）是同一 Team 的 Developer ID Installer，
+  否则发布构建失败；同一 Team 的证书续期只换这两个 secret。
+- Windows 由 Azure Artifact Signing 签名（[构建与发布](release.md)）；换一次身份验证（组织信息变了或验证到期）
+  身份 EKU 就变：先把新 EKU 设为 `PPVPN_WINDOWS_NEXT_PUBLISHER_EKU` 发一版，再改用新验证签名。
 - 发布前执行 race 测试、跨平台构建和校验和验证，详见 [构建与发布](release.md)。

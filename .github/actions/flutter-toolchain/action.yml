@@ -1,35 +1,54 @@
 name: Flutter toolchain
 description: >-
   What apps/flutter/scripts/ci-build.sh needs besides Rust: the pinned
-  Flutter SDK (apps/flutter/scripts/install-flutter.sh, on PATH) and
+  Flutter SDK (apps/flutter/scripts/install-flutter.sh, on PATH),
   flutter_rust_bridge_codegen at the version the bridge is generated with,
-  both cached. ci.yml's flutter job and release.yml's installer jobs.
+  and the cargo-expand it runs. ci.yml's flutter and android jobs,
+  release.yml's installer and cache jobs. The SDK is downloaded each time:
+  its cache took 1.4 to 1.9 GB per runner of the repository's 10 GB, and
+  restoring it took about as long as the download. The two codegen tools are
+  cached, saved only on main (release.yml): a pull request's cache would
+  serve that pull request alone.
 inputs:
   frb-codegen-version:
     description: flutter_rust_bridge_codegen's version (the flutter_rust_bridge of apps/flutter/rust/Cargo.toml)
     required: false
     default: 2.13.0
+  cargo-expand-version:
+    description: cargo-expand's version, which the codegen otherwise installs at its latest on every run
+    required: false
+    default: 1.0.127
 runs:
   using: composite
   steps:
-    - name: Cache Flutter
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ runner.temp }}/flutter-sdk
-        key: flutter-${{ hashFiles('apps/flutter/scripts/install-flutter.sh') }}-${{ runner.os }}-${{ runner.arch }}
     - name: Install Flutter
       shell: bash
       run: apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/flutter-sdk"
-    - name: Cache flutter_rust_bridge_codegen
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    - id: tools
+      name: Restore the codegen tools
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ~/.cargo/bin/flutter_rust_bridge_codegen*
-        key: frb-codegen-${{ inputs.frb-codegen-version }}-${{ runner.os }}-${{ runner.arch }}
-    - name: Install flutter_rust_bridge_codegen
+        path: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen*
+          ~/.cargo/bin/cargo-expand*
+        key: frb-codegen-${{ inputs.frb-codegen-version }}-expand-${{ inputs.cargo-expand-version }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Install the codegen tools
       shell: bash
       env:
         FRB_CODEGEN_VERSION: ${{ inputs.frb-codegen-version }}
+        CARGO_EXPAND_VERSION: ${{ inputs.cargo-expand-version }}
       run: |
         if ! flutter_rust_bridge_codegen --version 2>/dev/null | grep -qF "$FRB_CODEGEN_VERSION"; then
           cargo install flutter_rust_bridge_codegen --version "$FRB_CODEGEN_VERSION" --locked --force
         fi
+        if ! cargo expand --version 2>/dev/null | grep -qF "$CARGO_EXPAND_VERSION"; then
+          cargo install cargo-expand --version "$CARGO_EXPAND_VERSION" --locked --force
+        fi
+    - name: Save the codegen tools
+      if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen*
+          ~/.cargo/bin/cargo-expand*
+        key: ${{ steps.tools.outputs.cache-primary-key }}

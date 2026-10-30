@@ -2,7 +2,7 @@
 # process by Desktop and the CLI. The Go core it replaces is gone from main;
 # v0.5.21, its last release, keeps its tag and release files.
 [workspace]
-members = ["crates/core", "crates/cli", "crates/account", "crates/core-lab", "crates/engine-host", "crates/desktop", "crates/service", "apps/flutter/rust", "apps/flutter/push-agent"]
+members = ["crates/core", "crates/cli", "crates/account", "crates/core-lab", "crates/engine-host", "crates/desktop", "crates/service", "crates/tunnel-host", "apps/flutter/rust", "apps/flutter/push-agent"]
 # What a bare cargo command at the root builds, and so what ci.yml's
 # required jobs cover; the desktop crates and the service have their own
 # jobs there (desktop-*).
@@ -12,7 +12,7 @@ resolver = "2"
 [workspace.package]
 # One version for every crate the project ships (engine, account, CLI,
 # desktop, service): it goes on from the Go core's last, v0.5.21.
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 rust-version = "1.98.1"
 license = "GPL-3.0-or-later"
@@ -31,6 +31,8 @@ sail = { git = "https://github.com/peakpassvpn/sail.git", tag = "v0.22.0", featu
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 idna = "1"
+# JNI for the Android libraries (the tunnel host, the Flutter bridge).
+jni = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -47,6 +49,16 @@ quinn-proto = { git = "https://github.com/peakpassvpn/quinn.git", rev = "f814623
 # netlink-sys (0.9); see sail's tools/security/policy.toml for when these go.
 netconfig-rs = { git = "https://github.com/peakpassvpn/netconfig-rs.git", rev = "c4186a6416cce1b66ca65200b7a23b5e859181d7" }
 route_manager = { git = "https://github.com/tun-rs/route_manager.git", rev = "d0a6c5e3fbea1b4fba74bd2ad9739bc670936aaf" }
+
+# The mobile tunnel host as the iOS extension links it
+# (crates/tunnel-host/scripts/build-xcframework.sh): sail's dist-mobile, thin
+# LTO in one codegen unit (smaller and quicker to link than fat LTO,
+# measured by sail). Panics unwind: the C functions catch them.
+[profile.mobile]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+debug = false
 
 # The privileged service as it ships (tools/desktop/build-service.sh and the
 # Windows package.ps1): small and stripped. Panics unwind, the default: sail

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installs the pinned Flutter SDK into $1 (kept when it is already there:
-# ci.yml caches it) and puts it on GITHUB_PATH. The archive's SHA-256 is
+# Installs the pinned Flutter SDK into $1 (kept when it is already there)
+# and puts it on GITHUB_PATH. The archive's SHA-256 is
 # pinned here, from Flutter's release index for this version.
 set -euo pipefail
 

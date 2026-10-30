@@ -23,10 +23,24 @@
   - `SocketProtect`：Android 的 socket 保护；
   - `Engine::set_network_state`：宿主推送网络；
   - mobile profile 和 `max_connections`。
+- **隧道宿主（`crates/tunnel-host`）：**
+  - C ABI：`include/ppvpn_tunnel.h` 是契约，函数有 settings、start、stop、network_changed、sleep、wake；
+  - 隧道 socket 上的 Core API v1，报文格式见 #448；
+  - 隧道进程里的健康检查（见下）；
+  - iOS 的 XCFramework：`scripts/build-xcframework.sh <输出目录>`，产物是 `PPVPNTunnel.xcframework`（真机和模拟器的静态库，模块名 `PPVPNTunnel`）和 `PPVPNTunnel.ldflags`（扩展要链接的系统库）。只放进网络扩展，不放进 app。
+  - Android 的 JNI：`scripts/build-android.sh <输出目录>` 产出 `<abi>/libppvpn_tunnel.so`（arm64-v8a、x86_64，放进 app 的 jniLibs），Kotlin 类 `com.peakpassvpn.ppvpn.tunnel.TunnelHost`（`apps/flutter/runner/android`）。只有 `:tunnel` 进程的 TunnelService 加载它。函数同 C ABI，错误同样以 JSON 字符串返回；`Listener` 的 `protect(fd)` 转给 `VpnService.protect`，`onExit(reason)` 即 C ABI 的 on_exit。
 - **还没有：**
-  - 隧道宿主 crate、JNI 和 C ABI；
-  - Android 和 iOS 的交叉编译，以及对应的 CI；
-  - 隧道进程里的健康检查。
+  - 隧道宿主的 CI 只有 iOS、Android 的构建和 Linux 上的测试，还没有在设备上跑的测试。
+
+## 隧道进程里的健康检查
+
+界面进程在后台会被挂起，而断线多发生在这时（锁屏、切网络），所以检查和恢复放在隧道宿主里，规则同桌面（`ppvpn_engine_host::health`，#438）：
+
+- **一轮检查：** 引擎在运行（含 degraded），有选中的节点，且它的入口 TCP 探测成功。桌面的直连请求、捕获检查和经本地代理的路径检查在手机上做不了：隧道实例没有本地代理，所有流量都进隧道。
+- **恢复：** 在进程内停止再启动引擎，TUN 不动，系统的 VPN 图标不闪。每个恢复周期一次；两轮健康或用户的一次连接（`/v1/start`）开始新的周期。
+- **放弃：** 同一周期里第二次需要恢复，或引擎 `Fatal`（无法自愈，而 profile 只在界面进程里）：经 `on_exit` 通知原生层结束隧道，免得设备卡在一个不通的隧道后面。
+- **离线：** 原生层报告断网时不检查，这时的失败与隧道无关。
+- **报告：** 每一步在 `/v1/watch` 上写一帧 `{"kind": "health", "state": "healthy" | "settling" | "rechecking" | "recovering" | "failed", "detail"?}`。
 
 ## 移动端的 TUN
 

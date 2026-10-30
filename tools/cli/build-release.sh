@@ -12,12 +12,14 @@
 #   tools/cli/build-release.sh linux x86_64-unknown-linux-musl     # linux-x86_64
 #   tools/cli/build-release.sh linux aarch64-unknown-linux-musl    # linux-aarch64
 #   tools/cli/build-release.sh macos                               # macos-universal
+#   tools/cli/build-release.sh macos aarch64-apple-darwin          # macos-arm64 (a merge, #459)
 #
 # Linux builds are static (musl, with mimalloc: crates/cli/Cargo.toml), made
 # on an x86_64 Linux host as sail builds its musl releases: with sail's own
 # scripts at the commit Cargo.lock pins (a pinned, hash-checked musl-cross
 # GCC; BoringSSL as the prebuilt-boringssl action sets it up). The macOS
-# build is one universal binary of aarch64 and x86_64, made on macOS.
+# build is one universal binary of aarch64 and x86_64, made on macOS; with
+# one target named, that slice alone (never for stable).
 #
 # Environment:
 #   CHANNEL       empty (a merge: the crate's version, production API), dev or stable
@@ -26,11 +28,15 @@
 #   DEV_API_BASE  dev: the dev backend, compiled in as the default origin
 #                 (PPVPN_BUILD_PROFILE=dev); a dev archive is never published
 #   MACOS_SIGNING_P12_BASE64, MACOS_SIGNING_P12_PASSWORD
-#                 macOS: the "PPVPN Code Signing" certificate and key, as the
-#                 desktop app is signed; without them ad-hoc (refused for stable)
+#                 macOS: our Developer ID Application certificate and key, as the
+#                 desktop app is signed (#471); without them ad-hoc (refused for
+#                 stable)
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8
+#                 macOS: App Store Connect API key, notarizes the binary (required
+#                 for stable)
 set -euo pipefail
 
-os=${1:?usage: $0 linux <target> | macos}
+os=${1:?usage: $0 linux <target> | macos [<target>...]}
 cd "$(dirname "$0")/../.."
 root=$(pwd)
 work=$(mktemp -d)
@@ -107,33 +113,49 @@ linux)
 	esac
 	;;
 macos)
-	platform=macos-universal
-	for target in aarch64-apple-darwin x86_64-apple-darwin; do
+	shift
+	targets=("$@")
+	[ ${#targets[@]} -gt 0 ] || targets=(aarch64-apple-darwin x86_64-apple-darwin)
+	archs=()
+	for target in "${targets[@]}"; do
+		case $target in
+		aarch64-apple-darwin) archs+=(arm64) ;;
+		x86_64-apple-darwin) archs+=(x86_64) ;;
+		*) fail "unsupported target $target" ;;
+		esac
 		cargo build --release --locked -p ppvpn-cli --target "$target"
 	done
-	bin=$root/target/universal-apple-darwin/ppvpn
+	case "${archs[*]}" in
+	"arm64 x86_64") platform=macos-universal ;;
+	arm64) platform=macos-arm64 ;;
+	*) fail "macos builds aarch64-apple-darwin, or it and x86_64-apple-darwin in that order" ;;
+	esac
+	[ "$platform" = macos-universal ] || [ "${CHANNEL:-}" != stable ] || fail "a stable build is universal"
+	bin=$root/target/$platform/ppvpn
 	mkdir -p "$(dirname "$bin")"
-	lipo -create -output "$bin" \
-		target/aarch64-apple-darwin/release/ppvpn target/x86_64-apple-darwin/release/ppvpn
-	lipo "$bin" -verify_arch arm64 x86_64
+	slices=()
+	for target in "${targets[@]}"; do slices+=("target/$target/release/ppvpn"); done
+	lipo -create -output "$bin" "${slices[@]}"
+	lipo "$bin" -verify_arch "${archs[@]}"
 	# Symbols out before signing: a dSYM (the symbol tables of both slices;
 	# release builds carry no DWARF, which dsymutil warns about), then strip.
 	symbols=$work/ppvpn.dSYM
 	dsymutil "$bin" -o "$symbols" 2>&1 | grep -v 'no debug symbols in executable' || true
-	for arch in arm64 x86_64; do
+	for arch in "${archs[@]}"; do
 		nm -arch "$arch" "$symbols/Contents/Resources/DWARF/ppvpn" | grep 'ppvpn_cli8commands3run' >/dev/null \
 			|| fail "the dSYM lacks the CLI's symbols ($arch)"
 	done
 	strip "$bin"
 	! nm -arch arm64 "$bin" 2>/dev/null | grep 'ppvpn_cli8commands3run' >/dev/null || fail "the shipped ppvpn still has symbols"
-	# The desktop app's certificate (tools/desktop/ci/build-macos-native.sh):
-	# self-signed, so the designated requirement is pinned to the identifier
-	# and the certificate, and the Keychain item's access carries across
-	# updates. A temporary keychain holds it for this build only.
+	# The desktop app's Developer ID (tools/desktop/ci/build-macos-native.sh):
+	# Apple's designated requirement (identifier, Team ID) carries across
+	# updates and certificate renewals, and with it the Keychain item's
+	# access. A temporary keychain holds it for this build only.
 	identifier=com.peakpassvpn.ppvpn.cli
+	team=$(tr -d '[:space:]' <crates/service/src/macos_team_id)
+	identity=""
 	if [ -n "${MACOS_SIGNING_P12_BASE64:-}" ]; then
 		: "${MACOS_SIGNING_P12_PASSWORD:?MACOS_SIGNING_P12_PASSWORD is required with MACOS_SIGNING_P12_BASE64}"
-		identity="PPVPN Code Signing"
 		key_dir=$(mktemp -d)
 		keychain=$key_dir/signing.keychain-db
 		keychain_password=$(uuidgen)
@@ -150,18 +172,45 @@ macos)
 		security set-keychain-settings -lut 21600 "$keychain"
 		security unlock-keychain -p "$keychain_password" "$keychain"
 		printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode >"$key_dir/signing.p12"
-		security import "$key_dir/signing.p12" -k "$keychain" -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+		# security import reads only the legacy PKCS#12 algorithms and reports
+		# OpenSSL 3's defaults as "MAC verification failed ... (wrong password?)".
+		security import "$key_dir/signing.p12" -k "$keychain" -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign >/dev/null ||
+			fail "MACOS_SIGNING_P12_BASE64 could not be imported. If the password is right and the .p12 came from OpenSSL 3, re-export it with \`openssl pkcs12 -export -legacy\` or from Keychain Access."
 		rm -f "$key_dir/signing.p12"
 		security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
 		security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
-		cert_sha1=$(security find-certificate -c "$identity" -Z "$keychain" | awk '/^SHA-1 hash:/ { print $NF; exit }')
-		[ -n "$cert_sha1" ] || fail "no certificate for \"$identity\" in the signing keychain"
-		codesign --force --sign "$identity" --identifier "$identifier" --options runtime --timestamp=none \
-			--requirements "=designated => identifier \"$identifier\" and certificate leaf = H\"$cert_sha1\"" "$bin"
-		codesign -dv --verbose=4 "$bin" 2>&1 | grep -qx "Authority=$identity" || fail "ppvpn is not signed by $identity"
+		identity=$(security find-identity -v "$keychain" |
+			sed -n 's/^ *[0-9][0-9]*) [0-9A-F]\{40\} "\(.*\)"$/\1/p' |
+			grep -x "Developer ID Application: .* ($team)" || true)
+		if [ -z "$identity" ] || [ "$(printf '%s\n' "$identity" | wc -l)" -ne 1 ]; then
+			security find-identity -v "$keychain" >&2
+			[ "${CHANNEL:-}" != stable ] || fail "the certificate is not one \"Developer ID Application: … ($team)\" identity"
+			# A dev build whose environment still holds another certificate
+			# (the self-signed one of 0.7.x): built ad hoc, as without one.
+			echo "::warning::MACOS_SIGNING_P12_BASE64 is not our Developer ID Application certificate; signing ad-hoc (not for release)"
+			identity=""
+		fi
+	fi
+	if [ -n "$identity" ]; then
+		codesign --force --sign "$identity" --identifier "$identifier" --options runtime --timestamp "$bin"
+		codesign -dv --verbose=4 "$bin" 2>&1 | grep -qx "TeamIdentifier=$team" || fail "ppvpn is not signed by $team"
+		if [ -n "${ASC_KEY_P8:-}" ]; then
+			: "${ASC_KEY_ID:?ASC_KEY_ID is required with ASC_KEY_P8}"
+			: "${ASC_ISSUER_ID:?ASC_ISSUER_ID is required with ASC_KEY_P8}"
+			(umask 077 && printf '%s\n' "$ASC_KEY_P8" >"$key_dir/notary.p8")
+			# A bare binary takes no stapled ticket: Gatekeeper looks it up
+			# online.
+			ditto -c -k "$bin" "$work/ppvpn.zip"
+			"$root/tools/notarize.sh" "$work/ppvpn.zip" "$key_dir/notary.p8" "$ASC_KEY_ID" "$ASC_ISSUER_ID" ||
+				fail "notarizing ppvpn failed"
+		else
+			[ "${CHANNEL:-}" != stable ] || fail "a stable build must be notarized (ASC_KEY_P8)"
+			echo "warning: ASC_KEY_P8 not set; signed but not notarized"
+		fi
 	else
 		[ "${CHANNEL:-}" != stable ] || fail "a stable build must be signed (MACOS_SIGNING_P12_BASE64)"
-		echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
+		[ -n "${MACOS_SIGNING_P12_BASE64:-}" ] ||
+			echo "warning: MACOS_SIGNING_P12_BASE64 not set; signing ad-hoc (not for release)"
 		codesign --force --sign - --identifier "$identifier" --options runtime "$bin"
 	fi
 	codesign --verify --strict --verbose=2 "$bin"

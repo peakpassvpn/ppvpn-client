@@ -1,0 +1,101 @@
+name: Android SDK packages
+description: >-
+  The SDK packages ci.yml's android job boots its emulator from
+  (reactivecircus/android-emulator-runner), installed before that action
+  runs so that its own sdkmanager calls find them: the system image (about
+  1.5 GB from Google), the platform and the build tools the action asks
+  for. That action sends sdkmanager's output to /dev/null and goes on
+  after a failed download, so a truncated zip surfaced only as adb failing
+  to reach the emulator (run 40718438632), and sdkmanager's download of
+  the image broke off twice (runs 40718438632, 40736773393). Here the
+  system image comes by curl, resumed and checked against the SDK
+  repository's SHA-1 (system-image.py); the rest through sdkmanager,
+  failing, with the package named, unless each is complete. Not cached:
+  the download takes under a minute, and the repository's 10 GB of
+  Actions cache is short for the Rust caches already (#459). Nor is the
+  AVD: the action makes it locally in seconds, and the emulator starts
+  without snapshots.
+inputs:
+  api-level:
+    description: The emulator's API level, as the runner action's api-level
+    required: true
+  target:
+    description: The system image's target, as the runner action's target
+    required: true
+  arch:
+    description: The system image's ABI, as the runner action's arch
+    required: true
+  build-tools:
+    description: The build tools the runner action installs (its BUILD_TOOLS_VERSION)
+    required: false
+    default: 37.0.0
+runs:
+  using: composite
+  steps:
+    - id: sdk
+      name: Locate the SDK
+      shell: bash
+      run: |
+        set -euo pipefail
+        sdk=${ANDROID_HOME:-$ANDROID_SDK_ROOT}
+        echo "root=$sdk" >> "$GITHUB_OUTPUT"
+    - name: Install the packages
+      shell: bash
+      env:
+        SDK: ${{ steps.sdk.outputs.root }}
+        API: ${{ inputs.api-level }}
+        TARGET: ${{ inputs.target }}
+        ARCH: ${{ inputs.arch }}
+        PACKAGES: >-
+          platforms;android-${{ inputs.api-level }}
+          build-tools;${{ inputs.build-tools }}
+      run: |
+        set -euo pipefail
+        sdkmanager="$SDK/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$sdkmanager" --licenses > /dev/null || true
+        # The system image without sdkmanager's downloader, which finished
+        # twice with a truncated archive: resumed, and checked against the
+        # repository's size and SHA-1 (system-image.py).
+        python3 -I "$GITHUB_ACTION_PATH/system-image.py" "$SDK" "$API" "$TARGET" "$ARCH"
+        image="system-images;android-$API;$TARGET;$ARCH"
+        # sdkmanager takes it as installed: it lists it, and installing it
+        # again downloads nothing (the emulator runner does that next).
+        before=$(stat -c %Y "$SDK/${image//;//}/system.img")
+        "$sdkmanager" --install "$image" > "$RUNNER_TEMP/sdkmanager.log" 2>&1 || true
+        if [ "$(stat -c %Y "$SDK/${image//;//}/system.img")" != "$before" ] ||
+          ! "$sdkmanager" --list_installed 2>/dev/null | grep -qF "$image "; then
+          tail -20 "$RUNNER_TEMP/sdkmanager.log"
+          echo "::error::sdkmanager does not take $image as installed"
+          exit 1
+        fi
+        # The small ones (about 200 MB together) through sdkmanager.
+        for package in $PACKAGES; do
+          echo "installing $package"
+          "$sdkmanager" --install "$package" > "$RUNNER_TEMP/sdkmanager.log" 2>&1 || true
+          # It exits 0 after a failed download, which it reports as a
+          # warning; a complete package has its package.xml.
+          if [ ! -s "$SDK/${package//;//}/package.xml" ]; then
+            grep -E '^(Warning|Error): ' "$RUNNER_TEMP/sdkmanager.log" || tail -20 "$RUNNER_TEMP/sdkmanager.log"
+            echo "::error::sdkmanager did not install $package"
+            exit 1
+          fi
+        done
+    # sdkmanager writes a package's package.xml after unpacking it (and
+    # system-image.py after it), so a package without one is incomplete.
+    - name: Check the packages
+      shell: bash
+      env:
+        SDK: ${{ steps.sdk.outputs.root }}
+        PACKAGES: >-
+          system-images;android-${{ inputs.api-level }};${{ inputs.target }};${{ inputs.arch }}
+          platforms;android-${{ inputs.api-level }}
+          build-tools;${{ inputs.build-tools }}
+        SYSTEM_IMAGE: ${{ steps.sdk.outputs.root }}/system-images/android-${{ inputs.api-level }}/${{ inputs.target }}/${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        for package in $PACKAGES; do
+          dir="$SDK/${package//;//}"
+          [ -s "$dir/package.xml" ] || { echo "::error::$dir: not installed (no package.xml)"; exit 1; }
+          echo "$dir: $(du -sh "$dir" | cut -f1)"
+        done
+        [ -s "$SYSTEM_IMAGE/system.img" ] || { echo "::error::$SYSTEM_IMAGE: no system.img"; exit 1; }

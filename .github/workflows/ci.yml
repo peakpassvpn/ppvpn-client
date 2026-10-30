@@ -21,24 +21,33 @@ name: ci
 #                scripts, the C# and Swift bindings with their tests
 #   linux        Linux's own: L3 in network namespaces (tun with G7,
 #                network-change) and the desktop's enhanced mode end to end
-#   macos        clippy for aarch64 and x86_64, the macOS-only tests, the
-#                Debug app build
+#   macos        clippy (aarch64), the macOS-only tests
 #   windows      clippy (MSVC), the Windows-only tests, G7 on Windows, the
-#                C# bindings, App.Core, the app and push agent builds
+#                C# bindings, App.Core
 #   flutter      the Flutter prototype (#387) on Linux, macOS and Windows:
 #                build and smoke test, the Linux deb and rpm, only when it
-#                or the client changed; on Windows also its installer,
+#                or what it builds from changed; on Windows also its installer,
 #                installed and uninstalled
 #   android      the Flutter app's Android target (#448): the bridge for
 #                arm64 and x86_64, the APK, the app started on an emulator,
-#                only when it or the client changed
+#                only when it or what it builds from changed
+#   ios          the Flutter app's iOS target (#448): the bridge for Apple
+#                silicon's simulator, the app, started on an iPhone
+#                simulator, only when it or what it builds from changed
 # A pull request that changes only docs/ or Markdown runs every job, and each
 # skips its build and test steps (tools/ci-changes.sh `code`); lint still runs
 # the sensitive check.
 #
 # Merges to main run release.yml, not this: it builds the installers and
 # keeps the build caches this workflow restores. A pull request only reads
-# caches, so the cache keys here (shared-key) are the ones release.yml saves.
+# caches, so the cache keys here (shared-key) are the ones release.yml saves
+# (its cache-* jobs). The repository has 10 GB of cache: nothing here saves
+# one, not even setup-go's; test/go.mod's modules come from release.yml's
+# cache too (.github/actions/go-modules). The Rust caches are one per
+# runner OS's group of jobs (macos, flutter (macos) and ios; windows and
+# flutter (windows); flutter (ubuntu) and android) and tunnel (ios)'s; lint,
+# unit, integration, linux and desktop build without one, as the budget is
+# short (#459).
 # By hand: gh workflow run ci.yml --ref <branch>.
 
 on:
@@ -49,10 +58,6 @@ on:
         description: "windows: runs of the runtime's failure tests (twenty on the pull request that adds one)"
         type: number
         default: 5
-      flutter_curve_minutes:
-        description: "flutter: minutes of the prototype's memory curve with traffic pushes (10 on a pull request)"
-        type: number
-        default: 120
 
 permissions:
   contents: read
@@ -64,6 +69,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A cache download that stalls is given up after 5 minutes per segment
+  # (@actions/cache's default is 10), as a cache miss; the rust-cache steps
+  # also end after 10 minutes and the job goes on without the cache. A
+  # restore hung on 2026-10-29 until lint's 30-minute limit (#482).
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 5
   # Line numbers in a failing test's backtrace without full debug info. Part
   # of the cache key: release.yml's cache jobs set the same.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -107,11 +117,8 @@ jobs:
         with:
           toolchain: 1.98.1
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: linux
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -209,11 +216,8 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         with:
           toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: unit
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -240,11 +244,8 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         with:
           toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: integration
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -252,6 +253,7 @@ jobs:
       - name: L2 (make test-integration)
         if: steps.scope.outputs.code == 'true'
         run: |
+          sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dbus gnome-keyring
           make test-integration
@@ -284,17 +286,17 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         with:
           go-version-file: test/go.mod
-          cache-dependency-path: test/go.sum
+          cache: false
+      # test/go.mod's modules from the cache, offline on a hit (#459).
+      - uses: ./.github/actions/go-modules
+        if: steps.scope.outputs.code == 'true'
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         if: steps.scope.outputs.code == 'true'
         with:
           toolchain: 1.98.1
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: linux
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -433,11 +435,8 @@ jobs:
           toolchain: 1.98.1
           components: clippy
           targets: x86_64-unknown-linux-gnu
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.code == 'true'
-        with:
-          shared-key: desktop
-          save-if: false
+      # No Rust cache: the 10 GB of Actions cache holds the macOS, Windows
+      # and mobile builds' (release.yml, cache-*; #459).
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
@@ -459,6 +458,14 @@ jobs:
         run: |
           cargo test --locked -p ppvpn-push-agent
           cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets -- -D warnings
+      # The mobile tunnel host (#448) on Linux: its C functions, socket and
+      # host with an engine that is never started. Its iOS build is the
+      # tunnel job's.
+      - name: Tunnel host
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          cargo test --locked -p ppvpn-tunnel-host
+          cargo clippy --locked -p ppvpn-tunnel-host --all-targets -- -D warnings
       - name: Check scripts
         if: steps.scope.outputs.code == 'true'
         run: |
@@ -474,10 +481,9 @@ jobs:
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs
           key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
-      # Either cache (this one or rust-cache, which keeps ~/.cargo/bin) may
-      # have restored the binary: install only when it is missing or of
-      # another version, and then over whatever is there. Not for the target
-      # triple the job builds: a host tool.
+      # The cache may have restored the binary: install only when it is
+      # missing or of another version, and then over whatever is there. Not
+      # for the target triple the job builds: a host tool.
       - name: Install uniffi-bindgen-cs
         if: steps.scope.outputs.code == 'true'
         run: |
@@ -494,17 +500,13 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: dotnet test apps/linux/PPVPN.Linux.Tests
       # swift.org's toolchain for the runner's Ubuntu, its signature checked
-      # against swift.org's keys; cached per version.
-      - name: Cache Swift
-        if: steps.scope.outputs.code == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/swift
-          key: swift-${{ env.SWIFT_VERSION }}-ubuntu24.04-${{ runner.arch }}
+      # against swift.org's keys. Not cached: about 1 GB of the repository's
+      # 10 GB, for about a minute of download.
       - name: Install Swift
         if: steps.scope.outputs.code == 'true'
         run: |
           set -euo pipefail
+          sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev libedit2 libncurses-dev \
             libpython3-dev libsqlite3-0 libxml2-dev libz3-dev
@@ -530,13 +532,16 @@ jobs:
         run: swift test --package-path apps/macos/AppLogic
 
   # macOS, for what Linux cannot cover (L1 and L2 run once, on Linux):
-  #   - clippy over the whole workspace for aarch64 and x86_64-apple-darwin,
-  #     so that every cfg'd macOS path compiles; and that btls-sys links the
-  #     prebuilt BoringSSL (Desktop ships an Intel package, the one target
-  #     btls's own CI does not use);
-  #   - the macOS-only tests, by filter (docs/testing.md, "Platform tests");
-  #   - a Debug build of the app against the client (ad-hoc signed; without
-  #     the staged core and service, which a Debug build does not need).
+  #   - clippy over the whole workspace for aarch64-apple-darwin, so that
+  #     every cfg'd macOS path compiles. Not again for x86_64 (#459): no
+  #     code of ours is cfg'd by architecture, and the build scripts need
+  #     the Apple SDK (oslog's C includes <os/log.h>), so it cannot move to
+  #     Linux either. Only btls-sys is checked for x86_64-apple-darwin, that
+  #     it takes the prebuilt BoringSSL (Desktop ships an Intel package, the
+  #     one target btls's own CI does not use); release.yml links it;
+  #   - the macOS-only tests, by filter (docs/testing.md, "Platform tests").
+  # Not the native app's build (#459): the Flutter app replaced it, and the
+  # upgrade from it is tested with its last release (0.6.4).
   macos:
     name: macos
     runs-on: macos-15
@@ -558,22 +563,29 @@ jobs:
         if: steps.scope.outputs.memory == 'true'
         with:
           go-version-file: test/go.mod
-          cache-dependency-path: test/go.sum
+          cache: false
+      # test/go.mod's modules from the cache, offline on a hit (#459).
+      - uses: ./.github/actions/go-modules
+        if: steps.scope.outputs.memory == 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
+          prefix-key: v1-rust
           shared-key: macos
           save-if: false
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.code == 'true'
         with:
           targets: aarch64-apple-darwin x86_64-apple-darwin
-      - name: clippy, aarch64
+      - name: clippy
         if: steps.scope.outputs.code == 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: clippy, x86_64
+      - name: btls-sys, x86_64
         if: steps.scope.outputs.code == 'true'
-        run: cargo clippy --workspace --all-targets --locked --target x86_64-apple-darwin -- -D warnings
+        run: cargo check --locked -p btls-sys --target x86_64-apple-darwin
       # btls-sys's build script points the linker at the downloaded library
       # (BORING_BSSL_PATH_<target>/lib), and no BoringSSL build tree exists.
       - name: x86_64, the prebuilt BoringSSL is the one linked
@@ -644,15 +656,6 @@ jobs:
             ne-mem-macos.json
             ne-mem-*.log
           if-no-files-found: ignore
-      # Only when the desktop or what it builds from changed: the app
-      # compiles the client for both architectures.
-      - name: Build the Debug app against the client
-        if: steps.scope.outputs.desktop == 'true'
-        run: |
-          brew install xcodegen
-          apps/macos/scripts/bootstrap.sh
-          xcodebuild -project apps/macos/PPVPN.xcodeproj -scheme PPVPN -configuration Debug \
-            -derivedDataPath apps/macos/build -destination 'platform=macOS' build
 
   # Windows (MSVC, what the desktop links), for what Linux cannot cover:
   #   - clippy over the crates the desktop links (ppvpn-cli ships for Linux
@@ -666,9 +669,9 @@ jobs:
   #     a fault the test arms (the test build's fault-injection feature,
   #     never a release's). The runner is administrator; wintun.dll, sail's
   #     pinned one, goes beside the test;
-  #   - the app: the client's C# bindings, App.Core's tests, warning-free
-  #     builds of the WinUI app and the push agent (NativeAOT). No installer
-  #     and no signing (release.yml builds the installer).
+  #   - the client's C# bindings and App.Core's tests. Not the native app's
+  #     or its push agent's builds (#459): the Flutter app replaced them, and
+  #     the upgrade from them is tested with their last release (0.6.4).
   windows:
     name: windows
     runs-on: windows-latest
@@ -707,7 +710,11 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.code == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
         with:
+          prefix-key: v1-rust
           shared-key: windows
           save-if: false
       - uses: ./.github/actions/prebuilt-boringssl
@@ -725,6 +732,34 @@ jobs:
           cargo test -p ppvpn-core --lib --locked --target x86_64-pc-windows-msvc -- hostipv6::windows localdns::source probe::icmp
           cargo test -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc -- detect service sysproxy
           cargo test -p ppvpn-push-agent --locked --target x86_64-pc-windows-msvc
+      # The release's Windows signing scripts (#489), which sign only in a
+      # release environment: they parse, the signing client downloads and
+      # checks out (no signing: that needs Azure), and the signer check
+      # reads a signed file and refuses a signer that is not ours.
+      - name: Windows signing scripts
+        if: steps.scope.outputs.code == 'true'
+        shell: powershell
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+          ARTIFACT_SIGNING_ACCOUNT: ci
+          ARTIFACT_SIGNING_PROFILE: ci
+        run: |
+          foreach ($script in Get-ChildItem apps\windows\scripts\*.ps1, apps\flutter\scripts\*.ps1, tools\desktop\ci\*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { throw "$($script.Name): $($errors -join '; ')" }
+          }
+          # -Setup's variables into a file of this step's own.
+          $env:GITHUB_ENV = "$env:RUNNER_TEMP\artifact-signing.env"
+          tools\desktop\ci\artifact-signing.ps1 -Setup
+          Get-Content $env:GITHUB_ENV
+          $signTool = (Get-Content $env:GITHUB_ENV | Where-Object { $_ -like "ARTIFACT_SIGNING_SIGNTOOL=*" }) -replace "^[^=]*=", ""
+          # SignTool itself: signed, by Microsoft.
+          apps\windows\scripts\check-publisher.ps1 $signTool
+          $env:PPVPN_WINDOWS_PUBLISHER_EKU = "1.3.6.1.4.1.311.97.1"
+          $refused = $false
+          try { apps\windows\scripts\check-publisher.ps1 $signTool } catch { $refused = $true; Write-Host "refused: $_" }
+          if (-not $refused) { throw "check-publisher.ps1 accepted a signer that is not ours" }
       - name: L3, build the failure tests
         if: steps.scope.outputs.code == 'true'
         run: cargo test -p ppvpn-core --lib --features fault-injection --locked --target x86_64-pc-windows-msvc --no-run
@@ -751,8 +786,8 @@ jobs:
             Write-Output "::endgroup::"
           }
 
-      # The C# bindings, App.Core and the app: only when the desktop or what
-      # it builds from changed. Debug bindings, as the engine's tests build.
+      # The C# bindings and App.Core: only when the desktop or what it
+      # builds from changed. Debug bindings, as the engine's tests build.
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: steps.scope.outputs.desktop == 'true'
         with:
@@ -780,28 +815,16 @@ jobs:
         run: |
           dotnet test apps/dotnet-shared/PPVPN.App.Core.Tests
           if ($LASTEXITCODE -ne 0) { throw "dotnet test failed" }
-      - name: Build the app
-        if: steps.scope.outputs.desktop == 'true'
-        shell: powershell
-        run: |
-          dotnet build apps/windows/PPVPN.Windows/PPVPN.Windows.csproj -c Release -p:Platform=x64 -warnaserror
-          if ($LASTEXITCODE -ne 0) { throw "dotnet build failed" }
-      - name: Build the push agent (NativeAOT)
-        if: steps.scope.outputs.desktop == 'true'
-        shell: powershell
-        run: |
-          dotnet publish apps/windows/PPVPN.PushAgent/PPVPN.PushAgent.csproj -c Release -r win-x64 -warnaserror -o "$env:RUNNER_TEMP\push-agent"
-          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
 
   # The Flutter desktop prototype (#387), on the three desktop platforms:
   # apps/flutter/scripts/ci-build.sh (platform runner, bridge codegen,
   # analysis, the Rust library and the app in release), then smoke.sh (still
   # running after 20 s, a screenshot, resident memory, bundle sizes; Linux
   # in Xvfb without a GPU); on Windows also the installer, installed over
-  # the native app and uninstalled. Only when apps/flutter/ or crates/desktop
-  # changed (tools/ci-changes.sh `flutter`); not in release.yml. Its caches
-  # are read-only like the others', and nothing saves them: the Rust release
-  # build starts from scratch.
+  # the native app and uninstalled. Only when the app or what it builds from
+  # changed (tools/ci-changes.sh `flutter`). Its Rust cache (key flutter,
+  # one per runner OS) is release.yml's cache-flutter-*: the codegen's cargo
+  # expand, the release library and what the later steps build.
   flutter:
     name: flutter (${{ matrix.os }})
     strategy:
@@ -809,11 +832,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
-    # By hand the memory curve runs for flutter_curve_minutes (2 h unless told).
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 240 || 90 }}
+    timeout-minutes: 90
     env:
       FRB_CODEGEN_VERSION: 2.13.0
-      CURVE_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.flutter_curve_minutes || 10 }}
     defaults:
       run:
         shell: bash
@@ -831,6 +852,17 @@ jobs:
         if: steps.scope.outputs.flutter == 'true'
         with:
           toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          # Each runner OS's key is shared with its other jobs: macos and
+          # ios, windows, android (release.yml builds each in one job).
+          prefix-key: v1-rust
+          shared-key: ${{ runner.os == 'macOS' && 'macos' || runner.os == 'Windows' && 'windows' || 'flutter' }}
+          save-if: false
       # bindgen's libclang (btls-sys) on Windows, as in the windows job.
       - name: libclang
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
@@ -846,6 +878,7 @@ jobs:
       - name: Linux build dependencies
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         run: |
+          sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config \
             libgtk-3-dev libx11-dev libxi-dev xvfb imagemagick libgl1-mesa-dri mesa-vulkan-drivers \
@@ -854,9 +887,13 @@ jobs:
         if: steps.scope.outputs.flutter == 'true'
         with:
           frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
+      # flutter analyze on Linux only (#459): the Dart is the same on every
+      # platform.
       - id: build
         name: Build
         if: steps.scope.outputs.flutter == 'true'
+        env:
+          PPVPN_SKIP_ANALYZE: ${{ matrix.os != 'ubuntu-latest' && '1' || '' }}
         run: apps/flutter/scripts/ci-build.sh
       # The Linux bundle, for the 24 h curve on the test machine (built here,
       # never there: apps/flutter/scripts/longcurve).
@@ -872,7 +909,10 @@ jobs:
         if: steps.scope.outputs.flutter == 'true'
         with:
           go-version-file: test/go.mod
-          cache-dependency-path: test/go.sum
+          cache: false
+      # test/go.mod's modules from the cache, offline on a hit (#459).
+      - uses: ./.github/actions/go-modules
+        if: steps.scope.outputs.flutter == 'true'
       - name: End to end, signed in
         if: steps.scope.outputs.flutter == 'true'
         timeout-minutes: 20
@@ -899,8 +939,11 @@ jobs:
       # runner's slice only (arm64), with the client and the helpers in
       # debug: the packaging is what is checked, and debug builds the
       # quickest. Then the shipped app as the .pkg holds it. Nothing uploaded.
+      # Only when what it packages beyond the app changed
+      # (tools/ci-changes.sh `macpkg`): the Build step above has built and
+      # the end-to-end step has run the app either way.
       - name: Package (macOS)
-        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
+        if: steps.scope.outputs.flutter == 'true' && steps.scope.outputs.macpkg == 'true' && matrix.os == 'macos-15'
         timeout-minutes: 45
         env:
           PPVPN_APPLE_TARGETS: aarch64-apple-darwin
@@ -913,8 +956,10 @@ jobs:
           for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
             install -m 755 "target/$triple/debug/$bin" "build/binaries/$bin-$triple"
           done
-          # Sign with a throwaway self-signed identity, as a release signs with
-          # its own (pinned designated requirements), not ad hoc.
+          # Sign with a throwaway self-signed identity, not ad hoc: the path
+          # of package-app.sh without a Team ID (pinned designated
+          # requirements). Releases sign with our Developer ID and notarize
+          # (#471), which needs the release environment's secrets.
           key_dir="$RUNNER_TEMP/ci-signing"
           mkdir -p "$key_dir"
           printf '%s\n' '[req]' 'distinguished_name=dn' 'x509_extensions=ext' 'prompt=no' \
@@ -965,8 +1010,8 @@ jobs:
           ls -R "$app/Contents/Library" "$app/Contents/MacOS"
       # Enhanced mode end to end on Linux (#401 step 2): the release bundle
       # in the packages' layout (/usr/lib/ppvpn/ppvpn, the only client the
-      # service accepts) with the service built in its shipping profile and
-      # installed by its own helper, then stopped: e2e/linux_enhanced.sh runs
+      # service accepts) with the service built in its shipping profile (LTO
+      # off, as on Windows) and installed by its own helper, then stopped: e2e/linux_enhanced.sh runs
       # it inside test/netns/run.sh's namespace, with a mock backend, a saved
       # sign-in and test/fakenode, and checks the TUN, the rules and table,
       # traffic through the node and the cleanup after a disconnect. Removed
@@ -975,10 +1020,18 @@ jobs:
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         with:
           go-version-file: test/go.mod
-          cache-dependency-path: test/go.sum
+          cache: false
+      # test/go.mod's modules from the cache, offline on a hit (#459).
+      - uses: ./.github/actions/go-modules
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
       - name: Enhanced mode end to end (Linux)
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         timeout-minutes: 30
+        # The shipping profile without LTO, as on Windows (#459): the release
+        # builds with it.
+        env:
+          CARGO_PROFILE_SERVICE_LTO: 'false'
+          CARGO_PROFILE_SERVICE_CODEGEN_UNITS: '16'
         run: |
           cargo build --locked -p ppvpn-service --profile service --bins
           make test-tools
@@ -988,22 +1041,16 @@ jobs:
           sudo systemctl disable --now ppvpn-service
           sudo NETNS_TIMEOUT=300 test/netns/run.sh --script apps/flutter/e2e/linux_enhanced.sh \
             "$PWD/build/test-tools/fakenode"
-      # Against the native app of the latest release, the same measurements
-      # for both (apps/flutter/scripts/compare.py), then the prototype's own:
-      # startup phases, tray CPU, the memory curve with traffic pushes.
-      # Reported, never a gate: the numbers go to the job summary and the
-      # artifact.
+      # The native app's last release (0.6.4), which 0.6.x users upgrade
+      # from: the deb's in-place upgrade below and the Windows installer's
+      # stage A.
       - id: native
         name: Fetch the native app
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.flutter == 'true' && matrix.os != 'macos-15'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${{ matrix.os }}" = ubuntu-latest ]; then
-            sudo apt-get install -y --no-install-recommends xdotool >/dev/null
-          fi
-          apps/flutter/scripts/native.sh v0.6.4 "$RUNNER_TEMP/native"
+        run: apps/flutter/scripts/native.sh v0.6.4 "$RUNNER_TEMP/native"
       # The deb and rpm (#401 step 5, apps/flutter/scripts/package-linux.sh),
       # each installed alone in a fresh container by package-smoke.sh: the
       # layout, every library resolved from the package's dependencies, one
@@ -1040,46 +1087,18 @@ jobs:
           name: flutter-packages-linux
           path: ${{ runner.temp }}/flutter-pkg
           retention-days: 7
-      - name: Compare with the native app
-        if: steps.scope.outputs.flutter == 'true' && steps.native.outcome == 'success'
-        continue-on-error: true
-        run: |
-          python3 -m venv "$RUNNER_TEMP/venv" 2>/dev/null || python -m venv "$RUNNER_TEMP/venv"
-          py="$RUNNER_TEMP/venv/bin/python"; [ -x "$py" ] || py="$RUNNER_TEMP/venv/Scripts/python.exe"
-          "$py" -m pip install --quiet psutil==7.2.2 python-xlib==0.33
-          zip=$(sed -n 's/^zip_kib=//p' "$RUNNER_TEMP/flutter-out/results.txt")
-          # Windows paths for Python on Windows (Git Bash gives /d/a/...).
-          p() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else echo "$1"; fi; }
-          set -- "$py" apps/flutter/scripts/compare.py --flutter "$(p "${{ steps.build.outputs.bundle }}")" \
-            --flutter-zip-kib "$zip" --native "$(p "${{ steps.native.outputs.exe }}")" \
-            --native-installer "$(p "${{ steps.native.outputs.installer }}")" \
-            --native-root "$(p "${{ steps.native.outputs.root }}")" --out "$(p "$RUNNER_TEMP/flutter-out")" \
-            --curve-minutes "$CURVE_MINUTES"
-          if [ "${{ matrix.os }}" = ubuntu-latest ]; then
-            xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- "$@"
-          else
-            "$@"
-          fi
       # The Windows installer (#401 step 5): package-windows.ps1 packages
       # the release bundle with the native app's installer script
       # (apps/windows/installer/ppvpn.nsi), unsigned, as release.yml's
       # windows job will; the service in its shipping profile without LTO,
       # to keep the job short. smoke-installer.ps1 then installs it over the
-      # native app of the latest release (when fetched above), checks the
-      # installation, has the app quit on the installer's quit event and
-      # uninstalls it with /PURGE.
-      - name: Ensure NSIS
+      # native app 0.6.4 (fetched above), checks the
+      # installation, has an upgrade stop on a file held open, has the app
+      # quit on the installer's quit event and uninstalls it with /PURGE.
+      # NSIS from a pinned, checksummed installer, not Chocolatey's feed.
+      - name: NSIS
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
-            Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $makensis) {
-            choco install nsis --no-progress -y
-            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
-            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          }
-          & $makensis /VERSION
+        uses: ./.github/actions/nsis
       - name: Installer (Windows)
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
         shell: powershell
@@ -1139,6 +1158,15 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: flutter
+          save-if: false
       # The host's for the bridge codegen, which reads the crate.
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.flutter == 'true'
@@ -1153,6 +1181,7 @@ jobs:
         if: steps.scope.outputs.flutter == 'true'
         env:
           FLUTTER_TARGET: android
+          PPVPN_SKIP_ANALYZE: '1'
         run: |
           # The runner's JDK 17 (for the emulator's step too) and newest NDK.
           echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
@@ -1175,6 +1204,15 @@ jobs:
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      # The system image (checksummed) and the rest, installed by
+      # .github/actions/android-sdk, which fails on an incomplete one instead
+      # of booting without it.
+      - uses: ./.github/actions/android-sdk
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
       # A tablet: in landscape (1280 dp across, the desktop layout), then set
       # to a phone's screen in portrait (the phone layout, #448 step 5).
       - name: Smoke test (emulator)
@@ -1194,7 +1232,9 @@ jobs:
     # The Flutter app's iOS target (#448): the bridge as a static library
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
-    # an iPhone simulator. No packet tunnel yet (#448 step 2).
+    # an iPhone simulator. No packet tunnel yet (#448 step 2). Its Rust
+    # cache is the macOS jobs' (key macos, release.yml's cache-macos): with
+    # the codegen's cargo expand, BoringSSL and the bridge for the simulator.
     name: ios
     runs-on: macos-15
     timeout-minutes: 90
@@ -1215,6 +1255,15 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: macos
+          save-if: false
       # The host's for the bridge codegen, which reads the crate.
       - uses: ./.github/actions/prebuilt-boringssl
         if: steps.scope.outputs.flutter == 'true'
@@ -1230,8 +1279,105 @@ jobs:
         env:
           FLUTTER_TARGET: ios
           IOS_SDK: simulator
+          PPVPN_SKIP_ANALYZE: '1'
         run: apps/flutter/scripts/ci-build.sh
       - name: Smoke test (simulator)
         if: steps.scope.outputs.flutter == 'true'
         timeout-minutes: 30
         run: apps/flutter/e2e/ios_smoke.sh
+
+  tunnel:
+    # The mobile tunnel host for the iOS packet tunnel extension (#448):
+    # crates/tunnel-host/scripts/build-xcframework.sh, the device slice only
+    # (a network extension never runs in the simulator; the full
+    # XCFramework is built for TestFlight in release.yml). ~25 min cold:
+    # sail and BoringSSL from source, profile mobile. Only when the tunnel
+    # host or what iOS alone compiles changed (tools/ci-changes.sh
+    # `tunnel`): macOS runners are few. Its Rust cache, key tunnel, is
+    # release.yml's cache-tunnel: of its own, so that the other macOS jobs
+    # do not restore the mobile profile's artifacts.
+    name: tunnel (ios)
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.tunnel == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: tunnel
+          save-if: false
+      - name: Build the XCFramework
+        if: steps.scope.outputs.tunnel == 'true'
+        run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ios
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          name: tunnel-ios
+          path: |
+            ${{ runner.temp }}/tunnel/PPVPNTunnel.xcframework
+            ${{ runner.temp }}/tunnel/PPVPNTunnel.ldflags
+          if-no-files-found: error
+          retention-days: 14
+
+  tunnel-android:
+    # The mobile tunnel host for Android's VpnService (#448):
+    # crates/tunnel-host/scripts/build-android.sh, arm64-v8a only (the
+    # emulator's x86_64 builds the same code), with clippy for Android: its
+    # JNI binding compiles for Android only. BoringSSL prebuilt, profile
+    # mobile. Only when the tunnel host or its dependencies changed
+    # (tools/ci-changes.sh `tunnel`). No Rust cache, as the
+    # other Linux jobs (#459).
+    name: tunnel (android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          targets: aarch64-linux-android
+      - name: Build libppvpn_tunnel.so
+        if: steps.scope.outputs.tunnel == 'true'
+        env:
+          PPVPN_TUNNEL_CLIPPY: "1"
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          crates/tunnel-host/scripts/build-android.sh "$RUNNER_TEMP/tunnel" arm64-v8a
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.scope.outputs.tunnel == 'true'
+        with:
+          name: tunnel-android
+          path: ${{ runner.temp }}/tunnel
+          if-no-files-found: error
+          retention-days: 14

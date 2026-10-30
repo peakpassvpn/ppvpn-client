@@ -140,7 +140,11 @@ pub struct PushAgent {
 impl PushAgent {
     #[uniffi::constructor]
     pub fn new(config: PushAgentConfig, listener: Arc<dyn PushAgentListener>) -> Arc<Self> {
-        crate::logging::install_with_prefix(&config.log_dir, crate::logging::PUSH_AGENT_PREFIX);
+        crate::logging::install_with_prefix(
+            &config.log_dir,
+            crate::logging::PUSH_AGENT_PREFIX,
+            &config.app_version,
+        );
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()

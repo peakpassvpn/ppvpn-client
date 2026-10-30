@@ -1,0 +1,56 @@
+name: Go modules
+description: >-
+  The modules test/go.mod's packages build from (the Go module download
+  cache, ~/go/pkg/mod/cache/download: Go's default GOMODCACHE, which
+  setup-go keeps), from the Actions cache, for
+  the ci.yml jobs that build test/'s helpers (fakenode, loadgen): a run
+  that downloaded them cold failed on one module's zip from
+  proxy.golang.org (#459). Saved on main only (release.yml,
+  cache-downloads), with the modules `go list -deps -test ./...` needs on Linux,
+  macOS and Windows: the build lists, not every module go.sum names. A hit builds with GOPROXY=off,
+  from the cache alone. A miss (a go.sum change, or the entry evicted)
+  downloads as before, from proxy.golang.org or else the module's own
+  repository (GOPROXY=https://proxy.golang.org|direct): a second source,
+  checked against go.sum like the first. Linux and macOS share one entry
+  (the path is written with ~ so that it is the same string); Windows has
+  its own. Needs Go (actions/setup-go) first.
+inputs:
+  lookup-only:
+    description: Only check for the cache (release.yml), downloading and saving on a miss
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - id: cache
+      name: Restore the modules
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/go/pkg/mod/cache/download
+        key: go-modules-v1-${{ runner.os == 'Windows' && 'windows' || 'unix' }}-${{ hashFiles('test/go.sum') }}
+        lookup-only: ${{ inputs.lookup-only }}
+    - name: Where modules come from
+      shell: bash
+      env:
+        HIT: ${{ steps.cache.outputs.cache-hit }}
+        LOOKUP: ${{ inputs.lookup-only }}
+      run: |
+        if [ "$HIT" = true ] && [ "$LOOKUP" != true ]; then
+          echo "GOPROXY=off" >> "$GITHUB_ENV"
+        else
+          echo "GOPROXY=https://proxy.golang.org|direct" >> "$GITHUB_ENV"
+        fi
+    - name: Download the modules
+      if: inputs.lookup-only == 'true' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: test
+      run: |
+        # Each platform's build list: a file for one OS may import more.
+        for os in linux darwin windows; do GOOS=$os go list -deps -test ./... >/dev/null; done
+        du -sh "$(go env GOMODCACHE)/cache/download"
+    - name: Save the modules
+      if: inputs.lookup-only == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/go/pkg/mod/cache/download
+        key: ${{ steps.cache.outputs.cache-primary-key }}

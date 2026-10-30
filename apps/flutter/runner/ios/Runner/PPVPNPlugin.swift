@@ -6,18 +6,25 @@
 // - com.peakpassvpn.ppvpn/app: `filesDir`, the app's own directory: the
 //   App Group's container, which the packet tunnel shares (tunnel.sock),
 //   or Application Support in a build without the App Group (unsigned,
-//   the simulator).
+//   the simulator). `openUrl` -> Bool: an http(s) page in an
+//   SFSafariViewController over the app (lib/links.dart, #473), anything
+//   else through the system. `closeBrowser`: that page dismissed, if up.
 // - com.peakpassvpn.ppvpn/vpn: `prepare` -> Bool (the VPN configuration is
 //   saved; the system asks the user the first time), `start`, `stop`.
 // - com.peakpassvpn.ppvpn/vpn-state: the tunnel's NEVPNStatus as off /
 //   connecting / on / disconnecting, the current one first.
+//
+// A build for the simulator also prints the Dart VM service's address for
+// flutter test (VMServiceAnnouncer below).
 //
 // The packet tunnel itself (com.peakpassvpn.ppvpn.tunnel) is not in the
 // app yet: it comes with the tunnel host's C functions (#448 step 2).
 
 import Flutter
 import NetworkExtension
+import SafariServices
 import UIKit
+import os
 
 final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   static let appGroup = "group.com.peakpassvpn.ppvpn"
@@ -26,14 +33,22 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var manager: NETunnelProviderManager?
   private var sink: FlutterEventSink?
   private var observer: NSObjectProtocol?
+  private weak var browser: SFSafariViewController?
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let plugin = PPVPNPlugin()
     let messenger = registrar.messenger()
+    #if targetEnvironment(simulator)
+      VMServiceAnnouncer.start(registrar)
+    #endif
     FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/app", binaryMessenger: messenger)
       .setMethodCallHandler { call, result in
         switch call.method {
         case "filesDir": result(filesDir())
+        case "openUrl": plugin.open(call.arguments as? String, result: result)
+        case "closeBrowser":
+          plugin.browser?.dismiss(animated: true)
+          result(nil)
         default: result(FlutterMethodNotImplemented)
         }
       }
@@ -51,6 +66,30 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     guard let dir else { return nil }
     try? files.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir.path
+  }
+
+  private func open(_ text: String?, result: @escaping FlutterResult) {
+    guard let text, let url = URL(string: text) else { return result(false) }
+    guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let top = Self.topController() else {
+      return UIApplication.shared.open(url) { ok in result(ok) }
+    }
+    browser?.dismiss(animated: false)
+    let page = SFSafariViewController(url: url)
+    page.dismissButtonStyle = .close
+    top.present(page, animated: true)
+    browser = page
+    result(true)
+  }
+
+  /// The controller on top of the app's key window, to present over.
+  private static func topController() -> UIViewController? {
+    let window = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+      .first(where: \.isKeyWindow)
+    var top = window?.rootViewController
+    while let presented = top?.presentedViewController { top = presented }
+    return top
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -158,3 +197,39 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
   }
 }
+
+#if targetEnvironment(simulator)
+  /// flutter test on the simulator (e2e/ios_smoke.sh) learns the app's VM
+  /// service address from the simulator's log, through a `log stream` it
+  /// spawns while it launches the app, and the engine prints the address
+  /// once, about a second after launch. A stream still attaching then never
+  /// sees it, and the tool waits until it gives up. The test's own Dart code
+  /// cannot help: flutter test's bootstrap runs it only once the tool has
+  /// connected. So the app prints the line again every second for its first
+  /// minute, in the form the tool looks for, from the Runner executable
+  /// (the tool's predicate takes the app's own image or Flutter's; ci-build.sh
+  /// turns off the debug dylib for that). The tool takes the first it reads.
+  ///
+  /// Not `#if DEBUG`: flutter's Runner target does not set that condition
+  /// (only its RunnerTests do), so the announcer was compiled out (#484).
+  /// A release build has no VM service, and its vmServiceUrl stays nil.
+  enum VMServiceAnnouncer {
+    private static let log = Logger(subsystem: "com.peakpassvpn.ppvpn", category: "vm-service")
+
+    static func start(_ registrar: FlutterPluginRegistrar) {
+      var left = 60
+      Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+        left -= 1
+        if left == 0 { timer.invalidate() }
+        guard let url = engine(registrar)?.vmServiceUrl else { return }
+        log.notice("The Dart VM service is listening on \(url.absoluteString, privacy: .public)")
+      }
+    }
+
+    private static func engine(_ registrar: FlutterPluginRegistrar) -> FlutterEngine? {
+      if let controller = registrar.viewController as? FlutterViewController { return controller.engine }
+      let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+      return windows.lazy.compactMap { $0.rootViewController as? FlutterViewController }.first?.engine
+    }
+  }
+#endif

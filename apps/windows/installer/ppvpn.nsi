@@ -54,7 +54,7 @@ RequestExecutionLevel admin
 !insertmacro REQUIRE_DEFINE OUT_FILE
 
 !ifdef SIGN_COMMAND
-  ; Optional Authenticode signing (scripts/sign-windows.ps1 or WINDOWS_SIGN_COMMAND).
+  ; Optional Authenticode signing (scripts/sign-file.ps1, WINDOWS_SIGN_COMMAND).
   !finalize `${SIGN_COMMAND}`
   !uninstfinalize `${SIGN_COMMAND}`
 !endif
@@ -265,6 +265,96 @@ FunctionEnd
 !insertmacro DEFINE_STOP_SERVICE ""
 !insertmacro DEFINE_STOP_SERVICE "un."
 
+; The files the previous version installed (install-files.txt) that cannot be
+; replaced: each is opened for writing and deletion, sharing everything, as
+; replacing it needs. That fails while a process has it loaded, or open
+; without sharing writes (an upgrade on a VM failed on WinSparkle.dll, which
+; the guest agent held open). Restart Manager names the processes holding a
+; file. Sets $0 to one line per file ("" when all can be replaced) and prints
+; each line to the details.
+Function FindHeldFiles
+  StrCpy $R9 ""
+  ClearErrors
+  FileOpen $R0 "$INSTDIR\${MANIFEST}" r
+  ${If} ${Errors}
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+  ${Do}
+    ClearErrors
+    FileRead $R0 $R1
+    ${IfThen} ${Errors} ${|} ${Break} ${|}
+    ${TrimNewLines} "$R1" $R1
+    StrCpy $R2 $R1 1 -1
+    ; The list itself (the native app's lists it) is open here, and is
+    ; deleted, not replaced.
+    ${If} $R1 != ""
+    ${AndIf} $R2 != "\"
+    ${AndIf} $R1 != "${MANIFEST}"
+    ${AndIf} ${FileExists} "$INSTDIR\$R1"
+      ; GENERIC_WRITE | DELETE, FILE_SHARE_READ | WRITE | DELETE, OPEN_EXISTING
+      System::Call 'kernel32::CreateFileW(w "$INSTDIR\$R1", i 0x40010000, i 7, p 0, i 3, i 0x80, p 0) p .R3 ?e'
+      Pop $R4
+      ${If} $R3 P<> -1
+        System::Call 'kernel32::CloseHandle(p R3)'
+      ${Else}
+        Call HoldersOfR1
+        ${If} $R5 == ""
+          StrCpy $R5 "Windows error $R4"
+        ${EndIf}
+        DetailPrint "$R1: $R5"
+        StrCpy $R9 "$R9$R1: $R5$\r$\n"
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+  FileClose $R0
+  StrCpy $0 $R9
+FunctionEnd
+
+; Restart Manager's list of the processes holding $INSTDIR\$R1, into $R5 as
+; "name (pid N, service S), ..."; "" when it names none. At most 8 are read.
+Function HoldersOfR1
+  StrCpy $R5 ""
+  System::Call 'rstrtmgr::RmStartSession(*i .R6, i 0, w .R7) i .R8'
+  ${IfThen} $R8 != 0 ${|} Return ${|}
+  ; RmRegisterResources takes an array of string pointers: one, to a copy of the path.
+  System::Call '*(&w${NSIS_MAX_STRLEN} "$INSTDIR\$R1") p .R7'
+  System::Call '*(p R7) p .R2'
+  System::Call 'rstrtmgr::RmRegisterResources(i R6, i 1, p R2, i 0, p 0, i 0, p 0) i .R8'
+  ${If} $R8 == 0
+    ; RM_PROCESS_INFO: pid (4), start time (8), app name (256 WCHAR),
+    ; service short name (64 WCHAR), type, status, session, restartable (4 each): 668 bytes.
+    System::Alloc 5344
+    Pop $3
+    System::Call 'rstrtmgr::RmGetList(i R6, *i .r4, *i 8 r5, p r3, *i .r6) i .R8'
+    ${If} $R8 == 0
+      StrCpy $7 0
+      ${DoWhile} $7 < $5
+        IntOp $8 $7 * 668
+        IntPtrOp $9 $3 + $8
+        System::Call '*$9(i .r1, i .r8, i .r8, &w256 .r2, &w64 .r0)'
+        ${If} $0 != ""
+          StrCpy $2 "$2 (pid $1, service $0)"
+        ${Else}
+          StrCpy $2 "$2 (pid $1)"
+        ${EndIf}
+        ${If} $R5 == ""
+          StrCpy $R5 $2
+        ${Else}
+          StrCpy $R5 "$R5, $2"
+        ${EndIf}
+        IntOp $7 $7 + 1
+      ${Loop}
+    ${ElseIf} $R8 == 234 ; ERROR_MORE_DATA
+      StrCpy $R5 "$4 processes"
+    ${EndIf}
+    System::Free $3
+  ${EndIf}
+  System::Free $R2
+  System::Free $R7
+  System::Call 'rstrtmgr::RmEndSession(i R6)'
+FunctionEnd
+
 ; The installer runs elevated. Start the app through Explorer so it runs as
 ; the signed-in user at medium integrity, like a normal launch.
 Function LaunchApp
@@ -350,6 +440,31 @@ Section "PPVPN" SecMain
   Call StopApp
   Call StopAgent
   Call StopService
+  ; Then make sure they are released, before anything is changed: a process
+  ; that still holds one is named. Cancel (the default when silent) leaves the
+  ; previous version as it was and starts its service and agent again.
+  ${Do}
+    Call FindHeldFiles
+    ${IfThen} $0 == "" ${|} ${Break} ${|}
+    ${IfNot} ${Cmd} `MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "$(FilesInUse)$\r$\n$\r$\n$0" /SD IDCANCEL IDRETRY`
+      DetailPrint "$(FilesInUseAbort)"
+      ; A silent run (an update) shows nothing: the report goes to a file.
+      ${If} ${Silent}
+        FileOpen $1 "$TEMP\ppvpn-setup-files-in-use.txt" w
+        FileWrite $1 $0
+        FileClose $1
+      ${EndIf}
+      nsExec::ExecToLog '"$INSTDIR\ppvpn-service-install.exe"'
+      Pop $0
+      Call LaunchAgentIfEnabled
+      ${If} ${Silent}
+      ${AndIf} $AppWasRunning == 1
+        Call LaunchApp
+      ${EndIf}
+      SetErrorLevel 2
+      Abort "$(FilesInUseAbort)"
+    ${EndIf}
+  ${Loop}
   ; A service registered from another directory is re-registered: the install
   ; helper only starts an existing service and never changes its path.
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\${SERVICE_NAME}" "ImagePath"
@@ -482,6 +597,20 @@ Section "Uninstall"
   Delete "$INSTDIR\uninstall.exe"
   ; The directory is fixed and owned by this installer.
   RMDir /r "$INSTDIR"
+  ; The app's images can stay locked for a moment after it is gone (its
+  ; exit, a crash report, a scan): try again for up to 15 s, then leave what
+  ; is left to the next restart rather than in place.
+  StrCpy $1 0
+  ${DoWhile} ${FileExists} "$INSTDIR\*.*"
+    IntOp $1 $1 + 1
+    ${If} $1 > 15
+      DetailPrint "$INSTDIR: in use, removed at the next restart"
+      RMDir /r /REBOOTOK "$INSTDIR"
+      ${Break}
+    ${EndIf}
+    Sleep 1000
+    RMDir /r "$INSTDIR"
+  ${Loop}
   DeleteRegKey HKLM "${UNINST_KEY}"
 
   ${If} $RemoveData == ${BST_CHECKED}

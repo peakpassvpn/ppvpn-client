@@ -1,7 +1,8 @@
 //! PPVPN account client: the backend HTTP API a signed-in app uses and the
 //! browser device login that issues its credentials.
 //!
-//! The crate has no platform code. A host provides:
+//! The crate's only platform code reads the OS proxy for its API calls
+//! ([`sysproxy`]). A host provides:
 //! - an [`api::ApiConfig`] (backend base URL, product audiences, language,
 //!   local-backend test relaxations);
 //! - an [`auth::AuthConfig`] (where the browser authorization page lives);
@@ -20,3 +21,4 @@ pub mod auth;
 pub mod device;
 pub mod profile;
 pub mod session;
+mod sysproxy;

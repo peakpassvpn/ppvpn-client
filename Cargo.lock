@@ -822,6 +822,16 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "core-foundation"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91e195e091a93c46f7102ec7818a2aa394e1e1771c3ab4825963fa03e45afb8f"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
+name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
@@ -1727,9 +1737,11 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "socket2 0.6.5",
+ "system-configuration",
  "tokio",
  "tower-service",
  "tracing",
+ "windows-registry",
 ]
 
 [[package]]
@@ -1744,7 +1756,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -2286,7 +2298,7 @@ version = "0.1.6"
 source = "git+https://github.com/peakpassvpn/netconfig-rs.git?rev=c4186a6416cce1b66ca65200b7a23b5e859181d7#c4186a6416cce1b66ca65200b7a23b5e859181d7"
 dependencies = [
  "cfg-if",
- "core-foundation",
+ "core-foundation 0.10.1",
  "ipnet",
  "libc",
  "netlink-packet-core",
@@ -2732,20 +2744,23 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-account"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
+ "http",
+ "hyper-util",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "uuid",
+ "windows-registry",
 ]
 
 [[package]]
 name = "ppvpn-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "clap",
@@ -2765,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -2801,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-core-lab"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "bytes",
@@ -2820,7 +2835,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-desktop"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "hex",
@@ -2847,7 +2862,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-engine-host"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ppvpn-core",
  "serde",
@@ -2857,10 +2872,11 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-flutter"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "flutter_rust_bridge",
  "ppvpn-desktop",
+ "security-framework",
  "serde",
  "serde_json",
  "tokio",
@@ -2872,7 +2888,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-push-agent"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "ppvpn-desktop",
@@ -2885,10 +2901,10 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-service"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
- "core-foundation",
+ "core-foundation 0.10.1",
  "hex",
  "hmac",
  "libc",
@@ -2908,6 +2924,18 @@ dependencies = [
  "winapi",
  "windows-service",
  "winresource",
+]
+
+[[package]]
+name = "ppvpn-tunnel-host"
+version = "0.7.1"
+dependencies = [
+ "jni",
+ "ppvpn-core",
+ "ppvpn-engine-host",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -3606,7 +3634,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
 dependencies = [
  "bitflags 2.13.2",
- "core-foundation",
+ "core-foundation 0.10.1",
  "core-foundation-sys",
  "libc",
  "security-framework-sys",
@@ -3968,6 +3996,17 @@ dependencies = [
  "ntapi",
  "rayon",
  "windows 0.57.0",
+]
+
+[[package]]
+name = "system-configuration"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
+dependencies = [
+ "bitflags 2.13.2",
+ "core-foundation 0.9.4",
+ "system-configuration-sys",
 ]
 
 [[package]]
@@ -4915,7 +4954,7 @@ dependencies = [
  "windows-interface 0.59.3",
  "windows-link 0.1.3",
  "windows-result 0.3.4",
- "windows-strings",
+ "windows-strings 0.4.2",
 ]
 
 [[package]]
@@ -4996,6 +5035,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-registry"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+dependencies = [
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
+ "windows-strings 0.5.1",
+]
+
+[[package]]
 name = "windows-result"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5011,6 +5061,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56f42bd332cc6c8eac5af113fc0c1fd6a8fd2aa08a0119358686e5160d0586c6"
 dependencies = [
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-result"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
+dependencies = [
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -5031,6 +5090,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
 dependencies = [
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
+dependencies = [
+ "windows-link 0.2.1",
 ]
 
 [[package]]

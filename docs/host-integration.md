@@ -461,6 +461,7 @@ pub struct Error {
   - **暂时性错误**（网络错误、5xx、超时）：保留上一份 Profile（以 `expires_at` 为限），退避重试；
   - **无可用服务**（404）：保留上一份 Profile（以 `expires_at` 为限），提示用户。`ppvpn-account` 的 `SubscriptionProblem` 把 `SUBSCRIPTION_REQUIRED` 归为 `NoSubscription`，把 `PROXY_NODES_NOT_READY` 归为 `NodesNotReady`；裸 404 和不认识的码不归类，由宿主按旧口径处理。桌面端：`NodesNotReady` 对应 `ProfileStatus::NodesNotReady`（`ErrorCode::ProxyNodesNotReady`），客户端在 30 秒、60 秒后各重新拉取一次，之后每 2 分钟一次，直到状态改变（节点到位即 `Ready`，不需要用户操作）或退出登录；其余 404（`SUBSCRIPTION_REQUIRED`、裸 404、不认识的码）仍是 `ProfileStatus::NoSubscription`；
   - **需要重新登录**（刷新令牌后仍然 401，或者 403）：不再续用旧 Profile，要求用户重新登录。
+- **`ppvpn-account` 的请求走系统代理（#476）**：和原生版一致，每次请求时读取：先看环境变量（`HTTPS_PROXY` 等），Windows 再读 WinINet，macOS 再读 SystemConfiguration，Linux 只看环境变量。API 地址是本机时总是直连。系统代理连不上时（代理软件已退出、设置没恢复），这次请求改为直连，并记一条 warn。宿主不需要做任何配置。
 - **Profile 只放内存**：宿主可以不把 Profile 写到磁盘，因为里面有节点凭据；引擎的 `state_dir` 里也不保存 Profile 原文（第 4.6 节）。
 
 ## 10. 日志
@@ -514,7 +515,8 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
   - 没有内存告警接口，因为 Sail 没有收缩缓存的手段。内存上限靠 profile 加并发上限保证。
 - **休眠**：iOS 的 `sleep()` / `wake()` 照转 `Engine::sleep` / `Engine::wake`（第 4.7 节）。
 - **Profile**：经 `apply` 传入，只放在内存里（`docs/mobile.md`）。
-- **健康检查和恢复**：由隧道宿主负责，因为界面进程在后台会被挂起。规则同 #438，见 #448。
+- **健康检查和恢复**：由隧道宿主负责，因为界面进程在后台会被挂起。规则同 #438，在手机上怎么做见 `docs/mobile.md`。
+- **隧道宿主**：`crates/tunnel-host`。原生层调用的 C 函数以 `crates/tunnel-host/include/ppvpn_tunnel.h` 为契约；Android 经 JNI 调用同样的函数（Kotlin 类 `com.peakpassvpn.ppvpn.tunnel.TunnelHost`，socket 保护经它的 `Listener.protect`）。引擎的 `max_connections` 在 iOS 上由它设为 128。
 
 ## 12. 内部结构（不是契约，供评审参考）
 

@@ -92,7 +92,7 @@ pub(crate) fn main() -> ExitCode {
             data_dir,
             log_dir,
             platform: "linux".into(),
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            app_version: crate::version().into(),
         },
         Arc::new(Listener(notifier.clone())),
     );

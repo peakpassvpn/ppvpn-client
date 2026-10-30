@@ -115,7 +115,7 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
         data_dir: data_dir.clone(),
         log_dir,
         platform: platform.into(),
-        app_version: concat!(env!("CARGO_PKG_VERSION"), "-flutter").into(),
+        app_version: format!("{}-flutter", crate::update::version()),
     };
     let events = Arc::new(Events::default());
     let client = Client::new(
