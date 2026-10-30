@@ -77,20 +77,65 @@ pub(crate) fn open_url(_url: &str) -> bool {
     true
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", windows)))]
 pub(crate) fn open_url(url: &str) -> bool {
     use std::process::Command;
 
-    let mut command = if cfg!(target_os = "macos") {
-        Command::new("open")
-    } else if cfg!(windows) {
-        let mut command = Command::new("rundll32");
-        command.arg("url.dll,FileProtocolHandler");
-        command
+    let program = if cfg!(target_os = "macos") {
+        "open"
     } else {
-        Command::new("xdg-open")
+        "xdg-open"
     };
-    command.arg(url).spawn().is_ok()
+    Command::new(program).arg(url).spawn().is_ok()
+}
+
+/// Windows: the shell's own "open", which reports whether the default
+/// browser was started. `rundll32 url.dll,FileProtocolHandler` started
+/// nothing on Windows 11 while its spawn succeeded, so the sign-in never
+/// offered the link to open by hand.
+#[cfg(windows)]
+pub(crate) fn open_url(url: &str) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(text: &str) -> Vec<u16> {
+        OsStr::new(text).encode_wide().chain(Some(0)).collect()
+    }
+
+    let verb = wide("open");
+    let file = wide(url);
+    // SAFETY: COM for the shell's protocol handlers, as ShellExecute's
+    // documentation asks; undone below only when this call initialized it
+    // (S_OK or S_FALSE), not when the thread was already in another mode.
+    let com = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    } >= 0;
+    // SAFETY: NUL-terminated strings that outlive the call; no window.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if com {
+        // SAFETY: pairs with the successful CoInitializeEx above.
+        unsafe { CoUninitialize() };
+    }
+    // Greater than 32 on success; an error code otherwise.
+    result as isize > 32
 }
 
 /// Linux: a systemd unit, installed by a helper run as root through pkexec
