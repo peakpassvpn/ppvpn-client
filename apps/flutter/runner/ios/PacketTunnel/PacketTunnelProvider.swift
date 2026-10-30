@@ -139,18 +139,24 @@ struct TunnelError: LocalizedError {
 
 /// The engine's TunSettings (section 11, ppvpn_tunnel_settings): the
 /// tunnel's one IPv4 address and its routes (all traffic) as CIDR, the DNS
-/// address inside it and the MTU.
+/// address inside it and the MTU. IPv6 is optional: the engine sends none
+/// yet (#511), so an app's IPv6 leaves on the underlying network until it
+/// does; with them the tunnel takes IPv6 too, as Android's TunnelService.
 struct TunSettings: Decodable {
   let mtu: Int
   let ipv4Address: String
   let ipv4Routes: [String]
   let dnsServers: [String]
+  let ipv6Address: String?
+  let ipv6Routes: [String]?
 
   enum CodingKeys: String, CodingKey {
     case mtu
     case ipv4Address = "ipv4_address"
     case ipv4Routes = "ipv4_routes"
     case dnsServers = "dns_servers"
+    case ipv6Address = "ipv6_address"
+    case ipv6Routes = "ipv6_routes"
   }
 
   /// "10.60.159.89/30" as the address and its dotted mask.
@@ -164,6 +170,15 @@ struct TunSettings: Decodable {
     return (parts[0], dotted)
   }
 
+  /// "fd00::1/128" as the address and its prefix length.
+  static func split6(_ cidr: String) throws -> (String, NSNumber) {
+    let parts = cidr.split(separator: "/", maxSplits: 1).map(String.init)
+    guard parts.count == 2, parts[0].contains(":"), let bits = Int(parts[1]), (0...128).contains(bits) else {
+      throw TunnelError("not an IPv6 CIDR: \(cidr)")
+    }
+    return (parts[0], NSNumber(value: bits))
+  }
+
   func network() throws -> NEPacketTunnelNetworkSettings {
     // The remote address only labels the tunnel in Settings.
     let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
@@ -174,6 +189,15 @@ struct TunSettings: Decodable {
       return NEIPv4Route(destinationAddress: destination, subnetMask: mask)
     }
     settings.ipv4Settings = ipv4
+    if let ipv6Address {
+      let (address, prefix) = try Self.split6(ipv6Address)
+      let ipv6 = NEIPv6Settings(addresses: [address], networkPrefixLengths: [prefix])
+      ipv6.includedRoutes = try (ipv6Routes ?? []).map {
+        let (destination, prefix) = try Self.split6($0)
+        return NEIPv6Route(destinationAddress: destination, networkPrefixLength: prefix)
+      }
+      settings.ipv6Settings = ipv6
+    }
     let dns = NEDNSSettings(servers: dnsServers)
     // Every query, not only those for some domains.
     dns.matchDomains = [""]
