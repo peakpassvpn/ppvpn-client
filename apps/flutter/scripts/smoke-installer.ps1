@@ -9,7 +9,10 @@
   2. Installs -Installer silently and checks the install directory (the
      Flutter bundle, the push agent, the service binaries, wintun.dll; none
      of the native app's files left), the running service, the uninstall
-     entry and the Start menu shortcut's AppUserModelID.
+     entry and the Start menu shortcut's AppUserModelID. Then runs it again
+     with WinSparkle.dll held open (sharing reads only, as a VM's guest agent
+     held it): it must stop before changing anything, exit code 2, the
+     service running again and the installed files as they were.
   3. Starts the installed app in the tray (--background), checks its
      notification registration, sets the installer's quit event and
      expects the app to exit by itself.
@@ -370,6 +373,18 @@ try {
   if (-not $link) { throw "no Start menu shortcut at $shortcut" }
   $linkAumid = $link.ExtendedProperty("System.AppUserModel.ID")
   if ($linkAumid -ne $aumid) { throw "the shortcut's AppUserModelID is '$linkAumid', not $aumid" }
+  $held = Join-Path $dir "WinSparkle.dll"
+  $handle = [System.IO.File]::Open($held, "Open", "Read", "Read")
+  try {
+    Write-Host "==> $Installer /S, $held held open"
+    $process = Start-Process -FilePath $Installer -ArgumentList "/S" -Wait -PassThru
+    if ($process.ExitCode -ne 2) { throw "with $held held open, $Installer /S exited with $($process.ExitCode), not 2" }
+  } finally {
+    $handle.Dispose()
+  }
+  Wait-Until "$service running again" 30 { (Get-Service $service).Status -eq "Running" }
+  Test-FlutterInstall
+  Write-Host "the installer stopped on a held file and left the install as it was"
 
   # --- stage A: the upgrade, a rollback, the upgrade again --------------------------------
   if ($Native) {
