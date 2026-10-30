@@ -233,12 +233,14 @@ notarize() {
 # stapler fetches each ticket from Apple's CloudKit in one request and
 # gives up when the connection drops (exit 68, NSURLErrorDomain -1005), as
 # it did right after notarization in release runs 40911475488 and
-# 40929635549. Only that exit is tried again (three tries in all, 15 s and
-# 45 s apart), an exception to fixing flakes at the root that was agreed for
+# 40929635549. Only that exit is tried again (three tries in all, 60 s and
+# 180 s apart), an exception to fixing flakes at the root that was agreed for
 # this outside service; any other exit, such as 65 (no ticket), fails at once.
+# Run 40993849537 lost all three DMG tries within 80 s while the app's second
+# try 15 s in had worked, so the drops come in bursts and the gaps are long.
 staple() {
   local status
-  for pause in 15 45 0; do
+  for pause in 60 180 0; do
     status=0
     xcrun stapler staple "$1" || status=$?
     [[ "$status" != 0 ]] || return 0
@@ -246,7 +248,7 @@ staple() {
       echo "error: stapler staple $1 exited $status" >&2
       return "$status"
     fi
-    echo "warning: stapler staple $1 exited 68 (connection to Apple lost), again in ${pause}s" >&2
+    echo "warning: $(date -u +%H:%M:%SZ) stapler staple $1 exited 68 (connection to Apple lost), again in ${pause}s" >&2
     sleep "$pause"
   done
 }
