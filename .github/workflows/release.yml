@@ -297,6 +297,7 @@ jobs:
       - name: Build repository setup packages
         run: apps/linux/scripts/build-repo-packages.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: desktop-linux
           if-no-files-found: error
@@ -832,6 +833,7 @@ jobs:
       # The bundle at its default path and the push agent, at their paths in
       # the workspace (the artifact keeps them relative to its root).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: windows-app
           if-no-files-found: error
@@ -880,6 +882,7 @@ jobs:
         shell: powershell
         run: apps/flutter/scripts/package-windows.ps1 -ServiceOnly
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: windows-service
           if-no-files-found: error
@@ -956,6 +959,7 @@ jobs:
         shell: powershell
         run: apps/windows/scripts/check-publisher.ps1 (Get-Item dist\windows\*-setup.exe).FullName
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: desktop-windows-x64
           if-no-files-found: error
@@ -1042,6 +1046,7 @@ jobs:
           tar -cf build/macos-app/app.tar -C "$(dirname "$BUNDLE")" "$(basename "$BUNDLE")"
           tar -cf build/macos-app/client.tar -C "$GITHUB_WORKSPACE" "${PACKAGE#"$GITHUB_WORKSPACE"/}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: macos-app-${{ matrix.arch }}
           if-no-files-found: error
@@ -1074,6 +1079,7 @@ jobs:
       - name: Build the service helpers
         run: bash tools/desktop/build-service.sh macos-${{ matrix.arch }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: macos-service-${{ matrix.arch }}
           if-no-files-found: error
@@ -1138,6 +1144,7 @@ jobs:
           PPVPN_FLUTTER_BUNDLE: ${{ steps.unpack.outputs.bundle }}
         run: bash tools/desktop/ci/build-macos-native.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: desktop-${{ matrix.platform }}
           if-no-files-found: error
@@ -1216,6 +1223,7 @@ jobs:
         if: always() && env.SIGNED == 'true'
         run: tools/desktop/ci/ios-signing.sh cleanup
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: env.SIGNED == 'true'
         with:
           name: ios-ipa
@@ -1270,6 +1278,7 @@ jobs:
       - name: Build the archive
         run: tools/cli/build-release.sh linux ${{ matrix.target }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: cli-linux-${{ matrix.arch }}
           if-no-files-found: error
@@ -1323,6 +1332,7 @@ jobs:
           # shellcheck disable=SC2086 # the targets, one word each
           tools/cli/build-release.sh macos $TARGETS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: cli-macos
           if-no-files-found: error
@@ -1420,11 +1430,13 @@ jobs:
       - name: SHA256SUMS
         run: cd release && sha256sum -- * >../SHA256SUMS && mv ../SHA256SUMS . && cat SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: release-files
           path: release/
           if-no-files-found: error
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: site-preview
           path: site/
@@ -1690,6 +1702,7 @@ jobs:
           tools/desktop/ci/upload-site.sh --plan site
       # What site-deploy uploads; for a rehearsal, all there is.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: site
           path: site
@@ -1865,11 +1878,11 @@ jobs:
   # sail cold. rust-cache keeps the dependencies only; ci.yml never saves.
   # The key hashes the toolchain, the CARGO*/RUST*/CC* environment and the
   # manifests and lock file, so a job runs only when the merge changed one
-  # of those (`lock`) or its key is missing on main (the repository's 10 GB
+  # of those (`lock`) or its key is missing on main (the repository's 20 GB
   # evicts the least recently used), and then looks its exact key up first:
   # it builds, from scratch, and saves only on a miss. Not for a missing key
-  # while the caches are over 9.5 GB: rebuilding one would evict another.
-  # The 10 GB holds four keys (#459): macos, windows, flutter and tunnel;
+  # while the caches are over 19 GB: rebuilding one would evict another.
+  # The four keys (#459): macos, windows, flutter and tunnel;
   # lint, unit, integration, linux and desktop build uncached.
   # A workflow change that alters what a key's jobs build, without a lock
   # change, keeps the old entry: delete it (gh cache delete <key>; gh cache
@@ -1877,8 +1890,11 @@ jobs:
   # missing. All of them at once: a new prefix-key (here and in ci.yml).
   # The changes job deletes main's Rust entries no key uses any more (another
   # prefix-key, or a family's older entries once a newer one is saved):
-  # left to the LRU they kept the caches over 9.5 GB, so the new keys were
-  # never built (#496's merge, 7.9 GB of v0-rust-* left).
+  # left to the LRU they kept the caches over the guard, so the new keys were
+  # never built (#496's merge, 7.9 GB of v0-rust-* left). It also deletes
+  # main's CodeQL overlay databases but the newest per language (default
+  # setup leaves about ten each), and the entries of closed pull requests
+  # (a PR's caches are only its own; after the merge main saves its own).
   changes:
     name: changes
     if: github.event_name == 'push'
@@ -1886,8 +1902,10 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      # Deletes the Rust cache entries nothing uses (see above).
+      # Deletes the cache entries nothing uses (see above).
       actions: write
+      # Whether a pull request with caches is closed.
+      pull-requests: read
     outputs:
       lock: ${{ steps.diff.outputs.lock }}
       missing: ${{ steps.caches.outputs.missing }}
@@ -1921,6 +1939,30 @@ jobs:
                 echo "$family" >> "$RUNNER_TEMP/families"
               fi
             done
+          # CodeQL overlay databases on main: the newest per language
+          # (codeql-overlay-base-database-<n>-<hash>-<language>-...).
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=codeql-overlay-base-database-&per_page=100&sort=created_at&direction=desc" \
+            --jq '.actions_caches[] | "\(.id) \(.key)"' |
+            while read -r id key; do
+              family=$(cut -d- -f5-7 <<<"$key")
+              if grep -qxF "$family" "$RUNNER_TEMP/codeql" 2>/dev/null; then
+                echo "deleting the older CodeQL entry $key"
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" --silent
+              else
+                echo "$family" >> "$RUNNER_TEMP/codeql"
+              fi
+            done
+          # Closed pull requests' entries.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | select(.ref | startswith("refs/pull/")) | "\(.id) \(.ref)"' |
+            while read -r id ref; do
+              pr=$(cut -d/ -f3 <<<"$ref")
+              state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq .state) || state=unknown
+              if [ "$state" = closed ]; then
+                echo "deleting cache entry $id of closed #$pr"
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" --silent
+              fi
+            done
           used=$(gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" --jq .active_caches_size_in_bytes)
           keys=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=v1-rust-&per_page=100" \
             --jq '.actions_caches[].key')
@@ -1929,7 +1971,7 @@ jobs:
             grep -q "^v1-rust-$want-" <<<"$keys" || missing="$missing$want "
           done
           echo "cache usage: $((used / 1048576)) MiB; missing:$missing"
-          if [ "$used" -gt $((9500 * 1048576)) ]; then
+          if [ "$used" -gt $((19000 * 1048576)) ]; then
             echo "::warning::Actions caches at $((used / 1048576)) MiB: missing keys are not rebuilt"
             missing=" "
           fi

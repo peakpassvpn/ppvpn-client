@@ -350,6 +350,7 @@ jobs:
             --workers 1 --variant cap --variant mobile --variant budget \
             --out ne-mem-linux.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.memory == 'true'
         with:
           name: ne-mem-linux
@@ -388,6 +389,7 @@ jobs:
               | tee -a "$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.memory == 'true'
         with:
           name: ne-mem-dhat-linux
@@ -649,6 +651,7 @@ jobs:
             --workers 1 --variant cap --variant mobile --variant budget \
             --out ne-mem-macos.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.memory == 'true'
         with:
           name: ne-mem-macos
@@ -898,6 +901,7 @@ jobs:
       # The Linux bundle, for the 24 h curve on the test machine (built here,
       # never there: apps/flutter/scripts/longcurve).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         with:
           name: flutter-bundle-linux
@@ -1082,6 +1086,7 @@ jobs:
           smoke ubuntu:24.04 "/pkg/PPVPN-$version-linux-x64.deb" ${NATIVE_DEB:+"/native/$(basename "$NATIVE_DEB")"}
           smoke fedora:latest "/pkg/PPVPN-$version-linux-x64.rpm"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         with:
           name: flutter-packages-linux
@@ -1119,6 +1124,7 @@ jobs:
           set -- "$@" -Native "$(cygpath -w "$native")"
           powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/smoke-installer.ps1 "$@"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
         with:
           name: flutter-installer-windows
@@ -1128,6 +1134,7 @@ jobs:
             dist/windows/*-setup.exe
             dist/windows/release-meta-windows-x64.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.flutter == 'true'
         with:
           name: flutter-${{ matrix.os }}
@@ -1190,6 +1197,7 @@ jobs:
           apps/flutter/scripts/ci-build.sh
           ls -l "${{ github.workspace }}/apps/flutter/build/app/outputs/flutter-apk"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.flutter == 'true'
         with:
           name: flutter-apk-android
@@ -1327,6 +1335,7 @@ jobs:
         if: steps.scope.outputs.tunnel == 'true'
         run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ios
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.tunnel == 'true'
         with:
           name: tunnel-ios
@@ -1375,6 +1384,7 @@ jobs:
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
           crates/tunnel-host/scripts/build-android.sh "$RUNNER_TEMP/tunnel" arm64-v8a
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.tunnel == 'true'
         with:
           name: tunnel-android
