@@ -2,9 +2,9 @@
 # The Android smoke test (#448 steps 3 and 5) on a running emulator (ci.yml,
 # job android, after ci-build.sh with FLUTTER_TARGET=android):
 # integration_test/mobile_smoke_test.dart twice, its debug APK carrying the
-# release bridge and tunnel host ci-build.sh put in jniLibs. First a tablet's screen in
-# landscape (1280 dp across: the desktop layout), then a phone's, about
-# 390 dp across in portrait (the phone layout below 600).
+# release bridge and tunnel host ci-build.sh put in jniLibs. First a
+# tablet's screen in landscape (1280 dp across: the desktop layout), then
+# a phone's, about 390 dp across in portrait (the phone layout below 600).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

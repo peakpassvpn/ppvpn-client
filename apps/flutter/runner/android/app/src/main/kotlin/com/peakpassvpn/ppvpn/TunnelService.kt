@@ -35,10 +35,19 @@ import org.json.JSONObject
 // The host's own sockets leave outside the tunnel through protect. A start
 // from the system (always-on, no action) is not served yet.
 //
-// The host's calls block (stop waits for the engine): they run on one
-// worker thread, in order, so a stop right after a start finds it started.
+// The host's calls block (stop waits for the engine): they and every change
+// of state run on one worker thread, in order, so a stop right after a
+// start finds it started and a start right after a stop starts again. A
+// stop ends the service only if no start came after it (stopSelfResult).
+//
+// IPv4 only, as the engine's mobile TUN (docs/mobile.md): the TUN takes
+// IPv6 too once the host's settings carry it (ipv6_address, ipv6_routes);
+// until then an app's IPv6 on a dual-stack network does not enter it.
 class TunnelService : VpnService() {
+    // Written on the worker only; read by publish from any thread.
     @Volatile private var state = STATE_OFF
+    /** The last start's id, for a stop from the host or the system. */
+    @Volatile private var lastStartId = 0
     private val worker = Executors.newSingleThreadExecutor()
     private var tun: ParcelFileDescriptor? = null
     private var network: NetworkWatch? = null
@@ -58,21 +67,17 @@ class TunnelService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStartId = startId
         when (intent?.action) {
-            ACTION_START -> if (state == STATE_OFF) {
-                set(STATE_CONNECTING)
-                run(::start)
-            } else {
-                publish()
-            }
-            ACTION_STOP -> stop()
-            else -> if (state == STATE_OFF) stopSelf()
+            ACTION_START -> run(::start)
+            ACTION_STOP -> stop(startId)
+            else -> run { if (state == STATE_OFF) stopSelfResult(startId) }
         }
         return START_NOT_STICKY
     }
 
     /** Another VPN app took over, or the user revoked the permission. */
-    override fun onRevoke() = stop()
+    override fun onRevoke() = stop(lastStartId)
 
     override fun onDestroy() {
         unregisterReceiver(query)
@@ -96,6 +101,11 @@ class TunnelService : VpnService() {
 
     /** On the worker. */
     private fun start() {
+        if (state != STATE_OFF) {
+            publish()
+            return
+        }
+        set(STATE_CONNECTING)
         val failure = try {
             open()
         } catch (e: Exception) {
@@ -109,7 +119,7 @@ class TunnelService : VpnService() {
         Log.e(TAG, "start: $failure")
         shutDown()
         set(STATE_OFF)
-        stopSelf()
+        stopSelfResult(lastStartId)
     }
 
     /** The TUN, the network, the host: null once the host serves, else its error as JSON. */
@@ -118,6 +128,12 @@ class TunnelService : VpnService() {
         val builder = Builder().setSession(SESSION).setMtu(settings.getInt("mtu"))
         cidr(settings.getString("ipv4_address")).let { (address, prefix) -> builder.addAddress(address, prefix) }
         for (route in settings.getJSONArray("ipv4_routes").strings()) {
+            cidr(route).let { (address, prefix) -> builder.addRoute(address, prefix) }
+        }
+        settings.optString("ipv6_address").takeIf { it.isNotEmpty() }?.let {
+            cidr(it).let { (address, prefix) -> builder.addAddress(address, prefix) }
+        }
+        for (route in settings.optJSONArray("ipv6_routes")?.strings().orEmpty()) {
             cidr(route).let { (address, prefix) -> builder.addRoute(address, prefix) }
         }
         settings.getJSONArray("dns_servers").strings().forEach { builder.addDnsServer(it) }
@@ -129,7 +145,7 @@ class TunnelService : VpnService() {
 
             override fun onExit(reason: String) {
                 Log.e(TAG, "host exit: $reason")
-                stop()
+                stop(lastStartId)
             }
         }
         return TunnelHost.start(
@@ -141,16 +157,22 @@ class TunnelService : VpnService() {
         )
     }
 
-    private fun stop() {
-        if (state != STATE_OFF) set(STATE_DISCONNECTING)
-        run {
+    /** Ends the service unless a start newer than [startId] came. */
+    private fun stop(startId: Int) = run {
+        if (state != STATE_OFF) {
+            set(STATE_DISCONNECTING)
             shutDown()
             set(STATE_OFF)
-            stopSelf()
         }
+        stopSelfResult(startId)
     }
 
-    /** On the worker: no more networks, the host (which blocks until done), then the TUN. */
+    /**
+     * On the worker: no more networks, the host (which blocks until done),
+     * then the TUN. A network change the callback's thread is pushing in
+     * the meantime only records the network for the next start: the host
+     * is taken out before it stops.
+     */
     private fun shutDown() {
         network?.stop()
         network = null
@@ -179,7 +201,6 @@ class TunnelService : VpnService() {
         const val STATE_ON = "on"
         const val STATE_DISCONNECTING = "disconnecting"
 
-        private const val TAG = "PPVPN"
         /** The VPN's name in the system's settings and notification. */
         private const val SESSION = "PPVPN"
         /** In filesDir, where the app's client connects (crates/desktop tunnel.rs SOCKET_FILE). */
@@ -204,6 +225,8 @@ class TunnelService : VpnService() {
         private fun JSONArray.strings(): List<String> = (0 until length()).map(::getString)
     }
 }
+
+private const val TAG = "PPVPN"
 
 /**
  * The network outside the tunnel, pushed to the host as the engine's
@@ -287,7 +310,7 @@ private class NetworkWatch(private val service: VpnService) {
             sent = state
             // The tunnel is metered as its network is.
             service.setUnderlyingNetworks(current?.let { arrayOf(it) })
-            TunnelHost.networkChanged(state)?.let { Log.e("PPVPN", "network: $it") }
+            TunnelHost.networkChanged(state)?.let { Log.e(TAG, "network: $it") }
         }
         first.countDown()
     }
