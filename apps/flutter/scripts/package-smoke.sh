@@ -41,9 +41,17 @@ case $format in
     pkg_remove() { apt-get remove -y -qq ppvpn >/dev/null; } ;;
   rpm)
     desktop=(xorg-x11-server-Xvfb dbus-daemon mesa-libEGL mesa-dri-drivers dejavu-sans-fonts)
+    # dnf5's install has no --destdir: it downloads into a cache directory
+    # of ours, which keeps the rpms (and the metadata, dropped here) under
+    # one directory per repository. Not the package itself.
     pkg_fetch() {
-      local dir=$1; shift
-      dnf install -y -q --setopt=install_weak_deps=False --downloadonly --destdir "$dir" "$@"
+      local dir=$1 rpm; shift
+      dnf install -y -q --setopt=install_weak_deps=False --downloadonly \
+        --setopt=cachedir="$dir/.dnf" --setopt=system_cachedir="$dir/.dnf" "$@"
+      while IFS= read -r -d '' rpm; do
+        [[ "$(rpm -qp --nosignature --qf '%{NAME}' "$rpm")" == ppvpn ]] || mv "$rpm" "$dir/"
+      done < <(find "$dir/.dnf" -name '*.rpm' -print0)
+      rm -rf "$dir/.dnf"
     }
     pkg_install() { dnf install -y -q --setopt=install_weak_deps=False --disablerepo='*' "$@"; }
     pkg_remove() { dnf remove -y -q --disablerepo='*' ppvpn; } ;;
@@ -67,8 +75,11 @@ for set in "${sets[@]}"; do
     desktop) pkg_fetch "$pkgs/desktop" "${desktop[@]}" ;;
     native) pkg_fetch "$pkgs/native" "$native" ;;
   esac
+  files=("$pkgs/$set"/*."$format")
+  # Each set adds to the bare image, so an empty one means the fetch went
+  # somewhere else.
+  [[ ${#files[@]} -gt 0 ]] || { echo "FAIL: fetched no packages for the $set set" >&2; exit 1; }
   touch "$pkgs/$set.complete"
-  files=("$pkgs/$set"/*)
   echo "fetched the $set set: ${#files[@]} packages"
 done
 # From here on, nothing from the mirrors: apt without its lists, dnf without
