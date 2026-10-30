@@ -57,14 +57,40 @@ wait_for() { # landscape|portrait
   exit 1
 }
 
+# One leg, judged by its tests, not by flutter test's exit status: after
+# the tests, flutter test uninstalls the app, and that fails when the
+# emulator has gone offline in the meantime, after both legs had passed
+# (job 124155824780). The JSON report (one event per line): every test
+# that started, loading ones aside, finished with success (a skipped one
+# too), and at least one ran. A failed, errored or unfinished test fails
+# the leg.
+leg() { # name
+  local report="$PWD/build/smoke-$1.json" status=0 started passed ran bad
+  rm -f "$report"
+  flutter test integration_test/mobile_smoke_test.dart -d "$device" \
+    --file-reporter "json:$report" || status=$?
+  [ "$status" -eq 0 ] && return
+  [ -s "$report" ] || { echo "$1: flutter test exited $status, no report" >&2; exit 1; }
+  started=$(jq -s '[.[] | select(.type == "testStart" and (.test.name | startswith("loading ") | not))] | length' "$report")
+  passed=$(jq -s '[.[] | select(.type == "testDone" and .hidden != true and .result == "success")] | length' "$report")
+  ran=$(jq -s '[.[] | select(.type == "testDone" and .hidden != true and .skipped != true and .result == "success")] | length' "$report")
+  bad=$(jq -s '[.[] | select(.type == "testDone" and .result != "success")] | length' "$report")
+  if [ "$bad" -eq 0 ] && [ "$ran" -gt 0 ] && [ "$passed" -eq "$started" ]; then
+    echo "$1: flutter test exited $status after its $ran test(s) passed (the uninstall afterwards); the leg passed"
+    return
+  fi
+  echo "$1: flutter test exited $status: $started started, $passed passed, $bad failed" >&2
+  exit 1
+}
+
 echo "--- tablet, landscape"
 adb shell wm size 2560x1800
 adb shell wm density 320
 wait_for landscape
-flutter test integration_test/mobile_smoke_test.dart -d "$device"
+leg tablet
 
 echo "--- phone, portrait"
 adb shell wm size 1080x2340
 adb shell wm density 440
 wait_for portrait
-flutter test integration_test/mobile_smoke_test.dart -d "$device"
+leg phone
