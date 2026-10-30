@@ -21,6 +21,16 @@ mod linux;
 #[cfg(windows)]
 mod win;
 
+/// This build's version: a release's `PPVPN_VERSION`, else the workspace's
+/// (as the app's, apps/flutter/rust/src/update.rs).
+#[cfg(any(windows, target_os = "linux"))]
+fn version() -> &'static str {
+    option_env!("PPVPN_VERSION")
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(windows)]
 fn main() -> ExitCode {
     win::main()

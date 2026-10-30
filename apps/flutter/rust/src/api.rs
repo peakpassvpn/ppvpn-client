@@ -564,10 +564,11 @@ pub fn save_settings(settings: UiSettings) -> Result<(), String> {
     crate::settings::save(settings)
 }
 
-/// The bridge's version (the workspace's), for the settings page.
+/// This build's version (a release's, else the workspace's), for the
+/// settings page.
 #[frb(sync)]
 pub fn app_version() -> String {
-    env!("CARGO_PKG_VERSION").into()
+    crate::update::version().into()
 }
 
 /// Rules or global routing (persisted by the client); the running core
