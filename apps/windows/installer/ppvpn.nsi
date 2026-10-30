@@ -286,8 +286,11 @@ Function FindHeldFiles
     ${IfThen} ${Errors} ${|} ${Break} ${|}
     ${TrimNewLines} "$R1" $R1
     StrCpy $R2 $R1 1 -1
+    ; The list itself (the native app's lists it) is open here, and is
+    ; deleted, not replaced.
     ${If} $R1 != ""
     ${AndIf} $R2 != "\"
+    ${AndIf} $R1 != "${MANIFEST}"
     ${AndIf} ${FileExists} "$INSTDIR\$R1"
       ; GENERIC_WRITE | DELETE, FILE_SHARE_READ | WRITE | DELETE, OPEN_EXISTING
       System::Call 'kernel32::CreateFileW(w "$INSTDIR\$R1", i 0x40010000, i 7, p 0, i 3, i 0x80, p 0) p .R3 ?e'
