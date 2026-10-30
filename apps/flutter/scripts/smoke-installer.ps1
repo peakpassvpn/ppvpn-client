@@ -260,7 +260,20 @@ function Test-FlutterInstall {
 function Install([string] $Path) {
   Write-Host "==> $Path /S"
   $process = Start-Process -FilePath $Path -ArgumentList "/S" -Wait -PassThru
-  if ($process.ExitCode -ne 0) { throw "$Path /S exited with $($process.ExitCode)" }
+  if ($process.ExitCode -ne 0) {
+    Show-FilesInUse
+    throw "$Path /S exited with $($process.ExitCode)"
+  }
+}
+
+# What a silent installer that stopped on files in use (exit code 2) reported.
+function Show-FilesInUse {
+  $report = Join-Path $env:TEMP "ppvpn-setup-files-in-use.txt"
+  if (Test-Path -LiteralPath $report) {
+    Write-Host "files in use, as the installer reported them:"
+    Get-Content -LiteralPath $report | ForEach-Object { Write-Host "  $_" }
+    Remove-Item -LiteralPath $report
+  }
 }
 
 function Wait-Until([string] $What, [int] $Seconds, [scriptblock] $Condition) {
@@ -379,6 +392,14 @@ try {
     Write-Host "==> $Installer /S, $held held open"
     $process = Start-Process -FilePath $Installer -ArgumentList "/S" -Wait -PassThru
     if ($process.ExitCode -ne 2) { throw "with $held held open, $Installer /S exited with $($process.ExitCode), not 2" }
+    # Restart Manager named this script's process as the holder.
+    $report = Join-Path $env:TEMP "ppvpn-setup-files-in-use.txt"
+    if (-not (Select-String -LiteralPath $report -SimpleMatch "WinSparkle.dll: " -Quiet) -or
+        -not (Select-String -LiteralPath $report -SimpleMatch "(pid $PID" -Quiet)) {
+      Show-FilesInUse
+      throw "the installer's report does not name pid $PID holding WinSparkle.dll"
+    }
+    Show-FilesInUse
   } finally {
     $handle.Dispose()
   }

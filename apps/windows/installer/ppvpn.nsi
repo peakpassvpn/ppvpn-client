@@ -445,6 +445,12 @@ Section "PPVPN" SecMain
     ${IfThen} $0 == "" ${|} ${Break} ${|}
     ${IfNot} ${Cmd} `MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "$(FilesInUse)$\r$\n$\r$\n$0" /SD IDCANCEL IDRETRY`
       DetailPrint "$(FilesInUseAbort)"
+      ; A silent run (an update) shows nothing: the report goes to a file.
+      ${If} ${Silent}
+        FileOpen $1 "$TEMP\ppvpn-setup-files-in-use.txt" w
+        FileWrite $1 $0
+        FileClose $1
+      ${EndIf}
       nsExec::ExecToLog '"$INSTDIR\ppvpn-service-install.exe"'
       Pop $0
       Call LaunchAgentIfEnabled
