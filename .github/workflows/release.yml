@@ -1882,8 +1882,7 @@ jobs:
   # evicts the least recently used), and then looks its exact key up first:
   # it builds, from scratch, and saves only on a miss. Not for a missing key
   # while the caches are over 19 GB: rebuilding one would evict another.
-  # The four keys (#459): macos, windows, flutter and tunnel;
-  # lint, unit, integration, linux and desktop build uncached.
+  # The keys: macos, windows, flutter and tunnel (#459), linux and desktop.
   # A workflow change that alters what a key's jobs build, without a lock
   # change, keeps the old entry: delete it (gh cache delete <key>; gh cache
   # list --key v1-rust-macos- lists them) and the next merge rebuilds it as
@@ -1967,7 +1966,7 @@ jobs:
           keys=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=v1-rust-&per_page=100" \
             --jq '.actions_caches[].key')
           missing=" "
-          for want in macos-Darwin tunnel-Darwin windows-Windows_NT flutter-Linux; do
+          for want in macos-Darwin tunnel-Darwin windows-Windows_NT flutter-Linux linux-Linux desktop-Linux; do
             grep -q "^v1-rust-$want-" <<<"$keys" || missing="$missing$want "
           done
           echo "cache usage: $((used / 1048576)) MiB; missing:$missing"
@@ -2215,3 +2214,83 @@ jobs:
           export JAVA_HOME="$JAVA_HOME_17_X64"
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
           apps/flutter/scripts/ci-build.sh
+
+  # lint, unit, integration and linux: one key, linux. Not the memory steps'
+  # release builds of ne-mem (only when Cargo.lock or the harness changed).
+  cache-linux:
+    name: cache-linux
+    needs: changes
+    if: needs.changes.outputs.lock == 'true' || contains(needs.changes.outputs.missing, ' linux-Linux ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-rust
+          shared-key: linux
+          lookup-only: true
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: what lint, unit, integration and linux build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cargo clippy --all-targets --locked
+          cargo test --locked --no-run
+          cargo test --locked -p ppvpn-cli --test keystore --no-run
+          # tools/test-system-linux.sh
+          cargo test -p ppvpn-core --lib --no-run --locked --features fault-injection
+          cargo build -p ppvpn-core-lab --locked
+          (cd crates/service && cargo build --locked --bin ppvpn-service)
+          (cd crates/desktop && cargo clippy --locked --features linux-e2e --all-targets)
+          (cd crates/desktop && cargo test --locked --features linux-e2e --lib --no-run)
+
+  # desktop: a key of its own, as its CARGO_BUILD_TARGET is part of the key.
+  # Not the binding scripts' builds (uniffi-bindgen-cs, Swift).
+  cache-desktop:
+    name: cache-desktop
+    needs: changes
+    if: needs.changes.outputs.lock == 'true' || contains(needs.changes.outputs.missing, ' desktop-Linux ')
+    # As ci.yml's desktop job.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # As in ci.yml: part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+          targets: x86_64-unknown-linux-gnu
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-rust
+          shared-key: desktop
+          lookup-only: true
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: what desktop builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          (cd crates/service && cargo test --locked --no-run && cargo clippy --locked --all-targets)
+          (cd crates/desktop && cargo test --locked --no-run && cargo clippy --locked --all-targets)
+          cargo test --locked -p ppvpn-push-agent --no-run
+          cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets
+          cargo test --locked -p ppvpn-tunnel-host --no-run
+          cargo clippy --locked -p ppvpn-tunnel-host --all-targets
