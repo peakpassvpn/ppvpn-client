@@ -350,6 +350,7 @@ jobs:
             --workers 1 --variant cap --variant mobile --variant budget \
             --out ne-mem-linux.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.memory == 'true'
         with:
           name: ne-mem-linux
@@ -388,6 +389,7 @@ jobs:
               | tee -a "$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.memory == 'true'
         with:
           name: ne-mem-dhat-linux
@@ -649,6 +651,7 @@ jobs:
             --workers 1 --variant cap --variant mobile --variant budget \
             --out ne-mem-macos.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.memory == 'true'
         with:
           name: ne-mem-macos
@@ -898,6 +901,7 @@ jobs:
       # The Linux bundle, for the 24 h curve on the test machine (built here,
       # never there: apps/flutter/scripts/longcurve).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         with:
           name: flutter-bundle-linux
@@ -1082,6 +1086,7 @@ jobs:
           smoke ubuntu:24.04 "/pkg/PPVPN-$version-linux-x64.deb" ${NATIVE_DEB:+"/native/$(basename "$NATIVE_DEB")"}
           smoke fedora:latest "/pkg/PPVPN-$version-linux-x64.rpm"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
         with:
           name: flutter-packages-linux
@@ -1119,6 +1124,7 @@ jobs:
           set -- "$@" -Native "$(cygpath -w "$native")"
           powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/smoke-installer.ps1 "$@"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'windows-latest'
         with:
           name: flutter-installer-windows
@@ -1128,6 +1134,7 @@ jobs:
             dist/windows/*-setup.exe
             dist/windows/release-meta-windows-x64.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: always() && steps.scope.outputs.flutter == 'true'
         with:
           name: flutter-${{ matrix.os }}
@@ -1135,9 +1142,13 @@ jobs:
           if-no-files-found: ignore
 
   android:
-    # The Flutter app's Android target (#448 step 3): the bridge for arm64
-    # and x86_64 (the NDK's clang), the APK, and the app started on an
-    # emulator. No tunnel yet (#448 steps 2 and 3).
+    # The Flutter app's Android target (#448 step 3): the bridge and the
+    # tunnel host for arm64 and x86_64 (the NDK's clang), the APK (signed
+    # with the debug key until the Play upload key exists: the artifact
+    # installs on a phone as is), and on an emulator the app started and
+    # its VPN brought up (TunnelService, the host serving tunnel.sock).
+    # When the app or the tunnel host changed (tools/ci-changes.sh
+    # `android`).
     name: android
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -1154,12 +1165,12 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         with:
           toolchain: 1.98.1
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         # A restore that hangs ends as a cache miss (see env).
         timeout-minutes: 10
         continue-on-error: true
@@ -1169,16 +1180,16 @@ jobs:
           save-if: false
       # The host's for the bridge codegen, which reads the crate.
       - uses: ./.github/actions/prebuilt-boringssl
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         with:
           targets: x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android
       - uses: ./.github/actions/flutter-toolchain
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         with:
           frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
       - id: build
         name: Build
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         env:
           FLUTTER_TARGET: android
           PPVPN_SKIP_ANALYZE: '1'
@@ -1190,7 +1201,8 @@ jobs:
           apps/flutter/scripts/ci-build.sh
           ls -l "${{ github.workspace }}/apps/flutter/build/app/outputs/flutter-apk"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: steps.scope.outputs.flutter == 'true'
+        timeout-minutes: 10
+        if: steps.scope.outputs.android == 'true'
         with:
           name: flutter-apk-android
           path: ${{ steps.build.outputs.bundle }}
@@ -1198,7 +1210,7 @@ jobs:
           retention-days: 14
       # Hardware acceleration for the emulator.
       - name: KVM
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -1208,7 +1220,7 @@ jobs:
       # .github/actions/android-sdk, which fails on an incomplete one instead
       # of booting without it.
       - uses: ./.github/actions/android-sdk
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         with:
           api-level: 34
           target: google_apis
@@ -1216,7 +1228,7 @@ jobs:
       # A tablet: in landscape (1280 dp across, the desktop layout), then set
       # to a phone's screen in portrait (the phone layout, #448 step 5).
       - name: Smoke test (emulator)
-        if: steps.scope.outputs.flutter == 'true'
+        if: steps.scope.outputs.android == 'true'
         timeout-minutes: 30
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
@@ -1327,6 +1339,7 @@ jobs:
         if: steps.scope.outputs.tunnel == 'true'
         run: crates/tunnel-host/scripts/build-xcframework.sh "$RUNNER_TEMP/tunnel" ios
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.tunnel == 'true'
         with:
           name: tunnel-ios
@@ -1375,6 +1388,7 @@ jobs:
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
           crates/tunnel-host/scripts/build-android.sh "$RUNNER_TEMP/tunnel" arm64-v8a
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         if: steps.scope.outputs.tunnel == 'true'
         with:
           name: tunnel-android

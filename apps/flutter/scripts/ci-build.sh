@@ -18,6 +18,10 @@
 #   FLUTTER_TARGET       android: the APK (needs ANDROID_NDK_HOME and the
 #                        Android SDK), ios: the iOS app, unsigned, instead of
 #                        the runner's platform
+#   PPVPN_TUNNEL_ANDROID android: the tunnel host already built, a directory
+#                        of <abi>/libppvpn_tunnel.so as crates/tunnel-host/
+#                        scripts/build-android.sh leaves it (default: built
+#                        here, into build/tunnel-android)
 #   IOS_SDK              ios: simulator (a debug build for Apple silicon's
 #                        simulator, ci.yml) or device (release; the default)
 #   IOS_TEAM_ID, IOS_APP_PROFILE, IOS_TUNNEL_PROFILE
@@ -158,6 +162,10 @@ case $os in
     # The template asks for the network only in its debug and profile
     # manifests: the release app talks to the API too.
     replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.INTERNET"/>\n    <application'
+    # TunnelService follows the best non-VPN network: reading it, and on
+    # Android 8 to 11 requestNetwork, which needs the change permission.
+    # Both are normal permissions, granted at install.
+    replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>\n    <application'
     # The system VPN (runner/android TunnelService), in its own process:
     # only the system binds it.
     replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>' ;;
@@ -274,6 +282,18 @@ if [ "$os" = android ]; then
       cp "$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$triple/libc++_shared.so" \
         "android/app/src/main/jniLibs/$abi/"
     fi
+  done
+  # The tunnel host for TunnelService (runner/android, the :tunnel
+  # process), beside the bridge: libppvpn_tunnel.so (and libc++_shared.so
+  # if it needs it, the same file as the bridge's).
+  tunnel=${PPVPN_TUNNEL_ANDROID:-}
+  if [ -z "$tunnel" ]; then
+    tunnel=$app/build/tunnel-android
+    "$root/crates/tunnel-host/scripts/build-android.sh" "$tunnel" arm64-v8a x86_64
+  fi
+  for abi in arm64-v8a x86_64; do
+    test -f "$tunnel/$abi/libppvpn_tunnel.so" || { echo "no $tunnel/$abi/libppvpn_tunnel.so" >&2; exit 1; }
+    cp "$tunnel/$abi/"*.so "android/app/src/main/jniLibs/$abi/"
   done
 elif [ "$os" = ios ]; then
   # iOS takes no loose dynamic library: the bridge is a static library the
@@ -415,7 +435,31 @@ fi
 case $os in
   android)
     bundle=build/app/outputs/flutter-apk/app-release.apk
-    test -f "$bundle" ;;
+    test -f "$bundle"
+    # Both libraries for both ABIs, in the APK.
+    listing=$(unzip -l "$bundle")
+    for abi in arm64-v8a x86_64; do
+      for so in libppvpn_flutter.so libppvpn_tunnel.so; do
+        grep -qF "lib/$abi/$so" <<<"$listing" || { echo "$bundle lacks lib/$abi/$so" >&2; exit 1; }
+      done
+    done
+    # What native code calls back by name, kept through R8
+    # (runner/android/app/proguard-rules.pro).
+    sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:?the Android SDK is needed}}
+    dexdump=$(find "$sdk/build-tools" -name dexdump -type f | sort -V | tail -1)
+    [ -n "$dexdump" ] || { echo "no dexdump in $sdk/build-tools" >&2; exit 1; }
+    dex=$app/build/apk-dex
+    rm -rf "$dex"
+    mkdir -p "$dex"
+    unzip -q -o "$bundle" 'classes*.dex' -d "$dex"
+    "$dexdump" "$dex"/classes*.dex >"$dex/dump.txt"
+    for method in protect onExit; do
+      awk -v want="$method" '
+        /Class descriptor/ { inside = index($0, "Lcom/peakpassvpn/ppvpn/tunnel/TunnelHost$Listener;") > 0 }
+        inside && /name +:/ && index($0, "'"'"'" want "'"'"'") { found = 1 }
+        END { exit !found }' "$dex/dump.txt" ||
+        { echo "$bundle: R8 renamed or dropped TunnelHost.Listener.$method" >&2; exit 1; }
+    done ;;
   ios)
     if [ "${IOS_SDK:-device}" = simulator ]; then
       bundle=build/ios/iphonesimulator/Runner.app

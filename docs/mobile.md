@@ -29,8 +29,10 @@
   - 隧道进程里的健康检查（见下）；
   - iOS 的 XCFramework：`scripts/build-xcframework.sh <输出目录>`，产物是 `PPVPNTunnel.xcframework`（真机和模拟器的静态库，模块名 `PPVPNTunnel`）和 `PPVPNTunnel.ldflags`（扩展要链接的系统库）。只放进网络扩展，不放进 app。
   - Android 的 JNI：`scripts/build-android.sh <输出目录>` 产出 `<abi>/libppvpn_tunnel.so`（arm64-v8a、x86_64，放进 app 的 jniLibs），Kotlin 类 `com.peakpassvpn.ppvpn.tunnel.TunnelHost`（`apps/flutter/runner/android`）。只有 `:tunnel` 进程的 TunnelService 加载它。函数同 C ABI，错误同样以 JSON 字符串返回；`Listener` 的 `protect(fd)` 转给 `VpnService.protect`，`onExit(reason)` 即 C ABI 的 on_exit。
+- **Android 的 TunnelService（`apps/flutter/runner/android`）：** 按 `settings` 用 `VpnService.Builder` 建 TUN，把非 VPN 的最佳网络作为 NetworkState 推给宿主（启动前先推第一份，和 iOS 一样），再在 TUN 的 fd 上启动宿主，socket 是 `filesDir/tunnel.sock`，状态目录是 `filesDir/tunnel-state`。宿主开始服务后报告 on。`apps/flutter/scripts/ci-build.sh` 把两个 ABI 的 `libppvpn_tunnel.so` 放进 APK。
+- **CI：** iOS、Android 的构建和 Linux 上的测试；Android 模拟器上的冒烟测试会拉起系统 VPN，经 `tunnel.sock` 调用宿主，再断开。
 - **还没有：**
-  - 隧道宿主的 CI 只有 iOS、Android 的构建和 Linux 上的测试，还没有在设备上跑的测试。
+  - 带 profile 的真实连接（要真机和真实节点，CI 里没有）；Android 的常驻通知和 always-on 启动。
 
 ## 隧道进程里的健康检查
 
