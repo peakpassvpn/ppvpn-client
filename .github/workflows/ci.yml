@@ -1175,6 +1175,14 @@ jobs:
           path: ${{ steps.build.outputs.bundle }}
           if-no-files-found: error
           retention-days: 14
+      # Room for the emulator's userdata (7.4 GB): on a runner with the
+      # 72 GB disk, the build left 11 GB and the system image took the rest
+      # (run 41233125323, "Not enough space to create userdata partition").
+      # Cargo's build is done with: its libraries are in jniLibs, and this
+      # job saves no Rust cache.
+      - name: Drop Cargo's build
+        if: steps.scope.outputs.android == 'true'
+        run: rm -rf target
       # Hardware acceleration for the emulator.
       # What the build left, beside what the emulator needs next.
       - name: Disk after the build
