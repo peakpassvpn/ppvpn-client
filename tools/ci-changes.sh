@@ -4,22 +4,14 @@
 #   code  anything outside docs/ and Markdown. ci.yml's jobs skip their
 #         build and test steps when it is false (the jobs still run and
 #         report, so a docs-only pull request passes quickly).
-#   desktop  apps/, crates/{desktop,engine-host,service}, tools/desktop/,
-#         the dependencies or the workflows: what the desktop
-#         app builds (the macOS Debug app, the Windows C# bindings and app)
-#         depend on. ci.yml skips those builds when it is false.
-#   flutter  apps/flutter/ (the Flutter desktop app, #401), the crates it
-#         links (crates/{desktop,account,core,engine-host}) and the service
-#         its installers ship (crates/service), apps/linux/packaging/ (its deb and rpm take the
-#         native package's scripts), what its macOS packaging takes from
-#         apps/macos (the scripts, the push agent and what it builds from,
-#         the LaunchAgent, the .pkg's postinstall), the Windows installer
-#         script it shares with the native app (apps/windows/installer/,
-#         scripts/sign-file.ps1, check-publisher.ps1), the dependencies
-#         or the workflows. ci.yml's flutter job builds only when it is
-#         true. apps/flutter/ alone
-#         does not set desktop: the native apps do not depend on it.
-#         And outside apps/flutter/rust/ it does not set code either: a
+#   flutter  apps/flutter/ (the Flutter desktop app, #401, with its
+#         packaging), the crates it links (crates/{desktop,account,core,
+#         engine-host}) and the service its installers ship
+#         (crates/service), what its macOS packaging takes from apps/macos
+#         (the scripts, the push agent and what it builds from, the
+#         LaunchAgent, the .pkg's postinstall), the dependencies or the
+#         workflows. ci.yml's flutter job builds only when it is true.
+#         Outside apps/flutter/rust/ it does not set code: a
 #         change to the Flutter app's Dart, scripts or assets runs only the
 #         flutter job (and lint's sensitive check, which always runs). Its
 #         Rust bridge (apps/flutter/rust/) and push agent
@@ -61,7 +53,7 @@
 # everything.
 set -euo pipefail
 
-all() { printf '%s=true\n' code desktop flutter deps lock macpkg memory tunnel android; exit 0; }
+all() { printf '%s=true\n' code flutter deps lock macpkg memory tunnel android; exit 0; }
 
 case "${GITHUB_EVENT_NAME:-}" in
   pull_request) base=${PR_BASE_SHA:-} ;;
@@ -75,7 +67,7 @@ files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
 n=$(grep -c . <<<"$files" || true)
 (( n > 0 && n < 300 )) || all
 
-code=false desktop=false flutter=false deps=false lock=false macpkg=false memory=false tunnel=false
+code=false flutter=false deps=false lock=false macpkg=false memory=false tunnel=false
 while IFS= read -r f; do
   case $f in
     *.md) ;;
@@ -100,24 +92,19 @@ while IFS= read -r f; do
     docs/* | *.md) ;;
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .github/actions/* | \
     .github/workflows/ci.yml | .github/workflows/release.yml)
-      deps=true desktop=true flutter=true code=true ;;
+      deps=true flutter=true code=true ;;
     apps/flutter/rust/* | apps/flutter/push-agent/*) flutter=true code=true ;;
     apps/flutter/*) flutter=true ;;
-    crates/desktop/* | crates/engine-host/* | crates/service/*) desktop=true flutter=true code=true ;;
+    crates/desktop/* | crates/engine-host/* | crates/service/*) flutter=true code=true ;;
     crates/account/* | crates/core/*) flutter=true code=true ;;
-    # The maintainer scripts and autostart entry both Linux packages ship.
-    apps/linux/packaging/*) desktop=true flutter=true code=true ;;
     apps/macos/scripts/* | apps/macos/PPVPNAgent/* | apps/macos/AppLogic/* | \
-    apps/macos/LaunchAgents/* | apps/macos/packaging/* | apps/macos/project.yml | \
-    apps/windows/installer/* | apps/windows/scripts/sign-file.ps1 | apps/windows/scripts/check-publisher.ps1)
-      desktop=true flutter=true code=true ;;
-    apps/* | tools/desktop/*)
-      desktop=true code=true ;;
+    apps/macos/LaunchAgents/* | apps/macos/packaging/* | apps/macos/project.yml)
+      flutter=true code=true ;;
+    apps/* | tools/desktop/*) code=true ;;
     *) code=true ;;
   esac
 done <<<"$files"
 echo "code=$code"
-echo "desktop=$desktop"
 echo "flutter=$flutter"
 echo "deps=$deps"
 echo "lock=$lock"

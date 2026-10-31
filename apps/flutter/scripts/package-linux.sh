@@ -123,9 +123,7 @@ PY
 # --- 3. deb + rpm -----------------------------------------------------------------------
 mkdir -p "$out"
 export NFPM_ARCH PPVPN_VERSION="$version" PPVPN_BUILD_NUMBER="$build"
-# The native package's maintainer scripts and push agent entry; the app's own desktop entry.
-export PPVPN_STAGE_DIR="$stage" PPVPN_PACKAGING_DIR="$root/apps/linux/packaging"
-export PPVPN_FLUTTER_PACKAGING_DIR="$app/packaging/linux"
+export PPVPN_STAGE_DIR="$stage" PPVPN_PACKAGING_DIR="$app/packaging/linux"
 export PPVPN_PACKAGE_MAINTAINER="${PPVPN_PACKAGE_MAINTAINER:-PeakPass Labs LLC <support@peakpassvpn.com>}"
 expand_config "$app/packaging/linux/nfpm.yaml" "$work/nfpm.yaml"
 packages=()

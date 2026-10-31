@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the Flutter Linux bundle in the native packages' layout
-# (apps/linux/packaging/nfpm.yaml), as root (#401). Linux only; no /usr/bin
+# (apps/flutter/packaging/linux/nfpm.yaml), as root (#401). Linux only; no /usr/bin
 # link, desktop entry or icons (the deb and rpm: scripts/package-linux.sh).
 #
 #   /usr/lib/ppvpn/ppvpn          the bundle's ppvpn: the
