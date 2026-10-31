@@ -46,7 +46,9 @@ for slice in "${slices[@]}"; do
 	esac
 	rustup target add "$triple" >/dev/null
 	log="$out/build-$triple.log"
-	if ! cargo rustc --locked --profile mobile -p ppvpn-tunnel-host --lib --crate-type staticlib \
+	# Without colour: CARGO_TERM_COLOR=always (ci.yml) would end the line
+	# read below with an escape sequence, and the last flag with it.
+	if ! cargo rustc --locked --color never --profile mobile -p ppvpn-tunnel-host --lib --crate-type staticlib \
 		--target "$triple" -- --print native-static-libs 2>"$log"; then
 		tail -50 "$log" >&2
 		exit 1
