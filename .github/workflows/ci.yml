@@ -1242,6 +1242,17 @@ jobs:
       - name: Disk after the build
         if: always() && steps.scope.outputs.android == 'true'
         run: df -h /
+      # The emulator needs about 7.4 GB for its userdata partition, after
+      # the system image: with the build's 11 GB left it found 5.9 GB and
+      # did not start (job 124572523884). Cargo's target directory is done
+      # with by now (ci-build.sh copied the libraries into jniLibs, which the
+      # smoke test's debug APK packs); Gradle's caches stay for that build.
+      - name: Free the Rust build's disk
+        if: steps.scope.outputs.android == 'true'
+        run: |
+          du -sh target 2>/dev/null || true
+          rm -rf target
+          df -h /
       - name: KVM
         if: steps.scope.outputs.android == 'true'
         run: |
