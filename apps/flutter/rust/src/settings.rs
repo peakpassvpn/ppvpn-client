@@ -20,6 +20,10 @@
 //! `PPVPN_FLUTTER_HOME` (the end-to-end tests) the settings are the JSON
 //! file `app-settings.json` in that home's data directory, on every
 //! system. Anything missing or unreadable reads as the defaults.
+//!
+//! The API override is for development only (#519): a release build
+//! neither shows it nor honours it, and keeps a saved one as it is (the
+//! native apps share the file).
 
 use std::path::PathBuf;
 
@@ -203,8 +207,17 @@ pub(crate) fn save(settings: UiSettings) -> Result<(), String> {
     write(&store(&data_dir)?, &saved)
 }
 
-/// The saved API override, if any; read once when the client starts.
+/// Whether this build offers and honours the API override (#519): debug
+/// builds only. In a release build anyone could otherwise point the app
+/// at a backend it then trusts with the sign-in and the traffic.
+pub(crate) const API_OVERRIDE_ALLOWED: bool = cfg!(debug_assertions);
+
+/// The saved API override, if any and if this build honours one; read
+/// once when the client starts.
 pub(crate) fn api_override(data_dir: &str) -> Option<String> {
+    if !API_OVERRIDE_ALLOWED {
+        return None;
+    }
     let store = store(data_dir).ok()?;
     Some(read(&store).api_override).filter(|base| !base.is_empty())
 }
