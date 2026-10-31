@@ -9,7 +9,13 @@ publish = false
 description = "PPVPN backend account client: device-code login, credential rotation and the account API"
 
 [dependencies]
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "net", "rt", "macros"] }
+# Reachability diagnostics (src/reachability.rs, #521): DoH messages, and TLS
+# handshakes to each address with ring and the web PKI roots, as reqwest's.
+hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # The OS proxy for API calls (src/sysproxy.rs, #476): environment, macOS
 # SystemConfiguration, Windows WinINet.

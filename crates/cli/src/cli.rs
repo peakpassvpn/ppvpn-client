@@ -105,7 +105,13 @@ pub enum Command {
         command: Option<IngressCommand>,
     },
     /// Run privacy-safe local diagnostics.
-    Doctor,
+    Doctor {
+        /// Also check reaching the API host: what the system resolver and
+        /// the AliDNS and DNSPod DoH resolvers answer for it, and whether
+        /// each address completes TCP and TLS.
+        #[arg(long)]
+        network: bool,
+    },
     /// Generate a shell completion script (bash, zsh or fish).
     Completion { shell: String },
     /// Run the background daemon (started by `ppvpn start`).

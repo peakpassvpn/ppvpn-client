@@ -2747,14 +2747,18 @@ name = "ppvpn-account"
 version = "0.7.2"
 dependencies = [
  "base64",
+ "hickory-proto",
  "http",
  "hyper-util",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "uuid",
+ "webpki-roots",
  "windows-registry",
 ]
 
