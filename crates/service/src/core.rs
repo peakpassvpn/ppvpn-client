@@ -424,12 +424,10 @@ impl CoreManager {
             }
             Ownership::TakeOver => {
                 if let Some(current) = self.state.as_ref() {
+                    // No session ids in the log (see ipc.rs, watch).
                     info!(
-                        "session {} (generation {}) takes over from session {} (generation {})",
-                        body.session.session_id,
-                        body.session.generation,
-                        current.session.session_id,
-                        current.session.generation
+                        "generation {} takes over from generation {}",
+                        body.session.generation, current.session.generation
                     );
                 }
                 self.stop_because(stop_reason::TAKEN_OVER).ok();

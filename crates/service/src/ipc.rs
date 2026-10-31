@@ -464,9 +464,10 @@ fn serve_watch<S: Connection>(
         "keepalive_ms": keepalive.as_millis() as u64,
     });
     write_frame(stream, &signed_ok(req.id.clone(), watching, &auth.key)?)?;
+    // The session id stays out of the log: it is the session's secret,
+    // which status hides from other users.
     log::debug!(
-        "watch opened for session {} (generation {}) by pid {client_pid}",
-        session.session_id,
+        "watch opened for generation {} by pid {client_pid}",
         session.generation
     );
     let mut seq = 0u64;
