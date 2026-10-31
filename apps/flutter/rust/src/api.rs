@@ -553,8 +553,16 @@ pub struct UiSettings {
     pub language: UiLanguage,
     /// The backend to sign in to; empty for the default. Read when the
     /// client starts: a change takes effect on the next launch.
-    /// `PPVPN_API_BASE` wins over it.
+    /// `PPVPN_API_BASE` wins over it. Only a debug build honours it
+    /// ([`api_override_allowed`]).
     pub api_override: String,
+}
+
+/// Whether this build shows and honours the API override (#519): debug
+/// builds only; a release build keeps a saved one but ignores it.
+#[frb(sync)]
+pub fn api_override_allowed() -> bool {
+    crate::settings::API_OVERRIDE_ALLOWED
 }
 
 /// The saved settings, defaults when there are none. Works before

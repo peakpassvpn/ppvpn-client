@@ -26,6 +26,10 @@ class Settings {
   /// next launch).
   static final ValueNotifier<String> apiOverride = ValueNotifier('');
 
+  /// Whether this build shows the override (#519): debug builds of the
+  /// Rust library only; off in the screenshot mode.
+  static bool apiOverrideAllowed = false;
+
   /// As the system has it; [refreshLaunchAtLogin] reads it again.
   static final ValueNotifier<rust.UiLaunchAtLogin> launchAtLogin = ValueNotifier(
     const rust.UiLaunchAtLogin(enabled: false, needsApproval: false),
@@ -49,6 +53,7 @@ class Settings {
       debugPrint('load_settings: $error');
     }
     version = rust.appVersion();
+    apiOverrideAllowed = rust.apiOverrideAllowed();
   }
 
   static String? _save({rust.UiAppearance? appearance, rust.UiLanguage? language, String? apiOverride}) {
