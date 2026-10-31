@@ -194,8 +194,8 @@ Pinned versions:
 ## macOS packaging
 
 `scripts/package-macos.sh <PPVPN.app> arm64|x86_64` packages the app that
-`scripts/ci-build.sh` built as the native release packages
-`apps/macos` (#401 step 5), into the same artifacts in `dist/macos`. Into a
+`scripts/ci-build.sh` built as the native release packaged its app
+(#401 step 5; #522 removed it), into the same artifacts in `dist/macos`. Into a
 copy of the bundle, at the native app's paths, it puts:
 
 - the Swift push agent (`apps/macos`, target `PPVPNAgent`, built with the
@@ -204,15 +204,14 @@ copy of the bundle, at the native app's paths, it puts:
 - the client framework the agent links at `Contents/Frameworks`;
 - the service helpers in `Contents/MacOS`, where `rust/src/hooks.rs` looks
   for them;
-- Sparkle (the native project's package) at `Contents/Frameworks`, and the
-  Info.plist keys the native build sets: the appcast (`PPVPN_UPDATE_FEED_URL`,
+- Sparkle (resolved by the agent's build, `apps/macos/project.yml`) at
+  `Contents/Frameworks`, and the Info.plist keys the native build set: the appcast (`PPVPN_UPDATE_FEED_URL`,
   else the channel's feed from `PPVPN_UPDATE_SITE` and
   `PPVPN_RELEASE_CHANNEL`) and the EdDSA key (`PPVPN_SPARKLE_PUBLIC_KEY`).
 
-Then `apps/macos/scripts/package-app.sh`, which the native
-`package-dmg.sh` also uses, does the rest. It thins the bundle to the one
-architecture and signs it inside out with the hardened runtime and the
-native app's entitlements. It signs with the fixed certificate the service
+Then `apps/macos/scripts/package-app.sh` does the rest. It thins the bundle
+to the one architecture and signs it inside out with the hardened runtime
+and `packaging/macos/PPVPN.entitlements`. It signs with the fixed certificate the service
 pins when `PPVPN_CODESIGN_IDENTITY` is set, ad-hoc otherwise. It then writes
 `PPVPN-<version>-<platform>.dmg` (with the Sparkle signature when
 `SPARKLE_PRIVATE_KEY_FILE` is set), the `.pkg` (id
