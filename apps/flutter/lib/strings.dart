@@ -257,8 +257,8 @@ const _zh = <String, String>{
   'preferences': '首选项',
   'checkUpdates': '检查更新…',
   'openForDetails': '打开 PPVPN 查看详情', // not in the handoff
-  // Not in the handoff (#401 step 5): the Linux update notice, the native
-  // apps' strings (apps/dotnet-shared strings.json).
+  // Not in the handoff (#401 step 5): the Linux update notice, from the
+  // former native apps' strings.
   'updAvailT': 'PPVPN {v} 已发布',
   'updAvailD': '请通过系统更新升级：',
   'upToDate': '已是最新版本',

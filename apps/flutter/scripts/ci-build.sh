@@ -156,7 +156,7 @@ case $os in
       /usr/libexec/PlistBuddy -c 'Set :com.apple.security.app-sandbox false' "$f"
     done
     # The ppvpn:// scheme: the push agent opens ppvpn://push/<id> for a click
-    # on a notification (as for the native app, apps/macos/PPVPN/Info.plist).
+    # on a notification.
     /usr/libexec/PlistBuddy -c 'Delete :CFBundleURLTypes' "$plist" 2>/dev/null || true
     /usr/libexec/PlistBuddy \
       -c 'Add :CFBundleURLTypes array' \

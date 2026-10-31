@@ -26,7 +26,7 @@ use security_framework::os::macos::code_signing::{
 };
 use std::str::FromStr;
 
-/// Bundle identifier of PPVPN.app (apps/macos/project.yml).
+/// Bundle identifier of PPVPN.app (apps/flutter/scripts/ci-build.sh).
 pub const CLIENT_IDENTIFIER: &str = "com.peakpassvpn.ppvpn.desktop";
 /// The service binary's signing identifier (apps/macos/scripts/package-app.sh).
 pub const SERVICE_IDENTIFIER: &str = "com.peakpassvpn.ppvpn.service";
