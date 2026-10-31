@@ -29,10 +29,15 @@ adb shell settings put system user_rotation 0
 ) &
 grant=$!
 adb logcat -c || true
-# The emulator can be gone by the time this runs, after both legs passed.
-# TunnelService's lines (tag PPVPN), for a failed leg.
-trap 'kill "$grant" 2>/dev/null || true; adb logcat -d -s PPVPN:V || true
-  adb shell wm size reset || true; adb shell wm density reset || true' EXIT
+# The emulator can be gone by the time this runs, after both legs passed,
+# and adb then waits for it without end ("- waiting for device -": the
+# step's 30 minutes ran out, job 124559462808): every adb call here has a
+# deadline. TunnelService's lines (tag PPVPN), for a failed leg, also kept
+# for the job's artifact.
+trap 'kill "$grant" 2>/dev/null || true
+  timeout 20 adb logcat -d -s PPVPN:V >build/smoke-logcat.txt 2>&1 || true
+  cat build/smoke-logcat.txt
+  timeout 20 adb shell wm size reset || true; timeout 20 adb shell wm density reset || true' EXIT
 
 # A size applies some time after wm size; a leg that started before then
 # would lay out for the other shape. Waits until the app area the window
@@ -79,6 +84,10 @@ leg() { # name
     return
   fi
   echo "$1: flutter test exited $status: $ran passed, $bad failed, $unfinished unfinished" >&2
+  # What the report says went wrong (the whole report is the job's
+  # artifact).
+  jq -r 'select(.type == "error") | "error: \(.error)"' "$report" | head -n 20 >&2 || true
+  jq -c 'select(.type == "testDone" and .result != "success")' "$report" | head -n 10 >&2 || true
   exit 1
 }
 

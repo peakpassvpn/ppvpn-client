@@ -1272,6 +1272,16 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: apps/flutter/e2e/android_smoke.sh
+      # A failed smoke test's evidence: each leg's flutter test report (JSON
+      # events) and TunnelService's log lines.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && steps.scope.outputs.android == 'true'
+        timeout-minutes: 10
+        with:
+          name: android-smoke
+          path: apps/flutter/build/smoke-*
+          if-no-files-found: ignore
+          retention-days: 14
 
   ios:
     # The Flutter app's iOS target (#448): the bridge as a static library
