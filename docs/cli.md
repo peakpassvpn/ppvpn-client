@@ -220,9 +220,11 @@ Unknown fields are ignored and an unknown `routing_mode` falls back to `rules`.
 
 ## Build
 
-Release builds connect to the production API and ignore overrides. A build made with
-`PPVPN_BUILD_PROFILE=dev` reads `PPVPN_API_BASE` at run time (HTTPS only; plain HTTP only for loopback) and
-may set a compile-time default with `PPVPN_DEFAULT_API_BASE`. `PPVPN_VERSION` sets the reported version.
+The backend is compiled in from `PPVPN_API_BASE_DEFAULT`; `tools/cli/build-release.sh` requires it, and
+`release.yml` passes the backend (#517, see [Build and release](release.md#后端地址)).
+No backend address is written in the source. Release builds connect to it and ignore overrides. A build made
+with `PPVPN_BUILD_PROFILE=dev`, or one without a compiled-in backend (a local build), reads `PPVPN_API_BASE`
+at run time (HTTPS only; plain HTTP only for loopback). `PPVPN_VERSION` sets the reported version.
 Static Linux (musl) builds use mimalloc as the global allocator.
 
 Releases carry the CLI as tar.gz archives beside the desktop installers, in the same GitHub Release (tag

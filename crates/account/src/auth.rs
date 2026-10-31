@@ -20,12 +20,12 @@ use serde_json::{json, Value};
 
 use crate::api::{self, Api, ApiError, UserInfo};
 
-/// Where the backend's browser authorization page may live.
+/// Where the backend's browser authorization page may live: on the
+/// configured API base (its scheme, host and port), the host the backend
+/// returns `verification_uri` on (#517). No other host is trusted, and
+/// none is built in.
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
-    /// The production host of the verification page (HTTPS, port 443).
-    /// The configured API base's own host is trusted as well.
-    pub verification_host: String,
     /// The page's accepted paths; the URL must carry exactly one
     /// `user_code` query.
     pub verification_paths: Vec<String>,
@@ -35,16 +35,10 @@ pub struct AuthConfig {
 /// device page: the old `/dashboard/cli/authorize` is refused.
 pub const VERIFICATION_PATHS: &[&str] = &["/dashboard/device/authorize"];
 
-/// The production host of the browser authorization page, for every client.
-pub const PRODUCTION_VERIFICATION_HOST: &str = "www.peakpassvpn.com";
-
 impl AuthConfig {
-    /// The production page ([`PRODUCTION_VERIFICATION_HOST`],
-    /// [`VERIFICATION_PATHS`]); a page on the configured API base is trusted
-    /// as well.
+    /// The device page ([`VERIFICATION_PATHS`]) on the configured API base.
     pub fn production() -> Self {
         Self {
-            verification_host: PRODUCTION_VERIFICATION_HOST.to_string(),
             verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
         }
     }
@@ -824,12 +818,9 @@ fn validate_verification_url(
     let Ok(url) = Url::parse(raw) else {
         return Err(untrusted);
     };
-    let prod = url.scheme() == "https"
-        && url.host_str() == Some(config.verification_host.as_str())
-        && url.port_or_known_default() == Some(443);
-    // The configured backend (a staging host, or a developer's override) is
-    // trusted for everything else already, so its own
-    // authorization page is too. Outside debug builds it must be HTTPS.
+    // The configured backend is trusted for everything else already, so its
+    // own authorization page is too, and only it. Outside debug builds it
+    // must be HTTPS.
     let configured = Url::parse(configured_api_base.trim())
         .ok()
         .is_some_and(|base| {
@@ -839,7 +830,7 @@ fn validate_verification_url(
                 && url.port_or_known_default() == base.port_or_known_default()
         });
     let query = url.query_pairs().collect::<Vec<_>>();
-    if (!prod && !configured)
+    if !configured
         || !config
             .verification_paths
             .iter()
@@ -1084,7 +1075,6 @@ mod tests {
 
     fn config() -> AuthConfig {
         AuthConfig {
-            verification_host: "www.example.com".into(),
             verification_paths: vec!["/device/authorize".into(), "/old/authorize".into()],
         }
     }
@@ -1237,8 +1227,8 @@ mod tests {
     }
 
     #[test]
-    fn production_verification_url_is_exactly_allowlisted() {
-        let base = "https://api.example.com";
+    fn the_verification_url_is_exactly_allowlisted() {
+        let base = "https://www.example.com";
         let valid = "https://www.example.com/device/authorize?user_code=ABCD-EFGH";
         assert!(validate_verification_url(&config(), valid, "ABCD-EFGH", base, false).is_ok());
         for bad in [
@@ -1257,7 +1247,7 @@ mod tests {
 
     #[test]
     fn every_accepted_verification_path_is_trusted() {
-        let base = "https://api.example.com";
+        let base = "https://www.example.com";
         for valid in [
             "https://www.example.com/device/authorize?user_code=ABCD-EFGH",
             "https://www.example.com/old/authorize?user_code=ABCD-EFGH",
@@ -1274,10 +1264,9 @@ mod tests {
     #[test]
     fn only_the_device_page_is_accepted() {
         let config = AuthConfig {
-            verification_host: "www.example.com".into(),
             verification_paths: VERIFICATION_PATHS.iter().map(|p| p.to_string()).collect(),
         };
-        let base = "https://api.example.com";
+        let base = "https://www.example.com";
         let device = "https://www.example.com/dashboard/device/authorize?user_code=ABCD-EFGH";
         assert!(validate_verification_url(&config, device, "ABCD-EFGH", base, false).is_ok());
         for bad in [
@@ -1637,19 +1626,22 @@ mod tests {
     }
 
     #[test]
-    fn production_config_is_the_device_page_on_the_production_host() {
+    fn the_production_config_is_the_device_page_on_the_api_base_only() {
         let config = AuthConfig::production();
-        assert_eq!(config.verification_host, "www.peakpassvpn.com");
         assert_eq!(config.verification_paths, ["/dashboard/device/authorize"]);
-        let url = "https://www.peakpassvpn.com/dashboard/device/authorize?user_code=ABCD-EFGH";
-        assert!(validate_verification_url(
-            &config,
-            url,
-            "ABCD-EFGH",
-            "https://api.example.com",
-            false
-        )
-        .is_ok());
+        let base = "https://www.example.com";
+        let url = "https://www.example.com/dashboard/device/authorize?user_code=ABCD-EFGH";
+        assert!(validate_verification_url(&config, url, "ABCD-EFGH", base, false).is_ok());
+        // No host is built in: a page anywhere but the API base is refused.
+        for other in [
+            "https://api.example.com/dashboard/device/authorize?user_code=ABCD-EFGH",
+            "https://www.example.net/dashboard/device/authorize?user_code=ABCD-EFGH",
+        ] {
+            assert!(
+                validate_verification_url(&config, other, "ABCD-EFGH", base, false).is_err(),
+                "{other}"
+            );
+        }
     }
 
     #[test]

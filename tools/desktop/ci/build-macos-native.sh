@@ -14,7 +14,7 @@
 #   PPVPN_BUILD_NUMBER         monotonic counter shared by the release
 #   PPVPN_RELEASE_CHANNEL      dev | stable, recorded in release-meta
 #   PPVPN_VERSION              x.y.z from the release tag (default: project version)
-#   PPVPN_API_BASE_DEFAULT     backend for Release builds
+#   PPVPN_API_BASE_DEFAULT     the backend (required; release.yml sets it, docs/release.md 后端地址)
 #   PPVPN_UPDATE_SITE          base address of the update site; with a channel, each
 #                              build's Sparkle feed is
 #                              <site>/desktop/<channel>/appcast-<platform>.xml;
@@ -44,7 +44,7 @@ set -euo pipefail
 : "${MACOS_ARCHS:=arm64 x86_64}"
 : "${RUST_TOOLCHAIN:=stable}"
 : "${PPVPN_BUILD_NUMBER:?PPVPN_BUILD_NUMBER is required}"
-: "${PPVPN_API_BASE_DEFAULT:=https://www.peakpassvpn.com}"
+: "${PPVPN_API_BASE_DEFAULT:?PPVPN_API_BASE_DEFAULT (the backend) is required}"
 
 for arch in $MACOS_ARCHS; do
   case "$arch" in arm64|x86_64) ;; *) echo "unsupported arch in MACOS_ARCHS: $arch" >&2; exit 2 ;; esac
