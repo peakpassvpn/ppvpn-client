@@ -13,7 +13,11 @@ final class AgentSupportTests: XCTestCase {
     /// agent reads the sign-in the app wrote.
     func testDirectoriesAreTheApps() {
         XCTAssertEqual(AppDirectories.data.lastPathComponent, "PPVPN")
+        #if os(macOS)
+        // Foundation on Linux has no user Library directory; the agent runs
+        // only on macOS.
         XCTAssertEqual(Array(AppDirectories.logs.pathComponents.suffix(2)), ["Logs", "PPVPN"])
+        #endif
     }
 
     func testLogGoesToTheSink() {
