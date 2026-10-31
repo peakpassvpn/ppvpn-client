@@ -1175,19 +1175,22 @@ jobs:
           path: ${{ steps.build.outputs.bundle }}
           if-no-files-found: error
           retention-days: 14
-      # Room for the emulator's userdata (7.4 GB): on a runner with the
-      # 72 GB disk, the build left 11 GB and the system image took the rest
-      # (run 41233125323, "Not enough space to create userdata partition").
-      # Cargo's build is done with: its libraries are in jniLibs, and this
-      # job saves no Rust cache.
-      - name: Drop Cargo's build
-        if: steps.scope.outputs.android == 'true'
-        run: rm -rf target
-      # Hardware acceleration for the emulator.
       # What the build left, beside what the emulator needs next.
       - name: Disk after the build
         if: always() && steps.scope.outputs.android == 'true'
         run: df -h /
+      # The emulator needs about 7.4 GB for its userdata partition, after
+      # the system image: with the build's 11 GB left it found 5.9 GB and
+      # did not start (job 124572523884). Cargo's target directory is done
+      # with by now (ci-build.sh copied the libraries into jniLibs, which the
+      # smoke test's debug APK packs); Gradle's caches stay for that build.
+      - name: Free the Rust build's disk
+        if: steps.scope.outputs.android == 'true'
+        run: |
+          du -sh target 2>/dev/null || true
+          rm -rf target
+          df -h /
+      # Hardware acceleration for the emulator.
       - name: KVM
         if: steps.scope.outputs.android == 'true'
         run: |
@@ -1218,6 +1221,16 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: apps/flutter/e2e/android_smoke.sh
+      # A failed smoke test's evidence: each leg's flutter test report (JSON
+      # events) and TunnelService's log lines.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && steps.scope.outputs.android == 'true'
+        timeout-minutes: 10
+        with:
+          name: android-smoke
+          path: apps/flutter/build/smoke-*
+          if-no-files-found: ignore
+          retention-days: 14
 
   ios:
     # The Flutter app's iOS target (#448): the bridge as a static library
