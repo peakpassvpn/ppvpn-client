@@ -1214,6 +1214,16 @@ jobs:
       SIGNED: ${{ needs.prepare.outputs.channel == 'stable' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # App Store Connect takes only apps built with the iOS 26 SDK or later
+      # (an 18.5 build was refused at upload, 409). The image's default
+      # Xcode is older: the newest Xcode 26 on it, or the job fails here.
+      - name: Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          [[ -n "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; ls -d /Applications/Xcode*.app >&2; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
