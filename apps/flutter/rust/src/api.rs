@@ -285,6 +285,13 @@ pub async fn sign_in() -> Result<(), String> {
         .await
 }
 
+/// `path` on the site root of the backend the app signs in to (#517): the
+/// web pages the app links to follow the configured API base.
+#[frb(sync)]
+pub fn site_url(path: String) -> Result<String, String> {
+    Ok(bridge::get()?.client.site_url(&path))
+}
+
 /// Opens `url` in the default browser ("reopen the browser").
 #[frb(sync)]
 pub fn open_url(url: String) -> bool {

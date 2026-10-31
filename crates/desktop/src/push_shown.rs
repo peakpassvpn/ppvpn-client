@@ -13,7 +13,7 @@
 //! {"items": [{"id": 17, "message_id": 4711, "title": "…", "body": "…",
 //!             "severity": "critical", "category": "billing",
 //!             "event_key": "invoice.issued",
-//!             "deep_link": "https://www.peakpassvpn.com/app/…",
+//!             "deep_link": "https://www.example.com/app/…",
 //!             "created_at": "2026-09-29T00:00:00Z", "shown_at": 1790640000}]}
 //! ```
 //!
@@ -129,7 +129,7 @@ mod tests {
             severity: MessageSeverity::Critical,
             category: MessageCategory::Billing,
             event_key: "invoice.issued".into(),
-            deep_link: Some("https://www.peakpassvpn.com/app/x".into()),
+            deep_link: Some("https://www.example.com/app/x".into()),
             created_at: "2026-09-29T00:00:00Z".into(),
         }
     }

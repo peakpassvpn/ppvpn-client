@@ -15,6 +15,7 @@
   - Profile 以原始 JSON 字节传入，宿主不解析它；
   - 异步方法是普通的 `async fn`，FFI 层自己决定是用回调还是阻塞包装。
 - **公开面**：只有 `Engine` 和本文列出的值类型（在 crate 根导出）。profile 解析、dns-local 等实现都是 crate 内部的，宿主看不到它们，改动它们也不算破坏性变更。`ppvpn_core::internal` 只给本 crate 的测试和 `ppvpn-core-lab` 用，**不稳定，宿主不得使用**，任何版本都可能改动它而不另行通知。
+- **后端地址不在引擎里**：引擎不访问后端。宿主（desktop client、CLI、手机的界面进程）用的后端地址是构建输入 `PPVPN_API_BASE_DEFAULT`，由 CI 和发布从 GitHub 的 `PPVPN_API_BASE` 传入（#517，见 [构建与发布](release.md#后端地址)），代码里不写任何后端域名。登录页只信任这个地址的主机，应用打开的网页也从它推出。
 - **语义贴近 Core API v1**：方法和 Core API v1 一一对应（见第 13 节对照表），错误码沿用现有的字符串。这样宿主迁移时，基本只需要把 IPC 调用换成函数调用。
 
 ## 2. 实例与拓扑

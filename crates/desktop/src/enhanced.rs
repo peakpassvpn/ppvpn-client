@@ -94,13 +94,6 @@ const RELEASE_BUDGET: Duration = if cfg!(test) {
 /// Detail of the `Error` a disconnect ends in when the service never
 /// confirmed that the core stopped.
 const DISCONNECT_UNCONFIRMED: &str = "DISCONNECT_UNCONFIRMED";
-/// First-party hosts: only for them the full direct request / capture /
-/// proxied-path transaction runs. The direct request proves that TUN
-/// captures the app's own traffic (the core's counters grow), whichever
-/// outbound the profile routes it to (DIRECT once the profile carries the
-/// first-party rule, the node until then). The domain and its subdomains,
-/// so every backend environment counts without naming one here.
-const OFFICIAL_HEALTH_DOMAIN: &str = "peakpassvpn.com";
 /// The backend's unauthenticated health route.
 const HEALTH_PATH: &str = "/api/v1/health";
 /// Deadline for the direct health request (connect and whole response).
@@ -2357,14 +2350,27 @@ fn health_round(result: &Result<(), ClientErrorInfo>) -> Round {
     }
 }
 
-/// `Some(url)` when the full health transaction applies to `api_base`.
+/// `Some(url)` when the full health transaction (the direct request, the
+/// capture check, the proxied path) applies to `api_base`: a backend on the
+/// internet, its https API host a domain name, which is first-party by
+/// definition (#517: the host comes from the build, none is written here).
+/// The direct request proves that TUN captures the app's own traffic (the
+/// core's counters grow), whichever outbound the profile routes it to
+/// (DIRECT once the profile carries the first-party rule, the node until
+/// then). Not for a local or test backend: an IP address, `localhost` or
+/// plain http, which the tunnel does not carry.
 fn health_target(api_base: &str) -> Option<reqwest::Url> {
     let url = reqwest::Url::parse(api_base).ok()?;
-    let host = url.host_str()?;
-    let official = host
-        .strip_suffix(OFFICIAL_HEALTH_DOMAIN)
-        .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'));
-    official.then_some(url)
+    let host = url
+        .host_str()?
+        .trim_matches(['[', ']'])
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let public = url.scheme() == "https"
+        && host.parse::<std::net::IpAddr>().is_err()
+        && host.contains('.')
+        && !host.ends_with(".localhost");
+    public.then_some(url)
 }
 
 /// The backend's health endpoint (`GET /api/v1/health`: 200, `no-store`, no
@@ -2952,25 +2958,29 @@ mod tests {
     }
 
     #[test]
-    fn health_transaction_only_for_official_hosts() {
-        assert!(health_target("https://www.peakpassvpn.com").is_some());
-        assert!(health_target("https://peakpassvpn.com").is_some());
-        assert!(health_target("https://api.peakpassvpn.com/").is_some());
-        assert!(health_target("https://peakpassvpn.com.example.com").is_none());
-        assert!(health_target("https://notpeakpassvpn.com").is_none());
+    fn health_transaction_only_for_a_backend_on_the_internet() {
+        // Whatever backend the build names (#517).
+        assert!(health_target("https://www.example.com").is_some());
+        assert!(health_target("https://example.com").is_some());
+        assert!(health_target("https://staging.example.net/").is_some());
+        // A local or test backend.
+        assert!(health_target("http://www.example.com").is_none());
         assert!(health_target("http://localhost:8080").is_none());
+        assert!(health_target("https://localhost").is_none());
+        assert!(health_target("https://api.localhost").is_none());
         assert!(health_target("http://127.0.0.1").is_none());
-        assert!(health_target("https://staging.example.com").is_none());
+        assert!(health_target("https://127.0.0.1").is_none());
+        assert!(health_target("https://[::1]").is_none());
         assert!(health_target("not a url").is_none());
     }
 
     #[test]
     fn health_url_is_the_api_health_route_with_a_unique_probe() {
-        let first = health_url("https://www.peakpassvpn.com/some/base?x=1").unwrap();
-        assert_eq!(first.host_str(), Some("www.peakpassvpn.com"));
+        let first = health_url("https://www.example.com/some/base?x=1").unwrap();
+        assert_eq!(first.host_str(), Some("www.example.com"));
         assert_eq!(first.path(), "/api/v1/health");
         assert!(first.query().unwrap().starts_with("ppvpn_probe="));
-        let second = health_url("https://www.peakpassvpn.com").unwrap();
+        let second = health_url("https://www.example.com").unwrap();
         assert_ne!(first.query(), second.query());
         assert!(health_url("http://localhost:8080").is_none());
     }
