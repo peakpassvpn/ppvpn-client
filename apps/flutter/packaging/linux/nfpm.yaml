@@ -1,7 +1,7 @@
 # deb and rpm for PPVPN with the Flutter app (#401), built by
 # ../../scripts/package-linux.sh (which fills in every $-brace placeholder).
-# The native package's (apps/linux/packaging/nfpm.yaml) name, layout,
-# maintainer scripts and autostart entry, so either upgrades the other in
+# The native package's name, layout, maintainer scripts and autostart entry
+# (the native app is gone, #522), so it upgrades the native package in
 # place; only the app and its dependencies differ.
 #
 #   /usr/lib/ppvpn/ppvpn            the Flutter runner; ppvpn-service only talks to this path
@@ -48,7 +48,7 @@ contents:
     packager: rpm
   # The native entry plus StartupWMClass: the runner sets its program name (the X11
   # WM_CLASS) to the application id.
-  - src: ${PPVPN_FLUTTER_PACKAGING_DIR}/com.peakpassvpn.ppvpn.desktop.desktop
+  - src: ${PPVPN_PACKAGING_DIR}/com.peakpassvpn.ppvpn.desktop.desktop
     dst: /usr/share/applications/com.peakpassvpn.ppvpn.desktop.desktop
     file_info:
       mode: 0644

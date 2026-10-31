@@ -33,7 +33,7 @@ const OPEN_SWITCH: &str = "--open-notification";
 /// A click forwarded to the running instance on Windows, as the native
 /// app forwards it: `--notification-activated=id%3D<push id>`.
 const FORWARD_SWITCH: &str = "--notification-activated=";
-/// Set by the installer and the uninstaller (apps/windows/installer/ppvpn.nsi,
+/// Set by the installer and the uninstaller (apps/flutter/packaging/windows/ppvpn.nsi,
 /// `QUIT_EVENT`) to have the running app quit through its normal path
 /// before they replace its files; the native app's QuitSignal
 /// (apps/windows/PPVPN.Windows/Platform/AppUpdater.cs). Only the running

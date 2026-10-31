@@ -1,7 +1,3 @@
-[bindings.csharp]
-access_modifier = "public"
-namespace = "PPVPN.Ffi"
-
 [bindings.swift]
 # The C module is PPVPNClientFFI, matching the dynamic framework that
 # scripts/build-apple.sh wraps the library in.

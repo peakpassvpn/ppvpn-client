@@ -8,7 +8,7 @@
 //!   ppvpn.exe as its notifications' click activator (`instance.rs`). The
 //!   push agent writes the same; the uninstaller removes both keys;
 //! - `ppvpn.exe --set-shortcut-aumid <.lnk>`, run by the installer
-//!   (apps/windows/installer/ppvpn.nsi) right after it creates a shortcut:
+//!   (apps/flutter/packaging/windows/ppvpn.nsi) right after it creates a shortcut:
 //!   stamps the id on the shortcut as System.AppUserModel.ID and exits, 0
 //!   on success, 1 on failure, 2 without a path.
 //!
