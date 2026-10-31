@@ -22,6 +22,7 @@ import '../strings.dart';
 import '../theme.dart';
 import '../updates.dart';
 import '../widgets.dart';
+import 'diagnostics.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.app});
@@ -507,9 +508,58 @@ class _Advanced extends StatelessWidget {
             ],
           ),
         ),
+        // Network diagnostics (#521): the DoH comparison only on the press.
+        SettingRow(
+          icon: FLucideIcons.globe,
+          title: s('diagnostics'),
+          description: s('diagnosticsSub'),
+          divider: true,
+          trailing: Button(
+            kind: ButtonKind.secondary,
+            label: s('diagnosticsRun'),
+            onPress: () => unawaited(_showDiagnostics(context)),
+          ),
+        ),
       ],
     );
   }
+
+  Future<void> _showDiagnostics(BuildContext context) => showFDialog<void>(
+    context: context,
+    builder: (context, style, animation) => FDialog(
+      animation: animation,
+      semanticsLabel: S.current('diagnostics'),
+      builder: (context, style) => Padding(
+        padding: Tokens.dialogPadding,
+        child: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Semantics(
+                  header: true,
+                  child: Text(S.current('diagnostics'), style: Tokens.of(context).bodyStrong.copyWith(fontSize: 15)),
+                ),
+                const SizedBox(height: 6),
+                const DiagnosticsView(),
+                const SizedBox(height: 20),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Button(
+                    kind: ButtonKind.secondary,
+                    label: S.current('close'),
+                    onPress: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 /// The API override: a mono field under the title, the hint under it. It

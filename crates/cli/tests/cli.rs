@@ -246,6 +246,8 @@ fn doctor_reports_build_and_directories() {
     }
     let out = home.run(&["doctor"]);
     assert!(out.stdout.starts_with("Platform: "), "{}", out.stdout);
+    // The network check only with --network (#521).
+    assert!(value.get("reachability").is_none(), "{value}");
 }
 
 #[test]
