@@ -1181,6 +1181,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      # Room on the runner's disk: the bridge and the tunnel host for two
+      # ABIs (sail and BoringSSL in each), Gradle's build and the emulator's
+      # image filled it (run 41183704847, "No space left on device"). The
+      # preinstalled toolchains this job never uses go first: .NET, Haskell,
+      # Swift, PowerShell, CodeQL's bundle (not the Android SDK or Java).
+      - name: Free disk space
+        if: steps.scope.outputs.android == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift \
+            /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         if: steps.scope.outputs.android == 'true'
         with:
@@ -1226,6 +1238,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       # Hardware acceleration for the emulator.
+      # What the build left, beside what the emulator needs next.
+      - name: Disk after the build
+        if: always() && steps.scope.outputs.android == 'true'
+        run: df -h /
       - name: KVM
         if: steps.scope.outputs.android == 'true'
         run: |

@@ -31,6 +31,14 @@
   - Android 的 JNI：`scripts/build-android.sh <输出目录>` 产出 `<abi>/libppvpn_tunnel.so`（arm64-v8a、x86_64，放进 app 的 jniLibs），Kotlin 类 `com.peakpassvpn.ppvpn.tunnel.TunnelHost`（`apps/flutter/runner/android`）。只有 `:tunnel` 进程的 TunnelService 加载它。函数同 C ABI，错误同样以 JSON 字符串返回；`Listener` 的 `protect(fd)` 转给 `VpnService.protect`，`onExit(reason)` 即 C ABI 的 on_exit。
 - **Android 的 TunnelService（`apps/flutter/runner/android`）：** 按 `settings` 用 `VpnService.Builder` 建 TUN，把非 VPN 的最佳网络作为 NetworkState 推给宿主（启动前先推第一份，和 iOS 一样），再在 TUN 的 fd 上启动宿主，socket 是 `filesDir/tunnel.sock`，状态目录是 `filesDir/tunnel-state`。宿主开始服务后报告 on。`apps/flutter/scripts/ci-build.sh` 把两个 ABI 的 `libppvpn_tunnel.so` 放进 APK。
 - **CI：** iOS、Android 的构建和 Linux 上的测试；Android 模拟器上的冒烟测试会拉起系统 VPN，经 `tunnel.sock` 调用宿主，再断开。
+- **发布（`release.yml`）：** 合入 main 时，`ios` 和 `android` 两个任务都只构建，不签名、不上传，用来提前发现构建问题。stable 渠道（正式发布和演练都算）在批准后才签名上传：iOS 传到 TestFlight，Android 的 App Bundle 用 Play 上传密钥签名后传到 Google Play 的内部测试轨道（`tools/desktop/ci/play_upload.py`）。versionCode 用发布的构建号。
+  - Android 用 `desktop-release-stable` 里的这几个 secret：
+    - `ANDROID_UPLOAD_KEYSTORE`：上传密钥库，base64 编码；
+    - `ANDROID_UPLOAD_KEYSTORE_PASSWORD`、`ANDROID_UPLOAD_KEY_ALIAS`、`ANDROID_UPLOAD_KEY_PASSWORD`；
+    - `PLAY_SERVICE_ACCOUNT_JSON`：对这个 App 有发布权限的服务账号密钥。
+  - 还没有上传密钥或服务账号时，stable 渠道照样构建，但用 debug 密钥签名，不上传，只给出一条警告。
+  - Google Play 规定新 App 的第一个包只能在 Play Console 里手动上传，stable 运行产出的 App Bundle 会作为 artifact 保留，供手动上传使用。
+  - 发布状态由仓库变量 `PLAY_RELEASE_STATUS` 决定，默认 `completed`。App 从未发布过时，Play 只接受 `draft`。
 - **还没有：**
   - 带 profile 的真实连接（要真机和真实节点，CI 里没有）；Android 的常驻通知和 always-on 启动。
 
