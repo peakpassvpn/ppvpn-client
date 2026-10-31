@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-account"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64",
  "http",
@@ -2760,7 +2760,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-cli"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64",
  "clap",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-core"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-core-lab"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64",
  "bytes",
@@ -2835,7 +2835,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-desktop"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64",
  "hex",
@@ -2862,7 +2862,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-engine-host"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "ppvpn-core",
  "serde",
@@ -2872,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-flutter"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "flutter_rust_bridge",
  "jni",
@@ -2889,7 +2889,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-push-agent"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "chrono",
  "ppvpn-desktop",
@@ -2902,7 +2902,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-service"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",
@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "ppvpn-tunnel-host"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "jni",
  "ppvpn-core",
