@@ -464,9 +464,10 @@ fn serve_watch<S: Connection>(
         "keepalive_ms": keepalive.as_millis() as u64,
     });
     write_frame(stream, &signed_ok(req.id.clone(), watching, &auth.key)?)?;
+    // The session id stays out of the log: it is the session's secret,
+    // which status hides from other users.
     log::debug!(
-        "watch opened for session {} (generation {}) by pid {client_pid}",
-        session.session_id,
+        "watch opened for generation {} by pid {client_pid}",
         session.generation
     );
     let mut seq = 0u64;
@@ -1207,7 +1208,7 @@ fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
     match crate::macsign::check_process(&bytes, &requirement) {
         Ok(()) => Ok(pid as u32),
         // A debug service also takes an ad-hoc signed debug app, from the
-        // fixed path only (apps/macos/scripts/install-debug.sh).
+        // fixed paths only (macos_client_path_allowed).
         Err(error) if cfg!(debug_assertions) => {
             let path = macos_process_path(pid)?;
             if !macos_client_path_allowed(std::path::Path::new(&path)) {

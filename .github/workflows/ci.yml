@@ -406,8 +406,8 @@ jobs:
   #   - the Flutter app's Rust (its bridge and the push agent): clippy, and
   #     the agent's tests;
   #   - the desktop scripts: bash -n and their Python tests;
-  #   - Swift bindings, then the macOS app's AppLogic tests (no AppKit), with
-  #     the Swift the macOS app is developed with.
+  #   - Swift bindings, then the AppLogic tests of the macOS push agent (no
+  #     AppKit), with the Swift it is developed with.
   desktop:
     name: desktop
     # Pinned to the image the Swift toolchain is built for (ubuntu24.04):
@@ -1175,6 +1175,14 @@ jobs:
           path: ${{ steps.build.outputs.bundle }}
           if-no-files-found: error
           retention-days: 14
+      # Room for the emulator's userdata (7.4 GB): on a runner with the
+      # 72 GB disk, the build left 11 GB and the system image took the rest
+      # (run 41233125323, "Not enough space to create userdata partition").
+      # Cargo's build is done with: its libraries are in jniLibs, and this
+      # job saves no Rust cache.
+      - name: Drop Cargo's build
+        if: steps.scope.outputs.android == 'true'
+        run: rm -rf target
       # Hardware acceleration for the emulator.
       # What the build left, beside what the emulator needs next.
       - name: Disk after the build
