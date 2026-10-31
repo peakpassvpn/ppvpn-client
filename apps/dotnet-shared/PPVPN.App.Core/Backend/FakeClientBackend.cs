@@ -1129,15 +1129,17 @@ public sealed class FakeClientBackend : IClientBackend
 
     void Update(Func<ClientSnapshot, ClientSnapshot> change)
     {
-        ClientSnapshot snapshot;
         lock (_gate)
         {
-            snapshot = change(_snapshot);
+            var snapshot = change(_snapshot);
             // Like the crate: an unchanged snapshot is never sent (the initial one is read via Snapshot()).
             if (Equals(snapshot, _snapshot)) return;
             _snapshot = snapshot;
+            // Queued under the lock, so snapshots reach the listener in the order they were made:
+            // queued after it, a concurrent update's older snapshot (say, unread 3) could follow
+            // a newer one (unread 0) and stay the last one the UI sees.
+            Emit(() => _listener.OnSnapshot(snapshot));
         }
-        Emit(() => _listener.OnSnapshot(snapshot));
     }
 
     /// <summary>Queue a listener callback for the background pump (keeps order).</summary>

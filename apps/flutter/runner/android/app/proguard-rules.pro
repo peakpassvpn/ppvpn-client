@@ -7,3 +7,6 @@
 -keep class com.peakpassvpn.ppvpn.tunnel.TunnelHost { *; }
 -keep interface com.peakpassvpn.ppvpn.tunnel.TunnelHost$Listener { *; }
 -keep class * implements com.peakpassvpn.ppvpn.tunnel.TunnelHost$Listener { *; }
+
+# The saved sign-in's key (apps/flutter/rust src/android.rs): seal and open.
+-keep class com.peakpassvpn.ppvpn.Credentials { *; }

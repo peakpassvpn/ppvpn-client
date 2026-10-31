@@ -1,8 +1,10 @@
 //! ne-mem: ppvpn-core and sail in the iOS Network Extension's shape, for
 //! measuring memory (#388). One process holds the Engine the way the
 //! extension will: a TUN instance on a mobile platform (the host builds the
-//! routes; the core touches none), no local proxy, no system proxy, the log
-//! to a file. Nothing else runs in it: the loads come from other processes.
+//! routes; the core touches none), its addresses IPv4 and IPv6 as
+//! `tun_settings` gives them (#511), no local proxy, no system proxy, the
+//! log to a file. Nothing else runs in it: the loads come from other
+//! processes.
 //!
 //!     ne-mem --state-dir <dir> [--platform ios|android] [--workers N] [--log-file <path>]
 //!            [--dhat-file <path>]

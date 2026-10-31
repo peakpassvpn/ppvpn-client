@@ -309,28 +309,64 @@ jobs:
             dist/linux/*.rpm
             dist/linux/release-meta-linux-*.json
 
-  # Install the rpm alone under dnf, start it once and remove it
-  # (apps/flutter/scripts/package-smoke.sh). The deb is built, and so
-  # checked, on Ubuntu 22.04.
-  linux-rpm-smoke:
-    name: linux-rpm-smoke
+  # The deb and the rpm, each installed alone, started once and removed
+  # (apps/flutter/scripts/package-smoke.sh), in the images ci.yml uses
+  # (apps/flutter/packaging/linux/smoke-images.sh); the deb also upgrades the
+  # native app's last release in place, as in ci.yml. What the checks install
+  # comes from the caches ci.yml restores, not the mirrors: saved here, on
+  # main, where the pull requests' runs can read them.
+  linux-smoke:
+    name: linux-smoke
     needs: [prepare, linux]
     # Explicit: the implicit success() also looks at approve, which a push skips.
     if: ${{ !cancelled() && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
-    container: fedora:latest
     timeout-minutes: 20
+    env:
+      # As in ci.yml's flutter job, and in the deb cache's key.
+      NATIVE_TAG: v0.6.4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: apps/flutter/scripts
+          sparse-checkout: |
+            apps/flutter/scripts
+            apps/flutter/packaging/linux
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: desktop-linux
           path: dist
+      # Downloaded and checked only: package-smoke.sh installs it.
+      - name: Fetch the native app's deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          deb="PPVPN-${NATIVE_TAG#v}-linux-x64.deb"
+          gh release download "$NATIVE_TAG" --repo "$GITHUB_REPOSITORY" -p "$deb" -p SHA256SUMS -D native
+          (cd native && grep " $deb\$" SHA256SUMS | sha256sum -c -)
+      - name: Smoke packages (deb)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/smoke-pkgs/deb
+          key: linux-smoke-deb-v1-native-${{ env.NATIVE_TAG }}-${{ hashFiles('apps/flutter/scripts/package-smoke.sh', 'apps/flutter/packaging/linux/nfpm.yaml', 'apps/flutter/packaging/linux/smoke-images.sh') }}
+      - name: Smoke packages (rpm)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/smoke-pkgs/rpm
+          key: linux-smoke-rpm-v1-${{ hashFiles('apps/flutter/scripts/package-smoke.sh', 'apps/flutter/packaging/linux/nfpm.yaml', 'apps/flutter/packaging/linux/smoke-images.sh') }}
       # The app only: ppvpn-release would enable the (production) repository.
-      - name: Install, start and remove the x64 rpm
-        run: bash apps/flutter/scripts/package-smoke.sh dist/PPVPN-*-linux-x64.rpm
+      - name: Install, start and remove the x64 deb and rpm
+        run: |
+          source apps/flutter/packaging/linux/smoke-images.sh
+          smoke() {
+            mkdir -p "$RUNNER_TEMP/smoke-pkgs/$1"
+            docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/smoke-pkgs/$1:/smoke-pkgs" \
+              -e PPVPN_SMOKE_PKGS=/smoke-pkgs -w /src "$2" \
+              bash apps/flutter/scripts/package-smoke.sh "${@:3}"
+          }
+          deb=(dist/PPVPN-*-linux-x64.deb)
+          rpm=(dist/PPVPN-*-linux-x64.rpm)
+          smoke deb "$SMOKE_IMAGE_DEB" "${deb[0]}" "native/PPVPN-${NATIVE_TAG#v}-linux-x64.deb"
+          smoke rpm "$SMOKE_IMAGE_RPM" "${rpm[0]}"
 
   # The apt and dnf repositories the site serves, built from these packages
   # as from release assets and installed from with real apt and dnf. No
@@ -1450,7 +1486,7 @@ jobs:
   release-files:
     name: release-files
     if: inputs.channel == 'stable' && needs.prepare.outputs.publish == 'true'
-    needs: [prepare, approve, linux, linux-rpm-smoke, linux-repo, windows, macos, cli-linux, cli-macos]
+    needs: [prepare, approve, linux, linux-smoke, linux-repo, windows, macos, cli-linux, cli-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # For the package repositories' signing key, which signs the rpms here.

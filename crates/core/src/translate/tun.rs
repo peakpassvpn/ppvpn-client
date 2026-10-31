@@ -67,7 +67,7 @@ pub(crate) const TUN_DNS_ADDRESS: &str = "10.60.159.90";
 /// A mobile host's tunnel MTU, set in the inbound as the host sets it on
 /// the device (sail's default).
 pub(crate) const TUN_MTU: u16 = 9000;
-const TUN_INET6_ADDRESS: &str = "fde2:ec40:9312:c7fd::1/126";
+pub(crate) const TUN_INET6_ADDRESS: &str = "fde2:ec40:9312:c7fd::1/126";
 const TUN_PREFIXES: &[&str] = &["10.60.159.88/30", "fde2:ec40:9312:c7fd::/126"];
 /// The tunnel networks before 0.5.7; a host may still list them as DNS.
 const TUN_LEGACY_PREFIXES: &[&str] = &["172.19.0.0/30", "fdfe:dcba:9876::/126"];
@@ -105,13 +105,15 @@ pub(crate) const IPROUTE2_RULE_INDEX: u32 = 9091;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Tun {
     /// Desktop: the core owns the default route (auto_route, strict_route,
-    /// excluded ingresses). Mobile hosts build the tunnel themselves and
-    /// stay IPv4-only.
+    /// excluded ingresses). Mobile hosts build the tunnel themselves, from
+    /// `mobile::tun_settings` (#511).
     pub desktop: bool,
-    /// The tunnel's IPv6 address (desktop); off on hosts with IPv6 disabled.
+    /// The tunnel's IPv6 address; off on desktop hosts with IPv6 disabled,
+    /// always on mobile.
     pub ipv6: bool,
     /// The host has IPv6 but no IPv6 path of its own (no global address with
-    /// a default route): see [`Builder::tun_rules`]. Desktop with IPv6 only.
+    /// a default route; on mobile, no global address on the network the
+    /// host pushed): see [`Builder::tun_rules`]. With IPv6 only.
     pub no_host_ipv6_route: bool,
     /// The TUN device's name ([`interface_name`]); none on mobile, where the
     /// host builds the tunnel.
@@ -400,10 +402,10 @@ impl Builder {
         if !tun.interface_name.is_empty() {
             inbound["interface_name"] = tun.interface_name.clone().into();
         }
+        if tun.ipv6 {
+            inbound["address"] = json!([TUN_INET4_ADDRESS, TUN_INET6_ADDRESS]);
+        }
         if tun.desktop {
-            if tun.ipv6 {
-                inbound["address"] = json!([TUN_INET4_ADDRESS, TUN_INET6_ADDRESS]);
-            }
             // Every ingress IP stays out at the routing level too, so any
             // process's handshake or probe never loops.
             let mut excluded = Vec::new();
@@ -595,8 +597,7 @@ fn sequential(tag: &str, members: Vec<String>, attempt: &str) -> Value {
     })
 }
 
-/// The hand-off needs the TUN's IPv6: not on a host with IPv6 disabled,
-/// nor on mobile (an IPv4-only tunnel).
+/// The hand-off needs the TUN's IPv6: not on a host with IPv6 disabled.
 fn hands_off_direct_ipv6(tun: &Tun) -> bool {
-    tun.desktop && tun.ipv6 && tun.no_host_ipv6_route
+    tun.ipv6 && tun.no_host_ipv6_route
 }

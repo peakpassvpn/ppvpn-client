@@ -31,7 +31,7 @@
 文件名、更新源和签名都和原生版相同，已装的原生版原地升级。原生版（`apps/macos`、`apps/windows`、`apps/linux`）不再发行。
 
 - 每次合入 main：`linux`（deb 和 rpm）、`macos`（每个架构一个 DMG 和 .pkg）、`windows`（NSIS）构建安装包，不读任何密钥
-  （Windows 不签名、macOS ad-hoc 签名、没有更新签名），作为 workflow artifact；`linux-rpm-smoke` 在 dnf 下安装一次，
+  （Windows 不签名、macOS ad-hoc 签名、没有更新签名），作为 workflow artifact；`linux-smoke` 把 deb 和 rpm 各离线安装一次（依赖包来自缓存，在 main 上保存），
   `linux-repo` 用这些包自测 apt/dnf 仓库。什么都不发布。
 - 手动触发 `channel=stable`：在 tag `vX.Y.Z`（0.6.0 及以后；桌面端、CLI 和引擎同一个版本、同一个 Release）上，
   经 `desktop-release-approval` 审批，在 `desktop-release-stable` 里构建并签名，`release-files` 整体核对，

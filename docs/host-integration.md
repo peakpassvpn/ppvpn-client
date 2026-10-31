@@ -488,12 +488,13 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 
 - **实例**：一个 `Role::Tun` 实例，`platform` 为 `Ios` 或 `Android`，没有本地代理。
 - **隧道由宿主建立**：
-  - 先调 `ppvpn_core::tun_settings(platform)`，得到 `TunSettings { mtu, ipv4_address, ipv4_routes, dns_servers }`，再照着它建隧道：
-    - Android：用 `VpnService.Builder` 的 `setMtu`、`addAddress`、`addRoute`、`addDnsServer`，然后 `establish()`；
-    - iOS：在 `NEPacketTunnelNetworkSettings` 里设 IPv4 地址、`includedRoutes`、DNS 和 MTU，然后取 utun 的 fd。
+  - 先调 `ppvpn_core::tun_settings(platform)`，得到 `TunSettings { mtu, ipv4_address, ipv4_routes, ipv6_address, ipv6_routes, dns_servers }`，再照着它建隧道：
+    - Android：用 `VpnService.Builder` 的 `setMtu`、`addAddress`（IPv4 和 IPv6 各一次）、`addRoute`、`addDnsServer`，然后 `establish()`；
+    - iOS：在 `NEPacketTunnelNetworkSettings` 里设 IPv4 和 IPv6 地址（`NEIPv4Settings`、`NEIPv6Settings`）及各自的 `includedRoutes`、DNS 和 MTU，然后取 utun 的 fd。
 
     桌面上这个函数返回 `None`。引擎生成的 TUN 配置用的是同一组值，所以两边不会对不上。
-  - 隧道只有 IPv4，路由是全部流量。私网目的地按路由规则直连，经保护过的 socket（Android）或扩展自己的 socket（iOS）出去，不靠路由排除。DNS 地址在隧道网段内，引擎劫持所有查询，宿主不另设解析器。
+  - 隧道有 IPv4 和 IPv6（#511），两边的路由都是全部流量，所以 app 的 IPv6 不会绕过隧道。私网目的地按路由规则直连，经保护过的 socket（Android）或扩展自己的 socket（iOS）出去，不靠路由排除。DNS 地址在隧道网段内（IPv4），引擎劫持所有查询，宿主不另设解析器。
+  - 宿主推送的网络没有全局 IPv6 地址时，引擎对直连的全局 IPv6 目的地做和桌面一样的 hand-off（按域名改走 IPv4）；网络变化后重新判断（见下面的网络状态）。
   - 建好以后，把 fd 放进 `TunConfig::with_fd(fd)`。
     - 每次启动 Sail（`start`、完整重启、热切换失败后的回退），引擎都交给 Sail 一个 `dup` 的副本，Sail 停止时关闭副本。
     - 原 fd 引擎**不关**，由宿主在 `shutdown` 返回后关闭。所以引擎重启时不需要重建隧道，系统的 VPN 图标也不会闪。
@@ -508,6 +509,7 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
   - **格式**：`NetworkState` 的字段是 `interface`、`type`（wifi、cellular、ethernet、other）、`addresses`、`gateway`、`expensive`、`constrained`，序列化后就是 Sail 的网络状态 JSON。`interface` 为空表示断网。
   - **传递**：引擎保存最后一次的状态，每次启动 Sail 时先交给它；运行中调用时立即交给 Sail。
   - **之后的行为**：从此 Sail 按宿主的说法判断网络，不再自己探测。变化照常经 `NetworkChanged` 事件和离线状态（`Degraded{NoDefaultInterface}`）报告，和桌面一样。
+  - **IPv6 出口**：`addresses` 里有全局单播 IPv6 地址（2000::/3）就算有 IPv6 出口。所以宿主要把默认网络的 IPv6 地址也放进去。
   - **桌面**：调用返回 `CORE_OPERATION_FAILED`，因为桌面上 Sail 自己的监视器是唯一来源（第 12 节）。
 - **内存**：
   - 移动端的实例用 Sail 的 mobile profile：单线程，小缓冲和小窗口，`inbound.max_connections` 为 512。`sail::embed` 默认是 desktop profile，所以由引擎按 `platform` 设置。

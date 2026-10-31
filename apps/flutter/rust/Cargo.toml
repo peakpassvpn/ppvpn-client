@@ -25,6 +25,11 @@ tracing = "0.1"
 [target.'cfg(target_os = "ios")'.dependencies]
 security-framework = "3"
 
+# The app's Kotlin from the UI process (android.rs): the saved sign-in's
+# Keystore key (#473).
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 # The shell link's property store, for the installer's
 # `--set-shortcut-aumid` (aumid.rs), as the push agent's WinRT toasts use

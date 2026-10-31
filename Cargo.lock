@@ -2875,6 +2875,7 @@ name = "ppvpn-flutter"
 version = "0.7.1"
 dependencies = [
  "flutter_rust_bridge",
+ "jni",
  "ppvpn-desktop",
  "security-framework",
  "serde",
