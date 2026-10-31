@@ -49,7 +49,8 @@
 `Role::Tun` 加 `Platform::Ios` 或 `Platform::Android` 时，引擎生成的 TUN 配置和桌面不同：
 
 - **隧道由宿主建立：** 引擎不设置 `auto_route`、`strict_route` 和路由层的地址排除，也不给 TUN 网卡起名。入口地址在路由规则里照样直连。
-- **只有 IPv4：** 不探测主机的 IPv6，也不记 `host ipv6` 日志行。MTU 是 9000，和 `tun_settings` 一致。
+- **IPv4 和 IPv6 都进隧道（#511）：** 隧道有一个 IPv6 ULA 地址，IPv6 路由是 `::/0`，所以双栈网络上 app 的 IPv6 不会绕过 VPN。MTU 是 9000，和 `tun_settings` 一致。
+- **没有 IPv6 出口时（hand-off）：** 和桌面一样。宿主推送的网络没有全局 IPv6 地址时，直连的全局 IPv6 目的地按域名改走 IPv4，直连解析只取 IPv4；代理流量照常发往节点。网络变化后重新判断，变了就热切换（`KernelSwitched`），`host ipv6` 日志行记录判断结果。还没推送网络或断网时按有 IPv6 出口处理。
 - **与桌面相同的前导规则：** 嗅探、DNS 劫持、隧道自身网段和 fake-ip 段的拒绝、私网直连。
 - **DNS：** 宿主给系统的 DNS 地址是隧道网段里的 `10.60.159.90`。查询进隧道后由 DNS 劫持应答；劫持排在拒绝隧道网段的规则之前。
 - **入口探测的 ICMP 不需要特权：** iOS 用 `SOCK_DGRAM` ICMP socket；Android 需要 `net.ipv4.ping_group_range` 包含当前组，否则报 `ICMP_UNSUPPORTED`。

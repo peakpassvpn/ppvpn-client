@@ -557,22 +557,27 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
     );
     assert!(excluded.contains(&json!("192.168.0.0/16")));
 
+    // Mobile: the host built the tunnel, with IPv6 (#511).
     let mobile = Options {
-        tun: Some(Tun {
-            desktop: false,
-            ipv6: false,
-            no_host_ipv6_route: true,
-            interface_name: String::new(),
-            local_dns: LocalDns::System,
-        }),
+        tun: Some(mobile_tun(false)),
         ..Options::default()
     };
     let config = value(&translate(&contract(), &mobile).unwrap());
     assert_eq!(
         config["inbounds"][0],
-        json!({"type": "tun", "tag": "tun", "address": ["10.60.159.89/30"], "mtu": 9000})
+        json!({"type": "tun", "tag": "tun", "address": ["10.60.159.89/30", "fde2:ec40:9312:c7fd::1/126"], "mtu": 9000})
     );
     assert!(config["route"].get("auto_detect_interface").is_none());
+}
+
+fn mobile_tun(no_host_ipv6_route: bool) -> Tun {
+    Tun {
+        desktop: false,
+        ipv6: true,
+        no_host_ipv6_route,
+        interface_name: String::new(),
+        local_dns: LocalDns::System,
+    }
 }
 
 #[test]
@@ -796,20 +801,30 @@ fn without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain() {
     let with_path = value(&translate(&contract(), &tun_options()).unwrap());
     assert_eq!(config["inbounds"], with_path["inbounds"]);
 
-    // It needs the TUN's IPv6: not without it, nor on mobile.
+    // On mobile the same, on a network without IPv6 (#511).
+    let mobile = |no_host_ipv6_route| Options {
+        tun: Some(mobile_tun(no_host_ipv6_route)),
+        ..Options::default()
+    };
+    let t = translate(&contract(), &mobile(true)).unwrap();
+    assert!(t.direct_ipv6_hand_off);
+    let mobile_config = value(&t);
+    assert_eq!(mobile_config["route"]["rules"][2], rules[2]);
+    assert_eq!(
+        outbound(&mobile_config, DIRECT_TAG),
+        outbound(&config, DIRECT_TAG)
+    );
+    let with_path = value(&translate(&contract(), &mobile(false)).unwrap());
+    assert_eq!(mobile_config["inbounds"], with_path["inbounds"]);
+
+    // It needs the TUN's IPv6, and a host without an IPv6 path.
     for tun in [
         Tun {
             ipv6: false,
             no_host_ipv6_route: true,
             ..desktop_tun(LocalDns::System)
         },
-        Tun {
-            desktop: false,
-            ipv6: false,
-            no_host_ipv6_route: true,
-            interface_name: String::new(),
-            local_dns: LocalDns::System,
-        },
+        mobile_tun(false),
     ] {
         let options = Options {
             tun: Some(tun),

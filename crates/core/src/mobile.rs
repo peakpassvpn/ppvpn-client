@@ -20,18 +20,26 @@ pub struct TunSettings {
     /// direct by the routing rules, out of the tunnel through the protected
     /// (Android) or the extension's own (iOS) sockets.
     pub ipv4_routes: Vec<String>,
+    /// The tunnel's IPv6 address (a ULA) with its prefix length (#511).
+    pub ipv6_address: String,
+    /// Everything IPv6 into the tunnel too, so that no application's IPv6
+    /// goes around it. On a network without IPv6 the engine dials direct
+    /// IPv6 by its name over IPv4 (the hand-off, as on desktop).
+    pub ipv6_routes: Vec<String>,
     /// The resolver the system is given: inside the tunnel, where the
     /// engine answers every query (hijack-dns).
     pub dns_servers: Vec<String>,
 }
 
 /// The tunnel of a TUN instance on `platform`; None on desktop, where the
-/// engine builds it (auto_route). IPv4 only, as the engine's mobile TUN.
+/// engine builds it (auto_route).
 pub fn tun_settings(platform: Platform) -> Option<TunSettings> {
     mobile(platform).then(|| TunSettings {
         mtu: translate::TUN_MTU,
         ipv4_address: translate::TUN_INET4_ADDRESS.into(),
         ipv4_routes: vec!["0.0.0.0/0".into()],
+        ipv6_address: translate::TUN_INET6_ADDRESS.into(),
+        ipv6_routes: vec!["::/0".into()],
         dns_servers: vec![translate::TUN_DNS_ADDRESS.into()],
     })
 }
@@ -103,6 +111,21 @@ impl NetworkState {
     pub fn with_constrained(mut self, constrained: bool) -> Self {
         self.constrained = constrained;
         self
+    }
+
+    /// Whether the network reaches the IPv6 internet: it has a global
+    /// unicast IPv6 address (the host gives no IPv6 default route, and
+    /// an address of that scope comes from a router that offers one).
+    /// None offline, where nothing reaches anything.
+    pub(crate) fn ipv6_route(&self) -> Option<bool> {
+        self.interface.as_ref()?;
+        Some(self.addresses.iter().any(|address| {
+            let ip = address
+                .split_once('/')
+                .map_or(address.as_str(), |(ip, _)| ip);
+            ip.parse()
+                .is_ok_and(|ip| crate::hostipv6::global_unicast(&ip))
+        }))
     }
 }
 
@@ -186,6 +209,8 @@ mod tests {
         assert_eq!(settings.mtu, 9000);
         assert_eq!(settings.ipv4_address, "10.60.159.89/30");
         assert_eq!(settings.ipv4_routes, ["0.0.0.0/0"]);
+        assert_eq!(settings.ipv6_address, "fde2:ec40:9312:c7fd::1/126");
+        assert_eq!(settings.ipv6_routes, ["::/0"]);
         // The other host address of the tunnel's /30.
         assert_eq!(settings.dns_servers, ["10.60.159.90"]);
         assert_eq!(
@@ -194,9 +219,31 @@ mod tests {
                 "mtu": 9000,
                 "ipv4_address": "10.60.159.89/30",
                 "ipv4_routes": ["0.0.0.0/0"],
+                "ipv6_address": "fde2:ec40:9312:c7fd::1/126",
+                "ipv6_routes": ["::/0"],
                 "dns_servers": ["10.60.159.90"],
             })
         );
+    }
+
+    #[test]
+    fn an_ipv6_route_needs_a_global_address() {
+        let wifi = |addresses: &[&str]| {
+            NetworkState::new("wlan0", NetworkKind::Wifi)
+                .with_addresses(addresses.iter().map(|a| a.to_string()).collect())
+        };
+        assert_eq!(NetworkState::offline().ipv6_route(), None);
+        assert_eq!(wifi(&["192.168.1.2/24"]).ipv6_route(), Some(false));
+        assert_eq!(
+            wifi(&["192.168.1.2/24", "fe80::1/64", "fd00::2/64"]).ipv6_route(),
+            Some(false)
+        );
+        assert_eq!(
+            wifi(&["192.168.1.2/24", "2001:db8::2/64"]).ipv6_route(),
+            Some(true)
+        );
+        assert_eq!(wifi(&["2001:db8::2"]).ipv6_route(), Some(true));
+        assert_eq!(wifi(&["not an address"]).ipv6_route(), Some(false));
     }
 
     #[test]
