@@ -6,7 +6,9 @@
 //! toggle it between two starts), and again when the default interface
 //! changes ([`Engine::reprobe_host_ipv6`]): a host that loses or gains its
 //! IPv6 path switches kernels to the build that hands direct IPv6 its domain
-//! (see `translate::Tun::no_host_ipv6_route`), or back.
+//! (see `translate::Tun::no_host_ipv6_route`), or back. On mobile the
+//! tunnel always has IPv6 (#511) and the path is read from the network the
+//! host pushed, which sail reports as a change like its own.
 
 use std::sync::{Arc, Mutex};
 
@@ -131,7 +133,7 @@ fn sail_local_dns(servers: &[Server]) -> LocalDns {
 }
 
 /// Desktop TUNs own the default route (auto_route); mobile hosts build the
-/// tunnel themselves, IPv4 only.
+/// tunnel themselves.
 fn desktop(platform: Platform) -> bool {
     matches!(
         platform,
@@ -303,12 +305,19 @@ impl Inner {
         *self.tun.host.lock().expect("host ipv6") = state;
     }
 
-    /// The host's IPv6 now, logged. Mobile: an IPv4-only tunnel, nothing to
-    /// probe. A route that cannot be read keeps IPv6 as before (no
-    /// hand-off).
+    /// The host's IPv6 now, logged. A route that cannot be read keeps IPv6
+    /// as before (no hand-off). Mobile: the tunnel's IPv6 is always on, and
+    /// the path is the pushed network's; none pushed yet, or offline, is
+    /// read as a path (no hand-off): the next network probes again.
     fn read_host_ipv6(&self) -> Ipv6State {
         if !desktop(self.config.platform) {
-            return Ipv6State::default();
+            let route = self.host_ipv6_route();
+            let state = Ipv6State {
+                ipv6: true,
+                no_host_ipv6_route: route == Some(false),
+            };
+            tracing::info!(host_ipv6_route = route, policy = policy(state), "host ipv6");
+            return state;
         }
         let probe = self.tun.probe.lock().expect("host ipv6 probe").clone();
         let host = probe();
@@ -328,7 +337,7 @@ impl Inner {
     }
 
     pub(super) async fn reprobe_host_ipv6(self: &Arc<Self>) {
-        if self.config.role != Role::Tun || !desktop(self.config.platform) {
+        if self.config.role != Role::Tun {
             return;
         }
         if self.admit().is_err() {
@@ -527,8 +536,46 @@ mod tests {
         assert_eq!(host.asked(), 0);
         // The tunnel the host built from tun_settings.
         let settings = crate::tun_settings(Platform::Android).unwrap();
-        assert_eq!(inbounds[0]["address"], json!([settings.ipv4_address]));
+        assert_eq!(
+            inbounds[0]["address"],
+            json!([settings.ipv4_address, settings.ipv6_address])
+        );
         assert_eq!(inbounds[0]["mtu"], settings.mtu);
+    }
+
+    /// Mobile (#511): the network the host pushed decides the hand-off, at
+    /// start and when it changes; the system probe is never asked.
+    #[tokio::test]
+    async fn a_mobile_tun_follows_the_pushed_networks_ipv6() {
+        let wifi = |addresses: &[&str]| {
+            crate::NetworkState::new("wlan0", crate::NetworkKind::Wifi)
+                .with_addresses(addresses.iter().map(|a| a.to_string()).collect())
+        };
+        let (engine, fake, host) = instance(Role::Tun, Platform::Android);
+        engine
+            .set_network_state(wifi(&["192.168.1.2/24", "fe80::2/64"]))
+            .unwrap();
+        running(&engine).await;
+        assert!(hands_off(&fake), "no global IPv6 at start");
+        let mut rx = engine.subscribe(&[EventKind::KernelSwitched]);
+
+        engine
+            .set_network_state(wifi(&["192.168.1.2/24", "2001:db8::2/64"]))
+            .unwrap();
+        engine.reprobe_host_ipv6().await;
+        assert_eq!(reloads(&fake), 1);
+        assert!(!hands_off(&fake));
+        assert_eq!(kinds(&drain(&mut rx)), [EventKind::KernelSwitched]);
+
+        // Unchanged: nothing.
+        engine.reprobe_host_ipv6().await;
+        assert_eq!(reloads(&fake), 1);
+
+        engine.set_network_state(wifi(&["10.0.0.2/24"])).unwrap();
+        engine.reprobe_host_ipv6().await;
+        assert_eq!(reloads(&fake), 2);
+        assert!(hands_off(&fake));
+        assert_eq!(host.asked(), 0);
     }
 
     #[test]

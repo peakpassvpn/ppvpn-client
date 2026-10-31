@@ -40,9 +40,10 @@ import org.json.JSONObject
 // start finds it started and a start right after a stop starts again. A
 // stop ends the service only if no start came after it (stopSelfResult).
 //
-// IPv4 only, as the engine's mobile TUN (docs/mobile.md): the TUN takes
-// IPv6 too once the host's settings carry it (ipv6_address, ipv6_routes);
-// until then an app's IPv6 on a dual-stack network does not enter it.
+// IPv4 and IPv6 both enter the TUN (ipv6_address, ipv6_routes; #511), so
+// an app's IPv6 on a dual-stack network does not go around it. The
+// network's addresses go to the host with its IPv6 ones: a global one
+// tells the engine the network reaches the IPv6 internet.
 class TunnelService : VpnService() {
     // Written on the worker only; read by publish from any thread.
     @Volatile private var state = STATE_OFF

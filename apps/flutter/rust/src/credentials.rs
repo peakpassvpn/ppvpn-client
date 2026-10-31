@@ -13,6 +13,10 @@
 //! - iOS: one generic password in the app's Keychain (#473), out of the
 //!   App Group container the data directory is: the packet tunnel does not
 //!   need the sign-in.
+//! - Android: the 0600 file `credentials.sealed` in the app's own files,
+//!   the blob sealed with an AES-GCM key that never leaves the Android
+//!   Keystore (#473, runner/android Credentials.kt, over JNI: android.rs);
+//!   the plain file `credentials` earlier builds wrote is moved over.
 //!
 //! With `PPVPN_FLUTTER_HOME` (the end-to-end tests) it is always the file,
 //! in that home, so a test never touches a keyring.
@@ -25,6 +29,9 @@ use ppvpn_client::PlatformError;
 
 /// The native apps' file name (macOS release builds, Linux).
 const FILE: &str = "credentials";
+/// Android's sealed blob, beside it.
+#[cfg(target_os = "android")]
+const SEALED_FILE: &str = "credentials.sealed";
 
 fn failure(message: impl Into<String>) -> PlatformError {
     PlatformError::Failed {
@@ -44,6 +51,8 @@ pub(crate) enum Store {
     Keyring(secret_service::Fallback),
     #[cfg(target_os = "ios")]
     Keychain,
+    #[cfg(target_os = "android")]
+    Keystore(keystore::Sealed),
 }
 
 impl Store {
@@ -71,7 +80,14 @@ impl Store {
         Self::Keychain
     }
 
-    #[cfg(not(any(windows, target_os = "linux", target_os = "ios")))]
+    #[cfg(target_os = "android")]
+    fn native(file: impl FnOnce() -> FileStore) -> Self {
+        let plain = file();
+        let sealed = FileStore(plain.0.with_file_name(SEALED_FILE));
+        Self::Keystore(keystore::Sealed { sealed, plain })
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "ios", target_os = "android")))]
     fn native(file: impl FnOnce() -> FileStore) -> Self {
         Self::File(file())
     }
@@ -85,6 +101,8 @@ impl Store {
             Self::Keyring(keyring) => keyring.load(),
             #[cfg(target_os = "ios")]
             Self::Keychain => keychain::load(),
+            #[cfg(target_os = "android")]
+            Self::Keystore(sealed) => sealed.load(),
         }
     }
 
@@ -97,6 +115,8 @@ impl Store {
             Self::Keyring(keyring) => keyring.save(blob),
             #[cfg(target_os = "ios")]
             Self::Keychain => keychain::save(&blob),
+            #[cfg(target_os = "android")]
+            Self::Keystore(sealed) => sealed.save(&blob),
         }
     }
 
@@ -109,6 +129,8 @@ impl Store {
             Self::Keyring(keyring) => keyring.delete(),
             #[cfg(target_os = "ios")]
             Self::Keychain => keychain::delete(),
+            #[cfg(target_os = "android")]
+            Self::Keystore(sealed) => sealed.delete(),
         }
     }
 }
@@ -311,6 +333,52 @@ mod keychain {
         match delete_generic_password_options(options()) {
             Err(error) if error.code() != NOT_FOUND => Err(keychain_failure(error)),
             _ => Ok(()),
+        }
+    }
+}
+
+/// Android: the blob sealed by the app's Keystore key (android.rs), in a
+/// file only the app reads. A sealed blob whose key is gone (the app's data
+/// restored elsewhere, the key invalidated) is no sign-in: it is dropped and
+/// the user signs in again.
+#[cfg(target_os = "android")]
+mod keystore {
+    use ppvpn_client::PlatformError;
+
+    use super::FileStore;
+
+    pub(crate) struct Sealed {
+        pub(super) sealed: FileStore,
+        /// The plain file of earlier builds, moved over on the first load.
+        pub(super) plain: FileStore,
+    }
+
+    impl Sealed {
+        pub(super) fn load(&self) -> Result<Option<Vec<u8>>, PlatformError> {
+            if let Some(sealed) = self.sealed.load()? {
+                if let Some(blob) = crate::android::open(&sealed)? {
+                    return Ok(Some(blob));
+                }
+                tracing::warn!("the saved sign-in's key is gone: dropped");
+                self.sealed.delete()?;
+                return Ok(None);
+            }
+            let Some(blob) = self.plain.load()? else {
+                return Ok(None);
+            };
+            self.save(&blob)?;
+            Ok(Some(blob))
+        }
+
+        /// The plain file goes once the sealed one is written.
+        pub(super) fn save(&self, blob: &[u8]) -> Result<(), PlatformError> {
+            self.sealed.save(&crate::android::seal(blob)?)?;
+            self.plain.delete()
+        }
+
+        pub(super) fn delete(&self) -> Result<(), PlatformError> {
+            self.sealed.delete()?;
+            self.plain.delete()
         }
     }
 }
