@@ -3,7 +3,7 @@
 *.out
 .DS_Store
 /target/
-# Desktop, Windows packaging (apps/windows/scripts/package.ps1): the
+# Desktop packaging (apps/flutter/scripts/package-*): the
 # staging directory and the installer with its release metadata.
 /staging/
 /dist/

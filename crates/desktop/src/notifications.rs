@@ -400,10 +400,10 @@ mod tests {
 
     #[test]
     fn deep_links_become_absolute_against_the_site_root() {
-        let base = "https://www.peakpassvpn.com/api/prefix/";
+        let base = "https://www.example.com/api/prefix/";
         assert_eq!(
             absolute_link(base, "/app/subscriptions/88").as_deref(),
-            Some("https://www.peakpassvpn.com/app/subscriptions/88")
+            Some("https://www.example.com/app/subscriptions/88")
         );
         assert_eq!(
             absolute_link(base, "https://example.com/x").as_deref(),

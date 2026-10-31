@@ -978,10 +978,7 @@ pub(crate) mod tests {
     fn rule_set_hosts_is_the_api_base_authority() {
         let hosts = |base: &str| rule_set_hosts(base);
         assert_eq!(hosts("https://api.example.com"), ["api.example.com"]);
-        assert_eq!(
-            hosts("https://www.peakpassvpn.com/"),
-            ["www.peakpassvpn.com"]
-        );
+        assert_eq!(hosts("https://www.example.com/"), ["www.example.com"]);
         assert_eq!(
             hosts(" https://API.Example.com:443/api/v1?x=1 "),
             ["api.example.com"]

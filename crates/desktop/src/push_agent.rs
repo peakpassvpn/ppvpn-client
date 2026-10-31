@@ -1042,10 +1042,10 @@ mod tests {
             event_key: "order.paid".into(),
             created_at: "2026-09-29T12:00:00Z".into(),
         };
-        let message = to_push_message(&item, "https://www.peakpassvpn.com/api/");
+        let message = to_push_message(&item, "https://www.example.com/api/");
         assert_eq!(
             message.deep_link.as_deref(),
-            Some("https://www.peakpassvpn.com/app/orders/1")
+            Some("https://www.example.com/app/orders/1")
         );
         assert_eq!(message.category, MessageCategory::Order);
         assert_eq!(message.severity, MessageSeverity::Important);
@@ -1056,7 +1056,7 @@ mod tests {
                     deep_link: deep_link.into(),
                     ..item.clone()
                 },
-                "https://www.peakpassvpn.com",
+                "https://www.example.com",
             )
             .deep_link
         };

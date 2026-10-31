@@ -1313,7 +1313,7 @@ fn validate_linux_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
     // binary, which reads back as "<path> (deleted)": judge the path it was
     // started from, and ownership by the inode it actually runs.
     let path = linux_client_image(&link);
-    if !linux_client_path_allowed(&path, cfg!(debug_assertions)) {
+    if !linux_client_path_allowed(&path) {
         return Err(anyhow!("CLIENT_IMAGE_NOT_ALLOWED:{}", link.display()));
     }
     if !cfg!(debug_assertions) {
@@ -1338,16 +1338,10 @@ fn linux_client_image(link: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
-/// Release: the deb/rpm install location. Debug: an `apps/linux` build output.
+/// The deb/rpm install location.
 #[cfg(any(target_os = "linux", test))]
-fn linux_client_path_allowed(path: &std::path::Path, debug_build: bool) -> bool {
-    let normalized = path.to_string_lossy();
-    if normalized == "/usr/lib/ppvpn/ppvpn" {
-        return true;
-    }
-    debug_build
-        && path.file_name().and_then(|name| name.to_str()) == Some("ppvpn")
-        && normalized.contains("/apps/linux/")
+fn linux_client_path_allowed(path: &std::path::Path) -> bool {
+    path == std::path::Path::new("/usr/lib/ppvpn/ppvpn")
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -1910,29 +1904,16 @@ mod tests {
     }
 
     #[test]
-    fn linux_client_path_requires_the_package_install_outside_debug_builds() {
+    fn linux_client_path_requires_the_package_install() {
         use std::path::Path;
 
-        assert!(linux_client_path_allowed(
-            Path::new("/usr/lib/ppvpn/ppvpn"),
-            false
-        ));
-        assert!(!linux_client_path_allowed(
-            Path::new("/usr/lib/ppvpn/ppvpn (deleted)"),
-            false
-        ));
-        assert!(!linux_client_path_allowed(
-            Path::new("/work/user/ppvpn-desktop/apps/linux/bin/Debug/net8.0/ppvpn"),
-            false
-        ));
-        assert!(linux_client_path_allowed(
-            Path::new("/work/user/ppvpn-desktop/apps/linux/bin/Debug/net8.0/ppvpn"),
-            true
-        ));
-        assert!(!linux_client_path_allowed(
-            Path::new("/work/user/ppvpn-desktop/apps/linux/bin/Debug/net8.0/other"),
-            true
-        ));
+        assert!(linux_client_path_allowed(Path::new("/usr/lib/ppvpn/ppvpn")));
+        assert!(!linux_client_path_allowed(Path::new(
+            "/usr/lib/ppvpn/ppvpn (deleted)"
+        )));
+        assert!(!linux_client_path_allowed(Path::new(
+            "/work/user/ppvpn/apps/flutter/build/linux/x64/debug/bundle/ppvpn"
+        )));
     }
 
     #[test]
@@ -1941,16 +1922,15 @@ mod tests {
 
         let replaced = linux_client_image(Path::new("/usr/lib/ppvpn/ppvpn (deleted)"));
         assert_eq!(replaced, Path::new("/usr/lib/ppvpn/ppvpn"));
-        assert!(linux_client_path_allowed(&replaced, false));
+        assert!(linux_client_path_allowed(&replaced));
         assert_eq!(
             linux_client_image(Path::new("/usr/lib/ppvpn/ppvpn")),
             Path::new("/usr/lib/ppvpn/ppvpn")
         );
         // Only the kernel's suffix is removed: another binary stays another binary.
-        assert!(!linux_client_path_allowed(
-            &linux_client_image(Path::new("/tmp/ppvpn (deleted)")),
-            false
-        ));
+        assert!(!linux_client_path_allowed(&linux_client_image(Path::new(
+            "/tmp/ppvpn (deleted)"
+        ))));
     }
 }
 

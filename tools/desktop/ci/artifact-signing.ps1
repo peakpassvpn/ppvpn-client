@@ -3,7 +3,7 @@
 #
 #   artifact-signing.ps1 -Setup         the signing client (pinned, sha256-checked) and
 #                                       its metadata; WINDOWS_SIGN_COMMAND (this script
-#                                       with -Path) for apps/windows/scripts/sign-file.ps1
+#                                       with -Path) for apps/flutter/scripts/sign-file.ps1
 #   artifact-signing.ps1 -Path <file>   signs one file (SignTool + the client), timestamps
 #                                       it and checks the signature
 #

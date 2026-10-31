@@ -132,8 +132,10 @@ any release.
   apps have no language setting: this app keeps its own next to those
   (`language` or `Language`), which they ignore. The API override
   (Settings → Advanced) takes effect on the next launch; `PPVPN_API_BASE`
-  wins over it. Without either the backend is
-  `https://www.peakpassvpn.com`.
+  wins over it. Without either the backend is the one compiled in from
+  `PPVPN_API_BASE_DEFAULT` (required by `scripts/ci-build.sh`; CI and
+  releases pass it, docs/release.md 后端地址, #517). No backend
+  address is written in the code.
 - Quit the native app before trying it: both use the same data, sign-in
   and system proxy setting, and both have the same identity (bundle id,
   executable names).
@@ -236,14 +238,13 @@ architectures through `tools/desktop/ci/build-macos-native.sh`
 
 `scripts/package-windows.ps1` (Windows, after `scripts/ci-build.sh`) builds
 the installer the native Windows release ships, from this app: the same
-NSIS script (`apps/windows/installer/ppvpn.nsi`), install directory
+NSIS script (`packaging/windows/ppvpn.nsi`), install directory
 (`C:\Program Files\PPVPN`), service handling, shortcuts, uninstall entry
 and `/PURGE`, and the same artifacts,
 `dist/windows/PPVPN-<version>-windows-x64-setup.exe` (+ `.sha256`) and
 `release-meta-windows-x64.json`. It stages the release bundle (`ppvpn.exe`,
 `flutter_windows.dll`, `ppvpn_flutter.dll`, the plugins' DLLs, `data\`), the
-Rust push agent, `ppvpn-service`, `-install` and `-uninstall` (built as
-`apps/windows/scripts/package.ps1` builds them), `wintun.dll`,
+Rust push agent, `ppvpn-service`, `-install` and `-uninstall`, `wintun.dll`,
 `WinSparkle.dll` (the native app's WinSparkle version) and the
 notifications' icon (`Assets\AppLogo.png`). `install-files.txt` lists what
 it installs, so an upgrade from the native app removes the native app's
@@ -299,7 +300,7 @@ Builds without a feed (CI's, local ones) have updates off and no
 
 `scripts/install-linux-layout.sh <bundle> <service-bin-dir>` (root, Linux
 only) installs the bundle as the native packages do
-(`apps/linux/packaging/nfpm.yaml`). The executable becomes
+(`packaging/linux/nfpm.yaml`). The executable becomes
 `/usr/lib/ppvpn/ppvpn`, root-owned and 0755, because that is the only
 client the privileged service accepts. `lib/` and `data/` sit beside it,
 and so do `ppvpn-service`, `ppvpn-service-install` and
@@ -312,7 +313,7 @@ them. To remove it, run
 (`PPVPN-<version>-linux-x64.{deb,rpm}` and their `release-meta-linux-x64-*.json`),
 under the native package's name `ppvpn`, version and release (the build
 number), with its maintainer scripts and push agent autostart entry
-(`apps/linux/packaging`), so it upgrades the native package in place. The
+(`packaging/linux`), so it upgrades the native package in place. The
 dependencies are GTK 3, X11 and XInput, EGL, xdg-utils and pkexec instead of
 GTK 4, libadwaita and .NET's. It builds the service and the push agent
 itself. CI builds both in the Linux `flutter` job and checks each in a fresh

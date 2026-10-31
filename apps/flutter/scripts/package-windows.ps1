@@ -3,9 +3,9 @@
   Builds the PPVPN Windows installer (NSIS) from the Flutter app (#401).
 
 .DESCRIPTION
-  The Flutter counterpart of apps/windows/scripts/package.ps1, with the same
-  installer (apps/windows/installer/ppvpn.nsi), the same install directory,
-  service, shortcuts and uninstall entry, and the same artifacts:
+  The installer of the native app (its package.ps1, removed in #522), for the
+  Flutter app: the same installer (apps/flutter/packaging/windows/ppvpn.nsi),
+  install directory, service, shortcuts and uninstall entry, and the same artifacts:
   dist/windows/PPVPN-<version>-windows-x64-setup.exe (+ .sha256) and
   dist/windows/release-meta-windows-x64.json. An upgrade from the native app
   removes its files through the native installer's install-files.txt.
@@ -20,10 +20,9 @@
     3. builds the push agent (apps/flutter/push-agent, release) -> ppvpn-push-agent.exe
     4. stages the bundle (ppvpn.exe, flutter_windows.dll, ppvpn_flutter.dll, the plugins' DLLs,
        data\), the agent, the service binaries, wintun.dll (pinned release, sha256-checked),
-       WinSparkle.dll (the updater, rust/src/update.rs: the WinSparkle package the native app
-       references), the Visual C++ runtime (app-local; every import is then checked to be
+       WinSparkle.dll (the updater, rust/src/update.rs: the pinned WinSparkle package), the Visual C++ runtime (app-local; every import is then checked to be
        staged or part of Windows), Assets\AppLogo.png (the notifications' icon, the native app's) and LICENSE.txt
-    5. optional Authenticode signing (apps/windows/scripts/sign-file.ps1, the same environment)
+    5. optional Authenticode signing (apps/flutter/scripts/sign-file.ps1, the same environment)
     6. install-files.txt, makensis (solid LZMA, or zlib with -FastCompression)
     7. EdDSA signature for the update feed (winsparkle-tool, as the native app's feed is
        WinSparkle's) + release-meta-windows-x64.json
@@ -94,11 +93,10 @@ function Write-Utf8NoBom([string] $Path, [string] $Text) {
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $flutterDir = Join-Path $repo "apps\flutter"
-$windowsDir = Join-Path $repo "apps\windows"
-# The native app's installer script and assets, shared until the native app goes.
-$nsi = Join-Path $windowsDir "installer\ppvpn.nsi"
-$windowsScripts = Join-Path $windowsDir "scripts"
-$signScript = Join-Path $windowsScripts "sign-file.ps1"
+# The installer script and its assets.
+$windowsDir = Join-Path $flutterDir "packaging\windows"
+$nsi = Join-Path $windowsDir "ppvpn.nsi"
+$signScript = Join-Path $PSScriptRoot "sign-file.ps1"
 $target = "x86_64-pc-windows-msvc"
 if (-not $Bundle) { $Bundle = Join-Path $flutterDir "build\windows\x64\runner\Release" }
 if (-not $OutDir) { $OutDir = Join-Path $repo $(if ($ServiceOnly) { "build\windows-service" } else { "dist\windows" }) }
@@ -245,7 +243,7 @@ foreach ($bin in $serviceBins) {
 # The icon the notifications show (the app's and the push agent's registration,
 # rust/src/aumid.rs): the native app's, at its path.
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "Assets") | Out-Null
-Copy-Item -LiteralPath (Join-Path $windowsDir "PPVPN.Windows\Assets\AppLogo.png") -Destination (Join-Path $stage "Assets\AppLogo.png")
+Copy-Item -LiteralPath (Join-Path $windowsDir "AppLogo.png") -Destination (Join-Path $stage "Assets\AppLogo.png")
 
 # The Wintun driver DLL beside the service, as package.ps1 stages it.
 $wintunVersion = "0.14.1"
@@ -258,11 +256,10 @@ Expand-Archive -LiteralPath $wintunZip -DestinationPath $wintunDir -Force
 Copy-Item -LiteralPath (Join-Path $wintunDir "wintun\bin\amd64\wintun.dll") -Destination (Join-Path $stage "wintun.dll")
 Write-Host "wintun.dll $wintunVersion staged"
 
-# WinSparkle of the package the native app references: its DLL for the updater
+# WinSparkle, the version the native app shipped: its DLL for the updater
 # (rust/src/update.rs loads it from beside ppvpn.exe), its winsparkle-tool.exe for the
 # feed's signature (step 7).
-$csproj = Join-Path $windowsDir "PPVPN.Windows\PPVPN.Windows.csproj"
-$winSparkleVersion = ([xml](Get-Content -Raw $csproj)).SelectSingleNode("//PackageReference[@Include='WinSparkle']").GetAttribute("Version")
+$winSparkleVersion = "0.9.2"
 $winSparklePackage = Join-Path $work "winsparkle.$winSparkleVersion.zip"
 Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/winsparkle/$winSparkleVersion/winsparkle.$winSparkleVersion.nupkg" -OutFile $winSparklePackage
 $winSparkleDir = Join-Path $work "winsparkle"
@@ -320,7 +317,7 @@ foreach ($name in $ownBinaries) { Invoke-Sign (Join-Path $stage $name) }
 # The signer, as the service will check it (and its identity EKU, for the pin).
 if ($signing) {
   Invoke-Native "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-    (Join-Path $windowsScripts "check-publisher.ps1"), (Join-Path $stage "ppvpn.exe"))
+    (Join-Path $PSScriptRoot "check-publisher.ps1"), (Join-Path $stage "ppvpn.exe"))
 }
 
 # The GPL text, as package.ps1 (CRLF, for the installer's text box and Notepad).

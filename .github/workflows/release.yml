@@ -5,7 +5,7 @@ name: release
 #
 # On every push to main (a merge):
 #   - the installers of the Flutter app (apps/flutter, #401; the native apps
-#     in apps/macos, apps/windows and apps/linux no longer ship), without any
+#     no longer ship, #522), without any
 #     secret: Windows (NSIS, unsigned), macOS (one DMG and .pkg per
 #     architecture, ad-hoc signed) and Linux (deb and rpm), each with its
 #     release metadata, as workflow artifacts; the rpm installed under dnf,
@@ -54,6 +54,15 @@ name: release
 # v0.6.0 on. A stable release becomes the repository's "latest" release
 # (unless allow_downgrade is set). The repository holds no secret itself;
 # only the environments do, and a job reads them only when it runs in one.
+#
+# The backend every build talks to (an https origin; #517) is compiled in
+# as PPVPN_API_BASE_DEFAULT: the repository variable PPVPN_API_BASE (the
+# production host, public anyway) for every run but dev; for dev, the
+# secret PPVPN_API_BASE of desktop-release-dev, so that the dev host stays
+# masked in this public repository's logs. No address is written in the
+# code or here, and a build with an empty one fails (ci-build.sh,
+# tools/cli/build-release.sh). Moving the service is a change of the
+# variable.
 
 on:
   push:
@@ -261,7 +270,7 @@ jobs:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       NFPM_VERSION: '2.47.0'
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -295,7 +304,7 @@ jobs:
       # ppvpn-archive-keyring (deb) and ppvpn-release (rpm), which set the
       # package repository up on a user's machine.
       - name: Build repository setup packages
-        run: apps/linux/scripts/build-repo-packages.sh
+        run: apps/flutter/scripts/build-repo-packages.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         timeout-minutes: 10
         with:
@@ -394,7 +403,7 @@ jobs:
         with:
           sparse-checkout: |
             tools/desktop/ci
-            apps/linux/packaging
+            apps/flutter/packaging/linux
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: desktop-linux
@@ -720,8 +729,8 @@ jobs:
             = "$(jq -er .sha256 "$T/releases/stable/$STABLE_TAG/release-meta-linux-x64-rpm.json")"
           # packaging/ppvpn.list and ppvpn.repo, as the setup packages install
           # them, with the site's address replaced by this server's.
-          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" apps/linux/packaging/ppvpn.list >"$T/ppvpn.list"
-          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" apps/linux/packaging/ppvpn.repo >"$T/ppvpn.repo"
+          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" apps/flutter/packaging/linux/ppvpn.list >"$T/ppvpn.list"
+          sed "s#https://pkg.peakpassvpn.com#$REPO_URL#g" apps/flutter/packaging/linux/ppvpn.repo >"$T/ppvpn.repo"
           grep -qxF "deb [signed-by=/usr/share/keyrings/ppvpn-archive-keyring.gpg] $REPO_URL/linux/apt stable main" "$T/ppvpn.list"
           grep -qxF "baseurl=$REPO_URL/linux/rpm/stable/\$basearch" "$T/ppvpn.repo"
           grep -qx 'gpgcheck=1' "$T/ppvpn.repo"
@@ -818,7 +827,7 @@ jobs:
         if: always()
         run: cat "$RUNNER_TEMP/linux-repo/server.out" 2>/dev/null || true
 
-  # The NSIS installer. See apps/windows/README.md ("Packaging"). Three jobs
+  # The NSIS installer. See apps/flutter/README.md ("Windows installer"). Three jobs
   # (#459): the service's profile shares no build with the app's release
   # build, so it compiles beside it, and the packaging job compiles nothing:
   #   windows-app      the app (apps/flutter/scripts/ci-build.sh), with the
@@ -840,7 +849,7 @@ jobs:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       # bindgen's libclang (btls-sys), from the runner's LLVM.
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     defaults:
@@ -993,7 +1002,7 @@ jobs:
       - name: The installer's signer
         if: env.ARTIFACT_SIGNING == 'true'
         shell: powershell
-        run: apps/windows/scripts/check-publisher.ps1 (Get-Item dist\windows\*-setup.exe).FullName
+        run: apps/flutter/scripts/check-publisher.ps1 (Get-Item dist\windows\*-setup.exe).FullName
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         timeout-minutes: 10
         with:
@@ -1037,7 +1046,7 @@ jobs:
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       MACOS_ARCHS: ${{ matrix.arch }}
       PPVPN_APPLE_TARGETS: ${{ matrix.triple }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -1143,7 +1152,7 @@ jobs:
       CI_PROJECT_DIR: ${{ github.workspace }}
       MACOS_ARCHS: ${{ matrix.arch }}
       PPVPN_PREBUILT: 1
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
       # Developer ID Application and Installer, and the notary key (#471);
       # without them the build is ad-hoc signed and not notarized (refused for
@@ -1210,10 +1219,20 @@ jobs:
     env:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       SIGNED: ${{ needs.prepare.outputs.channel == 'stable' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # App Store Connect takes only apps built with the iOS 26 SDK or later
+      # (an 18.5 build was refused at upload, 409). The image's default
+      # Xcode is older: the newest Xcode 26 on it, or the job fails here.
+      - name: Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          [[ -n "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; ls -d /Applications/Xcode*.app >&2; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
@@ -1296,7 +1315,7 @@ jobs:
     env:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       STABLE: ${{ needs.prepare.outputs.channel == 'stable' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1383,7 +1402,7 @@ jobs:
     if: >-
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
     runs-on: ubuntu-latest
-    # Only dev reads its environment (the dev backend's address); nothing
+    # Only dev reads its environment (its PPVPN_API_BASE); nothing
     # here is signed.
     environment: ${{ needs.prepare.outputs.channel == 'dev' && needs.prepare.outputs.environment || '' }}
     timeout-minutes: 60
@@ -1398,7 +1417,7 @@ jobs:
     env:
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
-      DEV_API_BASE: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || '' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -1441,7 +1460,7 @@ jobs:
       TARGETS: ${{ needs.prepare.outputs.cli_macos }}
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
-      DEV_API_BASE: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || '' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       MACOS_SIGNING_P12_BASE64: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
       MACOS_SIGNING_P12_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
       # Notarization (App Store Connect API key, #471).
@@ -1501,7 +1520,7 @@ jobs:
         with:
           sparse-checkout: |
             tools/desktop/ci
-            apps/linux/packaging
+            apps/flutter/packaging/linux
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: desktop-*
@@ -1535,7 +1554,7 @@ jobs:
           set -eu
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rpm gnupg jq
-          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons apps/flutter/packaging/linux/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
           [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
           export PKG_GPG_FINGERPRINT
           tools/desktop/ci/sign-linux-rpms.sh release
@@ -1687,7 +1706,7 @@ jobs:
         with:
           sparse-checkout: |
             tools/desktop/ci
-            apps/linux/packaging
+            apps/flutter/packaging/linux
       - name: Tools
         run: |
           sudo apt-get update -qq
@@ -1805,7 +1824,7 @@ jobs:
         run: |
           set -eu
           # The key must be the one whose public half the packages ship.
-          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons apps/linux/packaging/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          PKG_GPG_FINGERPRINT=$(gpg --show-keys --with-colons apps/flutter/packaging/linux/ppvpn.asc | awk -F: '$1 == "fpr" { print $10; exit }')
           [ -n "$PKG_GPG_FINGERPRINT" ] || { echo "no fingerprint in packaging/ppvpn.asc" >&2; exit 1; }
           export PKG_GPG_FINGERPRINT
           # --published: a setup package the site already has under the same name is kept as

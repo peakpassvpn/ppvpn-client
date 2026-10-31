@@ -41,7 +41,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3
 
-# apps/windows/installer/ppvpn.nsi
+# apps/flutter/packaging/windows/ppvpn.nsi
 $dir = Join-Path $env:ProgramFiles "PPVPN"
 $exe = Join-Path $dir "ppvpn.exe"
 $uninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PPVPN"

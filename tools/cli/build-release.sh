@@ -22,11 +22,14 @@
 # one target named, that slice alone (never for stable).
 #
 # Environment:
-#   CHANNEL       empty (a merge: the crate's version, production API), dev or stable
+#   CHANNEL       empty (a merge: the crate's version), dev or stable
 #   VERSION       x.y.z of a dev or stable run. stable: must be the crate's
 #                 version (Cargo.toml), or the build fails
-#   DEV_API_BASE  dev: the dev backend, compiled in as the default origin
-#                 (PPVPN_BUILD_PROFILE=dev); a dev archive is never published
+#   PPVPN_API_BASE_DEFAULT
+#                 the backend, compiled in (required; release.yml: the GitHub
+#                 variable PPVPN_API_BASE, for dev the secret, #517). dev: a dev build
+#                 (PPVPN_BUILD_PROFILE=dev, which also takes PPVPN_API_BASE at
+#                 run time); a dev archive is never published
 #   MACOS_SIGNING_P12_BASE64, MACOS_SIGNING_P12_PASSWORD
 #                 macOS: our Developer ID Application certificate and key, as the
 #                 desktop app is signed (#471); without them ad-hoc (refused for
@@ -50,9 +53,11 @@ crate=$(cargo metadata --locked --no-deps --format-version 1 |
 	jq -r '.packages[] | select(.name == "ppvpn-cli") | .version')
 [ -n "$crate" ] || fail "no ppvpn-cli in cargo metadata"
 
-# What the binary is built as: release builds take no profile, origin or
-# version from the environment.
-unset PPVPN_BUILD_PROFILE PPVPN_DEFAULT_API_BASE PPVPN_VERSION
+# What the binary is built as: release builds take no profile or version
+# from the environment, and only the backend given.
+unset PPVPN_BUILD_PROFILE PPVPN_VERSION
+[ -n "${PPVPN_API_BASE_DEFAULT:-}" ] || fail "PPVPN_API_BASE_DEFAULT (the backend) is empty"
+export PPVPN_API_BASE_DEFAULT
 case "${CHANNEL:-}" in
 "")
 	version=$crate
@@ -65,10 +70,9 @@ stable)
 	;;
 dev)
 	[ -n "${VERSION:-}" ] || fail "a dev build needs VERSION"
-	[ -n "${DEV_API_BASE:-}" ] || fail "a dev build needs DEV_API_BASE"
 	version=$VERSION
 	name_version=$version-dev
-	export PPVPN_BUILD_PROFILE=dev PPVPN_DEFAULT_API_BASE=$DEV_API_BASE PPVPN_VERSION=$version
+	export PPVPN_BUILD_PROFILE=dev PPVPN_VERSION=$version
 	;;
 *) fail "unknown channel $CHANNEL" ;;
 esac
