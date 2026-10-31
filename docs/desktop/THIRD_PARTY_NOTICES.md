@@ -14,9 +14,9 @@ tree pins none, none is given.
 
 | Component | Used by | Licence | Upstream |
 |---|---|---|---|
-| flag-icons (4:3 country flags) | macOS (`apps/macos/PPVPN/Resources/Assets.xcassets/Flags`); the Flutter app takes the same images (`apps/flutter/assets/flags`) | MIT; text in `apps/macos/PPVPN/Resources/flag-icons-LICENSE.txt` | https://github.com/lipis/flag-icons |
+| flag-icons (4:3 country flags) | the Flutter app (`apps/flutter/assets/flags`) | MIT; text in `apps/flutter/assets/flags/LICENSE` | https://github.com/lipis/flag-icons |
 
-## macOS app
+## macOS
 
 | Component | Version | Licence | Upstream |
 |---|---|---|---|

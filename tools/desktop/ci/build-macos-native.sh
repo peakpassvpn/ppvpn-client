@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Build the macOS app as one DMG (and .pkg) per architecture, plus release
 # metadata for each: macos-arm64 (Apple silicon) and macos-x64 (Intel), both
-# built on an Apple silicon runner. The app is the Flutter one when
-# PPVPN_FLUTTER_BUNDLE is given (apps/flutter/scripts/package-macos.sh, #401),
-# else the native one (apps/macos, package-dmg.sh); the signing, the checks
-# and the output are the same.
+# built on an Apple silicon runner, from the Flutter app
+# (apps/flutter/scripts/package-macos.sh, #401).
 #
-# Required: CI_PROJECT_DIR
-# Optional:
+# Required:
+#   CI_PROJECT_DIR
 #   PPVPN_FLUTTER_BUNDLE       the universal PPVPN.app of apps/flutter/scripts/ci-build.sh
 #                              (built with MACOS_ARCHS and this script's environment)
+# Optional:
 #   MACOS_ARCHS                "arm64 x86_64" (default), or one of them
 #   RUST_TOOLCHAIN             default stable
 #   PPVPN_BUILD_NUMBER         monotonic counter shared by the release
@@ -41,6 +40,7 @@
 set -euo pipefail
 
 : "${CI_PROJECT_DIR:?CI_PROJECT_DIR is required}"
+: "${PPVPN_FLUTTER_BUNDLE:?PPVPN_FLUTTER_BUNDLE is required}"
 : "${MACOS_ARCHS:=arm64 x86_64}"
 : "${RUST_TOOLCHAIN:=stable}"
 : "${PPVPN_BUILD_NUMBER:?PPVPN_BUILD_NUMBER is required}"
@@ -59,7 +59,7 @@ else
   rustup default "$RUST_TOOLCHAIN"
   # ppvpn-client's build-apple.sh builds both slices; each package is thinned.
   rustup target add aarch64-apple-darwin x86_64-apple-darwin
-  # Universal service helpers; package-dmg.sh thins them per build.
+  # Universal service helpers; package-app.sh thins them per build.
   bash tools/desktop/build-service.sh macos
 fi
 
@@ -200,13 +200,8 @@ for arch in $MACOS_ARCHS; do
   platform=macos-arm64
   [[ "$arch" == x86_64 ]] && platform=macos-x64
   # The client package is built once (universal) and reused.
-  if [[ -n "${PPVPN_FLUTTER_BUNDLE:-}" ]]; then
-    SKIP_BOOTSTRAP=$bootstrap apps/flutter/scripts/package-macos.sh "$PPVPN_FLUTTER_BUNDLE" "$arch"
-    app="apps/flutter/build/macos-package-$arch/PPVPN.app"
-  else
-    SKIP_BOOTSTRAP=$bootstrap apps/macos/scripts/package-dmg.sh "$arch"
-    app="apps/macos/build/release-$arch/Build/Products/Release/PPVPN.app"
-  fi
+  SKIP_BOOTSTRAP=$bootstrap apps/flutter/scripts/package-macos.sh "$PPVPN_FLUTTER_BUNDLE" "$arch"
+  app="apps/flutter/build/macos-package-$arch/PPVPN.app"
   bootstrap=1
 
   expected_signature='Signature=adhoc'

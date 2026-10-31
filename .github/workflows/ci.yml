@@ -406,8 +406,8 @@ jobs:
   #   - the Flutter app's Rust (its bridge and the push agent): clippy, and
   #     the agent's tests;
   #   - the desktop scripts: bash -n and their Python tests;
-  #   - Swift bindings, then the macOS app's AppLogic tests (no AppKit), with
-  #     the Swift the macOS app is developed with.
+  #   - Swift bindings, then the AppLogic tests of the macOS push agent (no
+  #     AppKit), with the Swift it is developed with.
   desktop:
     name: desktop
     # Pinned to the image the Swift toolchain is built for (ubuntu24.04):

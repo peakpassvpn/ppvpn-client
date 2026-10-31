@@ -1207,7 +1207,7 @@ fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
     match crate::macsign::check_process(&bytes, &requirement) {
         Ok(()) => Ok(pid as u32),
         // A debug service also takes an ad-hoc signed debug app, from the
-        // fixed path only (apps/macos/scripts/install-debug.sh).
+        // fixed paths only (macos_client_path_allowed).
         Err(error) if cfg!(debug_assertions) => {
             let path = macos_process_path(pid)?;
             if !macos_client_path_allowed(std::path::Path::new(&path)) {

@@ -1,6 +1,6 @@
 # PPVPN Desktop
 
-PPVPN 的桌面客户端：三个平台都发行 Flutter 版（`apps/flutter`），macOS 的推送代理是 Swift 写的，
+PPVPN 的桌面客户端：三个平台都是 Flutter 版（`apps/flutter`），macOS 的推送代理是 Swift 写的，
 共用 Rust 客户端核心 `crates/desktop`（crate `ppvpn-desktop`，UniFFI 绑定）和特权服务 `crates/service`。
 网络引擎是 Rust `ppvpn-core`（仓库根的 `crates/core`），都在进程内运行：标准模式在
 应用进程里，增强模式（TUN）在特权服务进程里。
@@ -59,7 +59,7 @@ macOS 13、14 也可以在访达里按住 Control 点（或右键点）DMG 和 P
 ```
 apps/
 ├── flutter/        # Flutter 应用（桌面和移动端）、推送代理（Windows、Linux）、安装包（packaging/）
-├── macos/          # 推送代理（macOS）、AppLogic（可在 Linux 上测试）、打包脚本；SwiftUI app 不再发行
+├── macos/          # 推送代理（macOS）和它的 AppLogic（可在 Linux 上测试）、打包脚本
 └── assets/icons/   # 品牌与托盘图标
 crates/
 ├── account/        # 账号代码（与 CLI 共用）：后端 API、设备登录、推送设备注册、Profile 视图
