@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Packages the Flutter app (#401 step 5) as the native macOS release does:
-# the same PPVPN.app layout, signing, DMG, .pkg and release-meta, so that
-# release.yml can take the macOS artifacts from here instead.
+# Packages the Flutter app (#401 step 5) as the native macOS release did
+# (#522 removed it): the same PPVPN.app layout, signing, DMG, .pkg and
+# release-meta.
 #
 # Usage: apps/flutter/scripts/package-macos.sh <PPVPN.app> arm64|x86_64
 #   <PPVPN.app> is what scripts/ci-build.sh built; it is copied, not changed.
@@ -13,13 +13,13 @@
 #   PPVPN_UPDATE_FEED_URL      Sparkle appcast. Unset: the channel's feed on the update
 #                              site, <PPVPN_UPDATE_SITE>/desktop/<channel>/appcast-<platform>.xml,
 #                              when both the site and the channel are given; otherwise
-#                              updates are off (as apps/macos/scripts/package-dmg.sh)
+#                              updates are off
 #   PPVPN_SPARKLE_PUBLIC_KEY   Sparkle EdDSA public key
 #   and package-app.sh's: PPVPN_CODESIGN_IDENTITY, PPVPN_CODESIGN_TEAM,
 #   PPVPN_INSTALLER_IDENTITY, PPVPN_NOTARY_*, PPVPN_RELEASE_CHANNEL,
 #   SPARKLE_PRIVATE_KEY_FILE.
 #
-# Into the copy, at the native app's paths (apps/macos/project.yml):
+# Into the copy, at the native app's paths:
 #   Contents/Library/LoginItems/PPVPN Agent.app   the Swift push agent, built
 #       from apps/macos (target PPVPNAgent); the app registers it
 #       (runner/macos/Runner/MainFlutterWindow.swift, PushAgentService)
@@ -27,12 +27,12 @@
 #   Contents/Frameworks/PPVPNClientFFI.framework  the agent's client
 #   Contents/MacOS/ppvpn-service{,-install,-uninstall}  what rust/src/hooks.rs
 #       runs for enhanced mode
-#   Contents/Frameworks/Sparkle.framework  the native app's Sparkle (its Xcode
-#       project's package), which the runner loads (MainFlutterWindow.swift,
+#   Contents/Frameworks/Sparkle.framework  Sparkle as the agent's build resolved
+#       it (apps/macos/project.yml), which the runner loads (MainFlutterWindow.swift,
 #       Updater), and the Info.plist keys it reads: PPVPNUpdateFeedURL,
 #       SUPublicEDKey, SUEnableAutomaticChecks
 # then apps/macos/scripts/package-app.sh: thinning, inside-out signing with
-# the native app's entitlements, and dist/macos/PPVPN-<version>-<platform>.dmg,
+# packaging/macos/PPVPN.entitlements, and dist/macos/PPVPN-<version>-<platform>.dmg,
 # .pkg and release-meta-<platform>.json.
 set -euo pipefail
 
@@ -57,8 +57,7 @@ plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$src/Contents/Info.plist"; }
 version=$(plist CFBundleShortVersionString)
 bundle_version=$(plist CFBundleVersion)
 
-# The push agent, built as package-dmg.sh builds it within the native app,
-# with the Flutter app's version.
+# The push agent, with the Flutter app's version.
 if [ "${SKIP_BOOTSTRAP:-}" != 1 ]; then
   command -v xcodegen >/dev/null || brew install xcodegen
   "$macos/scripts/bootstrap.sh" --release
@@ -88,8 +87,7 @@ ditto "$src" "$app"
 contents="$app/Contents"
 mkdir -p "$contents/Library/LoginItems" "$contents/Library/LaunchAgents" "$contents/Frameworks"
 ditto "$agent" "$contents/Library/LoginItems/PPVPN Agent.app"
-# Shared from Contents/Frameworks (the agent's rpath), as
-# apps/macos/scripts/share-client-framework.sh leaves the native app.
+# Shared from Contents/Frameworks (the agent's rpath), as the native app had it.
 rm -rf "$contents/Library/LoginItems/PPVPN Agent.app/Contents/Frameworks/PPVPNClientFFI.framework"
 rmdir "$contents/Library/LoginItems/PPVPN Agent.app/Contents/Frameworks" 2>/dev/null || true
 rm -rf "$contents/Frameworks/PPVPNClientFFI.framework"
@@ -97,7 +95,7 @@ ditto "${ffi[0]}" "$contents/Frameworks/PPVPNClientFFI.framework"
 install -m 644 "$macos/LaunchAgents/com.peakpassvpn.ppvpn.desktop.agent.plist" "$contents/Library/LaunchAgents/"
 rm -rf "$contents/Frameworks/Sparkle.framework"
 ditto "$sparkle" "$contents/Frameworks/Sparkle.framework"
-# As apps/macos/project.yml has them; empty values leave updates off.
+# As the native app had them; empty values leave updates off.
 plist_set() {
   /usr/libexec/PlistBuddy -c "Delete :$1" "$contents/Info.plist" 2>/dev/null || true
   /usr/libexec/PlistBuddy -c "Add :$1 $2 $3" "$contents/Info.plist"
@@ -112,7 +110,7 @@ for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   install -m 755 "$file" "$contents/MacOS/$bin"
 done
 
-PPVPN_APP_ENTITLEMENTS="$macos/PPVPN/PPVPN.entitlements" \
+PPVPN_APP_ENTITLEMENTS="$app_dir/packaging/macos/PPVPN.entitlements" \
 PPVPN_SOURCE_PACKAGES="$build/xcode/SourcePackages" \
   "$macos/scripts/package-app.sh" "$app" "$arch"
 

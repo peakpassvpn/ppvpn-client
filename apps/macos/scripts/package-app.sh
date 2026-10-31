@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Thin a built PPVPN.app to one architecture, re-sign it inside out, and wrap
-# it in the DMG, the .pkg and the release metadata. The second half of
-# package-dmg.sh (the native app), shared with the Flutter app's
-# apps/flutter/scripts/package-macos.sh: both ship the same artifacts.
+# it in the DMG, the .pkg and the release metadata: the second half of
+# apps/flutter/scripts/package-macos.sh, with the artifacts the native app
+# shipped.
 #
 # Usage: apps/macos/scripts/package-app.sh <PPVPN.app> arm64|x86_64
 #   PPVPN_CODESIGN_IDENTITY    signing identity in the keychain search list, e.g.
@@ -199,14 +199,15 @@ done < "$MACHO"
 FFI="$(find "$APP" -type d -name 'PPVPNClientFFI.framework')"
 [[ "$FFI" == "$APP/Contents/Frameworks/PPVPNClientFFI.framework" ]] \
   || { echo "error: expected one PPVPNClientFFI.framework in Contents/Frameworks, found: $FFI" >&2; exit 1; }
-# The native app links the shared framework too; the Flutter app's own
-# client is its bridge library instead (libppvpn_flutter.dylib).
-CLIENTS=("$AGENT/Contents/MacOS/PPVPN Agent")
-[[ -d "$APP/Contents/Frameworks/FlutterMacOS.framework" ]] || CLIENTS+=("$APP/Contents/MacOS/PPVPN")
-for exe in "${CLIENTS[@]}"; do
-  otool -L "$exe" | grep -q '@rpath/PPVPNClientFFI.framework/Versions/A/PPVPNClientFFI' \
-    || { echo "error: $exe does not link the shared PPVPNClientFFI" >&2; exit 1; }
-done
+# The agent links the shared framework (the app's own client is its bridge
+# library, libppvpn_flutter.dylib), and not Sparkle: it depends on Sparkle
+# only so that its build resolves it (project.yml).
+AGENT_EXE="$AGENT/Contents/MacOS/PPVPN Agent"
+otool -L "$AGENT_EXE" | grep -q '@rpath/PPVPNClientFFI.framework/Versions/A/PPVPNClientFFI' \
+  || { echo "error: $AGENT_EXE does not link the shared PPVPNClientFFI" >&2; exit 1; }
+if otool -L "$AGENT_EXE" | grep -q Sparkle; then
+  echo "error: $AGENT_EXE links Sparkle" >&2; exit 1
+fi
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   [[ -f "$APP/Contents/MacOS/$bin" ]] || { echo "error: $bin missing" >&2; exit 1; }
 done

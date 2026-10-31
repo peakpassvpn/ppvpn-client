@@ -1,11 +1,10 @@
 # 构建
 
-命令都在仓库根执行，路径相对仓库根。各平台的完整步骤在
-`apps/macos/README.md`、`apps/windows/README.md`、`apps/linux/README.md`。
+命令都在仓库根执行，路径相对仓库根。完整步骤在 `apps/flutter/README.md`（三个平台的 Flutter
+桌面应用和安装包）和 `apps/macos/README.md`（macOS 的推送代理和打包）。
 
-工具链：Rust 1.98.1（仓库根的 `rust-toolchain.toml`）；C# 部分用 .NET 8 SDK 和
-`uniffi-bindgen-cs` v0.11.0+v0.31.0（见 `apps/dotnet-shared/PPVPN.Client/README.md`）；macOS 用
-Xcode、XcodeGen 和 Swift 6.4。
+工具链：Rust 1.98.1（仓库根的 `rust-toolchain.toml`）；Flutter（`apps/flutter/scripts/install-flutter.sh`）；
+macOS 用 Xcode、XcodeGen 和 Swift 6.4。
 
 ## 共用的前置步骤
 
@@ -22,13 +21,12 @@ cargo build --locked -p ppvpn-service --profile service --bins
 
 ## 各平台
 
-- **macOS**：`apps/macos/scripts/bootstrap.sh` 生成 `PPVPNClient` Swift 包和 `PPVPN.xcodeproj`，
-  之后用 Xcode 或 `xcodebuild` 构建 Debug。Debug 构建不需要嵌入 service（缺少时只给出警告）。
-- **Linux**：`crates/desktop/scripts/build-dotnet.sh x86_64-unknown-linux-gnu` 生成 C# 绑定和
-  原生库，之后 `dotnet run --project apps/linux`。deb/rpm 由 `apps/linux/scripts/build-package.sh`
-  在 Ubuntu 22.04（glibc 2.35）基线上构建，它自己构建 service。
-- **Windows**：只在 Windows 上构建（`crates\desktop\scripts\build-dotnet.ps1`，MSVC 工具链），
-  见 `apps/windows/README.md`。安装包里另有 `wintun.dll`（增强模式的 TUN 驱动，`package.ps1` 下载并按哈希校验）。
+- 三个平台的桌面应用都是 Flutter 版（`apps/flutter`），`apps/flutter/scripts/ci-build.sh` 构建。
+- **macOS**：`apps/flutter/scripts/package-macos.sh` 打包，它用 `apps/macos/scripts/bootstrap.sh`
+  生成 `PPVPNClient` Swift 包和 `PPVPN.xcodeproj`，构建推送代理（`PPVPNAgent`）。
+- **Linux、Windows**：deb/rpm 由 `apps/flutter/scripts/package-linux.sh` 打包，Windows 安装包由
+  `apps/flutter/scripts/package-windows.ps1` 打包（MSVC 工具链），两者都自己构建 service。Windows
+  安装包里另有 `wintun.dll`（增强模式的 TUN 驱动，`package-windows.ps1` 下载并按哈希校验）。
 
 ## 嵌入 app 的二进制
 
@@ -37,7 +35,7 @@ cargo build --locked -p ppvpn-service --profile service --bins
 tools/desktop/build-service.sh macos
 ```
 
-macOS 的 Release 构建和 `apps/macos/scripts/package-dmg.sh` 需要这些产物。
+macOS 的打包（`apps/flutter/scripts/package-macos.sh`）需要这些产物。
 
 ## 尚未迁入的部分
 

@@ -3,7 +3,7 @@
 // this over the generated file.
 //
 // A click on a notification comes back as ppvpn://push/<id>, which the push
-// agent opens (as for the native app, PPVPNApp.swift); opening the app again
+// agent opens; opening the app again
 // (the Dock icon, Finder) comes as a reopen. Both go to Dart; what arrives
 // before Dart asks ("ready") is held until then.
 //
@@ -101,9 +101,8 @@ private let agentLog = Logger(subsystem: "com.peakpassvpn.ppvpn.desktop", catego
 
 /// Keeps the bundled push agent (Contents/Library/LoginItems/PPVPN Agent.app)
 /// registered with launchd, and restarts or re-registers it when it stopped
-/// running: the native app's apps/macos/PPVPN/Platform/PushAgentService.swift
-/// with its PushAgentHealth (AppLogic), the same files, defaults key and
-/// timings, so that either app takes over from the other, and the
+/// running, with the files, defaults key and timings the former native app
+/// used, so that an update from it takes over its registration, and the
 /// unregistering before an update (Updater).
 @MainActor
 private final class PushAgentService {
@@ -355,8 +354,7 @@ private final class PushAgentService {
   }
 }
 
-/// Launch at login through `SMAppService.mainApp`, as the native app's
-/// apps/macos/PPVPN/Platform/LoginItem.swift: the system holds the state,
+/// Launch at login through `SMAppService.mainApp`: the system holds the state,
 /// read back on each `state`.
 ///
 /// Channel ppvpn/login-item: `state` → {enabled, needsApproval}, `set` (a
@@ -399,10 +397,9 @@ private final class LoginItem {
 
 private let updateLog = Logger(subsystem: "com.peakpassvpn.ppvpn.desktop", category: "update")
 
-/// Sparkle 2, as the native app's apps/macos/PPVPN/Platform/Updater.swift:
-/// the appcast and the EdDSA key are the Info.plist keys PPVPNUpdateFeedURL
-/// and SUPublicEDKey, which scripts/package-macos.sh writes with the native
-/// build's settings, and it adds Sparkle.framework to Contents/Frameworks.
+/// Sparkle 2: the appcast and the EdDSA key are the Info.plist keys
+/// PPVPNUpdateFeedURL and SUPublicEDKey, which scripts/package-macos.sh
+/// writes, and it adds Sparkle.framework to Contents/Frameworks.
 /// The generated runner does not link Sparkle: the framework is loaded at
 /// run time, and a build without it or without both keys (ci-build.sh
 /// alone) has updates off, with no 「检查更新…」.

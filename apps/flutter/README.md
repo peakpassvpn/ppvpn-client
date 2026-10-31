@@ -196,8 +196,8 @@ Pinned versions:
 ## macOS packaging
 
 `scripts/package-macos.sh <PPVPN.app> arm64|x86_64` packages the app that
-`scripts/ci-build.sh` built as the native release packages
-`apps/macos` (#401 step 5), into the same artifacts in `dist/macos`. Into a
+`scripts/ci-build.sh` built as the native release packaged its app
+(#401 step 5; #522 removed it), into the same artifacts in `dist/macos`. Into a
 copy of the bundle, at the native app's paths, it puts:
 
 - the Swift push agent (`apps/macos`, target `PPVPNAgent`, built with the
@@ -206,15 +206,14 @@ copy of the bundle, at the native app's paths, it puts:
 - the client framework the agent links at `Contents/Frameworks`;
 - the service helpers in `Contents/MacOS`, where `rust/src/hooks.rs` looks
   for them;
-- Sparkle (the native project's package) at `Contents/Frameworks`, and the
-  Info.plist keys the native build sets: the appcast (`PPVPN_UPDATE_FEED_URL`,
+- Sparkle (resolved by the agent's build, `apps/macos/project.yml`) at
+  `Contents/Frameworks`, and the Info.plist keys the native build set: the appcast (`PPVPN_UPDATE_FEED_URL`,
   else the channel's feed from `PPVPN_UPDATE_SITE` and
   `PPVPN_RELEASE_CHANNEL`) and the EdDSA key (`PPVPN_SPARKLE_PUBLIC_KEY`).
 
-Then `apps/macos/scripts/package-app.sh`, which the native
-`package-dmg.sh` also uses, does the rest. It thins the bundle to the one
-architecture and signs it inside out with the hardened runtime and the
-native app's entitlements. It signs with the fixed certificate the service
+Then `apps/macos/scripts/package-app.sh` does the rest. It thins the bundle
+to the one architecture and signs it inside out with the hardened runtime
+and `packaging/macos/PPVPN.entitlements`. It signs with the fixed certificate the service
 pins when `PPVPN_CODESIGN_IDENTITY` is set, ad-hoc otherwise. It then writes
 `PPVPN-<version>-<platform>.dmg` (with the Sparkle signature when
 `SPARKLE_PRIVATE_KEY_FILE` is set), the `.pkg` (id
@@ -238,14 +237,13 @@ architectures through `tools/desktop/ci/build-macos-native.sh`
 
 `scripts/package-windows.ps1` (Windows, after `scripts/ci-build.sh`) builds
 the installer the native Windows release ships, from this app: the same
-NSIS script (`apps/windows/installer/ppvpn.nsi`), install directory
+NSIS script (`packaging/windows/ppvpn.nsi`), install directory
 (`C:\Program Files\PPVPN`), service handling, shortcuts, uninstall entry
 and `/PURGE`, and the same artifacts,
 `dist/windows/PPVPN-<version>-windows-x64-setup.exe` (+ `.sha256`) and
 `release-meta-windows-x64.json`. It stages the release bundle (`ppvpn.exe`,
 `flutter_windows.dll`, `ppvpn_flutter.dll`, the plugins' DLLs, `data\`), the
-Rust push agent, `ppvpn-service`, `-install` and `-uninstall` (built as
-`apps/windows/scripts/package.ps1` builds them), `wintun.dll`,
+Rust push agent, `ppvpn-service`, `-install` and `-uninstall`, `wintun.dll`,
 `WinSparkle.dll` (the native app's WinSparkle version) and the
 notifications' icon (`Assets\AppLogo.png`). `install-files.txt` lists what
 it installs, so an upgrade from the native app removes the native app's
@@ -301,7 +299,7 @@ Builds without a feed (CI's, local ones) have updates off and no
 
 `scripts/install-linux-layout.sh <bundle> <service-bin-dir>` (root, Linux
 only) installs the bundle as the native packages do
-(`apps/linux/packaging/nfpm.yaml`). The executable becomes
+(`packaging/linux/nfpm.yaml`). The executable becomes
 `/usr/lib/ppvpn/ppvpn`, root-owned and 0755, because that is the only
 client the privileged service accepts. `lib/` and `data/` sit beside it,
 and so do `ppvpn-service`, `ppvpn-service-install` and
@@ -314,7 +312,7 @@ them. To remove it, run
 (`PPVPN-<version>-linux-x64.{deb,rpm}` and their `release-meta-linux-x64-*.json`),
 under the native package's name `ppvpn`, version and release (the build
 number), with its maintainer scripts and push agent autostart entry
-(`apps/linux/packaging`), so it upgrades the native package in place. The
+(`packaging/linux`), so it upgrades the native package in place. The
 dependencies are GTK 3, X11 and XInput, EGL, xdg-utils and pkexec instead of
 GTK 4, libadwaita and .NET's. It builds the service and the push agent
 itself. CI builds both in the Linux `flutter` job and checks each in a fresh

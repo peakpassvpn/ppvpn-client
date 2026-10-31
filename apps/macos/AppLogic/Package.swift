@@ -1,8 +1,7 @@
 // swift-tools-version:5.10
-// App logic shared by the macOS app and its tests: UI state, presentation and
-// the client backend seam, with no SwiftUI, and AppKit / Network only behind
-// `#if canImport(...)` (the Logs text renderer, so its performance is
-// tested; NWPathMonitor), so it also builds and tests on Linux.
+// What the macOS push agent (PPVPNAgent) shares beyond the client bindings:
+// its log and the app's directories. No AppKit, so it also builds and tests
+// on Linux, with the bindings (scripts/build-swift-linux.sh).
 import PackageDescription
 
 let package = Package(

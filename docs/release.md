@@ -10,10 +10,8 @@
   不再从源码构建。
 - 版本号接着 Go 版往上走：Rust 的第一个对外版本是 **0.6.0**（Go 的最后一版是 0.5.21）。引擎、账号、CLI、
   桌面客户端和特权服务用同一个版本，写在根 `Cargo.toml` 的 `[workspace.package] version`，各 crate 用
-  `version.workspace = true` 继承，`Cargo.lock` 随之更新。三个平台工程的版本（合入 main 时安装包用的版本）
-  与它保持一致，改版本时一起改：`apps/windows/Directory.Build.props` 的 `VersionPrefix`、
-  `apps/macos/project.yml` 的 `MARKETING_VERSION`、`apps/linux/PPVPN.Linux.csproj` 和
-  `apps/linux/PPVPN.PushAgent/PPVPN.PushAgent.csproj` 的 `Version`。
+  `version.workspace = true` 继承，`Cargo.lock` 随之更新。`apps/macos/project.yml` 的 `MARKETING_VERSION`
+  与它保持一致，改版本时一起改。
 - 一个版本一个 tag `vX.Y.Z`、一个 GitHub Release：里面是三个平台的安装包和 CLI 的归档。发行时安装包的版本
   来自手动触发时填的版本（必须在 tag `v<版本>` 上运行）；CLI 的构建核对它等于 `Cargo.toml` 的版本，不等则
   发行失败。
@@ -64,7 +62,7 @@
 Azure Artifact Signing 给程序、安装包和卸载程序签 Authenticode（#489）：`azure/login` 用 OIDC 登录 Entra 应用
 （它对每个环境有 federated credential，并在证书配置上有 Certificate Profile Signer 角色），
 `tools/desktop/ci/artifact-signing.ps1` 装好 SignTool 的签名插件（版本和 SHA-256 钉在脚本里），
-`apps/windows/scripts/sign-file.ps1` 逐个文件签名、加时间戳并验证。缺任何一个就不签名，和以前一样。
+`apps/flutter/scripts/sign-file.ps1` 逐个文件签名、加时间戳并验证。缺任何一个就不签名，和以前一样。
 都不是 secret，放在两个环境里：
 
 | 名称 | 内容 |

@@ -1,5 +1,5 @@
-//! PPVPN desktop client logic shared by the native macOS (SwiftUI), Windows
-//! (WinUI 3) and Linux (GTK 4) apps through UniFFI.
+//! PPVPN desktop client logic: the Flutter app's bridge and push agent
+//! (apps/flutter) link it, the macOS app and push agent use it through UniFFI.
 //!
 //! The UI owns nothing but presentation: every state change arrives as a full
 //! [`ClientSnapshot`] through [`ClientListener::on_snapshot`], and everything

@@ -18,12 +18,11 @@ name: ci
 #   unit         L1
 #   integration  L2
 #   desktop      the desktop layers: the service and the client, the
-#                scripts, the C# and Swift bindings with their tests
+#                scripts, the Swift bindings with their tests
 #   linux        Linux's own: L3 in network namespaces (tun with G7,
 #                network-change) and the desktop's enhanced mode end to end
 #   macos        clippy (aarch64), the macOS-only tests
-#   windows      clippy (MSVC), the Windows-only tests, G7 on Windows, the
-#                C# bindings, App.Core
+#   windows      clippy (MSVC), the Windows-only tests, G7 on Windows
 #   flutter      the Flutter prototype (#387) on Linux, macOS and Windows:
 #                build and smoke test, the Linux deb and rpm, only when it
 #                or what it builds from changed; on Windows also its installer,
@@ -407,10 +406,8 @@ jobs:
   #   - the Flutter app's Rust (its bridge and the push agent): clippy, and
   #     the agent's tests;
   #   - the desktop scripts: bash -n and their Python tests;
-  #   - C# bindings, then App.Core's and the Linux app's tests (.NET 8, no
-  #     GTK runtime needed);
-  #   - Swift bindings, then the macOS app's AppLogic tests (no AppKit), with
-  #     the Swift the macOS app is developed with.
+  #   - Swift bindings, then the AppLogic tests of the macOS push agent (no
+  #     AppKit), with the Swift it is developed with.
   desktop:
     name: desktop
     # Pinned to the image the Swift toolchain is built for (ubuntu24.04):
@@ -420,10 +417,7 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
-      UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
       SWIFT_VERSION: 6.4.0
-      DOTNET_NOLOGO: '1'
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: scope
@@ -473,34 +467,6 @@ jobs:
         run: |
           bash -n tools/desktop/*.sh tools/desktop/ci/*.sh
           python3 -m unittest discover -s tools/desktop/ci -p '*_test.py' -v
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        if: steps.scope.outputs.code == 'true'
-        with:
-          dotnet-version: '8.0.x'
-      - name: Cache uniffi-bindgen-cs
-        if: steps.scope.outputs.code == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/uniffi-bindgen-cs
-          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
-      # The cache may have restored the binary: install only when it is
-      # missing or of another version, and then over whatever is there. Not
-      # for the target triple the job builds: a host tool.
-      - name: Install uniffi-bindgen-cs
-        if: steps.scope.outputs.code == 'true'
-        run: |
-          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
-            env -u CARGO_BUILD_TARGET cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
-          fi
-      - name: Generate C# bindings
-        if: steps.scope.outputs.code == 'true'
-        run: crates/desktop/scripts/build-dotnet.sh x86_64-unknown-linux-gnu
-      - name: Test App.Core
-        if: steps.scope.outputs.code == 'true'
-        run: dotnet test apps/dotnet-shared/PPVPN.App.Core.Tests
-      - name: Test the Linux app
-        if: steps.scope.outputs.code == 'true'
-        run: dotnet test apps/linux/PPVPN.Linux.Tests
       # swift.org's toolchain for the runner's Ubuntu, its signature checked
       # against swift.org's keys. Not cached: about 1 GB of the repository's
       # 10 GB, for about a minute of download.
@@ -671,10 +637,9 @@ jobs:
   #     (198.18.0.0/16 alone, the runner's own traffic stays out), failed by
   #     a fault the test arms (the test build's fault-injection feature,
   #     never a release's). The runner is administrator; wintun.dll, sail's
-  #     pinned one, goes beside the test;
-  #   - the client's C# bindings and App.Core's tests. Not the native app's
-  #     or its push agent's builds (#459): the Flutter app replaced them, and
-  #     the upgrade from them is tested with their last release (0.6.4).
+  #     pinned one, goes beside the test.
+  # Not the native app's build (#459, #522): the Flutter app replaced it,
+  # and the upgrade from it is tested with its last release (0.6.4).
   windows:
     name: windows
     runs-on: windows-latest
@@ -688,9 +653,6 @@ jobs:
       # each: one per pull request, `runs` by hand (5 unless told; twenty
       # on the pull request that adds a test there).
       RUNS: ${{ github.event_name == 'workflow_dispatch' && inputs.runs || 1 }}
-      UNIFFI_BINDGEN_CS_TAG: v0.11.0+v0.31.0
-      DOTNET_NOLOGO: '1'
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     defaults:
       run:
         shell: bash
@@ -747,7 +709,7 @@ jobs:
           ARTIFACT_SIGNING_ACCOUNT: ci
           ARTIFACT_SIGNING_PROFILE: ci
         run: |
-          foreach ($script in Get-ChildItem apps\windows\scripts\*.ps1, apps\flutter\scripts\*.ps1, tools\desktop\ci\*.ps1) {
+          foreach ($script in Get-ChildItem apps\flutter\scripts\*.ps1, tools\desktop\ci\*.ps1) {
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors) | Out-Null
             if ($errors) { throw "$($script.Name): $($errors -join '; ')" }
@@ -758,10 +720,10 @@ jobs:
           Get-Content $env:GITHUB_ENV
           $signTool = (Get-Content $env:GITHUB_ENV | Where-Object { $_ -like "ARTIFACT_SIGNING_SIGNTOOL=*" }) -replace "^[^=]*=", ""
           # SignTool itself: signed, by Microsoft.
-          apps\windows\scripts\check-publisher.ps1 $signTool
+          apps\flutter\scripts\check-publisher.ps1 $signTool
           $env:PPVPN_WINDOWS_PUBLISHER_EKU = "1.3.6.1.4.1.311.97.1"
           $refused = $false
-          try { apps\windows\scripts\check-publisher.ps1 $signTool } catch { $refused = $true; Write-Host "refused: $_" }
+          try { apps\flutter\scripts\check-publisher.ps1 $signTool } catch { $refused = $true; Write-Host "refused: $_" }
           if (-not $refused) { throw "check-publisher.ps1 accepted a signer that is not ours" }
       - name: L3, build the failure tests
         if: steps.scope.outputs.code == 'true'
@@ -788,36 +750,6 @@ jobs:
             if (-not ($out -match "test result: ok\. 3 passed")) { throw "runtime::windows_tests: not all three tests ran" }
             Write-Output "::endgroup::"
           }
-
-      # The C# bindings and App.Core: only when the desktop or what it
-      # builds from changed. Debug bindings, as the engine's tests build.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        if: steps.scope.outputs.desktop == 'true'
-        with:
-          dotnet-version: '8.0.x'
-      - name: Cache uniffi-bindgen-cs
-        if: steps.scope.outputs.desktop == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
-          key: uniffi-bindgen-cs-${{ env.UNIFFI_BINDGEN_CS_TAG }}-${{ runner.os }}
-      # build-dotnet.ps1 refuses any other version of the generator.
-      - name: Install uniffi-bindgen-cs
-        if: steps.scope.outputs.desktop == 'true'
-        run: |
-          if ! uniffi-bindgen-cs --version 2>/dev/null | grep -qF "${UNIFFI_BINDGEN_CS_TAG#v}"; then
-            cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$UNIFFI_BINDGEN_CS_TAG" uniffi-bindgen-cs --force
-          fi
-      - name: Generate C# bindings
-        if: steps.scope.outputs.desktop == 'true'
-        shell: powershell
-        run: crates/desktop/scripts/build-dotnet.ps1
-      - name: Test App.Core
-        if: steps.scope.outputs.desktop == 'true'
-        shell: powershell
-        run: |
-          dotnet test apps/dotnet-shared/PPVPN.App.Core.Tests
-          if ($LASTEXITCODE -ne 0) { throw "dotnet test failed" }
 
   # The Flutter desktop prototype (#387), on the three desktop platforms:
   # apps/flutter/scripts/ci-build.sh (platform runner, bridge codegen,
@@ -1113,8 +1045,8 @@ jobs:
           path: ${{ runner.temp }}/flutter-pkg
           retention-days: 7
       # The Windows installer (#401 step 5): package-windows.ps1 packages
-      # the release bundle with the native app's installer script
-      # (apps/windows/installer/ppvpn.nsi), unsigned, as release.yml's
+      # the release bundle with the installer script
+      # (apps/flutter/packaging/windows/ppvpn.nsi), unsigned, as release.yml's
       # windows job will; the service in its shipping profile without LTO,
       # to keep the job short. smoke-installer.ps1 then installs it over the
       # native app 0.6.4 (fetched above), checks the
@@ -1243,6 +1175,14 @@ jobs:
           path: ${{ steps.build.outputs.bundle }}
           if-no-files-found: error
           retention-days: 14
+      # Room for the emulator's userdata (7.4 GB): on a runner with the
+      # 72 GB disk, the build left 11 GB and the system image took the rest
+      # (run 41233125323, "Not enough space to create userdata partition").
+      # Cargo's build is done with: its libraries are in jniLibs, and this
+      # job saves no Rust cache.
+      - name: Drop Cargo's build
+        if: steps.scope.outputs.android == 'true'
+        run: rm -rf target
       # Hardware acceleration for the emulator.
       # What the build left, beside what the emulator needs next.
       - name: Disk after the build
