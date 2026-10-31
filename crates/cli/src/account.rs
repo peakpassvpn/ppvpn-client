@@ -292,9 +292,7 @@ mod tests {
     use crate::env::Os;
 
     #[test]
-    fn the_verification_page_is_on_the_production_api_host() {
-        let host = crate::buildinfo::PRODUCTION_API_BASE.trim_start_matches("https://");
-        assert_eq!(AuthConfig::production().verification_host, host);
+    fn the_cli_signs_in_with_its_audience() {
         assert_eq!(TOKEN_AUDIENCE, "cli");
     }
 

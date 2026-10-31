@@ -838,6 +838,9 @@ jobs:
     timeout-minutes: 90
     env:
       FRB_CODEGEN_VERSION: 2.13.0
+      # The backend the app is built for (#517): the GitHub variable, as
+      # release.yml's; ci-build.sh fails without it.
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
     defaults:
       run:
         shell: bash
@@ -1171,6 +1174,9 @@ jobs:
     timeout-minutes: 90
     env:
       FRB_CODEGEN_VERSION: 2.13.0
+      # The backend the app is built for (#517): the GitHub variable, as
+      # release.yml's; ci-build.sh fails without it.
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
     defaults:
       run:
         shell: bash
@@ -1285,6 +1291,9 @@ jobs:
     timeout-minutes: 90
     env:
       FRB_CODEGEN_VERSION: 2.13.0
+      # The backend the app is built for (#517): the GitHub variable, as
+      # release.yml's; ci-build.sh fails without it.
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
     defaults:
       run:
         shell: bash

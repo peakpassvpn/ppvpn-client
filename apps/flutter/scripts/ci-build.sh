@@ -55,8 +55,16 @@
 #   PPVPN_SKIP_ANALYZE   1: no flutter analyze (ci.yml analyzes on Linux)
 #   and what rust/src/update.rs and bridge.rs bake into the library:
 #   PPVPN_UPDATE_SITE, PPVPN_RELEASE_CHANNEL, PPVPN_SPARKLE_PUBLIC_KEY,
-#   PPVPN_API_BASE_DEFAULT
+#   PPVPN_API_BASE_DEFAULT (required: the backend, an https origin; ci.yml
+#   and release.yml pass the GitHub variable PPVPN_API_BASE, a dev release
+#   the secret of that name, #517)
 set -euo pipefail
+
+if [ -z "${PPVPN_API_BASE_DEFAULT:-}" ]; then
+  echo "ci-build: PPVPN_API_BASE_DEFAULT (the backend) is empty: see docs/release.md (后端地址)" >&2
+  exit 1
+fi
+export PPVPN_API_BASE_DEFAULT
 
 app=$(cd "$(dirname "$0")/.." && pwd)
 root=$(cd "$app/../.." && pwd)
