@@ -11,7 +11,8 @@
 //!
 //! [`profile`] is the UI view of a proxy profile, [`device`] registers an
 //! install for push, and [`session`] holds the rules a signed-in host
-//! follows between calls.
+//! follows between calls. [`reachability`] checks what the resolvers
+//! answer for the API and node hosts and whether each address completes TLS.
 //!
 //! Errors stay structured ([`api::ApiError`], [`auth::AuthError`]); hosts map
 //! them to their own user-facing codes.
@@ -20,5 +21,6 @@ pub mod api;
 pub mod auth;
 pub mod device;
 pub mod profile;
+pub mod reachability;
 pub mod session;
 mod sysproxy;

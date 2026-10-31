@@ -13,6 +13,7 @@ import 'package:forui/forui.dart';
 
 import '../app_state.dart';
 import '../links.dart';
+import '../pages/diagnostics.dart';
 import '../pages/logs.dart';
 import '../pages/settings.dart';
 import '../settings.dart';
@@ -111,6 +112,25 @@ class PhoneMe extends StatelessWidget {
                 title: s('logs'),
                 onPress: () => unawaited(
                   pushPhonePage<void>(context, PhoneScaffold(title: s('logs'), back: true, child: const LogsPage())),
+                ),
+              ),
+              // Network diagnostics (#521): its page says the DoH resolvers
+              // are asked only when the user presses Run.
+              _Row(
+                icon: FLucideIcons.globe,
+                title: s('diagnostics'),
+                onPress: () => unawaited(
+                  pushPhonePage<void>(
+                    context,
+                    PhoneScaffold(
+                      title: s('diagnostics'),
+                      back: true,
+                      child: const SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(16, 8, 16, 24),
+                        child: DiagnosticsView(),
+                      ),
+                    ),
+                  ),
                 ),
               ),
               // The website's console (ppvpn-web apps/client, under /dashboard):

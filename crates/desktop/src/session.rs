@@ -322,7 +322,6 @@ impl Client {
 
     /// Raw bytes of the current proxy profile, exactly as downloaded, for
     /// handing to `ppvpn-core` (which validates them).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn profile_raw(&self) -> Option<Arc<Vec<u8>>> {
         self.session_state().profile_raw.clone()
     }
@@ -408,6 +407,10 @@ impl Client {
     /// Record `error` as the latest user-facing failure and hand it back.
     pub(crate) fn report(&self, error: ClientError) -> ClientError {
         if let Some(info) = error.info() {
+            // What the network did, for the logs (#521).
+            if matches!(info.code, ErrorCode::NetworkUnreachable) {
+                self.diagnose_reachability_after_failure();
+            }
             self.update(|snapshot| snapshot.last_error = Some(info));
         }
         error

@@ -79,7 +79,7 @@ pub fn run(cli: &Cli, env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()>
         }
         Command::Completion { shell } => completion(shell, out).map_err(io),
         Command::Mode { mode } => mode_command(mode.as_deref(), env, hooks, out),
-        Command::Doctor => doctor(env, hooks, out),
+        Command::Doctor { network } => doctor(env, hooks, *network, out),
         Command::Login { no_browser } => login(env, hooks, out, *no_browser),
         Command::Account => account_command(env, hooks, out),
         Command::Logout => logout(env, hooks, out),
@@ -182,11 +182,11 @@ fn mode_command(mode: Option<&str>, env: &Env, hooks: &Hooks, out: &mut Printer)
     .map_err(io)
 }
 
-fn doctor(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
+fn doctor(env: &Env, hooks: &Hooks, network: bool, out: &mut Printer) -> Result<()> {
     let config = build_config(env, hooks)?;
     let paths = Paths::resolve(env)?;
     let platform = platform(env.os);
-    let value: Value = json!({
+    let mut value: Value = json!({
         "ok": true,
         "platform": platform,
         "cli_version": buildinfo::version(),
@@ -200,7 +200,7 @@ fn doctor(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let human = format!(
+    let mut human = format!(
         "Platform: {platform}\nCLI: {}\nBuild profile: {profile}\nAPI origin: {}\nRuntime: {}\nState: {}\nSettings: {}",
         buildinfo::version(),
         config.api_base,
@@ -208,6 +208,22 @@ fn doctor(env: &Env, hooks: &Hooks, out: &mut Printer) -> Result<()> {
         paths.state_dir.display(),
         paths.settings.display(),
     );
+    // Reaching the API host (#521), only when asked: it queries third-party
+    // DoH resolvers.
+    if network {
+        use ppvpn_account::reachability;
+        let targets: Vec<_> = reachability::api_target(&config.api_base)
+            .into_iter()
+            .collect();
+        let report = runtime()?.block_on(reachability::run(
+            targets,
+            reachability::Mode::Compare,
+            false,
+        ));
+        value["reachability"] = serde_json::to_value(&report).unwrap_or(Value::Null);
+        human.push_str("\n\nReachability\n");
+        human.push_str(report.text().trim_end());
+    }
     out.success(&value, &human)
         .map_err(|err| CliError::new(Exit::Other, "OUTPUT_FAILED", err.to_string()))
 }

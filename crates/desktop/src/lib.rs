@@ -28,6 +28,7 @@ mod monitor;
 mod notifications;
 mod push_agent;
 mod push_shown;
+mod reachability;
 mod routing;
 mod service;
 mod session;

@@ -292,6 +292,18 @@ pub fn site_url(path: String) -> Result<String, String> {
     Ok(bridge::get()?.client.site_url(&path))
 }
 
+/// Network diagnostics (#521): the system resolver and the DoH resolvers
+/// for the API host and the profile's node hosts, then TCP and TLS to each
+/// address, as text for the page and for pasting into a ticket. Only on the
+/// user's press: it asks third-party resolvers. Up to about 15 seconds.
+pub async fn diagnose_reachability() -> Result<String, String> {
+    bridge::get()?
+        .fetch(|client| async move {
+            Ok::<_, ppvpn_client::ClientError>(client.diagnose_reachability().await.text())
+        })
+        .await
+}
+
 /// Opens `url` in the default browser ("reopen the browser").
 #[frb(sync)]
 pub fn open_url(url: String) -> bool {

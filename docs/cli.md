@@ -144,7 +144,7 @@ ppvpn [--json] [--no-color] <command>
 | `proxy` / `proxy credential [node-id]` | local proxy endpoints; the routed credential, or a node's |
 | `mode [rules\|global]` | show or set the routing mode |
 | `ingress [node-id]` / `ingress pin <node-id> <endpoint-key>` / `ingress auto <node-id>` | ingress health; pin or unpin |
-| `doctor` | privacy-safe diagnostics |
+| `doctor [--network]` | privacy-safe diagnostics; `--network` also checks reaching the API host: the system resolver's and AliDNS's and DNSPod's DoH answers, and TCP and TLS to each address (#521) |
 | `version` / `completion <bash\|zsh\|fish>` | version; shell completion script |
 
 Argument values are checked before any file, keychain, network or core access. For example, `probe` needs
