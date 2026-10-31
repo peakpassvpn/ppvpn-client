@@ -40,6 +40,24 @@
     Release 重建并上传更新站点。
   - 构建号是 `DESKTOP_BUILD_OFFSET` 加 `release.yml` 的 run number，只增不减。
 
+## 后端地址
+
+客户端连接的后端由构建时的 `PPVPN_API_BASE_DEFAULT` 决定，代码和 workflow 里都不写域名（#517）。它的值是一个 https 源（例如 `https://www.example.com`，不带路径）：
+
+| 名称 | 类型 | 位置 | 用途 |
+| --- | --- | --- | --- |
+| `PPVPN_API_BASE` | 变量 | 仓库 | 正式后端：合入 main 的构建、`ci.yml` 的应用构建、stable 发布（包括不在环境里的 job，如 Linux CLI） |
+| `PPVPN_API_BASE` | secret | 环境 `desktop-release-dev` | dev 构建的后端 |
+
+- 正式后端的主机本来就是公开的，所以用变量；变量会原样出现在公开仓库的运行日志里。dev 后端的主机不能公开，所以 dev 构建读 secret，日志里会被遮住。不要把 dev 后端放进变量。
+- `desktop-release-stable` 里不设 `PPVPN_API_BASE`：stable 只读仓库变量。
+
+- 值为空时构建失败：`apps/flutter/scripts/ci-build.sh`（桌面、Android、iOS）、`tools/cli/build-release.sh`、`tools/desktop/ci/build-macos-native.sh` 都会检查。
+- 应用里，登录页只信任这个地址的主机（后端按客户端请求的主机返回 `verification_uri`），增强模式的健康检查对它的主机做完整检查，应用打开的网页（购买、路由规则、手机「我的」里的页面）也从它推出。
+- 本地构建不设它时：Flutter 应用需要环境变量 `PPVPN_API_BASE`（或调试构建的设置项），CLI 按 dev 构建处理，也需要 `PPVPN_API_BASE`。
+- 换后端域名只改变量，不改代码。
+- 原生版（`apps/macos`、`apps/windows`、`apps/linux`）不再发行，它们的构建文件里还留着旧的默认地址，没有改。
+
 ## Windows 签名（Azure Artifact Signing）
 
 `windows` job 在发布环境（`desktop-release-dev`、`desktop-release-stable`）里、下表的变量都在时用

@@ -23,13 +23,15 @@ use crate::api::{
 };
 use crate::hooks::Hooks;
 
-/// The backend the app signs in to; `PPVPN_API_BASE` overrides it, else the
-/// settings page's API override (`settings.json`). A release build bakes in
-/// its channel's backend with `PPVPN_API_BASE_DEFAULT` (release.yml, as for
-/// the native macOS app; a dev build's is the dev backend).
-const DEFAULT_API_BASE: &str = match option_env!("PPVPN_API_BASE_DEFAULT") {
-    Some(base) if !base.is_empty() => base,
-    _ => "https://www.peakpassvpn.com",
+/// The backend the app signs in to, compiled in from
+/// `PPVPN_API_BASE_DEFAULT`: ci.yml and release.yml pass the GitHub
+/// variable `PPVPN_API_BASE`, a dev release the secret of that name (#517), and
+/// scripts/ci-build.sh refuses to build without it. No address is written
+/// here. `PPVPN_API_BASE` overrides it, else the settings page's API
+/// override (`settings.json`).
+const DEFAULT_API_BASE: Option<&str> = match option_env!("PPVPN_API_BASE_DEFAULT") {
+    Some(base) if !base.is_empty() => Some(base),
+    _ => None,
 };
 
 pub(crate) struct Bridge {
@@ -106,12 +108,14 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
     } else {
         "linux"
     };
+    let api_base = std::env::var("PPVPN_API_BASE")
+        .ok()
+        .filter(|base| !base.is_empty())
+        .or_else(|| crate::settings::api_override(&data_dir))
+        .or_else(|| DEFAULT_API_BASE.map(str::to_string))
+        .ok_or("this build has no backend: build it with PPVPN_API_BASE_DEFAULT")?;
     let config = ClientConfig {
-        api_base: std::env::var("PPVPN_API_BASE")
-            .ok()
-            .filter(|base| !base.is_empty())
-            .or_else(|| crate::settings::api_override(&data_dir))
-            .unwrap_or_else(|| DEFAULT_API_BASE.into()),
+        api_base,
         data_dir: data_dir.clone(),
         log_dir,
         platform: platform.into(),

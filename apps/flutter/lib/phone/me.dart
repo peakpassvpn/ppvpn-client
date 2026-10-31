@@ -22,11 +22,6 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'phone.dart';
 
-/// The site's pages behind the ↗ rows, in the system browser for now (the
-/// in-app browser and the one-time sign-in link come with the web pages,
-/// #387).
-const _site = 'https://www.peakpassvpn.com';
-
 class PhoneMe extends StatelessWidget {
   const PhoneMe({super.key, required this.app});
 
@@ -156,7 +151,16 @@ class PhoneMe extends StatelessWidget {
     },
   );
 
-  void _open(String path) => unawaited(openUrl('$_site$path'));
+  /// The site's pages behind the ↗ rows, in the system browser for now (the
+  /// in-app browser and the one-time sign-in link come with the web pages,
+  /// #387), on the configured backend's site (#517).
+  void _open(String path) {
+    try {
+      unawaited(openUrl(rust.siteUrl(path: path)));
+    } catch (error) {
+      debugPrint('siteUrl: $error');
+    }
+  }
 
   Future<void> _confirmSignOut(BuildContext context) async {
     final s = S.current;

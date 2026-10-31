@@ -1,18 +1,17 @@
 //! Build profile and API origin.
 //!
-//! Release builds talk to the production API and ignore any override. Only a
-//! `dev` build accepts `PPVPN_API_BASE`, and only an HTTPS origin (plain HTTP
-//! is allowed for loopback development). The profile and a non-production
-//! default origin are set at compile time through `PPVPN_BUILD_PROFILE` and
-//! `PPVPN_DEFAULT_API_BASE`, so no environment-specific origin lives in the
-//! source.
+//! The backend is a build input, `PPVPN_API_BASE_DEFAULT` at compile time
+//! (release.yml: the GitHub variable `PPVPN_API_BASE`, for dev the secret
+//! of that name, #517); no origin lives in the source. A release build talks
+//! to it and ignores any override. Only a `dev` build accepts
+//! `PPVPN_API_BASE`, and only an HTTPS origin (plain HTTP is allowed for
+//! loopback development). A build without a compiled-in origin (a local
+//! one) is a `dev` build. The profile is set with `PPVPN_BUILD_PROFILE`.
 
 use std::net::IpAddr;
 
 use crate::env::Env;
 use crate::error::{CliError, Result};
-
-pub const PRODUCTION_API_BASE: &str = "https://www.peakpassvpn.com";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -36,7 +35,7 @@ pub fn version() -> &'static str {
 pub fn compiled() -> (Option<&'static str>, Option<&'static str>) {
     (
         option_env!("PPVPN_BUILD_PROFILE"),
-        option_env!("PPVPN_DEFAULT_API_BASE"),
+        option_env!("PPVPN_API_BASE_DEFAULT").filter(|base| !base.is_empty()),
     )
 }
 
@@ -52,14 +51,16 @@ pub fn resolve_with(
 ) -> Result<BuildConfig> {
     let invalid =
         |message: &str| CliError::argument(message.to_string()).with_code("BUILD_CONFIG_INVALID");
-    let profile = match profile.unwrap_or("prod") {
-        "prod" => Profile::Prod,
-        "dev" => Profile::Dev,
+    let profile = match (profile.unwrap_or("prod"), default_base) {
+        ("prod", Some(_)) => Profile::Prod,
+        // No backend compiled in: a local build, which takes the
+        // environment's as a dev build does.
+        ("prod", None) | ("dev", _) => Profile::Dev,
         _ => return Err(invalid("unsupported build profile")),
     };
-    let raw = match profile {
-        Profile::Prod => default_base.unwrap_or(PRODUCTION_API_BASE),
-        Profile::Dev => env
+    let raw = match (profile, default_base) {
+        (Profile::Prod, Some(base)) => base,
+        _ => env
             .var("PPVPN_API_BASE")
             .or(default_base)
             .ok_or_else(|| invalid("a dev build needs PPVPN_API_BASE"))?,
@@ -157,12 +158,26 @@ mod tests {
     fn release_builds_ignore_the_override() {
         let config = resolve_with(
             None,
-            None,
+            Some("https://api.example.test/"),
             &env(&[("PPVPN_API_BASE", "https://evil.example.test")]),
         )
         .unwrap();
         assert_eq!(config.profile, Profile::Prod);
-        assert_eq!(config.api_base, PRODUCTION_API_BASE);
+        assert_eq!(config.api_base, "https://api.example.test");
+    }
+
+    #[test]
+    fn a_build_without_a_backend_is_a_dev_build() {
+        let config = resolve_with(
+            None,
+            None,
+            &env(&[("PPVPN_API_BASE", "https://api.example.test")]),
+        )
+        .unwrap();
+        assert_eq!(config.profile, Profile::Dev);
+        assert_eq!(config.api_base, "https://api.example.test");
+        let err = resolve_with(None, None, &env(&[])).unwrap_err();
+        assert_eq!(err.code, "BUILD_CONFIG_INVALID");
     }
 
     #[test]

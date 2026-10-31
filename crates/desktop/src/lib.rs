@@ -53,7 +53,7 @@ uniffi::setup_scaffolding!();
 
 #[derive(uniffi::Record, Clone, Debug, PartialEq)]
 pub struct ClientConfig {
-    /// Backend base URL, e.g. `https://www.peakpassvpn.com`.
+    /// Backend base URL, e.g. `https://www.example.com`.
     pub api_base: String,
     /// Writable per-user directory for core state (`core/`) and caches.
     pub data_dir: String,
@@ -973,6 +973,13 @@ fn site_url_for(api_base: &str, path: &str) -> String {
 }
 
 impl Client {
+    /// `path` on the site root of `ClientConfig::api_base`, for the pages
+    /// the apps open (#517): the configured backend's own site, not a
+    /// hardcoded host.
+    pub fn site_url(&self, path: &str) -> String {
+        site_url_for(&self.config.api_base, path)
+    }
+
     /// [`Client::new`] with the privileged-service client and the core
     /// launcher injected (tests substitute fakes).
     pub(crate) fn with_parts(
@@ -1089,8 +1096,8 @@ mod tests {
     fn routing_rules_url_uses_the_site_root() {
         let url = |base| site_url_for(base, ROUTING_RULES_PATH);
         assert_eq!(
-            url("https://www.peakpassvpn.com"),
-            "https://www.peakpassvpn.com/dashboard/routing-rules"
+            url("https://www.example.com"),
+            "https://www.example.com/dashboard/routing-rules"
         );
         assert_eq!(
             url("https://api.example.com/api/prefix/?x=1#f"),
@@ -1100,13 +1107,21 @@ mod tests {
             url("http://127.0.0.1:8080/"),
             "http://127.0.0.1:8080/dashboard/routing-rules"
         );
+        assert_eq!(
+            url("https://www.example.net"),
+            "https://www.example.net/dashboard/routing-rules"
+        );
+        assert_eq!(
+            site_url_for("https://www.example.net/api/", ""),
+            "https://www.example.net/"
+        );
     }
 
     #[test]
     fn purchase_url_uses_the_site_root() {
         assert_eq!(
-            purchase_url_for("https://www.peakpassvpn.com"),
-            "https://www.peakpassvpn.com/dashboard/products"
+            purchase_url_for("https://www.example.com"),
+            "https://www.example.com/dashboard/products"
         );
         assert_eq!(
             purchase_url_for("https://api.example.com/api/prefix/?x=1#f"),
