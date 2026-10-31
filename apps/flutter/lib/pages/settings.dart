@@ -474,7 +474,8 @@ class _Advanced extends StatelessWidget {
     return _Group(
       title: s('advanced'),
       children: [
-        const _ApiOverride(),
+        // Development only (#519): release builds neither show nor honour it.
+        if (Settings.apiOverrideAllowed) const _ApiOverride(),
         SettingRow(
           icon: FLucideIcons.server,
           title: s('service'),

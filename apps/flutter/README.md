@@ -132,8 +132,11 @@ any release.
   apps have no language setting: this app keeps its own next to those
   (`language` or `Language`), which they ignore. The API override
   (Settings → Advanced) takes effect on the next launch; `PPVPN_API_BASE`
-  wins over it. Without either the backend is
-  `https://www.peakpassvpn.com`.
+  wins over it. Only a debug build of the Rust library shows and honours
+  the override (#519); a release build, what `scripts/ci-build.sh` and
+  release.yml make, keeps a saved one but ignores it. Without either the
+  backend is the build's default, `https://www.peakpassvpn.com` unless
+  `PPVPN_API_BASE_DEFAULT` set another.
 - Quit the native app before trying it: both use the same data, sign-in
   and system proxy setting, and both have the same identity (bundle id,
   executable names).

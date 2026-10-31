@@ -24,7 +24,7 @@ use crate::api::{
 use crate::hooks::Hooks;
 
 /// The backend the app signs in to; `PPVPN_API_BASE` overrides it, else the
-/// settings page's API override (`settings.json`). A release build bakes in
+/// settings page's API override (`settings.json`; debug builds only, #519). A release build bakes in
 /// its channel's backend with `PPVPN_API_BASE_DEFAULT` (release.yml, as for
 /// the native macOS app; a dev build's is the dev backend).
 const DEFAULT_API_BASE: &str = match option_env!("PPVPN_API_BASE_DEFAULT") {
