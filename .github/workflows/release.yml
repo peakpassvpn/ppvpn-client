@@ -54,6 +54,15 @@ name: release
 # v0.6.0 on. A stable release becomes the repository's "latest" release
 # (unless allow_downgrade is set). The repository holds no secret itself;
 # only the environments do, and a job reads them only when it runs in one.
+#
+# The backend every build talks to (an https origin; #517) is compiled in
+# as PPVPN_API_BASE_DEFAULT: the repository variable PPVPN_API_BASE (the
+# production host, public anyway) for every run but dev; for dev, the
+# secret PPVPN_API_BASE of desktop-release-dev, so that the dev host stays
+# masked in this public repository's logs. No address is written in the
+# code or here, and a build with an empty one fails (ci-build.sh,
+# tools/cli/build-release.sh). Moving the service is a change of the
+# variable.
 
 on:
   push:
@@ -261,7 +270,7 @@ jobs:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       NFPM_VERSION: '2.47.0'
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -840,7 +849,7 @@ jobs:
       PPVPN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       # bindgen's libclang (btls-sys), from the runner's LLVM.
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     defaults:
@@ -1037,7 +1046,7 @@ jobs:
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       MACOS_ARCHS: ${{ matrix.arch }}
       PPVPN_APPLE_TARGETS: ${{ matrix.triple }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -1143,7 +1152,7 @@ jobs:
       CI_PROJECT_DIR: ${{ github.workspace }}
       MACOS_ARCHS: ${{ matrix.arch }}
       PPVPN_PREBUILT: 1
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       SPARKLE_PRIVATE_KEY: ${{ needs.prepare.outputs.environment && secrets.SPARKLE_PRIVATE_KEY || '' }}
       # Developer ID Application and Installer, and the notary key (#471);
       # without them the build is ad-hoc signed and not notarized (refused for
@@ -1210,7 +1219,7 @@ jobs:
     env:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       SIGNED: ${{ needs.prepare.outputs.channel == 'stable' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1296,7 +1305,7 @@ jobs:
     env:
       PPVPN_VERSION: ${{ needs.prepare.outputs.version }}
       PPVPN_BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
-      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.environment && secrets.PPVPN_API_BASE || 'https://www.peakpassvpn.com' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       STABLE: ${{ needs.prepare.outputs.channel == 'stable' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1383,7 +1392,7 @@ jobs:
     if: >-
       !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.package == 'true' && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
     runs-on: ubuntu-latest
-    # Only dev reads its environment (the dev backend's address); nothing
+    # Only dev reads its environment (its PPVPN_API_BASE); nothing
     # here is signed.
     environment: ${{ needs.prepare.outputs.channel == 'dev' && needs.prepare.outputs.environment || '' }}
     timeout-minutes: 60
@@ -1398,7 +1407,7 @@ jobs:
     env:
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
-      DEV_API_BASE: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || '' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -1441,7 +1450,7 @@ jobs:
       TARGETS: ${{ needs.prepare.outputs.cli_macos }}
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       VERSION: ${{ needs.prepare.outputs.version }}
-      DEV_API_BASE: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || '' }}
+      PPVPN_API_BASE_DEFAULT: ${{ needs.prepare.outputs.channel == 'dev' && secrets.PPVPN_API_BASE || needs.prepare.outputs.channel != 'dev' && vars.PPVPN_API_BASE || '' }}
       MACOS_SIGNING_P12_BASE64: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_BASE64 || '' }}
       MACOS_SIGNING_P12_PASSWORD: ${{ needs.prepare.outputs.environment && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
       # Notarization (App Store Connect API key, #471).

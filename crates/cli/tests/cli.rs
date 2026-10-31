@@ -45,6 +45,8 @@ impl Home {
                 ("HOME", home),
                 ("XDG_CONFIG_HOME", &config),
                 ("XDG_STATE_HOME", &state),
+                // A test build has no backend compiled in (#517).
+                ("PPVPN_API_BASE", "https://api.example.test"),
             ],
         )
     }

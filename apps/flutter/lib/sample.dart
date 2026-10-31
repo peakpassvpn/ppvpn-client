@@ -156,7 +156,7 @@ List<rust.UiMessage> _sampleMessages() {
     'broadcast' => 'announcement',
     _ => type,
   });
-  const link = 'https://www.peakpassvpn.com/console';
+  const link = 'https://www.example.com/console';
   // (type, severity, link, age, zh title, zh body, en title, en body)
   const sample = [
     ('expiring', 'critical', true, 3, '订阅将在 3 天后到期', '你的 Pro 年付套餐将于 2026年10月2日 到期，到期后将无法连接任何节点。续费后立即生效，剩余时长自动顺延，系统代理与增强模式的设置会保留。', 'Subscription expires in 3 days', 'Your Pro annual plan expires on Oct 2, 2026, after which you can’t connect to any node. Renewal takes effect immediately and remaining time carries over. System Proxy and Enhanced Mode settings are kept.'),
