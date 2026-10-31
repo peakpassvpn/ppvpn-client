@@ -26,9 +26,10 @@
   connection mode, the installation id, launch at login), must survive the
   upgrade to this installer, a rollback to the native one and the upgrade
   again, each app restoring it when started. There is no backend: the API
-  override points at a closed port, so "restored" is the client's offline
-  restore (the runner has a network, and the real API would reject the
-  fake sign-in). One PASS/FAIL line per check, in the job summary and in
+  override (the native app) and PPVPN_API_BASE (the Flutter app, which
+  ignores the override in a release build, #519) point at a closed port,
+  so "restored" is the client's offline restore (the runner has a
+  network, and the real API would reject the fake sign-in). One PASS/FAIL line per check, in the job summary and in
   windows-stage-a.txt under $env:RUNNER_TEMP\flutter-out; any FAIL fails
   the script after the cleanup checks.
 #>
@@ -59,6 +60,12 @@ $credentialTarget = "PPVPN/desktop.credentials"
 $blob = '{"version":1,"active_refresh":"acceptance-not-a-real-refresh-token"}'
 $installation = "5f0c2a8e-3b1d-4c6e-9a7f-2d4b6e8c0a13"
 $apiOverride = "http://127.0.0.1:9"
+# The same closed port for the Flutter app: a release build ignores the
+# saved API override (#519), so it gets the backend from PPVPN_API_BASE,
+# which every app started from here inherits (the native app reads only
+# the override). Without it the Flutter app called the real API, which
+# rejected the fake sign-in and dropped it (run of #520).
+$env:PPVPN_API_BASE = $apiOverride
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $runCommand = "`"$exe`" --background"
 $out = if ($env:RUNNER_TEMP) { Join-Path $env:RUNNER_TEMP "flutter-out" } else { Join-Path $env:TEMP "flutter-out" }
