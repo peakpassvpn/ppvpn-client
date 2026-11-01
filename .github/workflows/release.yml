@@ -2181,6 +2181,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 180
     env:
+      # ci-build.sh refuses an empty backend; what a release passes (#518).
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
       # As in ci.yml: part of the cache key.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
@@ -2273,6 +2275,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 150
     env:
+      # ci-build.sh refuses an empty backend; what a release passes (#518).
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
       # As in ci.yml: part of the cache key.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_INCREMENTAL: 0
@@ -2330,6 +2334,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
+      # ci-build.sh refuses an empty backend; what a release passes (#518).
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
       # As in ci.yml: part of the cache key.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
