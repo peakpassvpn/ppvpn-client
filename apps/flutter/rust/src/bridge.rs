@@ -28,7 +28,7 @@ use crate::hooks::Hooks;
 /// variable `PPVPN_API_BASE`, a dev release the secret of that name (#517), and
 /// scripts/ci-build.sh refuses to build without it. No address is written
 /// here. `PPVPN_API_BASE` overrides it, else the settings page's API
-/// override (`settings.json`).
+/// override (`settings.json`; debug builds only, #519).
 const DEFAULT_API_BASE: Option<&str> = match option_env!("PPVPN_API_BASE_DEFAULT") {
     Some(base) if !base.is_empty() => Some(base),
     _ => None,
