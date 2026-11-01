@@ -38,6 +38,26 @@ pub const MAX_PROBLEM_DETAIL_LEN: usize = 200;
 // Errors
 // ---------------------------------------------------------------------------
 
+/// `error` and every `source()` under it, joined with `: ` (#537): reqwest's
+/// own message only says the request failed, the cause (a reset, a closed
+/// pooled connection, an OS error) is further down. A level whose text the
+/// previous one already contains is skipped.
+pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut chain = error.to_string();
+    let mut last = chain.clone();
+    let mut source = error.source();
+    while let Some(error) = source {
+        let text = error.to_string();
+        if !last.contains(&text) {
+            chain.push_str(": ");
+            chain.push_str(&text);
+        }
+        last = text;
+        source = error.source();
+    }
+    chain
+}
+
 /// A failed backend call, kept structured until the caller decides whether it
 /// is terminal for the saved credential.
 #[derive(Debug)]
@@ -306,6 +326,9 @@ impl Api {
                 .default_headers(headers.clone())
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(20))
+                // Shorter than the 60 s polls (#537): a connection idle that
+                // long is not reused, a path may have dropped it silently.
+                .pool_idle_timeout(Duration::from_secs(30))
                 // A local mock backend may use a self-signed certificate;
                 // only ever for a loopback base under the test switch.
                 .danger_accept_invalid_certs(trust_local)
@@ -372,6 +395,7 @@ impl Api {
                     tracing::warn!(
                         proxy = %proxy.host_str().unwrap_or_default(),
                         port = proxy.port_or_known_default().unwrap_or_default(),
+                        error = %error_chain(&error),
                         "API: the system proxy is unreachable, going direct"
                     );
                     self.direct.execute(request).await
@@ -770,6 +794,44 @@ pub struct SwitchTeamResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|layer| layer as _)
+        }
+    }
+
+    #[test]
+    fn the_error_chain_names_every_cause_once() {
+        let error = Layer(
+            "error sending request for url (https://www.example.com/x)",
+            Some(Box::new(Layer(
+                "client error (SendRequest)",
+                Some(Box::new(Layer(
+                    "connection closed before message completed",
+                    Some(Box::new(Layer(
+                        "connection closed before message completed",
+                        None,
+                    ))),
+                ))),
+            ))),
+        );
+        assert_eq!(
+            error_chain(&error),
+            "error sending request for url (https://www.example.com/x): \
+             client error (SendRequest): connection closed before message completed"
+        );
+        assert_eq!(error_chain(&Layer("timed out", None)), "timed out");
+    }
 
     fn api(base: &str, trust_local_backend: bool) -> Api {
         Api::new(ApiConfig {
