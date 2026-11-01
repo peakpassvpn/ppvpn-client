@@ -143,6 +143,10 @@ fn answer(frame: &[u8]) -> Result<Value, CoreCallError> {
     };
     Err(CoreCallError::Api {
         code: text("code"),
+        field: error
+            .get("field")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         message: text("message"),
         retryable: error
             .get("retryable")
@@ -268,6 +272,7 @@ mod tests {
             error,
             CoreCallError::Api {
                 code: "TUNNEL_NOT_READY".into(),
+                field: None,
                 message: "starting".into(),
                 retryable: true,
             }

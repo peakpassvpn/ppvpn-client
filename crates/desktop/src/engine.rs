@@ -175,6 +175,7 @@ impl CoreTransport for EngineTransport {
 fn api_error(error: ApiError) -> CoreCallError {
     CoreCallError::Api {
         code: error.code,
+        field: error.field,
         message: error.message,
         retryable: error.retryable,
     }

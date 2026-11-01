@@ -5,7 +5,7 @@
 //! Crate-owned entries: `client-settings.json`, `enhanced-connection.json`,
 //! `ppvpn-core/` (standard-core state), `installation.json`,
 //! `push-agent.json`, `push-agent-cursor.json`, `push-agent.heartbeat`,
-//! `selection.json`, `system-proxy-backup.json`. `settings.json`,
+//! `saved-profile.json`, `selection.json`, `system-proxy-backup.json`. `settings.json`,
 //! `config.json`, `state.json` and similar belong to the apps.
 
 use std::path::Path;
@@ -17,6 +17,8 @@ pub(crate) const LEGACY_SETTINGS_FILE: &str = "settings.json";
 /// Enhanced-mode connection state (was `connection/state.json`).
 pub(crate) const ENHANCED_STATE_FILE: &str = "enhanced-connection.json";
 const LEGACY_ENHANCED_STATE: &str = "connection/state.json";
+/// The last profile a core accepted ([`crate::saved_profile`]).
+pub(crate) const SAVED_PROFILE_FILE: &str = "saved-profile.json";
 /// Standard-core runtime directory (was `core/`).
 pub(crate) const CORE_DIR: &str = "ppvpn-core";
 const LEGACY_CORE_DIR: &str = "core";

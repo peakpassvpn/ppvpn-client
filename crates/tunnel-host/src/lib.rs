@@ -43,6 +43,7 @@ fn platform(value: i32) -> Option<Platform> {
 pub(crate) fn api_error(code: &str, message: impl Into<String>, retryable: bool) -> ApiError {
     ApiError {
         code: code.to_string(),
+        field: None,
         message: message.into(),
         retryable,
     }
