@@ -182,6 +182,7 @@ impl Engine {
         let log = Logs::new(&config.log)?;
         let state_dir = StateDirLock::acquire(&config.state_dir)?;
         log.span().in_scope(|| cleanup::sweep(&config))?;
+        log.span().in_scope(crate::fdlimit::raise_and_log);
         give_back_freed_memory();
         let options = sail_options(&config)?
             .run_dir(cleanup::run_dir(&config))
