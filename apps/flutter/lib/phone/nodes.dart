@@ -437,7 +437,9 @@ class _NodeRow extends StatelessWidget {
       selected: current,
       label: nodeTitle(node),
       onPress: onPress,
-      builder: (context, _) => Container(
+      builder: (context, pressed) => AnimatedContainer(
+        duration: Tokens.motion(context, pressed ? Duration.zero : Tokens.motionFast),
+        color: pressed ? t.phonePress : t.phonePress.withValues(alpha: 0),
         constraints: const BoxConstraints(minHeight: Tokens.phoneRowTwoLines),
         padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 14, 8),
         child: Row(
@@ -481,15 +483,27 @@ class _NodeRow extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             LatencyPill(latency: latency),
-            if (current) ...[
-              const SizedBox(width: 8),
-              Container(
-                width: 22,
-                height: 22,
-                decoration: BoxDecoration(color: t.accent, shape: BoxShape.circle),
-                child: Icon(FLucideIcons.check, size: 13, color: t.onAccent),
+            // The check grows in from 0.6 as the node becomes current.
+            AnimatedSwitcher(
+              duration: Tokens.motion(context, Tokens.motionBase),
+              switchInCurve: Tokens.motionCurve,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(scale: Tween(begin: 0.6, end: 1.0).animate(animation), child: child),
               ),
-            ],
+              child: current
+                  ? Padding(
+                      key: const ValueKey('check'),
+                      padding: const EdgeInsetsDirectional.only(start: 8),
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(color: t.accent, shape: BoxShape.circle),
+                        child: Icon(FLucideIcons.check, size: 13, color: t.onAccent),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
           ],
         ),
       ),

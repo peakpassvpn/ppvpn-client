@@ -367,10 +367,11 @@ class _AccountCard extends StatelessWidget {
                                     unawaited(app.switchTeam(team.id));
                                     unawaited(Navigator.of(context).maybePop());
                                   },
-                            builder: (context, _) => Container(
+                            builder: (context, pressed) => Container(
                               constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               decoration: BoxDecoration(
+                                color: pressed ? t.phonePress : null,
                                 border: i == 0 ? null : Border(top: BorderSide(color: t.line, width: 0.5)),
                               ),
                               child: Row(
@@ -428,7 +429,9 @@ class _Row extends StatelessWidget {
       radius: 0,
       onPress: onPress,
       label: value == null ? title : '$title, $value',
-      builder: (context, _) => Container(
+      builder: (context, pressed) => AnimatedContainer(
+        duration: Tokens.motion(context, pressed ? Duration.zero : Tokens.motionFast),
+        color: pressed ? t.phonePress : t.phonePress.withValues(alpha: 0),
         constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         child: Row(
@@ -470,11 +473,11 @@ class _SignOut extends StatelessWidget {
       onPress: onPress,
       label: S.current('signOut'),
       radius: Tokens.phoneCardRadius,
-      builder: (context, _) => Container(
+      builder: (context, pressed) => Container(
         constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
         padding: const EdgeInsets.symmetric(vertical: 8),
         alignment: Alignment.center,
-        decoration: t.phoneCardDecoration(),
+        decoration: t.phoneCardDecoration(color: pressed ? Color.alphaBlend(t.phonePress, t.card) : null),
         child: Text(
           S.current('signOut'),
           style: t.phoneBodyStrong.copyWith(fontSize: 15, height: 20 / 15, color: t.bad),

@@ -99,7 +99,7 @@ class _PhoneShellState extends State<PhoneShell> {
           Positioned.fill(
             child: MediaQuery(
               data: media.copyWith(padding: media.padding.copyWith(bottom: media.padding.bottom + Tokens.phoneTabBar)),
-              child: KeyedSubtree(key: ValueKey(_tab), child: page),
+              child: _TabSwitch(tab: _tab, child: page),
             ),
           ),
           Positioned(
@@ -111,6 +111,36 @@ class _PhoneShellState extends State<PhoneShell> {
         ],
       );
     },
+  );
+}
+
+/// A tab's page coming in (the motion board, #535): it fades in rising
+/// [Tokens.pageRise] over [Tokens.motionPage]; the page it replaces fades
+/// out over [Tokens.motionFast].
+class _TabSwitch extends StatelessWidget {
+  const _TabSwitch({required this.tab, required this.child});
+
+  final _Tab tab;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: Tokens.motion(context, Tokens.motionPage),
+    reverseDuration: Tokens.motion(context, Tokens.motionFast),
+    switchInCurve: Tokens.motionCurve,
+    switchOutCurve: Tokens.motionFastCurve,
+    layoutBuilder: (current, previous) =>
+        Stack(fit: StackFit.expand, children: [...previous, ?current]),
+    transitionBuilder: (child, animation) => FadeTransition(
+      opacity: animation,
+      child: AnimatedBuilder(
+        animation: animation,
+        builder: (context, child) =>
+            Transform.translate(offset: Offset(0, Tokens.pageRise * (1 - animation.value)), child: child),
+        child: child,
+      ),
+    ),
+    child: KeyedSubtree(key: ValueKey(tab), child: child),
   );
 }
 
@@ -141,7 +171,11 @@ class _TabBar extends StatelessWidget {
           builder: (context, _) => Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              TabIcon(tab: value.name, filled: on, color: color, size: 24),
+              // Outline and filled cross-fade as the tab is chosen.
+              AnimatedSwitcher(
+                duration: Tokens.motion(context, Tokens.motionFast),
+                child: TabIcon(key: ValueKey(on), tab: value.name, filled: on, color: color, size: 24),
+              ),
               const SizedBox(height: 3),
               Text(
                 label,
@@ -270,7 +304,10 @@ class PhoneScaffold extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: back ? t.phoneBodyStrong.copyWith(fontSize: 17) : t.phoneTitle,
           );
-    return DecoratedBox(
+    // The overview's tint follows the status (#535).
+    return AnimatedContainer(
+      duration: Tokens.motion(context, Tokens.motionBase),
+      curve: Tokens.motionCurve,
       decoration: background ?? BoxDecoration(color: t.bg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -429,7 +466,8 @@ void pushPhoneChoice<T>(
                         onChanged(option);
                         unawaited(Navigator.of(context).maybePop());
                       },
-                      builder: (context, _) => Container(
+                      builder: (context, pressed) => Container(
+                        color: pressed ? t.phonePress : null,
                         constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: Row(

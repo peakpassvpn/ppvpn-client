@@ -109,7 +109,9 @@ class _ConnectionCard extends StatelessWidget {
     // One line on a phone: the one in use, else the first.
     final names = node == null ? const <String>[] : lineNames(node);
     final inUse = node == null ? -1 : node.lines.indexWhere((line) => line.key == snapshot.lineKey);
-    return Container(
+    return AnimatedContainer(
+      duration: Tokens.motion(context, Tokens.motionBase),
+      curve: Tokens.motionCurve,
       clipBehavior: Clip.antiAlias,
       decoration: t.phoneCardDecoration(
         radius: Tokens.phoneConnectionRadius,
@@ -226,7 +228,9 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
     return Semantics(
       liveRegion: true,
       header: true,
-      child: Container(
+      child: AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionBase),
+        curve: Tokens.motionCurve,
         height: 28,
         padding: const EdgeInsetsDirectional.fromSTEB(10, 0, 12, 0),
         decoration: BoxDecoration(color: tone.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(14)),
@@ -240,7 +244,18 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
             else
               dot,
             const SizedBox(width: 7),
-            Text(statusTitle(widget.snapshot), style: t.phoneNote.copyWith(fontWeight: FontWeight.w600, color: tone)),
+            AnimatedSize(
+              duration: Tokens.motion(context, Tokens.motionBase),
+              curve: Tokens.motionCurve,
+              child: Swap(
+                id: statusTitle(widget.snapshot),
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(
+                  statusTitle(widget.snapshot),
+                  style: t.phoneNote.copyWith(fontWeight: FontWeight.w600, color: tone),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -297,69 +312,168 @@ class _ElapsedState extends State<_Elapsed> {
 }
 
 /// The main button: a 112 disc in a 168 ring of the status colour; green
-/// while connected, the brand's blue otherwise, the power icon on it (a
-/// spinner while busy, when it takes no press). The state is the Rust
-/// layer's, with no optimistic flip (as the desktop switch).
-class _Orb extends StatelessWidget {
+/// while connected, the brand's blue otherwise, the power icon on it. The
+/// motion board (#535): a press shrinks it to 0.96; while busy an arc turns
+/// round the disc and the ring breathes, and it takes no press; on
+/// connecting a ripple spreads from the disc to the ring. The state is the
+/// Rust layer's, with no optimistic flip (as the desktop switch).
+class _Orb extends StatefulWidget {
   const _Orb({required this.app, required this.snapshot, required this.tone});
 
   final AppState app;
   final rust.UiSnapshot snapshot;
   final Color tone;
 
+  @override
+  State<_Orb> createState() => _OrbState();
+}
+
+class _OrbState extends State<_Orb> with TickerProviderStateMixin {
   static const _green = LinearGradient(
     begin: Alignment(-0.5, -0.87),
     end: Alignment(0.5, 0.87),
     colors: [Color(0xFF26A85A), Color(0xFF13763A)],
   );
+  static const _ripple = Duration(milliseconds: 600);
+
+  late final AnimationController _breath = AnimationController(vsync: this, duration: Tokens.pulseHalf);
+  late final AnimationController _spread = AnimationController(vsync: this, duration: _ripple);
+
+  bool get _busy => isBusy(widget.snapshot.phase);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _follow();
+  }
+
+  @override
+  void didUpdateWidget(_Orb old) {
+    super.didUpdateWidget(old);
+    _follow();
+    final on = widget.snapshot.phase == rust.UiPhase.connected;
+    if (on && old.snapshot.phase != rust.UiPhase.connected && !MediaQuery.disableAnimationsOf(context)) {
+      unawaited(_spread.forward(from: 0));
+    }
+  }
+
+  /// The ring breathes while busy, and not under reduced motion.
+  void _follow() {
+    if (_busy && !MediaQuery.disableAnimationsOf(context)) {
+      if (!_breath.isAnimating) unawaited(_breath.repeat(reverse: true));
+    } else if (_breath.isAnimating || _breath.value != 0) {
+      _breath
+        ..stop()
+        ..value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _breath.dispose();
+    _spread.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final t = Tokens.of(context);
     final s = S.current;
-    final busy = isBusy(snapshot.phase);
+    final snapshot = widget.snapshot;
+    final tone = widget.tone;
+    final busy = _busy;
     final on = snapshot.phase == rust.UiPhase.connected;
     final glow = on ? const Color(0xFF15803D) : const Color(0xFF1F4390);
     final label = busy ? statusTitle(snapshot) : s(on ? 'disconnectBtn' : 'connectBtn');
-    final face = Container(
-      width: Tokens.phoneOrb,
-      height: Tokens.phoneOrb,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          stops: const [0, 0.58, 0.58, 0.70, 0.70],
-          colors: [
-            tone.withValues(alpha: 0.10),
-            tone.withValues(alpha: 0.10),
-            tone.withValues(alpha: 0.05),
-            tone.withValues(alpha: 0.05),
-            tone.withValues(alpha: 0),
+    final base = Tokens.motion(context, Tokens.motionBase);
+    Widget face(bool pressed) => AnimatedScale(
+      scale: pressed ? 0.96 : 1,
+      duration: Tokens.motion(context, Tokens.motionFast),
+      curve: Tokens.motionFastCurve,
+      child: SizedBox.square(
+        dimension: Tokens.phoneOrb,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // The ring of the status colour, breathing while busy.
+            FadeTransition(
+              opacity: _breath.drive(Tween(begin: 1.0, end: 0.45).chain(CurveTween(curve: Curves.easeInOut))),
+              child: AnimatedContainer(
+                duration: base,
+                curve: Tokens.motionCurve,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    stops: const [0, 0.58, 0.58, 0.70, 0.70],
+                    colors: [
+                      tone.withValues(alpha: 0.10),
+                      tone.withValues(alpha: 0.10),
+                      tone.withValues(alpha: 0.05),
+                      tone.withValues(alpha: 0.05),
+                      tone.withValues(alpha: 0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            // On connecting: a ripple from the disc to the ring.
+            AnimatedBuilder(
+              animation: _spread,
+              builder: (context, _) {
+                final v = Curves.easeOutCubic.transform(_spread.value);
+                if (_spread.value == 0 || _spread.value == 1) return const SizedBox.shrink();
+                final size = Tokens.phoneOrbDisc + (Tokens.phoneOrb - Tokens.phoneOrbDisc) * v;
+                return Container(
+                  width: size,
+                  height: size,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: t.ok.withValues(alpha: 0.35 * (1 - v)), width: 2),
+                  ),
+                );
+              },
+            ),
+            // While busy: the arc turning round the disc.
+            AnimatedOpacity(
+              opacity: busy ? 1 : 0,
+              duration: base,
+              child: busy
+                  ? Spinner(
+                      color: t.accent,
+                      track: t.accent.withValues(alpha: 0.14),
+                      size: Tokens.phoneOrbDisc + 20,
+                      stroke: 3,
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            AnimatedContainer(
+              duration: base,
+              curve: Tokens.motionCurve,
+              width: Tokens.phoneOrbDisc,
+              height: Tokens.phoneOrbDisc,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: on ? _green : Tokens.primaryGradient,
+                boxShadow: [
+                  BoxShadow(color: glow.withValues(alpha: busy ? 0.18 : 0.35), offset: const Offset(0, 14), blurRadius: 30),
+                ],
+              ),
+              child: const Icon(FLucideIcons.power, size: 44, color: Color(0xFFFFFFFF)),
+            ),
           ],
         ),
       ),
-      child: AnimatedContainer(
-        duration: Tokens.motion(context, Tokens.motionBase),
-        curve: Tokens.motionCurve,
-        width: Tokens.phoneOrbDisc,
-        height: Tokens.phoneOrbDisc,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: on ? _green : Tokens.primaryGradient,
-          boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.35), offset: const Offset(0, 14), blurRadius: 30)],
-        ),
-        child: busy
-            ? const Spinner(color: Color(0xFFFFFFFF), size: 34)
-            : const Icon(FLucideIcons.power, size: 44, color: Color(0xFFFFFFFF)),
-      ),
     );
-    if (busy) return Semantics(button: true, enabled: false, label: label, child: ExcludeSemantics(child: face));
+    if (busy) {
+      return Semantics(button: true, enabled: false, label: label, child: ExcludeSemantics(child: face(false)));
+    }
     return Pressable(
       key: const ValueKey('connect'),
-      onPress: () => unawaited(on ? app.disconnect() : app.connect()),
+      onPress: () => unawaited(on ? widget.app.disconnect() : widget.app.connect()),
       label: label,
       radius: Tokens.phoneOrb / 2,
-      builder: (context, _) => face,
+      builder: (context, pressed) => face(pressed),
     );
   }
 }
@@ -392,7 +506,9 @@ class _NodeCard extends StatelessWidget {
       radius: 0,
       onPress: onPress,
       label: '$label, $title',
-      builder: (context, _) => Container(
+      builder: (context, pressed) => AnimatedContainer(
+        duration: Tokens.motion(context, pressed ? Duration.zero : Tokens.motionFast),
+        color: pressed ? t.phonePress : t.phonePress.withValues(alpha: 0),
         constraints: const BoxConstraints(minHeight: Tokens.phoneRowTwoLines),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(

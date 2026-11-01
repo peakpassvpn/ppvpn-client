@@ -513,6 +513,9 @@ extension PhoneTokens on Tokens {
   /// and the hair ring.
   Color get phoneRoundFill => brightness == Brightness.light ? const Color(0xB3FFFFFF) : const Color(0x0DFFFFFF);
 
+  /// A row's fill while pressed (t1 at 6 %, 8 % in dark; #535).
+  Color get phonePress => brightness == Brightness.light ? const Color(0x0F14171C) : const Color(0x14E8EAED);
+
   /// The 0.5 px separators between rows of a card.
   Color get phoneSeparator => brightness == Brightness.light ? const Color(0x1F0F172A) : const Color(0x1FFFFFFF);
 

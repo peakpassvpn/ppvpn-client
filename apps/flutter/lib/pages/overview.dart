@@ -806,9 +806,7 @@ class TrafficCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final s = S.current;
-    Widget rate(String label, Color key, int value) {
-      final (number, unit) = formatRate(value);
-      return Column(
+    Widget rate(String label, Color key, int value) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -822,20 +820,28 @@ class TrafficCard extends StatelessWidget {
               Text(label, style: t.note.copyWith(color: t.t2)),
             ],
           ),
-          Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(text: number, style: t.rate),
+          // The number rolls from the last value to this one (#535).
+          TweenAnimationBuilder<double>(
+            tween: Tween(end: value.toDouble()),
+            duration: Tokens.motion(context, _rateRoll),
+            curve: Curves.easeOut,
+            builder: (context, shown, _) {
+              final (number, unit) = formatRate(shown.round());
+              return Text.rich(
                 TextSpan(
-                  text: ' $unit',
-                  style: t.monoText(12, weight: FontWeight.w500, color: t.t3),
+                  children: [
+                    TextSpan(text: number, style: t.rate),
+                    TextSpan(
+                      text: ' $unit',
+                      style: t.monoText(12, weight: FontWeight.w500, color: t.t3),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
         ],
       );
-    }
 
     final rates = ValueListenableBuilder(
       valueListenable: app.traffic,
@@ -847,10 +853,7 @@ class TrafficCard extends StatelessWidget {
         ],
       ),
     );
-    final sparkline = ValueListenableBuilder(
-      valueListenable: app.history,
-      builder: (context, history, _) => CustomPaint(painter: _Sparkline(history, up: t.accent2, down: t.ok)),
-    );
+    final sparkline = _SlidingSparkline(app: app, up: t.accent2, down: t.ok);
     if (phone) {
       return Container(
         clipBehavior: Clip.antiAlias,
@@ -886,39 +889,104 @@ class TrafficCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          SizedBox(
-            height: 44,
-            child: ValueListenableBuilder(
-              valueListenable: app.history,
-              builder: (context, history, _) => CustomPaint(
-                painter: _Sparkline(history, up: t.accent2, down: t.ok),
-              ),
-            ),
-          ),
+          SizedBox(height: 44, child: sparkline),
         ],
       ),
     );
   }
 }
 
-/// Download (filled) and upload lines over the last samples, on one scale.
-class _Sparkline extends CustomPainter {
-  _Sparkline(this.samples, {required this.up, required this.down});
+/// A rate's roll from one sample to the next (the motion board, #535).
+const _rateRoll = Duration(milliseconds: 300);
 
-  final List<rust.UiTraffic> samples;
+/// The sparkline, moving (#535): each new sample slides the lines left by
+/// one step over the time since the previous one, linearly, and the scale
+/// eases to the new peak; under reduced motion it jumps.
+class _SlidingSparkline extends StatefulWidget {
+  const _SlidingSparkline({required this.app, required this.up, required this.down});
+
+  final AppState app;
   final Color up;
   final Color down;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    if (samples.length < 2) return;
+  State<_SlidingSparkline> createState() => _SlidingSparklineState();
+}
+
+class _SlidingSparklineState extends State<_SlidingSparkline> with SingleTickerProviderStateMixin {
+  late final AnimationController _slide = AnimationController(vsync: this, value: 1);
+  DateTime? _last;
+  double _fromPeak = 1;
+  double _toPeak = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _toPeak = _fromPeak = _peak(widget.app.history.value);
+    widget.app.history.addListener(_sampled);
+  }
+
+  @override
+  void dispose() {
+    widget.app.history.removeListener(_sampled);
+    _slide.dispose();
+    super.dispose();
+  }
+
+  static double _peak(List<rust.UiTraffic> samples) {
     var peak = 1;
     for (final s in samples) {
       if (s.down > peak) peak = s.down;
       if (s.up > peak) peak = s.up;
     }
+    return peak.toDouble();
+  }
+
+  void _sampled() {
+    final now = DateTime.now();
+    final since = _last == null ? Duration.zero : now.difference(_last!);
+    _last = now;
+    _fromPeak = _fromPeak + (_toPeak - _fromPeak) * _slide.value;
+    _toPeak = _peak(widget.app.history.value);
+    final duration = Tokens.motion(context, since > const Duration(seconds: 3) ? const Duration(seconds: 3) : since);
+    if (duration == Duration.zero) {
+      _slide.value = 1;
+    } else {
+      _slide.duration = duration;
+      unawaited(_slide.forward(from: 0));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _slide,
+    builder: (context, _) {
+      final t = _slide.value;
+      final peak = _fromPeak + (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(t);
+      return CustomPaint(
+        painter: _Sparkline(widget.app.history.value, up: widget.up, down: widget.down, shift: 1 - t, peak: peak),
+      );
+    },
+  );
+}
+
+/// Download (filled) and upload lines over the last samples, on one scale
+/// ([peak]), [shift] steps to the right of their place (the slide in).
+class _Sparkline extends CustomPainter {
+  _Sparkline(this.samples, {required this.up, required this.down, this.shift = 0, required this.peak});
+
+  final List<rust.UiTraffic> samples;
+  final Color up;
+  final Color down;
+  final double shift;
+  final double peak;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (samples.length < 2) return;
     final step = size.width / (AppState.historyLength - 1);
-    final start = size.width - step * (samples.length - 1);
+    final start = size.width - step * (samples.length - 1) + step * shift;
+    canvas.clipRect(Offset.zero & size);
     Path line(int Function(rust.UiTraffic) pick) {
       final path = Path();
       for (var i = 0; i < samples.length; i++) {
@@ -952,7 +1020,12 @@ class _Sparkline extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_Sparkline old) => !identical(old.samples, samples) || old.up != up || old.down != down;
+  bool shouldRepaint(_Sparkline old) =>
+      !identical(old.samples, samples) ||
+      old.up != up ||
+      old.down != down ||
+      old.shift != shift ||
+      old.peak != peak;
 }
 
 class _LocalProxy extends StatelessWidget {
