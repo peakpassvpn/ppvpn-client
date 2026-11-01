@@ -352,12 +352,10 @@ text = open(path).read()
 flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a", "-Wl,-export_dynamic"]
 flags += os.environ["NATIVE"].split()
 setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flags) + ");"
-# The Dart side finds the bridge's functions by name (dlsym), so nothing
-# in the Runner calls them: a release build's dead stripping drops them,
-# and an archive strips the symbols left ("all" by default). The
-# TestFlight build of 0.7.2 stayed white. No dead stripping, and an
-# archive strips locals only.
-setting += "\n\t\t\t\tDEAD_CODE_STRIPPING = NO;"
+# The Dart side finds the bridge's functions by name (dlsym): an archive
+# strips every symbol by default ("all"), the export trie included, and
+# the TestFlight build of 0.7.2 stayed white. An archive strips locals
+# only.
 setting += "\n\t\t\t\tSTRIP_STYLE = \"non-global\";"
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
@@ -532,16 +530,18 @@ case $os in
       runner=$bundle/Runner
     fi
     # The bridge's functions in the export trie, where ExternalLibrary.process
-    # (dlsym) looks: without them the app starts to a white screen. The
-    # unsigned device build (main's push run) shows dead stripping; only an
-    # IPA (a stable run, before the upload) shows the archive's stripping.
-    # The simulator's debug build does neither, so its smoke test cannot
-    # tell.
+    # (dlsym) looks, by the names flutter_rust_bridge's Dart side uses:
+    # without them the app starts to a white screen. Only an IPA (a stable
+    # run, before the upload) shows the archive's stripping; the simulator's
+    # debug build strips nothing, so its smoke test cannot tell.
     if [ -n "${runner:-}" ]; then
       test -s "$runner"
-      exported=$(xcrun dyld_info -exports "$runner" | grep -c '_frbgen_' || true)
-      [ "$exported" -gt 0 ] || { echo "$runner exports no bridge function (_frbgen_*)" >&2; exit 1; }
-      echo "$runner: $exported bridge functions exported"
+      exports=$(xcrun dyld_info -exports "$runner")
+      for name in frb_pde_ffi_dispatcher_primary frb_pde_ffi_dispatcher_sync frb_get_rust_content_hash \
+          frb_dart_fn_deliver_output frb_init_frb_dart_api_dl frb_create_shutdown_callback; do
+        grep -qw "_$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
+      done
+      echo "$runner: $(grep -c '_frb_' <<<"$exports") bridge functions exported"
     fi ;;
   linux)
     bundle=build/linux/x64/release/bundle
