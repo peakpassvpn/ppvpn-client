@@ -11,6 +11,12 @@
 //! they no longer point at the endpoint, compatible mode ends in `Error`
 //! (NetworkPathContended, naming the app when it can be told) and leaves
 //! them alone.
+//!
+//! Settings that point at our own endpoint are never saved or restored as
+//! the user's (#536): they are recorded and put back switched off. The
+//! endpoint's port is kept in `<data_dir>/system-proxy-endpoint.json`, so
+//! enhanced mode and the next launch can switch off an OS proxy still
+//! pointing at that loopback port once nothing listens there.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -26,6 +32,10 @@ use crate::sysproxy::SystemProxyWriter;
 use crate::{ClientConfig, ConnectionPhase, StandardState};
 
 const BACKUP_FILE: &str = "system-proxy-backup.json";
+const ENDPOINT_FILE: &str = "system-proxy-endpoint.json";
+/// The standard core's preferred endpoint port, checked as well when no
+/// port was recorded (clients before #536).
+const PREFERRED_PORT: u16 = 7891;
 /// How long connect waits for the standard core to become ready.
 const READY_WAIT: Duration = if cfg!(test) {
     Duration::from_millis(500)
@@ -80,6 +90,7 @@ struct Inner {
     writer: Arc<dyn SystemProxyWriter>,
     standard: StandardCore,
     backup_path: PathBuf,
+    endpoint_path: PathBuf,
     on_state: StateSink,
     operation: tokio::sync::Mutex<()>,
     data: Mutex<Data>,
@@ -129,6 +140,7 @@ impl Compat {
                 writer,
                 standard,
                 backup_path: PathBuf::from(&config.data_dir).join(BACKUP_FILE),
+                endpoint_path: PathBuf::from(&config.data_dir).join(ENDPOINT_FILE),
                 on_state,
                 operation: tokio::sync::Mutex::new(()),
                 data: Mutex::new(Data {
@@ -209,6 +221,19 @@ impl Compat {
                 tracing::warn!("compatible mode: restore failed ({})", info.detail);
             }
         }
+        inner.clear_dead_endpoint().await;
+    }
+
+    /// While off (enhanced mode connecting): switches off an OS proxy that
+    /// still points at our loopback port with nothing listening there
+    /// (#536). Another app's proxy, or one that answers, is left alone.
+    pub(crate) async fn clear_stale_proxy(&self) {
+        let inner = &self.inner;
+        let _operation = inner.operation.lock().await;
+        if inner.with_data(|data| data.state.phase) != ConnectionPhase::Off {
+            return;
+        }
+        inner.clear_dead_endpoint().await;
     }
 
     /// While connected: after a standard-core restart the endpoint comes up
@@ -396,6 +421,42 @@ impl Inner {
         );
     }
 
+    /// [`Compat::clear_stale_proxy`] without the lock and phase check.
+    async fn clear_dead_endpoint(&self) {
+        let writer = self.writer.clone();
+        let endpoint_path = self.endpoint_path.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<Option<u16>, String> {
+            let mut ports = vec![PREFERRED_PORT];
+            if let Some(port) = std::fs::read(&endpoint_path)
+                .ok()
+                .and_then(|raw| serde_json::from_slice::<u16>(&raw).ok())
+            {
+                ports.insert(0, port);
+            }
+            let proxies = writer.current_proxies()?;
+            let Some(port) = ports.into_iter().find(|port| {
+                crate::sysproxy::points_at(&proxies, "127.0.0.1", *port) && !listening(*port)
+            }) else {
+                return Ok(None);
+            };
+            let now = writer.snapshot()?;
+            writer.restore(&crate::sysproxy::switch_off(&now, port))?;
+            Ok(Some(port))
+        })
+        .await;
+        match result {
+            Ok(Ok(Some(port))) => tracing::warn!(
+                "compatible mode: the system proxy still pointed at our loopback port {port} \
+                 with nothing listening; switched it off"
+            ),
+            Ok(Ok(None)) => {}
+            Ok(Err(detail)) => {
+                tracing::warn!("compatible mode: clearing a stale system proxy failed ({detail})")
+            }
+            Err(error) => tracing::warn!("compatible mode: {error}"),
+        }
+    }
+
     /// Restores the OS settings, then disables the endpoint (best effort).
     async fn tear_down(&self) -> Result<(), ClientErrorInfo> {
         let restored = self.restore_os().await;
@@ -418,7 +479,8 @@ impl Inner {
     }
 
     /// Saves the current OS settings (unless a backup already exists: those
-    /// are the user's own), then points them at `endpoint`.
+    /// are the user's own), then points them at `endpoint`. Saved settings
+    /// that already point at the endpoint's port are recorded switched off.
     /// Returns the proxy that was active in the settings saved now (`None`
     /// when a backup already existed or the OS proxy was off).
     async fn apply_os(
@@ -427,6 +489,7 @@ impl Inner {
     ) -> Result<Option<(String, u16)>, ClientErrorInfo> {
         let writer = self.writer.clone();
         let path = self.backup_path.clone();
+        let endpoint_path = self.endpoint_path.clone();
         let (host, port) = endpoint.clone();
         tokio::task::spawn_blocking(move || -> Result<Option<(String, u16)>, String> {
             let mut previous = None;
@@ -438,7 +501,14 @@ impl Inner {
                     .ok()
                     .map(|backup| Backup { endpoint, ..backup }),
                 Err(_) => {
-                    let saved = writer.snapshot()?;
+                    let now = writer.snapshot()?;
+                    let saved = crate::sysproxy::switch_off(&now, port);
+                    if saved != now {
+                        tracing::info!(
+                            "compatible mode: the OS proxy already pointed at our port {port}; \
+                             saved as off"
+                        );
+                    }
                     previous = crate::sysproxy::active_proxy(&saved);
                     Some(Backup {
                         version: 1,
@@ -455,6 +525,9 @@ impl Inner {
                 let tmp = path.with_extension("json.tmp");
                 std::fs::write(&tmp, raw).map_err(|error| format!("save backup: {error}"))?;
                 std::fs::rename(&tmp, &path).map_err(|error| format!("save backup: {error}"))?;
+            }
+            if let Err(error) = std::fs::write(&endpoint_path, port.to_string()) {
+                tracing::info!("compatible mode: record endpoint port: {error}");
             }
             writer.apply(&host, port).map(|()| previous)
         })
@@ -476,7 +549,8 @@ impl Inner {
 
 /// [`Inner::restore_os`], blocking: puts the backup's settings back unless
 /// another app pointed the OS proxy elsewhere since (its settings stay; a
-/// failed check restores as before), then deletes the backup.
+/// failed check restores as before), then deletes the backup. Saved
+/// settings that point at the backup's endpoint go back switched off.
 fn restore_backup(writer: &dyn SystemProxyWriter, path: &std::path::Path) -> Result<(), String> {
     let Ok(raw) = std::fs::read(path) else {
         return Ok(());
@@ -493,12 +567,33 @@ fn restore_backup(writer: &dyn SystemProxyWriter, path: &std::path::Path) -> Res
                     "compatible mode: system proxy changed by another app since connect; leaving it"
                 );
             } else {
-                writer.restore(&backup.saved)?;
+                let saved = match &backup.endpoint {
+                    Some((_, port)) => crate::sysproxy::switch_off(&backup.saved, *port),
+                    None => backup.saved.clone(),
+                };
+                if saved != backup.saved {
+                    tracing::info!(
+                        "compatible mode: the saved system proxy pointed at our endpoint; \
+                         restored as off"
+                    );
+                }
+                writer.restore(&saved)?;
             }
         }
         Err(error) => tracing::warn!("unreadable system proxy backup dropped: {error}"),
     }
     std::fs::remove_file(path).map_err(|error| format!("remove backup: {error}"))
+}
+
+/// Whether anything accepts connections on loopback `port`.
+fn listening(port: u16) -> bool {
+    let timeout = Duration::from_millis(300);
+    [
+        std::net::IpAddr::from([127, 0, 0, 1]),
+        std::net::IpAddr::from(std::net::Ipv6Addr::LOCALHOST),
+    ]
+    .into_iter()
+    .any(|ip| std::net::TcpStream::connect_timeout(&(ip, port).into(), timeout).is_ok())
 }
 
 /// The app listening on a loopback proxy port (best effort; never probes in
@@ -560,6 +655,35 @@ mod tests {
         let path = backup_at(None);
         restore_backup(&writer, &path).unwrap();
         assert_eq!(restores(&writer), 2);
+    }
+
+    #[test]
+    fn saved_settings_pointing_at_our_endpoint_go_back_off() {
+        let writer = FakeWriter::default();
+        let ours = serde_json::json!({"windows": {"ProxyEnable": "0x1",
+            "ProxyServer": "127.0.0.1:7891", "ProxyOverride": "<local>"}});
+        let path = backup_at(Some(("127.0.0.1", 7891)));
+        let backup = Backup {
+            version: 1,
+            saved: ours,
+            endpoint: Some(("127.0.0.1".into(), 7891)),
+        };
+        std::fs::write(&path, serde_json::to_vec(&backup).unwrap()).unwrap();
+        *writer.current.lock().unwrap() = Some(vec![("127.0.0.1".into(), 7891)]);
+        restore_backup(&writer, &path).unwrap();
+        let off = serde_json::json!({"windows": {"ProxyEnable": "0x0",
+            "ProxyServer": "127.0.0.1:7891", "ProxyOverride": "<local>"}});
+        assert_eq!(writer.calls(), vec![format!("restore {off}")]);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_loopback_port_is_listening_only_while_bound() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(listening(port));
+        drop(listener);
+        assert!(!listening(port));
     }
 
     #[test]

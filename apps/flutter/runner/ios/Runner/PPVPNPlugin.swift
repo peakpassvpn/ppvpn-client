@@ -7,8 +7,10 @@
 //   App Group's container, which the packet tunnel shares (tunnel.sock),
 //   or Application Support in a build without the App Group (unsigned,
 //   the simulator). `openUrl` -> Bool: an http(s) page in an
-//   SFSafariViewController over the app (lib/links.dart, #473), anything
-//   else through the system. `closeBrowser`: that page dismissed, if up.
+//   SFSafariViewController presented as a page sheet over the app
+//   (lib/links.dart, #473, #535), anything else through the system.
+//   `closeBrowser`: that page dismissed, if up. `sampleSettings`: the
+//   screenshot mode's page and theme in a simulator build (lib/sample.dart).
 // - com.peakpassvpn.ppvpn/vpn: `prepare` -> Bool (the VPN configuration is
 //   saved; the system asks the user the first time), `start`, `stop`.
 // - com.peakpassvpn.ppvpn/vpn-state: the tunnel's NEVPNStatus as off /
@@ -49,6 +51,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         case "closeBrowser":
           plugin.browser?.dismiss(animated: true)
           result(nil)
+        case "sampleSettings": result(sampleSettings())
         default: result(FlutterMethodNotImplemented)
         }
       }
@@ -56,6 +59,25 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       .setMethodCallHandler(plugin.handle)
     FlutterEventChannel(name: "com.peakpassvpn.ppvpn/vpn-state", binaryMessenger: messenger)
       .setStreamHandler(plugin)
+  }
+
+  /// The screenshot mode's page and theme (lib/sample.dart) in a simulator
+  /// build, from the environment or the launch arguments (`simctl launch
+  /// <device> <bundle> -PPVPN_FLUTTER_SAMPLE nodes`, which land in the
+  /// defaults): Dart does not see the variables simctl passes. Nil in a
+  /// device build.
+  private static func sampleSettings() -> [String: String]? {
+    #if targetEnvironment(simulator)
+      var settings: [String: String] = [:]
+      for (key, name) in [("page", "PPVPN_FLUTTER_SAMPLE"), ("theme", "PPVPN_FLUTTER_THEME")] {
+        if let value = ProcessInfo.processInfo.environment[name] ?? UserDefaults.standard.string(forKey: name) {
+          settings[key] = value
+        }
+      }
+      return settings
+    #else
+      return nil
+    #endif
   }
 
   private static func filesDir() -> String? {
@@ -76,6 +98,8 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     browser?.dismiss(animated: false)
     let page = SFSafariViewController(url: url)
     page.dismissButtonStyle = .close
+    // A sheet, the app showing above it (the canvas's 手机 · 登录：授权页).
+    page.modalPresentationStyle = .pageSheet
     top.present(page, animated: true)
     browser = page
     result(true)

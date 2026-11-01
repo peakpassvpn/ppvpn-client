@@ -1,7 +1,8 @@
 # The packet tunnel extension (#448) added to the iOS runner flutter create
 # made (scripts/ci-build.sh, after its own edits of the project): target
 # PacketTunnel, bundle id com.peakpassvpn.ppvpn.tunnel, from runner/ios
-# PacketTunnel (copied to ios/PacketTunnel), embedded in the app.
+# PacketTunnel (copied to ios/PacketTunnel), embedded in the app. Also the
+# privacy manifests of both targets.
 #
 #   ruby ios-tunnel-target.rb <project> <version> <build>
 #
@@ -37,6 +38,13 @@ sources = %w[PacketTunnelProvider.swift TunnelHost.swift].map { |name| group.new
 tunnel.add_file_references(sources)
 %w[Info.plist PacketTunnel.entitlements].each { |name| group.new_reference(name) }
 tunnel.add_system_framework("NetworkExtension")
+
+# The privacy manifests (#535), from runner/ios: each target's in its own
+# bundle.
+tunnel.resources_build_phase.add_file_reference(group.new_reference("PrivacyInfo.xcprivacy"), true)
+runner_group = project.main_group.find_subpath("Runner", false) or abort "#{project_path}: no Runner group"
+abort "Runner/PrivacyInfo.xcprivacy is missing" unless File.file?(File.join(File.dirname(project_path), "Runner", "PrivacyInfo.xcprivacy"))
+runner.resources_build_phase.add_file_reference(runner_group.new_reference("PrivacyInfo.xcprivacy"), true)
 
 xcframework = ENV["PPVPN_TUNNEL_XCFRAMEWORK"].to_s
 unless xcframework.empty?

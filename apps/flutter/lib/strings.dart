@@ -287,6 +287,19 @@ const _zh = <String, String>{
   'noMatches': '没有匹配的节点',
   'back': '返回',
   'daysLeft': '剩余 {n} 天',
+  // The phone boards (#535): a node group's count, 我的's captions, the
+  // account card's expiry.
+  'nodesCount': '{n} 个',
+  'accountHelp': '账户与帮助',
+  'openInWeb': '在网页中打开',
+  'validUntil': '有效期至 {d}',
+  // The phone's sign-in (#535): the page opens in a sheet, no code to
+  // compare.
+  'phoneSignInLine': '用 PPVPN 账户登录。授权页面在应用内弹出，确认一次就回到这里，无需输入密码。',
+  'phoneStep1': '点“登录”，授权页面从下方弹出',
+  'phoneStep2': '在授权页面里点“授权”',
+  'phoneStep3': '页面自动关闭，完成登录',
+  'reopenAuth': '重新打开授权页面',
 };
 
 const _en = <String, String>{
@@ -532,5 +545,14 @@ const _en = <String, String>{
   'noMatches': 'No matching nodes',
   'back': 'Back',
   'daysLeft': '{n} days left',
+  'nodesCount': '{n}',
+  'accountHelp': 'Account and Help',
+  'openInWeb': 'Opens on the web',
+  'validUntil': 'Valid until {d}',
+  'phoneSignInLine': 'Sign in with your PPVPN account. The authorization page opens in the app; confirm once and you are back here, no password needed.',
+  'phoneStep1': 'Tap Sign In: the authorization page slides up',
+  'phoneStep2': 'Tap Authorize on that page',
+  'phoneStep3': 'The page closes and you are signed in',
+  'reopenAuth': 'Open the Authorization Page Again',
 };
 

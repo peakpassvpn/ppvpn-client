@@ -55,6 +55,7 @@ String _libraryPath() {
 Future<void> main() async {
   mark('main');
   WidgetsFlutterBinding.ensureInitialized();
+  await loadSampleSettings();
   final AppState app;
   var background = false;
   if (samplePage != null) {
@@ -219,11 +220,21 @@ class _PrototypeAppState extends State<PrototypeApp> {
             data: t.forui,
             child: DefaultTextStyle(
               style: t.body,
-              // Below 600 wide the phone layout, else the desktop's (#448).
+              // Phones and tablets get the phone layout, on a tablet centred
+              // at Tokens.phoneMaxWidth until the iPad boards are built
+              // (#535); elsewhere below 600 wide too (#448), else the
+              // desktop's.
               child: ColoredBox(
                 color: t.bg,
                 child: LayoutBuilder(
-                  builder: (context, box) => box.maxWidth < Tokens.phoneBreakpoint
+                  builder: (context, box) => mobile
+                      ? Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: Tokens.phoneMaxWidth),
+                            child: PhoneShell(app: widget.app),
+                          ),
+                        )
+                      : box.maxWidth < Tokens.phoneBreakpoint
                       ? PhoneShell(app: widget.app)
                       : Shell(app: widget.app),
                 ),

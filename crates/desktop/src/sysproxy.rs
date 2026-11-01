@@ -178,6 +178,52 @@ pub(crate) fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// `saved` (a [`SystemProxyWriter::snapshot`]) with every proxy that points
+/// at loopback `port` switched off (#536): settings that point at our own
+/// endpoint are never the user's, and restoring them leaves the OS proxy on
+/// a port nobody listens on. Everything else is kept as it was.
+pub(crate) fn switch_off(saved: &Value, port: u16) -> Value {
+    let ours = |host: &str, proxy_port: u16| proxy_port == port && is_loopback_host(host);
+    let points_here = |only: &Value| {
+        active_proxies(only)
+            .iter()
+            .any(|(host, proxy_port)| ours(host, *proxy_port))
+    };
+    let mut saved = saved.clone();
+    if let Some(services) = saved.get_mut("macos").and_then(Value::as_object_mut) {
+        for entry in services.values_mut() {
+            for kind in ["web", "secure", "socks"] {
+                let proxy = &mut entry[kind];
+                let points_here = proxy["enabled"].as_bool().unwrap_or(false)
+                    && proxy["port"]
+                        .as_str()
+                        .and_then(|port| port.parse::<u16>().ok())
+                        .is_some_and(|proxy_port| {
+                            ours(proxy["server"].as_str().unwrap_or_default(), proxy_port)
+                        });
+                if points_here {
+                    proxy["enabled"] = Value::Bool(false);
+                }
+            }
+        }
+    } else if saved.get("windows").is_some() {
+        if points_here(&saved) {
+            saved["windows"]["ProxyEnable"] = Value::from("0x0");
+        }
+    } else if saved.get("linux").is_some() {
+        // GNOME and KDE each have one switch for all their schemes.
+        let gnome = serde_json::json!({"linux": {"gnome": saved["linux"]["gnome"]}});
+        if points_here(&gnome) {
+            saved["linux"]["gnome"]["org.gnome.system.proxy mode"] = Value::from("'none'");
+        }
+        let kde = serde_json::json!({"linux": {"kde": saved["linux"]["kde"]}});
+        if points_here(&kde) {
+            saved["linux"]["kde"]["ProxyType"] = Value::from("0");
+        }
+    }
+    saved
+}
+
 /// The writer for the OS this build targets.
 pub(crate) fn platform_writer() -> Arc<dyn SystemProxyWriter> {
     Arc::new(os::OsWriter)
@@ -884,7 +930,12 @@ pub(crate) mod tests {
         /// What the OS points at now: the last `apply` unless set here
         /// (another app took the proxy over).
         pub(crate) current: Mutex<Option<Vec<(String, u16)>>>,
+        /// The OS settings as a macOS snapshot, when a test follows them
+        /// through apply and restore (`snapshot` then reads them, `apply`
+        /// and `restore` write them).
+        pub(crate) os: Mutex<Option<Value>>,
         applied: Mutex<Option<(String, u16)>>,
+        restored: Mutex<Option<Value>>,
     }
 
     impl FakeWriter {
@@ -896,6 +947,9 @@ pub(crate) mod tests {
     impl SystemProxyWriter for FakeWriter {
         fn snapshot(&self) -> Result<Value, String> {
             self.calls.lock().unwrap().push("snapshot".into());
+            if let Some(os) = self.os.lock().unwrap().clone() {
+                return Ok(os);
+            }
             Ok(self
                 .previous
                 .lock()
@@ -912,19 +966,48 @@ pub(crate) mod tests {
                 Some(error) => Err(error),
                 None => {
                     *self.applied.lock().unwrap() = Some((host.to_string(), port));
+                    if let Some(os) = self.os.lock().unwrap().as_mut() {
+                        for entry in os["macos"]
+                            .as_object_mut()
+                            .into_iter()
+                            .flat_map(|services| services.values_mut())
+                        {
+                            for kind in ["web", "secure", "socks"] {
+                                entry[kind] = serde_json::json!({
+                                    "enabled": true, "server": host, "port": port.to_string()});
+                            }
+                        }
+                    }
                     Ok(())
                 }
             }
         }
         fn restore(&self, saved: &Value) -> Result<(), String> {
             self.calls.lock().unwrap().push(format!("restore {saved}"));
+            *self.applied.lock().unwrap() = None;
+            *self.restored.lock().unwrap() = Some(saved.clone());
+            if let Some(os) = self.os.lock().unwrap().as_mut() {
+                *os = saved.clone();
+            }
             Ok(())
         }
         fn current_proxies(&self) -> Result<Vec<(String, u16)>, String> {
             if let Some(current) = self.current.lock().unwrap().clone() {
                 return Ok(current);
             }
-            Ok(self.applied.lock().unwrap().clone().into_iter().collect())
+            if let Some(os) = self.os.lock().unwrap().as_ref() {
+                return Ok(active_proxies(os));
+            }
+            if let Some(applied) = self.applied.lock().unwrap().clone() {
+                return Ok(vec![applied]);
+            }
+            Ok(self
+                .restored
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(active_proxies)
+                .unwrap_or_default())
         }
     }
 
@@ -1001,6 +1084,63 @@ pub(crate) mod tests {
             "org.gnome.system.proxy.http host": "'127.0.0.1'",
             "org.gnome.system.proxy.http port": "51234"}, "kde": null}});
         assert!(!points_at(&active_proxies(&gnome_off), "127.0.0.1", 51234));
+    }
+
+    #[test]
+    fn switch_off_turns_off_only_what_points_at_our_port() {
+        use serde_json::json;
+        let macos = json!({"macos": {
+            "Ethernet": {"web": {"enabled": true, "server": "127.0.0.1", "port": "6152"},
+                         "secure": {"enabled": true, "server": "localhost", "port": "7891"},
+                         "socks": {"enabled": false, "server": "127.0.0.1", "port": "7891"},
+                         "bypass": ["*.local"]},
+            "Wi-Fi": {"web": {"enabled": true, "server": "10.0.0.5", "port": "7891"},
+                      "secure": {"enabled": true, "server": "127.0.0.1", "port": "7891"},
+                      "socks": {"enabled": true, "server": "::1", "port": "7891"},
+                      "bypass": []}}});
+        let off = switch_off(&macos, 7891);
+        assert_eq!(
+            active_proxies(&off),
+            vec![("127.0.0.1".into(), 6152), ("10.0.0.5".into(), 7891)],
+            "another app's port and a remote proxy stay"
+        );
+        assert_eq!(off["macos"]["Wi-Fi"]["secure"]["server"], "127.0.0.1");
+        assert_eq!(off["macos"]["Ethernet"]["bypass"], json!(["*.local"]));
+        assert_eq!(switch_off(&macos, 9999), macos);
+
+        let windows = json!({"windows": {"ProxyEnable": "0x1",
+            "ProxyServer": "127.0.0.1:7891", "ProxyOverride": "<local>"}});
+        let off = switch_off(&windows, 7891);
+        assert_eq!(off["windows"]["ProxyEnable"], "0x0");
+        assert_eq!(off["windows"]["ProxyServer"], "127.0.0.1:7891");
+        assert_eq!(switch_off(&windows, 6152), windows);
+
+        let linux = json!({"linux": {
+            "gnome": {"org.gnome.system.proxy mode": "'manual'",
+                      "org.gnome.system.proxy.http host": "'127.0.0.1'",
+                      "org.gnome.system.proxy.http port": "7891"},
+            "gnome_defaults": [],
+            "kde": {"ProxyType": "1", "httpProxy": "http://127.0.0.1 6152"}}});
+        let off = switch_off(&linux, 7891);
+        assert_eq!(
+            off["linux"]["gnome"]["org.gnome.system.proxy mode"],
+            "'none'"
+        );
+        assert_eq!(
+            off["linux"]["kde"]["ProxyType"], "1",
+            "KDE points elsewhere"
+        );
+        let off = switch_off(&linux, 6152);
+        assert_eq!(
+            off["linux"]["gnome"]["org.gnome.system.proxy mode"],
+            "'manual'"
+        );
+        assert_eq!(off["linux"]["kde"]["ProxyType"], "0");
+
+        assert_eq!(
+            switch_off(&json!({"fake": "previous"}), 7891),
+            json!({"fake": "previous"})
+        );
     }
 
     #[test]

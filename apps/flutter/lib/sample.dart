@@ -4,11 +4,13 @@
 // sample-messages.json) and a few log lines, with no client behind them: no
 // backend, no core, no sign-in, no log or settings file read or written.
 // PPVPN_FLUTTER_THEME=dark|light forces the theme. Only
-// apps/flutter/scripts/smoke.sh sets these.
+// apps/flutter/scripts/smoke.sh sets these (by hand on iOS, with
+// --dart-define).
 
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'app_state.dart';
@@ -17,18 +19,44 @@ import 'settings.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
 
-/// The page the screenshot mode opens on, or null when it is off.
-final String? samplePage = switch (Platform.environment['PPVPN_FLUTTER_SAMPLE']) {
-  final page? when const {'overview', 'nodes', 'logs', 'messages', 'settings'}.contains(page) => page,
-  _ => null,
-};
+/// The page the screenshot mode opens on, or null when it is off. Also as
+/// a --dart-define, and on iOS from [loadSampleSettings].
+String? samplePage = _page(
+  Platform.environment['PPVPN_FLUTTER_SAMPLE'] ?? const String.fromEnvironment('PPVPN_FLUTTER_SAMPLE'),
+);
 
 /// The forced theme brightness, or null to follow the system.
-final Brightness? forcedBrightness = switch (Platform.environment['PPVPN_FLUTTER_THEME']) {
+Brightness? forcedBrightness = _brightness(
+  Platform.environment['PPVPN_FLUTTER_THEME'] ?? const String.fromEnvironment('PPVPN_FLUTTER_THEME'),
+);
+
+String? _page(String? name) => const {'overview', 'nodes', 'logs', 'messages', 'settings'}.contains(name) ? name : null;
+
+Brightness? _brightness(String? name) => switch (name) {
   'dark' => Brightness.dark,
   'light' => Brightness.light,
   _ => null,
 };
+
+/// iOS: an app launched by simctl has the variables in its process but not
+/// in Platform.environment (#535); a simulator build asks the app channel
+/// (runner/ios PPVPNPlugin), which also reads the launch arguments
+/// (`-PPVPN_FLUTTER_SAMPLE nodes`), so one build shows every page. Before
+/// anything reads [samplePage].
+Future<void> loadSampleSettings() async {
+  if (!Platform.isIOS || samplePage != null) return;
+  try {
+    final settings = await const MethodChannel(
+      'com.peakpassvpn.ppvpn/app',
+    ).invokeMapMethod<String, String>('sampleSettings');
+    samplePage = _page(settings?['page']);
+    forcedBrightness ??= _brightness(settings?['theme']);
+  } on PlatformException catch (error) {
+    debugPrint('sampleSettings: $error');
+  } on MissingPluginException {
+    // A runner without it: no screenshot mode.
+  }
+}
 
 /// The logs page in the screenshot mode: its directory (as the footer shows
 /// it), its "today" and its lines.

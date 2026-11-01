@@ -18,6 +18,9 @@ pub(crate) fn device_name(platform: &str) -> String {
         "macos" => "macOS",
         "windows" => "Windows",
         "linux" => "Linux",
+        // The phones (#535): not a desktop.
+        "ios" => return "PPVPN · iOS".to_string(),
+        "android" => return "PPVPN · Android".to_string(),
         _ => return "PPVPN Desktop".to_string(),
     };
     format!("PPVPN Desktop · {os}")
@@ -278,6 +281,8 @@ mod tests {
         assert_eq!(device_name("windows"), "PPVPN Desktop · Windows");
         assert_eq!(device_name("linux"), "PPVPN Desktop · Linux");
         assert_eq!(device_name("bsd"), "PPVPN Desktop");
+        assert_eq!(device_name("ios"), "PPVPN · iOS");
+        assert_eq!(device_name("android"), "PPVPN · Android");
     }
 
     #[test]

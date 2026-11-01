@@ -30,7 +30,9 @@ void main() {
     await app.main();
     // The client restores nothing, then signs out: real time, its threads.
     final deadline = DateTime.now().add(const Duration(seconds: 60));
-    while (find.text('Sign In with Browser').evaluate().isEmpty) {
+    // The phone sign-in's button (lib/phone/sign_in.dart), by key: its
+    // label is copy.
+    while (find.byKey(const ValueKey('sign-in')).evaluate().isEmpty) {
       if (DateTime.now().isAfter(deadline)) fail('the sign-in page did not show');
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
       await tester.pump();
