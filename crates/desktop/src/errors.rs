@@ -195,9 +195,13 @@ impl From<ClientErrorInfo> for ClientError {
     }
 }
 
-/// Maps a reqwest transport error (no HTTP response) to a code.
+/// Maps a reqwest transport error (no HTTP response) to a code; the detail
+/// carries the whole source chain (#537).
 pub(crate) fn transport_error(error: &reqwest::Error) -> ClientError {
-    ClientError::failed(ErrorCode::NetworkUnreachable, error.to_string())
+    ClientError::failed(
+        ErrorCode::NetworkUnreachable,
+        ppvpn_account::api::error_chain(error),
+    )
 }
 
 /// Maps a non-success HTTP status (with the backend problem code, if any) of
