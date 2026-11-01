@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launch screen (#535): the app's background, light or dark, with
+     the brand mark in the middle, as the first frame shows. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/launch_background" />
+    <item
+        android:width="72dp"
+        android:height="72dp"
+        android:drawable="@drawable/launch_mark"
+        android:gravity="center" />
+</layer-list>

@@ -1,14 +1,16 @@
-// 我的 (#448 step 5): the account card (radius 18 on the brand gradient; a
-// press switches teams), then grouped 50-high rows with 17 titles and the
-// accent-tinted icon tiles: 连接 (routing), 通用 (appearance, language), 支持
-// (日志, pushed; the web pages ↗, account deletion among them, with the
-// version on 关于), and 退出登录 in red after a confirmation. A row with a
-// value pushes its choices.
+// 我的 (#448 step 5), to the canvas's 手机 · 我的 (#535): the account card
+// (radius 18 on the brand gradient, the expiry and the days left; a press
+// switches teams), then 50-high rows with 17 titles and the accent-tinted
+// icon tiles in two groups: 本机 (routing, logs, appearance, language,
+// diagnostics; native) and 账户与帮助 (the web pages ↗, account deletion
+// among them), 退出登录 in red after a confirmation, the version last. A
+// row with a value pushes its choices.
 
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
@@ -37,14 +39,15 @@ class PhoneMe extends StatelessWidget {
         padding: phoneScrollPadding(context),
         children: [
           _AccountCard(app: app, snapshot: snapshot),
-          _Group(
-            title: s('connection'),
-            rows: [
+          PhoneCaption(text: s('thisDevice')),
+          PhoneCard(
+            inset: 58,
+            children: [
               _Row(
                 icon: FLucideIcons.split,
                 title: s('routing'),
                 value: snapshot.routingMode == rust.UiRoutingMode.rules ? s('rules') : s('global'),
-                onPress: () => _choose<rust.UiRoutingMode>(
+                onPress: () => pushPhoneChoice<rust.UiRoutingMode>(
                   context,
                   title: s('routing'),
                   options: [(rust.UiRoutingMode.rules, s('rules')), (rust.UiRoutingMode.global, s('global'))],
@@ -52,11 +55,13 @@ class PhoneMe extends StatelessWidget {
                   onChanged: (mode) => unawaited(app.setRoutingMode(mode)),
                 ),
               ),
-            ],
-          ),
-          _Group(
-            title: s('general'),
-            rows: [
+              _Row(
+                icon: FLucideIcons.list,
+                title: s('logs'),
+                onPress: () => unawaited(
+                  pushPhonePage<void>(context, PhoneScaffold(title: s('logs'), back: true, child: const LogsPage())),
+                ),
+              ),
               ValueListenableBuilder(
                 valueListenable: Settings.appearance,
                 builder: (context, appearance, _) {
@@ -66,10 +71,10 @@ class PhoneMe extends StatelessWidget {
                     (rust.UiAppearance.dark, s('dark')),
                   ];
                   return _Row(
-                    icon: FLucideIcons.sunMoon,
+                    icon: FLucideIcons.moon,
                     title: s('appearance'),
                     value: _name(options, appearance),
-                    onPress: () => _choose(
+                    onPress: () => pushPhoneChoice(
                       context,
                       title: s('appearance'),
                       options: options,
@@ -92,7 +97,7 @@ class PhoneMe extends StatelessWidget {
                     icon: FLucideIcons.languages,
                     title: s('language'),
                     value: _name(options, language),
-                    onPress: () => _choose(
+                    onPress: () => pushPhoneChoice(
                       context,
                       title: s('language'),
                       options: options,
@@ -101,18 +106,6 @@ class PhoneMe extends StatelessWidget {
                     ),
                   );
                 },
-              ),
-            ],
-          ),
-          _Group(
-            title: s('support'),
-            rows: [
-              _Row(
-                icon: FLucideIcons.list,
-                title: s('logs'),
-                onPress: () => unawaited(
-                  pushPhonePage<void>(context, PhoneScaffold(title: s('logs'), back: true, child: const LogsPage())),
-                ),
               ),
               // Network diagnostics (#521): its page says the DoH resolvers
               // are asked only when the user presses Run.
@@ -133,19 +126,30 @@ class PhoneMe extends StatelessWidget {
                   ),
                 ),
               ),
-              // The website's console (ppvpn-web apps/client, under /dashboard):
-              // subscriptions, and tickets for help. It has no device page.
-              // Not on iOS: a way to buy a plan outside in-app purchase is
-              // refused by App Review (guideline 3.1.1, #473); a plan bought
-              // elsewhere still works in the app.
+            ],
+          ),
+          PhoneCaption(text: s('accountHelp'), trailing: s('openInWeb')),
+          PhoneCard(
+            inset: 58,
+            children: [
+              // The website's console (ppvpn-web apps/client, under
+              // /dashboard): subscriptions, and tickets for help. It has no
+              // device page. Not on iOS: a way to buy a plan outside in-app
+              // purchase is refused by App Review (guideline 3.1.1, #473); a
+              // plan bought elsewhere still works in the app.
               if (!Platform.isIOS)
                 _Row(
-                  icon: FLucideIcons.receipt,
+                  icon: FLucideIcons.creditCard,
                   title: s('planWeb'),
                   web: true,
                   onPress: () => _open('/dashboard/subscriptions'),
                 ),
-              _Row(icon: FLucideIcons.megaphone, title: s('helpWeb'), web: true, onPress: () => _open('/dashboard/tickets')),
+              _Row(
+                icon: FLucideIcons.megaphone,
+                title: s('helpWeb'),
+                web: true,
+                onPress: () => _open('/dashboard/tickets'),
+              ),
               // The site's deletion page (signed out, it signs in first, then
               // comes back): it confirms again and deletes the account.
               // App Store and Play need it reachable from the app (#473).
@@ -155,17 +159,20 @@ class PhoneMe extends StatelessWidget {
                 web: true,
                 onPress: () => _open('/account/delete'),
               ),
-              _Row(
-                icon: FLucideIcons.info,
-                title: s('about'),
-                value: Settings.version.isEmpty ? null : Settings.version,
-                web: true,
-                onPress: () => _open(''),
-              ),
+              _Row(icon: FLucideIcons.info, title: s('about'), web: true, onPress: () => _open('')),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 18),
           _SignOut(onPress: () => unawaited(_confirmSignOut(context))),
+          if (Settings.version.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: Text(
+                '${s('app')} ${Settings.version}',
+                textAlign: TextAlign.center,
+                style: Tokens.of(context).monoText(11, color: Tokens.of(context).t3, height: 16),
+              ),
+            ),
         ],
       );
     },
@@ -199,65 +206,6 @@ class PhoneMe extends StatelessWidget {
 String _name<T>(List<(T, String)> options, T value) =>
     options.firstWhere((option) => option.$1 == value, orElse: () => options.first).$2;
 
-/// Pushes the choices of a row: one 50 row each, the current one checked;
-/// a press sets it and goes back.
-void _choose<T>(
-  BuildContext context, {
-  required String title,
-  required List<(T, String)> options,
-  required T value,
-  required ValueChanged<T> onChanged,
-}) => unawaited(
-  pushPhonePage<void>(
-    context,
-    PhoneScaffold(
-      title: title,
-      back: true,
-      child: Builder(
-        builder: (context) {
-          final t = Tokens.of(context);
-          return ListView(
-            padding: phoneScrollPadding(context),
-            children: [
-              Container(
-                clipBehavior: Clip.antiAlias,
-                decoration: t.phoneCardDecoration(),
-                child: Column(
-                  children: [
-                    for (final (i, (option, text)) in options.indexed)
-                      Pressable(
-                        radius: 0,
-                        selected: option == value,
-                        label: text,
-                        onPress: () {
-                          onChanged(option);
-                          unawaited(Navigator.of(context).maybePop());
-                        },
-                        builder: (context, _) => Container(
-                          height: Tokens.phoneRow,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          decoration: BoxDecoration(
-                            border: i == 0 ? null : Border(top: BorderSide(color: t.line, width: 0.5)),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(child: Text(text, style: t.phoneRowTitle)),
-                              if (option == value) Icon(FLucideIcons.check, size: 18, color: t.accent),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    ),
-  ),
-);
-
 /// The account card: the avatar, the name, the team (个人 for the personal
 /// space) with the days left, white on the brand gradient. A press lists
 /// the teams to switch to (as the desktop's account menu, #443).
@@ -272,49 +220,113 @@ class _AccountCard extends StatelessWidget {
     final t = Tokens.of(context);
     final s = S.current;
     const white = Color(0xFFFFFFFF);
+    const soft = Color(0xC7FFFFFF);
     final name = snapshot.accountName ?? '';
     final initial = name.isEmpty ? '?' : name.characters.first.toUpperCase();
     final days = _daysLeft(snapshot.expiresAt);
+    final until = snapshot.expiresAt == null ? null : DateTime.tryParse(snapshot.expiresAt!)?.toLocal();
     final team = snapshot.teamName ?? '—';
+    String two(int n) => n.toString().padLeft(2, '0');
     return Pressable(
       key: const ValueKey('account'),
       onPress: () => _teams(context),
       label: '${s('account')}, $name, $team',
       radius: Tokens.phoneAccountRadius,
       builder: (context, _) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: t.phoneCardDecoration(radius: Tokens.phoneAccountRadius, gradient: Tokens.brandGradient),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              alignment: Alignment.center,
-              decoration: const BoxDecoration(color: Color(0x33FFFFFF), shape: BoxShape.circle),
-              child: Text(initial, style: t.phoneBodyStrong.copyWith(fontSize: 18, color: white)),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment(-0.64, -0.77),
+            end: Alignment(0.64, 0.77),
+            stops: [0, 0.5, 1],
+            colors: [Color(0xFF2C56B4), Color(0xFF1F4390), Color(0xFF152F6A)],
+          ),
+          borderRadius: BorderRadius.circular(Tokens.phoneAccountRadius),
+          boxShadow: [
+            BoxShadow(
+              color: t.brightness == Brightness.light ? const Color(0x381F4390) : const Color(0x73000000),
+              offset: const Offset(0, 10),
+              blurRadius: 28,
             ),
-            const SizedBox(width: 12),
-            Expanded(
+          ],
+        ),
+        child: Stack(
+          children: [
+            // The brand's mountains in the bottom right corner.
+            Positioned(
+              right: -10,
+              bottom: -6,
+              child: ExcludeSemantics(
+                child: SvgPicture.string(
+                  '<svg viewBox="0 0 200 90" xmlns="http://www.w3.org/2000/svg">'
+                  '<path d="M0 90 L60 30 L95 62 L135 14 L200 80 L200 90 Z" fill="#ffffff" fill-opacity="0.07"/>'
+                  '<path d="M40 90 L95 50 L130 74 L165 44 L200 70 L200 90 Z" fill="#ffffff" fill-opacity="0.08"/></svg>',
+                  width: 200,
+                  height: 90,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    name.isEmpty ? '—' : name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.phoneBodyStrong.copyWith(color: white),
+                  Row(
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0x2EFFFFFF),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0x40FFFFFF)),
+                        ),
+                        child: Text(initial, style: t.phoneBodyStrong.copyWith(fontSize: 19, color: white)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              name.isEmpty ? '—' : name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: t.phoneRowTitle.copyWith(fontWeight: FontWeight.w600, color: white),
+                            ),
+                            Text(
+                              team,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: t.phoneNote.copyWith(color: soft),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(FLucideIcons.chevronRight, size: 16, color: soft),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    [team, if (days != null) s('daysLeft', {'n': '$days'})].join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.phoneNote.copyWith(color: const Color(0xC7FFFFFF)),
-                  ),
+                  if (until != null) ...[
+                    const SizedBox(height: 14),
+                    // Side by side, one under the other at large text sizes.
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      spacing: 12,
+                      runSpacing: 2,
+                      children: [
+                        Text(
+                          s('validUntil', {'d': '${until.year}-${two(until.month)}-${two(until.day)}'}),
+                          style: t.phoneNote.copyWith(fontSize: 12, color: soft),
+                        ),
+                        if (days != null)
+                          Text(s('daysLeft', {'n': '$days'}), style: t.phoneNote.copyWith(fontSize: 12, color: soft)),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
-            Icon(FLucideIcons.chevronRight, size: 18, color: const Color(0xA6FFFFFF)),
           ],
         ),
       ),
@@ -357,10 +369,11 @@ class _AccountCard extends StatelessWidget {
                                     unawaited(app.switchTeam(team.id));
                                     unawaited(Navigator.of(context).maybePop());
                                   },
-                            builder: (context, _) => Container(
-                              height: Tokens.phoneRow,
+                            builder: (context, pressed) => Container(
+                              constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               decoration: BoxDecoration(
+                                color: pressed ? t.phonePress : null,
                                 border: i == 0 ? null : Border(top: BorderSide(color: t.line, width: 0.5)),
                               ),
                               child: Row(
@@ -400,46 +413,8 @@ int? _daysLeft(String? rfc3339) {
   return days < 0 ? null : days;
 }
 
-/// A group: its heading (13, t2) 24 below the previous, then its rows in
-/// one card with 0.5 px dividers.
-class _Group extends StatelessWidget {
-  const _Group({required this.title, required this.rows});
-
-  final String title;
-  final List<Widget> rows;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Tokens.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 24, 4, 8),
-          child: Semantics(header: true, child: Text(title, style: t.phoneNote.copyWith(color: t.t2))),
-        ),
-        Container(
-          clipBehavior: Clip.antiAlias,
-          decoration: t.phoneCardDecoration(),
-          child: Column(
-            children: [
-              for (final (i, row) in rows.indexed)
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: i == 0 ? null : Border(top: BorderSide(color: t.line, width: 0.5)),
-                  ),
-                  child: row,
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// A 50 row: the icon tile, the 17 title, the value in t3, then the
-/// chevron, or ↗ for a web page.
+/// A 50 row: the 32 icon tile, the 17 title, the value in t3 (14), then
+/// the chevron, or ↗ for a web page.
 class _Row extends StatelessWidget {
   const _Row({required this.icon, required this.title, required this.onPress, this.value, this.web = false});
 
@@ -456,20 +431,29 @@ class _Row extends StatelessWidget {
       radius: 0,
       onPress: onPress,
       label: value == null ? title : '$title, $value',
-      builder: (context, _) => Container(
-        height: Tokens.phoneRow,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+      builder: (context, pressed) => AnimatedContainer(
+        duration: Tokens.motion(context, pressed ? Duration.zero : Tokens.motionFast),
+        color: pressed ? t.phonePress : t.phonePress.withValues(alpha: 0),
+        constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         child: Row(
           children: [
-            RowIcon(icon: icon),
+            PhoneTile(icon: icon),
             const SizedBox(width: 12),
-            Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.phoneRowTitle)),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: t.phoneRowTitle.copyWith(letterSpacing: -0.34),
+              ),
+            ),
             if (value case final text?) ...[
               const SizedBox(width: 8),
-              Text(text, style: t.phoneBody.copyWith(color: t.t3)),
+              Text(text, style: t.phoneBody.copyWith(fontSize: 14, height: 20 / 14, color: t.t3)),
             ],
             const SizedBox(width: 6),
-            Icon(web ? FLucideIcons.arrowUpRight : FLucideIcons.chevronRight, size: 18, color: t.t3),
+            Icon(web ? FLucideIcons.arrowUpRight : FLucideIcons.chevronRight, size: 16, color: t.t3),
           ],
         ),
       ),
@@ -477,7 +461,7 @@ class _Row extends StatelessWidget {
   }
 }
 
-/// 退出登录: a 50 card row, the text red and centred.
+/// 退出登录: a 50 card, the text red (15 · 600) and centred.
 class _SignOut extends StatelessWidget {
   const _SignOut({required this.onPress});
 
@@ -491,11 +475,15 @@ class _SignOut extends StatelessWidget {
       onPress: onPress,
       label: S.current('signOut'),
       radius: Tokens.phoneCardRadius,
-      builder: (context, _) => Container(
-        height: Tokens.phoneRow,
+      builder: (context, pressed) => Container(
+        constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         alignment: Alignment.center,
-        decoration: t.phoneCardDecoration(),
-        child: Text(S.current('signOut'), style: t.phoneRowTitle.copyWith(color: t.bad)),
+        decoration: t.phoneCardDecoration(color: pressed ? Color.alphaBlend(t.phonePress, t.card) : null),
+        child: Text(
+          S.current('signOut'),
+          style: t.phoneBodyStrong.copyWith(fontSize: 15, height: 20 / 15, color: t.bad),
+        ),
       ),
     );
   }

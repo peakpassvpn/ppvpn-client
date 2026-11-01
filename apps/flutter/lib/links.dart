@@ -1,10 +1,8 @@
 // Opening links (#473). The desktops start the system's browser from Rust
 // (rust/src/hooks.rs open_url). iOS and Android cannot start a process, so
 // there the app channel shows the page inside the app: SFSafariViewController
-// on iOS (runner/ios PPVPNPlugin), a Custom Tab or else the browser on
-// Android (runner/android MainActivity).
-
-import 'dart:io';
+// as a page sheet on iOS (runner/ios PPVPNPlugin), a Custom Tab or else the
+// browser on Android (runner/android MainActivity).
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -25,11 +23,11 @@ Future<bool> openUrl(String url) async {
   }
 }
 
-/// iOS: closes the page [openUrl] showed, if it is still up (after the
-/// sign-in it was opened for). Android's Custom Tab cannot be closed by the
-/// app: the user comes back with Back.
+/// Closes the page [openUrl] showed, if it is still up (after the sign-in
+/// it was opened for): iOS dismisses the sheet; Android brings the app back
+/// over its Custom Tab, which finishes it.
 Future<void> closeBrowser() async {
-  if (!Platform.isIOS) return;
+  if (!mobile) return;
   try {
     await _app.invokeMethod<void>('closeBrowser');
   } on PlatformException catch (error) {

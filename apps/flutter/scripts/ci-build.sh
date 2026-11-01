@@ -110,6 +110,16 @@ rm -rf test
 if [ "$os" = macos ]; then
   rm -rf macos/Runner/Assets.xcassets/AppIcon.appiconset
 fi
+# iOS: our launch screen's image (runner/ios, the brand mark as a vector)
+# and app icon (scripts/app-icons.swift) replace the template's PNGs; on
+# Android the adaptive icon (runner/android, mipmap-anydpi-v26) the
+# template's launcher PNGs (#535).
+if [ "$os" = ios ]; then
+  rm -rf ios/Runner/Assets.xcassets/LaunchImage.imageset ios/Runner/Assets.xcassets/AppIcon.appiconset
+fi
+if [ "$os" = android ]; then
+  rm -f android/app/src/main/res/mipmap-*/ic_launcher.png
+fi
 # Our changes to the generated runner (macOS: the activation channel; the
 # icons, from apps/macos and apps/windows; Android: the activity in our
 # package).
@@ -237,7 +247,23 @@ PY
     # The export compliance answer (#470): only the system's and standard
     # encryption, so no question per TestFlight build.
     /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName PPVPN' -c 'Set :CFBundleName PPVPN' \
-      -c 'Add :ITSAppUsesNonExemptEncryption bool false' "$plist" ;;
+      -c 'Add :ITSAppUsesNonExemptEncryption bool false' "$plist"
+    # #535: the iPhone in portrait only, the iPad in all four (multitasking
+    # needs them); the system's own text (the in-app browser's controls,
+    # permission prompts) in Chinese or English, as the app's.
+    /usr/libexec/PlistBuddy \
+      -c 'Delete :UISupportedInterfaceOrientations' \
+      -c 'Add :UISupportedInterfaceOrientations array' \
+      -c 'Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait' \
+      -c 'Delete :UISupportedInterfaceOrientations~ipad' \
+      -c 'Add :UISupportedInterfaceOrientations~ipad array' \
+      -c 'Add :UISupportedInterfaceOrientations~ipad:0 string UIInterfaceOrientationPortrait' \
+      -c 'Add :UISupportedInterfaceOrientations~ipad:1 string UIInterfaceOrientationPortraitUpsideDown' \
+      -c 'Add :UISupportedInterfaceOrientations~ipad:2 string UIInterfaceOrientationLandscapeLeft' \
+      -c 'Add :UISupportedInterfaceOrientations~ipad:3 string UIInterfaceOrientationLandscapeRight' \
+      -c 'Add :CFBundleLocalizations array' \
+      -c 'Add :CFBundleLocalizations:0 string zh-Hans' \
+      -c 'Add :CFBundleLocalizations:1 string en' "$plist" ;;
   windows)
     # ppvpn.exe and its version resource, as apps/windows
     # (PPVPN.Windows.csproj, Directory.Build.props).

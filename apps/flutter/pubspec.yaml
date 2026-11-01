@@ -34,8 +34,6 @@ flutter:
     # flag-icons 7.6.0 (MIT, assets/flags/LICENSE), 4:3, the exit countries
     # we expect; others get a lettered tile.
     - assets/flags/
-    # The app icon (apps/macos AppIcon, 256 px), the brand mark in the app.
-    - assets/brand/
   # Numbers and addresses (theme.dart `Tokens.mono`); Inter comes with forui.
   # OFL: assets/fonts/JetBrainsMono-OFL.txt.
   fonts:

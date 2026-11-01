@@ -34,7 +34,7 @@ class SignInPage extends StatelessWidget {
       } else if (snapshot.auth == rust.UiAuth.awaitingBrowser && code != null) {
         body = _Waiting(app: app, code: code);
       } else {
-        body = _SignedOut(app: app, error: _signInError(snapshot.error));
+        body = _SignedOut(app: app, error: signInError(snapshot.error));
       }
       return Align(
         alignment: Alignment.centerLeft,
@@ -47,12 +47,13 @@ class SignInPage extends StatelessWidget {
   );
 }
 
-enum _SignInError { expired, denied, network }
+/// Why the last sign-in ended, when it failed (the phone's sign-in too).
+enum SignInError { expired, denied, network }
 
-_SignInError? _signInError(rust.UiError? error) => switch (error?.code) {
-  'AuthExpired' => _SignInError.expired,
-  'AuthDenied' => _SignInError.denied,
-  'NetworkUnreachable' || 'ServerUnavailable' => _SignInError.network,
+SignInError? signInError(rust.UiError? error) => switch (error?.code) {
+  'AuthExpired' => SignInError.expired,
+  'AuthDenied' => SignInError.denied,
+  'NetworkUnreachable' || 'ServerUnavailable' => SignInError.network,
   _ => null,
 };
 
@@ -92,7 +93,7 @@ class _SignedOut extends StatelessWidget {
   const _SignedOut({required this.app, required this.error});
 
   final AppState app;
-  final _SignInError? error;
+  final SignInError? error;
 
   @override
   Widget build(BuildContext context) {
@@ -100,13 +101,13 @@ class _SignedOut extends StatelessWidget {
     final s = S.current;
     final (title, text) = switch (error) {
       null => (s('loginTitle'), s('loginSub')),
-      _SignInError.expired => (s('errExpiredT'), s('errExpiredD')),
-      _SignInError.denied => (s('errDeniedT'), s('errDeniedD')),
-      _SignInError.network => (s('errNetT'), s('errNetD')),
+      SignInError.expired => (s('errExpiredT'), s('errExpiredD')),
+      SignInError.denied => (s('errDeniedT'), s('errDeniedD')),
+      SignInError.network => (s('errNetT'), s('errNetD')),
     };
     final button = switch (error) {
       null => s('loginBtn'),
-      _SignInError.network => s('tryAgain'),
+      SignInError.network => s('tryAgain'),
       _ => s('signInAgain'),
     };
     return Column(
@@ -118,7 +119,7 @@ class _SignedOut extends StatelessWidget {
           text: text,
           icon: error == null
               ? null
-              : Icon(FLucideIcons.circleAlert, size: 32, color: error == _SignInError.network ? t.warn : t.bad),
+              : Icon(FLucideIcons.circleAlert, size: 32, color: error == SignInError.network ? t.warn : t.bad),
         ),
         const SizedBox(height: 32),
         Button(kind: ButtonKind.primary, label: button, fontSize: 14, onPress: app.signIn),
@@ -358,7 +359,7 @@ class SignInBrand extends StatelessWidget {
                       const SizedBox(height: 36),
                       Row(
                         children: [
-                          const BrandMark(size: 40),
+                          const BrandMark(size: 40, onBrand: true),
                           const SizedBox(width: 12),
                           Text(S.current('app'), style: text(22, 28, FontWeight.w700, white, -0.02)),
                         ],

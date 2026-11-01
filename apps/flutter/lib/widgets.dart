@@ -20,7 +20,9 @@ import 'theme.dart';
 
 /// Tap, Enter and Space activate it; it is a button to screen readers and
 /// shows a focus ring when reached by keyboard. [builder] gets the hover
-/// state.
+/// state, which a touch also sets while the finger is down (at least
+/// [Pressable.minPress], so a quick tap still shows: the phone's press
+/// feedback, #535).
 class Pressable extends StatefulWidget {
   const Pressable({
     super.key,
@@ -39,6 +41,8 @@ class Pressable extends StatefulWidget {
   final bool? selected;
   final double radius;
 
+  static const minPress = Duration(milliseconds: 80);
+
   @override
   State<Pressable> createState() => _PressableState();
 }
@@ -46,6 +50,24 @@ class Pressable extends StatefulWidget {
 class _PressableState extends State<Pressable> {
   bool _hovered = false;
   bool _focused = false;
+  bool _pressed = false;
+  DateTime _pressedAt = DateTime.now();
+
+  void _down() {
+    _pressedAt = DateTime.now();
+    setState(() => _pressed = true);
+  }
+
+  void _up() {
+    final left = Pressable.minPress - DateTime.now().difference(_pressedAt);
+    if (left <= Duration.zero) {
+      setState(() => _pressed = false);
+    } else {
+      Timer(left, () {
+        if (mounted) setState(() => _pressed = false);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,6 +86,9 @@ class _PressableState extends State<Pressable> {
         actions: {ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) => widget.onPress?.call())},
         child: GestureDetector(
           onTap: widget.onPress,
+          onTapDown: enabled ? (_) => _down() : null,
+          onTapUp: enabled ? (_) => _up() : null,
+          onTapCancel: enabled ? _up : null,
           onDoubleTap: widget.onDoublePress,
           child: DecoratedBox(
             position: DecorationPosition.foreground,
@@ -71,7 +96,10 @@ class _PressableState extends State<Pressable> {
               borderRadius: BorderRadius.circular(widget.radius),
               border: _focused ? Border.all(color: t.accent, width: 2) : null,
             ),
-            child: Opacity(opacity: enabled ? 1 : 0.5, child: widget.builder(context, _hovered && enabled)),
+            child: Opacity(
+              opacity: enabled ? 1 : 0.5,
+              child: widget.builder(context, (_hovered || _pressed) && enabled),
+            ),
           ),
         ),
       ),
@@ -555,10 +583,11 @@ class TriSwitch extends StatelessWidget {
 
 /// A rotating three-quarter ring, 0.9 s a turn, linear.
 class Spinner extends StatefulWidget {
-  const Spinner({super.key, required this.color, this.size = 14, this.track});
+  const Spinner({super.key, required this.color, this.size = 14, this.track, this.stroke = 2});
 
   final Color color;
   final double size;
+  final double stroke;
 
   /// The rest of the ring, when drawn (the sign-in wait ring).
   final Color? track;
@@ -568,8 +597,18 @@ class Spinner extends StatefulWidget {
 }
 
 class _SpinnerState extends State<Spinner> with SingleTickerProviderStateMixin {
-  late final AnimationController _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))
-    ..repeat();
+  late final AnimationController _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+
+  // Still under reduced motion: the arc alone says it is busy.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _turn.stop();
+    } else if (!_turn.isAnimating) {
+      unawaited(_turn.repeat());
+    }
+  }
 
   @override
   void dispose() {
@@ -582,19 +621,19 @@ class _SpinnerState extends State<Spinner> with SingleTickerProviderStateMixin {
     turns: _turn,
     child: CustomPaint(
       size: Size.square(widget.size),
-      painter: _ArcPainter(widget.color, widget.track),
+      painter: _ArcPainter(widget.color, widget.track, widget.stroke),
     ),
   );
 }
 
 class _ArcPainter extends CustomPainter {
-  _ArcPainter(this.color, this.track);
+  _ArcPainter(this.color, this.track, this.stroke);
   final Color color;
   final Color? track;
+  final double stroke;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final stroke = 2.0;
     final rect = (Offset.zero & size).deflate(stroke / 2);
     Paint paint(Color color) => Paint()
       ..color = color
@@ -606,7 +645,7 @@ class _ArcPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_ArcPainter old) => old.color != color || old.track != track;
+  bool shouldRepaint(_ArcPainter old) => old.color != color || old.track != track || old.stroke != stroke;
 }
 
 /// Copies [text]; the label turns into 「✓ 已复制」 for 1.6 s.
@@ -669,7 +708,14 @@ class LatencyPill extends StatelessWidget {
       LatencyTimeout() => (S.current('timeout'), t.t3, t.sunk),
       LatencyFailed() => (S.current('failed'), t.bad, t.badSoft),
     };
-    return Container(
+    // A new value fades in; the tone's colours follow (#535). Its text
+    // grows only so far with the system's size (Tokens.phoneChromeTextMax).
+    final duration = Tokens.motion(context, Tokens.motionBase);
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: Tokens.phoneChromeTextMax,
+      child: AnimatedContainer(
+      duration: duration,
+      curve: Tokens.motionCurve,
       height: 22,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(11)),
@@ -678,10 +724,19 @@ class LatencyPill extends StatelessWidget {
         children: latency is LatencyTesting
             ? [Spinner(color: fg, size: 10)]
             : [
-                Container(width: 6, height: 6, decoration: BoxDecoration(color: fg, shape: BoxShape.circle)),
+                AnimatedContainer(
+                  duration: duration,
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
+                ),
                 const SizedBox(width: 5),
-                Text(text, style: t.monoText(12, weight: FontWeight.w500, color: fg)),
+                AnimatedSwitcher(
+                  duration: duration,
+                  child: Text(text, key: ValueKey(text), style: t.monoText(12, weight: FontWeight.w500, color: fg)),
+                ),
               ],
+      ),
       ),
     );
   }
@@ -730,15 +785,17 @@ class Flag extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final code = (countryCode ?? '').toLowerCase();
+    // Radius 3 at the desktop's size, 4 at the phone's.
+    final radius = size.width >= Tokens.phoneFlagSize.width ? 4.0 : 3.0;
     return ExcludeSemantics(
       child: Container(
         width: size.width,
         height: size.height,
         clipBehavior: Clip.antiAlias,
         alignment: Alignment.center,
-        decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(3)),
+        decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(radius)),
         foregroundDecoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(radius),
           border: Border.all(color: t.flagOutline, width: 0.5),
         ),
         child: _flags.contains(code)
@@ -749,29 +806,29 @@ class Flag extends StatelessWidget {
   }
 }
 
-/// The brand mark: the app icon, the double P (sign-in and the sidebar).
-/// Drawn 1.22 times [size], as the native login did, so that the mark
-/// itself fills [size] and the icon's transparent margin overflows it.
+/// The brand mark, the canvas's mountain (#535): white on the brand
+/// gradient's rounded tile, or with [onBrand] (on the brand gradient: the
+/// sign-in panels) the brand mountain on a white tile.
 class BrandMark extends StatelessWidget {
-  const BrandMark({super.key, required this.size});
+  const BrandMark({super.key, required this.size, this.onBrand = false});
 
   final double size;
+  final bool onBrand;
+
+  static const _plain =
+      '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" '
+      'x2="1" y2="1"><stop offset="0" stop-color="#3d63c9"/><stop offset="1" stop-color="#1f4390"/>'
+      '</linearGradient></defs><rect width="24" height="24" rx="6.5" fill="url(#g)"/>'
+      '<path d="M3.5 17.5 9.2 9l3.3 4.8 2.1-2.9 5.9 6.6z" fill="#fff"/>'
+      '<path d="M9.2 9l1.4 2.1-1.4.8-1.3-1z" fill="#c9d6ff"/></svg>';
+  static const _onBrand =
+      '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="6.5" '
+      'fill="#fff"/><path d="M3.5 17.5 9.2 9l3.3 4.8 2.1-2.9 5.9 6.6z" fill="#1f4390"/>'
+      '<path d="M9.2 9l1.4 2.1-1.4.8-1.3-1z" fill="#8fa8f5"/></svg>';
 
   @override
-  Widget build(BuildContext context) => SizedBox.square(
-    dimension: size,
-    child: OverflowBox(
-      maxWidth: size * 1.22,
-      maxHeight: size * 1.22,
-      child: Image.asset(
-        'assets/brand/app-icon.png',
-        width: size * 1.22,
-        height: size * 1.22,
-        filterQuality: FilterQuality.medium,
-        excludeFromSemantics: true,
-      ),
-    ),
-  );
+  Widget build(BuildContext context) =>
+      ExcludeSemantics(child: SvgPicture.string(onBrand ? _onBrand : _plain, width: size, height: size));
 }
 
 /// The overview's icon: the shield `M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10
