@@ -418,6 +418,9 @@ impl Client {
                 if let Err(error) = self.compat.disconnect().await {
                     tracing::warn!("compatible mode: disconnect before enhanced failed: {error}");
                 }
+                // Enhanced mode never opens the endpoint: an OS proxy still
+                // pointing at it would cut every app that uses it (#536).
+                self.compat.clear_stale_proxy().await;
                 self.prime_enhanced().await?;
                 self.enhanced.enable().await
             }
