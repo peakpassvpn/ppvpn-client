@@ -1774,6 +1774,69 @@ mod tests {
     }
 
     #[test]
+    fn switching_compatible_and_enhanced_back_and_forth_never_strands_the_os_proxy() {
+        let (client, _, launcher, data_dir) = signed_in_client();
+        wait_for(&client, |s| {
+            matches!(s.standard, StandardState::Ready { .. })
+        });
+        // A loopback port nothing listens on, as our endpoint is once
+        // compatible mode is off.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        launcher.system_proxy.lock().unwrap().1 = port;
+        let macos = |port: u16| {
+            let proxy = serde_json::json!({"enabled": true, "server": "127.0.0.1", "port": port.to_string()});
+            serde_json::json!({"macos": {"Wi-Fi": {
+                "web": proxy, "secure": proxy, "socks": proxy, "bypass": []}}})
+        };
+        let set_os = |port: u16| *launcher.writer.os.lock().unwrap() = Some(macos(port));
+        let os_proxies = || {
+            crate::sysproxy::active_proxies(launcher.writer.os.lock().unwrap().as_ref().unwrap())
+        };
+        // Surge's proxy is on.
+        set_os(6152);
+
+        // Compatible: Surge's settings are saved and ours applied.
+        block_on(client.set_connection_mode(crate::ConnectionMode::Compatible)).unwrap();
+        block_on(client.connect()).unwrap();
+        assert!(client.snapshot().connection.proxy_was_foreign);
+        assert_eq!(os_proxies(), vec![("127.0.0.1".to_string(), port); 3]);
+
+        // Enhanced (it fails here, without a service): Surge's come back.
+        let _ = block_on(client.set_connection_mode(crate::ConnectionMode::Enhanced));
+        assert_eq!(os_proxies(), vec![("127.0.0.1".to_string(), 6152); 3]);
+        // Surge quits and writes back the proxy it last saw: ours.
+        set_os(port);
+
+        // Compatible again: that proxy is neither Surge's nor the user's.
+        block_on(client.set_connection_mode(crate::ConnectionMode::Compatible)).unwrap();
+        assert_eq!(client.snapshot().connection.phase, ConnectionPhase::On);
+        assert!(!client.snapshot().connection.proxy_was_foreign);
+
+        // Enhanced again: the OS proxy ends off, not on a dead port.
+        let _ = block_on(client.set_connection_mode(crate::ConnectionMode::Enhanced));
+        assert_eq!(os_proxies(), Vec::new());
+        assert!(!backup_exists(&data_dir));
+
+        // Something put our dead port back: enhanced switches it off.
+        set_os(port);
+        let _ = block_on(client.connect());
+        assert_eq!(os_proxies(), Vec::new());
+
+        // A proxy that answers on that port is somebody's: it stays.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        set_os(port);
+        let _ = block_on(client.connect());
+        assert_eq!(os_proxies(), vec![("127.0.0.1".to_string(), port); 3]);
+        drop(listener);
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn sign_out_restores_the_os_proxy() {
         let (client, _, launcher, data_dir) = signed_in_client();
         wait_for(&client, |s| {
