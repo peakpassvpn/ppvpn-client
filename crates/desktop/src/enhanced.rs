@@ -1398,6 +1398,17 @@ impl Inner {
         let error = match self.service.disconnect(session).await {
             Ok(()) | Err(ServiceError::Failed(_)) => return Ok(()),
             Err(error) if error.not_listening() => return Ok(()),
+            // The service refuses this executable before reading any request
+            // (#543): it never ran a core for it, and one left by an earlier
+            // build stops when its lease lapses, since nothing here can
+            // renew it. Asking again only gets refused again.
+            Err(error @ ServiceError::Rejected(_)) => {
+                tracing::info!(
+                    detail = %error.detail(),
+                    "enhanced mode: the service refuses this client; nothing to stop"
+                );
+                return Ok(());
+            }
             Err(error) => error,
         };
         tracing::info!(
@@ -1414,6 +1425,7 @@ impl Inner {
                     return Ok(());
                 }
                 Ok(Err(error)) if error.not_listening() => return Ok(()),
+                Ok(Err(ServiceError::Rejected(_))) => return Ok(()),
                 _ => {}
             }
             if Instant::now() + DISCONNECT_CONFIRM_POLL >= deadline {
@@ -5132,6 +5144,34 @@ mod tests {
         assert_eq!(h.enhanced.state().phase, ConnectionPhase::Off);
         assert!(h.service.owner.lock().unwrap().is_none());
         assert_eq!(h.enhanced.inner.with_data(|d| d.machine.generation), 1);
+    }
+
+    #[tokio::test]
+    async fn disconnecting_from_a_refusing_service_ends_off_at_once() {
+        // A connect the service refused leaves the attempt's session behind;
+        // turning off (e.g. switching to compatible mode) must not wait for
+        // a confirmation the service will never give (#543).
+        let h = harness_with(true, Some(BUILD), false);
+        h.service.rejects.store(true, Ordering::SeqCst);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        let error = h.enhanced.enable().await.unwrap_err();
+        assert!(rejected(&error), "{error:?}");
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::Error);
+        let started = Instant::now();
+        h.enhanced.disable().await.unwrap();
+        assert!(started.elapsed() < DISCONNECT_CONFIRM_TIMEOUT);
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::Off);
+        assert_eq!(persisted(&h).desired, Desired::Disconnected);
+
+        // The same once connected: the app was replaced by a build the
+        // service does not trust.
+        h.service.rejects.store(false, Ordering::SeqCst);
+        h.enhanced.enable().await.unwrap();
+        h.service.rejects.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        h.enhanced.disable().await.unwrap();
+        assert!(started.elapsed() < DISCONNECT_CONFIRM_TIMEOUT);
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::Off);
     }
 
     #[tokio::test]
