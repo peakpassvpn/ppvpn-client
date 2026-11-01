@@ -6,8 +6,10 @@
 //! the data directory ([`crate::device::write_private`]: 0600 on Unix, the
 //! profile directory's ACL on Windows). It belongs to the saved login and
 //! its team: the session drops it at sign-out, at a sign-in (another
-//! account may follow) and at a team switch. A file saved against another
-//! API base is ignored, since the core pins rule sets to that host.
+//! account may follow), at a team switch and when the team has no usable
+//! profile (no subscription, expired, team disabled, nodes not ready). A
+//! file saved against another API base is removed, since the core pins
+//! rule sets to that host.
 
 use std::path::Path;
 
@@ -106,7 +108,7 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600);
         }
 
-        // Another backend: ignored and dropped.
+        // Another backend: removed.
         assert_eq!(load(&dir, "https://www.example.net"), None);
         assert!(!Path::new(&dir).join(SAVED_PROFILE_FILE).exists());
 

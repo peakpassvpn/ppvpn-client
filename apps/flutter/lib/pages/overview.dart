@@ -698,7 +698,19 @@ class ProblemCard extends StatelessWidget {
           onPress: () => app.connectIn(rust.UiConnectionMode.compatible),
         ),
     ];
+    final expired = snapshot.error?.code == 'ProfileExpired';
     return switch (snapshot.phase) {
+      // The core refused the profile: neither the tunnel nor the system
+      // proxy is at fault (#532).
+      rust.UiPhase.error when expired || snapshot.error?.code == 'ProfileInvalid' => ProblemCard(
+        warn: false,
+        title: s(expired ? 'cfgExpiredT' : 'cfgT'),
+        description: s(expired ? 'fr_profileExpired' : 'fr_profile'),
+        actions: [
+          Button(kind: ButtonKind.secondary, label: s('refreshNodes'), onPress: app.refreshNodes),
+          retry,
+        ],
+      ),
       rust.UiPhase.error when enhanced => ProblemCard(
         warn: false,
         title: '${s('tunMode')} · ${s('st_failed')}',
@@ -735,8 +747,6 @@ class ProblemCard extends StatelessWidget {
         title: s('h_stdFail'),
         description: switch (snapshot.error?.code) {
           null || 'SystemProxyFailed' => s('fr_port'),
-          // The core refused the profile: no proxy setting is at fault (#532).
-          'ProfileInvalid' || 'ProfileExpired' => s('fr_profile'),
           final code => code,
         },
         actions: [retry],
@@ -755,7 +765,6 @@ class ProblemCard extends StatelessWidget {
       'ServiceUnavailable' || 'ServiceIncompatible' => s('fr_service'),
       'NetworkPathContended' => s('fr_contended'),
       'Timeout' => s('fr_timeout'),
-      'ProfileInvalid' || 'ProfileExpired' => s('fr_profile'),
       final code? => code,
       null => s('st_failed'),
     };
