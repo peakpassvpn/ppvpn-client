@@ -368,7 +368,7 @@ class _AccountCard extends StatelessWidget {
                                     unawaited(Navigator.of(context).maybePop());
                                   },
                             builder: (context, _) => Container(
-                              height: Tokens.phoneRow,
+                              constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               decoration: BoxDecoration(
                                 border: i == 0 ? null : Border(top: BorderSide(color: t.line, width: 0.5)),
@@ -429,8 +429,8 @@ class _Row extends StatelessWidget {
       onPress: onPress,
       label: value == null ? title : '$title, $value',
       builder: (context, _) => Container(
-        height: Tokens.phoneRow,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         child: Row(
           children: [
             PhoneTile(icon: icon),
@@ -471,7 +471,8 @@ class _SignOut extends StatelessWidget {
       label: S.current('signOut'),
       radius: Tokens.phoneCardRadius,
       builder: (context, _) => Container(
-        height: Tokens.phoneRow,
+        constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         alignment: Alignment.center,
         decoration: t.phoneCardDecoration(),
         child: Text(

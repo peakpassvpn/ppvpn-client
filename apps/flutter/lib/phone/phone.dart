@@ -13,6 +13,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../pages/logs.dart';
 import '../pages/messages.dart';
 import '../sample.dart' show samplePage;
 import '../src/rust/api.dart' as rust;
@@ -47,6 +48,15 @@ class _PhoneShellState extends State<PhoneShell> {
   void initState() {
     super.initState();
     widget.app.pageRequests.addListener(_showRequested);
+    // The screenshot mode's pushed pages: the messages, the logs.
+    if (samplePage case 'messages' || 'logs') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (samplePage == 'messages') return openMessages(context, widget.app);
+        final title = S.current('logs');
+        unawaited(pushPhonePage<void>(context, PhoneScaffold(title: title, back: true, child: const LogsPage())));
+      });
+    }
   }
 
   @override
@@ -145,7 +155,8 @@ class _TabBar extends StatelessWidget {
 
     return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        // The canvas's blur(24px): a deviation of 24.
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
           height: Tokens.phoneTabBar + bottom,
           padding: EdgeInsets.only(bottom: bottom, left: 8, right: 8),
@@ -419,8 +430,8 @@ void pushPhoneChoice<T>(
                         unawaited(Navigator.of(context).maybePop());
                       },
                       builder: (context, _) => Container(
-                        height: Tokens.phoneRow,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: Row(
                           children: [
                             Expanded(child: Text(text, style: t.phoneRowTitle)),

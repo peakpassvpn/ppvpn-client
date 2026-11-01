@@ -393,8 +393,8 @@ class _NodeCard extends StatelessWidget {
       onPress: onPress,
       label: '$label, $title',
       builder: (context, _) => Container(
-        height: Tokens.phoneRowTwoLines,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        constraints: const BoxConstraints(minHeight: Tokens.phoneRowTwoLines),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(
           children: [
             leading,

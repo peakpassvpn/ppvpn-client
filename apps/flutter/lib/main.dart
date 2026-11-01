@@ -55,6 +55,7 @@ String _libraryPath() {
 Future<void> main() async {
   mark('main');
   WidgetsFlutterBinding.ensureInitialized();
+  await loadSampleSettings();
   final AppState app;
   var background = false;
   if (samplePage != null) {
