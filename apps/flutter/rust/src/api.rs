@@ -82,6 +82,9 @@ pub struct UiSnapshot {
     /// The current team's id, one of [`teams`]' [`UiTeam::id`]s.
     pub team_id: Option<String>,
     pub profile: UiProfile,
+    /// With `profile` [`UiProfile::Invalid`]: an earlier profile stays in use
+    /// (#532). Without, nothing can connect until a valid one arrives.
+    pub profile_previous: bool,
     /// Changes when the node list does: read [`nodes`] again.
     pub profile_revision: Option<String>,
     /// Service paid-until, RFC 3339.

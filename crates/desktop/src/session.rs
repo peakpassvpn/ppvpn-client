@@ -19,6 +19,7 @@ use crate::api::{ApiErrorExt, ToTeam};
 use crate::auth::{AccessToken, AuthError, SignedIn};
 use crate::auth::{AuthErrorExt, StoreErrorExt};
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
+use crate::saved_profile::SavedProfile;
 use crate::{
     AuthState, Client, ClientSnapshot, DeviceCode, Node, ProfileStatus, StandardState, Team,
 };
@@ -114,6 +115,10 @@ pub(crate) struct SessionState {
     /// A profile revision the core rejected, with why; keeps
     /// `ProfileStatus::Invalid` across refreshes of that same revision.
     core_rejected: Option<(String, ClientErrorInfo)>,
+    /// The last profile a core accepted (this run, or saved by an earlier
+    /// one): the session goes back to it when a newer revision is rejected,
+    /// and the next launch starts from it (#532).
+    accepted: Option<SavedProfile>,
     refresh_task: Option<tokio::task::JoinHandle<()>>,
     /// Wakes the refresh loop when the profile status moves into or out of
     /// `NodesNotReady` outside the loop (a manual refresh, a team switch), so
@@ -148,6 +153,7 @@ impl SessionState {
         self.nodes.clear();
         self.teams.clear();
         self.core_rejected = None;
+        self.accepted = None;
         if let Some(task) = self.refresh_task.take() {
             task.abort();
         }
@@ -427,7 +433,7 @@ impl Client {
         match result {
             Ok(Some(signed_in)) => {
                 tracing::info!("session restore: signed in");
-                self.begin_session(signed_in)
+                self.begin_session(signed_in, true)
             }
             Ok(None) => {
                 tracing::info!("session restore: signed out (no saved login)");
@@ -484,6 +490,7 @@ impl Client {
                     snapshot.last_error = info;
                     true
                 });
+                self.load_saved_profile(session);
                 self.spawn_refresh_loop(session, RETRY_INTERVAL);
             }
         }
@@ -562,7 +569,7 @@ impl Client {
                         tracing::info!(
                             "credential store readable after {attempt} attempts; restoring"
                         );
-                        return client.begin_session(signed_in);
+                        return client.begin_session(signed_in, true);
                     }
                     // Readable now and nothing saved (or rejected for good).
                     Ok(None) => {
@@ -595,6 +602,7 @@ impl Client {
                             snapshot.last_error = info;
                             true
                         });
+                        client.load_saved_profile(session);
                         return client.spawn_refresh_loop(session, RETRY_INTERVAL);
                     }
                 }
@@ -689,7 +697,7 @@ impl Client {
         match result {
             Ok(signed_in) => {
                 tracing::info!("device login: finished, signed in");
-                self.begin_session(signed_in)
+                self.begin_session(signed_in, false)
             }
             Err(AuthError::Cancelled) => {
                 tracing::info!("device login: cancelled or superseded");
@@ -730,9 +738,9 @@ impl Client {
         });
     }
 
-    /// Start a new session from a completed sign-in and load its data in
-    /// the background.
-    fn begin_session(&self, signed_in: SignedIn) {
+    /// Start a new session from a completed sign-in (`restored`: the saved
+    /// login at launch) and load its data in the background.
+    fn begin_session(&self, signed_in: SignedIn, restored: bool) {
         let (session, replaced) = {
             let mut state = self.session_state();
             let replaced = state.signed_in;
@@ -754,7 +762,77 @@ impl Client {
             snapshot.last_error = None;
             true
         });
+        if restored {
+            self.load_saved_profile(session);
+        } else {
+            // A new sign-in, possibly another account's.
+            crate::saved_profile::remove(&self.config.data_dir);
+        }
         self.spawn_refresh_loop(session, Duration::ZERO);
+    }
+
+    /// Puts the profile an earlier run saved in place at launch, until the
+    /// backend serves one the core accepts (#532).
+    fn load_saved_profile(&self, session: u64) {
+        let Some(saved) = crate::saved_profile::load(&self.config.data_dir, &self.config.api_base)
+        else {
+            return;
+        };
+        let parsed = match api::parse_profile(&saved.raw) {
+            Ok(parsed) if !parsed.nodes.is_empty() && parsed.summary.revision == saved.revision => {
+                parsed
+            }
+            _ => {
+                tracing::warn!("saved profile: not a usable profile, removed");
+                crate::saved_profile::remove(&self.config.data_dir);
+                return;
+            }
+        };
+        let applied = self.update_session(session, |state, snapshot| {
+            if !state.signed_in || state.profile_raw.is_some() {
+                // Signed out meanwhile, or the fresh download landed first.
+                return false;
+            }
+            state.profile_raw = Some(saved.raw.clone());
+            state.nodes = parsed.nodes;
+            state.accepted = Some(saved.clone());
+            self.keep_selection(snapshot, &state.nodes, parsed.default_node_id);
+            snapshot.profile = Some(parsed.summary);
+            snapshot.profile_status = ProfileStatus::Ready;
+            true
+        });
+        if applied {
+            tracing::info!(
+                "saved profile: revision {} in use until the backend serves one",
+                saved.revision
+            );
+            self.on_profile_changed();
+        }
+    }
+
+    /// Keeps the selected node when `nodes` has it, else selects the
+    /// profile's default (or the first node) and persists that. Called under
+    /// the session lock, so it cannot overwrite a concurrent `select_node`.
+    fn keep_selection(
+        &self,
+        snapshot: &mut ClientSnapshot,
+        nodes: &[Node],
+        default_node_id: Option<String>,
+    ) {
+        let selection_valid = snapshot
+            .selected_node_id
+            .as_ref()
+            .is_some_and(|id| nodes.iter().any(|node| &node.id == id));
+        if selection_valid {
+            return;
+        }
+        let fallback = default_node_id
+            .filter(|id| nodes.iter().any(|node| &node.id == id))
+            .or_else(|| nodes.first().map(|node| node.id.clone()));
+        if let Err(detail) = save_selection(&self.config.data_dir, fallback.as_deref()) {
+            tracing::warn!("persist node selection: {detail}");
+        }
+        snapshot.selected_node_id = fallback;
     }
 
     /// The backend rejected the saved login for good (credentials are
@@ -776,6 +854,7 @@ impl Client {
                 tracing::warn!("clear node selection: {detail}");
             }
             crate::device::remove_agent_files(&self.config.data_dir);
+            crate::saved_profile::remove(&self.config.data_dir);
             let mut snapshot = self
                 .snapshot
                 .lock()
@@ -1010,6 +1089,9 @@ impl Client {
             state.profile_raw = None;
             state.nodes.clear();
             state.core_rejected = None;
+            // Another team's profile.
+            state.accepted = None;
+            crate::saved_profile::remove(&self.config.data_dir);
             snapshot.team = Some(team);
             snapshot.profile = None;
             snapshot.profile_status = ProfileStatus::Loading;
@@ -1050,6 +1132,9 @@ impl Client {
             state.profile_raw = None;
             state.nodes.clear();
             state.core_rejected = None;
+            // Nothing to fall back to: the team has no usable profile now.
+            state.accepted = None;
+            crate::saved_profile::remove(&self.config.data_dir);
             snapshot.profile = None;
             snapshot.profile_status = status;
             clear_error(snapshot, user_action);
@@ -1062,9 +1147,17 @@ impl Client {
         error
     }
 
-    /// The core refused `revision` of the current profile.
-    pub(crate) fn mark_core_rejected(&self, revision: &str, info: ClientErrorInfo) {
+    /// The core refused `revision` of the current profile. With an earlier
+    /// profile a core accepted, the session goes back to it and the cores
+    /// run it again; returns whether it did (#532).
+    pub(crate) fn mark_core_rejected(&self, revision: &str, info: ClientErrorInfo) -> bool {
+        // The core's code and field lead the detail, for support (#532).
+        tracing::warn!(
+            "profile revision {revision} rejected by the core: {}",
+            info.detail
+        );
         let session = self.session_state().session;
+        let mut previous = None;
         self.update_session(session, |state, snapshot| {
             let current = snapshot
                 .profile
@@ -1074,8 +1167,55 @@ impl Client {
                 return false;
             }
             state.core_rejected = Some((revision.to_string(), info.clone()));
-            snapshot.profile_status = ProfileStatus::Invalid { error: info };
+            let fallback = state
+                .accepted
+                .clone()
+                .filter(|accepted| accepted.revision != revision)
+                .and_then(|accepted| {
+                    let parsed = api::parse_profile(&accepted.raw).ok()?;
+                    Some((accepted, parsed))
+                });
+            if let Some((accepted, parsed)) = fallback {
+                state.profile_raw = Some(accepted.raw);
+                state.nodes = parsed.nodes;
+                self.keep_selection(snapshot, &state.nodes, parsed.default_node_id);
+                snapshot.profile = Some(parsed.summary);
+                previous = Some(accepted.revision);
+            }
+            snapshot.profile_status = ProfileStatus::Invalid {
+                error: info.clone(),
+                previous: previous.is_some(),
+            };
             true
+        });
+        if let Some(previous) = &previous {
+            tracing::info!("profile: back to revision {previous}, which the core accepted");
+            self.on_profile_changed();
+        }
+        previous.is_some()
+    }
+
+    /// A core accepted `current`: the session falls back to it and the next
+    /// launch starts from it (#532).
+    pub(crate) fn mark_core_accepted(&self, current: &CurrentProfile) {
+        let session = self.session_state().session;
+        self.update_session(session, |state, _| {
+            let known = state
+                .accepted
+                .as_ref()
+                .is_some_and(|accepted| accepted.revision == current.revision);
+            if state.signed_in && !known {
+                let accepted = SavedProfile {
+                    revision: current.revision.clone(),
+                    raw: current.raw.clone(),
+                };
+                // Under the session lock: a sign-out cannot come between and
+                // leave the file behind.
+                crate::saved_profile::save(&self.config.data_dir, &self.config.api_base, &accepted);
+                state.accepted = Some(accepted);
+            }
+            // Nothing the snapshot shows changed.
+            false
         });
     }
 
@@ -1105,7 +1245,10 @@ impl Client {
                         if state.team_epoch != epoch {
                             return false;
                         }
-                        snapshot.profile_status = ProfileStatus::Invalid { error: info };
+                        snapshot.profile_status = ProfileStatus::Invalid {
+                            error: info,
+                            previous: state.profile_raw.is_some(),
+                        };
                         clear_error(snapshot, user_action);
                         true
                     });
@@ -1127,33 +1270,32 @@ impl Client {
             if state.team_epoch != epoch {
                 return false;
             }
+            let known_rejected = state
+                .core_rejected
+                .as_ref()
+                .is_some_and(|(revision, _)| *revision == parsed.summary.revision);
+            let on_previous = snapshot
+                .profile
+                .as_ref()
+                .is_some_and(|profile| profile.revision != parsed.summary.revision);
+            if known_rejected && on_previous && state.profile_raw.is_some() {
+                // The core refused this revision already: the earlier one it
+                // accepted stays in use (#532).
+                clear_error(snapshot, user_action);
+                return true;
+            }
             changed = state.profile_raw.is_none()
                 || snapshot.profile.as_ref().map(|profile| &profile.revision)
                     != Some(&parsed.summary.revision);
             standard_failed = matches!(snapshot.standard, StandardState::Failed { .. });
             state.profile_raw = Some(Arc::new(raw));
             state.nodes = parsed.nodes;
-            let nodes = &state.nodes;
-            let selection_valid = snapshot
-                .selected_node_id
-                .as_ref()
-                .is_some_and(|id| nodes.iter().any(|node| &node.id == id));
-            if !selection_valid {
-                let fallback = parsed
-                    .default_node_id
-                    .filter(|id| nodes.iter().any(|node| &node.id == id))
-                    .or_else(|| nodes.first().map(|node| node.id.clone()));
-                // Persisted under the session lock so it cannot overwrite a
-                // concurrent `select_node`.
-                if let Err(detail) = save_selection(&self.config.data_dir, fallback.as_deref()) {
-                    tracing::warn!("persist node selection: {detail}");
-                }
-                snapshot.selected_node_id = fallback;
-            }
+            self.keep_selection(snapshot, &state.nodes, parsed.default_node_id);
             snapshot.profile_status = match &state.core_rejected {
                 Some((revision, info)) if *revision == parsed.summary.revision => {
                     ProfileStatus::Invalid {
                         error: info.clone(),
+                        previous: false,
                     }
                 }
                 _ => ProfileStatus::Ready,

@@ -23,7 +23,7 @@ use crate::core_ipc::{self, CoreCallError, CoreTransport};
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
 use crate::standard::StandardCore;
 use crate::sysproxy::SystemProxyWriter;
-use crate::{ClientConfig, ConnectionPhase};
+use crate::{ClientConfig, ConnectionPhase, StandardState};
 
 const BACKUP_FILE: &str = "system-proxy-backup.json";
 /// How long connect waits for the standard core to become ready.
@@ -290,14 +290,22 @@ impl Inner {
         }
     }
 
-    async fn ready_transport(&self) -> Option<Arc<dyn CoreTransport>> {
+    /// The ready standard core's transport. A core that refused the profile
+    /// fails at once with that (#532): nothing would start it within the
+    /// wait, and it is no proxy setting's fault.
+    async fn ready_transport(&self) -> Result<Arc<dyn CoreTransport>, (ClientErrorInfo, bool)> {
         let deadline = tokio::time::Instant::now() + READY_WAIT;
         loop {
             if let Ok(transport) = self.standard.transport() {
-                return Some(transport);
+                return Ok(transport);
+            }
+            if let StandardState::Failed { error } = self.standard.state() {
+                if crate::cores::is_profile_rejection(&error) {
+                    return Err((error, false));
+                }
             }
             if tokio::time::Instant::now() >= deadline {
-                return None;
+                return Err(failed("STANDARD_CORE_NOT_READY", true));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -306,10 +314,7 @@ impl Inner {
     async fn bring_up(
         &self,
     ) -> Result<((String, u16), Option<ForeignProxy>), (ClientErrorInfo, bool)> {
-        let transport = self
-            .ready_transport()
-            .await
-            .ok_or_else(|| failed("STANDARD_CORE_NOT_READY", true))?;
+        let transport = self.ready_transport().await?;
         let status = core_ipc::set_system_proxy(transport.as_ref(), true)
             .await
             .map_err(|error| endpoint_failure(&error))?;

@@ -133,9 +133,12 @@ class OverviewPage extends StatelessWidget {
             children: [
               Reveal(
                 child: snapshot.profile == rust.UiProfile.invalid
-                    ? const Column(
+                    ? Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [ConfigWarning(), SizedBox(height: Tokens.cardGap)],
+                        children: [
+                          ConfigWarning(previous: snapshot.profilePrevious),
+                          const SizedBox(height: Tokens.cardGap),
+                        ],
                       )
                     : null,
               ),
@@ -732,6 +735,8 @@ class ProblemCard extends StatelessWidget {
         title: s('h_stdFail'),
         description: switch (snapshot.error?.code) {
           null || 'SystemProxyFailed' => s('fr_port'),
+          // The core refused the profile: no proxy setting is at fault (#532).
+          'ProfileInvalid' || 'ProfileExpired' => s('fr_profile'),
           final code => code,
         },
         actions: [retry],
@@ -750,6 +755,7 @@ class ProblemCard extends StatelessWidget {
       'ServiceUnavailable' || 'ServiceIncompatible' => s('fr_service'),
       'NetworkPathContended' => s('fr_contended'),
       'Timeout' => s('fr_timeout'),
+      'ProfileInvalid' || 'ProfileExpired' => s('fr_profile'),
       final code? => code,
       null => s('st_failed'),
     };
@@ -1081,8 +1087,12 @@ class LoadingNodes extends StatelessWidget {
   }
 }
 
+/// The profile is invalid: says whether an earlier one is still in use
+/// (`previous`) or there is none (#532).
 class ConfigWarning extends StatelessWidget {
-  const ConfigWarning({super.key});
+  const ConfigWarning({super.key, required this.previous});
+
+  final bool previous;
 
   @override
   Widget build(BuildContext context) {
@@ -1103,7 +1113,7 @@ class ConfigWarning extends StatelessWidget {
               TextSpan(
                 children: [
                   TextSpan(text: '${S.current('cfgT')} · ', style: t.sectionTitle),
-                  TextSpan(text: S.current('cfgD'), style: t.sub),
+                  TextSpan(text: S.current(previous ? 'cfgD' : 'invalidD'), style: t.sub),
                 ],
               ),
             ),

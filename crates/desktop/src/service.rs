@@ -1172,6 +1172,7 @@ pub(crate) fn forwarded_core_error(error: ServiceError) -> CoreCallError {
         ServiceError::Failed(detail) => match error.reason_code() {
             Some(code) => CoreCallError::Api {
                 code: code.to_string(),
+                field: None,
                 message: detail
                     .split_once(':')
                     .map(|(_, message)| message.trim().to_string())
@@ -1180,6 +1181,7 @@ pub(crate) fn forwarded_core_error(error: ServiceError) -> CoreCallError {
             },
             None => CoreCallError::Api {
                 code: "CORE_OPERATION_FAILED".to_string(),
+                field: None,
                 message: detail.clone(),
                 retryable: false,
             },
