@@ -1,5 +1,5 @@
 //! Core API v1 calls: paths with JSON bodies, answered with data or an
-//! error `{"code","message","retryable"}`.
+//! error `{"code","field"?,"message","retryable"}`.
 //!
 //! Three transports implement [`CoreTransport`]: `engine::EngineTransport`
 //! calls the in-process engine (standard mode),
@@ -43,6 +43,9 @@ pub(crate) enum CoreCallError {
     /// call); `code` is the stable upstream code such as `NODE_NOT_FOUND`.
     Api {
         code: String,
+        /// The profile field a validation error is about, e.g.
+        /// `routing.rule_sets[0].url`.
+        field: Option<String>,
         message: String,
         retryable: bool,
     },
@@ -60,8 +63,25 @@ impl CoreCallError {
     pub(crate) fn detail(&self) -> String {
         match self {
             Self::Transport(detail) => detail.clone(),
-            Self::Api { code, message, .. } if message.is_empty() => code.clone(),
-            Self::Api { code, message, .. } => format!("{code}: {message}"),
+            Self::Api {
+                code,
+                field,
+                message,
+                ..
+            } => {
+                // `CODE field: message`: the code and the field lead, so a
+                // rejected profile's log line names both (#532).
+                let mut detail = code.clone();
+                if let Some(field) = field {
+                    detail.push(' ');
+                    detail.push_str(field);
+                }
+                if !message.is_empty() {
+                    detail.push_str(": ");
+                    detail.push_str(message);
+                }
+                detail
+            }
         }
     }
 
@@ -1001,6 +1021,7 @@ pub(crate) mod tests {
     fn rule_set_rejections_are_profile_errors() {
         let rejected = CoreCallError::Api {
             code: "RULE_SET_HOST_NOT_ALLOWED".into(),
+            field: None,
             message: "rule set cn-ip host cdn.example.com is not allowed".into(),
             retryable: false,
         };
@@ -1010,6 +1031,28 @@ pub(crate) mod tests {
         );
         assert!(is_profile_error("RULE_SET_HOSTS_INVALID"));
         assert!(is_profile_error("RULE_SET_NOT_FOUND"));
+    }
+
+    #[test]
+    fn the_detail_names_the_code_and_the_field() {
+        let rejected = CoreCallError::Api {
+            code: "RULE_SET_HOST_NOT_ALLOWED".into(),
+            field: Some("routing.rule_sets[0].url".into()),
+            message: "rule set host must be the host the profile came from".into(),
+            retryable: false,
+        };
+        assert_eq!(
+            rejected.info(ErrorCode::StandardCoreFailed).detail,
+            "RULE_SET_HOST_NOT_ALLOWED routing.rule_sets[0].url: \
+             rule set host must be the host the profile came from"
+        );
+        let bare = CoreCallError::Api {
+            code: "PROFILE_REQUIRED".into(),
+            field: None,
+            message: String::new(),
+            retryable: false,
+        };
+        assert_eq!(bare.detail(), "PROFILE_REQUIRED");
     }
 
     fn proxy_core() -> Arc<FakeCore> {
@@ -1252,6 +1295,7 @@ pub(crate) mod tests {
     fn api_errors_keep_the_core_code() {
         let error = CoreCallError::Api {
             code: "NODE_NOT_FOUND".into(),
+            field: None,
             message: "node not found".into(),
             retryable: false,
         };
@@ -1262,6 +1306,7 @@ pub(crate) mod tests {
         );
         let profile = CoreCallError::Api {
             code: "ENDPOINT_KEY_DUPLICATE".into(),
+            field: None,
             message: String::new(),
             retryable: false,
         };
@@ -1333,6 +1378,7 @@ pub(crate) mod tests {
                     Duration::ZERO,
                     Err(CoreCallError::Api {
                         code: "NODE_NOT_FOUND".into(),
+                        field: None,
                         message: String::new(),
                         retryable: false,
                     }),

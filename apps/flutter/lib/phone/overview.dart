@@ -67,9 +67,9 @@ class PhoneOverview extends StatelessWidget {
       children: [
         Reveal(
           child: snapshot.profile == rust.UiProfile.invalid
-              ? const Column(
+              ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [ConfigWarning(), SizedBox(height: 12)],
+                  children: [ConfigWarning(previous: snapshot.profilePrevious), const SizedBox(height: 12)],
                 )
               : null,
         ),

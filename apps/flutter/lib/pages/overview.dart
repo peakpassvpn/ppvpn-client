@@ -133,9 +133,12 @@ class OverviewPage extends StatelessWidget {
             children: [
               Reveal(
                 child: snapshot.profile == rust.UiProfile.invalid
-                    ? const Column(
+                    ? Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [ConfigWarning(), SizedBox(height: Tokens.cardGap)],
+                        children: [
+                          ConfigWarning(previous: snapshot.profilePrevious),
+                          const SizedBox(height: Tokens.cardGap),
+                        ],
                       )
                     : null,
               ),
@@ -702,7 +705,19 @@ class ProblemCard extends StatelessWidget {
           onPress: () => app.connectIn(rust.UiConnectionMode.compatible),
         ),
     ];
+    final expired = snapshot.error?.code == 'ProfileExpired';
     return switch (snapshot.phase) {
+      // The core refused the profile: neither the tunnel nor the system
+      // proxy is at fault (#532).
+      rust.UiPhase.error when expired || snapshot.error?.code == 'ProfileInvalid' => ProblemCard(
+        warn: false,
+        title: s(expired ? 'cfgExpiredT' : 'cfgT'),
+        description: s(expired ? 'fr_profileExpired' : 'fr_profile'),
+        actions: [
+          Button(kind: ButtonKind.secondary, label: s('refreshNodes'), onPress: app.refreshNodes),
+          retry,
+        ],
+      ),
       rust.UiPhase.error when enhanced => ProblemCard(
         warn: false,
         title: '${s('tunMode')} · ${s('st_failed')}',
@@ -1196,8 +1211,12 @@ class LoadingNodes extends StatelessWidget {
   }
 }
 
+/// The profile is invalid: says whether an earlier one is still in use
+/// (`previous`) or there is none (#532).
 class ConfigWarning extends StatelessWidget {
-  const ConfigWarning({super.key});
+  const ConfigWarning({super.key, required this.previous});
+
+  final bool previous;
 
   @override
   Widget build(BuildContext context) {
@@ -1218,7 +1237,7 @@ class ConfigWarning extends StatelessWidget {
               TextSpan(
                 children: [
                   TextSpan(text: '${S.current('cfgT')} · ', style: t.sectionTitle),
-                  TextSpan(text: S.current('cfgD'), style: t.sub),
+                  TextSpan(text: S.current(previous ? 'cfgD' : 'invalidD'), style: t.sub),
                 ],
               ),
             ),

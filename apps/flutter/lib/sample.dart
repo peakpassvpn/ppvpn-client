@@ -124,6 +124,7 @@ AppState sampleState() {
       teamName: 'Acme Studio',
       teamId: 'acme',
       profile: rust.UiProfile.ready,
+      profilePrevious: false,
       profileRevision: 'sample',
       expiresAt: '2027-03-31T00:00:00Z',
       phase: rust.UiPhase.connected,

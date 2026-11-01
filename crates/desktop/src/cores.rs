@@ -46,7 +46,7 @@ fn is_standard_error(info: &ClientErrorInfo) -> bool {
 }
 
 /// A core refused the profile itself (as opposed to failing to run).
-fn is_profile_rejection(info: &ClientErrorInfo) -> bool {
+pub(crate) fn is_profile_rejection(info: &ClientErrorInfo) -> bool {
     matches!(
         info.code,
         ErrorCode::ProfileInvalid | ErrorCode::ProfileExpired
@@ -305,16 +305,23 @@ impl Client {
         // Standard-core failures surface through its state sink; a rejected
         // update of a running core keeps it ready and is reported here. Both
         // cores get the selection and the pins with the profile.
-        if let Err(error) = self
+        match self
             .standard
             .apply_profile(&current.raw, &current.revision)
             .await
         {
-            if let Some(info) = error.info() {
-                if is_profile_rejection(&info) {
-                    self.mark_core_rejected(&current.revision, info);
-                } else if matches!(self.standard.state(), StandardState::Ready { .. }) {
-                    self.report_background(info);
+            Ok(()) => self.mark_core_accepted(&current),
+            Err(error) => {
+                if let Some(info) = error.info() {
+                    if is_profile_rejection(&info) {
+                        if self.mark_core_rejected(&current.revision, info) {
+                            // Back on the earlier profile: the sync that
+                            // follows hands it to both cores.
+                            return;
+                        }
+                    } else if matches!(self.standard.state(), StandardState::Ready { .. }) {
+                        self.report_background(info);
+                    }
                 }
             }
         }
@@ -504,6 +511,9 @@ pub(crate) mod test_support {
         pub(crate) system_proxy: Arc<Mutex<(bool, u16)>>,
         /// `apply-profile` fails while set (the core cannot run the profile).
         pub(crate) fail_apply: Arc<AtomicBool>,
+        /// `apply-profile` refuses this revision as the engine refuses a rule
+        /// set on another host (`RULE_SET_HOST_NOT_ALLOWED`).
+        pub(crate) reject_revision: Arc<Mutex<Option<String>>>,
         /// `GetStatus.rule_sets`; omitted while `null`.
         pub(crate) rule_sets: Arc<Mutex<Value>>,
         /// Ingress pins the core holds (node id → endpoint key); reported in
@@ -534,6 +544,8 @@ pub(crate) mod test_support {
             let toggle = system_proxy.clone();
             let fail_apply: Arc<AtomicBool> = Arc::default();
             let failing = fail_apply.clone();
+            let reject_revision: Arc<Mutex<Option<String>>> = Arc::default();
+            let rejected = reject_revision.clone();
             let rule_sets: Arc<Mutex<Value>> = Arc::default();
             let reported_rule_sets = rule_sets.clone();
             let pins: Arc<Mutex<std::collections::BTreeMap<String, String>>> = Arc::default();
@@ -611,10 +623,26 @@ pub(crate) mod test_support {
                         Duration::ZERO,
                         Err(CoreCallError::Api {
                             code: "INTERNAL".into(),
+                            field: None,
                             message: "runtime failed to start".into(),
                             retryable: false,
                         }),
                     ),
+                    "/v1/apply-profile"
+                        if rejected.lock().unwrap().as_deref()
+                            == body["profile"]["revision"].as_str() =>
+                    {
+                        (
+                            Duration::ZERO,
+                            Err(CoreCallError::Api {
+                                code: "RULE_SET_HOST_NOT_ALLOWED".into(),
+                                field: Some("routing.rule_sets[0].url".into()),
+                                message: "rule set host must be the host the profile came from"
+                                    .into(),
+                                retryable: false,
+                            }),
+                        )
+                    }
                     "/v1/apply-profile" => {
                         *applied.lock().unwrap() = Some(body["profile"].clone());
                         // The engine takes the selection (default: the
@@ -663,6 +691,7 @@ pub(crate) mod test_support {
                 writer: Arc::default(),
                 system_proxy,
                 fail_apply,
+                reject_revision,
                 rule_sets,
                 pins,
                 credentials_reset: Arc::default(),
@@ -1050,13 +1079,169 @@ mod tests {
         assert_eq!(snapshot.profile.unwrap().revision, REVISION);
         assert_eq!(
             snapshot.profile_status,
-            ProfileStatus::Invalid { error: info }
+            ProfileStatus::Invalid {
+                error: info,
+                previous: true
+            }
         );
         assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
         assert_eq!(client.nodes().len(), 3);
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(launcher.calls("/v1/apply-profile"), 1);
 
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    fn saved_revision(data_dir: &str, api_base: &str) -> Option<String> {
+        crate::saved_profile::load(data_dir, api_base).map(|saved| saved.revision)
+    }
+
+    fn rejected_detail(snapshot: &ClientSnapshot) -> Option<(String, bool)> {
+        match &snapshot.profile_status {
+            ProfileStatus::Invalid { error, previous } => Some((error.detail.clone(), *previous)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_rejected_profile_with_nothing_before_it_says_so_and_fails_compatible_at_once() {
+        let launcher = FakeLauncher::new();
+        *launcher.reject_revision.lock().unwrap() = Some(REVISION.into());
+        let (client, _, launcher, data_dir) =
+            signed_in_client_with(vec![("200 OK", r#"{"revoked":true}"#.into())], launcher);
+        let snapshot = wait_for(&client, |s| rejected_detail(s).is_some());
+        let (detail, previous) = rejected_detail(&snapshot).unwrap();
+        assert!(
+            detail.starts_with("RULE_SET_HOST_NOT_ALLOWED routing.rule_sets[0].url"),
+            "{detail}"
+        );
+        assert!(!previous, "nothing was accepted before");
+        assert!(matches!(snapshot.standard, StandardState::Failed { .. }));
+
+        block_on(client.set_connection_mode(crate::ConnectionMode::Compatible)).unwrap();
+        let error = block_on(client.connect()).unwrap_err();
+        assert_eq!(error.info().unwrap().code, ErrorCode::ProfileInvalid);
+        let snapshot = client.snapshot();
+        assert_eq!(snapshot.connection.phase, ConnectionPhase::Error);
+        assert_eq!(
+            snapshot.connection.reason.map(|reason| reason.code),
+            Some(ErrorCode::ProfileInvalid)
+        );
+        assert!(
+            !launcher
+                .writer
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("apply")),
+            "the OS proxy was never touched"
+        );
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn a_rejected_revision_falls_back_to_the_accepted_one_and_sign_out_drops_it() {
+        let rejected = FIXTURE.replace(REVISION, "r2");
+        let (client, _, launcher, data_dir) = signed_in_client_then(vec![
+            ("200 OK", rejected.clone()),
+            ("200 OK", rejected),
+            ("200 OK", r#"{"revoked":true}"#.into()),
+        ]);
+        let api_base = client.config.api_base.clone();
+        wait_for(&client, is_ready);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while saved_revision(&data_dir, &api_base).as_deref() != Some(REVISION) {
+            assert!(
+                Instant::now() < deadline,
+                "the accepted profile was not saved"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        *launcher.reject_revision.lock().unwrap() = Some("r2".into());
+        block_on(client.refresh_profile()).unwrap();
+        let snapshot = wait_for(&client, |s| rejected_detail(s).is_some());
+        assert!(
+            rejected_detail(&snapshot).unwrap().1,
+            "the accepted one is in use"
+        );
+        assert_eq!(snapshot.profile.unwrap().revision, REVISION);
+        assert_eq!(
+            client.current_profile().unwrap().raw.as_slice(),
+            FIXTURE.as_bytes()
+        );
+        assert!(matches!(
+            client.snapshot().standard,
+            StandardState::Ready { revision } if revision == REVISION
+        ));
+        assert_eq!(
+            saved_revision(&data_dir, &api_base).as_deref(),
+            Some(REVISION)
+        );
+
+        // The same rejected revision again: the accepted one stays.
+        let applies = launcher.calls("/v1/apply-profile");
+        block_on(client.refresh_profile()).unwrap();
+        assert_eq!(client.snapshot().profile.unwrap().revision, REVISION);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(launcher.calls("/v1/apply-profile"), applies);
+
+        block_on(client.sign_out()).unwrap();
+        assert_eq!(saved_revision(&data_dir, &api_base), None);
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn the_saved_profile_serves_a_launch_whose_fresh_profile_is_rejected() {
+        let rejected = FIXTURE.replace(REVISION, "r2");
+        let (base, _) = serve(vec![
+            ("200 OK", r#"{"refresh_token":"jyr_prepared"}"#.to_string()),
+            ("200 OK", token_set("jyr_active")),
+            ("200 OK", r#"{"id":"u1","name":"Jerry","avatar":""}"#.into()),
+            (
+                "200 OK",
+                r#"{"items":[{"id":"t1","name":"Personal","is_personal":true,"is_default":true}]}"#
+                    .into(),
+            ),
+            ("200 OK", rejected),
+        ]);
+        let data_dir = crate::test_backend::temp_dir("ppvpn-cores-test");
+        crate::saved_profile::save(
+            &data_dir,
+            &base,
+            &crate::saved_profile::SavedProfile {
+                revision: REVISION.into(),
+                raw: Arc::new(FIXTURE.as_bytes().to_vec()),
+            },
+        );
+        let launcher = FakeLauncher::new();
+        *launcher.reject_revision.lock().unwrap() = Some("r2".into());
+        let client = Client::with_parts(
+            ClientConfig {
+                api_base: base.clone(),
+                data_dir: data_dir.clone(),
+                log_dir: data_dir.clone(),
+                platform: "macos".into(),
+                app_version: "0.0.0-test".into(),
+            },
+            MemoryPlatform::with_blob(r#"{"version":1,"active_refresh":"jyr_old"}"#),
+            Arc::new(Recorder::default()),
+            Arc::new(NoService),
+            launcher.clone(),
+            launcher.writer.clone(),
+        );
+        let snapshot = wait_for(&client, |s| {
+            rejected_detail(s).is_some_and(|(_, previous)| previous)
+                && matches!(s.standard, StandardState::Ready { .. })
+        });
+        assert_eq!(snapshot.profile.unwrap().revision, REVISION);
+        assert!(matches!(
+            snapshot.standard,
+            StandardState::Ready { revision } if revision == REVISION
+        ));
+        assert_eq!(saved_revision(&data_dir, &base).as_deref(), Some(REVISION));
         client.shutdown();
         let _ = std::fs::remove_dir_all(data_dir);
     }

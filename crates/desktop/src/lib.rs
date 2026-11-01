@@ -30,6 +30,7 @@ mod push_agent;
 mod push_shown;
 mod reachability;
 mod routing;
+mod saved_profile;
 mod service;
 mod session;
 mod standard;
@@ -431,9 +432,14 @@ pub enum ProfileStatus {
     /// The team is disabled; offer switching teams. No profile, both cores
     /// stopped.
     TeamDisabled,
-    /// The backend sent a profile this client or its core rejects; the
-    /// previously valid profile, if any, stays in use.
-    Invalid { error: ClientErrorInfo },
+    /// The backend sent a profile this client or its core rejects. With
+    /// `previous`, an earlier profile (one the core accepted, possibly saved
+    /// by an earlier run) stays in use; without, there is nothing to connect
+    /// with until the backend serves a valid one (#532).
+    Invalid {
+        error: ClientErrorInfo,
+        previous: bool,
+    },
     /// The team's subscription is live, but its nodes are not published yet.
     /// No profile, both cores stopped. The client fetches the profile again
     /// on its own (after 30 s, 60 s, then every 2 minutes) and moves to

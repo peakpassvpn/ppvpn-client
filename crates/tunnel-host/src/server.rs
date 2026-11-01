@@ -3,7 +3,7 @@
 //! - a frame is `[u32 big-endian length][UTF-8 JSON]`, at most 16 MiB;
 //! - one call per connection: `{"path", "body"}`, answered by
 //!   `engine-host::dispatch` as `{"ok": true, "data"}` or
-//!   `{"ok": false, "error": {"code", "message", "retryable"}}`;
+//!   `{"ok": false, "error": {"code", "field"?, "message", "retryable"}}`;
 //! - `/v1/watch` keeps its connection: a `status` frame at once and at each
 //!   state change, and the health loop's `health` frames, until the host
 //!   stops.

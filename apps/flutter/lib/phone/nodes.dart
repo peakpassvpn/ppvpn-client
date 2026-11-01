@@ -81,8 +81,11 @@ class _PhoneNodesState extends State<PhoneNodes> {
       builder: (context, nodes, _) {
         if (nodes.isEmpty) {
           return snapshot.profile == rust.UiProfile.invalid
-              ? const Center(
-                  child: Padding(padding: EdgeInsets.all(Tokens.phonePadding), child: ConfigWarning()),
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(Tokens.phonePadding),
+                    child: ConfigWarning(previous: snapshot.profilePrevious),
+                  ),
                 )
               : const LoadingNodes();
         }

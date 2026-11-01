@@ -18,6 +18,10 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiError {
     pub code: String,
+    /// The profile field a validation error is about, e.g.
+    /// `routing.rule_sets[0].url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
     pub message: String,
     pub retryable: bool,
 }
@@ -26,6 +30,7 @@ impl ApiError {
     fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
+            field: None,
             message: message.into(),
             retryable: false,
         }
@@ -40,6 +45,7 @@ impl From<ppvpn_core::Error> for ApiError {
     fn from(error: ppvpn_core::Error) -> Self {
         Self {
             code: error.code.to_string(),
+            field: error.field,
             message: error.message,
             retryable: error.retryable,
         }
@@ -246,6 +252,7 @@ mod tests {
             ApiError::from(error),
             ApiError {
                 code: "PROFILE_REQUIRED".to_string(),
+                field: None,
                 message: "profile is required".to_string(),
                 retryable: false,
             }
