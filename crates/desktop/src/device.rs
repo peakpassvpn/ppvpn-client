@@ -1,5 +1,13 @@
-//! Desktop push registration (main-app side of the push agent), on
-//! [`ppvpn_account::device`].
+//! Push registration, on [`ppvpn_account::device`].
+//!
+//! Phones (#539) register the APNs or FCM token the host hands over with
+//! [`Client::set_push_token`]. It is device-wide, so it is kept in
+//! `<data_dir>/push-token.json` across sign-outs; the device is registered
+//! on sign-in, on every launch and whenever the token changes, and
+//! unregistered by token at sign-out (best effort).
+//!
+//! The desktop registers for the self-hosted channel (main-app side of the
+//! push agent):
 //!
 //! Each install has a stable `installation_id` (`<data_dir>/installation.json`,
 //! kept across sign-outs). While signed in, the device is registered with the
@@ -11,7 +19,9 @@
 
 use std::path::{Path, PathBuf};
 
-use ppvpn_account::device::{installation_id, push_platform, DeviceRegistrationRequest};
+use ppvpn_account::device::{
+    installation_id, official_push, push_platform, DeviceRegistrationRequest,
+};
 pub(crate) use ppvpn_account::device::{write_private, DeviceState};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +33,20 @@ use crate::Client;
 
 pub(crate) const AGENT_FILE: &str = "push-agent.json";
 pub(crate) const AGENT_CURSOR_FILE: &str = "push-agent-cursor.json";
+pub(crate) const PUSH_TOKEN_FILE: &str = "push-token.json";
+
+/// The OS push token (APNs, FCM) the host handed over.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OsPushToken {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+}
+
+pub(crate) fn read_os_token(data_dir: &str) -> Option<OsPushToken> {
+    let raw = std::fs::read(Path::new(data_dir).join(PUSH_TOKEN_FILE)).ok()?;
+    serde_json::from_slice(&raw).ok()
+}
 
 /// What the push agent needs; written by the main app only.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -75,6 +99,57 @@ fn needs_new_token(error: &ClientError) -> bool {
 }
 
 impl Client {
+    /// Phones: the APNs device token (iOS) or FCM registration token
+    /// (Android) the OS gave the app, and the app's bundle id / package name
+    /// when known. Call it whenever the OS hands one over (every launch, and
+    /// on rotation). While signed in the device is registered with it; a
+    /// replaced token is unregistered first. Ignored on other platforms.
+    pub fn set_push_token(&self, token: String, bundle_id: Option<String>) {
+        if !official_push(&self.config.platform) {
+            tracing::warn!("push registration: OS push tokens are for the phones only");
+            return;
+        }
+        let token = token.trim().to_string();
+        if token.is_empty() {
+            return;
+        }
+        let new = OsPushToken {
+            token,
+            bundle_id: bundle_id.filter(|id| !id.trim().is_empty()),
+        };
+        let old = read_os_token(&self.config.data_dir);
+        if old.as_ref() != Some(&new) {
+            let raw = serde_json::to_vec(&new).unwrap_or_default();
+            let path = Path::new(&self.config.data_dir).join(PUSH_TOKEN_FILE);
+            if let Err(detail) = write_private(&path, &raw) {
+                tracing::warn!("push registration: {detail}");
+                return;
+            }
+        }
+        let Ok(session) = self.current_session() else {
+            return;
+        };
+        let replaced = old.filter(|old| old.token != new.token);
+        let was_registered = {
+            let mut state = self.session_state();
+            let registered = state.is_session(session) && state.device == DeviceState::Registered;
+            if registered && replaced.is_some() {
+                state.device = DeviceState::Pending;
+            }
+            registered
+        };
+        let weak = self.this.clone();
+        self.runtime.spawn(async move {
+            let Some(client) = ClientRef::upgrade(&weak) else {
+                return;
+            };
+            if let (Some(old), true) = (replaced, was_registered) {
+                client.unregister_os_token(session, &old.token).await;
+            }
+            client.ensure_device_registered(session).await;
+        });
+    }
+
     /// Registers when the session wants it; called by the refresh loop.
     pub(crate) async fn ensure_device_registered(&self, session: u64) {
         let wanted = {
@@ -108,16 +183,27 @@ impl Client {
     }
 
     async fn register_device(&self, session: u64) {
-        let installation = match installation_id(&self.config.data_dir) {
-            Ok(id) => id,
-            Err(detail) => {
-                tracing::warn!("push registration: installation id unavailable: {detail}");
-                return;
+        let official = official_push(&self.config.platform);
+        let (installation, os_token) = if official {
+            match read_os_token(&self.config.data_dir) {
+                Some(os_token) => (String::new(), Some(os_token)),
+                // Registered once the host hands the token over.
+                None => return,
+            }
+        } else {
+            match installation_id(&self.config.data_dir) {
+                Ok(id) => (id, None),
+                Err(detail) => {
+                    tracing::warn!("push registration: installation id unavailable: {detail}");
+                    return;
+                }
             }
         };
         let body = DeviceRegistrationRequest {
             platform: push_platform(&self.config.platform),
-            installation_id: installation.clone(),
+            installation_id: (!official).then(|| installation.clone()),
+            token: os_token.as_ref().map(|os_token| os_token.token.clone()),
+            bundle_id: os_token.and_then(|os_token| os_token.bundle_id),
             app_version: self.config.app_version.clone(),
             locale: locale(),
             timezone: timezone(),
@@ -144,6 +230,13 @@ impl Client {
                 return;
             }
         };
+        if official {
+            if self.session_is(session) {
+                tracing::info!("push registration: device {} registered", registration.id);
+                self.set_device_state(session, DeviceState::Registered);
+            }
+            return;
+        }
         let file = AgentFile {
             api_base: self.config.api_base.clone(),
             device_id: registration.id,
@@ -173,6 +266,16 @@ impl Client {
     /// Sign-out: deletes the device on the backend (best effort, while the
     /// session can still authenticate).
     pub(crate) async fn unregister_device(&self) {
+        if official_push(&self.config.platform) {
+            let Ok(session) = self.current_session() else {
+                return;
+            };
+            let registered = self.session_state().device == DeviceState::Registered;
+            if let (true, Some(os_token)) = (registered, read_os_token(&self.config.data_dir)) {
+                self.unregister_os_token(session, &os_token.token).await;
+            }
+            return;
+        }
         let Some(file) = read_agent_file(&self.config.data_dir) else {
             return;
         };
@@ -193,6 +296,30 @@ impl Client {
             Ok(Ok(())) => tracing::info!("push registration: device {id} deleted"),
             Ok(Err(error)) => tracing::info!("push registration: delete failed: {error}"),
             Err(_) => tracing::info!("push registration: delete timed out"),
+        }
+    }
+
+    /// Disables the device holding the OS push token `push_token` (best
+    /// effort).
+    async fn unregister_os_token(&self, session: u64, push_token: &str) {
+        let unregistered = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.bearer(
+                session,
+                |token| async move {
+                    self.auth
+                        .api()
+                        .unregister_push_token(&token, push_token)
+                        .await
+                },
+                ApiError::into_client_error,
+            ),
+        )
+        .await;
+        match unregistered {
+            Ok(Ok(())) => tracing::info!("push registration: device unregistered"),
+            Ok(Err(error)) => tracing::info!("push registration: unregister failed: {error}"),
+            Err(_) => tracing::info!("push registration: unregister timed out"),
         }
     }
 }
@@ -228,12 +355,16 @@ mod tests {
     }
 
     fn client(base: &str, data_dir: &str) -> Arc<Client> {
+        client_on(base, data_dir, "windows")
+    }
+
+    fn client_on(base: &str, data_dir: &str, platform: &str) -> Arc<Client> {
         Client::with_parts(
             ClientConfig {
                 api_base: base.to_string(),
                 data_dir: data_dir.to_string(),
                 log_dir: data_dir.to_string(),
-                platform: "windows".into(),
+                platform: platform.into(),
                 app_version: "1.2.3".into(),
             },
             MemoryPlatform::with_blob(r#"{"version":1,"active_refresh":"jyr_old"}"#),
@@ -305,6 +436,51 @@ mod tests {
         assert!(!Path::new(&dir).join(crate::push_shown::SHOWN_FILE).exists());
         assert_eq!(client.shown_push(17), None);
         assert!(Path::new(&dir).join(INSTALLATION_FILE).exists());
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_phone_registers_its_os_token_and_unregisters_it_at_sign_out() {
+        let backend = Backend::new();
+        let base = serve(backend.clone());
+        let dir = temp_dir("ppvpn-device-test");
+        let client = client_on(&base, &dir, "ios");
+        let bodies = || backend.device_bodies.lock().unwrap().clone();
+
+        // Signed in, but no OS token yet: nothing to register.
+        wait_until(|| client.snapshot().auth == crate::AuthState::SignedIn);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(backend.requests_matching("/devices/").is_empty());
+
+        client.set_push_token("apns-1".into(), Some("com.example.app".into()));
+        wait_until(|| !bodies().is_empty());
+        let body = &bodies()[0];
+        assert_eq!(body["platform"], "ios");
+        assert_eq!(body["token"], "apns-1");
+        assert_eq!(body["bundle_id"], "com.example.app");
+        assert!(body.get("installation_id").is_none());
+        assert!(read_agent_file(&dir).is_none(), "no push agent on a phone");
+        wait_until(|| client.session_state().device == DeviceState::Registered);
+
+        // The same token again changes nothing.
+        client.set_push_token("apns-1".into(), Some("com.example.app".into()));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(bodies().len(), 1);
+
+        // A new token: the old one is unregistered, the new one registered.
+        client.set_push_token("apns-2".into(), None);
+        wait_until(|| bodies().len() == 3);
+        assert_eq!(bodies()[1], serde_json::json!({"token": "apns-1"}));
+        assert_eq!(bodies()[2]["token"], "apns-2");
+        assert!(bodies()[2].get("bundle_id").is_none());
+        wait_until(|| client.session_state().device == DeviceState::Registered);
+
+        block_on(client.logout()).unwrap();
+        assert_eq!(bodies()[3], serde_json::json!({"token": "apns-2"}));
+        assert!(backend.requests_matching("DELETE").is_empty());
+        // The token is the device's: it stays for the next sign-in.
+        assert_eq!(read_os_token(&dir).unwrap().token, "apns-2");
         client.shutdown();
         let _ = std::fs::remove_dir_all(dir);
     }

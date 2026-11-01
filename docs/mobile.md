@@ -72,3 +72,8 @@
 - 持久化选中节点、ingress pin 和 `routing_mode`，每次 apply 一起传入；
 - Profile 里有节点凭据。隧道进程只经 socket 随 `apply` 拿到它，自己不落盘。界面进程把核心最后接受的一份写在自己数据目录的 `saved-profile.json` 里（Android 的 `filesDir`，iOS 的 App Group 容器；Unix 权限 0600），用于启动时新 Profile 拿不到或被拒绝的情况（#532，见 host-integration.md 第 9 节）。
 - 后端地址编译进应用：`scripts/ci-build.sh` 要求 `PPVPN_API_BASE_DEFAULT`，CI 和发布从 GitHub 的 `PPVPN_API_BASE` 传入（#517，见 [构建与发布](release.md#后端地址)）。手机上没有环境变量可以改它，「我的」里打开的网页也从这个地址推出。
+- 推送走官方通道（#539）：iOS 用 APNs，Android 用 FCM。原生层申请通知权限、向系统注册，拿到 APNs device token 或 FCM registration token 后调用 `set_push_token(token, bundle_id)`（Flutter 桥接；Rust 侧是 `Client::set_push_token`）。每次启动和令牌轮换时都要调用。
+  - 已登录时 UI 进程把设备注册到后端（`POST /api/v1/devices/register`，`platform` 为 `ios` / `android`，带 `token` 和可选的 `bundle_id`）。登录、每次启动和令牌变化时都会注册；令牌变了先注销旧的。
+  - 退出登录时按令牌注销（`POST /api/v1/devices/unregister`，尽力而为）。令牌属于设备，保存在 UI 进程数据目录的 `push-token.json`（0600），退出登录后保留，下次登录直接再注册。
+  - 通知内容是 `title` + `body`，`extra` 里带 `message_id` 和 `deep_link`。展示和点击跳转由原生层处理，点开后按 `message_id` 拉正文。
+  - 桌面平台不使用这个调用：Windows、Linux 和目前的 macOS 仍走自建推送代理。

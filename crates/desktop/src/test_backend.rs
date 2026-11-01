@@ -30,6 +30,8 @@ pub(crate) struct Backend {
     pub(crate) push_token: Mutex<String>,
     /// Status for `POST /devices/register` (e.g. 403 before the scope).
     pub(crate) register_status: Mutex<Option<&'static str>>,
+    /// Bodies of `POST /devices/register` and `/devices/unregister`.
+    pub(crate) device_bodies: Mutex<Vec<Value>>,
     /// Request heads (lower-cased) of `GET /api/v1/health`.
     pub(crate) health_heads: Mutex<Vec<String>>,
     /// Body of `GET /api/v1/me/proxy-profile`; none answers 404
@@ -177,12 +179,34 @@ impl Backend {
                     );
                 }
                 let request: Value = serde_json::from_str(body).unwrap_or_default();
+                self.device_bodies.lock().unwrap().push(request.clone());
+                let desktop = request["platform"]
+                    .as_str()
+                    .is_some_and(|platform| platform.starts_with("desktop-"));
+                if desktop {
+                    return (
+                        "200 OK",
+                        json!({"id": 42, "platform": request["platform"],
+                               "push_token": *self.push_token.lock().unwrap()})
+                        .to_string(),
+                    );
+                }
+                if request["token"].as_str().unwrap_or_default().is_empty() {
+                    return (
+                        "400 Bad Request",
+                        r#"{"code":"DEVICE_TOKEN_REQUIRED"}"#.into(),
+                    );
+                }
                 (
                     "200 OK",
-                    json!({"id": 42, "platform": request["platform"],
-                           "push_token": *self.push_token.lock().unwrap()})
-                    .to_string(),
+                    json!({"id": 43, "platform": request["platform"], "token_hash_prefix": "0a1b"})
+                        .to_string(),
                 )
+            }
+            ("POST", "/api/v1/devices/unregister") => {
+                let request: Value = serde_json::from_str(body).unwrap_or_default();
+                self.device_bodies.lock().unwrap().push(request);
+                ("200 OK", r#"{"message":"device unregistered"}"#.into())
             }
             ("DELETE", "/api/v1/devices/42") => ("204 No Content", String::new()),
             ("GET", "/api/v1/push/pull") => {

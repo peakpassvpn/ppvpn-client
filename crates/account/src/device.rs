@@ -2,9 +2,11 @@
 //! `POST /devices/register` request and the registration state of a
 //! signed-in session.
 //!
-//! Each install has a stable `installation_id` (`<data_dir>/installation.json`,
-//! kept across sign-outs). What the host does with the returned push token
-//! (the desktop hands it to its push agent) stays with the host.
+//! Desktop installs register with a stable `installation_id`
+//! (`<data_dir>/installation.json`, kept across sign-outs) and get the
+//! self-hosted channel's push token back; what the host does with it (the
+//! desktop hands it to its push agent) stays with the host. Phones register
+//! the APNs or FCM token their OS gave them instead (#539).
 
 use std::path::Path;
 
@@ -30,7 +32,15 @@ pub enum DeviceState {
 pub struct DeviceRegistrationRequest {
     /// [`push_platform`] of the host platform.
     pub platform: String,
-    pub installation_id: String,
+    /// Desktop (self-hosted channel) only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installation_id: Option<String>,
+    /// The APNs device token or FCM registration token (official channels).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// The app's bundle id / package name, when the host gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
     pub app_version: String,
     /// Language tag, e.g. `zh-CN`.
     pub locale: String,
@@ -38,9 +48,21 @@ pub struct DeviceRegistrationRequest {
     pub timezone: String,
 }
 
-/// `desktop-macos` / `desktop-windows` / `desktop-linux`.
+/// `ios` / `android` on the phones (APNs, FCM), `desktop-macos` /
+/// `desktop-windows` / `desktop-linux` (the self-hosted channel) elsewhere.
 pub fn push_platform(platform: &str) -> String {
-    format!("desktop-{platform}")
+    if official_push(platform) {
+        platform.to_string()
+    } else {
+        format!("desktop-{platform}")
+    }
+}
+
+/// The platform registers an OS push token (APNs, FCM) rather than an
+/// installation id. macOS stays on the self-hosted channel until it moves
+/// to APNs.
+pub fn official_push(platform: &str) -> bool {
+    matches!(platform, "ios" | "android")
 }
 
 #[derive(Serialize, Deserialize)]
@@ -149,9 +171,13 @@ mod tests {
     #[test]
     fn registration_body_and_platform() {
         assert_eq!(push_platform("windows"), "desktop-windows");
+        assert_eq!(push_platform("ios"), "ios");
+        assert_eq!(push_platform("android"), "android");
         let body = serde_json::to_value(DeviceRegistrationRequest {
             platform: push_platform("macos"),
-            installation_id: "id".into(),
+            installation_id: Some("id".into()),
+            token: None,
+            bundle_id: None,
             app_version: "1.2.3".into(),
             locale: "zh-CN".into(),
             timezone: "UTC".into(),
@@ -162,6 +188,27 @@ mod tests {
             serde_json::json!({
                 "platform": "desktop-macos",
                 "installation_id": "id",
+                "app_version": "1.2.3",
+                "locale": "zh-CN",
+                "timezone": "UTC",
+            })
+        );
+        let body = serde_json::to_value(DeviceRegistrationRequest {
+            platform: push_platform("ios"),
+            installation_id: None,
+            token: Some("apns".into()),
+            bundle_id: Some("com.example.app".into()),
+            app_version: "1.2.3".into(),
+            locale: "zh-CN".into(),
+            timezone: "UTC".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "platform": "ios",
+                "token": "apns",
+                "bundle_id": "com.example.app",
                 "app_version": "1.2.3",
                 "locale": "zh-CN",
                 "timezone": "UTC",
