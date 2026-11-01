@@ -28,6 +28,7 @@ pub const PATH_MESSAGES_UNREAD: &str = "/api/v1/messages/unread-count";
 pub const PATH_MESSAGES_READ_ALL: &str = "/api/v1/messages/read-all";
 pub const PATH_DEVICES: &str = "/api/v1/devices";
 pub const PATH_DEVICES_REGISTER: &str = "/api/v1/devices/register";
+pub const PATH_DEVICES_UNREGISTER: &str = "/api/v1/devices/unregister";
 
 /// Longest backend problem code copied into an error detail.
 const MAX_PROBLEM_CODE_LEN: usize = 64;
@@ -516,7 +517,7 @@ impl Api {
     }
 
     /// `POST /devices/register`: registers (or re-registers) this install for
-    /// desktop push; the push token is only in this answer.
+    /// push. On the desktop channel the push token is only in this answer.
     pub async fn register_device(
         &self,
         token: &str,
@@ -528,6 +529,23 @@ impl Api {
             .bearer_auth(token)
             .json(body);
         decode("POST", self.send(request).await).await
+    }
+
+    /// `POST /devices/unregister`: disables the device holding an APNs or
+    /// FCM `push_token` (official channels; desktop devices use
+    /// [`Self::delete_device`]).
+    pub async fn unregister_push_token(
+        &self,
+        token: &str,
+        push_token: &str,
+    ) -> Result<(), ApiError> {
+        let request = self
+            .http
+            .post(self.endpoint(PATH_DEVICES_UNREGISTER)?)
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "token": push_token }));
+        let response = self.send(request).await.map_err(ApiError::Transport)?;
+        check_status("POST", response).await.map(|_| ())
     }
 
     /// `DELETE /devices/{id}`; an unknown device counts as deleted.
@@ -701,6 +719,9 @@ pub struct Message {
 #[derive(Deserialize, Debug)]
 pub struct DeviceRegistration {
     pub id: u64,
+    /// The self-hosted channel's token (desktop platforms only; empty for
+    /// APNs and FCM devices).
+    #[serde(default)]
     pub push_token: String,
 }
 
