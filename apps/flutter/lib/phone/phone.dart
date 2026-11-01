@@ -6,8 +6,10 @@
 // screen with a back control. Signed out: the phone sign-in.
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:forui/forui.dart';
@@ -412,28 +414,34 @@ class PhoneBell extends StatelessWidget {
   }
 }
 
-/// Pushes [page] full screen, sliding in from the end over
-/// [Tokens.motionPage]. Routes sit beside the app's home, so the page gets
-/// forui's theme and the body text style here.
-Future<T?> pushPhonePage<T>(BuildContext context, Widget page) => Navigator.of(context).push<T>(
-  PageRouteBuilder<T>(
-    transitionDuration: Tokens.motion(context, Tokens.motionPage),
-    reverseTransitionDuration: Tokens.motion(context, Tokens.motionFast),
-    pageBuilder: (context, _, _) {
-      final t = Tokens.of(context);
-      return FTheme(
-        data: t.forui,
-        child: DefaultTextStyle(style: t.body, child: page),
-      );
-    },
-    transitionsBuilder: (context, animation, _, child) => SlideTransition(
-      position: animation.drive(
-        Tween(begin: const Offset(1, 0), end: Offset.zero).chain(CurveTween(curve: Tokens.motionCurve)),
+/// Pushes [page] full screen. iOS: the platform's page route, which also
+/// goes back with a swipe from the screen's left edge (#535). Elsewhere it
+/// slides in from the end over [Tokens.motionPage]. Routes sit beside the
+/// app's home, so the page gets forui's theme and the body text style here.
+Future<T?> pushPhonePage<T>(BuildContext context, Widget page) {
+  Widget themed(BuildContext context) {
+    final t = Tokens.of(context);
+    return FTheme(
+      data: t.forui,
+      child: DefaultTextStyle(style: t.body, child: page),
+    );
+  }
+
+  if (Platform.isIOS) return Navigator.of(context).push<T>(CupertinoPageRoute<T>(builder: themed));
+  return Navigator.of(context).push<T>(
+    PageRouteBuilder<T>(
+      transitionDuration: Tokens.motion(context, Tokens.motionPage),
+      reverseTransitionDuration: Tokens.motion(context, Tokens.motionFast),
+      pageBuilder: (context, _, _) => themed(context),
+      transitionsBuilder: (context, animation, _, child) => SlideTransition(
+        position: animation.drive(
+          Tween(begin: const Offset(1, 0), end: Offset.zero).chain(CurveTween(curve: Tokens.motionCurve)),
+        ),
+        child: child,
       ),
-      child: child,
     ),
-  ),
-);
+  );
+}
 
 /// Pushes the choices of a row: one 50 row each, the current one checked;
 /// a press sets it and goes back.
