@@ -101,10 +101,16 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
         return Ok(bridge);
     }
     let (data_dir, log_dir) = crate::dirs::dirs()?;
+    // What the backend knows the device by: device sign-in, the device
+    // name, push registration (#535).
     let platform = if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(windows) {
         "windows"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else if cfg!(target_os = "android") {
+        "android"
     } else {
         "linux"
     };

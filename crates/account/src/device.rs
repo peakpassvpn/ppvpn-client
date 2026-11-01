@@ -38,9 +38,13 @@ pub struct DeviceRegistrationRequest {
     pub timezone: String,
 }
 
-/// `desktop-macos` / `desktop-windows` / `desktop-linux`.
+/// `desktop-macos` / `desktop-windows` / `desktop-linux`; a phone is plain
+/// `ios` / `android`.
 pub fn push_platform(platform: &str) -> String {
-    format!("desktop-{platform}")
+    match platform {
+        "ios" | "android" => platform.to_string(),
+        _ => format!("desktop-{platform}"),
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -149,6 +153,8 @@ mod tests {
     #[test]
     fn registration_body_and_platform() {
         assert_eq!(push_platform("windows"), "desktop-windows");
+        assert_eq!(push_platform("ios"), "ios");
+        assert_eq!(push_platform("android"), "android");
         let body = serde_json::to_value(DeviceRegistrationRequest {
             platform: push_platform("macos"),
             installation_id: "id".into(),
