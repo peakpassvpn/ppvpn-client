@@ -111,9 +111,14 @@ if [ "$os" = macos ]; then
   rm -rf macos/Runner/Assets.xcassets/AppIcon.appiconset
 fi
 # iOS: our launch screen's image (runner/ios, the brand mark as a vector)
-# replaces the template's PNGs (#535).
+# and app icon (scripts/app-icons.swift) replace the template's PNGs; on
+# Android the adaptive icon (runner/android, mipmap-anydpi-v26) the
+# template's launcher PNGs (#535).
 if [ "$os" = ios ]; then
-  rm -rf ios/Runner/Assets.xcassets/LaunchImage.imageset
+  rm -rf ios/Runner/Assets.xcassets/LaunchImage.imageset ios/Runner/Assets.xcassets/AppIcon.appiconset
+fi
+if [ "$os" = android ]; then
+  rm -f android/app/src/main/res/mipmap-*/ic_launcher.png
 fi
 # Our changes to the generated runner (macOS: the activation channel; the
 # icons, from apps/macos and apps/windows; Android: the activity in our

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The adaptive icon's foreground (#535): the brand mark's mountain at
+     0.62, inside the 66 dp safe zone of the 108 dp layer. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:pivotX="12"
+        android:pivotY="13.25"
+        android:scaleX="0.62"
+        android:scaleY="0.62"
+        android:translateY="-0.65">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M3.5,17.5L9.2,9l3.3,4.8 2.1,-2.9 5.9,6.6z" />
+        <path android:fillColor="#FFC9D6FF" android:pathData="M9.2,9l1.4,2.1 -1.4,0.8 -1.3,-1z" />
+    </group>
+</vector>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The adaptive icon's background (#535): the brand gradient with its top
+     right highlight, as the iOS icon (scripts/app-icons.swift). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path android:pathData="M0,0h24v24h-24z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0"
+                android:startY="0"
+                android:endX="24"
+                android:endY="24"
+                android:startColor="#FF3D63C9"
+                android:endColor="#FF1F4390" />
+        </aapt:attr>
+    </path>
+    <path android:pathData="M0,0h24v24h-24z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="20.4"
+                android:centerY="2.4"
+                android:gradientRadius="16.8"
+                android:startColor="#38FFFFFF"
+                android:endColor="#00FFFFFF" />
+        </aapt:attr>
+    </path>
+</vector>
