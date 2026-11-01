@@ -540,7 +540,20 @@ case $os in
     if [ -n "${runner:-}" ]; then
       test -s "$runner"
       exported=$(xcrun dyld_info -exports "$runner" | grep -c '_frbgen_' || true)
-      [ "$exported" -gt 0 ] || { echo "$runner exports no bridge function (_frbgen_*)" >&2; exit 1; }
+      if [ "$exported" -eq 0 ]; then
+        # Where the functions went: in the library, linked, exported, and
+        # the settings Xcode linked with.
+        {
+          echo "$runner exports no bridge function (_frbgen_*)"
+          echo "ios/rust/libppvpn_flutter.a: $(nm -gU ios/rust/libppvpn_flutter.a 2>/dev/null | grep -c ' T _frbgen_' || true) global bridge functions"
+          echo "$runner: $(nm -m "$runner" | grep -c '_frbgen_' || true) bridge symbols, $(xcrun dyld_info -exports "$runner" | wc -l | tr -d ' ') export lines"
+          nm -m "$runner" | grep '_frbgen_' | head -n 3
+          xcrun dyld_info -exports "$runner" | head -n 8
+          (cd ios && xcodebuild -project Runner.xcodeproj -target Runner -configuration Release -showBuildSettings 2>/dev/null |
+            grep -E '^ *(DEAD_CODE_STRIPPING|STRIP_STYLE|STRIP_INSTALLED_PRODUCT|DEPLOYMENT_POSTPROCESSING|COPY_PHASE_STRIP|OTHER_LDFLAGS|EXPORTED_SYMBOLS_FILE|STRIPFLAGS) =')
+        } >&2
+        exit 1
+      fi
       echo "$runner: $exported bridge functions exported"
     fi ;;
   linux)

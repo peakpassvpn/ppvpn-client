@@ -1261,7 +1261,7 @@ jobs:
         if: steps.scope.outputs.flutter == 'true'
         with:
           toolchain: 1.98.1
-          targets: aarch64-apple-ios-sim
+          targets: aarch64-apple-ios-sim,aarch64-apple-ios
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.scope.outputs.flutter == 'true'
         # A restore that hangs ends as a cache miss (see env).
@@ -1292,6 +1292,19 @@ jobs:
         if: steps.scope.outputs.flutter == 'true'
         timeout-minutes: 30
         run: apps/flutter/e2e/ios_smoke.sh
+      # TEMPORARY (diagnosis of the release build's missing bridge exports):
+      # the unsigned device build release.yml makes, with Xcode 26.
+      - name: Device build (diagnosis)
+        if: steps.scope.outputs.flutter == 'true'
+        env:
+          FLUTTER_TARGET: ios
+          IOS_SDK: device
+          PPVPN_SKIP_ANALYZE: '1'
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          rm -rf apps/flutter/ios apps/flutter/build/ios
+          apps/flutter/scripts/ci-build.sh
 
   tunnel:
     # The mobile tunnel host for the iOS packet tunnel extension (#448):
