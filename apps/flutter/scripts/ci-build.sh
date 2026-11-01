@@ -352,6 +352,10 @@ text = open(path).read()
 flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a", "-Wl,-export_dynamic"]
 flags += os.environ["NATIVE"].split()
 setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flags) + ");"
+# An archive strips the app's symbols ("all" by default), the exported
+# ones too: the Dart side found none and the TestFlight build of 0.7.2
+# stayed white. Locals only.
+setting += "\n\t\t\t\tSTRIP_STYLE = \"non-global\";"
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations")
@@ -516,9 +520,19 @@ case $os in
     elif [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
       bundle=$(ls build/ios/ipa/*.ipa)
       test -f "$bundle"
+      runner=build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app/Runner
     else
       bundle=build/ios/iphoneos/Runner.app
       test -x "$bundle/Runner"
+      runner=$bundle/Runner
+    fi
+    # The bridge's functions, exported for ExternalLibrary.process: without
+    # them the app starts to a white screen (the simulator's debug build
+    # strips nothing, so its smoke test cannot tell).
+    if [ -n "${runner:-}" ]; then
+      exported=$(nm -gU "$runner" | grep -c ' _frbgen_' || true)
+      [ "$exported" -gt 0 ] || { echo "$runner exports no bridge function (_frbgen_*)" >&2; exit 1; }
+      echo "$runner: $exported bridge functions exported"
     fi ;;
   linux)
     bundle=build/linux/x64/release/bundle
