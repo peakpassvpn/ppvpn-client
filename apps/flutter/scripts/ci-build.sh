@@ -520,17 +520,22 @@ case $os in
     elif [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
       bundle=$(ls build/ios/ipa/*.ipa)
       test -f "$bundle"
-      runner=build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app/Runner
+      # The Runner that ships, after the export's own processing.
+      runner=build/ios/Runner.shipped
+      unzip -p "$bundle" Payload/Runner.app/Runner >"$runner"
     else
       bundle=build/ios/iphoneos/Runner.app
       test -x "$bundle/Runner"
       runner=$bundle/Runner
     fi
-    # The bridge's functions, exported for ExternalLibrary.process: without
-    # them the app starts to a white screen (the simulator's debug build
-    # strips nothing, so its smoke test cannot tell).
+    # The bridge's functions in the export trie, where ExternalLibrary.process
+    # (dlsym) looks: without them the app starts to a white screen. Only an
+    # IPA is stripped: the simulator's debug build and the unsigned device
+    # build (main's push run) strip nothing, so they always pass; this
+    # fires in a stable run, before the upload.
     if [ -n "${runner:-}" ]; then
-      exported=$(nm -gU "$runner" | grep -c ' _frbgen_' || true)
+      test -s "$runner"
+      exported=$(xcrun dyld_info -exports "$runner" | grep -c '_frbgen_' || true)
       [ "$exported" -gt 0 ] || { echo "$runner exports no bridge function (_frbgen_*)" >&2; exit 1; }
       echo "$runner: $exported bridge functions exported"
     fi ;;
