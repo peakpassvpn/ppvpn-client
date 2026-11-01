@@ -687,8 +687,8 @@ class _CopyButtonState extends State<CopyButton> {
   }
 }
 
-/// Latency as a pill (22 high, mono 12): < 100 ms ok, 100–199 warn, ≥ 200
-/// bad; timeout and failure dim; a spinner while testing.
+/// Latency as a pill (22 high, mono 12): < 250 ms ok, 250–999 warn, ≥ 1000
+/// bad; timeout and failure bad too; a spinner while testing.
 class LatencyPill extends StatelessWidget {
   const LatencyPill({super.key, required this.latency});
 
@@ -702,10 +702,10 @@ class LatencyPill extends StatelessWidget {
     final (String text, Color fg, Color bg) = switch (latency) {
       null => ('—', t.t3, t.sunk),
       LatencyTesting() => ('', t.accent, t.accentSoft),
-      LatencyMs(:final ms) when ms < 100 => ('$ms ms', t.ok, t.okSoft),
-      LatencyMs(:final ms) when ms < 200 => ('$ms ms', t.warn, t.warnSoft),
+      LatencyMs(:final ms) when ms < 250 => ('$ms ms', t.ok, t.okSoft),
+      LatencyMs(:final ms) when ms < 1000 => ('$ms ms', t.warn, t.warnSoft),
       LatencyMs(:final ms) => ('$ms ms', t.bad, t.badSoft),
-      LatencyTimeout() => (S.current('timeout'), t.t3, t.sunk),
+      LatencyTimeout() => (S.current('timeout'), t.bad, t.badSoft),
       LatencyFailed() => (S.current('failed'), t.bad, t.badSoft),
     };
     // A new value fades in; the tone's colours follow (#535). Its text
