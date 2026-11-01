@@ -139,11 +139,13 @@ class _ConnectionCard extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
-            child: Column(
+            child: MediaQuery.withClampedTextScaling(
+              maxScaleFactor: Tokens.phoneChromeTextMax,
+              child: Column(
               children: [
                 Row(
                   children: [
-                    _StatusPill(snapshot: snapshot, tone: tone),
+                    Flexible(child: _StatusPill(snapshot: snapshot, tone: tone)),
                     const Spacer(),
                     Swap(
                       id: connected,
@@ -176,6 +178,7 @@ class _ConnectionCard extends StatelessWidget {
                         ),
                 ),
               ],
+              ),
             ),
           ),
         ],
@@ -252,6 +255,8 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
                 alignment: AlignmentDirectional.centerStart,
                 child: Text(
                   statusTitle(widget.snapshot),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: t.phoneNote.copyWith(fontWeight: FontWeight.w600, color: tone),
                 ),
               ),
@@ -523,7 +528,7 @@ class _NodeCard extends StatelessWidget {
                   Text(label, style: t.phoneNote.copyWith(fontSize: 12, height: 16 / 12)),
                   Text(
                     title,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: t.phoneRowTitle.copyWith(fontWeight: weight, letterSpacing: -0.17),
                   ),

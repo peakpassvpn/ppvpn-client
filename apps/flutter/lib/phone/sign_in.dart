@@ -32,84 +32,86 @@ class PhoneSignIn extends StatelessWidget {
     const white = Color(0xFFFFFFFF);
     final top = MediaQuery.paddingOf(context).top;
     final bottom = MediaQuery.paddingOf(context).bottom;
+    // The brand, then the panel filling the rest of the screen, or
+    // scrolling when the text is large (SliverFillRemaining).
     return ColoredBox(
       color: t.card,
-      child: LayoutBuilder(
-        builder: (context, box) => SingleChildScrollView(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: box.maxHeight),
-            child: IntrinsicHeight(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Container(
+              decoration: const BoxDecoration(gradient: Tokens.brandGradient),
+              child: Stack(
                 children: [
-                  Container(
-                    decoration: const BoxDecoration(gradient: Tokens.brandGradient),
-                    child: Stack(
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ExcludeSemantics(
+                      child: SvgPicture.string(_mountains, height: 210, fit: BoxFit.cover),
+                    ),
+                  ),
+                  // The panel's rounded top, rising 28 over the brand (a
+                  // viewport paints its earlier slivers on top, so the
+                  // panel itself cannot reach up here).
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: 28,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: t.card,
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(24, top + 40, 24, 120),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          child: ExcludeSemantics(
-                            child: SvgPicture.string(_mountains, height: 210, fit: BoxFit.cover),
-                          ),
+                        Row(
+                          children: [
+                            const BrandMark(size: 48, onBrand: true),
+                            const SizedBox(width: 12),
+                            Text(
+                              s('app'),
+                              style: t.phoneTitle.copyWith(fontSize: 22, height: 28 / 22, color: white),
+                            ),
+                          ],
                         ),
-                        Padding(
-                          padding: EdgeInsets.fromLTRB(24, top + 40, 24, 120),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  const BrandMark(size: 48, onBrand: true),
-                                  const SizedBox(width: 12),
-                                  Text(
-                                    s('app'),
-                                    style: t.phoneTitle.copyWith(fontSize: 22, height: 28 / 22, color: white),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 36),
-                              Semantics(
-                                header: true,
-                                child: Text(s('signInTitle'), style: t.phoneTitle.copyWith(color: white)),
-                              ),
-                              const SizedBox(height: 10),
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 300),
-                                child: Text(
-                                  s('phoneSignInLine'),
-                                  style: t.phoneBody.copyWith(fontSize: 15, color: const Color(0xCCFFFFFF)),
-                                ),
-                              ),
-                            ],
+                        const SizedBox(height: 36),
+                        Semantics(
+                          header: true,
+                          child: Text(s('signInTitle'), style: t.phoneTitle.copyWith(color: white)),
+                        ),
+                        const SizedBox(height: 10),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 300),
+                          child: Text(
+                            s('phoneSignInLine'),
+                            style: t.phoneBody.copyWith(fontSize: 15, color: const Color(0xCCFFFFFF)),
                           ),
                         ),
                       ],
-                    ),
-                  ),
-                  // The panel rises 28 over the brand.
-                  Expanded(
-                    child: Transform.translate(
-                      offset: const Offset(0, -28),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: t.card,
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                        ),
-                        padding: EdgeInsets.fromLTRB(Tokens.phonePadding, 28, Tokens.phonePadding, bottom + 6),
-                        child: ValueListenableBuilder(
-                          valueListenable: app.snapshot,
-                          builder: (context, snapshot, _) => _Panel(app: app, snapshot: snapshot),
-                        ),
-                      ),
                     ),
                   ),
                 ],
               ),
             ),
           ),
-        ),
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(Tokens.phonePadding, 0, Tokens.phonePadding, bottom + 6),
+              child: ValueListenableBuilder(
+                valueListenable: app.snapshot,
+                builder: (context, snapshot, _) => _Panel(app: app, snapshot: snapshot),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

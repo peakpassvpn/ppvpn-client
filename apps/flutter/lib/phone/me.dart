@@ -309,13 +309,15 @@ class _AccountCard extends StatelessWidget {
                   ),
                   if (until != null) ...[
                     const SizedBox(height: 14),
-                    Row(
+                    // Side by side, one under the other at large text sizes.
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      spacing: 12,
+                      runSpacing: 2,
                       children: [
-                        Expanded(
-                          child: Text(
-                            s('validUntil', {'d': '${until.year}-${two(until.month)}-${two(until.day)}'}),
-                            style: t.phoneNote.copyWith(fontSize: 12, color: soft),
-                          ),
+                        Text(
+                          s('validUntil', {'d': '${until.year}-${two(until.month)}-${two(until.day)}'}),
+                          style: t.phoneNote.copyWith(fontSize: 12, color: soft),
                         ),
                         if (days != null)
                           Text(s('daysLeft', {'n': '$days'}), style: t.phoneNote.copyWith(fontSize: 12, color: soft)),

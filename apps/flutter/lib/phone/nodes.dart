@@ -114,12 +114,24 @@ class _PhoneNodesState extends State<PhoneNodes> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(Tokens.phonePadding, 4, Tokens.phonePadding, 12),
-              child: _SearchField(onChanged: (value) => setState(() => _query = value)),
+            MediaQuery.withClampedTextScaling(
+              maxScaleFactor: Tokens.phoneChromeTextMax,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(Tokens.phonePadding, 4, Tokens.phonePadding, 12),
+                    child: _SearchField(onChanged: (value) => setState(() => _query = value)),
+                  ),
+                  if (regions.length > 1)
+                    _RegionChips(
+                      regions: regions,
+                      selected: _region,
+                      onSelect: (region) => setState(() => _region = region),
+                    ),
+                ],
+              ),
             ),
-            if (regions.length > 1)
-              _RegionChips(regions: regions, selected: _region, onSelect: (region) => setState(() => _region = region)),
             Expanded(
               child: CustomScrollView(
                 physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
@@ -451,9 +463,10 @@ class _NodeRow extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Two lines at large text sizes before it is cut.
                   Text(
                     nodeTitle(node),
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: t.phoneBody.copyWith(
                       fontWeight: current ? FontWeight.w600 : FontWeight.w500,

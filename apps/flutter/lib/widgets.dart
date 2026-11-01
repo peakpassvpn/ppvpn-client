@@ -708,9 +708,12 @@ class LatencyPill extends StatelessWidget {
       LatencyTimeout() => (S.current('timeout'), t.t3, t.sunk),
       LatencyFailed() => (S.current('failed'), t.bad, t.badSoft),
     };
-    // A new value fades in; the tone's colours follow (#535).
+    // A new value fades in; the tone's colours follow (#535). Its text
+    // grows only so far with the system's size (Tokens.phoneChromeTextMax).
     final duration = Tokens.motion(context, Tokens.motionBase);
-    return AnimatedContainer(
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: Tokens.phoneChromeTextMax,
+      child: AnimatedContainer(
       duration: duration,
       curve: Tokens.motionCurve,
       height: 22,
@@ -733,6 +736,7 @@ class LatencyPill extends StatelessWidget {
                   child: Text(text, key: ValueKey(text), style: t.monoText(12, weight: FontWeight.w500, color: fg)),
                 ),
               ],
+      ),
       ),
     );
   }

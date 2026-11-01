@@ -85,7 +85,9 @@ class _PhoneShellState extends State<PhoneShell> {
     valueListenable: widget.app.snapshot,
     builder: (context, snapshot, _) {
       final app = widget.app;
-      if (snapshot.auth != rust.UiAuth.signedIn) return PhoneSignIn(app: app);
+      if (snapshot.auth != rust.UiAuth.signedIn) {
+        return MediaQuery.withClampedTextScaling(maxScaleFactor: Tokens.phoneTextMax, child: PhoneSignIn(app: app));
+      }
       final s = S.current;
       final bell = PhoneBell(unread: snapshot.unread, onPress: () => openMessages(context, app));
       final page = switch (_tab) {
@@ -94,23 +96,32 @@ class _PhoneShellState extends State<PhoneShell> {
         _Tab.me => PhoneScaffold(title: s('me'), trailing: bell, child: PhoneMe(app: app)),
       };
       final media = MediaQuery.of(context);
-      return Stack(
+      return MediaQuery.withClampedTextScaling(
+        maxScaleFactor: Tokens.phoneTextMax,
+        child: Stack(
         children: [
           // The pages scroll under the translucent tab bar: their bottom
           // padding includes it.
           Positioned.fill(
             child: MediaQuery(
               data: media.copyWith(padding: media.padding.copyWith(bottom: media.padding.bottom + Tokens.phoneTabBar)),
-              child: _TabSwitch(tab: _tab, child: page),
+              // The cap inside: this MediaQuery is built from the one above.
+              child: MediaQuery.withClampedTextScaling(
+                maxScaleFactor: Tokens.phoneTextMax,
+                child: _TabSwitch(tab: _tab, child: page),
+              ),
             ),
           ),
           Positioned(
             left: 0,
             right: 0,
             bottom: 0,
-            child: _TabBar(tab: _tab, onTab: (tab) => setState(() => _tab = tab)),
+            child: MediaQuery.withNoTextScaling(
+              child: _TabBar(tab: _tab, onTab: (tab) => setState(() => _tab = tab)),
+            ),
           ),
         ],
+        ),
       );
     },
   );
@@ -317,12 +328,15 @@ class PhoneScaffold extends StatelessWidget {
           Container(
             height: Tokens.phoneTopBar + top,
             padding: EdgeInsets.fromLTRB(back ? 4 : Tokens.phoneBarStart, top, Tokens.phoneBarEnd, 0),
-            child: Row(
+            child: MediaQuery.withClampedTextScaling(
+              maxScaleFactor: Tokens.phoneChromeTextMax,
+              child: Row(
               children: [
                 if (back) const PhoneBack(),
                 Expanded(child: Semantics(header: true, label: brand ? title : null, child: heading)),
                 if (trailing case final trailing?) ...[const SizedBox(width: 8), trailing],
               ],
+              ),
             ),
           ),
           Expanded(child: MediaQuery.removePadding(context: context, removeTop: true, child: child)),

@@ -315,6 +315,13 @@ class Tokens {
   /// iPad boards are built (#535).
   static const phoneMaxWidth = 480.0;
 
+  /// Text size limits on the phone (#535): the pages grow with the system's
+  /// text size up to [phoneTextMax], rows growing with it; the bars and
+  /// the small fixed-height pieces (capsules, chips, the route) up to
+  /// [phoneChromeTextMax]; the tab bar's labels not at all, as the system's.
+  static const phoneTextMax = 1.6;
+  static const phoneChromeTextMax = 1.2;
+
   /// The phone's buttons in a top bar (测速方式, 全部测速): 36, pills.
   static const phoneSmallButton = 36.0;
 
