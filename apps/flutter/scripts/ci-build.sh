@@ -352,9 +352,12 @@ text = open(path).read()
 flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a", "-Wl,-export_dynamic"]
 flags += os.environ["NATIVE"].split()
 setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flags) + ");"
-# An archive strips the app's symbols ("all" by default), the exported
-# ones too: the Dart side found none and the TestFlight build of 0.7.2
-# stayed white. Locals only.
+# The Dart side finds the bridge's functions by name (dlsym), so nothing
+# in the Runner calls them: a release build's dead stripping drops them,
+# and an archive strips the symbols left ("all" by default). The
+# TestFlight build of 0.7.2 stayed white. No dead stripping, and an
+# archive strips locals only.
+setting += "\n\t\t\t\tDEAD_CODE_STRIPPING = NO;"
 setting += "\n\t\t\t\tSTRIP_STYLE = \"non-global\";"
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
@@ -529,10 +532,11 @@ case $os in
       runner=$bundle/Runner
     fi
     # The bridge's functions in the export trie, where ExternalLibrary.process
-    # (dlsym) looks: without them the app starts to a white screen. Only an
-    # IPA is stripped: the simulator's debug build and the unsigned device
-    # build (main's push run) strip nothing, so they always pass; this
-    # fires in a stable run, before the upload.
+    # (dlsym) looks: without them the app starts to a white screen. The
+    # unsigned device build (main's push run) shows dead stripping; only an
+    # IPA (a stable run, before the upload) shows the archive's stripping.
+    # The simulator's debug build does neither, so its smoke test cannot
+    # tell.
     if [ -n "${runner:-}" ]; then
       test -s "$runner"
       exported=$(xcrun dyld_info -exports "$runner" | grep -c '_frbgen_' || true)
