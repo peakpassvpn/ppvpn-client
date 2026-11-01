@@ -14,6 +14,7 @@ import 'package:forui/forui.dart';
 
 import '../app_state.dart';
 import '../pages/messages.dart';
+import '../sample.dart' show samplePage;
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
 import '../theme.dart';
@@ -35,7 +36,12 @@ class PhoneShell extends StatefulWidget {
 }
 
 class _PhoneShellState extends State<PhoneShell> {
-  _Tab _tab = _Tab.overview;
+  // The screenshot mode's page (sample.dart): 节点, or 我的 for settings.
+  _Tab _tab = switch (samplePage) {
+    'nodes' => _Tab.nodes,
+    'settings' => _Tab.me,
+    _ => _Tab.overview,
+  };
 
   @override
   void initState() {

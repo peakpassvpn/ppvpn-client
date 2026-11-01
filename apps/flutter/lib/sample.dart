@@ -4,7 +4,8 @@
 // sample-messages.json) and a few log lines, with no client behind them: no
 // backend, no core, no sign-in, no log or settings file read or written.
 // PPVPN_FLUTTER_THEME=dark|light forces the theme. Only
-// apps/flutter/scripts/smoke.sh sets these.
+// apps/flutter/scripts/smoke.sh sets these (by hand on iOS, with
+// --dart-define).
 
 import 'dart:io';
 import 'dart:math' as math;
@@ -17,9 +18,12 @@ import 'settings.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
 
-/// The page the screenshot mode opens on, or null when it is off.
-final String? samplePage = switch (Platform.environment['PPVPN_FLUTTER_SAMPLE']) {
-  final page? when const {'overview', 'nodes', 'logs', 'messages', 'settings'}.contains(page) => page,
+/// The page the screenshot mode opens on, or null when it is off. Also as
+/// a --dart-define: an iOS app launched by simctl has the variable in its
+/// process but not in Platform.environment (#535).
+final String? samplePage = switch (Platform.environment['PPVPN_FLUTTER_SAMPLE'] ??
+    const String.fromEnvironment('PPVPN_FLUTTER_SAMPLE')) {
+  final page when const {'overview', 'nodes', 'logs', 'messages', 'settings'}.contains(page) => page,
   _ => null,
 };
 
