@@ -303,6 +303,21 @@ class Tokens {
   static const phoneSwitchSize = Size(51, 31);
   static const phoneFlagSize = Size(28, 21);
 
+  /// The overview's main button: the 168 ring around its 112 disc.
+  static const phoneOrb = 168.0;
+  static const phoneOrbDisc = 112.0;
+
+  /// The top bar's insets: 20 before the title, 12 after the last button.
+  static const phoneBarStart = 20.0;
+  static const phoneBarEnd = 12.0;
+
+  /// On a tablet the phone layout keeps to this width, centred, until the
+  /// iPad boards are built (#535).
+  static const phoneMaxWidth = 480.0;
+
+  /// The phone's buttons in a top bar (测速方式, 全部测速): 36, pills.
+  static const phoneSmallButton = 36.0;
+
   // Motion (#401, decided on 2026-10-24). Durations go through [motion],
   // which makes them 0 when the system asks for reduced motion.
 
@@ -489,6 +504,17 @@ class Tokens {
 extension PhoneTokens on Tokens {
   /// Inset fields on the phone: a shade darker in light.
   Color get phoneSunk => brightness == Brightness.light ? const Color(0xFFECEFF3) : sunk;
+
+  /// The tab bar's fill at 82 % over its blur, and the 0.5 px line on top.
+  Color get phoneBarFill => brightness == Brightness.light ? const Color(0xD1F4F5FA) : const Color(0xD10D0F13);
+  Color get phoneBarLine => brightness == Brightness.light ? const Color(0x1F0F172A) : const Color(0x1FFFFFFF);
+
+  /// The round 44 buttons of the top bar (the bell): a translucent fill
+  /// and the hair ring.
+  Color get phoneRoundFill => brightness == Brightness.light ? const Color(0xB3FFFFFF) : const Color(0x0DFFFFFF);
+
+  /// The 0.5 px separators between rows of a card.
+  Color get phoneSeparator => brightness == Brightness.light ? const Color(0x1F0F172A) : const Color(0x1FFFFFFF);
 
   /// A phone card: [radius] (16, the connection card 28, the account card
   /// 18), the hair outline; in light the card shadow with its second layer

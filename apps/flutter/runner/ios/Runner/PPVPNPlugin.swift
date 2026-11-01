@@ -7,8 +7,9 @@
 //   App Group's container, which the packet tunnel shares (tunnel.sock),
 //   or Application Support in a build without the App Group (unsigned,
 //   the simulator). `openUrl` -> Bool: an http(s) page in an
-//   SFSafariViewController over the app (lib/links.dart, #473), anything
-//   else through the system. `closeBrowser`: that page dismissed, if up.
+//   SFSafariViewController presented as a page sheet over the app
+//   (lib/links.dart, #473, #535), anything else through the system.
+//   `closeBrowser`: that page dismissed, if up.
 // - com.peakpassvpn.ppvpn/vpn: `prepare` -> Bool (the VPN configuration is
 //   saved; the system asks the user the first time), `start`, `stop`.
 // - com.peakpassvpn.ppvpn/vpn-state: the tunnel's NEVPNStatus as off /
@@ -76,6 +77,8 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     browser?.dismiss(animated: false)
     let page = SFSafariViewController(url: url)
     page.dismissButtonStyle = .close
+    // A sheet, the app showing above it (the canvas's 手机 · 登录：授权页).
+    page.modalPresentationStyle = .pageSheet
     top.present(page, animated: true)
     browser = page
     result(true)

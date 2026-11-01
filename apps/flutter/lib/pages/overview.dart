@@ -416,7 +416,7 @@ class _SessionTimerState extends State<SessionTimer> {
 /// 本机 → the node's lines → 互联网. The line in use and those before it are
 /// lit while connected; the rest wait (dashed).
 class RouteLine extends StatelessWidget {
-  const RouteLine({required this.lines, required this.current, required this.connected});
+  const RouteLine({required this.lines, required this.current, required this.connected, this.compact = false});
 
   /// [lineNames], in failover order.
   final List<String> lines;
@@ -425,14 +425,17 @@ class RouteLine extends StatelessWidget {
   final int current;
   final bool connected;
 
+  /// The phone's: 24 high hops of 11 · 600, no icons, centred, short links.
+  final bool compact;
+
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final tone = connected ? t.ok : t.accent;
     final reached = current + 1;
     Widget hop(String text, {IconData? icon, bool lit = false, bool wait = false, bool mono = false}) => Container(
-      height: 26,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      height: compact ? 24 : 26,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 9 : 10),
       decoration: BoxDecoration(
         color: wait ? null : t.hop,
         borderRadius: BorderRadius.circular(13),
@@ -441,10 +444,13 @@ class RouteLine extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (icon != null) ...[Icon(icon, size: 13, color: wait ? t.t3 : t.t2), const SizedBox(width: 6)],
+          if (icon != null && !compact) ...[Icon(icon, size: 13, color: wait ? t.t3 : t.t2), const SizedBox(width: 6)],
           Text(
             text,
-            style: mono
+            style: compact
+                ? (mono ? t.monoText(11, weight: FontWeight.w600, color: lit ? tone : (wait ? t.t3 : t.t2)) : t.label)
+                      .copyWith(color: lit ? tone : (wait ? t.t3 : t.t2))
+                : mono
                 ? t.monoText(12, weight: FontWeight.w500, color: lit ? tone : (wait ? t.t3 : t.t2))
                 : t.note.copyWith(fontWeight: FontWeight.w500, color: wait ? t.t3 : t.t2),
           ),
@@ -453,10 +459,10 @@ class RouteLine extends StatelessWidget {
     );
     Widget link(bool wait) => Flexible(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 72),
+        constraints: BoxConstraints(maxWidth: compact ? 22 : 72),
         child: Container(
           height: 2,
-          margin: const EdgeInsets.symmetric(horizontal: 4),
+          margin: EdgeInsets.symmetric(horizontal: compact ? 3 : 4),
           child: CustomPaint(painter: _Dashes(wait ? t.t3.withValues(alpha: 0.4) : tone.withValues(alpha: 0.55), wait)),
         ),
       ),
@@ -466,6 +472,7 @@ class RouteLine extends StatelessWidget {
       label: [S.current('thisDevice'), ...shown, S.current('internet')].join(' → '),
       child: ExcludeSemantics(
         child: Row(
+          mainAxisAlignment: compact ? MainAxisAlignment.center : MainAxisAlignment.start,
           children: [
             hop(S.current('thisDevice'), icon: FLucideIcons.monitor),
             for (var i = 0; i < shown.length; i++) ...[
@@ -787,9 +794,13 @@ class ProblemCard extends StatelessWidget {
 }
 
 class TrafficCard extends StatelessWidget {
-  const TrafficCard({required this.app});
+  const TrafficCard({required this.app, this.phone = false});
 
   final AppState app;
+
+  /// The phone's (手机 · 概览): no heading, radius 16, the sparkline 48
+  /// high across the card's whole width.
+  final bool phone;
 
   @override
   Widget build(BuildContext context) {
@@ -826,6 +837,37 @@ class TrafficCard extends StatelessWidget {
       );
     }
 
+    final rates = ValueListenableBuilder(
+      valueListenable: app.traffic,
+      builder: (context, sample, _) => Row(
+        children: [
+          Expanded(child: rate(s('upload'), t.accent2, sample.up)),
+          const SizedBox(width: 12),
+          Expanded(child: rate(s('download'), t.ok, sample.down)),
+        ],
+      ),
+    );
+    final sparkline = ValueListenableBuilder(
+      valueListenable: app.history,
+      builder: (context, history, _) => CustomPaint(painter: _Sparkline(history, up: t.accent2, down: t.ok)),
+    );
+    if (phone) {
+      return Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: t.phoneCardDecoration(),
+        child: Semantics(
+          label: s('traffic'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(padding: const EdgeInsets.fromLTRB(16, 14, 16, 0), child: rates),
+              const SizedBox(height: 6),
+              SizedBox(height: 48, child: sparkline),
+            ],
+          ),
+        ),
+      );
+    }
     return CardBox(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Column(

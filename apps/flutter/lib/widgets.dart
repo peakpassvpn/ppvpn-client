@@ -730,15 +730,17 @@ class Flag extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final code = (countryCode ?? '').toLowerCase();
+    // Radius 3 at the desktop's size, 4 at the phone's.
+    final radius = size.width >= Tokens.phoneFlagSize.width ? 4.0 : 3.0;
     return ExcludeSemantics(
       child: Container(
         width: size.width,
         height: size.height,
         clipBehavior: Clip.antiAlias,
         alignment: Alignment.center,
-        decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(3)),
+        decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(radius)),
         foregroundDecoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(radius),
           border: Border.all(color: t.flagOutline, width: 0.5),
         ),
         child: _flags.contains(code)
@@ -749,29 +751,29 @@ class Flag extends StatelessWidget {
   }
 }
 
-/// The brand mark: the app icon, the double P (sign-in and the sidebar).
-/// Drawn 1.22 times [size], as the native login did, so that the mark
-/// itself fills [size] and the icon's transparent margin overflows it.
+/// The brand mark, the canvas's mountain (#535): white on the brand
+/// gradient's rounded tile, or with [onBrand] (on the brand gradient: the
+/// sign-in panels) the brand mountain on a white tile.
 class BrandMark extends StatelessWidget {
-  const BrandMark({super.key, required this.size});
+  const BrandMark({super.key, required this.size, this.onBrand = false});
 
   final double size;
+  final bool onBrand;
+
+  static const _plain =
+      '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" '
+      'x2="1" y2="1"><stop offset="0" stop-color="#3d63c9"/><stop offset="1" stop-color="#1f4390"/>'
+      '</linearGradient></defs><rect width="24" height="24" rx="6.5" fill="url(#g)"/>'
+      '<path d="M3.5 17.5 9.2 9l3.3 4.8 2.1-2.9 5.9 6.6z" fill="#fff"/>'
+      '<path d="M9.2 9l1.4 2.1-1.4.8-1.3-1z" fill="#c9d6ff"/></svg>';
+  static const _onBrand =
+      '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="6.5" '
+      'fill="#fff"/><path d="M3.5 17.5 9.2 9l3.3 4.8 2.1-2.9 5.9 6.6z" fill="#1f4390"/>'
+      '<path d="M9.2 9l1.4 2.1-1.4.8-1.3-1z" fill="#8fa8f5"/></svg>';
 
   @override
-  Widget build(BuildContext context) => SizedBox.square(
-    dimension: size,
-    child: OverflowBox(
-      maxWidth: size * 1.22,
-      maxHeight: size * 1.22,
-      child: Image.asset(
-        'assets/brand/app-icon.png',
-        width: size * 1.22,
-        height: size * 1.22,
-        filterQuality: FilterQuality.medium,
-        excludeFromSemantics: true,
-      ),
-    ),
-  );
+  Widget build(BuildContext context) =>
+      ExcludeSemantics(child: SvgPicture.string(onBrand ? _onBrand : _plain, width: size, height: size));
 }
 
 /// The overview's icon: the shield `M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10
