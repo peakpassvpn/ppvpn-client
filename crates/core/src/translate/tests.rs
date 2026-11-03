@@ -505,19 +505,22 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
         .iter()
         .map(|p| p.as_str().unwrap())
         .collect();
-    assert_eq!(
-        excluded[..7],
-        [
-            "8.8.8.8/32",
-            "1.1.1.1/32",
-            "224.0.0.0/4",
-            "255.255.255.255/32",
-            "169.254.0.0/16",
-            "fe80::/10",
-            "ff00::/8"
-        ]
+    for prefix in [
+        "8.8.8.8/32",
+        "1.1.1.1/32",
+        "224.0.0.0/4",
+        "255.255.255.255/32",
+        "169.254.0.0/16",
+        "fe80::/10",
+        "ff00::/8",
+    ] {
+        assert!(excluded.contains(&prefix), "{prefix}: {excluded:?}");
+    }
+    assert!(
+        excluded.windows(2).all(|pair| pair[0] < pair[1]),
+        "canonical set: {excluded:?}"
     );
-    // Then the private networks, less the TUN's own (#317).
+    // The private networks are included too, less the TUN's own (#317).
     for private in ["172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"] {
         assert!(excluded.contains(&private), "{private}: {excluded:?}");
     }
@@ -541,16 +544,15 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
     let tun = &config["inbounds"][0];
     assert_eq!(tun["address"], json!(["10.60.159.89/30"]));
     let excluded = tun["route_exclude_address"].as_array().unwrap();
-    assert_eq!(
-        excluded[..5],
-        [
-            "8.8.8.8/32",
-            "1.1.1.1/32",
-            "224.0.0.0/4",
-            "255.255.255.255/32",
-            "169.254.0.0/16"
-        ]
-    );
+    for prefix in [
+        "8.8.8.8/32",
+        "1.1.1.1/32",
+        "224.0.0.0/4",
+        "255.255.255.255/32",
+        "169.254.0.0/16",
+    ] {
+        assert!(excluded.contains(&json!(prefix)), "{prefix}: {excluded:?}");
+    }
     assert!(
         excluded.iter().all(|p| !p.as_str().unwrap().contains(':')),
         "no IPv6 without the TUN's IPv6: {excluded:?}"
