@@ -943,6 +943,12 @@ jobs:
         env:
           PPVPN_SKIP_ANALYZE: ${{ matrix.os != 'ubuntu-latest' && '1' || '' }}
         run: apps/flutter/scripts/ci-build.sh
+      - name: Flutter regression tests
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'ubuntu-latest'
+        working-directory: apps/flutter
+        env:
+          PPVPN_UI_TEST_CJK_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+        run: flutter test --no-pub checks
       - name: Preserve the normal macOS client for observer-only reruns
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
         run: |
