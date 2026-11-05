@@ -46,15 +46,22 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
         ? null
         : await messages.locate(request.messageId!);
     if (!mounted) return;
-    _open(index == null ? request.push : messages.view.value.items[index]);
+    _open(
+      index == null ? request.push : messages.view.value.items[index],
+      readOnly: index == null,
+    );
   }
 
-  void _open(rust.UiMessage message) {
-    unawaited(messages.setRead(message, true));
+  void _open(rust.UiMessage message, {bool readOnly = false}) {
+    if (!readOnly) unawaited(messages.setRead(message, true));
     unawaited(
       pushPhonePage<void>(
         context,
-        _MessageDetail(message: message, messages: messages),
+        _MessageDetail(
+          message: message,
+          messages: messages,
+          readOnly: readOnly,
+        ),
       ),
     );
   }
@@ -248,7 +255,12 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
 }
 
 class _MessageDetail extends StatelessWidget {
-  const _MessageDetail({required this.message, required this.messages});
+  const _MessageDetail({
+    required this.message,
+    required this.messages,
+    this.readOnly = false,
+  });
+  final bool readOnly;
   final rust.UiMessage message;
   final MessagesState messages;
   @override
@@ -292,7 +304,7 @@ class _MessageDetail extends StatelessWidget {
               final current = view.items
                   .where((m) => m.id == message.id)
                   .firstOrNull;
-              if (current == null) return const SizedBox.shrink();
+              if (readOnly || current == null) return const SizedBox.shrink();
               return Button(
                 kind: ButtonKind.text,
                 label: s(current.read ? 'markUnread' : 'markRead'),

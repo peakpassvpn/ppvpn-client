@@ -15,6 +15,7 @@ import 'package:ppvpn_flutter/sample.dart';
 import 'package:ppvpn_flutter/settings.dart';
 import 'package:ppvpn_flutter/src/rust/api.dart' as rust;
 import 'package:ppvpn_flutter/theme.dart';
+import 'package:ppvpn_flutter/widgets.dart' show Pressable;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -119,15 +120,19 @@ void main() {
   testWidgets('node details open by touch without selecting the row', (
     tester,
   ) async {
+    var selections = 0;
     await tester.pumpWidget(
       host(
         Center(
           child: SizedBox(
             width: 250,
-            child: NodeIdentity(
-              node: node('Los Angeles 203.0.113.12'),
-              phone: true,
-              tag: true,
+            child: Pressable(
+              onPress: () => selections++,
+              builder: (context, _) => NodeIdentity(
+                node: node('Los Angeles 203.0.113.12'),
+                phone: true,
+                tag: true,
+              ),
             ),
           ),
         ),
@@ -138,9 +143,34 @@ void main() {
     await tester.tap(find.text('Premium'));
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('出口 IP: 203.0.113.12'), findsOneWidget);
+    expect(selections, 0);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets(
+    'a read-only push never mutates an inbox message with the same id',
+    (tester) async {
+      final app = sampleState();
+      final message = app.messages.view.value.items.first;
+      expect(message.read, isFalse);
+      app.messages.requestOpen((messageId: null, push: message));
+      await tester.pumpWidget(
+        host(
+          PhoneScaffold(
+            title: '消息中心',
+            child: PhoneMessagesPage(app: app),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(app.messages.view.value.items.first.read, isFalse);
+      expect(find.text('标为已读'), findsNothing);
+      expect(find.text('标为未读'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   for (final scale in [1.0, 1.6]) {
     testWidgets(
       'phone inbox pushes readable detail and marks read at scale $scale',
