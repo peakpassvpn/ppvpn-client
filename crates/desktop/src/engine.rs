@@ -324,6 +324,19 @@ mod tests {
         assert!(!core_ipc::is_profile_error("ENGINE_SHUT_DOWN"));
     }
 
+    #[tokio::test]
+    async fn mobile_standard_engine_accepts_socket_protection() {
+        // Match the iOS UI engine's actual configuration on every CI host:
+        // target-gated protection must not escape Engine::new validation tests.
+        for platform in [Platform::Ios, Platform::Android] {
+            let dir = TempDir::new();
+            let config = EngineConfig::new(Role::Standard, platform, dir.path())
+                .with_socket_protect(ppvpn_core::SocketProtect::new(|_| Ok(())));
+            let engine = Engine::new(config).await.unwrap();
+            engine.shutdown().await.unwrap();
+        }
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn mobile_network_reaches_probes_before_start_and_after_recreation() {
