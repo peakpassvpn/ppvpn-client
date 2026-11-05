@@ -5,7 +5,7 @@
 //! work the same over the privileged service.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
 use ppvpn_core::{
@@ -37,6 +37,14 @@ pub(crate) struct EngineLauncher {
     platform: Platform,
     /// Authority of the API the profile comes from (`allowed_rule_set_hosts`).
     rule_set_hosts: Vec<String>,
+    network: Arc<Mutex<HostNetwork>>,
+    network_updates: Mutex<()>,
+}
+
+#[derive(Default)]
+struct HostNetwork {
+    last: Option<ppvpn_core::NetworkState>,
+    active: Weak<Engine>,
 }
 
 impl EngineLauncher {
@@ -48,6 +56,8 @@ impl EngineLauncher {
             log_dir: PathBuf::from(&config.log_dir),
             platform: platform(&config.platform),
             rule_set_hosts: core_ipc::rule_set_hosts(&config.api_base),
+            network: Arc::default(),
+            network_updates: Mutex::new(()),
         }
     }
 
@@ -57,10 +67,23 @@ impl EngineLauncher {
             "ppvpn-core.{}.log",
             crate::standard::utc_date(SystemTime::now())
         ));
-        EngineConfig::new(Role::Standard, self.platform, self.state_dir.clone())
+        let config = EngineConfig::new(Role::Standard, self.platform, self.state_dir.clone())
             .with_local_proxy(LocalProxyConfig::default())
             .with_system_proxy(true)
-            .with_log(LogConfig::new(LogLevel::Info, LogSink::File { path: log }))
+            .with_log(LogConfig::new(LogLevel::Info, LogSink::File { path: log }));
+        #[cfg(target_os = "ios")]
+        let config = {
+            let network = self.network.clone();
+            if self.platform == Platform::Ios {
+                config.with_socket_protect(ppvpn_core::SocketProtect::new(move |fd| {
+                    let state = network.lock().unwrap().last.clone();
+                    protect_ios_socket(fd, state.as_ref())
+                }))
+            } else {
+                config
+            }
+        };
+        config
     }
 
     async fn create(&self) -> Result<Launched, ClientErrorInfo> {
@@ -71,12 +94,26 @@ impl EngineLauncher {
                 format!("create engine dir: {error}"),
             )
         })?;
-        let engine = Engine::new(self.engine_config()).await.map_err(|error| {
+        let engine = Arc::new(Engine::new(self.engine_config()).await.map_err(|error| {
             ClientErrorInfo::new(
                 ErrorCode::StandardCoreFailed,
                 format!("STANDARD_ENGINE_FAILED: {error}"),
             )
-        })?;
+        })?);
+        {
+            let _update = self.network_updates.lock().unwrap();
+            let state = {
+                let mut network = self.network.lock().unwrap();
+                network.active = Arc::downgrade(&engine);
+                network.last.clone()
+            };
+            if let Some(state) = state {
+                engine.set_network_state(state).map_err(|error| {
+                    ClientErrorInfo::new(ErrorCode::StandardCoreFailed, error.to_string())
+                })?;
+            }
+        }
+
         tracing::info!(
             core = %Engine::version().core_version,
             "standard core: in-process Rust engine created"
@@ -125,20 +162,44 @@ impl EngineLauncher {
 }
 
 impl CoreLauncher for EngineLauncher {
+    fn network_changed(&self, state: ppvpn_core::NetworkState) -> Result<(), ClientErrorInfo> {
+        let _update = self.network_updates.lock().unwrap();
+        let active = {
+            let mut network = self.network.lock().unwrap();
+            network.last = Some(state.clone());
+            network.active.upgrade()
+        };
+        if let Some(engine) = active {
+            if let Err(error) = engine.set_network_state(state) {
+                if error.code != ppvpn_core::codes::ENGINE_SHUT_DOWN {
+                    return Err(ClientErrorInfo::new(
+                        ErrorCode::StandardCoreFailed,
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn launch(&self) -> BoxFuture<'_, Result<Launched, ClientErrorInfo>> {
         Box::pin(self.create())
     }
 }
 
-/// `ClientConfig::platform` (`macos` / `windows` / `linux`); anything else
+/// `ClientConfig::platform` (desktop and mobile platform names); anything else
 /// is this build's OS.
 fn platform(name: &str) -> Platform {
     match name {
         "macos" => Platform::Macos,
         "windows" => Platform::Windows,
         "linux" => Platform::Linux,
+        "ios" => Platform::Ios,
+        "android" => Platform::Android,
         _ if cfg!(target_os = "macos") => Platform::Macos,
         _ if cfg!(windows) => Platform::Windows,
+        _ if cfg!(target_os = "ios") => Platform::Ios,
+        _ if cfg!(target_os = "android") => Platform::Android,
         _ => Platform::Linux,
     }
 }
@@ -149,7 +210,7 @@ fn platform(name: &str) -> Platform {
 
 /// Serves Core API v1 calls from an in-process [`Engine`].
 pub(crate) struct EngineTransport {
-    engine: Engine,
+    engine: Arc<Engine>,
 }
 
 impl CoreTransport for EngineTransport {
@@ -186,6 +247,12 @@ mod tests {
     use super::*;
     use ppvpn_core::ApplyRequest;
     use serde_json::json;
+
+    #[test]
+    fn mobile_platforms_keep_mobile_engine_settings() {
+        assert_eq!(platform("ios"), Platform::Ios);
+        assert_eq!(platform("android"), Platform::Android);
+    }
 
     /// A fresh directory, removed on drop.
     struct TempDir(PathBuf);
@@ -255,6 +322,90 @@ mod tests {
             assert!(core_ipc::is_profile_error(code), "{code}");
         }
         assert!(!core_ipc::is_profile_error("ENGINE_SHUT_DOWN"));
+    }
+
+    #[tokio::test]
+    async fn mobile_standard_engine_accepts_socket_protection() {
+        // Match the iOS UI engine's actual configuration on every CI host:
+        // target-gated protection must not escape Engine::new validation tests.
+        for platform in [Platform::Ios, Platform::Android] {
+            let dir = TempDir::new();
+            let config = EngineConfig::new(Role::Standard, platform, dir.path())
+                .with_socket_protect(ppvpn_core::SocketProtect::new(|_| Ok(())));
+            let engine = Engine::new(config).await.unwrap();
+            engine.shutdown().await.unwrap();
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn mobile_network_reaches_probes_before_start_and_after_recreation() {
+        let dir = TempDir::new();
+        let mut config = config(dir.path());
+        config.platform = "ios".into();
+        let launcher = EngineLauncher::new(&config);
+        let interface = if cfg!(target_os = "macos") {
+            "lo0"
+        } else {
+            "lo"
+        };
+        let online = ppvpn_core::NetworkState::new(interface, ppvpn_core::NetworkKind::Other)
+            .with_addresses(vec!["127.0.0.1/8".into()]);
+        launcher.network_changed(online.clone()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut profile: Value = serde_json::from_str(include_str!(
+            "../../account/tests/fixtures/proxy-profile.json"
+        ))
+        .unwrap();
+        let mut node = profile["nodes"][0].clone();
+        let mut ingress = node["ingresses"][0].clone();
+        ingress["endpoint"] =
+            json!({"domain":"127.0.0.1","port":listener.local_addr().unwrap().port()});
+        node["ingresses"] = json!([ingress]);
+        let id = node["id"].as_str().unwrap().to_string();
+        profile["nodes"] = json!([node]);
+        profile["routing"] =
+            json!({"rule_sets":[],"rules":[],"final":{"type":"proxy","target":"selected"}});
+        for _ in 0..2 {
+            let launched = launcher.launch().await.unwrap();
+            let core = launched.transport.as_ref();
+            core_ipc::apply_profile(
+                core,
+                &profile,
+                None,
+                None,
+                &core_ipc::ApplyChoices::default(),
+            )
+            .await
+            .unwrap();
+            core_ipc::start(core).await.unwrap();
+            let result = core_ipc::probe_entrances(core, "tcp", std::slice::from_ref(&id), 1000, 4)
+                .await
+                .unwrap();
+            assert_eq!(result[0]["success"], true, "{result:?}");
+            launcher
+                .network_changed(ppvpn_core::NetworkState::offline())
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let result =
+                        core_ipc::probe_entrances(core, "tcp", std::slice::from_ref(&id), 1000, 4)
+                            .await;
+                    if result.as_ref().err().and_then(CoreCallError::code)
+                        == Some("NO_DEFAULT_INTERFACE")
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("native offline state must reach probes");
+            launched.stop.send(()).unwrap();
+            assert_eq!(launched.exited.await, "stopped");
+            // A path arriving while the UI engine is suspended is retained.
+            launcher.network_changed(online.clone()).unwrap();
+        }
     }
 
     #[tokio::test]
@@ -437,4 +588,50 @@ mod tests {
         let unknown = call(&launched, "/v1/watch-events", json!({})).await;
         assert_eq!(code(&unknown), Some("CORE_API_UNSUPPORTED"));
     }
+}
+
+/// iOS UI-owned sockets must use the physical interface, rather than being
+/// captured by the app's own active packet tunnel. Bind before connect.
+#[cfg(target_os = "ios")]
+fn protect_ios_socket(fd: i32, state: Option<&ppvpn_core::NetworkState>) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::io::{Error, ErrorKind};
+    let name = state
+        .and_then(|s| s.interface.as_deref())
+        .filter(|name| !name.is_empty() && !name.starts_with("utun"))
+        .ok_or_else(|| Error::from(ErrorKind::NotConnected))?;
+    let name = CString::new(name).map_err(|_| Error::from(ErrorKind::InvalidInput))?;
+    // SAFETY: the interface name is NUL-terminated; all socket buffers below
+    // have their actual size and remain valid for the system calls.
+    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    if index == 0 {
+        return Err(Error::last_os_error());
+    }
+    // SAFETY: sockaddr_storage is a plain C buffer initialized before use.
+    let mut address: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut size = std::mem::size_of_val(&address) as libc::socklen_t;
+    if unsafe { libc::getsockname(fd, &mut address as *mut _ as *mut libc::sockaddr, &mut size) }
+        != 0
+    {
+        return Err(Error::last_os_error());
+    }
+    let (level, option) = if address.ss_family as i32 == libc::AF_INET6 {
+        (libc::IPPROTO_IPV6, libc::IPV6_BOUND_IF)
+    } else {
+        (libc::IPPROTO_IP, libc::IP_BOUND_IF)
+    };
+    // SAFETY: index is a valid u32 buffer of the supplied length.
+    if unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            option,
+            &index as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&index) as libc::socklen_t,
+        )
+    } != 0
+    {
+        return Err(Error::last_os_error());
+    }
+    Ok(())
 }

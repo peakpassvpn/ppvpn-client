@@ -6,6 +6,8 @@
 // among them), 退出登录 in red after a confirmation, the version last. A
 // row with a value pushes its choices.
 
+import '../icons.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -44,7 +46,7 @@ class PhoneMe extends StatelessWidget {
             inset: 58,
             children: [
               _Row(
-                icon: FLucideIcons.split,
+                icon: AppIcons.split,
                 title: s('routing'),
                 value: snapshot.routingMode == rust.UiRoutingMode.rules ? s('rules') : s('global'),
                 onPress: () => pushPhoneChoice<rust.UiRoutingMode>(
@@ -56,7 +58,7 @@ class PhoneMe extends StatelessWidget {
                 ),
               ),
               _Row(
-                icon: FLucideIcons.list,
+                icon: AppIcons.list,
                 title: s('logs'),
                 onPress: () => unawaited(
                   pushPhonePage<void>(context, PhoneScaffold(title: s('logs'), back: true, child: const LogsPage())),
@@ -71,7 +73,7 @@ class PhoneMe extends StatelessWidget {
                     (rust.UiAppearance.dark, s('dark')),
                   ];
                   return _Row(
-                    icon: FLucideIcons.moon,
+                    icon: AppIcons.moon,
                     title: s('appearance'),
                     value: _name(options, appearance),
                     onPress: () => pushPhoneChoice(
@@ -94,7 +96,7 @@ class PhoneMe extends StatelessWidget {
                     (rust.UiLanguage.english, 'English'),
                   ];
                   return _Row(
-                    icon: FLucideIcons.languages,
+                    icon: AppIcons.languages,
                     title: s('language'),
                     value: _name(options, language),
                     onPress: () => pushPhoneChoice(
@@ -110,7 +112,7 @@ class PhoneMe extends StatelessWidget {
               // Network diagnostics (#521): its page says the DoH resolvers
               // are asked only when the user presses Run.
               _Row(
-                icon: FLucideIcons.globe,
+                icon: AppIcons.globe,
                 title: s('diagnostics'),
                 onPress: () => unawaited(
                   pushPhonePage<void>(
@@ -139,13 +141,13 @@ class PhoneMe extends StatelessWidget {
               // plan bought elsewhere still works in the app.
               if (!Platform.isIOS)
                 _Row(
-                  icon: FLucideIcons.creditCard,
+                  icon: AppIcons.creditCard,
                   title: s('planWeb'),
                   web: true,
                   onPress: () => _open('/dashboard/subscriptions'),
                 ),
               _Row(
-                icon: FLucideIcons.megaphone,
+                icon: AppIcons.megaphone,
                 title: s('helpWeb'),
                 web: true,
                 onPress: () => _open('/dashboard/tickets'),
@@ -154,12 +156,12 @@ class PhoneMe extends StatelessWidget {
               // comes back): it confirms again and deletes the account.
               // App Store and Play need it reachable from the app (#473).
               _Row(
-                icon: FLucideIcons.userX,
+                icon: AppIcons.userX,
                 title: s('deleteAccountWeb'),
                 web: true,
                 onPress: () => _open('/account/delete'),
               ),
-              _Row(icon: FLucideIcons.info, title: s('about'), web: true, onPress: () => _open('')),
+              _Row(icon: AppIcons.info, title: s('about'), web: true, onPress: () => _open('')),
             ],
           ),
           const SizedBox(height: 18),
@@ -304,7 +306,7 @@ class _AccountCard extends StatelessWidget {
                           ],
                         ),
                       ),
-                      const Icon(FLucideIcons.chevronRight, size: 16, color: soft),
+                      const Icon(AppIcons.chevronRight, size: 16, color: soft),
                     ],
                   ),
                   if (until != null) ...[
@@ -387,7 +389,7 @@ class _AccountCard extends StatelessWidget {
                                     ),
                                   ),
                                   if (!team.active) Text(S.current('teamDisabled'), style: t.phoneNote),
-                                  if (team.id == current) Icon(FLucideIcons.check, size: 18, color: t.accent),
+                                  if (team.id == current) Icon(AppIcons.check, size: 18, color: t.accent),
                                 ],
                               ),
                             ),
@@ -453,7 +455,7 @@ class _Row extends StatelessWidget {
               Text(text, style: t.phoneBody.copyWith(fontSize: 14, height: 20 / 14, color: t.t3)),
             ],
             const SizedBox(width: 6),
-            Icon(web ? FLucideIcons.arrowUpRight : FLucideIcons.chevronRight, size: 16, color: t.t3),
+            Icon(web ? AppIcons.arrowUpRight : AppIcons.chevronRight, size: 16, color: t.t3),
           ],
         ),
       ),

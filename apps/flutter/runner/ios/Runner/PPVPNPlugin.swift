@@ -24,6 +24,7 @@
 
 import Flutter
 import NetworkExtension
+import Network
 import SafariServices
 import UIKit
 import os
@@ -36,6 +37,8 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var sink: FlutterEventSink?
   private var observer: NSObjectProtocol?
   private weak var browser: SFSafariViewController?
+  private let network = PPVPNAppNetworkMonitor()
+  private var backgroundTasks: [Int: UIBackgroundTaskIdentifier] = [:]
 
   static func register(with registrar: FlutterPluginRegistrar) {
     PPVPNNativeChrome.register(with: registrar)
@@ -49,6 +52,11 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         switch call.method {
         case "nativeChromeAvailable": result(PPVPNNativeChrome.available)
         case "filesDir": result(filesDir())
+        case "beginBackgroundTask": result(plugin.beginBackgroundTask())
+        case "endBackgroundTask":
+          if let raw = call.arguments as? Int { plugin.endBackgroundTask(raw) }
+          result(nil)
+        case "chooseLine": plugin.chooseLine(call.arguments, result: result)
         case "openUrl": plugin.open(call.arguments as? String, result: result)
         case "closeBrowser":
           plugin.browser?.dismiss(animated: true)
@@ -57,6 +65,8 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         default: result(FlutterMethodNotImplemented)
         }
       }
+    FlutterEventChannel(name: "com.peakpassvpn.ppvpn/network-state", binaryMessenger: messenger)
+      .setStreamHandler(plugin.network)
     FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/vpn", binaryMessenger: messenger)
       .setMethodCallHandler(plugin.handle)
     FlutterEventChannel(name: "com.peakpassvpn.ppvpn/vpn-state", binaryMessenger: messenger)
@@ -82,6 +92,20 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     #endif
   }
 
+  private func beginBackgroundTask() -> Int? {
+    var identifier: UIBackgroundTaskIdentifier = .invalid
+    identifier = UIApplication.shared.beginBackgroundTask(withName: "PPVPN UI engine suspension") { [weak self] in
+      self?.endBackgroundTask(identifier.rawValue)
+    }
+    guard identifier != .invalid else { return nil }
+    backgroundTasks[identifier.rawValue] = identifier
+    return identifier.rawValue
+  }
+
+  private func endBackgroundTask(_ raw: Int) {
+    if let task = backgroundTasks.removeValue(forKey: raw) { UIApplication.shared.endBackgroundTask(task) }
+  }
+
   private static func filesDir() -> String? {
     let files = FileManager.default
     let dir =
@@ -90,6 +114,27 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     guard let dir else { return nil }
     try? files.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir.path
+  }
+
+  private func chooseLine(_ arguments: Any?, result: @escaping FlutterResult) {
+    guard let args = arguments as? [String: Any],
+      let options = args["options"] as? [String], !options.isEmpty,
+      let top = Self.topController(), top.presentedViewController == nil else {
+      return result(FlutterError(code: "line-picker-unavailable", message: "Unable to show route choices", details: nil))
+    }
+    let selected = (args["selected"] as? NSNumber)?.intValue ?? 0
+    let sheet = UIAlertController(title: args["title"] as? String,
+      message: args["message"] as? String, preferredStyle: .actionSheet)
+    for (index, label) in options.enumerated() {
+      sheet.addAction(UIAlertAction(title: index == selected ? "✓ " + label : label, style: .default) { _ in result(index) })
+    }
+    sheet.addAction(UIAlertAction(title: args["cancel"] as? String, style: .cancel) { _ in result(nil) })
+    // UIAlertController uses a popover on iPad; provide a valid source anchor.
+    if let popover = sheet.popoverPresentationController {
+      popover.sourceView = top.view
+      popover.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.maxY - top.view.safeAreaInsets.bottom, width: 1, height: 1)
+    }
+    top.present(sheet, animated: true)
   }
 
   private func open(_ text: String?, result: @escaping FlutterResult) {
@@ -259,3 +304,32 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
   }
 #endif
+
+/// The UI-owned standard engine needs the same native network feed as the
+/// independent packet tunnel. Deliver the initial path as well as changes.
+private final class PPVPNAppNetworkMonitor: NSObject, FlutterStreamHandler {
+  private var monitor: NWPathMonitor?
+  private var generation = 0
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    monitor?.cancel()
+    generation += 1
+    let current = generation
+    let watch = NWPathMonitor()
+    watch.pathUpdateHandler = { [weak self] path in
+      let json = NetworkState(path).json
+      DispatchQueue.main.async { [weak self] in
+        guard self?.generation == current else { return }
+        events(json)
+      }
+    }
+    monitor = watch
+    watch.start(queue: DispatchQueue(label: "com.peakpassvpn.ppvpn.app-network"))
+    return nil
+  }
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    generation += 1
+    monitor?.cancel()
+    monitor = nil
+    return nil
+  }
+}

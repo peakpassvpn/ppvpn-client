@@ -60,3 +60,5 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
 ] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+libc = "0.2"

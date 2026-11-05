@@ -7,12 +7,14 @@
 // card. The desktop's full-page gates and the invalid-profile warning as
 // they are.
 
+import '../icons.dart';
+
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
-import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../node_identity.dart';
 import '../pages/overview.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
@@ -21,7 +23,12 @@ import '../widgets.dart';
 import 'phone.dart';
 
 class PhoneOverview extends StatelessWidget {
-  const PhoneOverview({super.key, required this.app, required this.bell, required this.onNodes});
+  const PhoneOverview({
+    super.key,
+    required this.app,
+    required this.bell,
+    required this.onNodes,
+  });
 
   final AppState app;
   final Widget bell;
@@ -38,7 +45,10 @@ class PhoneOverview extends StatelessWidget {
       final loading = snapshot.profile == rust.UiProfile.loading;
       // The top of the page in the status colour, fading into the
       // background (spec: 状态铺色).
-      final tint = Color.alphaBlend(statusColor(t, snapshot).withValues(alpha: 0.10), t.bg);
+      final tint = Color.alphaBlend(
+        statusColor(t, snapshot).withValues(alpha: 0.10),
+        t.bg,
+      );
       return PhoneScaffold(
         title: S.current('overview'),
         brand: true,
@@ -54,7 +64,9 @@ class PhoneOverview extends StatelessWidget {
         child: Swap(
           id: limited != null || loading ? snapshot.profile : null,
           expand: true,
-          child: limited ?? (loading ? const LoadingNodes() : _page(context, snapshot)),
+          child:
+              limited ??
+              (loading ? const LoadingNodes() : _page(context, snapshot)),
         ),
       );
     },
@@ -69,7 +81,10 @@ class PhoneOverview extends StatelessWidget {
           child: snapshot.profile == rust.UiProfile.invalid
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [ConfigWarning(previous: snapshot.profilePrevious), const SizedBox(height: 12)],
+                  children: [
+                    ConfigWarning(previous: snapshot.profilePrevious),
+                    const SizedBox(height: 12),
+                  ],
                 )
               : null,
         ),
@@ -108,7 +123,9 @@ class _ConnectionCard extends StatelessWidget {
     final detail = enhancedDetail(snapshot);
     // One line on a phone: the one in use, else the first.
     final names = node == null ? const <String>[] : lineNames(node);
-    final inUse = node == null ? -1 : node.lines.indexWhere((line) => line.key == snapshot.lineKey);
+    final inUse = node == null
+        ? -1
+        : node.lines.indexWhere((line) => line.key == snapshot.lineKey);
     return AnimatedContainer(
       duration: Tokens.motion(context, Tokens.motionBase),
       curve: Tokens.motionCurve,
@@ -118,7 +135,10 @@ class _ConnectionCard extends StatelessWidget {
         gradient: RadialGradient(
           center: Alignment.topRight,
           radius: 1.1,
-          colors: [Color.alphaBlend(tone.withValues(alpha: 0.16), t.card), t.card],
+          colors: [
+            Color.alphaBlend(tone.withValues(alpha: 0.16), t.card),
+            t.card,
+          ],
         ),
       ),
       child: Stack(
@@ -131,7 +151,10 @@ class _ConnectionCard extends StatelessWidget {
                   gradient: RadialGradient(
                     center: Alignment.bottomLeft,
                     radius: 0.9,
-                    colors: [t.accent2.withValues(alpha: 0.10), t.accent2.withValues(alpha: 0)],
+                    colors: [
+                      t.accent2.withValues(alpha: 0.10),
+                      t.accent2.withValues(alpha: 0),
+                    ],
                   ),
                 ),
               ),
@@ -142,46 +165,55 @@ class _ConnectionCard extends StatelessWidget {
             child: MediaQuery.withClampedTextScaling(
               maxScaleFactor: Tokens.phoneChromeTextMax,
               child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: _StatusPill(snapshot: snapshot, tone: tone),
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: _StatusPill(snapshot: snapshot, tone: tone),
+                        ),
                       ),
-                    ),
-                    Swap(
-                      id: connected,
-                      alignment: AlignmentDirectional.centerEnd,
-                      child: connected ? _Elapsed(since: app.connectedSince) : const SizedBox.shrink(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                _Orb(app: app, snapshot: snapshot, tone: tone),
-                Reveal(
-                  child: detail == null
-                      ? null
-                      : Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(detail, textAlign: TextAlign.center, style: t.phoneNote.copyWith(color: t.t2)),
-                        ),
-                ),
-                Reveal(
-                  child: node == null || phase == rust.UiPhase.off || names.isEmpty
-                      ? null
-                      : Padding(
-                          padding: const EdgeInsets.only(top: 14),
-                          child: RouteLine(
-                            lines: [names[inUse < 0 ? 0 : inUse]],
-                            current: inUse < 0 ? -1 : 0,
-                            connected: connected,
-                            compact: true,
+                      Swap(
+                        id: connected,
+                        alignment: AlignmentDirectional.centerEnd,
+                        child: connected
+                            ? _Elapsed(since: app.connectedSince)
+                            : const SizedBox.shrink(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  _Orb(app: app, snapshot: snapshot, tone: tone),
+                  Reveal(
+                    child: detail == null
+                        ? null
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              detail,
+                              textAlign: TextAlign.center,
+                              style: t.phoneNote.copyWith(color: t.t2),
+                            ),
                           ),
-                        ),
-                ),
-              ],
+                  ),
+                  Reveal(
+                    child:
+                        node == null ||
+                            phase == rust.UiPhase.off ||
+                            names.isEmpty
+                        ? null
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 14),
+                            child: RouteLine(
+                              lines: [names[inUse < 0 ? 0 : inUse]],
+                              current: inUse < 0 ? -1 : 0,
+                              connected: connected,
+                              compact: true,
+                            ),
+                          ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -203,11 +235,17 @@ class _StatusPill extends StatefulWidget {
   State<_StatusPill> createState() => _StatusPillState();
 }
 
-class _StatusPillState extends State<_StatusPill> with SingleTickerProviderStateMixin {
-  late final AnimationController _breath = AnimationController(vsync: this, duration: Tokens.pulseHalf)
-    ..repeat(reverse: true);
+class _StatusPillState extends State<_StatusPill>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _breath = AnimationController(
+    vsync: this,
+    duration: Tokens.pulseHalf,
+  )..repeat(reverse: true);
   late final Animation<double> _opacity = _breath.drive(
-    Tween(begin: 1.0, end: Tokens.pulseLow).chain(CurveTween(curve: Curves.easeInOut)),
+    Tween(
+      begin: 1.0,
+      end: Tokens.pulseLow,
+    ).chain(CurveTween(curve: Curves.easeInOut)),
   );
 
   @override
@@ -228,10 +266,14 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
       decoration: BoxDecoration(
         color: tone,
         shape: BoxShape.circle,
-        boxShadow: [BoxShadow(color: tone.withValues(alpha: 0.22), spreadRadius: 3)],
+        boxShadow: [
+          BoxShadow(color: tone.withValues(alpha: 0.22), spreadRadius: 3),
+        ],
       ),
     );
-    final breathing = phase == rust.UiPhase.connected && !MediaQuery.disableAnimationsOf(context);
+    final breathing =
+        phase == rust.UiPhase.connected &&
+        !MediaQuery.disableAnimationsOf(context);
     return Semantics(
       liveRegion: true,
       header: true,
@@ -240,7 +282,10 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
         curve: Tokens.motionCurve,
         height: 28,
         padding: const EdgeInsetsDirectional.fromSTEB(10, 0, 12, 0),
-        decoration: BoxDecoration(color: tone.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(14)),
+        decoration: BoxDecoration(
+          color: tone.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(14),
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -261,7 +306,10 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
                   statusTitle(widget.snapshot),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: t.phoneNote.copyWith(fontWeight: FontWeight.w600, color: tone),
+                  style: t.phoneNote.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: tone,
+                  ),
                 ),
               ),
             ),
@@ -301,16 +349,19 @@ class _ElapsedState extends State<_Elapsed> {
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final since = widget.since;
-    final elapsed = since == null ? Duration.zero : DateTime.now().difference(since);
+    final elapsed = since == null
+        ? Duration.zero
+        : DateTime.now().difference(since);
     String two(int n) => n.toString().padLeft(2, '0');
-    final text = '${two(elapsed.inHours)}:${two(elapsed.inMinutes % 60)}:${two(elapsed.inSeconds % 60)}';
+    final text =
+        '${two(elapsed.inHours)}:${two(elapsed.inMinutes % 60)}:${two(elapsed.inSeconds % 60)}';
     return Semantics(
       label: '${S.current('thisSession')} $text',
       child: ExcludeSemantics(
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(FLucideIcons.clock, size: 13, color: t.t2),
+            Icon(AppIcons.clock, size: 13, color: t.t2),
             const SizedBox(width: 5),
             Text(text, style: t.monoText(13, color: t.t2)),
           ],
@@ -345,8 +396,14 @@ class _OrbState extends State<_Orb> with TickerProviderStateMixin {
   );
   static const _ripple = Duration(milliseconds: 600);
 
-  late final AnimationController _breath = AnimationController(vsync: this, duration: Tokens.pulseHalf);
-  late final AnimationController _spread = AnimationController(vsync: this, duration: _ripple);
+  late final AnimationController _breath = AnimationController(
+    vsync: this,
+    duration: Tokens.pulseHalf,
+  );
+  late final AnimationController _spread = AnimationController(
+    vsync: this,
+    duration: _ripple,
+  );
 
   bool get _busy => isBusy(widget.snapshot.phase);
 
@@ -361,7 +418,9 @@ class _OrbState extends State<_Orb> with TickerProviderStateMixin {
     super.didUpdateWidget(old);
     _follow();
     final on = widget.snapshot.phase == rust.UiPhase.connected;
-    if (on && old.snapshot.phase != rust.UiPhase.connected && !MediaQuery.disableAnimationsOf(context)) {
+    if (on &&
+        old.snapshot.phase != rust.UiPhase.connected &&
+        !MediaQuery.disableAnimationsOf(context)) {
       unawaited(_spread.forward(from: 0));
     }
   }
@@ -393,7 +452,9 @@ class _OrbState extends State<_Orb> with TickerProviderStateMixin {
     final busy = _busy;
     final on = snapshot.phase == rust.UiPhase.connected;
     final glow = on ? const Color(0xFF15803D) : const Color(0xFF1F4390);
-    final label = busy ? statusTitle(snapshot) : s(on ? 'disconnectBtn' : 'connectBtn');
+    final label = busy
+        ? statusTitle(snapshot)
+        : s(on ? 'disconnectBtn' : 'connectBtn');
     final base = Tokens.motion(context, Tokens.motionBase);
     Widget face(bool pressed) => AnimatedScale(
       scale: pressed ? 0.96 : 1,
@@ -406,7 +467,12 @@ class _OrbState extends State<_Orb> with TickerProviderStateMixin {
           children: [
             // The ring of the status colour, breathing while busy.
             FadeTransition(
-              opacity: _breath.drive(Tween(begin: 1.0, end: 0.45).chain(CurveTween(curve: Curves.easeInOut))),
+              opacity: _breath.drive(
+                Tween(
+                  begin: 1.0,
+                  end: 0.45,
+                ).chain(CurveTween(curve: Curves.easeInOut)),
+              ),
               child: AnimatedContainer(
                 duration: base,
                 curve: Tokens.motionCurve,
@@ -430,14 +496,20 @@ class _OrbState extends State<_Orb> with TickerProviderStateMixin {
               animation: _spread,
               builder: (context, _) {
                 final v = Curves.easeOutCubic.transform(_spread.value);
-                if (_spread.value == 0 || _spread.value == 1) return const SizedBox.shrink();
-                final size = Tokens.phoneOrbDisc + (Tokens.phoneOrb - Tokens.phoneOrbDisc) * v;
+                if (_spread.value == 0 || _spread.value == 1)
+                  return const SizedBox.shrink();
+                final size =
+                    Tokens.phoneOrbDisc +
+                    (Tokens.phoneOrb - Tokens.phoneOrbDisc) * v;
                 return Container(
                   width: size,
                   height: size,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: t.ok.withValues(alpha: 0.35 * (1 - v)), width: 2),
+                    border: Border.all(
+                      color: t.ok.withValues(alpha: 0.35 * (1 - v)),
+                      width: 2,
+                    ),
                   ),
                 );
               },
@@ -465,21 +537,35 @@ class _OrbState extends State<_Orb> with TickerProviderStateMixin {
                 shape: BoxShape.circle,
                 gradient: on ? _green : Tokens.primaryGradient,
                 boxShadow: [
-                  BoxShadow(color: glow.withValues(alpha: busy ? 0.18 : 0.35), offset: const Offset(0, 14), blurRadius: 30),
+                  BoxShadow(
+                    color: glow.withValues(alpha: busy ? 0.18 : 0.35),
+                    offset: const Offset(0, 14),
+                    blurRadius: 30,
+                  ),
                 ],
               ),
-              child: const Icon(FLucideIcons.power, size: 44, color: Color(0xFFFFFFFF)),
+              child: const Icon(
+                AppIcons.power,
+                size: 44,
+                color: Color(0xFFFFFFFF),
+              ),
             ),
           ],
         ),
       ),
     );
     if (busy) {
-      return Semantics(button: true, enabled: false, label: label, child: ExcludeSemantics(child: face(false)));
+      return Semantics(
+        button: true,
+        enabled: false,
+        label: label,
+        child: ExcludeSemantics(child: face(false)),
+      );
     }
     return Pressable(
       key: const ValueKey('connect'),
-      onPress: () => unawaited(on ? widget.app.disconnect() : widget.app.connect()),
+      onPress: () =>
+          unawaited(on ? widget.app.disconnect() : widget.app.connect()),
       label: label,
       radius: Tokens.phoneOrb / 2,
       builder: (context, pressed) => face(pressed),
@@ -490,7 +576,11 @@ class _OrbState extends State<_Orb> with TickerProviderStateMixin {
 /// The current node (flag, 当前节点 over its name, latency; opens 节点) and
 /// the routing mode (pushes its choices), 62 rows in one card.
 class _NodeCard extends StatelessWidget {
-  const _NodeCard({required this.app, required this.snapshot, required this.onNodes});
+  const _NodeCard({
+    required this.app,
+    required this.snapshot,
+    required this.onNodes,
+  });
 
   final AppState app;
   final rust.UiSnapshot snapshot;
@@ -510,13 +600,17 @@ class _NodeCard extends StatelessWidget {
       required FontWeight weight,
       required VoidCallback onPress,
       Widget? end,
+      Widget? identity,
     }) => Pressable(
       key: key,
       radius: 0,
       onPress: onPress,
       label: '$label, $title',
       builder: (context, pressed) => AnimatedContainer(
-        duration: Tokens.motion(context, pressed ? Duration.zero : Tokens.motionFast),
+        duration: Tokens.motion(
+          context,
+          pressed ? Duration.zero : Tokens.motionFast,
+        ),
         color: pressed ? t.phonePress : t.phonePress.withValues(alpha: 0),
         constraints: const BoxConstraints(minHeight: Tokens.phoneRowTwoLines),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -529,19 +623,26 @@ class _NodeCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: t.phoneNote.copyWith(fontSize: 12, height: 16 / 12)),
                   Text(
-                    title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.phoneRowTitle.copyWith(fontWeight: weight, letterSpacing: -0.17),
+                    label,
+                    style: t.phoneNote.copyWith(fontSize: 12, height: 16 / 12),
                   ),
+                  identity ??
+                      Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.phoneRowTitle.copyWith(
+                          fontWeight: weight,
+                          letterSpacing: -0.17,
+                        ),
+                      ),
                 ],
               ),
             ),
             if (end != null) ...[const SizedBox(width: 8), end],
             const SizedBox(width: 6),
-            Icon(FLucideIcons.chevronRight, size: 16, color: t.t3),
+            Icon(AppIcons.chevronRight, size: 16, color: t.t3),
           ],
         ),
       ),
@@ -551,8 +652,14 @@ class _NodeCard extends StatelessWidget {
         row(
           key: const ValueKey('current-node'),
           label: s('currentNode'),
-          leading: Flag(countryCode: node?.exitCountryCode, size: Tokens.phoneFlagSize),
+          leading: Flag(
+            countryCode: node?.exitCountryCode,
+            size: Tokens.phoneFlagSize,
+          ),
           title: node == null ? '—' : nodeTitle(node),
+          identity: node == null
+              ? null
+              : NodeIdentity(node: node, phone: true, strong: true, tag: true),
           weight: FontWeight.w600,
           onPress: onNodes,
           end: node == null ? null : LatencyPill.ms(snapshot.latencyMs),
@@ -560,13 +667,16 @@ class _NodeCard extends StatelessWidget {
         row(
           key: const ValueKey('routing'),
           label: s('routing'),
-          leading: const PhoneTile(icon: FLucideIcons.split, size: 28),
+          leading: const PhoneTile(icon: AppIcons.split, size: 28),
           title: rules ? s('rules') : s('global'),
           weight: FontWeight.w500,
           onPress: () => pushPhoneChoice<rust.UiRoutingMode>(
             context,
             title: s('routing'),
-            options: [(rust.UiRoutingMode.rules, s('rules')), (rust.UiRoutingMode.global, s('global'))],
+            options: [
+              (rust.UiRoutingMode.rules, s('rules')),
+              (rust.UiRoutingMode.global, s('global')),
+            ],
             value: snapshot.routingMode,
             onChanged: (mode) => unawaited(app.setRoutingMode(mode)),
           ),

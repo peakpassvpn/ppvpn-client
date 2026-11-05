@@ -1,6 +1,5 @@
 // Rendering-only regression coverage. Fixed fixtures: no VPN or backend.
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' show ImageByteFormat;
 
 import 'package:flutter/widgets.dart';
@@ -14,12 +13,18 @@ import 'package:ppvpn_flutter/sample.dart';
 import 'package:ppvpn_flutter/settings.dart';
 import 'package:ppvpn_flutter/src/rust/api.dart' as rust;
 import 'package:ppvpn_flutter/theme.dart';
-import 'package:ppvpn_flutter/pages/nodes.dart' show TierTag;
+import 'package:ppvpn_flutter/node_identity.dart' show NodeInfoTag;
 import 'package:ppvpn_flutter/widgets.dart' show linesText;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
+    await (FontLoader(
+      'PPVPN Material',
+    )..addFont(rootBundle.load('assets/fonts/MaterialSymbols.ttf'))).load();
+    await (FontLoader('PPVPN Material Filled')
+          ..addFont(rootBundle.load('assets/fonts/MaterialSymbolsFilled.ttf')))
+        .load();
     final inter = FontLoader('packages/forui/Inter')
       ..addFont(rootBundle.load('packages/forui/assets/fonts/inter/Inter.ttf'));
     final mono = FontLoader('JetBrains Mono')
@@ -182,10 +187,10 @@ void main() {
                 final rowTitle = find.text(app.nodes.value.first.name);
                 final row = find
                     .ancestor(of: rowTitle, matching: find.byType(Row))
-                    .first;
+                    .last;
                 final tier = find.descendant(
                   of: row,
-                  matching: find.byType(TierTag),
+                  matching: find.byType(NodeInfoTag),
                 );
                 final lines = find.descendant(
                   of: row,
