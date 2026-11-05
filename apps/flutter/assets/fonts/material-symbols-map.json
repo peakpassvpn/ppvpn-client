@@ -1,0 +1,202 @@
+{
+  "arrowDown": {
+    "web": "arrow_downward",
+    "codepoint": 57344
+  },
+  "bell": {
+    "web": "notifications",
+    "codepoint": 57345
+  },
+  "calendar": {
+    "web": "calendar_month",
+    "codepoint": 57346
+  },
+  "calendarClock": {
+    "web": "event_upcoming",
+    "codepoint": 57347
+  },
+  "calendarX": {
+    "web": "event_busy",
+    "codepoint": 57348
+  },
+  "check": {
+    "web": "check",
+    "codepoint": 57349
+  },
+  "checkCheck": {
+    "web": "done_all",
+    "codepoint": 57350
+  },
+  "chevronDown": {
+    "web": "expand_more",
+    "codepoint": 57351
+  },
+  "chevronLeft": {
+    "web": "chevron_left",
+    "codepoint": 57352
+  },
+  "chevronRight": {
+    "web": "chevron_right",
+    "codepoint": 57353
+  },
+  "chevronUp": {
+    "web": "expand_less",
+    "codepoint": 57354
+  },
+  "circleAlert": {
+    "web": "error",
+    "codepoint": 57355
+  },
+  "circleCheck": {
+    "web": "check_circle",
+    "codepoint": 57356
+  },
+  "clock": {
+    "web": "schedule",
+    "codepoint": 57357
+  },
+  "creditCard": {
+    "web": "credit_card",
+    "codepoint": 57358
+  },
+  "download": {
+    "web": "download",
+    "codepoint": 57359
+  },
+  "folderOpen": {
+    "web": "folder_open",
+    "codepoint": 57360
+  },
+  "globe": {
+    "web": "public",
+    "codepoint": 57361
+  },
+  "inbox": {
+    "web": "inbox",
+    "codepoint": 57362
+  },
+  "info": {
+    "web": "info",
+    "codepoint": 57363
+  },
+  "languages": {
+    "web": "translate",
+    "codepoint": 57364
+  },
+  "link": {
+    "web": "link",
+    "codepoint": 57365
+  },
+  "link2Off": {
+    "web": "link_off",
+    "codepoint": 57366
+  },
+  "list": {
+    "web": "list_alt",
+    "codepoint": 57367
+  },
+  "logOut": {
+    "web": "logout",
+    "codepoint": 57368
+  },
+  "mailOpen": {
+    "web": "drafts",
+    "codepoint": 57369
+  },
+  "mapPin": {
+    "web": "location_on",
+    "codepoint": 57370
+  },
+  "megaphone": {
+    "web": "campaign",
+    "codepoint": 57371
+  },
+  "minus": {
+    "web": "remove",
+    "codepoint": 57372
+  },
+  "monitor": {
+    "web": "desktop_windows",
+    "codepoint": 57373
+  },
+  "moon": {
+    "web": "dark_mode",
+    "codepoint": 57374
+  },
+  "power": {
+    "web": "power_settings_new",
+    "codepoint": 57375
+  },
+  "receipt": {
+    "web": "receipt_long",
+    "codepoint": 57376
+  },
+  "route": {
+    "web": "route",
+    "codepoint": 57377
+  },
+  "search": {
+    "web": "search",
+    "codepoint": 57378
+  },
+  "server": {
+    "web": "dns",
+    "codepoint": 57379
+  },
+  "settings": {
+    "web": "settings",
+    "codepoint": 57380
+  },
+  "shield": {
+    "web": "verified_user",
+    "codepoint": 57381
+  },
+  "shoppingBag": {
+    "web": "shopping_bag",
+    "codepoint": 57382
+  },
+  "split": {
+    "web": "call_split",
+    "codepoint": 57383
+  },
+  "square": {
+    "web": "stop",
+    "codepoint": 57384
+  },
+  "sunMoon": {
+    "web": "contrast",
+    "codepoint": 57385
+  },
+  "user": {
+    "web": "person",
+    "codepoint": 57386
+  },
+  "userX": {
+    "web": "person_remove",
+    "codepoint": 57387
+  },
+  "users": {
+    "web": "group",
+    "codepoint": 57388
+  },
+  "x": {
+    "web": "close",
+    "codepoint": 57389
+  },
+  "zap": {
+    "web": "bolt",
+    "codepoint": 57390
+  },
+  "arrowUpRight": {
+    "web": "north_east",
+    "codepoint": 57391
+  },
+  "mail": {
+    "web": "mail",
+    "codepoint": 57392
+  },
+  "copy": {
+    "web": "content_copy",
+    "codepoint": 57393
+  }
+}

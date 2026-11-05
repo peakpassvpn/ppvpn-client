@@ -9,6 +9,8 @@
 // process stays flat however long the page is open (#387). Not in the
 // prototype: selecting text.
 
+import '../icons.dart';
+
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
@@ -427,7 +429,7 @@ class _Tools extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Icon(FLucideIcons.chevronDown, size: 12, color: t.t3),
+                    Icon(AppIcons.chevronDown, size: 12, color: t.t3),
                   ],
                 ),
               ),
@@ -447,7 +449,7 @@ class _Tools extends StatelessWidget {
                 )
               : Button(
                   kind: ButtonKind.text,
-                  icon: FLucideIcons.arrowDown,
+                  icon: AppIcons.arrowDown,
                   label: s('live'),
                   height: 26,
                   fontSize: 12,
@@ -455,7 +457,7 @@ class _Tools extends StatelessWidget {
                 );
           final revealButton = Button(
             kind: ButtonKind.secondary,
-            icon: FLucideIcons.folderOpen,
+            icon: AppIcons.folderOpen,
             label: reveal,
             onPress: onReveal,
           );

@@ -1,5 +1,6 @@
 package com.peakpassvpn.ppvpn
 
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -25,6 +26,7 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "filesDir" -> result.success(filesDir.absolutePath)
+                    "chooseLine" -> chooseLine(call.arguments, result)
                     "openUrl" -> result.success(open(call.arguments as? String))
                     "closeBrowser" -> {
                         closeTab()
@@ -34,6 +36,31 @@ class MainActivity : FlutterActivity() {
                 }
             }
         vpn = VpnPlugin(this, flutterEngine.dartExecutor.binaryMessenger)
+    }
+
+    private fun chooseLine(arguments: Any?, result: MethodChannel.Result) {
+        val args = arguments as? Map<*, *> ?: run {
+            result.error("line-picker-unavailable", "Invalid route choices", null)
+            return
+        }
+        val options = (args["options"] as? List<*>)?.filterIsInstance<String>()
+        if (options.isNullOrEmpty() || isFinishing) {
+            result.error("line-picker-unavailable", "Unable to show route choices", null)
+            return
+        }
+        var completed = false
+        fun finish(value: Int?) {
+            if (!completed) { completed = true; result.success(value) }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(args["title"] as? String)
+            .setSingleChoiceItems(options.toTypedArray(), (args["selected"] as? Number)?.toInt() ?: 0) { dialog, which ->
+                dialog.dismiss()
+                finish(which)
+            }
+            .setNegativeButton(args["cancel"] as? String) { _, _ -> finish(null) }
+            .setOnCancelListener { finish(null) }
+            .show()
     }
 
     // A Custom Tab where the browser offers them, else the browser: the

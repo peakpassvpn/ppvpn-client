@@ -8,6 +8,8 @@
 // enhanced mode is step 2). Appearance, language and the override are the
 // app's own (settings.dart); the routing mode is the client's.
 
+import '../icons.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -113,7 +115,7 @@ class _General extends StatelessWidget {
         ValueListenableBuilder(
           valueListenable: Settings.appearance,
           builder: (context, appearance, _) => SettingRow(
-            icon: FLucideIcons.sunMoon,
+            icon: AppIcons.sunMoon,
             title: s('appearance'),
             trailing: Segmented(
               label: s('appearance'),
@@ -130,7 +132,7 @@ class _General extends StatelessWidget {
         ValueListenableBuilder(
           valueListenable: Settings.language,
           builder: (context, language, _) => SettingRow(
-            icon: FLucideIcons.languages,
+            icon: AppIcons.languages,
             title: s('language'),
             divider: true,
             trailing: Segmented(
@@ -147,7 +149,7 @@ class _General extends StatelessWidget {
           ),
         ),
         SettingRow(
-          icon: FLucideIcons.split,
+          icon: AppIcons.split,
           title: s('routing'),
           divider: true,
           trailing: Segmented(
@@ -214,7 +216,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
       builder: (context, state, _) => Column(
         children: [
           SettingRow(
-            icon: FLucideIcons.power,
+            icon: AppIcons.power,
             title: s('launchAtLogin'),
             divider: true,
             trailing: TriSwitch(
@@ -226,7 +228,7 @@ class _LaunchAtLoginState extends State<_LaunchAtLogin> with WindowListener {
           if (state.needsApproval)
             _SubRow(
               children: [
-                Icon(FLucideIcons.circleAlert, size: 14, color: t.warn),
+                Icon(AppIcons.circleAlert, size: 14, color: t.warn),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(s(Platform.isWindows ? 'winLaunchApprove' : 'launchApprove'), style: t.note),
@@ -271,7 +273,7 @@ class _Version extends StatelessWidget {
     return Column(
       children: [
         SettingRow(
-          icon: FLucideIcons.info,
+          icon: AppIcons.info,
           title: s('versionT'),
           divider: true,
           trailing: Row(
@@ -306,7 +308,7 @@ class _Version extends StatelessWidget {
                 )
               : _SubRow(
                   children: [
-                    Icon(FLucideIcons.arrowDown, size: 14, color: t.accent),
+                    Icon(AppIcons.arrowDown, size: 14, color: t.accent),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Column(
@@ -328,7 +330,7 @@ class _Version extends StatelessWidget {
           builder: (context, autoUpdate, _) => autoUpdate == null
               ? const SizedBox.shrink()
               : SettingRow(
-                  icon: FLucideIcons.calendarClock,
+                  icon: AppIcons.calendarClock,
                   title: s('autoUpdate'),
                   description: s('autoUpdateD'),
                   divider: true,
@@ -377,21 +379,21 @@ class _Account extends StatelessWidget {
     return _Group(
       title: s('account'),
       children: [
-        SettingRow(icon: FLucideIcons.user, title: s('user'), trailing: _Value(snapshot.accountName ?? '—')),
+        SettingRow(icon: AppIcons.user, title: s('user'), trailing: _Value(snapshot.accountName ?? '—')),
         SettingRow(
-          icon: FLucideIcons.users,
+          icon: AppIcons.users,
           title: s('team'),
           divider: true,
           trailing: _Value(snapshot.teamName ?? '—'),
         ),
         SettingRow(
-          icon: FLucideIcons.calendar,
+          icon: AppIcons.calendar,
           title: s('expires'),
           divider: true,
           trailing: _Value(_date(snapshot.expiresAt), mono: true),
         ),
         SettingRow(
-          icon: FLucideIcons.logOut,
+          icon: AppIcons.logOut,
           title: s('signOut'),
           divider: true,
           trailing: Button(
@@ -479,7 +481,7 @@ class _Advanced extends StatelessWidget {
         // Development only (#519): release builds neither show nor honour it.
         if (Settings.apiOverrideAllowed) const _ApiOverride(),
         SettingRow(
-          icon: FLucideIcons.server,
+          icon: AppIcons.server,
           title: s('service'),
           description: s('laterStep'),
           divider: true,
@@ -512,7 +514,7 @@ class _Advanced extends StatelessWidget {
         ),
         // Network diagnostics (#521): the DoH comparison only on the press.
         SettingRow(
-          icon: FLucideIcons.globe,
+          icon: AppIcons.globe,
           title: s('diagnostics'),
           description: s('diagnosticsSub'),
           divider: true,
@@ -600,7 +602,7 @@ class _ApiOverrideState extends State<_ApiOverride> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const RowIcon(icon: FLucideIcons.link),
+          const RowIcon(icon: AppIcons.link),
           const SizedBox(width: 14),
           Expanded(
             child: Column(

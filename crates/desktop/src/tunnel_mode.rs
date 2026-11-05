@@ -598,6 +598,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changed_ingress_pins_reach_the_live_host_without_restarting() {
+        let dir = temp_dir();
+        let host = host(&dir, "configured");
+        let (mode, _) = mode(&dir);
+        mode.set_profile(PROFILE, "r1").await.unwrap();
+        mode.enable().await.unwrap();
+        mode.inner
+            .config
+            .ingress_pins
+            .set(crate::ingress::Pins::from([("hk".into(), "route2".into())]));
+        mode.reapply().await.unwrap();
+        {
+            let requests = host.requests.lock().unwrap();
+            let apply = requests
+                .iter()
+                .rev()
+                .find(|r| r["path"] == "/v1/apply-profile")
+                .unwrap();
+            assert_eq!(
+                apply["body"]["pins"],
+                json!([{"node_id":"hk","endpoint_key":"route2"}])
+            );
+        }
+        mode.inner.config.ingress_pins.set(Default::default());
+        mode.reapply().await.unwrap();
+        {
+            let requests = host.requests.lock().unwrap();
+            let apply = requests
+                .iter()
+                .rev()
+                .find(|r| r["path"] == "/v1/apply-profile")
+                .unwrap();
+            // The host contract decodes omitted pins as an empty list.
+            assert!(apply["body"].get("pins").is_none());
+            assert_eq!(
+                requests.iter().filter(|r| r["path"] == "/v1/start").count(),
+                1
+            );
+        }
+        mode.disable().await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn connect_applies_with_the_selection_starts_and_is_on() {
         let dir = temp_dir();
         let host = host(&dir, "configured");

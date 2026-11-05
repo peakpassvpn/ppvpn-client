@@ -228,6 +228,43 @@ pub async fn refresh_nodes() -> Result<(), String> {
         .await
 }
 
+/// Native mobile path changes, including the initial path and offline state.
+pub async fn set_mobile_network(json: String) -> Result<(), String> {
+    bridge::get()?
+        .call(move |client| async move { client.set_mobile_network(json) })
+        .await
+}
+
+/// Release UI-only resources before iOS suspension, restore on foreground.
+/// The independent system VPN continues running.
+pub async fn set_app_foreground(active: bool) -> Result<(), String> {
+    bridge::get()?
+        .call(move |client| async move {
+            client.set_app_foreground(active).await;
+            Ok(())
+        })
+        .await
+}
+
+/// The persisted manual line selection; None means automatic failover.
+#[frb(sync)]
+pub fn pinned_ingress(node_id: String) -> Result<Option<String>, String> {
+    Ok(bridge::get()?
+        .client
+        .snapshot()
+        .ingress_pins
+        .into_iter()
+        .find(|pin| pin.node_id == node_id)
+        .map(|pin| pin.endpoint_key))
+}
+
+/// Selects a real ingress, or returns to automatic failover.
+pub async fn pin_ingress(node_id: String, endpoint_key: Option<String>) -> Result<(), String> {
+    bridge::get()?
+        .call(move |client| async move { client.pin_ingress(node_id, endpoint_key).await })
+        .await
+}
+
 /// Tests every node; results arrive in [`next_events`]. Fails until the
 /// standard-mode core is ready.
 pub async fn probe_all(method: UiProbeMethod) -> Result<(), String> {

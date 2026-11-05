@@ -51,7 +51,7 @@ pub struct EngineConfig {
     pub tun: Option<TunConfig>,             // 仅 Tun：local_dns_servers 覆盖（等同 --local-dns-servers）；Windows 上 wintun_dll 路径；移动端 fd（宿主打开的 TUN，第 11 节）
     pub log: LogConfig,                     // 级别（info/debug）和日志行的接收端，见第 10 节
     pub max_connections: Option<u32>,       // Sail 的并发会话上限（inbound.max_connections）；None 用 profile 的，0 不限（第 11 节）
-    pub socket_protect: Option<SocketProtect>, // 仅移动端的 Tun：出站 socket 的保护回调，不序列化（第 11 节）
+    pub socket_protect: Option<SocketProtect>, // 仅移动端：出站 socket 的保护回调，不序列化（第 11 节）
 }
 
 impl Engine {
@@ -504,7 +504,7 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 - **socket 保护（Android）**：用 `EngineConfig::with_socket_protect(SocketProtect::new(|fd| ...))` 设置，宿主在回调里调 `VpnService.protect(fd)`。
   - **覆盖范围**：引擎的每个出站 socket 连接前都先经过它：Sail 的出站（节点、直连、DNS 上游、规则集下载），以及入口探测的 TCP 和 ICMP。不保护的话，探测会进隧道，TUN 会自己应答 TCP 握手。
   - **失败与线程**：回调返回错误时，这次拨号或探测失败。回调在 Sail 或探测的线程上执行，里面不能再调用实例。
-  - **适用平台**：iOS 不需要，因为扩展自己的流量本来就不进隧道。只有移动端的 Tun 实例接受，其他情况 `new` 返回 `CORE_OPERATION_FAILED`（field=`socket_protect`）。
+  - **适用平台**：iOS 扩展自己的流量本来就不进隧道，但 App 内 Standard 实例的测速必须绑定物理接口，避免流量进入自身 VPN。移动端的 Tun 和 Standard 实例均接受，桌面平台 `new` 返回 `CORE_OPERATION_FAILED`（field=`socket_protect`）。
   - **不序列化**：它是 `#[serde(skip)]` 字段，由 FFI 层直接设置。
 - **网络状态**：宿主监听 `ConnectivityManager` 或 `NWPathMonitor`，在 `start` 之前和每次变化时调 `Engine::set_network_state(NetworkState)`；断网时传 `NetworkState::offline()`。
   - **格式**：`NetworkState` 的字段是 `interface`、`type`（wifi、cellular、ethernet、other）、`addresses`、`gateway`、`expensive`、`constrained`，序列化后就是 Sail 的网络状态 JSON。`interface` 为空表示断网。

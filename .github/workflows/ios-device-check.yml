@@ -2,7 +2,7 @@ name: iOS device check
 
 on:
   push:
-    branches: [codex/iphone13mini-device-check]
+    branches: [codex/iphone13mini-device-check, codex/client-device-feedback]
   workflow_dispatch:
 
 permissions:
