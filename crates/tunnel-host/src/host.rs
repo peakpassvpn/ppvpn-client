@@ -43,6 +43,7 @@ impl Options {
 }
 
 /// The native side's `on_exit`.
+#[derive(Clone)]
 pub struct ExitCallback {
     function: extern "C" fn(*mut c_void, *const c_char),
     context: usize,
@@ -436,5 +437,12 @@ mod tests {
                 .code,
             "REQUEST_INVALID"
         );
+    }
+}
+
+#[cfg(test)]
+impl ExitCallback {
+    pub(crate) fn notify(self, code: &str, message: &str) {
+        self.call(code, message);
     }
 }

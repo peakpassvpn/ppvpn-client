@@ -279,3 +279,6 @@ mod tests {
         ppvpn_tunnel_wake();
     }
 }
+
+#[cfg(test)]
+mod callback_stop_tests;
