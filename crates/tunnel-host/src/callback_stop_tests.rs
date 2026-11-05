@@ -70,3 +70,42 @@ fn stop_does_not_return_while_the_native_exit_callback_is_running() {
         "stop returned while native code still used its context"
     );
 }
+
+#[test]
+fn a_rejected_start_cannot_replace_the_running_hosts_listener() {
+    let _serial = host::test_lock();
+    let dir = std::env::temp_dir().join(format!("ppvpn-listener-stop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tun = std::fs::File::open("/dev/null").unwrap();
+    let (old, old_calls) = mpsc::channel();
+    let (new, new_calls) = mpsc::channel();
+    let exit = ExitCallback::from_fn(move |_| {
+        old.send("old listener").unwrap();
+    });
+    let start = |callback| {
+        host::start(
+            tun.as_raw_fd(),
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            Platform::Android,
+            Options::default(),
+            Some(callback),
+        )
+    };
+    start(exit.clone()).unwrap();
+    let rejected = ExitCallback::from_fn(move |_| {
+        new.send("new listener").unwrap();
+    });
+    assert_eq!(start(rejected).unwrap_err().code, "TUNNEL_ALREADY_RUNNING");
+    exit.notify("OLD_EXIT", "old host");
+    assert_eq!(
+        old_calls.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "old listener"
+    );
+    host::stop();
+    assert!(matches!(
+        new_calls.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    std::fs::remove_dir_all(dir).unwrap();
+}

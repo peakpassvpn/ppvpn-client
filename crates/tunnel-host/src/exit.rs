@@ -1,7 +1,7 @@
 //! The native callback's lifetime, shared with stop, independently of the
 //! runtime: its thread may itself stop that runtime.
 
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
 
@@ -9,24 +9,34 @@ use std::thread::{self, ThreadId};
 pub struct ExitCallback(Arc<Callback>);
 
 struct Callback {
-    function: extern "C" fn(*mut c_void, *const c_char),
-    context: usize,
     state: Mutex<State>,
     finished: Condvar,
 }
 
-#[derive(Default)]
+type Handler = Box<dyn Fn(&CStr) + Send + Sync>;
+
 struct State {
     cancelled: bool,
     running: Option<ThreadId>,
+    function: Option<Handler>,
 }
 
 impl ExitCallback {
     pub fn new(function: extern "C" fn(*mut c_void, *const c_char), context: *mut c_void) -> Self {
+        // Store only the address, as before; the C caller owns its lifetime.
+        let context = context as usize;
+        Self::from_fn(move |reason| function(context as *mut c_void, reason.as_ptr()))
+    }
+
+    /// An owned callback, used by JNI to bind a listener to this host
+    /// instead of looking up a process-global listener during delivery.
+    pub(crate) fn from_fn(function: impl Fn(&CStr) + Send + Sync + 'static) -> Self {
         Self(Arc::new(Callback {
-            function,
-            context: context as usize,
-            state: Mutex::new(State::default()),
+            state: Mutex::new(State {
+                cancelled: false,
+                running: None,
+                function: Some(Box::new(function)),
+            }),
             finished: Condvar::new(),
         }))
     }
@@ -61,7 +71,7 @@ impl ExitCallback {
     }
 
     fn invoke(&self, reason: CString) {
-        {
+        let function = {
             let mut state = self.lock();
             if state.cancelled {
                 return;
@@ -69,10 +79,24 @@ impl ExitCallback {
             // A host exits once, even if two producers try to notify it.
             state.cancelled = true;
             state.running = Some(thread::current().id());
+            state.function.take().expect("an uncancelled callback")
+        };
+        // Release captured JNI references before advertising completion,
+        // including if a Rust handler unwinds. No callback lock is held
+        // while native code calls back into stop.
+        struct Finished<'a>(&'a ExitCallback);
+        impl Drop for Finished<'_> {
+            fn drop(&mut self) {
+                let exit = self.0;
+                exit.lock().running = None;
+                exit.0.finished.notify_all();
+            }
         }
-        (self.0.function)(self.0.context as *mut c_void, reason.as_ptr());
-        self.lock().running = None;
-        self.0.finished.notify_all();
+        let _finished = Finished(self);
+        {
+            let handler = function;
+            handler(&reason);
+        }
     }
 
     /// Suppress a callback not entered yet, or wait for an entered one.
@@ -80,6 +104,7 @@ impl ExitCallback {
     pub(crate) fn cancel_and_wait(&self) {
         let mut state = self.lock();
         state.cancelled = true;
+        let pending = state.function.take();
         while state.running.is_some() && state.running != Some(thread::current().id()) {
             state = self
                 .0
@@ -87,6 +112,8 @@ impl ExitCallback {
                 .wait(state)
                 .unwrap_or_else(|e| e.into_inner());
         }
+        drop(state);
+        drop(pending);
     }
 }
 
@@ -188,5 +215,37 @@ mod tests {
         exit.cancel_and_wait();
         assert!(!exit.is_running());
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn cancellation_releases_an_owned_listener_without_a_new_start() {
+        let listener = Arc::new(());
+        let weak = Arc::downgrade(&listener);
+        let exit = ExitCallback::from_fn(move |_| {
+            let _listener = &listener;
+        });
+        assert!(weak.upgrade().is_some());
+        exit.cancel_and_wait();
+        // The process keeps its stopping slot and gate. It must not keep
+        // a stopped service's JNI GlobalRef alive through that gate.
+        assert!(weak.upgrade().is_none());
+        exit.invoke(CString::new("late").unwrap());
+    }
+
+    #[test]
+    fn an_owned_listener_is_released_when_a_handler_unwinds() {
+        let listener = Arc::new(());
+        let weak = Arc::downgrade(&listener);
+        let exit = ExitCallback::from_fn(move |_| {
+            let _listener = &listener;
+            panic!("test handler unwind");
+        });
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            exit.invoke(CString::new("exit").unwrap());
+        }))
+        .is_err());
+        exit.cancel_and_wait();
+        assert!(!exit.is_running());
+        assert!(weak.upgrade().is_none());
     }
 }
