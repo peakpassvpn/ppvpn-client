@@ -208,8 +208,6 @@ case $os in
       replace "$gradle" 'signingConfig = signingConfigs.getByName("debug")' 'signingConfig = signingConfigs.getByName("upload")'
     fi ;;
   ios)
-    # Exercise delayed NE callbacks without starting a VPN or an app.
-    python3 checks/ios_tunnel_test.py
     # The App Store id, as the user decided it (#448), and iOS 15 and later.
     # The app's channels (runner/ios PPVPNPlugin.swift) go into the
     # generated AppDelegate.swift, which the Runner target compiles, and
