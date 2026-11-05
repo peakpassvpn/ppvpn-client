@@ -6,15 +6,16 @@
 // separators. A tap makes a node the current one; pulling down refreshes
 // the list.
 
+import '../icons.dart';
+
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart' show CupertinoSliverRefreshControl;
 import 'package:flutter/services.dart' show TextInputAction;
 import 'package:flutter/widgets.dart';
-import 'package:forui/forui.dart';
 
 import '../app_state.dart';
-import '../pages/nodes.dart';
+import '../node_identity.dart';
 import '../pages/overview.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
@@ -48,14 +49,18 @@ class _PhoneNodesState extends State<PhoneNodes> {
     if (mounted) setState(() => _testing = false);
   }
 
-  void _nextMethod() => setState(() => _method = switch (_method) {
-    rust.UiProbeMethod.icmp => rust.UiProbeMethod.tcp,
-    rust.UiProbeMethod.tcp => rust.UiProbeMethod.connect,
-    rust.UiProbeMethod.connect => rust.UiProbeMethod.icmp,
-  });
+  void _nextMethod() => setState(
+    () => _method = switch (_method) {
+      rust.UiProbeMethod.icmp => rust.UiProbeMethod.tcp,
+      rust.UiProbeMethod.tcp => rust.UiProbeMethod.connect,
+      rust.UiProbeMethod.connect => rust.UiProbeMethod.icmp,
+    },
+  );
 
   String get _methodName => switch (_method) {
-    rust.UiProbeMethod.icmp => 'Ping', rust.UiProbeMethod.tcp => 'TCP', rust.UiProbeMethod.connect => 'Connect',
+    rust.UiProbeMethod.icmp => 'Ping',
+    rust.UiProbeMethod.tcp => 'TCP',
+    rust.UiProbeMethod.connect => 'Connect',
   };
 
   @override
@@ -64,19 +69,27 @@ class _PhoneNodesState extends State<PhoneNodes> {
     builder: (context, snapshot, _) => PhoneScaffold(
       title: S.current('nodes'),
       nativeActions: [
-        NativeChromeAction(id: 'probe-method', label: _methodName, onPress: _nextMethod),
-        NativeChromeAction(id: 'test-all', label: S.current('testAll'),
-          enabled: !_testing && snapshot.standardReady, onPress: () => unawaited(_testAll())),
+        NativeChromeAction(
+          id: 'probe-method',
+          label: _methodName,
+          onPress: _nextMethod,
+        ),
+        NativeChromeAction(
+          id: 'test-all',
+          label: S.current('testAll'),
+          enabled: !_testing && snapshot.standardReady,
+          onPress: () => unawaited(_testAll()),
+        ),
       ],
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _MethodButton(
-            method: _method,
-            onPress: _nextMethod,
-          ),
+          _MethodButton(method: _method, onPress: _nextMethod),
           const SizedBox(width: 8),
-          _TestAllButton(testing: _testing, onPress: _testing || !snapshot.standardReady ? null : _testAll),
+          _TestAllButton(
+            testing: _testing,
+            onPress: _testing || !snapshot.standardReady ? null : _testAll,
+          ),
         ],
       ),
       child: _body(context, snapshot),
@@ -113,7 +126,9 @@ class _PhoneNodesState extends State<PhoneNodes> {
               node,
         ];
         final padding = phoneScrollPadding(context);
-        final current = shown.where((node) => node.id == snapshot.selectedNodeId).firstOrNull;
+        final current = shown
+            .where((node) => node.id == snapshot.selectedNodeId)
+            .firstOrNull;
         // The others by region, in the list's order; a group's count is
         // the region's.
         final groups = <String, List<rust.UiNode>>{};
@@ -133,8 +148,15 @@ class _PhoneNodesState extends State<PhoneNodes> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(Tokens.phonePadding, 4, Tokens.phonePadding, 12),
-                    child: _SearchField(onChanged: (value) => setState(() => _query = value)),
+                    padding: const EdgeInsets.fromLTRB(
+                      Tokens.phonePadding,
+                      4,
+                      Tokens.phonePadding,
+                      12,
+                    ),
+                    child: _SearchField(
+                      onChanged: (value) => setState(() => _query = value),
+                    ),
                   ),
                   if (regions.length > 1)
                     _RegionChips(
@@ -147,7 +169,9 @@ class _PhoneNodesState extends State<PhoneNodes> {
             ),
             Expanded(
               child: CustomScrollView(
-                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
                 slivers: [
                   CupertinoSliverRefreshControl(onRefresh: app.refreshNodes),
                   SliverPadding(
@@ -170,23 +194,36 @@ class _PhoneNodesState extends State<PhoneNodes> {
                                 node: node,
                                 current: node.id == snapshot.selectedNodeId,
                                 latency: latency[node.id],
-                                onPress: () => unawaited(app.selectNode(node.id)),
+                                onPress: () =>
+                                    unawaited(app.selectNode(node.id)),
                               );
                               return SliverList.list(
                                 children: [
                                   if (current != null) ...[
                                     PhoneCaption(text: s('currentNode')),
                                     PhoneCard(
-                                      decoration: _currentDecoration(Tokens.of(context)),
+                                      decoration: _currentDecoration(
+                                        Tokens.of(context),
+                                      ),
                                       children: [rowOf(current)],
                                     ),
                                   ],
-                                  for (final MapEntry(key: region, value: nodes) in groups.entries) ...[
+                                  for (final MapEntry(key: region, value: nodes)
+                                      in groups.entries) ...[
                                     PhoneCaption(
-                                      text: region.isEmpty ? s('allRegions') : region,
-                                      trailing: s('nodesCount', {'n': '${counts[region]}'}),
+                                      text: region.isEmpty
+                                          ? s('allRegions')
+                                          : region,
+                                      trailing: s('nodesCount', {
+                                        'n': '${counts[region]}',
+                                      }),
                                     ),
-                                    PhoneCard(inset: 56, children: [for (final node in nodes) rowOf(node)]),
+                                    PhoneCard(
+                                      inset: 56,
+                                      children: [
+                                        for (final node in nodes) rowOf(node),
+                                      ],
+                                    ),
                                   ],
                                 ],
                               );
@@ -209,11 +246,20 @@ class _PhoneNodesState extends State<PhoneNodes> {
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
       stops: const [0, 0.7],
-      colors: [Color.alphaBlend(t.accent.withValues(alpha: 0.05), t.card), t.card],
+      colors: [
+        Color.alphaBlend(t.accent.withValues(alpha: 0.05), t.card),
+        t.card,
+      ],
     ),
     borderRadius: BorderRadius.circular(Tokens.phoneCardRadius),
     border: Border.all(color: t.accent, width: 1.5),
-    boxShadow: [BoxShadow(color: t.accent.withValues(alpha: 0.14), offset: const Offset(0, 6), blurRadius: 18)],
+    boxShadow: [
+      BoxShadow(
+        color: t.accent.withValues(alpha: 0.14),
+        offset: const Offset(0, 6),
+        blurRadius: 18,
+      ),
+    ],
   );
 }
 
@@ -252,9 +298,16 @@ class _MethodButton extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(name, style: t.phoneBodyStrong.copyWith(fontSize: 14, height: 20 / 14, color: t.accent)),
+                Text(
+                  name,
+                  style: t.phoneBodyStrong.copyWith(
+                    fontSize: 14,
+                    height: 20 / 14,
+                    color: t.accent,
+                  ),
+                ),
                 const SizedBox(width: 5),
-                Icon(FLucideIcons.chevronDown, size: 12, color: t.accent),
+                Icon(AppIcons.chevronDown, size: 12, color: t.accent),
               ],
             ),
           ),
@@ -293,7 +346,13 @@ class _TestAllButton extends StatelessWidget {
               color: light ? null : t.accent,
               borderRadius: BorderRadius.circular(Tokens.phoneSmallButton / 2),
               boxShadow: light
-                  ? const [BoxShadow(color: Color(0x471F4390), offset: Offset(0, 4), blurRadius: 12)]
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x471F4390),
+                        offset: Offset(0, 4),
+                        blurRadius: 12,
+                      ),
+                    ]
                   : null,
             ),
             child: Row(
@@ -302,9 +361,16 @@ class _TestAllButton extends StatelessWidget {
                 if (testing)
                   Spinner(color: t.onAccent, size: 14)
                 else
-                  Icon(FLucideIcons.zap, size: 14, color: t.onAccent),
+                  Icon(AppIcons.zap, size: 14, color: t.onAccent),
                 const SizedBox(width: 6),
-                Text(label, style: t.phoneBodyStrong.copyWith(fontSize: 14, height: 20 / 14, color: t.onAccent)),
+                Text(
+                  label,
+                  style: t.phoneBodyStrong.copyWith(
+                    fontSize: 14,
+                    height: 20 / 14,
+                    color: t.onAccent,
+                  ),
+                ),
               ],
             ),
           ),
@@ -354,7 +420,7 @@ class _SearchFieldState extends State<_SearchField> {
           ),
           child: Row(
             children: [
-              Icon(FLucideIcons.search, size: 18, color: t.t3),
+              Icon(AppIcons.search, size: 18, color: t.t3),
               const SizedBox(width: 8),
               Expanded(
                 child: Stack(
@@ -363,7 +429,13 @@ class _SearchFieldState extends State<_SearchField> {
                     ValueListenableBuilder(
                       valueListenable: _controller,
                       builder: (context, value, _) => value.text.isEmpty
-                          ? ExcludeSemantics(child: Text(hint, maxLines: 1, style: style.copyWith(color: t.t3)))
+                          ? ExcludeSemantics(
+                              child: Text(
+                                hint,
+                                maxLines: 1,
+                                style: style.copyWith(color: t.t3),
+                              ),
+                            )
                           : const SizedBox(),
                     ),
                     EditableText(
@@ -391,7 +463,11 @@ class _SearchFieldState extends State<_SearchField> {
 
 /// The regions as chips (34 high), scrolling sideways; 全部 first.
 class _RegionChips extends StatelessWidget {
-  const _RegionChips({required this.regions, required this.selected, required this.onSelect});
+  const _RegionChips({
+    required this.regions,
+    required this.selected,
+    required this.onSelect,
+  });
 
   final List<String> regions;
   final String? selected;
@@ -414,7 +490,10 @@ class _RegionChips extends StatelessWidget {
           height: 34,
           padding: const EdgeInsets.symmetric(horizontal: 15),
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: on ? t.accent : t.phoneSunk, borderRadius: BorderRadius.circular(17)),
+          decoration: BoxDecoration(
+            color: on ? t.accent : t.phoneSunk,
+            borderRadius: BorderRadius.circular(17),
+          ),
           child: Text(
             text,
             style: t.phoneBody.copyWith(
@@ -445,7 +524,12 @@ class _RegionChips extends StatelessWidget {
 }
 
 class _NodeRow extends StatelessWidget {
-  const _NodeRow({required this.node, required this.current, required this.latency, required this.onPress});
+  const _NodeRow({
+    required this.node,
+    required this.current,
+    required this.latency,
+    required this.onPress,
+  });
 
   final rust.UiNode node;
   final bool current;
@@ -455,15 +539,16 @@ class _NodeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final lines = linesText(node);
-    final tier = (node.entryLabel ?? '').isNotEmpty;
     return Pressable(
       radius: 0,
       selected: current,
       label: nodeTitle(node),
       onPress: onPress,
       builder: (context, pressed) => AnimatedContainer(
-        duration: Tokens.motion(context, pressed ? Duration.zero : Tokens.motionFast),
+        duration: Tokens.motion(
+          context,
+          pressed ? Duration.zero : Tokens.motionFast,
+        ),
         color: pressed ? t.phonePress : t.phonePress.withValues(alpha: 0),
         constraints: const BoxConstraints(minHeight: Tokens.phoneRowTwoLines),
         padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 14, 8),
@@ -476,42 +561,22 @@ class _NodeRow extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Two lines at large text sizes before it is cut.
-                  Text(
-                    nodeTitle(node),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.phoneBody.copyWith(
-                      fontWeight: current ? FontWeight.w600 : FontWeight.w500,
-                      letterSpacing: -0.16,
-                    ),
+                  NodeIdentity(
+                    node: node,
+                    phone: true,
+                    strong: current,
+                    tag: true,
                   ),
-                  if (tier || lines.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    LayoutBuilder(
-                      builder: (context, box) => Wrap(
-                        spacing: 6,
-                        runSpacing: 3,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          if (tier)
-                            ConstrainedBox(
-                              constraints: BoxConstraints(maxWidth: box.maxWidth),
-                              // TierTag's Align must shrink to its label so
-                              // short metadata can still share a line.
-                              child: IntrinsicWidth(child: TierTag(label: node.entryLabel, entryKey: node.entryKey)),
-                            ),
-                          if (lines.isNotEmpty)
-                            Text(
-                              lines,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: t.monoText(12, color: t.t3, height: 16),
-                            ),
-                        ],
+                  if (linesText(node).isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        linesText(node),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.monoText(12, color: t.t3, height: 16),
                       ),
                     ),
-                  ],
                 ],
               ),
             ),
@@ -523,7 +588,10 @@ class _NodeRow extends StatelessWidget {
               switchInCurve: Tokens.motionCurve,
               transitionBuilder: (child, animation) => FadeTransition(
                 opacity: animation,
-                child: ScaleTransition(scale: Tween(begin: 0.6, end: 1.0).animate(animation), child: child),
+                child: ScaleTransition(
+                  scale: Tween(begin: 0.6, end: 1.0).animate(animation),
+                  child: child,
+                ),
               ),
               child: current
                   ? Padding(
@@ -532,8 +600,15 @@ class _NodeRow extends StatelessWidget {
                       child: Container(
                         width: 22,
                         height: 22,
-                        decoration: BoxDecoration(color: t.accent, shape: BoxShape.circle),
-                        child: Icon(FLucideIcons.check, size: 13, color: t.onAccent),
+                        decoration: BoxDecoration(
+                          color: t.accent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          AppIcons.check,
+                          size: 13,
+                          color: t.onAccent,
+                        ),
                       ),
                     )
                   : const SizedBox.shrink(),

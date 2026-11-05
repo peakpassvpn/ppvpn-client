@@ -316,7 +316,7 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   # Run once on Linux, after the bridge types have been generated.
   if [ "$os" = linux ]; then
     PPVPN_UI_TEST_CJK_FONT="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}" \
-      flutter test checks/mobile_layout_test.dart checks/native_chrome_test.dart checks/logs_layout_test.dart --no-pub
+      flutter test checks/mobile_layout_test.dart checks/native_chrome_test.dart checks/logs_layout_test.dart checks/device_feedback_test.dart --no-pub
   fi
 fi
 

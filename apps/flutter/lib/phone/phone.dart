@@ -5,18 +5,19 @@
 // the bell on 概览 and 我的. Messages, logs and choices are pushed full
 // screen with a back control. Signed out: the phone sign-in.
 
+import '../icons.dart';
+
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/widgets.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
 import '../pages/logs.dart';
-import '../pages/messages.dart';
+import 'messages.dart';
 import '../sample.dart' show samplePage;
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
@@ -57,7 +58,12 @@ class _PhoneShellState extends State<PhoneShell> {
         if (!mounted) return;
         if (samplePage == 'messages') return openMessages(context, widget.app);
         final title = S.current('logs');
-        unawaited(pushPhonePage<void>(context, PhoneScaffold(title: title, back: true, child: const LogsPage())));
+        unawaited(
+          pushPhonePage<void>(
+            context,
+            PhoneScaffold(title: title, back: true, child: const LogsPage()),
+          ),
+        );
       });
     }
   }
@@ -72,7 +78,9 @@ class _PhoneShellState extends State<PhoneShell> {
   /// Signed out the sign-in stays.
   void _showRequested() {
     final request = widget.app.pageRequests.value;
-    if (request == null || widget.app.snapshot.value.auth != rust.UiAuth.signedIn) return;
+    if (request == null ||
+        widget.app.snapshot.value.auth != rust.UiAuth.signedIn)
+      return;
     switch (request.page) {
       case WindowPage.messages:
         openMessages(context, widget.app);
@@ -86,42 +94,65 @@ class _PhoneShellState extends State<PhoneShell> {
     valueListenable: widget.app.snapshot,
     builder: (context, snapshot, _) {
       final app = widget.app;
+      if (snapshot.auth == rust.UiAuth.restoring)
+        return const RestoringSession();
       if (snapshot.auth != rust.UiAuth.signedIn) {
-        return MediaQuery.withClampedTextScaling(maxScaleFactor: Tokens.phoneTextMax, child: PhoneSignIn(app: app));
+        return MediaQuery.withClampedTextScaling(
+          maxScaleFactor: Tokens.phoneTextMax,
+          child: PhoneSignIn(app: app),
+        );
       }
       final s = S.current;
-      final bell = PhoneBell(unread: snapshot.unread, onPress: () => openMessages(context, app));
+      final bell = PhoneBell(
+        unread: snapshot.unread,
+        onPress: () => openMessages(context, app),
+      );
       final page = switch (_tab) {
-        _Tab.overview => PhoneOverview(app: app, bell: bell, onNodes: () => setState(() => _tab = _Tab.nodes)),
+        _Tab.overview => PhoneOverview(
+          app: app,
+          bell: bell,
+          onNodes: () => setState(() => _tab = _Tab.nodes),
+        ),
         _Tab.nodes => PhoneNodes(app: app),
-        _Tab.me => PhoneScaffold(title: s('me'), trailing: bell, child: PhoneMe(app: app)),
+        _Tab.me => PhoneScaffold(
+          title: s('me'),
+          trailing: bell,
+          child: PhoneMe(app: app),
+        ),
       };
       final media = MediaQuery.of(context);
       return MediaQuery.withClampedTextScaling(
         maxScaleFactor: Tokens.phoneTextMax,
         child: Stack(
-        children: [
-          // The pages scroll under the translucent tab bar: their bottom
-          // padding includes it.
-          Positioned.fill(
-            child: MediaQuery(
-              data: media.copyWith(padding: media.padding.copyWith(bottom: media.padding.bottom + Tokens.phoneTabBar)),
-              // The cap inside: this MediaQuery is built from the one above.
-              child: MediaQuery.withClampedTextScaling(
-                maxScaleFactor: Tokens.phoneTextMax,
-                child: _TabSwitch(tab: _tab, child: page),
+          children: [
+            // The pages scroll under the translucent tab bar: their bottom
+            // padding includes it.
+            Positioned.fill(
+              child: MediaQuery(
+                data: media.copyWith(
+                  padding: media.padding.copyWith(
+                    bottom: media.padding.bottom + Tokens.phoneTabBar,
+                  ),
+                ),
+                // The cap inside: this MediaQuery is built from the one above.
+                child: MediaQuery.withClampedTextScaling(
+                  maxScaleFactor: Tokens.phoneTextMax,
+                  child: _TabSwitch(tab: _tab, child: page),
+                ),
               ),
             ),
-          ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: MediaQuery.withNoTextScaling(
-              child: _TabBar(tab: _tab, onTab: (tab) => setState(() => _tab = tab)),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: MediaQuery.withNoTextScaling(
+                child: _TabBar(
+                  tab: _tab,
+                  onTab: (tab) => setState(() => _tab = tab),
+                ),
+              ),
             ),
-          ),
-        ],
+          ],
         ),
       );
     },
@@ -149,8 +180,10 @@ class _TabSwitch extends StatelessWidget {
       opacity: animation,
       child: AnimatedBuilder(
         animation: animation,
-        builder: (context, child) =>
-            Transform.translate(offset: Offset(0, Tokens.pageRise * (1 - animation.value)), child: child),
+        builder: (context, child) => Transform.translate(
+          offset: Offset(0, Tokens.pageRise * (1 - animation.value)),
+          child: child,
+        ),
         child: child,
       ),
     ),
@@ -186,7 +219,8 @@ class _TabBar extends StatelessWidget {
           onAction: (action) {
             if (!action.startsWith('tab:')) return;
             final index = int.tryParse(action.substring(4));
-            if (index != null && index >= 0 && index < _Tab.values.length) onTab(_Tab.values[index]);
+            if (index != null && index >= 0 && index < _Tab.values.length)
+              onTab(_Tab.values[index]);
           },
         ),
       );
@@ -207,12 +241,21 @@ class _TabBar extends StatelessWidget {
               // Outline and filled cross-fade as the tab is chosen.
               AnimatedSwitcher(
                 duration: Tokens.motion(context, Tokens.motionFast),
-                child: TabIcon(key: ValueKey(on), tab: value.name, filled: on, color: color, size: 24),
+                child: TabIcon(
+                  key: ValueKey(on),
+                  tab: value.name,
+                  filled: on,
+                  color: color,
+                  size: 24,
+                ),
               ),
               const SizedBox(height: 3),
               Text(
                 label,
-                style: t.label.copyWith(color: color, fontWeight: on ? FontWeight.w600 : FontWeight.w500),
+                style: t.label.copyWith(
+                  color: color,
+                  fontWeight: on ? FontWeight.w600 : FontWeight.w500,
+                ),
               ),
             ],
           ),
@@ -247,48 +290,27 @@ class _TabBar extends StatelessWidget {
 /// The tab icons of the canvas (shield, globe, person): 2 px outlines, or
 /// filled for the selected tab (Lucide has no filled icons).
 class TabIcon extends StatelessWidget {
-  const TabIcon({super.key, required this.tab, required this.filled, required this.color, this.size = 24});
-
-  /// overview, nodes or me.
+  const TabIcon({
+    super.key,
+    required this.tab,
+    required this.filled,
+    required this.color,
+    this.size = 24,
+  });
   final String tab;
   final bool filled;
   final Color color;
   final double size;
-
   @override
   Widget build(BuildContext context) {
-    final c = _hex(color);
-    final inner = _hex(Tokens.of(context).brightness == Brightness.light ? const Color(0xFFFFFFFF) : Tokens.dark.bg);
-    final body = switch ((tab, filled)) {
-      ('overview', true) =>
-        '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="$c"/>'
-            '<path d="m8.5 12 2.5 2.5 4.5-5" fill="none" stroke="$inner" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
-      ('overview', false) =>
-        '<g fill="none" stroke="$c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-            '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></g>',
-      ('nodes', true) =>
-        '<g fill="none" stroke="$c" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9" '
-            'fill="$c" fill-opacity="0.14"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></g>',
-      ('nodes', false) =>
-        '<g fill="none" stroke="$c" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/>'
-            '<path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></g>',
-      (_, true) => '<g fill="$c"><circle cx="12" cy="8" r="4.5"/><path d="M3.5 21a8.5 8.5 0 0 1 17 0z"/></g>',
-      _ =>
-        '<g fill="none" stroke="$c" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/>'
-            '<path d="M4 21a8 8 0 0 1 16 0"/></g>',
+    final icon = switch (tab) {
+      'overview' => AppIcons.shield,
+      'nodes' => AppIcons.globe,
+      _ => AppIcons.user,
     };
-    return ExcludeSemantics(
-      child: SvgPicture.string(
-        '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">$body</svg>',
-        width: size,
-        height: size,
-      ),
-    );
+    return Icon(filled ? filledIcon(icon) : icon, color: color, size: size);
   }
 }
-
-String _hex(Color color) =>
-    '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
 /// A page under the top bar (56 plus the safe area): the large title (28)
 /// on the left, or with [brand] the mark and 「PPVPN」 (the overview);
@@ -320,17 +342,24 @@ class PhoneScaffold extends StatelessWidget {
     final t = Tokens.of(context);
     final top = MediaQuery.paddingOf(context).top;
     final bell = trailing is PhoneBell ? trailing as PhoneBell : null;
-    final supportsActions = trailing == null || bell != null || nativeActions != null;
+    final supportsActions =
+        trailing == null || bell != null || nativeActions != null;
     if (NativeChrome.enabled && supportsActions) {
       final s = S.current;
-      final actions = nativeActions ?? [
-        if (bell != null)
-          NativeChromeAction(
-            id: 'messages', label: bell.unread > 0
-                ? '${s('messages')}, ${s('unreadN', {'n': '${bell.unread}'})}' : s('messages'),
-            symbol: 'bell', badge: bell.unread, onPress: bell.onPress,
-          ),
-      ];
+      final actions =
+          nativeActions ??
+          [
+            if (bell != null)
+              NativeChromeAction(
+                id: 'messages',
+                label: bell.unread > 0
+                    ? '${s('messages')}, ${s('unreadN', {'n': '${bell.unread}'})}'
+                    : s('messages'),
+                symbol: 'bell',
+                badge: bell.unread,
+                onPress: bell.onPress,
+              ),
+          ];
       final large = !back && !brand;
       return AnimatedContainer(
         duration: Tokens.motion(context, Tokens.motionBase),
@@ -344,20 +373,38 @@ class PhoneScaffold extends StatelessWidget {
               child: NativeChromeView(
                 kind: 'navigation',
                 configuration: {
-                  'title': brand ? s('app') : title, 'back': back, 'backLabel': s('back'),
-                  'largeTitle': large, 'topInset': top,
-                  'dark': t.brightness == Brightness.dark, 'accent': t.accent.toARGB32(),
-                  'actions': [for (final action in actions) action.configuration],
+                  'title': brand ? s('app') : title,
+                  'back': back,
+                  'backLabel': s('back'),
+                  'largeTitle': large,
+                  'topInset': top,
+                  'dark': t.brightness == Brightness.dark,
+                  'accent': t.accent.toARGB32(),
+                  'actions': [
+                    for (final action in actions) action.configuration,
+                  ],
                 },
                 onAction: (id) {
-                  if (id == 'back') { unawaited(Navigator.of(context).maybePop()); return; }
+                  if (id == 'back') {
+                    unawaited(Navigator.of(context).maybePop());
+                    return;
+                  }
                   for (final action in actions) {
-                    if (action.id == id && action.enabled) { action.onPress(); return; }
+                    if (action.id == id && action.enabled) {
+                      action.onPress();
+                      return;
+                    }
                   }
                 },
               ),
             ),
-            Expanded(child: MediaQuery.removePadding(context: context, removeTop: true, child: child)),
+            Expanded(
+              child: MediaQuery.removePadding(
+                context: context,
+                removeTop: true,
+                child: child,
+              ),
+            ),
           ],
         ),
       );
@@ -380,7 +427,9 @@ class PhoneScaffold extends StatelessWidget {
             title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: back ? t.phoneBodyStrong.copyWith(fontSize: 17) : t.phoneTitle,
+            style: back
+                ? t.phoneBodyStrong.copyWith(fontSize: 17)
+                : t.phoneTitle,
           );
     // The overview's tint follows the status (#535).
     return AnimatedContainer(
@@ -392,19 +441,39 @@ class PhoneScaffold extends StatelessWidget {
         children: [
           Container(
             height: Tokens.phoneTopBar + top,
-            padding: EdgeInsets.fromLTRB(back ? 4 : Tokens.phoneBarStart, top, Tokens.phoneBarEnd, 0),
+            padding: EdgeInsets.fromLTRB(
+              back ? 4 : Tokens.phoneBarStart,
+              top,
+              Tokens.phoneBarEnd,
+              0,
+            ),
             child: MediaQuery.withClampedTextScaling(
               maxScaleFactor: Tokens.phoneChromeTextMax,
               child: Row(
-              children: [
-                if (back) const PhoneBack(),
-                Expanded(child: Semantics(header: true, label: brand ? title : null, child: heading)),
-                if (trailing case final trailing?) ...[const SizedBox(width: 8), trailing],
-              ],
+                children: [
+                  if (back) const PhoneBack(),
+                  Expanded(
+                    child: Semantics(
+                      header: true,
+                      label: brand ? title : null,
+                      child: heading,
+                    ),
+                  ),
+                  if (trailing case final trailing?) ...[
+                    const SizedBox(width: 8),
+                    trailing,
+                  ],
+                ],
               ),
             ),
           ),
-          Expanded(child: MediaQuery.removePadding(context: context, removeTop: true, child: child)),
+          Expanded(
+            child: MediaQuery.removePadding(
+              context: context,
+              removeTop: true,
+              child: child,
+            ),
+          ),
         ],
       ),
     );
@@ -432,7 +501,11 @@ class PhoneBack extends StatelessWidget {
     builder: (context, _) => SizedBox(
       width: Tokens.phoneControl,
       height: Tokens.phoneControl,
-      child: Icon(FLucideIcons.chevronLeft, size: 24, color: Tokens.of(context).accent),
+      child: Icon(
+        AppIcons.chevronLeft,
+        size: 24,
+        color: Tokens.of(context).accent,
+      ),
     ),
   );
 }
@@ -452,7 +525,9 @@ class PhoneBell extends StatelessWidget {
     return Pressable(
       key: const ValueKey('bell'),
       onPress: onPress,
-      label: unread > 0 ? '${s('messages')}, ${s('unreadN', {'n': '$unread'})}' : s('messages'),
+      label: unread > 0
+          ? '${s('messages')}, ${s('unreadN', {'n': '$unread'})}'
+          : s('messages'),
       radius: Tokens.phoneControl / 2,
       builder: (context, _) => Container(
         width: Tokens.phoneControl,
@@ -465,7 +540,7 @@ class PhoneBell extends StatelessWidget {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            Center(child: Icon(FLucideIcons.bell, size: 22, color: t.t1)),
+            Center(child: Icon(AppIcons.bell, size: 22, color: t.t1)),
             if (unread > 0)
               Positioned(
                 top: 3,
@@ -482,7 +557,11 @@ class PhoneBell extends StatelessWidget {
                   ),
                   child: Text(
                     unread > 99 ? '99+' : '$unread',
-                    style: t.label.copyWith(height: 18 / 11, fontWeight: FontWeight.w700, color: t.onBad),
+                    style: t.label.copyWith(
+                      height: 18 / 11,
+                      fontWeight: FontWeight.w700,
+                      color: t.onBad,
+                    ),
                   ),
                 ),
               ),
@@ -506,7 +585,10 @@ Future<T?> pushPhonePage<T>(BuildContext context, Widget page) {
     );
   }
 
-  if (Platform.isIOS) return Navigator.of(context).push<T>(CupertinoPageRoute<T>(builder: themed));
+  if (Platform.isIOS)
+    return Navigator.of(
+      context,
+    ).push<T>(CupertinoPageRoute<T>(builder: themed, allowSnapshotting: false));
   return Navigator.of(context).push<T>(
     PageRouteBuilder<T>(
       transitionDuration: Tokens.motion(context, Tokens.motionPage),
@@ -514,7 +596,10 @@ Future<T?> pushPhonePage<T>(BuildContext context, Widget page) {
       pageBuilder: (context, _, _) => themed(context),
       transitionsBuilder: (context, animation, _, child) => SlideTransition(
         position: animation.drive(
-          Tween(begin: const Offset(1, 0), end: Offset.zero).chain(CurveTween(curve: Tokens.motionCurve)),
+          Tween(
+            begin: const Offset(1, 0),
+            end: Offset.zero,
+          ).chain(CurveTween(curve: Tokens.motionCurve)),
         ),
         child: child,
       ),
@@ -555,12 +640,18 @@ void pushPhoneChoice<T>(
                       },
                       builder: (context, pressed) => Container(
                         color: pressed ? t.phonePress : null,
-                        constraints: const BoxConstraints(minHeight: Tokens.phoneRow),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        constraints: const BoxConstraints(
+                          minHeight: Tokens.phoneRow,
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
                         child: Row(
                           children: [
                             Expanded(child: Text(text, style: t.phoneRowTitle)),
-                            if (option == value) Icon(FLucideIcons.check, size: 18, color: t.accent),
+                            if (option == value)
+                              Icon(AppIcons.check, size: 18, color: t.accent),
                           ],
                         ),
                       ),
@@ -579,7 +670,12 @@ void pushPhoneChoice<T>(
 /// [children] as rows with 0.5 px separators, inset by [inset] (past the
 /// rows' icon or flag).
 class PhoneCard extends StatelessWidget {
-  const PhoneCard({super.key, required this.children, this.inset = 0, this.decoration});
+  const PhoneCard({
+    super.key,
+    required this.children,
+    this.inset = 0,
+    this.decoration,
+  });
 
   final List<Widget> children;
   final double inset;
@@ -628,10 +724,20 @@ class PhoneCaption extends StatelessWidget {
           Expanded(
             child: Semantics(
               header: true,
-              child: Text(text, style: t.phoneNote.copyWith(fontWeight: FontWeight.w600, color: t.t2)),
+              child: Text(
+                text,
+                style: t.phoneNote.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: t.t2,
+                ),
+              ),
             ),
           ),
-          if (trailing case final trailing?) Text(trailing, style: t.phoneNote.copyWith(fontSize: 12, color: t.t3)),
+          if (trailing case final trailing?)
+            Text(
+              trailing,
+              style: t.phoneNote.copyWith(fontSize: 12, color: t.t3),
+            ),
         ],
       ),
     );
@@ -652,7 +758,10 @@ class PhoneTile extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(size < 30 ? 8 : 9)),
+      decoration: BoxDecoration(
+        color: t.accentSoft,
+        borderRadius: BorderRadius.circular(size < 30 ? 8 : 9),
+      ),
       child: Icon(icon, size: 16, color: t.accent),
     );
   }
@@ -662,6 +771,10 @@ class PhoneTile extends StatelessWidget {
 void openMessages(BuildContext context, AppState app) => unawaited(
   pushPhonePage<void>(
     context,
-    PhoneScaffold(title: S.current('msgCenter'), back: true, child: MessagesPage(app: app)),
+    PhoneScaffold(
+      title: S.current('msgCenter'),
+      back: true,
+      child: PhoneMessagesPage(app: app),
+    ),
   ),
 );

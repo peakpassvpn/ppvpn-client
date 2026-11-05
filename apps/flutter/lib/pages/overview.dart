@@ -7,6 +7,8 @@
 // installs the privileged service on first use, after the explanation
 // dialog (handoff "7. 增强模式安装授权").
 
+import '../icons.dart';
+
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
@@ -342,9 +344,9 @@ class _Orb extends StatelessWidget {
             id: (problem: phase == rust.UiPhase.error || phase == rust.UiPhase.contended, off: phase == rust.UiPhase.off, tone: tone),
             alignment: Alignment.center,
             child: phase == rust.UiPhase.error || phase == rust.UiPhase.contended
-                ? Icon(FLucideIcons.circleAlert, size: 26, color: tone)
+                ? Icon(AppIcons.circleAlert, size: 26, color: tone)
                 : phase == rust.UiPhase.off
-                ? Icon(FLucideIcons.link2Off, size: 24, color: tone)
+                ? Icon(AppIcons.link2Off, size: 24, color: tone)
                 : ShieldCheckIcon(size: 26, stroke: 2.2, color: connected && light ? const Color(0xFFFFFFFF) : tone),
           ),
         ],
@@ -480,13 +482,13 @@ class RouteLine extends StatelessWidget {
         child: Row(
           mainAxisAlignment: compact ? MainAxisAlignment.center : MainAxisAlignment.start,
           children: [
-            hop(S.current('thisDevice'), icon: FLucideIcons.monitor),
+            hop(S.current('thisDevice'), icon: AppIcons.monitor),
             for (var i = 0; i < shown.length; i++) ...[
               link(i >= reached),
               hop(shown[i], lit: i < reached, wait: i >= reached, mono: true),
             ],
             link(!connected),
-            hop(S.current('internet'), icon: FLucideIcons.globe, wait: !connected),
+            hop(S.current('internet'), icon: AppIcons.globe, wait: !connected),
           ],
         ),
       ),
@@ -531,7 +533,7 @@ class _Modes extends StatelessWidget {
       child: Column(
         children: [
           SettingRow(
-            icon: FLucideIcons.monitor,
+            icon: AppIcons.monitor,
             title: s('stdMode'),
             description: s('stdDesc'),
             trailing: TriSwitch(
@@ -543,7 +545,7 @@ class _Modes extends StatelessWidget {
             ),
           ),
           SettingRow(
-            icon: FLucideIcons.zap,
+            icon: AppIcons.zap,
             title: s('tunMode'),
             description: s('tunDesc'),
             divider: true,
@@ -556,7 +558,7 @@ class _Modes extends StatelessWidget {
           ),
           if (!snapshot.serviceInstalled && !enhancedActive(snapshot)) _InstallHint(app: app),
           SettingRow(
-            icon: FLucideIcons.mapPin,
+            icon: AppIcons.mapPin,
             title: s('currentNode'),
             divider: true,
             trailing: NodePicker(app: app, selectedId: snapshot.selectedNodeId),
@@ -635,7 +637,7 @@ class NodePicker extends StatelessWidget {
                     ),
                   ],
                   const SizedBox(width: 10),
-                  Icon(FLucideIcons.chevronDown, size: 12, color: t.t3),
+                  Icon(AppIcons.chevronDown, size: 12, color: t.t3),
                 ],
               ),
             ),
@@ -664,7 +666,7 @@ class _InstallHint extends StatelessWidget {
       decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(Tokens.controlRadius)),
       child: Row(
         children: [
-          Icon(FLucideIcons.info, size: 14, color: t.accent),
+          Icon(AppIcons.info, size: 14, color: t.accent),
           const SizedBox(width: 8),
           Expanded(
             child: Text(s('needInstall'), style: t.note.copyWith(color: t.accent)),
@@ -793,7 +795,7 @@ class ProblemCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(FLucideIcons.circleAlert, size: 16, color: tone),
+          Icon(AppIcons.circleAlert, size: 16, color: tone),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -1154,17 +1156,17 @@ class LimitedAccess extends StatelessWidget {
     final s = S.current;
     return switch (snapshot.profile) {
       rust.UiProfile.noSubscription => LimitedAccess._(
-        icon: FLucideIcons.shield,
+        icon: AppIcons.shield,
         title: s('noSubT'),
         description: s('noSubD'),
       ),
       rust.UiProfile.subscriptionExpired => LimitedAccess._(
-        icon: FLucideIcons.clock,
+        icon: AppIcons.clock,
         title: s('expiredT'),
         description: s('expiredD', {'d': snapshot.expiresAt ?? '—'}),
       ),
       rust.UiProfile.teamDisabled => LimitedAccess._(
-        icon: FLucideIcons.circleAlert,
+        icon: AppIcons.circleAlert,
         title: s('teamOffT'),
         description: s('teamOffD', {'team': snapshot.teamName ?? '—'}),
       ),
@@ -1233,7 +1235,7 @@ class ConfigWarning extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(FLucideIcons.circleAlert, size: 16, color: t.warn),
+          Icon(AppIcons.circleAlert, size: 16, color: t.warn),
           const SizedBox(width: 10),
           Expanded(
             child: Text.rich(

@@ -36,6 +36,7 @@ dev_dependencies:
 
 flutter:
   assets:
+    - assets/brand/
     # menubar-*: macOS template images; tray-*: Windows and Linux.
     - assets/tray/
     # flag-icons 7.6.0 (MIT, assets/flags/LICENSE), 4:3, the exit countries
@@ -44,6 +45,12 @@ flutter:
   # Numbers and addresses (theme.dart `Tokens.mono`); Inter comes with forui.
   # OFL: assets/fonts/JetBrainsMono-OFL.txt.
   fonts:
+    - family: PPVPN Material
+      fonts:
+        - asset: assets/fonts/MaterialSymbols.ttf
+    - family: PPVPN Material Filled
+      fonts:
+        - asset: assets/fonts/MaterialSymbolsFilled.ttf
     - family: JetBrains Mono
       fonts:
         - asset: assets/fonts/JetBrainsMono-Regular.ttf

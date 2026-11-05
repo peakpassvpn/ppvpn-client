@@ -1,6 +1,7 @@
 // System navigation chrome hosted by Flutter. No client or tunnel state lives here.
 import Flutter
 import UIKit
+import CoreText
 
 enum PPVPNNativeChrome {
   static var available: Bool {
@@ -10,6 +11,14 @@ enum PPVPNNativeChrome {
 
   static func register(with registrar: FlutterPluginRegistrar) {
     if #available(iOS 26.0, *) {
+      for name in ["MaterialSymbols", "MaterialSymbolsFilled"] {
+        let key = registrar.lookupKey(forAsset: "assets/fonts/\(name).ttf")
+        let urls = [Bundle.main.url(forResource: key, withExtension: nil),
+          Bundle.main.privateFrameworksURL?.appendingPathComponent("App.framework/flutter_assets/assets/fonts/\(name).ttf")]
+        if let url = urls.compactMap({ $0 }).first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+          CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+      }
       MainActor.assumeIsolated {
         for kind in ["navigation", "tabs"] {
           // Hit-test blocking preserves overlays without delaying UIKit selection gestures.
@@ -21,6 +30,18 @@ enum PPVPNNativeChrome {
       }
     }
   }
+}
+
+@MainActor
+private func materialImage(_ code: UInt32, filled: Bool = false) -> UIImage? {
+  guard let scalar = UnicodeScalar(code),
+    let font = UIFont(name: filled ? "PPVPNMaterialFilled" : "PPVPNMaterial", size: 24) else { return nil }
+  return UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { _ in
+    let text = String(scalar) as NSString
+    let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.black]
+    let size = text.size(withAttributes: attributes)
+    text.draw(at: CGPoint(x: (24-size.width)/2, y: (24-size.height)/2), withAttributes: attributes)
+  }.withRenderingMode(.alwaysTemplate)
 }
 
 @MainActor
@@ -93,12 +114,11 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
     surface.topInset = CGFloat((next["topInset"] as? NSNumber)?.doubleValue ?? 0)
     if surface.kind == "tabs" {
       let labels = next["labels"] as? [String] ?? []
-      let symbols = ["checkmark.shield", "globe", "person"]
-      let selectedSymbols = ["checkmark.shield.fill", "globe", "person.fill"]
+      let symbols: [UInt32] = [57381, 57361, 57386]
       let names = ["overview", "nodes", "me"]
       let items = labels.prefix(3).enumerated().map { index, label in
-        let item = UITabBarItem(title: label, image: UIImage(systemName: symbols[index]), tag: index)
-        item.selectedImage = UIImage(systemName: selectedSymbols[index])
+        let item = UITabBarItem(title: label, image: materialImage(symbols[index]), tag: index)
+        item.selectedImage = materialImage(symbols[index], filled: true)
         item.accessibilityIdentifier = "tab-\(names[index])"
         return item
       }
@@ -123,7 +143,7 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
       let actions = next["actions"] as? [[String: Any]] ?? []
       item.rightBarButtonItems = actions.reversed().compactMap { action -> UIBarButtonItem? in
         guard let id = action["id"] as? String, let label = action["label"] as? String else { return nil }
-        let symbol = (action["symbol"] as? String).flatMap(UIImage.init(systemName:))
+        let symbol = (action["symbol"] as? String).flatMap { $0 == "bell" ? materialImage(57345) : nil }
         let command = UIAction(title: label, image: symbol) { [weak self] _ in self?.emit(id) }
         let button = UIBarButtonItem(title: symbol == nil ? label : nil, image: symbol,
           primaryAction: command, menu: nil)

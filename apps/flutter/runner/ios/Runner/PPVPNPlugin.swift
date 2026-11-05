@@ -36,6 +36,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var sink: FlutterEventSink?
   private var observer: NSObjectProtocol?
   private weak var browser: SFSafariViewController?
+  private var backgroundTasks: [Int: UIBackgroundTaskIdentifier] = [:]
 
   static func register(with registrar: FlutterPluginRegistrar) {
     PPVPNNativeChrome.register(with: registrar)
@@ -49,6 +50,10 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         switch call.method {
         case "nativeChromeAvailable": result(PPVPNNativeChrome.available)
         case "filesDir": result(filesDir())
+        case "beginBackgroundTask": result(plugin.beginBackgroundTask())
+        case "endBackgroundTask":
+          if let raw = call.arguments as? Int { plugin.endBackgroundTask(raw) }
+          result(nil)
         case "openUrl": plugin.open(call.arguments as? String, result: result)
         case "closeBrowser":
           plugin.browser?.dismiss(animated: true)
@@ -80,6 +85,20 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     #else
       return nil
     #endif
+  }
+
+  private func beginBackgroundTask() -> Int? {
+    var identifier: UIBackgroundTaskIdentifier = .invalid
+    identifier = UIApplication.shared.beginBackgroundTask(withName: "PPVPN UI engine suspension") { [weak self] in
+      self?.endBackgroundTask(identifier.rawValue)
+    }
+    guard identifier != .invalid else { return nil }
+    backgroundTasks[identifier.rawValue] = identifier
+    return identifier.rawValue
+  }
+
+  private func endBackgroundTask(_ raw: Int) {
+    if let task = backgroundTasks.removeValue(forKey: raw) { UIApplication.shared.endBackgroundTask(task) }
   }
 
   private static func filesDir() -> String? {

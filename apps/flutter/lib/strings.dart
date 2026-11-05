@@ -42,6 +42,9 @@ class S {
 }
 
 const _zh = <String, String>{
+  'restoringSession': '正在恢复登录状态…',
+  'nodeDetails': '节点详情',
+  'nodeAddress': '出口 IP',
   'app': 'PPVPN',
   'overview': '概览',
   'nodes': '节点',
@@ -308,6 +311,9 @@ const _zh = <String, String>{
 };
 
 const _en = <String, String>{
+  'restoringSession': 'Restoring your session…',
+  'nodeDetails': 'Node details',
+  'nodeAddress': 'Exit IP',
   'app': 'PPVPN',
   'overview': 'Overview',
   'nodes': 'Nodes',

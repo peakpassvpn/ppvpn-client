@@ -130,15 +130,19 @@ impl CoreLauncher for EngineLauncher {
     }
 }
 
-/// `ClientConfig::platform` (`macos` / `windows` / `linux`); anything else
+/// `ClientConfig::platform` (desktop and mobile platform names); anything else
 /// is this build's OS.
 fn platform(name: &str) -> Platform {
     match name {
         "macos" => Platform::Macos,
         "windows" => Platform::Windows,
         "linux" => Platform::Linux,
+        "ios" => Platform::Ios,
+        "android" => Platform::Android,
         _ if cfg!(target_os = "macos") => Platform::Macos,
         _ if cfg!(windows) => Platform::Windows,
+        _ if cfg!(target_os = "ios") => Platform::Ios,
+        _ if cfg!(target_os = "android") => Platform::Android,
         _ => Platform::Linux,
     }
 }
@@ -186,6 +190,12 @@ mod tests {
     use super::*;
     use ppvpn_core::ApplyRequest;
     use serde_json::json;
+
+    #[test]
+    fn mobile_platforms_keep_mobile_engine_settings() {
+        assert_eq!(platform("ios"), Platform::Ios);
+        assert_eq!(platform("android"), Platform::Android);
+    }
 
     /// A fresh directory, removed on drop.
     struct TempDir(PathBuf);

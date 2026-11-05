@@ -228,6 +228,17 @@ pub async fn refresh_nodes() -> Result<(), String> {
         .await
 }
 
+/// Release UI-only resources before iOS suspension, restore on foreground.
+/// The independent system VPN continues running.
+pub async fn set_app_foreground(active: bool) -> Result<(), String> {
+    bridge::get()?
+        .call(move |client| async move {
+            client.set_app_foreground(active).await;
+            Ok(())
+        })
+        .await
+}
+
 /// Tests every node; results arrive in [`next_events`]. Fails until the
 /// standard-mode core is ready.
 pub async fn probe_all(method: UiProbeMethod) -> Result<(), String> {

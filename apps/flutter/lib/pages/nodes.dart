@@ -8,6 +8,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../app_state.dart';
+import '../node_identity.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
 import '../theme.dart';
@@ -46,7 +47,9 @@ class _NodesPageState extends State<NodesPage> {
         valueListenable: app.nodes,
         builder: (context, nodes, _) {
           if (nodes.isEmpty) {
-            return snapshot.profile == rust.UiProfile.invalid ? const _InvalidEmpty() : const LoadingNodes();
+            return snapshot.profile == rust.UiProfile.invalid
+                ? const _InvalidEmpty()
+                : const LoadingNodes();
           }
           final selectedRow = _selectedRow ?? snapshot.selectedNodeId;
           return Column(
@@ -62,7 +65,9 @@ class _NodesPageState extends State<NodesPage> {
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: Tokens.pageInset),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Tokens.pageInset,
+                  ),
                   child: _Table(
                     app: app,
                     nodes: nodes,
@@ -72,7 +77,12 @@ class _NodesPageState extends State<NodesPage> {
                   ),
                 ),
               ),
-              _Footer(app: app, node: app.nodeById(selectedRow), count: nodes.length, testing: _testing),
+              _Footer(
+                app: app,
+                node: app.nodeById(selectedRow),
+                count: nodes.length,
+                testing: _testing,
+              ),
             ],
           );
         },
@@ -102,7 +112,12 @@ class _Tools extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = S.current;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Tokens.pageInset, 0, Tokens.pageInset, 12),
+      padding: const EdgeInsets.fromLTRB(
+        Tokens.pageInset,
+        0,
+        Tokens.pageInset,
+        12,
+      ),
       child: Row(
         children: [
           Segmented(
@@ -116,7 +131,11 @@ class _Tools extends StatelessWidget {
             onChanged: onMethod,
           ),
           const Spacer(),
-          Button(kind: ButtonKind.secondary, label: s('refreshNodes'), onPress: onRefresh),
+          Button(
+            kind: ButtonKind.secondary,
+            label: s('refreshNodes'),
+            onPress: onRefresh,
+          ),
           const SizedBox(width: 8),
           Button(
             kind: ButtonKind.primary,
@@ -163,7 +182,10 @@ class _Table extends StatelessWidget {
       const SizedBox(width: 12),
       SizedBox(width: 150, child: c[4]),
       const SizedBox(width: 12),
-      SizedBox(width: 84, child: Align(alignment: Alignment.centerRight, child: c[5])),
+      SizedBox(
+        width: 84,
+        child: Align(alignment: Alignment.centerRight, child: c[5]),
+      ),
     ],
   );
 
@@ -212,10 +234,16 @@ class _Table extends StatelessWidget {
                       curve: Tokens.motionFastCurve,
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
-                        color: isSelected ? t.accentSoft : (hovered ? t.sunk : null),
+                        color: isSelected
+                            ? t.accentSoft
+                            : (hovered ? t.sunk : null),
                         border: Border(
-                          top: index == 0 ? BorderSide.none : BorderSide(color: t.hair),
-                          left: isSelected ? BorderSide(color: t.accent, width: 3) : BorderSide.none,
+                          top: index == 0
+                              ? BorderSide.none
+                              : BorderSide(color: t.hair),
+                          left: isSelected
+                              ? BorderSide(color: t.accent, width: 3)
+                              : BorderSide.none,
                         ),
                       ),
                       child: _cells([
@@ -223,26 +251,27 @@ class _Table extends StatelessWidget {
                           opacity: isCurrent ? 1 : 0,
                           duration: Tokens.motion(context, Tokens.motionBase),
                           curve: Tokens.motionCurve,
-                          child: Text('✓', style: t.bodyStrong.copyWith(color: t.accent, fontSize: 13)),
+                          child: Text(
+                            '✓',
+                            style: t.bodyStrong.copyWith(
+                              color: t.accent,
+                              fontSize: 13,
+                            ),
+                          ),
                         ),
                         Row(
                           children: [
                             Flag(countryCode: node.exitCountryCode),
                             const SizedBox(width: 10),
                             Flexible(
-                              child: Text(
-                                nodeTitle(node),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: t.body.copyWith(
-                                  fontSize: 13,
-                                  fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400,
-                                ),
+                              child: NodeIdentity(
+                                node: node,
+                                strong: isCurrent,
                               ),
                             ),
                           ],
                         ),
-                        TierTag(label: node.entryLabel, entryKey: node.entryKey),
+                        NodeInfoTag(node: node, type: false),
                         Text(
                           node.exitRegion ?? '',
                           maxLines: 1,
@@ -291,10 +320,17 @@ class TierTag extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 7),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: teal ? Tokens.tierOptimized.withValues(alpha: 0.10) : t.accentSoft,
+          color: teal
+              ? Tokens.tierOptimized.withValues(alpha: 0.10)
+              : t.accentSoft,
           borderRadius: BorderRadius.circular(5),
         ),
-        child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.label.copyWith(color: color)),
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: t.label.copyWith(color: color),
+        ),
       ),
     );
   }
@@ -304,7 +340,12 @@ class TierTag extends StatelessWidget {
 /// buttons (the addresses carry the credentials); otherwise the node count
 /// and testing note.
 class _Footer extends StatelessWidget {
-  const _Footer({required this.app, required this.node, required this.count, required this.testing});
+  const _Footer({
+    required this.app,
+    required this.node,
+    required this.count,
+    required this.testing,
+  });
 
   final AppState app;
   final rust.UiNode? node;
@@ -316,11 +357,18 @@ class _Footer extends StatelessWidget {
     final t = Tokens.of(context);
     final s = S.current;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Tokens.pageInset, 12, Tokens.pageInset, 16),
+      padding: const EdgeInsets.fromLTRB(
+        Tokens.pageInset,
+        12,
+        Tokens.pageInset,
+        16,
+      ),
       child: Container(
         height: 40,
         padding: const EdgeInsets.fromLTRB(14, 0, 6, 0),
-        decoration: t.cardDecoration().copyWith(borderRadius: BorderRadius.circular(10)),
+        decoration: t.cardDecoration().copyWith(
+          borderRadius: BorderRadius.circular(10),
+        ),
         child: ValueListenableBuilder(
           valueListenable: app.proxies,
           builder: (context, proxies, _) {
@@ -336,13 +384,19 @@ class _Footer extends StatelessWidget {
                       s('nodeProxyT', {'n': nodeTitle(selected)}),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: t.note.copyWith(color: t.t1, fontWeight: FontWeight.w500),
+                      style: t.note.copyWith(
+                        color: t.t1,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
                 ] else ...[
                   Text(
-                    [s('nodeCount', {'n': '$count'}), if (testing) s('testing')].join(' · '),
+                    [
+                      s('nodeCount', {'n': '$count'}),
+                      if (testing) s('testing'),
+                    ].join(' · '),
                     style: t.note.copyWith(color: t.t2),
                   ),
                   const Spacer(),
@@ -385,7 +439,11 @@ class _InvalidEmpty extends StatelessWidget {
           children: [
             Text(S.current('invalidT'), style: t.heroTitle),
             const SizedBox(height: 6),
-            Text(S.current('invalidD'), style: t.sub, textAlign: TextAlign.center),
+            Text(
+              S.current('invalidD'),
+              style: t.sub,
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
