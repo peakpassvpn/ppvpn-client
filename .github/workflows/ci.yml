@@ -1297,8 +1297,8 @@ jobs:
       - name: Xcode 26
         if: steps.scope.outputs.flutter == 'true'
         run: |
-          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
-          [[ -n "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; exit 1; }
+          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          [[ -d "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; exit 1; }
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
           xcrun --sdk iphonesimulator --show-sdk-version
