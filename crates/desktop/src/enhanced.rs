@@ -4544,10 +4544,11 @@ mod tests {
     async fn a_health_check_spanning_a_live_profile_update_cannot_reconnect_it() {
         let h = harness(true);
         h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
         h.enhanced.enable().await.unwrap();
         let old = Arc::new(StatusGate::default());
         *h.service.status_gate.lock().unwrap() = Some(old.clone());
-        h.enhanced.set_health_interval(Duration::from_millis(20));
         old.entered().await;
 
         // The in-flight check expects r1, but its status RPC will now see r2.
@@ -4578,13 +4579,14 @@ mod tests {
     async fn a_stale_success_after_same_revision_reapply_cannot_clear_new_recovery_strikes() {
         let h = harness(true);
         h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
         h.enhanced.enable().await.unwrap();
         let old = Arc::new(StatusGate {
             after_snapshot: true,
             ..StatusGate::default()
         });
         *h.service.status_gate.lock().unwrap() = Some(old.clone());
-        h.enhanced.set_health_interval(Duration::from_millis(20));
         old.entered().await;
         h.enhanced.reapply().await.unwrap();
         let episode = h.enhanced.inner.with_data(|data| {
@@ -4606,10 +4608,11 @@ mod tests {
     async fn disconnect_cancels_a_status_barrier_without_waiting_for_the_probe() {
         let h = harness(true);
         h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
         h.enhanced.enable().await.unwrap();
         let gate = Arc::new(StatusGate::default());
         *h.service.status_gate.lock().unwrap() = Some(gate.clone());
-        h.enhanced.set_health_interval(Duration::from_millis(20));
         gate.entered().await;
         // Never release the RPC: disable must cancel the health task rather
         // than wait for a network timeout while holding the operation lock.
@@ -4645,6 +4648,8 @@ mod tests {
     async fn discarding_a_queued_recovery_keeps_the_same_generations_health_monitor() {
         let h = harness(true);
         h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
         h.enhanced.enable().await.unwrap();
         // This operation wins the lock before the queued health recovery.
         // The production profile updater holds it in exactly the same way.
@@ -4665,7 +4670,6 @@ mod tests {
             .unwrap();
         let next = Arc::new(StatusGate::default());
         *h.service.status_gate.lock().unwrap() = Some(next.clone());
-        h.enhanced.set_health_interval(Duration::from_millis(20));
         drop(operation);
         next.entered().await;
         // The fresh probe itself holds no operation lock. Wait through any
