@@ -79,20 +79,33 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
               sliver: SliverToBoxAdapter(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(s('msgCenter'), style: t.phoneBodyStrong),
-                    ),
-                    Button(
-                      kind: ButtonKind.text,
-                      height: 44,
-                      label: s('markAllRead'),
-                      onPress: view.items.any((m) => !m.read)
-                          ? () => unawaited(messages.markAllRead())
-                          : null,
-                    ),
-                  ],
+                child: ValueListenableBuilder(
+                  valueListenable: widget.app.snapshot,
+                  builder: (context, snapshot, _) {
+                    final unread = widget.app.fixed
+                        ? view.items.where((m) => !m.read).length
+                        : snapshot.unread;
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            unread > 0
+                                ? s('unreadShort', {'n': '$unread'})
+                                : s('allRead'),
+                            style: t.phoneNote,
+                          ),
+                        ),
+                        Button(
+                          kind: ButtonKind.text,
+                          height: 44,
+                          label: s('markAllRead'),
+                          onPress: unread > 0 && view.loaded
+                              ? () => unawaited(messages.markAllRead())
+                              : null,
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),

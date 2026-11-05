@@ -1993,7 +1993,7 @@ mod tests {
         block_on(client.set_app_foreground(false));
         assert!(matches!(client.snapshot().standard, StandardState::Stopped));
         assert_eq!(launcher.calls("/v1/stop"), 1);
-        block_on(client.sync_cores(Trigger::ProfileChanged));
+        block_on(client.sync_cores(super::Trigger::ProfileChanged));
         assert_eq!(*launcher.launches.lock().unwrap(), 1);
         assert!(matches!(client.snapshot().auth, AuthState::SignedIn));
         block_on(client.set_app_foreground(true));

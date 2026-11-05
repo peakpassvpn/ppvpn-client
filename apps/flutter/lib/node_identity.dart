@@ -168,3 +168,31 @@ class NodeInfoTag extends StatelessWidget {
     );
   }
 }
+
+/// Single-line controls keep the same name/address hierarchy without changing
+/// the desktop picker height or introducing a nested popover into its menu.
+class NodeInlineName extends StatelessWidget {
+  const NodeInlineName({super.key, required this.node, this.style});
+  final rust.UiNode node;
+  final TextStyle? style;
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final value = nodeIdentity(node);
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: value.name),
+          if (value.address != null)
+            TextSpan(
+              text: '  ${value.address}',
+              style: t.monoText(12, color: t.t3),
+            ),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: style ?? t.bodyStrong,
+    );
+  }
+}

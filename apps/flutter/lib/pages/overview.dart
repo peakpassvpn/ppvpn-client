@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../node_identity.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
 import '../theme.dart';
@@ -33,11 +34,13 @@ bool isBusy(rust.UiPhase phase) => switch (phase) {
 
 /// The connection is in enhanced mode and not off: the status follows it.
 bool enhancedActive(rust.UiSnapshot snapshot) =>
-    snapshot.connectionMode == rust.UiConnectionMode.enhanced && snapshot.phase != rust.UiPhase.off;
+    snapshot.connectionMode == rust.UiConnectionMode.enhanced &&
+    snapshot.phase != rust.UiPhase.off;
 
 /// A mode's switch: on, in between, or off (also while the other mode has
 /// the connection).
-SwitchState switchState(rust.UiSnapshot snapshot, rust.UiConnectionMode mode) => snapshot.connectionMode != mode
+SwitchState switchState(rust.UiSnapshot snapshot, rust.UiConnectionMode mode) =>
+    snapshot.connectionMode != mode
     ? SwitchState.off
     : snapshot.phase == rust.UiPhase.connected
     ? SwitchState.on
@@ -48,7 +51,8 @@ SwitchState switchState(rust.UiSnapshot snapshot, rust.UiConnectionMode mode) =>
 /// The title of a contended enhanced mode: held by a session or user, or
 /// the network taken by another app (#438).
 String contendedTitle(rust.UiContended? contended) => switch (contended) {
-  rust.UiContended.networkTaken || rust.UiContended.routesTaken => S.current('h_networkTaken'),
+  rust.UiContended.networkTaken ||
+  rust.UiContended.routesTaken => S.current('h_networkTaken'),
   _ => S.current('h_occupied'),
 };
 
@@ -89,19 +93,21 @@ String? enhancedDetail(rust.UiSnapshot snapshot) => !enhancedActive(snapshot)
         _ => null,
       };
 
-Color statusColor(Tokens t, rust.UiSnapshot snapshot) => switch (snapshot.phase) {
-  rust.UiPhase.connected => t.ok,
-  rust.UiPhase.error => t.bad,
-  rust.UiPhase.contended => t.warn,
-  final phase when isBusy(phase) => t.accent,
-  _ => t.t3,
-};
+Color statusColor(Tokens t, rust.UiSnapshot snapshot) =>
+    switch (snapshot.phase) {
+      rust.UiPhase.connected => t.ok,
+      rust.UiPhase.error => t.bad,
+      rust.UiPhase.contended => t.warn,
+      final phase when isBusy(phase) => t.accent,
+      _ => t.t3,
+    };
 
 /// Turns enhanced mode on; before the service is installed, only after
 /// the install explanation ("Cancel" leaves it off, no failure). The client
 /// then installs it behind the system's admin prompt (`WaitingPermission`).
 Future<void> turnOnEnhanced(BuildContext context, AppState app) async {
-  if (!app.snapshot.value.serviceInstalled && !await confirmInstall(context)) return;
+  if (!app.snapshot.value.serviceInstalled && !await confirmInstall(context))
+    return;
   await app.connectIn(rust.UiConnectionMode.enhanced);
 }
 
@@ -154,7 +160,10 @@ class OverviewPage extends StatelessWidget {
                     ? null
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [const SizedBox(height: Tokens.cardGap), problem],
+                        children: [
+                          const SizedBox(height: Tokens.cardGap),
+                          problem,
+                        ],
                       ),
               ),
               const SizedBox(height: Tokens.cardGap),
@@ -166,7 +175,12 @@ class OverviewPage extends StatelessWidget {
                   children: [
                     Expanded(child: TrafficCard(app: app)),
                     const SizedBox(width: Tokens.cardGap),
-                    Expanded(child: _LocalProxy(app: app, nodeId: snapshot.selectedNodeId)),
+                    Expanded(
+                      child: _LocalProxy(
+                        app: app,
+                        nodeId: snapshot.selectedNodeId,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -209,7 +223,10 @@ class _Hero extends StatelessWidget {
                 gradient: RadialGradient(
                   center: Alignment.topLeft,
                   radius: 1.3,
-                  colors: [tone.withValues(alpha: 0.11), tone.withValues(alpha: 0)],
+                  colors: [
+                    tone.withValues(alpha: 0.11),
+                    tone.withValues(alpha: 0),
+                  ],
                   stops: const [0, 0.55],
                 ),
               ),
@@ -233,11 +250,16 @@ class _Hero extends StatelessWidget {
                           Semantics(
                             header: true,
                             liveRegion: true,
-                            child: Text(statusTitle(snapshot), style: t.heroTitle),
+                            child: Text(
+                              statusTitle(snapshot),
+                              style: t.heroTitle,
+                            ),
                           ),
                           const SizedBox(height: 2),
                           Swap(
-                            id: phase == rust.UiPhase.off ? phase : (detail ?? node?.id),
+                            id: phase == rust.UiPhase.off
+                                ? phase
+                                : (detail ?? node?.id),
                             child: phase == rust.UiPhase.off
                                 ? Text(s('d_idle'), style: t.sub)
                                 : detail != null
@@ -249,11 +271,12 @@ class _Hero extends StatelessWidget {
                                       Flag(countryCode: node.exitCountryCode),
                                       const SizedBox(width: 8),
                                       Flexible(
-                                        child: Text(
-                                          nodeTitle(node),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: t.sub.copyWith(color: t.t1, fontWeight: FontWeight.w600),
+                                        child: NodeInlineName(
+                                          node: node,
+                                          style: t.sub.copyWith(
+                                            color: t.t1,
+                                            fontWeight: FontWeight.w600,
+                                          ),
                                         ),
                                       ),
                                       const SizedBox(width: 8),
@@ -274,8 +297,15 @@ class _Hero extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
                                 Text(
-                                  s(snapshot.connectionMode == rust.UiConnectionMode.enhanced ? 'tunMode' : 'stdMode'),
-                                  style: t.sectionTitle.copyWith(color: t.accent),
+                                  s(
+                                    snapshot.connectionMode ==
+                                            rust.UiConnectionMode.enhanced
+                                        ? 'tunMode'
+                                        : 'stdMode',
+                                  ),
+                                  style: t.sectionTitle.copyWith(
+                                    color: t.accent,
+                                  ),
                                 ),
                                 Text(statusTitle(snapshot), style: t.note),
                               ],
@@ -288,10 +318,15 @@ class _Hero extends StatelessWidget {
                   child: node == null || phase == rust.UiPhase.off
                       ? null
                       : Padding(
-                          padding: const EdgeInsets.only(top: 18, left: Tokens.orbSize + 16),
+                          padding: const EdgeInsets.only(
+                            top: 18,
+                            left: Tokens.orbSize + 16,
+                          ),
                           child: RouteLine(
                             lines: lineNames(node),
-                            current: node.lines.indexWhere((line) => line.key == snapshot.lineKey),
+                            current: node.lines.indexWhere(
+                              (line) => line.key == snapshot.lineKey,
+                            ),
                             connected: connected,
                           ),
                         ),
@@ -331,23 +366,44 @@ class _Orb extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: connected && light ? Tokens.connectedOrb : null,
               color: connected && light ? null : tone.withValues(alpha: 0.10),
-              border: connected && light ? null : Border.all(color: tone.withValues(alpha: 0.25)),
+              border: connected && light
+                  ? null
+                  : Border.all(color: tone.withValues(alpha: 0.25)),
               boxShadow: [
                 BoxShadow(color: tone.withValues(alpha: 0.12), spreadRadius: 6),
-                BoxShadow(color: tone.withValues(alpha: 0.06), spreadRadius: 13),
-                if (connected && light) BoxShadow(color: tone.withValues(alpha: 0.30), offset: const Offset(0, 6), blurRadius: 16),
+                BoxShadow(
+                  color: tone.withValues(alpha: 0.06),
+                  spreadRadius: 13,
+                ),
+                if (connected && light)
+                  BoxShadow(
+                    color: tone.withValues(alpha: 0.30),
+                    offset: const Offset(0, 6),
+                    blurRadius: 16,
+                  ),
               ],
             ),
           ),
           if (busy) Spinner(color: tone, size: Tokens.orbSize),
           Swap(
-            id: (problem: phase == rust.UiPhase.error || phase == rust.UiPhase.contended, off: phase == rust.UiPhase.off, tone: tone),
+            id: (
+              problem:
+                  phase == rust.UiPhase.error ||
+                  phase == rust.UiPhase.contended,
+              off: phase == rust.UiPhase.off,
+              tone: tone,
+            ),
             alignment: Alignment.center,
-            child: phase == rust.UiPhase.error || phase == rust.UiPhase.contended
+            child:
+                phase == rust.UiPhase.error || phase == rust.UiPhase.contended
                 ? Icon(AppIcons.circleAlert, size: 26, color: tone)
                 : phase == rust.UiPhase.off
                 ? Icon(AppIcons.link2Off, size: 24, color: tone)
-                : ShieldCheckIcon(size: 26, stroke: 2.2, color: connected && light ? const Color(0xFFFFFFFF) : tone),
+                : ShieldCheckIcon(
+                    size: 26,
+                    stroke: 2.2,
+                    color: connected && light ? const Color(0xFFFFFFFF) : tone,
+                  ),
           ),
         ],
       ),
@@ -408,9 +464,12 @@ class _SessionTimerState extends State<SessionTimer> {
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final since = widget.since;
-    final elapsed = since == null ? Duration.zero : DateTime.now().difference(since);
+    final elapsed = since == null
+        ? Duration.zero
+        : DateTime.now().difference(since);
     String two(int n) => n.toString().padLeft(2, '0');
-    final text = '${two(elapsed.inHours)}:${two(elapsed.inMinutes % 60)}:${two(elapsed.inSeconds % 60)}';
+    final text =
+        '${two(elapsed.inHours)}:${two(elapsed.inMinutes % 60)}:${two(elapsed.inSeconds % 60)}';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -424,7 +483,12 @@ class _SessionTimerState extends State<SessionTimer> {
 /// 本机 → the node's lines → 互联网. The line in use and those before it are
 /// lit while connected; the rest wait (dashed).
 class RouteLine extends StatelessWidget {
-  const RouteLine({required this.lines, required this.current, required this.connected, this.compact = false});
+  const RouteLine({
+    required this.lines,
+    required this.current,
+    required this.connected,
+    this.compact = false,
+  });
 
   /// [lineNames], in failover order.
   final List<String> lines;
@@ -441,26 +505,50 @@ class RouteLine extends StatelessWidget {
     final t = Tokens.of(context);
     final tone = connected ? t.ok : t.accent;
     final reached = current + 1;
-    Widget hop(String text, {IconData? icon, bool lit = false, bool wait = false, bool mono = false}) => Container(
+    Widget hop(
+      String text, {
+      IconData? icon,
+      bool lit = false,
+      bool wait = false,
+      bool mono = false,
+    }) => Container(
       height: compact ? 24 : 26,
       padding: EdgeInsets.symmetric(horizontal: compact ? 9 : 10),
       decoration: BoxDecoration(
         color: wait ? null : t.hop,
         borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: lit ? tone.withValues(alpha: 0.25) : (wait ? t.line : t.hair)),
+        border: Border.all(
+          color: lit ? tone.withValues(alpha: 0.25) : (wait ? t.line : t.hair),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (icon != null && !compact) ...[Icon(icon, size: 13, color: wait ? t.t3 : t.t2), const SizedBox(width: 6)],
+          if (icon != null && !compact) ...[
+            Icon(icon, size: 13, color: wait ? t.t3 : t.t2),
+            const SizedBox(width: 6),
+          ],
           Text(
             text,
             style: compact
-                ? (mono ? t.monoText(11, weight: FontWeight.w600, color: lit ? tone : (wait ? t.t3 : t.t2)) : t.label)
+                ? (mono
+                          ? t.monoText(
+                              11,
+                              weight: FontWeight.w600,
+                              color: lit ? tone : (wait ? t.t3 : t.t2),
+                            )
+                          : t.label)
                       .copyWith(color: lit ? tone : (wait ? t.t3 : t.t2))
                 : mono
-                ? t.monoText(12, weight: FontWeight.w500, color: lit ? tone : (wait ? t.t3 : t.t2))
-                : t.note.copyWith(fontWeight: FontWeight.w500, color: wait ? t.t3 : t.t2),
+                ? t.monoText(
+                    12,
+                    weight: FontWeight.w500,
+                    color: lit ? tone : (wait ? t.t3 : t.t2),
+                  )
+                : t.note.copyWith(
+                    fontWeight: FontWeight.w500,
+                    color: wait ? t.t3 : t.t2,
+                  ),
           ),
         ],
       ),
@@ -471,16 +559,27 @@ class RouteLine extends StatelessWidget {
         child: Container(
           height: 2,
           margin: EdgeInsets.symmetric(horizontal: compact ? 3 : 4),
-          child: CustomPaint(painter: _Dashes(wait ? t.t3.withValues(alpha: 0.4) : tone.withValues(alpha: 0.55), wait)),
+          child: CustomPaint(
+            painter: _Dashes(
+              wait ? t.t3.withValues(alpha: 0.4) : tone.withValues(alpha: 0.55),
+              wait,
+            ),
+          ),
         ),
       ),
     );
     final shown = lines.take(3).toList();
     return Semantics(
-      label: [S.current('thisDevice'), ...shown, S.current('internet')].join(' → '),
+      label: [
+        S.current('thisDevice'),
+        ...shown,
+        S.current('internet'),
+      ].join(' → '),
       child: ExcludeSemantics(
         child: Row(
-          mainAxisAlignment: compact ? MainAxisAlignment.center : MainAxisAlignment.start,
+          mainAxisAlignment: compact
+              ? MainAxisAlignment.center
+              : MainAxisAlignment.start,
           children: [
             hop(S.current('thisDevice'), icon: AppIcons.monitor),
             for (var i = 0; i < shown.length; i++) ...[
@@ -507,7 +606,10 @@ class _Dashes extends CustomPainter {
     final (dash, gap) = short ? (3.0, 5.0) : (6.0, 4.0);
     for (var x = 0.0; x < size.width; x += dash + gap) {
       canvas.drawRRect(
-        RRect.fromRectAndRadius(Rect.fromLTWH(x, 0, dash, size.height), const Radius.circular(1)),
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, 0, dash, size.height),
+          const Radius.circular(1),
+        ),
         paint,
       );
     }
@@ -528,7 +630,8 @@ class _Modes extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = S.current;
     // While one mode is on its way, the other mode's switch waits.
-    bool enabled(rust.UiConnectionMode mode) => !isBusy(snapshot.phase) || snapshot.connectionMode == mode;
+    bool enabled(rust.UiConnectionMode mode) =>
+        !isBusy(snapshot.phase) || snapshot.connectionMode == mode;
     return CardBox(
       child: Column(
         children: [
@@ -541,7 +644,9 @@ class _Modes extends StatelessWidget {
               label: s('stdMode'),
               state: switchState(snapshot, rust.UiConnectionMode.compatible),
               enabled: enabled(rust.UiConnectionMode.compatible),
-              onChanged: (on) => on ? app.connectIn(rust.UiConnectionMode.compatible) : app.disconnect(),
+              onChanged: (on) => on
+                  ? app.connectIn(rust.UiConnectionMode.compatible)
+                  : app.disconnect(),
             ),
           ),
           SettingRow(
@@ -553,10 +658,12 @@ class _Modes extends StatelessWidget {
               label: s('tunMode'),
               state: switchState(snapshot, rust.UiConnectionMode.enhanced),
               enabled: enabled(rust.UiConnectionMode.enhanced),
-              onChanged: (on) => on ? turnOnEnhanced(context, app) : app.disconnect(),
+              onChanged: (on) =>
+                  on ? turnOnEnhanced(context, app) : app.disconnect(),
             ),
           ),
-          if (!snapshot.serviceInstalled && !enhancedActive(snapshot)) _InstallHint(app: app),
+          if (!snapshot.serviceInstalled && !enhancedActive(snapshot))
+            _InstallHint(app: app),
           SettingRow(
             icon: AppIcons.mapPin,
             title: s('currentNode'),
@@ -594,10 +701,11 @@ class NodePicker extends StatelessWidget {
                   FItem(
                     selected: node.id == selectedId,
                     prefix: Flag(countryCode: node.exitCountryCode),
-                    title: Text(nodeTitle(node), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    title: NodeInlineName(node: node),
                     suffix: ValueListenableBuilder(
                       valueListenable: app.latency,
-                      builder: (context, latency, _) => LatencyPill(latency: latency[node.id]),
+                      builder: (context, latency, _) =>
+                          LatencyPill(latency: latency[node.id]),
                     ),
                     onPress: () => app.selectNode(node.id),
                   ),
@@ -607,7 +715,8 @@ class NodePicker extends StatelessWidget {
           builder: (context, controller, _) => Pressable(
             key: const ValueKey('node-picker'),
             onPress: controller.toggle,
-            label: '${S.current('currentNode')}: ${selected == null ? '—' : nodeTitle(selected)}',
+            label:
+                '${S.current('currentNode')}: ${selected == null ? '—' : nodeTitle(selected)}',
             builder: (context, hovered) => Container(
               height: 34,
               constraints: const BoxConstraints(maxWidth: 320),
@@ -620,20 +729,24 @@ class NodePicker extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (selected != null) ...[Flag(countryCode: selected.exitCountryCode), const SizedBox(width: 10)],
+                  if (selected != null) ...[
+                    Flag(countryCode: selected.exitCountryCode),
+                    const SizedBox(width: 10),
+                  ],
                   Flexible(
-                    child: Text(
-                      selected == null ? '—' : nodeTitle(selected),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: t.control.copyWith(color: t.t1),
-                    ),
+                    child: selected == null
+                        ? const Text('—')
+                        : NodeInlineName(
+                            node: selected,
+                            style: t.control.copyWith(color: t.t1),
+                          ),
                   ),
                   if (selected != null) ...[
                     const SizedBox(width: 10),
                     ValueListenableBuilder(
                       valueListenable: app.snapshot,
-                      builder: (context, snapshot, _) => LatencyPill.ms(snapshot.latencyMs),
+                      builder: (context, snapshot, _) =>
+                          LatencyPill.ms(snapshot.latencyMs),
                     ),
                   ],
                   const SizedBox(width: 10),
@@ -663,13 +776,19 @@ class _InstallHint extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
       padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-      decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(Tokens.controlRadius)),
+      decoration: BoxDecoration(
+        color: t.accentSoft,
+        borderRadius: BorderRadius.circular(Tokens.controlRadius),
+      ),
       child: Row(
         children: [
           Icon(AppIcons.info, size: 14, color: t.accent),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(s('needInstall'), style: t.note.copyWith(color: t.accent)),
+            child: Text(
+              s('needInstall'),
+              style: t.note.copyWith(color: t.accent),
+            ),
           ),
           Button(
             kind: ButtonKind.text,
@@ -689,7 +808,12 @@ class _InstallHint extends StatelessWidget {
 /// right: enhanced mode failed or is in use elsewhere, or the system proxy
 /// failed.
 class ProblemCard extends StatelessWidget {
-  const ProblemCard({required this.warn, required this.title, required this.description, required this.actions});
+  const ProblemCard({
+    required this.warn,
+    required this.title,
+    required this.description,
+    required this.actions,
+  });
 
   /// Warning tone (in use elsewhere) instead of the failure tone.
   final bool warn;
@@ -701,7 +825,11 @@ class ProblemCard extends StatelessWidget {
   static ProblemCard? of(AppState app, rust.UiSnapshot snapshot) {
     final s = S.current;
     final enhanced = snapshot.connectionMode == rust.UiConnectionMode.enhanced;
-    final retry = Button(kind: ButtonKind.secondary, label: s('retry'), onPress: app.retry);
+    final retry = Button(
+      kind: ButtonKind.secondary,
+      label: s('retry'),
+      onPress: app.retry,
+    );
     final compatible = [
       if (enhanced && snapshot.suggestCompatible)
         Button(
@@ -714,15 +842,21 @@ class ProblemCard extends StatelessWidget {
     return switch (snapshot.phase) {
       // The core refused the profile: neither the tunnel nor the system
       // proxy is at fault (#532).
-      rust.UiPhase.error when expired || snapshot.error?.code == 'ProfileInvalid' => ProblemCard(
-        warn: false,
-        title: s(expired ? 'cfgExpiredT' : 'cfgT'),
-        description: s(expired ? 'fr_profileExpired' : 'fr_profile'),
-        actions: [
-          Button(kind: ButtonKind.secondary, label: s('refreshNodes'), onPress: app.refreshNodes),
-          retry,
-        ],
-      ),
+      rust.UiPhase.error
+          when expired || snapshot.error?.code == 'ProfileInvalid' =>
+        ProblemCard(
+          warn: false,
+          title: s(expired ? 'cfgExpiredT' : 'cfgT'),
+          description: s(expired ? 'fr_profileExpired' : 'fr_profile'),
+          actions: [
+            Button(
+              kind: ButtonKind.secondary,
+              label: s('refreshNodes'),
+              onPress: app.refreshNodes,
+            ),
+            retry,
+          ],
+        ),
       rust.UiPhase.error when enhanced => ProblemCard(
         warn: false,
         title: '${s('tunMode')} · ${s('st_failed')}',
@@ -741,19 +875,24 @@ class ProblemCard extends StatelessWidget {
         actions: [
           ...compatible,
           if (snapshot.canTakeOver)
-            Button(kind: ButtonKind.secondary, label: s('takeOver'), onPress: app.takeOver)
+            Button(
+              kind: ButtonKind.secondary,
+              label: s('takeOver'),
+              onPress: app.takeOver,
+            )
           // Nothing to retry against another OS user's connection.
           else if (snapshot.contended != rust.UiContended.anotherUser)
             retry,
         ],
       ),
       // The tunnel works; only the PPVPN API is unreachable for now (#438).
-      rust.UiPhase.connected when enhanced && snapshot.apiUnreachable => ProblemCard(
-        warn: true,
-        title: s('h_on'),
-        description: s('d_apiUnreachable'),
-        actions: const [],
-      ),
+      rust.UiPhase.connected when enhanced && snapshot.apiUnreachable =>
+        ProblemCard(
+          warn: true,
+          title: s('h_on'),
+          description: s('d_apiUnreachable'),
+          actions: const [],
+        ),
       rust.UiPhase.error => ProblemCard(
         warn: false,
         title: s('h_stdFail'),
@@ -806,7 +945,10 @@ class ProblemCard extends StatelessWidget {
               ],
             ),
           ),
-          for (final (i, action) in actions.indexed) ...[if (i > 0) const SizedBox(width: 8), action],
+          for (final (i, action) in actions.indexed) ...[
+            if (i > 0) const SizedBox(width: 8),
+            action,
+          ],
         ],
       ),
     );
@@ -827,41 +969,44 @@ class TrafficCard extends StatelessWidget {
     final t = Tokens.of(context);
     final s = S.current;
     Widget rate(String label, Color key, int value) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 8,
-                height: 3,
-                decoration: BoxDecoration(color: key, borderRadius: BorderRadius.circular(2)),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 8,
+              height: 3,
+              decoration: BoxDecoration(
+                color: key,
+                borderRadius: BorderRadius.circular(2),
               ),
-              const SizedBox(width: 6),
-              Text(label, style: t.note.copyWith(color: t.t2)),
-            ],
-          ),
-          // The number rolls from the last value to this one (#535).
-          TweenAnimationBuilder<double>(
-            tween: Tween(end: value.toDouble()),
-            duration: Tokens.motion(context, _rateRoll),
-            curve: Curves.easeOut,
-            builder: (context, shown, _) {
-              final (number, unit) = formatRate(shown.round());
-              return Text.rich(
-                TextSpan(
-                  children: [
-                    TextSpan(text: number, style: t.rate),
-                    TextSpan(
-                      text: ' $unit',
-                      style: t.monoText(12, weight: FontWeight.w500, color: t.t3),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
-      );
+            ),
+            const SizedBox(width: 6),
+            Text(label, style: t.note.copyWith(color: t.t2)),
+          ],
+        ),
+        // The number rolls from the last value to this one (#535).
+        TweenAnimationBuilder<double>(
+          tween: Tween(end: value.toDouble()),
+          duration: Tokens.motion(context, _rateRoll),
+          curve: Curves.easeOut,
+          builder: (context, shown, _) {
+            final (number, unit) = formatRate(shown.round());
+            return Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: number, style: t.rate),
+                  TextSpan(
+                    text: ' $unit',
+                    style: t.monoText(12, weight: FontWeight.w500, color: t.t3),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
 
     final rates = ValueListenableBuilder(
       valueListenable: app.traffic,
@@ -883,7 +1028,10 @@ class TrafficCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(padding: const EdgeInsets.fromLTRB(16, 14, 16, 0), child: rates),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: rates,
+              ),
               const SizedBox(height: 6),
               SizedBox(height: 48, child: sparkline),
             ],
@@ -923,7 +1071,11 @@ const _rateRoll = Duration(milliseconds: 300);
 /// one step over the time since the previous one, linearly, and the scale
 /// eases to the new peak; under reduced motion it jumps.
 class _SlidingSparkline extends StatefulWidget {
-  const _SlidingSparkline({required this.app, required this.up, required this.down});
+  const _SlidingSparkline({
+    required this.app,
+    required this.up,
+    required this.down,
+  });
 
   final AppState app;
   final Color up;
@@ -933,8 +1085,12 @@ class _SlidingSparkline extends StatefulWidget {
   State<_SlidingSparkline> createState() => _SlidingSparklineState();
 }
 
-class _SlidingSparklineState extends State<_SlidingSparkline> with SingleTickerProviderStateMixin {
-  late final AnimationController _slide = AnimationController(vsync: this, value: 1);
+class _SlidingSparklineState extends State<_SlidingSparkline>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _slide = AnimationController(
+    vsync: this,
+    value: 1,
+  );
   DateTime? _last;
   double _fromPeak = 1;
   double _toPeak = 1;
@@ -968,7 +1124,10 @@ class _SlidingSparklineState extends State<_SlidingSparkline> with SingleTickerP
     _last = now;
     _fromPeak = _fromPeak + (_toPeak - _fromPeak) * _slide.value;
     _toPeak = _peak(widget.app.history.value);
-    final duration = Tokens.motion(context, since > const Duration(seconds: 3) ? const Duration(seconds: 3) : since);
+    final duration = Tokens.motion(
+      context,
+      since > const Duration(seconds: 3) ? const Duration(seconds: 3) : since,
+    );
     if (duration == Duration.zero) {
       _slide.value = 1;
     } else {
@@ -982,9 +1141,16 @@ class _SlidingSparklineState extends State<_SlidingSparkline> with SingleTickerP
     animation: _slide,
     builder: (context, _) {
       final t = _slide.value;
-      final peak = _fromPeak + (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(t);
+      final peak =
+          _fromPeak + (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(t);
       return CustomPaint(
-        painter: _Sparkline(widget.app.history.value, up: widget.up, down: widget.down, shift: 1 - t, peak: peak),
+        painter: _Sparkline(
+          widget.app.history.value,
+          up: widget.up,
+          down: widget.down,
+          shift: 1 - t,
+          peak: peak,
+        ),
       );
     },
   );
@@ -993,7 +1159,13 @@ class _SlidingSparklineState extends State<_SlidingSparkline> with SingleTickerP
 /// Download (filled) and upload lines over the last samples, on one scale
 /// ([peak]), [shift] steps to the right of their place (the slide in).
 class _Sparkline extends CustomPainter {
-  _Sparkline(this.samples, {required this.up, required this.down, this.shift = 0, required this.peak});
+  _Sparkline(
+    this.samples, {
+    required this.up,
+    required this.down,
+    this.shift = 0,
+    required this.peak,
+  });
 
   final List<rust.UiTraffic> samples;
   final Color up;
@@ -1010,8 +1182,13 @@ class _Sparkline extends CustomPainter {
     Path line(int Function(rust.UiTraffic) pick) {
       final path = Path();
       for (var i = 0; i < samples.length; i++) {
-        final point = Offset(start + step * i, size.height - 2 - (size.height - 6) * pick(samples[i]) / peak);
-        i == 0 ? path.moveTo(point.dx, point.dy) : path.lineTo(point.dx, point.dy);
+        final point = Offset(
+          start + step * i,
+          size.height - 2 - (size.height - 6) * pick(samples[i]) / peak,
+        );
+        i == 0
+            ? path.moveTo(point.dx, point.dy)
+            : path.lineTo(point.dx, point.dy);
       }
       return path;
     }
@@ -1064,7 +1241,10 @@ class _LocalProxy extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(s('localProxy'), style: t.sectionTitle),
-          Padding(padding: const EdgeInsets.only(top: 2), child: Text(s('proxyNote'), style: t.note)),
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(s('proxyNote'), style: t.note),
+          ),
           ValueListenableBuilder(
             valueListenable: app.proxies,
             builder: (context, proxies, _) {
@@ -1104,7 +1284,10 @@ class ProxyRows extends StatelessWidget {
       height: 28,
       margin: const EdgeInsets.only(top: 9),
       padding: const EdgeInsets.fromLTRB(10, 0, 4, 0),
-      decoration: BoxDecoration(color: t.sunk, borderRadius: BorderRadius.circular(Tokens.segmentRadius)),
+      decoration: BoxDecoration(
+        color: t.sunk,
+        borderRadius: BorderRadius.circular(Tokens.segmentRadius),
+      ),
       child: Row(
         children: [
           // 54 in the design (Chinese); no wrapping for longer labels.
@@ -1129,13 +1312,20 @@ class ProxyRows extends StatelessWidget {
     return Column(
       children: [
         row('HTTP', 'http://$endpoint', CopyButton(text: url(proxy, 'http'))),
-        row('SOCKS5', 'socks5://$endpoint', CopyButton(text: url(proxy, 'socks5h'))),
+        row(
+          'SOCKS5',
+          'socks5://$endpoint',
+          CopyButton(text: url(proxy, 'socks5h')),
+        ),
         row(
           S.current('authUser'),
           proxy.username,
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: Text('${S.current('authPass')} ••••••', style: t.monoText(12, color: t.t3)),
+            child: Text(
+              '${S.current('authPass')} ••••••',
+              style: t.monoText(12, color: t.t3),
+            ),
           ),
         ),
       ],
@@ -1146,7 +1336,11 @@ class ProxyRows extends StatelessWidget {
 /// Access limited: no subscription, subscription expired, team disabled
 /// (a full empty state replaces the page; the tray shows its title).
 class LimitedAccess extends StatelessWidget {
-  const LimitedAccess._({required this.icon, required this.title, required this.description});
+  const LimitedAccess._({
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
 
   final IconData icon;
   final String title;
@@ -1185,7 +1379,14 @@ class LimitedAccess extends StatelessWidget {
           children: [
             Icon(icon, size: 44, color: t.t3),
             const SizedBox(height: 12),
-            Semantics(header: true, child: Text(title, style: t.heroTitle, textAlign: TextAlign.center)),
+            Semantics(
+              header: true,
+              child: Text(
+                title,
+                style: t.heroTitle,
+                textAlign: TextAlign.center,
+              ),
+            ),
             const SizedBox(height: 6),
             Text(description, style: t.sub, textAlign: TextAlign.center),
           ],
@@ -1241,8 +1442,14 @@ class ConfigWarning extends StatelessWidget {
             child: Text.rich(
               TextSpan(
                 children: [
-                  TextSpan(text: '${S.current('cfgT')} · ', style: t.sectionTitle),
-                  TextSpan(text: S.current(previous ? 'cfgD' : 'invalidD'), style: t.sub),
+                  TextSpan(
+                    text: '${S.current('cfgT')} · ',
+                    style: t.sectionTitle,
+                  ),
+                  TextSpan(
+                    text: S.current(previous ? 'cfgD' : 'invalidD'),
+                    style: t.sub,
+                  ),
                 ],
               ),
             ),
