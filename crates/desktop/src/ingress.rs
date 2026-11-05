@@ -172,9 +172,16 @@ impl Client {
             )
             .await;
         }
-        self.enhanced
-            .pin_ingress_live(&node_id, endpoint_key.as_deref())
-            .await;
+        match &self.tunnel {
+            // The phone's live engine is in the VPN extension, not the desktop service.
+            // Reapply carries the updated pins without restarting the tunnel.
+            Some(tunnel) => tunnel.reapply().await?,
+            None => {
+                self.enhanced
+                    .pin_ingress_live(&node_id, endpoint_key.as_deref())
+                    .await
+            }
+        }
         Ok(())
     }
 

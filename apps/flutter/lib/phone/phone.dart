@@ -201,11 +201,13 @@ class _TabBar extends StatelessWidget {
   final ValueChanged<_Tab> onTab;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => RouteChrome(builder: _buildChrome);
+
+  Widget _buildChrome(BuildContext context, bool settled) {
     final t = Tokens.of(context);
     final s = S.current;
     final bottom = MediaQuery.paddingOf(context).bottom;
-    if (NativeChrome.enabled) {
+    if (NativeChrome.enabled && settled) {
       return SizedBox(
         height: Tokens.phoneTabBar + bottom,
         child: NativeChromeView(
@@ -338,13 +340,15 @@ class PhoneScaffold extends StatelessWidget {
   final List<NativeChromeAction>? nativeActions;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => RouteChrome(builder: _buildChrome);
+
+  Widget _buildChrome(BuildContext context, bool settled) {
     final t = Tokens.of(context);
     final top = MediaQuery.paddingOf(context).top;
     final bell = trailing is PhoneBell ? trailing as PhoneBell : null;
     final supportsActions =
         trailing == null || bell != null || nativeActions != null;
-    if (NativeChrome.enabled && supportsActions) {
+    if (NativeChrome.enabled && settled && supportsActions) {
       final s = S.current;
       final actions =
           nativeActions ??
@@ -440,7 +444,7 @@ class PhoneScaffold extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
-            height: Tokens.phoneTopBar + top,
+            height: top + (NativeChrome.enabled && supportsActions ? (back || brand ? 44 : 96) : Tokens.phoneTopBar),
             padding: EdgeInsets.fromLTRB(
               back ? 4 : Tokens.phoneBarStart,
               top,

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/material.dart' show SelectableText;
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,7 @@ import 'package:ppvpn_flutter/icons.dart';
 import 'package:ppvpn_flutter/phone/sign_in.dart';
 import 'package:ppvpn_flutter/node_identity.dart';
 import 'package:ppvpn_flutter/phone/phone.dart';
+import 'package:ppvpn_flutter/phone/nodes.dart';
 import 'package:ppvpn_flutter/phone/messages.dart';
 import 'package:ppvpn_flutter/sample.dart';
 import 'package:ppvpn_flutter/settings.dart';
@@ -95,6 +97,61 @@ void main() {
       child: DefaultTextStyle(style: Tokens.light.body, child: child),
     ),
   );
+  testWidgets(
+    'nodes default to Ping and stay selected in their original group',
+    (tester) async {
+      tester.view.physicalSize = const Size(375, 812);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final app = sampleState();
+      await tester.pumpWidget(host(PhoneNodes(app: app)));
+      await tester.pump();
+      expect(find.text('Ping'), findsOneWidget);
+      expect(find.text('当前节点'), findsNothing);
+      expect(find.text('Hong Kong 01'), findsOneWidget);
+      expect(
+        tester
+            .widget<Pressable>(find.byKey(const ValueKey('node-hk1')))
+            .selected,
+        isTrue,
+      );
+      await tester.longPress(find.byKey(const ValueKey('node-hk1')));
+      await tester.pumpAndSettle();
+      expect(find.text('选择实际线路'), findsOneWidget);
+      expect(find.text('自动选择（故障切换）'), findsOneWidget);
+      await tester.tap(find.text('HKG-B'));
+      await tester.pumpAndSettle();
+      expect(app.pinnedLine('hk1'), 'HKG-B');
+      await tester.longPress(find.byKey(const ValueKey('node-hk1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('自动选择（故障切换）'));
+      await tester.pumpAndSettle();
+      expect(app.pinnedLine('hk1'), isNull);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets('tap and long press have distinct mobile feedback', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final calls = <String>[];
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'HapticFeedback.vibrate') calls.add(call.arguments as String);
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    await tester.pumpWidget(host(Center(child: Pressable(
+      onPress: () {}, onLongPress: () {},
+      builder: (_, _) => const SizedBox(width: 120, height: 50, child: Text('touch')),
+    ))));
+    await tester.tap(find.text('touch'));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('touch'));
+    await tester.pumpAndSettle();
+    expect(calls, ['HapticFeedbackType.selectionClick', 'HapticFeedbackType.mediumImpact']);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('restoring a stored session never shows sign-in', (tester) async {
     final app = AppState.fixed(
       const rust.UiSnapshot(

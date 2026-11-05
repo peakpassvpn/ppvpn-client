@@ -25,7 +25,7 @@ class NodesPage extends StatefulWidget {
 }
 
 class _NodesPageState extends State<NodesPage> {
-  rust.UiProbeMethod _method = rust.UiProbeMethod.tcp;
+  rust.UiProbeMethod _method = rust.UiProbeMethod.icmp;
   String? _selectedRow;
   bool _testing = false;
 

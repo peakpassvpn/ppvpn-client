@@ -1,7 +1,7 @@
 // The phone nodes page (#448 step 5), to the canvas's 手机 · 节点 (#535):
 // the test method and 全部测速 in the top bar, the search field, the region
-// chips (the selected one solid accent), then the current node in its own
-// highlighted card and the others grouped by region under captions, 62 a
+// chips (the selected one solid accent), then all nodes grouped by region
+// with the selected row highlighted in place, 62 a
 // row (flag, name, the tier tag and the lines below, latency) with 0.5 px
 // separators. A tap makes a node the current one; pulling down refreshes
 // the list.
@@ -34,7 +34,7 @@ class PhoneNodes extends StatefulWidget {
 }
 
 class _PhoneNodesState extends State<PhoneNodes> {
-  rust.UiProbeMethod _method = rust.UiProbeMethod.tcp;
+  rust.UiProbeMethod _method = rust.UiProbeMethod.icmp;
   bool _testing = false;
   String _query = '';
 
@@ -126,17 +126,13 @@ class _PhoneNodesState extends State<PhoneNodes> {
               node,
         ];
         final padding = phoneScrollPadding(context);
-        final current = shown
-            .where((node) => node.id == snapshot.selectedNodeId)
-            .firstOrNull;
-        // The others by region, in the list's order; a group's count is
-        // the region's.
+        // Keep every node in its original region and position.
         final groups = <String, List<rust.UiNode>>{};
         final counts = <String, int>{};
         for (final node in shown) {
           final region = node.exitRegion ?? '';
           counts[region] = (counts[region] ?? 0) + 1;
-          if (node.id != current?.id) (groups[region] ??= []).add(node);
+          (groups[region] ??= []).add(node);
         }
         final s = S.current;
         return Column(
@@ -196,18 +192,11 @@ class _PhoneNodesState extends State<PhoneNodes> {
                                 latency: latency[node.id],
                                 onPress: () =>
                                     unawaited(app.selectNode(node.id)),
+                                onLongPress: () =>
+                                    openNodeLines(context, app, node),
                               );
                               return SliverList.list(
                                 children: [
-                                  if (current != null) ...[
-                                    PhoneCaption(text: s('currentNode')),
-                                    PhoneCard(
-                                      decoration: _currentDecoration(
-                                        Tokens.of(context),
-                                      ),
-                                      children: [rowOf(current)],
-                                    ),
-                                  ],
                                   for (final MapEntry(key: region, value: nodes)
                                       in groups.entries) ...[
                                     PhoneCaption(
@@ -238,29 +227,6 @@ class _PhoneNodesState extends State<PhoneNodes> {
       },
     );
   }
-
-  /// The current node's card: the accent ring (1.5) and glow over a
-  /// faint accent wash at the top.
-  static BoxDecoration _currentDecoration(Tokens t) => BoxDecoration(
-    gradient: LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      stops: const [0, 0.7],
-      colors: [
-        Color.alphaBlend(t.accent.withValues(alpha: 0.05), t.card),
-        t.card,
-      ],
-    ),
-    borderRadius: BorderRadius.circular(Tokens.phoneCardRadius),
-    border: Border.all(color: t.accent, width: 1.5),
-    boxShadow: [
-      BoxShadow(
-        color: t.accent.withValues(alpha: 0.14),
-        offset: const Offset(0, 6),
-        blurRadius: 18,
-      ),
-    ],
-  );
 }
 
 /// The test method as a 36 pill in the accent colour on accent-soft (Ping,
@@ -529,19 +495,23 @@ class _NodeRow extends StatelessWidget {
     required this.current,
     required this.latency,
     required this.onPress,
+    required this.onLongPress,
   });
 
   final rust.UiNode node;
   final bool current;
   final Latency? latency;
   final VoidCallback onPress;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     return Pressable(
+      key: ValueKey('node-${node.id}'),
       radius: 0,
       selected: current,
+      onLongPress: onLongPress,
       label: nodeTitle(node),
       onPress: onPress,
       builder: (context, pressed) => AnimatedContainer(
@@ -549,7 +519,11 @@ class _NodeRow extends StatelessWidget {
           context,
           pressed ? Duration.zero : Tokens.motionFast,
         ),
-        color: pressed ? t.phonePress : t.phonePress.withValues(alpha: 0),
+        color: pressed
+            ? t.phonePress
+            : current
+            ? t.accentSoft
+            : t.phonePress.withValues(alpha: 0),
         constraints: const BoxConstraints(minHeight: Tokens.phoneRowTwoLines),
         padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 14, 8),
         child: Row(
@@ -618,4 +592,25 @@ class _NodeRow extends StatelessWidget {
       ),
     );
   }
+}
+
+void openNodeLines(BuildContext context, AppState app, rust.UiNode node) {
+  final s = S.current;
+  final pinned = app.pinnedLine(node.id);
+  pushPhoneChoice<String?>(
+    context,
+    title: s('chooseLine'),
+    options: [
+      (null, s('autoLine')),
+      for (final (index, line) in node.lines.indexed)
+        (
+          line.key,
+          line.label?.isNotEmpty == true
+              ? line.label!
+              : s('lineN', {'n': '${index + 1}'}),
+        ),
+    ],
+    value: pinned,
+    onChanged: (key) => unawaited(app.pinLine(node.id, key)),
+  );
 }

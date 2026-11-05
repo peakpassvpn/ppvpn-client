@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 
 import 'links.dart';
+import 'haptics.dart';
 import 'messages_state.dart';
 import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
@@ -227,6 +228,8 @@ class AppState with WidgetsBindingObserver {
         _followVpn(snapshot.value.phase, next.phase);
         _followSignIn(snapshot.value, next);
         if (next.phase == rust.UiPhase.connected) {
+          if (snapshot.value.phase != rust.UiPhase.connected)
+            unawaited(AppHaptics.connected());
           connectedSince ??= DateTime.now();
         } else if (next.phase != rust.UiPhase.reconnecting) {
           connectedSince = null;
@@ -377,6 +380,21 @@ class AppState with WidgetsBindingObserver {
   Future<void> switchTeam(String id) => _run(() => rust.switchTeam(teamId: id));
   Future<void> setRoutingMode(rust.UiRoutingMode mode) =>
       _run(() => rust.setRoutingMode(mode: mode));
+
+  final Map<String, String> _fixedPins = {};
+  String? pinnedLine(String nodeId) =>
+      fixed ? _fixedPins[nodeId] : rust.pinnedIngress(nodeId: nodeId);
+  Future<void> pinLine(String nodeId, String? key) async {
+    if (fixed) {
+      if (key == null) {
+        _fixedPins.remove(nodeId);
+      } else {
+        _fixedPins[nodeId] = key;
+      }
+      return;
+    }
+    await _run(() => rust.pinIngress(nodeId: nodeId, endpointKey: key));
+  }
 
   Future<void> testAll(rust.UiProbeMethod method) async {
     latency.value = {

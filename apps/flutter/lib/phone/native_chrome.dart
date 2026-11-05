@@ -7,6 +7,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../haptics.dart';
+
 class NativeChrome {
   static bool enabled = false;
 
@@ -77,6 +79,7 @@ class _NativeChromeViewState extends State<NativeChromeView> {
     _channel = channel;
     channel.setMethodCallHandler((call) async {
       if (mounted && call.method == 'action' && call.arguments is String) {
+        unawaited(AppHaptics.selection());
         widget.onAction(call.arguments as String);
       }
     });
@@ -116,4 +119,50 @@ class _NativeChromeViewState extends State<NativeChromeView> {
     },
     onPlatformViewCreated: _created,
   );
+}
+
+/// UIKit glass remains native while settled. During push/pop (including an
+/// interrupted back swipe), render Flutter chrome so platform-view backing
+/// surfaces never cross the moving route's shadow or clip.
+class RouteChrome extends StatefulWidget {
+  const RouteChrome({super.key, required this.builder});
+  final Widget Function(BuildContext context, bool settled) builder;
+  @override
+  State<RouteChrome> createState() => _RouteChromeState();
+}
+
+class _RouteChromeState extends State<RouteChrome> {
+  Animation<double>? _primary;
+  Animation<double>? _secondary;
+  bool get _settled =>
+      (_primary == null || _primary!.status == AnimationStatus.completed) &&
+      (_secondary == null || _secondary!.status == AnimationStatus.dismissed);
+  bool _last = true;
+  void _changed(AnimationStatus _) {
+    final next = _settled;
+    if (next != _last) setState(() => _last = next);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _primary?.removeStatusListener(_changed);
+    _secondary?.removeStatusListener(_changed);
+    final route = ModalRoute.of(context);
+    _primary = route?.animation;
+    _secondary = route?.secondaryAnimation;
+    _primary?.addStatusListener(_changed);
+    _secondary?.addStatusListener(_changed);
+    _last = _settled;
+  }
+
+  @override
+  void dispose() {
+    _primary?.removeStatusListener(_changed);
+    _secondary?.removeStatusListener(_changed);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context, _last);
 }

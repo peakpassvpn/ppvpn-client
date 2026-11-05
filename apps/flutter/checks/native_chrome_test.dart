@@ -7,6 +7,52 @@ import 'package:ppvpn_flutter/phone/native_chrome.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('both routes use Flutter chrome during push and pop', (
+    tester,
+  ) async {
+    final navigator = GlobalKey<NavigatorState>();
+    Widget page(String name) => RouteChrome(
+      builder: (_, settled) => Text(
+        '$name-${settled ? 'native' : 'flutter'}',
+        textDirection: TextDirection.ltr,
+      ),
+    );
+    await tester.pumpWidget(
+      WidgetsApp(
+        color: const Color(0xff000000),
+        navigatorKey: navigator,
+        pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+          settings: settings,
+          pageBuilder: (context, _, _) => builder(context),
+        ),
+        home: page('root'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('root-native'), findsOneWidget);
+    navigator.currentState!.push(
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 400),
+        reverseTransitionDuration: const Duration(milliseconds: 400),
+        pageBuilder: (_, _, _) => page('detail'),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('root-flutter'), findsOneWidget);
+    expect(find.text('detail-flutter'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('detail-native'), findsOneWidget);
+    navigator.currentState!.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('root-flutter'), findsOneWidget);
+    expect(find.text('detail-flutter'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('root-native'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'native chrome updates configuration and dispatches current callbacks',
     (tester) async {

@@ -15,6 +15,7 @@ import 'package:forui/forui.dart' show FDialog, showFDialog;
 
 import 'app_state.dart';
 import 'icons.dart';
+import 'haptics.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
 import 'theme.dart';
@@ -32,11 +33,13 @@ class Pressable extends StatefulWidget {
     this.label,
     this.selected,
     this.onDoublePress,
+    this.onLongPress,
     this.radius = Tokens.controlRadius,
   });
 
   final VoidCallback? onPress;
   final VoidCallback? onDoublePress;
+  final VoidCallback? onLongPress;
   final Widget Function(BuildContext context, bool hovered) builder;
   final String? label;
   final bool? selected;
@@ -53,6 +56,18 @@ class _PressableState extends State<Pressable> {
   bool _focused = false;
   bool _pressed = false;
   DateTime _pressedAt = DateTime.now();
+
+  void _activate() {
+    if (widget.onPress == null) return;
+    if (widget.selected != true) unawaited(AppHaptics.selection());
+    widget.onPress!();
+  }
+
+  void _longPress() {
+    if (widget.onLongPress == null) return;
+    unawaited(AppHaptics.impact());
+    widget.onLongPress!();
+  }
 
   void _down() {
     _pressedAt = DateTime.now();
@@ -79,6 +94,7 @@ class _PressableState extends State<Pressable> {
       enabled: enabled,
       selected: widget.selected,
       label: widget.label,
+      onLongPress: enabled && widget.onLongPress != null ? _longPress : null,
       child: FocusableActionDetector(
         enabled: enabled,
         mouseCursor: enabled
@@ -88,11 +104,14 @@ class _PressableState extends State<Pressable> {
         onShowFocusHighlight: (value) => setState(() => _focused = value),
         actions: {
           ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (_) => widget.onPress?.call(),
+            onInvoke: (_) => _activate(),
           ),
         },
         child: GestureDetector(
-          onTap: widget.onPress,
+          onTap: enabled ? _activate : null,
+          onLongPress: enabled && widget.onLongPress != null
+              ? _longPress
+              : null,
           onTapDown: enabled ? (_) => _down() : null,
           onTapUp: enabled ? (_) => _up() : null,
           onTapCancel: enabled ? _up : null,

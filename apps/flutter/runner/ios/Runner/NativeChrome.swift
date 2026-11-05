@@ -126,6 +126,7 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
         let pages = items.map { item in
           let page = UIViewController()
           page.view.backgroundColor = .clear
+          page.view.isOpaque = false
           page.tabBarItem = item
           return page
         }
@@ -190,11 +191,14 @@ private final class ChromeSurface: UIView {
     self.kind = kind
     super.init(frame: frame)
     backgroundColor = .clear
+    isOpaque = false
+    navigation.isOpaque = false
     navigation.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
     // UIKit supplies Liquid Glass. Do not replace its appearance/background.
     // This embedded controller owns only the existing bottom phone tabs.
     tabController.traitOverrides.horizontalSizeClass = .compact
     tabController.view.backgroundColor = .clear
+    tabController.view.isOpaque = false
     addSubview(kind == "tabs" ? tabController.view : navigation)
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }

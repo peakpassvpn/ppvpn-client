@@ -66,6 +66,7 @@ class NodeIdentity extends StatelessWidget {
         if (tag || (!phone && nodeKind(node) != null))
           LayoutBuilder(
             builder: (context, box) => Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Flexible(
                   child: Text(
@@ -74,6 +75,8 @@ class NodeIdentity extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: (phone ? t.phoneBody : t.body).copyWith(
                       fontWeight: strong ? FontWeight.w600 : FontWeight.w500,
+                      height: 1.2,
+                      leadingDistribution: TextLeadingDistribution.even,
                     ),
                   ),
                 ),
@@ -92,6 +95,8 @@ class NodeIdentity extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: (phone ? t.phoneBody : t.body).copyWith(
               fontWeight: strong ? FontWeight.w600 : FontWeight.w500,
+              height: 1.2,
+              leadingDistribution: TextLeadingDistribution.even,
             ),
           ),
         if (value.address != null)
@@ -161,7 +166,11 @@ class NodeInfoTag extends StatelessWidget {
                       : s('nodeDetails')),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: t.label.copyWith(color: t.accent),
+            style: t.label.copyWith(
+              color: t.accent,
+              height: 1.2,
+              leadingDistribution: TextLeadingDistribution.even,
+            ),
           ),
         ),
       ),

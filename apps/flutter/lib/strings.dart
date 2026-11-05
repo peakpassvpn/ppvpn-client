@@ -28,7 +28,10 @@ class S {
   static S get current => switch (Settings.language.value) {
     rust.UiLanguage.chinese => _chinese,
     rust.UiLanguage.english => _english,
-    rust.UiLanguage.system => PlatformDispatcher.instance.locale.languageCode == 'zh' ? _chinese : _english,
+    rust.UiLanguage.system =>
+      PlatformDispatcher.instance.locale.languageCode == 'zh'
+          ? _chinese
+          : _english,
   };
 
   /// Chinese is shown (dates are written the Chinese way).
@@ -96,6 +99,9 @@ const _zh = <String, String>{
   'colRegion': '地区',
   'colRoutes': '线路',
   'colLatency': '延迟',
+  'chooseLine': '选择实际线路',
+  'autoLine': '自动选择（故障切换）',
+  'lineN': '线路 {n}',
   'probe': '测速方式',
   'testAll': '全部测速',
   'refreshNodes': '刷新节点',
@@ -354,7 +360,8 @@ const _en = <String, String>{
   'buy': 'Buy Subscription',
   'refresh': 'Refresh',
   'teamOffT': 'Team Disabled',
-  'teamOffD': '“{team}” was disabled by its admin. Switch to another team to continue.',
+  'teamOffD':
+      '“{team}” was disabled by its admin. Switch to another team to continue.',
   'switchTeam': 'Switch Team',
   'personal': 'Personal',
   'teamDisabled': 'Disabled',
@@ -365,6 +372,9 @@ const _en = <String, String>{
   'colRegion': 'Region',
   'colRoutes': 'Routes',
   'colLatency': 'Latency',
+  'chooseLine': 'Choose connection route',
+  'autoLine': 'Automatic (failover)',
+  'lineN': 'Route {n}',
   'probe': 'Test Method',
   'testAll': 'Test All',
   'refreshNodes': 'Refresh Nodes',
@@ -390,7 +400,8 @@ const _en = <String, String>{
   'h_stdStarting': 'Applying System Proxy',
   'h_stdFail': 'System Proxy Failed',
   'd_idle': 'Local proxy is still available',
-  'fr_port': 'Couldn’t apply system proxy settings. Another app may be managing them.',
+  'fr_port':
+      'Couldn’t apply system proxy settings. Another app may be managing them.',
   'fr_profile': 'The current node configuration can’t be used, so the app can’t connect right now. Tap "Refresh Nodes". If it still can’t connect, please contact support.',
   'cfgExpiredT': 'Node Configuration Expired',
   'fr_profileExpired': 'The node configuration has expired. The app will get a new one automatically. If this doesn’t clear up after a while, please check that your subscription is active.',
@@ -421,7 +432,8 @@ const _en = <String, String>{
   'unreadShort': '{n} unread',
   'allRead': 'All read',
   'msgEmptyT': 'No Messages',
-  'msgEmptyD': 'Notices about your subscription, billing and routes will appear here.',
+  'msgEmptyD':
+      'Notices about your subscription, billing and routes will appear here.',
   'msgErrT': 'Couldn’t load messages',
   'msgErrD': 'Check your network connection and try again.',
   'loadingMore': 'Loading…',
@@ -475,12 +487,14 @@ const _en = <String, String>{
   'launchAtLogin': 'Launch at Login',
   'launchApprove': 'Allow PPVPN in System Settings › General › Login Items.',
   'openSysSettings': 'Allow in System Settings',
-  'winLaunchApprove': 'Turned off in Settings › Apps › Startup. Turn it back on there.',
+  'winLaunchApprove':
+      'Turned off in Settings › Apps › Startup. Turn it back on there.',
   'openWinStartup': 'Open Startup Settings',
   'autoUpdate': 'Update Automatically',
   'autoUpdateD': 'Installs new versions in the background. When off, you’ll be asked first.',
   'updatedTo': 'Updated to PPVPN {v}',
-  'updInstalling': 'An update is being installed. Open PPVPN again in a moment.',
+  'updInstalling':
+      'An update is being installed. Open PPVPN again in a moment.',
   'updUpdating': 'Updating PPVPN',
   'updUpdatingD': 'PPVPN will reopen when the update is done.',
   'user': 'User',
@@ -515,7 +529,8 @@ const _en = <String, String>{
   'd_preparing': 'Checking system service',
   'd_authorizing': 'First-time setup installs a system service. Enter your administrator password in the system dialog.',
   'd_disconnecting': 'Restoring system network settings',
-  'd_occupied': 'Another PPVPN session on this computer is using Enhanced Mode.',
+  'd_occupied':
+      'Another PPVPN session on this computer is using Enhanced Mode.',
   'd_occupiedUser': 'Another user on this computer is using Enhanced Mode.',
   'h_networkTaken': 'Network Taken Over',
   'd_routesTaken': 'Another VPN keeps changing this computer’s routes, so Enhanced Mode has paused. Turn it off, then try again.',
@@ -571,4 +586,3 @@ const _en = <String, String>{
   'phoneStep3': 'The page closes and you are signed in',
   'reopenAuth': 'Open the Authorization Page Again',
 };
-
