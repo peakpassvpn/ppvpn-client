@@ -88,14 +88,8 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else { return result(nil) }
       if call.method == "snapshot" {
-        self.surface.layoutIfNeeded()
-        guard self.surface.window != nil, self.surface.bounds.width > 0, self.surface.bounds.height > 0 else { return result(nil) }
-        let format = UIGraphicsImageRendererFormat()
-        format.opaque = false
-        let image = UIGraphicsImageRenderer(bounds: self.surface.bounds, format: format).image { _ in
-          self.surface.drawHierarchy(in: self.surface.bounds, afterScreenUpdates: true)
-        }
-        return result(image.pngData().map { FlutterStandardTypedData(bytes: $0) })
+        self.snapshot(result, deadline: CACurrentMediaTime() + 1)
+        return
       }
       guard call.method == "update", let next = call.arguments as? [String: Any] else {
         return result(FlutterMethodNotImplemented)
@@ -106,8 +100,55 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
     apply(config)
   }
 
-  deinit { channel.setMethodCallHandler(nil) }
+  deinit {
+    channel.setMethodCallHandler(nil)
+    // Temporary Flutter offstage changes are not controller destruction.
+    let controller = surface.tabController
+    Task { @MainActor in
+      if controller.parent != nil {
+        controller.willMove(toParent: nil)
+        controller.removeFromParent()
+      }
+    }
+  }
   func view() -> UIView { surface }
+
+  // Only cache a settled tab indicator. A screenshot of the selection spring
+  // would replay its halfway position when the covered page becomes visible.
+  private func snapshot(_ result: @escaping FlutterResult, deadline: CFTimeInterval, stableFrames: Int = 0) {
+    surface.layoutIfNeeded()
+    guard surface.window != nil, surface.bounds.width > 0, surface.bounds.height > 0 else { return result(nil) }
+    if surface.kind == "tabs" {
+      let moving = Self.geometryMoving(surface.layer)
+      let stable = moving ? 0 : stableFrames + 1
+      if stable < 2 {
+        guard CACurrentMediaTime() < deadline else { return result(nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0) { [weak self] in
+          guard let self else { return result(nil) }
+          self.snapshot(result, deadline: deadline, stableFrames: stable)
+        }
+        return
+      }
+    }
+    let format = UIGraphicsImageRendererFormat()
+    format.opaque = false
+    let image = UIGraphicsImageRenderer(bounds: surface.bounds, format: format).image { _ in
+      surface.drawHierarchy(in: surface.bounds, afterScreenUpdates: true)
+    }
+    result(image.pngData().map { FlutterStandardTypedData(bytes: $0) })
+  }
+
+  private static func geometryMoving(_ layer: CALayer) -> Bool {
+    if let visible = layer.presentation() {
+      if abs(visible.position.x - layer.position.x) > 0.25 || abs(visible.position.y - layer.position.y) > 0.25 ||
+        abs(visible.bounds.width - layer.bounds.width) > 0.25 || abs(visible.bounds.height - layer.bounds.height) > 0.25 ||
+        abs(visible.transform.m41 - layer.transform.m41) > 0.25 || abs(visible.transform.m42 - layer.transform.m42) > 0.25 ||
+        abs(visible.transform.m11 - layer.transform.m11) > 0.001 || abs(visible.transform.m22 - layer.transform.m22) > 0.001 {
+        return true
+      }
+    }
+    return (layer.sublayers ?? []).contains(where: geometryMoving)
+  }
 
   private func emit(_ action: String) { channel.invokeMethod("action", arguments: action) }
 
@@ -144,7 +185,14 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
       }
       let currentItems = surface.tabs.items ?? items
       let selected = (next["selected"] as? NSNumber)?.intValue ?? 0
-      surface.tabController.selectedIndex = currentItems.indices.contains(selected) ? selected : 0
+      let target = currentItems.indices.contains(selected) ? selected : 0
+      // A tap has already selected its controller. Do not start it again.
+      if surface.tabController.selectedIndex != target {
+        UIView.performWithoutAnimation {
+          surface.tabController.selectedIndex = target
+          surface.tabController.view.layoutIfNeeded()
+        }
+      }
     } else {
       let item = UINavigationItem(title: next["title"] as? String ?? "")
       let back = next["back"] as? Bool == true
@@ -216,10 +264,9 @@ private final class ChromeSurface: UIView {
   override func didMoveToWindow() {
     super.didMoveToWindow()
     guard kind == "tabs" else { return }
-    if window == nil {
-      tabController.willMove(toParent: nil)
-      tabController.removeFromParent()
-    } else if tabController.parent == nil {
+    // Flutter detaches platform-view surfaces while a route is covered.
+    // Keep the same child controller so UIKit does not replay tab selection.
+    if window != nil && tabController.parent == nil {
       var responder: UIResponder? = next
       while let current = responder {
         if let parent = current as? UIViewController {

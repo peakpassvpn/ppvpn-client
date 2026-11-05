@@ -72,11 +72,12 @@ class NativeChromeView extends StatefulWidget {
       _views
           .where((view) => view.mounted && !view.widget.frozen)
           .map(
-            (view) =>
-                view._captureWork ??
-                (view._snapshot == null
-                    ? view._capture()
-                    : Future<void>.value()),
+            (view) => view.widget.kind == 'tabs'
+                ? view._capture()
+                : view._captureWork ??
+                      (view._snapshot == null
+                          ? view._capture()
+                          : Future<void>.value()),
           ),
     );
   }
@@ -111,11 +112,19 @@ class _NativeChromeViewState extends State<NativeChromeView> {
 
   Future<void> _captureImage() async {
     try {
-      final bytes = await _channel!.invokeMethod<Uint8List>('snapshot');
-      if (bytes == null || bytes.isEmpty || !mounted) return;
-      final image = MemoryImage(bytes);
-      await precacheImage(image, context);
-      if (mounted) setState(() => _snapshot = image);
+      // Selection/configuration may change while UIKit settles or PNG decodes.
+      // Never publish an image requested for an older configuration.
+      for (var attempt = 0; attempt < 3 && mounted; attempt++) {
+        final configuration = _configuration;
+        final bytes = await _channel!.invokeMethod<Uint8List>('snapshot');
+        if (bytes == null || bytes.isEmpty || !mounted) return;
+        final image = MemoryImage(bytes);
+        await precacheImage(image, context);
+        if (!mounted) return;
+        if (configuration != _configuration) continue;
+        setState(() => _snapshot = image);
+        return;
+      }
     } on PlatformException catch (error) {
       debugPrint('native chrome snapshot: ${error.code}');
     } on MissingPluginException {

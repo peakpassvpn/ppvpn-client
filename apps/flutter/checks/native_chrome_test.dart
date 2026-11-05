@@ -9,81 +9,94 @@ import 'package:ppvpn_flutter/phone/native_chrome.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets(
-    'route motion reuses the native image without recreating UIKit views',
-    (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
-      final bytes = await tester.runAsync(() async {
-        final recorder = ui.PictureRecorder();
-        ui.Canvas(recorder)
-            .drawColor(const Color(0xff123456), ui.BlendMode.src);
-        final picture = recorder.endRecording();
-        final image = await picture.toImage(4, 4);
-        final data = await image.toByteData(format: ui.ImageByteFormat.png);
-        image.dispose();
-        picture.dispose();
-        return data!.buffer.asUint8List();
-      });
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      var creates = 0;
-      int? id;
-      messenger.setMockMethodCallHandler(SystemChannels.platform_views, (
-        call,
-      ) async {
-        if (call.method == 'create') {
-          creates++;
-          id = (call.arguments as Map)['id'] as int;
-          messenger.setMockMethodCallHandler(
-            MethodChannel('com.peakpassvpn.ppvpn/native-chrome/$id'),
-            (call) async {
-              if (call.method == 'snapshot') return bytes;
-              return null;
-            },
-          );
-        }
-        return null;
-      });
-      addTearDown(() {
-        messenger.setMockMethodCallHandler(SystemChannels.platform_views, null);
+  testWidgets('tabbar refreshes before navigation and retains its UIKit view', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final bytes = await tester.runAsync(() async {
+      final recorder = ui.PictureRecorder();
+      ui.Canvas(recorder).drawColor(const Color(0xff123456), ui.BlendMode.src);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(4, 4);
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      picture.dispose();
+      return data!.buffer.asUint8List();
+    });
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var creates = 0;
+    var snapshots = 0;
+    int? id;
+    messenger.setMockMethodCallHandler(SystemChannels.platform_views, (
+      call,
+    ) async {
+      if (call.method == 'create') {
+        creates++;
+        id = (call.arguments as Map)['id'] as int;
         messenger.setMockMethodCallHandler(
           MethodChannel('com.peakpassvpn.ppvpn/native-chrome/$id'),
-          null,
+          (call) async {
+            if (call.method == 'snapshot') {
+              snapshots++;
+              return bytes;
+            }
+            return null;
+          },
         );
-      });
-      Widget view(bool frozen) => Directionality(
-        textDirection: TextDirection.ltr,
-        child: SizedBox(
-          width: 375,
-          height: 100,
-          child: NativeChromeView(
-            kind: 'navigation',
-            configuration: const {'title': 'Me'},
-            frozen: frozen,
-            onAction: (_) {},
-          ),
-        ),
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(SystemChannels.platform_views, null);
+      messenger.setMockMethodCallHandler(
+        MethodChannel('com.peakpassvpn.ppvpn/native-chrome/$id'),
+        null,
       );
-      await tester.pumpWidget(view(false));
-      await tester.pumpAndSettle();
+    });
+    Widget view(bool frozen) => Directionality(
+      textDirection: TextDirection.ltr,
+      child: SizedBox(
+        width: 375,
+        height: 100,
+        child: NativeChromeView(
+          kind: 'tabs',
+          configuration: const {'selected': 2},
+          frozen: frozen,
+          onAction: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpWidget(view(false));
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pump();
+    final before = snapshots;
+    var prepared = false;
+    NativeChromeView.prepareTransition().then((_) => prepared = true);
+    for (var i = 0; i < 100 && !prepared; i++) {
       await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        () => Future<void>.delayed(const Duration(milliseconds: 5)),
       );
       await tester.pump();
-      await tester.pumpWidget(view(true));
-      await tester.pumpAndSettle();
-      expect(find.byType(Image), findsOneWidget);
-      expect(find.byType(UiKitView, skipOffstage: false), findsOneWidget);
-      expect(creates, 1);
-      await tester.pumpWidget(view(false));
-      await tester.pumpAndSettle();
-      expect(find.byType(Image), findsNothing);
-      expect(creates, 1);
-      await tester.pumpWidget(const SizedBox());
-      debugDefaultTargetPlatformOverride = null;
-    },
-  );
+    }
+    expect(prepared, isTrue);
+    expect(snapshots, greaterThan(before));
+    await tester.pumpWidget(view(true));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.byType(UiKitView, skipOffstage: false), findsOneWidget);
+    expect(creates, 1);
+    await tester.pumpWidget(view(false));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNothing);
+    expect(creates, 1);
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   testWidgets('both routes freeze native appearance during push and pop', (
     tester,
