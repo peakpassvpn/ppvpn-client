@@ -1,0 +1,63 @@
+name: iOS device check
+
+on:
+  push:
+    branches: [codex/iphone13mini-device-check]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-device-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_BUILD_NUMBER: ${{ github.run_number }}
+      FLUTTER_TARGET: ios
+      IOS_SDK: device
+      PPVPN_SKIP_ANALYZE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          [[ -n "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+      - uses: ./.github/actions/cargo-home
+      - name: No test-only features
+        run: tools/release-features-check.sh --target aarch64-apple-ios -p ppvpn-flutter
+      - id: app
+        name: Build unsigned device app
+        run: apps/flutter/scripts/ci-build.sh
+      - name: Archive app and source provenance
+        env:
+          APP: ${{ steps.app.outputs.bundle }}
+        run: |
+          test -x "$APP/Runner"
+          /usr/libexec/PlistBuddy -c "Add :PPVPNSourceCommit string $GITHUB_SHA" "$APP/Info.plist"
+          mkdir -p device-check
+          ditto -c -k --keepParent "$APP" device-check/Runner.app.zip
+          git rev-parse HEAD > device-check/source-commit.txt
+          shasum -a 256 device-check/Runner.app.zip > device-check/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-device-check
+          path: device-check/
+          if-no-files-found: error
+          retention-days: 3
