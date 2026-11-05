@@ -72,8 +72,10 @@ char *ppvpn_tunnel_start(int32_t tun_fd, const char *socket_path, const char *st
 
 /*
  * Stops the engine (routes are the system's: nothing to undo), closes the
- * socket and its watch connections, removes the socket file. Blocks until
- * the engine and any entered callback finish. Without a running host: nothing.
+ * socket and its watch connections, removes the socket file. Normally waits
+ * for the engine and any entered callback. If a needed shutdown worker cannot
+ * be allocated, runtime cleanup runs in background; callback draining still
+ * completes before return. Without a running host: nothing.
  * No callback can start after this returns. A callback already entered is
  * drained before return, except when stop is called from that callback
  * itself. Keep its context valid through that callback's return as well.
