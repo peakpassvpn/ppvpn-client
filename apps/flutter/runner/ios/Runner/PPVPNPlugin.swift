@@ -38,6 +38,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private weak var browser: SFSafariViewController?
 
   static func register(with registrar: FlutterPluginRegistrar) {
+    PPVPNNativeChrome.register(with: registrar)
     let plugin = PPVPNPlugin()
     let messenger = registrar.messenger()
     #if targetEnvironment(simulator)
@@ -46,6 +47,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/app", binaryMessenger: messenger)
       .setMethodCallHandler { call, result in
         switch call.method {
+        case "nativeChromeAvailable": result(PPVPNNativeChrome.available)
         case "filesDir": result(filesDir())
         case "openUrl": plugin.open(call.arguments as? String, result: result)
         case "closeBrowser":
