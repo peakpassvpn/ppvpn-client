@@ -20,52 +20,82 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   private let log = Logger(subsystem: "com.peakpassvpn.ppvpn.tunnel", category: "tunnel")
   private let queue = DispatchQueue(label: "com.peakpassvpn.ppvpn.tunnel")
+  // Lifecycle state belongs to queue, including asynchronous settings,
+  // path and exit callbacks. A token stays distinct even after a restart.
   private var monitor: NWPathMonitor?
   private var host: TunnelHost?
+  private var run: Run?
+
+  private final class Run {
+    var completion: ((Error?) -> Void)?
+
+    init(_ completion: @escaping (Error?) -> Void) { self.completion = completion }
+
+    func finish(_ error: Error?) {
+      let callback = completion
+      completion = nil
+      callback?(error)
+    }
+  }
 
   override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+    queue.async { [weak self] in
+      guard let self else { return completionHandler(TunnelError("the provider is gone")) }
+      self.shutDown()
+      let run = Run(completionHandler)
+      self.run = run
+      self.start(run)
+    }
+  }
+
+  /// On queue. Delayed system completions must re-enter it and check run.
+  private func start(_ run: Run) {
     guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)
     else {
-      return completionHandler(TunnelError("no App Group container"))
+      return shutDown(error: TunnelError("no App Group container"))
     }
     let network: NEPacketTunnelNetworkSettings
     do {
       network = try TunnelHost.tunSettings().network()
     } catch {
       log.error("tun settings: \(error.localizedDescription, privacy: .public)")
-      return completionHandler(error)
+      return shutDown(error: error)
     }
     setTunnelNetworkSettings(network) { [weak self] error in
-      guard let self else { return completionHandler(TunnelError("the provider is gone")) }
-      if let error {
-        self.log.error("network settings: \(error.localizedDescription, privacy: .public)")
-        return completionHandler(error)
-      }
-      guard let fd = Self.utunDescriptor() else {
-        return completionHandler(TunnelError("no utun descriptor after the network settings"))
-      }
-      // Every path to the host, the first before it starts: it hands that
-      // one to the engine at start (section 11).
-      self.watchNetwork { [weak self] first in
-        guard let self else { return completionHandler(TunnelError("the provider is gone")) }
-        guard first else { return }
-        do {
-          self.host = try TunnelHost.start(
-            fd: fd,
-            socketPath: container.appendingPathComponent("tunnel.sock").path,
-            stateDir: container.appendingPathComponent("tunnel-state").path
-          ) { [weak self] reason in
-            // The host gave up by itself: end the tunnel, then the host.
-            self?.log.error("host exit: \(reason, privacy: .public)")
-            self?.cancelTunnelWithError(TunnelError(reason))
-            self?.queue.async { [weak self] in self?.shutDown() }
+      guard let self else { return run.finish(TunnelError("the provider is gone")) }
+      self.queue.async {
+        guard self.run === run else { return }
+        if let error {
+          self.log.error("network settings: \(error.localizedDescription, privacy: .public)")
+          return self.shutDown(error: error)
+        }
+        guard let fd = Self.utunDescriptor() else {
+          return self.shutDown(error: TunnelError("no utun descriptor after the network settings"))
+        }
+        // Every path to the host, the first before it starts.
+        self.watchNetwork(run: run) { [weak self] first in
+          guard let self, self.run === run, first else { return }
+          do {
+            self.host = try TunnelHost.start(
+              fd: fd,
+              socketPath: container.appendingPathComponent("tunnel.sock").path,
+              stateDir: container.appendingPathComponent("tunnel-state").path
+            ) { [weak self] reason in
+              // Return to Rust promptly: stop drains this callback. The
+              // queued work may run after stop/start, so check its token.
+              self?.queue.async { [weak self] in
+                guard let self, self.run === run else { return }
+                self.log.error("host exit: \(reason, privacy: .public)")
+                self.cancelTunnelWithError(TunnelError(reason))
+                self.shutDown()
+              }
+            }
+            self.log.info("tunnel started")
+            run.finish(nil)
+          } catch {
+            self.log.error("start: \(error.localizedDescription, privacy: .public)")
+            self.shutDown(error: error)
           }
-          self.log.info("tunnel started")
-          completionHandler(nil)
-        } catch {
-          self.log.error("start: \(error.localizedDescription, privacy: .public)")
-          self.stopWatching()
-          completionHandler(error)
         }
       }
     }
@@ -79,39 +109,47 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
   }
 
-  /// On the queue: no more paths, then the host (which blocks until done).
-  private func shutDown() {
+  /// On queue: invalidate callbacks before stopping the monitor and host.
+  private func shutDown(error: Error = TunnelError("the tunnel stopped before startup finished")) {
+    let previous = run
+    run = nil
     stopWatching()
     host?.stop()
     host = nil
+    previous?.finish(error)
   }
 
   override func sleep(completionHandler: @escaping () -> Void) {
-    host?.sleep()
-    completionHandler()
+    queue.async { [weak self] in
+      self?.host?.sleep()
+      completionHandler()
+    }
   }
 
   override func wake() {
-    host?.wake()
+    queue.async { [weak self] in self?.host?.wake() }
   }
 
-  /// Each path goes to the host; `updated` is told whether it was the first.
-  private func watchNetwork(updated: @escaping (Bool) -> Void) {
+  /// Each path goes to this run only; queued updates may outlive cancel.
+  private func watchNetwork(run: Run, updated: @escaping (Bool) -> Void) {
     let monitor = NWPathMonitor()
     var first = true
     monitor.pathUpdateHandler = { [weak self] path in
+      guard let self, self.run === run else { return }
       let state = NetworkState(path).json
       if let error = TunnelHost.networkChanged(state) {
-        self?.log.error("network: \(error, privacy: .public)")
+        self.log.error("network: \(error, privacy: .public)")
       }
-      updated(first)
+      let wasFirst = first
       first = false
+      updated(wasFirst)
     }
-    monitor.start(queue: queue)
     self.monitor = monitor
+    monitor.start(queue: queue)
   }
 
   private func stopWatching() {
+    monitor?.pathUpdateHandler = nil
     monitor?.cancel()
     monitor = nil
   }
