@@ -1401,6 +1401,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - name: Xcode 26
+        if: steps.scope.outputs.flutter == 'true'
+        run: |
+          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          [[ -d "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
       - name: Native tunnel lifecycle
         if: steps.scope.outputs.flutter == 'true'
         run: python3 apps/flutter/checks/ios_tunnel_test.py
