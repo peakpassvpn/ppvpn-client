@@ -52,7 +52,7 @@
 #                        into one, or one of them (release.yml builds each
 #                        architecture's DMG in a job of its own, #459)
 #                        (default: the runner's architecture only)
-#   PPVPN_SKIP_ANALYZE   1: no flutter analyze (ci.yml analyzes on Linux)
+#   PPVPN_SKIP_ANALYZE   1: skip analysis and Dart checks (ci.yml runs both on Linux)
 #   and what rust/src/update.rs and bridge.rs bake into the library:
 #   PPVPN_UPDATE_SITE, PPVPN_RELEASE_CHANNEL, PPVPN_SPARKLE_PUBLIC_KEY,
 #   PPVPN_API_BASE_DEFAULT (required: the backend, an https origin; ci.yml
@@ -318,9 +318,10 @@ esac
 
 flutter_rust_bridge_codegen generate
 grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> rust/src/lib.rs
-# Analysis once per pull request, in ci.yml's Linux flutter job: the
+# Analysis and Dart checks once per pull request, in ci.yml's Linux flutter job: the
 # others set PPVPN_SKIP_ANALYZE=1 (#459).
 if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
+  flutter test checks/vpn_connection_test.dart --no-pub
   flutter analyze --no-fatal-infos
   # Phone constraints and text scaling need no emulator or system VPN.
   # Run once on Linux, after the bridge types have been generated.
