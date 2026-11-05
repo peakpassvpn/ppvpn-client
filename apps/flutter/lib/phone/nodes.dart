@@ -65,7 +65,7 @@ class _PhoneNodesState extends State<PhoneNodes> {
       title: S.current('nodes'),
       nativeActions: [
         NativeChromeAction(id: 'probe-method', label: _methodName, onPress: _nextMethod),
-        NativeChromeAction(id: 'test-all', label: S.current('testAll'), prominent: true,
+        NativeChromeAction(id: 'test-all', label: S.current('testAll'),
           enabled: !_testing && snapshot.standardReady, onPress: () => unawaited(_testAll())),
       ],
       trailing: Row(

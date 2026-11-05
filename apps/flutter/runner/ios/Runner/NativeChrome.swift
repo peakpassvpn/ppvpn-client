@@ -121,7 +121,7 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
       surface.navigation.prefersLargeTitles = large
       item.largeTitleDisplayMode = large ? .always : .never
       let actions = next["actions"] as? [[String: Any]] ?? []
-      item.rightBarButtonItems = actions.reversed().compactMap { action in
+      item.rightBarButtonItems = actions.reversed().compactMap { action -> UIBarButtonItem? in
         guard let id = action["id"] as? String, let label = action["label"] as? String else { return nil }
         let symbol = (action["symbol"] as? String).flatMap(UIImage.init(systemName:))
         let command = UIAction(title: label, image: symbol) { [weak self] _ in self?.emit(id) }
@@ -170,6 +170,7 @@ private final class ChromeSurface: UIView {
     self.kind = kind
     super.init(frame: frame)
     backgroundColor = .clear
+    navigation.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
     // UIKit supplies Liquid Glass. Do not replace its appearance/background.
     // This embedded controller owns only the existing bottom phone tabs.
     tabController.traitOverrides.horizontalSizeClass = .compact
