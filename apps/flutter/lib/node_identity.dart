@@ -63,22 +63,27 @@ class NodeIdentity extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (!phone && nodeKind(node) != null)
-          Row(
-            children: [
-              Flexible(
-                child: Text(
-                  nodeDisplayName(node),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: t.body.copyWith(
-                    fontWeight: strong ? FontWeight.w600 : FontWeight.w500,
+        if (tag || (!phone && nodeKind(node) != null))
+          LayoutBuilder(
+            builder: (context, box) => Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    nodeDisplayName(node),
+                    maxLines: phone ? 2 : 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: (phone ? t.phoneBody : t.body).copyWith(
+                      fontWeight: strong ? FontWeight.w600 : FontWeight.w500,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              Flexible(child: NodeInfoTag(node: node)),
-            ],
+                const SizedBox(width: 6),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: box.maxWidth * 0.45),
+                  child: NodeInfoTag(node: node),
+                ),
+              ],
+            ),
           )
         else
           Text(
@@ -98,11 +103,6 @@ class NodeIdentity extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: t.monoText(12, color: t.t3),
             ),
-          ),
-        if (tag)
-          Padding(
-            padding: const EdgeInsets.only(top: 5),
-            child: NodeInfoTag(node: node),
           ),
       ],
     );

@@ -228,6 +228,13 @@ pub async fn refresh_nodes() -> Result<(), String> {
         .await
 }
 
+/// Native mobile path changes, including the initial path and offline state.
+pub async fn set_mobile_network(json: String) -> Result<(), String> {
+    bridge::get()?
+        .call(move |client| async move { client.set_mobile_network(json) })
+        .await
+}
+
 /// Release UI-only resources before iOS suspension, restore on foreground.
 /// The independent system VPN continues running.
 pub async fn set_app_foreground(active: bool) -> Result<(), String> {

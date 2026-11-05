@@ -45,7 +45,24 @@ class AppState with WidgetsBindingObserver {
     : fixed = false,
       snapshot = ValueNotifier(initial) {
     _refreshNodes(initial);
-    if (Platform.isIOS) WidgetsBinding.instance.addObserver(this);
+    if (Platform.isIOS) {
+      WidgetsBinding.instance.addObserver(this);
+      _network = const EventChannel('com.peakpassvpn.ppvpn/network-state')
+          .receiveBroadcastStream()
+          .listen(
+            (event) {
+              if (event is! String) return;
+              _networkUpdates = _networkUpdates
+                  .then((_) => rust.setMobileNetwork(json: event))
+                  .catchError((Object error) {
+                    debugPrint('mobile network: $error');
+                  });
+            },
+            onError: (Object error) {
+              debugPrint('mobile network stream: $error');
+            },
+          );
+    }
     if (mobile) SystemVpn.listen();
     unawaited(_pump());
   }
@@ -159,6 +176,8 @@ class AppState with WidgetsBindingObserver {
     }
   }
 
+  StreamSubscription<dynamic>? _network;
+  Future<void> _networkUpdates = Future.value();
   Future<void> _lifecycle = Future.value();
   static const _native = MethodChannel('com.peakpassvpn.ppvpn/app');
 
@@ -371,6 +390,7 @@ class AppState with WidgetsBindingObserver {
     if (_stopped) return;
     _stopped = true;
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_network?.cancel());
     rust.shutdown();
   }
 }

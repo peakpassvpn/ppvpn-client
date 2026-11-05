@@ -802,7 +802,7 @@ impl Client {
         let weak = self.this.clone();
         let deliver = move |result: ProbeResult| {
             if let Some(error) = &result.error {
-                tracing::warn!(method = ?result.method, error_code = ?error.code, "node probe failed");
+                tracing::warn!(method = ?result.method, error_code = ?error.code, detail = %error.detail, "node probe failed");
             }
             // A speed test of the current node also refreshes its latency.
             if let Some(client) = session::ClientRef::upgrade(&weak) {

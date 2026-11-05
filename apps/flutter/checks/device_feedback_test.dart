@@ -140,6 +140,14 @@ void main() {
     );
     expect(find.text('Los Angeles'), findsOneWidget);
     expect(find.text('203.0.113.12'), findsOneWidget);
+    final nameRect = tester.getRect(find.text('Los Angeles'));
+    final tagRect = tester.getRect(find.text('Premium'));
+    expect(tagRect.center.dy, closeTo(nameRect.center.dy, 1));
+    expect(
+      tester.getRect(find.text('203.0.113.12')).top,
+      greaterThanOrEqualTo(nameRect.bottom),
+    );
+
     await tester.tap(find.text('Premium'));
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('出口 IP: 203.0.113.12'), findsOneWidget);

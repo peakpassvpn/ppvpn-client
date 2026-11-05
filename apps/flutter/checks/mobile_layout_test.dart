@@ -187,7 +187,7 @@ void main() {
                 final rowTitle = find.text(app.nodes.value.first.name);
                 final row = find
                     .ancestor(of: rowTitle, matching: find.byType(Row))
-                    .first;
+                    .last;
                 final tier = find.descendant(
                   of: row,
                   matching: find.byType(NodeInfoTag),

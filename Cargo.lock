@@ -2845,6 +2845,7 @@ dependencies = [
  "hex",
  "hmac",
  "iana-time-zone",
+ "libc",
  "ppvpn-account",
  "ppvpn-core",
  "ppvpn-engine-host",

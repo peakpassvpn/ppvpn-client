@@ -230,7 +230,7 @@ open(path, "w").write(text)
 
 delegate = "ios/Runner/AppDelegate.swift"
 code = open(delegate).read()
-plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["PPVPNPlugin.swift", "NativeChrome.swift"])
+plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
 imports = [line for line in plugin.splitlines() if line.startswith("import ")]
 body = "\n".join(line for line in plugin.splitlines() if not line.startswith("import "))
 code, registered = re.subn(

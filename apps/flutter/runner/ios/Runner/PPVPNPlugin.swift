@@ -24,6 +24,7 @@
 
 import Flutter
 import NetworkExtension
+import Network
 import SafariServices
 import UIKit
 import os
@@ -36,6 +37,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var sink: FlutterEventSink?
   private var observer: NSObjectProtocol?
   private weak var browser: SFSafariViewController?
+  private let network = PPVPNAppNetworkMonitor()
   private var backgroundTasks: [Int: UIBackgroundTaskIdentifier] = [:]
 
   static func register(with registrar: FlutterPluginRegistrar) {
@@ -62,6 +64,8 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         default: result(FlutterMethodNotImplemented)
         }
       }
+    FlutterEventChannel(name: "com.peakpassvpn.ppvpn/network-state", binaryMessenger: messenger)
+      .setStreamHandler(plugin.network)
     FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/vpn", binaryMessenger: messenger)
       .setMethodCallHandler(plugin.handle)
     FlutterEventChannel(name: "com.peakpassvpn.ppvpn/vpn-state", binaryMessenger: messenger)
@@ -278,3 +282,32 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
   }
 #endif
+
+/// The UI-owned standard engine needs the same native network feed as the
+/// independent packet tunnel. Deliver the initial path as well as changes.
+private final class PPVPNAppNetworkMonitor: NSObject, FlutterStreamHandler {
+  private var monitor: NWPathMonitor?
+  private var generation = 0
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    monitor?.cancel()
+    generation += 1
+    let current = generation
+    let watch = NWPathMonitor()
+    watch.pathUpdateHandler = { [weak self] path in
+      let json = NetworkState(path).json
+      DispatchQueue.main.async { [weak self] in
+        guard self?.generation == current else { return }
+        events(json)
+      }
+    }
+    monitor = watch
+    watch.start(queue: DispatchQueue(label: "com.peakpassvpn.ppvpn.app-network"))
+    return nil
+  }
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    generation += 1
+    monitor?.cancel()
+    monitor = nil
+    return nil
+  }
+}

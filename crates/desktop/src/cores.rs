@@ -277,6 +277,18 @@ impl Client {
         self.sync_cores(Trigger::SessionEnded).await;
     }
 
+    /// The native mobile host supplies the real physical network; sail's
+    /// desktop monitor cannot discover it inside the iOS sandbox.
+    pub fn set_mobile_network(&self, json: String) -> Result<(), ClientError> {
+        let state = serde_json::from_str::<ppvpn_core::NetworkState>(&json).map_err(|error| {
+            ClientErrorInfo::new(
+                ErrorCode::StandardCoreFailed,
+                format!("MOBILE_NETWORK_INVALID: {error}"),
+            )
+        })?;
+        self.standard.network_changed(state).map_err(Into::into)
+    }
+
     /// iOS suspends its UI process while the packet-tunnel extension keeps
     /// running. Release the in-process engine's file lock before suspension;
     /// profile refreshes must not restart it until the app returns.
