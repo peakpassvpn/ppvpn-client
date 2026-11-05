@@ -25,9 +25,10 @@ connections.
 The host's routes stay as they are but for one: TEST-NET-3 (203.0.113.0/24)
 into the TUN, which the loads dial. fakenode (-redirect) sends the node's
 dials to that range to its own sinks on loopback, so nothing loops and
-nothing leaves the host, except: the rule sets, downloaded by the engine
-from GitHub (the public sets the backend serves, about 1 MB in all), and the
-DNS scenario's DoT queries, through the node to public resolvers.
+nothing leaves the host except the rule sets downloaded from GitHub. DNS
+uses real verified TLS through the node to a local responder with a 100 ms
+delay. --dns-source public separately diagnoses the public resolver path;
+it retains the same response checks but is not a repeatable memory load.
 
 Scenarios, in this order, each a MARK line with the peak since the previous
 one (see ne-mem's doc):
@@ -47,8 +48,11 @@ one (see ne-mem's doc):
 Prints one NEMEM JSON line per scenario and a Markdown table at the end
 (also appended to $GITHUB_STEP_SUMMARY when set). A scenario whose load
 failed (a connection refused, an echo short, a download empty, DNS mostly
-unanswered) is marked ✗: its numbers are not the load's. Exits 1 when one
-of the first variant's did.
+unanswered) is marked ✗: its numbers are not the load's. Exits 1 when the
+default (or, with --no-default, the first selected) variant fails. The ios
+variant is also checked: refused connections above its cap are expected,
+but anything other than exactly 128 completed echoes above the cap, a
+stalled load, or failure below the cap still fails the run.
 """
 
 import argparse
@@ -56,6 +60,7 @@ import hashlib
 import json
 import os
 import platform
+import select
 import shutil
 import socket
 import struct
@@ -98,6 +103,8 @@ VARIANTS = {
                                             "netstack.read_ahead=32"]},
     "budget": {"profile": "desktop", "set": ["netstack.budget=mobile"]},
     "mobile": {"profile": "mobile"},
+    # The shipped iOS host combines mobile tuning with this cap (#388).
+    "ios": {"profile": "mobile", "set": ["inbound.max_connections=128"]},
     # Not the profile's: the sessions a 35 MiB budget carries at about 150
     # KiB each (#388); the dispatcher refuses the rest, the TUN's included.
     "cap": {"profile": "desktop", "set": ["inbound.max_connections=128"]},
@@ -161,12 +168,14 @@ def profile(revision, ports, sets):
 
 
 class NeMem:
-    def __init__(self, binary, work, workers, platform_name, variant, settings, dhat=None):
+    def __init__(self, binary, work, workers, platform_name, variant, settings, dhat=None, trust_bundle=None):
         self.state = os.path.join(work, "state")
         os.makedirs(self.state, mode=0o700, exist_ok=True)
         self.log_path = os.path.join(work, f"ne-mem-{variant}-w{workers}.log")
         self.dhat = dhat
         env = dict(os.environ)
+        if trust_bundle:
+            env["SSL_CERT_FILE"] = trust_bundle
         env.pop("PPVPN_LAB_SAIL_SETTINGS", None)
         if settings:
             env["PPVPN_LAB_SAIL_SETTINGS"] = settings
@@ -301,59 +310,171 @@ class PeakCounter:
         return self.peak
 
 
+DNS_RESPONSE_TIMEOUT = 11  # core DNS_TIMEOUT is 10s; allow delivery/scheduling.
+DNS_PORT = 53
+
+
+def node_command(args, work):
+    return [args.fakenode, "-dir", work, "-redirect", TEST_NET,
+            *(["-local-dns"] if args.dns_source == "local" else [])]
+
+
+def local_trust_bundle(args, ports, work):
+    if args.dns_source != "local":
+        return None
+    if not ports.get("local_dns") or ports.get("dns_delay_ms") != 100:
+        raise RuntimeError("fakenode lacks the local 100 ms DoT fixture; rebuild the benchmark tools")
+    # A separate process uses the same native loader as Sail. Its inherited
+    # SSL_CERT_FILE/DIR are honored, including macOS native trust. Only the
+    # measured engine receives the combined bundle; no global trust changes.
+    bundle = os.path.join(work, "dns-trust.pem")
+    result = subprocess.run([args.ne_mem, "--export-trust-bundle", bundle,
+                             "--extra-ca", ports["certificate"]],
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise RuntimeError(f"export process-only DNS trust: {result.stderr.strip()}")
+    return bundle
+
+
+def node_dns_stats(node):
+    node.stdin.write("dns-stats\n")
+    node.stdin.flush()
+    if not select.select([node.stdout], [], [], 5)[0]:
+        raise RuntimeError("fakenode DNS statistics timed out")
+    try:
+        stats = json.loads(node.stdout.readline())
+        if not isinstance(stats, dict) or any(type(stats.get(key)) is not int or stats[key] < 0
+               for key in ("connections", "queries", "replies")):
+            raise ValueError("missing or invalid counters")
+        return stats
+    except (ValueError, TypeError) as error:
+        raise RuntimeError(f"invalid fakenode DNS statistics: {error}") from error
+
+
+def fixture_load(node, before, answered):
+    # WriteMsg can complete just before its success counter is incremented.
+    deadline = time.monotonic() + 0.5
+    while True:
+        after = node_dns_stats(node)
+        delta = {"fixture_" + key: after[key] - before[key]
+                 for key in ("queries", "replies", "connections")}
+        if delta["fixture_replies"] >= answered or time.monotonic() >= deadline:
+            return delta
+        time.sleep(0.01)
+
+
 def dns_burst(count, rate=400):
     """count A queries for distinct names under example.net, through the
     TUN's DNS (any address port 53 is hijacked), rate a second; returns the
-    answers that came back."""
+    completed resolutions (including NXDOMAIN) that came back."""
+    questions = []
+    for i in range(count):
+        name = f"n{i}-{os.getpid()}.example.net"
+        questions.append(b"".join(bytes([len(p)]) + p.encode() for p in name.split("."))
+                         + b"\0" + struct.pack(">HH", 1, 1))
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(0.2)
-    answered = 0
+    answered = set()
     stop = threading.Event()
+    complete = threading.Event()
 
     def receive():
-        nonlocal answered
         while not stop.is_set():
             try:
-                sock.recvfrom(4096)
-                answered += 1
+                data, _ = sock.recvfrom(4096)
+                if len(data) < 12:
+                    continue
+                query_id, flags, qdcount = struct.unpack(">HHH", data[:6])
+                # Random names may legitimately be NXDOMAIN. SERVFAIL,
+                # REFUSED, truncation and unrelated replies are not a
+                # successful DNS load, even when the response ID matches.
+                if (flags & 0x8000 and not (flags & 0x7A00)
+                        and (flags & 0xF) in (0, 3) and qdcount == 1
+                        and query_id < count
+                        and data[12:12 + len(questions[query_id])].lower()
+                        == questions[query_id]):
+                    answered.add(query_id)
+                    if len(answered) == count:
+                        complete.set()
             except OSError:
                 pass
     t = threading.Thread(target=receive, daemon=True)
     t.start()
-    for i in range(count):
-        name = f"n{i}-{os.getpid()}.example.net"
+    for i, question in enumerate(questions):
         q = struct.pack(">HHHHHH", i & 0xFFFF, 0x0100, 1, 0, 0, 0)
-        q += b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\0"
-        q += struct.pack(">HH", 1, 1)
-        sock.sendto(q, (DNS_IP, 53))
+        q += question
+        sock.sendto(q, (DNS_IP, DNS_PORT))
         time.sleep(1 / rate)
-    time.sleep(5)
+    # The old 5s cut-off counted queries still within the core's 10s
+    # resolution deadline as failures. Duplicated replies must not hide
+    # missing queries either.
+    complete.wait(DNS_RESPONSE_TIMEOUT)
     stop.set()
     t.join()
     sock.close()
-    return answered
+    return len(answered)
 
 
 def failure(row):
     """Why the scenario's load failed, or None."""
     load = row.get("load")
     if load is not None:
+        label = row.get("label", "")
+        if row.get("variant") == "ios" and label.startswith("conns"):
+            required = min(int(label.removeprefix("conns")), 128)
+            completed = load.get("completed_echoes", 0)
+            if completed < required:
+                return f"{completed} complete echoes; need {required}"
+            if completed > 128:
+                return f"{completed} complete echoes exceed the iOS cap of 128"
         if "error" in load or load.get("failed_connections"):
             return f"{load.get('failed_connections', '?')} connections failed"
+        if load.get("stalled_connections"):
+            return f"{load['stalled_connections']} connections stalled"
         if load.get("bytes_received", 0) == 0:
             return "nothing received"
         if load.get("bytes_sent") and load["bytes_received"] < load["bytes_sent"]:
             return f"echo short: {load['bytes_received']} of {load['bytes_sent']} bytes"
     if "answered" in row and row["answered"] < 0.95 * row["queries"]:
         return f"DNS: {row['answered']} of {row['queries']} answered"
+    if row.get("dns_source") == "local":
+        for key in ("fixture_queries", "fixture_replies"):
+            if row.get(key, 0) < row["answered"]:
+                return f"DNS: local fixture {key} does not cover the validated replies"
     return None
 
 
-def run(args, variant, settings, workers, ports, sizes, work):
+def expected_ios_refusal(row):
+    """An overloaded capped TUN can accept TCP then refuse the stream.
+
+    Keep the row's ✗ (the requested load did not all complete), but do not
+    fail CI for the intended cap. A dead/stalled tunnel still fails, as do
+    all scenarios at or below the cap and the subsequent recovery loads.
+    """
+    label = row["label"]
+    if row["variant"] != "ios" or not label.startswith("conns"):
+        return False
+    requested = int(label.removeprefix("conns"))
+    load = row.get("load", {})
+    return (requested > 128 and "error" not in load
+            and load.get("completed_echoes", 0) == 128
+            and not load.get("stalled_connections", 0)
+            and load.get("failed_connections", 0) <= requested - 128)
+
+
+def failed_loads(rows, primary, dhat=False):
+    """Failures that invalidate the measurement, including ios when selected."""
+    return [row for row in rows
+            if row["variant"] in (primary, "ios") and row["failed"]
+            and not (dhat and row["failed"].startswith("DNS:"))
+            and not expected_ios_refusal(row)]
+
+
+def run(args, variant, settings, workers, ports, sizes, work, node, trust_bundle):
     rows = []
     plat = "ios" if sys.platform == "darwin" else "android"
     before = interfaces()
-    engine = NeMem(args.ne_mem, work, workers, plat, variant, settings, args.dhat)
+    engine = NeMem(args.ne_mem, work, workers, plat, variant, settings, args.dhat, trust_bundle)
     try:
         def mark(label, **extra):
             row = engine.call("mark", label=label)
@@ -382,12 +503,12 @@ def run(args, variant, settings, workers, ports, sizes, work):
                           "-duration", f"{args.load_seconds}s")
             mark(f"conns{conns}", load=res)
 
-        for node in ("anytls", "ss"):
-            engine.call("select", node=node)
+        for node_id in ("anytls", "ss"):
+            engine.call("select", node=node_id)
             res = loadgen(args, "-target", f"{TARGET_IP}:{ports['source_port']}", "-mode", "stream",
                           "-direction", "down", "-conns", "8", "-rate-mbit", "0",
                           "-duration", f"{args.load_seconds}s")
-            mark(f"download_{node}", load=res)
+            mark(f"download_{node_id}", load=res)
 
         holder = {}
         th = threading.Thread(target=lambda: holder.update(load=loadgen(
@@ -403,11 +524,16 @@ def run(args, variant, settings, workers, ports, sizes, work):
         th.join()
         mark("switch", load=holder.get("load"))
 
-        # The AnyTLS sessions the burst's upstream queries (DoT through the
-        # node) open, which the session cap may or may not count.
+        # All established AnyTLS sessions during the burst, including idle
+        # pooled sessions from prior loads. fixture_connections separately
+        # counts the local DoT responder's TLS connections.
+        before_dns = node_dns_stats(node) if args.dns_source == "local" else None
         sessions = PeakCounter(lambda: node_connections(ports["anytls_port"]))
         answered = dns_burst(args.dns_queries, args.dns_rate)
-        mark("dns", queries=args.dns_queries, answered=answered, node_sessions_peak=sessions.stop())
+        sessions_peak = sessions.stop()
+        fixture = fixture_load(node, before_dns, answered) if before_dns is not None else {}
+        mark("dns", queries=args.dns_queries, answered=answered, node_sessions_peak=sessions_peak,
+             dns_source=args.dns_source, **fixture)
 
         apply_rule_sets(engine, "ne-mem#2", ports, 1, sizes)
         mark("ruleset_refresh")
@@ -428,11 +554,13 @@ def run(args, variant, settings, workers, ports, sizes, work):
     return rows
 
 
-def table(rows, sizes):
+def table(rows, sizes, dns_source="local"):
     lines = [f"Budget: {BUDGET_MIB} MiB for ppvpn-core and sail. "
              f"Host: {platform.system()} {platform.machine()}, {os.cpu_count()} CPUs. "
              f"Rule sets (bytes, revision 1 / 2): "
              + ", ".join(f"{k} {sizes[0][k]}/{sizes[1][k]}" for k in RULE_SETS) + ".",
+             f"DNS source: {dns_source}" + (" (verified TLS, 100 ms local replies)." if dns_source == "local"
+                                           else " (public-path diagnostic; latency is uncontrolled)."),
              "",
              "| variant | workers | scenario | peak MiB | after MiB | heap peak MiB | heap after MiB | threads "
              "| RSS peak / resident MiB | source | load |",
@@ -458,6 +586,8 @@ def main():
     parser.add_argument("--load-seconds", type=int, default=20)
     parser.add_argument("--dns-queries", type=int, default=2000)
     parser.add_argument("--dns-rate", type=int, default=400, help="DNS queries a second")
+    parser.add_argument("--dns-source", choices=("local", "public"), default="local",
+                        help="local verified DoT for repeatable memory loads; public for a separate path diagnostic")
     parser.add_argument("--conns", default="100,250,500")
     parser.add_argument("--variant", action="append", default=[], metavar="NAME=SETTINGS",
                         help="also run with these sail start settings (JSON), or VARIANTS[NAME]; repeatable")
@@ -471,21 +601,24 @@ def main():
         settings = settings or json.dumps(VARIANTS[name])
         json.loads(settings)
         variants.append((name, settings))
+    if not variants:
+        parser.error("--no-default needs at least one --variant")
     if os.geteuid() != 0:
         sys.exit("run as root: sail opens the TUN")
 
     sizes = [{}, {}]  # the rule sets' sizes, as last hashed
     work = tempfile.mkdtemp(prefix="ne-mem-")
-    node = subprocess.Popen([args.fakenode, "-dir", work, "-redirect", TEST_NET],
+    node = subprocess.Popen(node_command(args, work),
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     rows = []
     try:
         ports = json.loads(node.stdout.readline())
+        trust_bundle = local_trust_bundle(args, ports, work)
         for variant, settings in variants:
             for workers in (int(w) for w in args.workers.split(",")):
                 # A fresh state directory each run: start downloads the rule sets.
                 shutil.rmtree(os.path.join(work, "state"), ignore_errors=True)
-                rows += run(args, variant, settings, workers, ports, sizes, work)
+                rows += run(args, variant, settings, workers, ports, sizes, work, node, trust_bundle)
     finally:
         node.stdin.close()
         node.wait(timeout=10)
@@ -494,7 +627,7 @@ def main():
                 dest = shutil.copy(os.path.join(work, name), os.getcwd())
                 os.chmod(dest, 0o644)
         shutil.rmtree(work, ignore_errors=True)
-    report = table(rows, sizes)
+    report = table(rows, sizes, args.dns_source)
     print(report)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
@@ -502,13 +635,15 @@ def main():
     if args.out:
         with open(args.out, "w") as f:
             json.dump({"rows": rows, "rule_set_bytes": sizes,
-                       "variants": dict(variants)}, f, indent=1)
+                       "variants": dict(variants), "dns_source": args.dns_source,
+                       "dns_delay_ms": 100 if args.dns_source == "local" else None}, f, indent=1)
         os.chmod(args.out, 0o644)
     # dhat slows the engine enough that the DNS burst falls short (#388):
     # under --dhat only a failed transfer counts, the DNS row still shows ✗.
-    if any(r["failed"] and not (args.dhat and r["failed"].startswith("DNS:"))
-           for r in rows if r["variant"] == "default"):
-        sys.exit("a load failed on the default variant (✗ above)")
+    failed = failed_loads(rows, variants[0][0], bool(args.dhat))
+    if failed:
+        names = ", ".join(f"{r['variant']}/{r['label']}" for r in failed)
+        sys.exit(f"a required load failed: {names} (✗ above)")
 
 
 if __name__ == "__main__":
