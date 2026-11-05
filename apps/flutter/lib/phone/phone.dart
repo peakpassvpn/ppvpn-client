@@ -586,9 +586,7 @@ class PhoneBell extends StatelessWidget {
 /// goes back with a swipe from the screen's left edge (#535). Elsewhere it
 /// slides in from the end over [Tokens.motionPage]. Routes sit beside the
 /// app's home, so the page gets forui's theme and the body text style here.
-Future<T?> pushPhonePage<T>(BuildContext context, Widget page) async {
-  await NativeChromeView.prepareTransition();
-  if (!context.mounted) return null;
+Future<T?> pushPhonePage<T>(BuildContext context, Widget page) {
   Widget themed(BuildContext context) {
     final t = Tokens.of(context);
     return FTheme(

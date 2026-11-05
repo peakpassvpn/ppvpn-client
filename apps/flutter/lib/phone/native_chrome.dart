@@ -66,22 +66,6 @@ class NativeChromeView extends StatefulWidget {
     this.frozen = false,
   });
   final bool frozen;
-  static final Set<_NativeChromeViewState> _views = {};
-  static Future<void> prepareTransition() async {
-    await Future.wait(
-      _views
-          .where((view) => view.mounted && !view.widget.frozen)
-          .map(
-            (view) => view.widget.kind == 'tabs'
-                ? view._capture()
-                : view._captureWork ??
-                      (view._snapshot == null
-                          ? view._capture()
-                          : Future<void>.value()),
-          ),
-    );
-  }
-
   final String kind;
   final Map<String, Object?> configuration;
   final ValueChanged<String> onAction;
@@ -94,13 +78,8 @@ class _NativeChromeViewState extends State<NativeChromeView> {
   MethodChannel? _channel;
   String? _configuration;
   MemoryImage? _snapshot;
+  String? _snapshotConfiguration;
   Future<void>? _captureWork;
-
-  @override
-  void initState() {
-    super.initState();
-    NativeChromeView._views.add(this);
-  }
 
   Future<void> _capture() {
     if (_captureWork case final work?) return work;
@@ -121,8 +100,13 @@ class _NativeChromeViewState extends State<NativeChromeView> {
         final image = MemoryImage(bytes);
         await precacheImage(image, context);
         if (!mounted) return;
-        if (configuration != _configuration) continue;
-        setState(() => _snapshot = image);
+        if (configuration != _configuration ||
+            configuration != jsonEncode(widget.configuration))
+          continue;
+        setState(() {
+          _snapshot = image;
+          _snapshotConfiguration = configuration;
+        });
         return;
       }
     } on PlatformException catch (error) {
@@ -152,9 +136,7 @@ class _NativeChromeViewState extends State<NativeChromeView> {
       _configuration = configuration;
       // Cache the exact native appearance while idle; route motion uses this
       // Flutter image instead of swapping to a differently styled header.
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => unawaited(_capture()),
-      );
+      _warmSnapshot();
     } on PlatformException catch (error) {
       debugPrint('native chrome update: ${error.code}');
     } on MissingPluginException {
@@ -162,20 +144,24 @@ class _NativeChromeViewState extends State<NativeChromeView> {
     }
   }
 
+  // Cache work is best effort and never gates Navigator.push. Request a frame
+  // explicitly so an otherwise idle screen also prepares its native image.
+  void _warmSnapshot() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_capture()));
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
   @override
   void didUpdateWidget(covariant NativeChromeView oldWidget) {
     super.didUpdateWidget(oldWidget);
     unawaited(_update());
     if (oldWidget.frozen && !widget.frozen) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => unawaited(_capture()),
-      );
+      _warmSnapshot();
     }
   }
 
   @override
   void dispose() {
-    NativeChromeView._views.remove(this);
     _channel?.setMethodCallHandler(null);
     super.dispose();
   }
@@ -185,7 +171,10 @@ class _NativeChromeViewState extends State<NativeChromeView> {
     fit: StackFit.expand,
     children: [
       Offstage(
-        offstage: widget.frozen && _snapshot != null,
+        offstage:
+            widget.frozen &&
+            _snapshot != null &&
+            _snapshotConfiguration == jsonEncode(widget.configuration),
         child: UiKitView(
           viewType: 'com.peakpassvpn.ppvpn/native-${widget.kind}',
           creationParams: widget.configuration,
@@ -197,7 +186,9 @@ class _NativeChromeViewState extends State<NativeChromeView> {
           onPlatformViewCreated: _created,
         ),
       ),
-      if (widget.frozen && _snapshot != null)
+      if (widget.frozen &&
+          _snapshot != null &&
+          _snapshotConfiguration == jsonEncode(widget.configuration))
         ExcludeSemantics(
           child: IgnorePointer(
             child: Image(
