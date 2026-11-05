@@ -347,7 +347,7 @@ mod tests {
         let mut node = profile["nodes"][0].clone();
         let mut ingress = node["ingresses"][0].clone();
         ingress["endpoint"] =
-            json!({"ip":"127.0.0.1","port":listener.local_addr().unwrap().port()});
+            json!({"domain":"127.0.0.1","port":listener.local_addr().unwrap().port()});
         node["ingresses"] = json!([ingress]);
         let id = node["id"].as_str().unwrap().to_string();
         profile["nodes"] = json!([node]);
