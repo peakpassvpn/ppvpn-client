@@ -17,7 +17,7 @@ import 'package:ppvpn_flutter/sample.dart';
 import 'package:ppvpn_flutter/settings.dart';
 import 'package:ppvpn_flutter/src/rust/api.dart' as rust;
 import 'package:ppvpn_flutter/theme.dart';
-import 'package:ppvpn_flutter/widgets.dart' show Pressable;
+import 'package:ppvpn_flutter/widgets.dart' show Pressable, lineNames;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -80,6 +80,33 @@ void main() {
       'Los Angeles',
     );
   });
+  test(
+    'route names preserve backend labels and never expose endpoint keys',
+    () {
+      final named = rust.UiNode(
+        id: 'n',
+        name: 'Test',
+        entryKey: 'standard',
+        udp: true,
+        lines: const [
+          rust.UiLine(key: 'internal-a', label: '广州移动'),
+          rust.UiLine(key: 'internal-b'),
+        ],
+      );
+      expect(lineNames(named), ['广州移动', '备用线路 1']);
+      final unnamed = rust.UiNode(
+        id: 'n',
+        name: 'Test',
+        entryKey: 'standard',
+        udp: true,
+        lines: const [
+          rust.UiLine(key: 'internal-a'),
+          rust.UiLine(key: 'internal-b'),
+        ],
+      );
+      expect(lineNames(unnamed), ['首选线路', '备用线路 1']);
+    },
+  );
   test('traffic starts with a full zero-filled window', () {
     final app = AppState.fixed(sampleState().snapshot.value);
     expect(app.history.value.length, AppState.historyLength);
@@ -104,6 +131,14 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final app = sampleState();
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      const channel = MethodChannel('com.peakpassvpn.ppvpn/app');
+      messenger.setMockMethodCallHandler(
+        channel,
+        (_) async => throw MissingPluginException(),
+      );
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
       await tester.pumpWidget(host(PhoneNodes(app: app)));
       await tester.pump();
       expect(find.text('Ping'), findsOneWidget);
@@ -170,6 +205,45 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets(
+    'native route popup applies selection and preserves pins on cancel',
+    (tester) async {
+      tester.view.physicalSize = const Size(375, 812);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final app = sampleState();
+      final channel = const MethodChannel('com.peakpassvpn.ppvpn/app');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final requests = <Map<dynamic, dynamic>>[];
+      int? answer = 2;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'chooseLine') {
+          requests.add(call.arguments as Map);
+          return answer;
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      await tester.pumpWidget(host(PhoneNodes(app: app)));
+      await tester.longPress(find.byKey(const ValueKey('node-hk1')));
+      await tester.pumpAndSettle();
+      expect(requests.single['options'], [
+        '自动选择（故障切换）',
+        'HKG-A',
+        'HKG-B',
+        'SZX-R',
+      ]);
+      expect(app.pinnedLine('hk1'), 'HKG-B');
+      expect(find.text('选择实际线路'), findsNothing);
+      answer = null;
+      await tester.longPress(find.byKey(const ValueKey('node-hk1')));
+      await tester.pumpAndSettle();
+      expect(requests.last['selected'], 2);
+      expect(app.pinnedLine('hk1'), 'HKG-B');
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   testWidgets('restoring a stored session never shows sign-in', (tester) async {
     final app = AppState.fixed(
       const rust.UiSnapshot(

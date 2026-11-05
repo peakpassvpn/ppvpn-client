@@ -56,6 +56,7 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         case "endBackgroundTask":
           if let raw = call.arguments as? Int { plugin.endBackgroundTask(raw) }
           result(nil)
+        case "chooseLine": plugin.chooseLine(call.arguments, result: result)
         case "openUrl": plugin.open(call.arguments as? String, result: result)
         case "closeBrowser":
           plugin.browser?.dismiss(animated: true)
@@ -113,6 +114,27 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     guard let dir else { return nil }
     try? files.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir.path
+  }
+
+  private func chooseLine(_ arguments: Any?, result: @escaping FlutterResult) {
+    guard let args = arguments as? [String: Any],
+      let options = args["options"] as? [String], !options.isEmpty,
+      let top = Self.topController(), top.presentedViewController == nil else {
+      return result(FlutterError(code: "line-picker-unavailable", message: "Unable to show route choices", details: nil))
+    }
+    let selected = (args["selected"] as? NSNumber)?.intValue ?? 0
+    let sheet = UIAlertController(title: args["title"] as? String,
+      message: args["message"] as? String, preferredStyle: .actionSheet)
+    for (index, label) in options.enumerated() {
+      sheet.addAction(UIAlertAction(title: index == selected ? "✓ " + label : label, style: .default) { _ in result(index) })
+    }
+    sheet.addAction(UIAlertAction(title: args["cancel"] as? String, style: .cancel) { _ in result(nil) })
+    // UIAlertController uses a popover on iPad; provide a valid source anchor.
+    if let popover = sheet.popoverPresentationController {
+      popover.sourceView = top.view
+      popover.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.maxY - top.view.safeAreaInsets.bottom, width: 1, height: 1)
+    }
+    top.present(sheet, animated: true)
   }
 
   private func open(_ text: String?, result: @escaping FlutterResult) {

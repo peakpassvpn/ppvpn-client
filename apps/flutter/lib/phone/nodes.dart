@@ -11,8 +11,9 @@ import '../icons.dart';
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart' show CupertinoSliverRefreshControl;
-import 'package:flutter/services.dart' show TextInputAction;
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:forui/forui.dart' show FTheme;
 
 import '../app_state.dart';
 import '../node_identity.dart';
@@ -594,23 +595,89 @@ class _NodeRow extends StatelessWidget {
   }
 }
 
-void openNodeLines(BuildContext context, AppState app, rust.UiNode node) {
+Future<void> openNodeLines(
+  BuildContext context,
+  AppState app,
+  rust.UiNode node,
+) async {
   final s = S.current;
+  final labels = [s('autoLine'), ...lineNames(node)];
   final pinned = app.pinnedLine(node.id);
-  pushPhoneChoice<String?>(
-    context,
-    title: s('chooseLine'),
-    options: [
-      (null, s('autoLine')),
-      for (final (index, line) in node.lines.indexed)
-        (
-          line.key,
-          line.label?.isNotEmpty == true
-              ? line.label!
-              : s('lineN', {'n': '${index + 1}'}),
+  final selected = pinned == null
+      ? 0
+      : node.lines.indexWhere((line) => line.key == pinned) + 1;
+  int? choice;
+  try {
+    choice = await const MethodChannel('com.peakpassvpn.ppvpn/app')
+        .invokeMethod<int>('chooseLine', {
+          'title': s('chooseLine'),
+          'message':
+              node.lines.any((line) => line.label?.trim().isNotEmpty != true)
+              ? s('lineNameMissing')
+              : nodeDisplayName(node),
+          'options': labels,
+          'selected': selected,
+          'cancel': s('cancel'),
+        });
+  } on MissingPluginException {
+    if (!context.mounted) return;
+    // Widget tests and older runners still use a popup, never a pushed page.
+    final t = Tokens.of(context);
+    choice = await showGeneralDialog<int>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: s('cancel'),
+      barrierColor: const Color(0x66000000),
+      transitionDuration: Tokens.motion(context, Tokens.motionPage),
+      pageBuilder: (context, _, _) => FTheme(
+        data: t.forui,
+        child: DefaultTextStyle(
+          style: t.body,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: DecoratedBox(
+                  decoration: t.cardDecoration(),
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(s('chooseLine'), style: t.bodyStrong),
+                          for (final (index, label) in labels.indexed)
+                            Pressable(
+                              onPress: () => Navigator.of(context).pop(index),
+                              selected: selected == index,
+                              builder: (context, _) => Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Text(label, style: t.body),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
-    ],
-    value: pinned,
-    onChanged: (key) => unawaited(app.pinLine(node.id, key)),
-  );
+      ),
+      transitionBuilder: (context, animation, _, child) => SlideTransition(
+        position: Tween(begin: const Offset(0, 1), end: Offset.zero).animate(
+          CurvedAnimation(parent: animation, curve: Tokens.motionCurve),
+        ),
+        child: child,
+      ),
+    );
+  } on PlatformException catch (error) {
+    app.actionError.value = error.message ?? error.code;
+    return;
+  }
+  if (choice == null || choice < 0 || choice >= labels.length) return;
+  await app.pinLine(node.id, choice == 0 ? null : node.lines[choice - 1].key);
 }

@@ -207,11 +207,12 @@ class _TabBar extends StatelessWidget {
     final t = Tokens.of(context);
     final s = S.current;
     final bottom = MediaQuery.paddingOf(context).bottom;
-    if (NativeChrome.enabled && settled) {
+    if (NativeChrome.enabled) {
       return SizedBox(
         height: Tokens.phoneTabBar + bottom,
         child: NativeChromeView(
           kind: 'tabs',
+          frozen: !settled,
           configuration: {
             'labels': [s('overview'), s('nodes'), s('me')],
             'selected': tab.index,
@@ -348,7 +349,7 @@ class PhoneScaffold extends StatelessWidget {
     final bell = trailing is PhoneBell ? trailing as PhoneBell : null;
     final supportsActions =
         trailing == null || bell != null || nativeActions != null;
-    if (NativeChrome.enabled && settled && supportsActions) {
+    if (NativeChrome.enabled && supportsActions) {
       final s = S.current;
       final actions =
           nativeActions ??
@@ -376,6 +377,7 @@ class PhoneScaffold extends StatelessWidget {
               height: top + (large ? 96 : 44),
               child: NativeChromeView(
                 kind: 'navigation',
+                frozen: !settled,
                 configuration: {
                   'title': brand ? s('app') : title,
                   'back': back,
@@ -584,7 +586,9 @@ class PhoneBell extends StatelessWidget {
 /// goes back with a swipe from the screen's left edge (#535). Elsewhere it
 /// slides in from the end over [Tokens.motionPage]. Routes sit beside the
 /// app's home, so the page gets forui's theme and the body text style here.
-Future<T?> pushPhonePage<T>(BuildContext context, Widget page) {
+Future<T?> pushPhonePage<T>(BuildContext context, Widget page) async {
+  await NativeChromeView.prepareTransition();
+  if (!context.mounted) return null;
   Widget themed(BuildContext context) {
     final t = Tokens.of(context);
     return FTheme(

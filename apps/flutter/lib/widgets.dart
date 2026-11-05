@@ -902,7 +902,11 @@ String nodeTitle(rust.UiNode node) {
 /// place (keys are internal and never shown), as in the native apps.
 List<String> lineNames(rust.UiNode node) => [
   for (final (i, line) in node.lines.indexed)
-    line.label ?? S.current('routeN', {'n': '${i + 1}'}),
+    line.label?.trim().isNotEmpty == true
+        ? line.label!
+        : i == 0
+        ? S.current('primaryLine')
+        : S.current('backupLineN', {'n': '$i'}),
 ];
 
 /// The lines as one text, "HKG-A → 线路 2"; a single line without a label

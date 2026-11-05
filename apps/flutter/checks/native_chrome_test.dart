@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -7,13 +9,89 @@ import 'package:ppvpn_flutter/phone/native_chrome.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('both routes use Flutter chrome during push and pop', (
+  testWidgets(
+    'route motion reuses the native image without recreating UIKit views',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final bytes = await tester.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        ui.Canvas(recorder)
+            .drawColor(const Color(0xff123456), ui.BlendMode.src);
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(4, 4);
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        image.dispose();
+        picture.dispose();
+        return data!.buffer.asUint8List();
+      });
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      var creates = 0;
+      int? id;
+      messenger.setMockMethodCallHandler(SystemChannels.platform_views, (
+        call,
+      ) async {
+        if (call.method == 'create') {
+          creates++;
+          id = (call.arguments as Map)['id'] as int;
+          messenger.setMockMethodCallHandler(
+            MethodChannel('com.peakpassvpn.ppvpn/native-chrome/$id'),
+            (call) async {
+              if (call.method == 'snapshot') return bytes;
+              return null;
+            },
+          );
+        }
+        return null;
+      });
+      addTearDown(() {
+        messenger.setMockMethodCallHandler(SystemChannels.platform_views, null);
+        messenger.setMockMethodCallHandler(
+          MethodChannel('com.peakpassvpn.ppvpn/native-chrome/$id'),
+          null,
+        );
+      });
+      Widget view(bool frozen) => Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 375,
+          height: 100,
+          child: NativeChromeView(
+            kind: 'navigation',
+            configuration: const {'title': 'Me'},
+            frozen: frozen,
+            onAction: (_) {},
+          ),
+        ),
+      );
+      await tester.pumpWidget(view(false));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+      await tester.pumpWidget(view(true));
+      await tester.pumpAndSettle();
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.byType(UiKitView, skipOffstage: false), findsOneWidget);
+      expect(creates, 1);
+      await tester.pumpWidget(view(false));
+      await tester.pumpAndSettle();
+      expect(find.byType(Image), findsNothing);
+      expect(creates, 1);
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets('both routes freeze native appearance during push and pop', (
     tester,
   ) async {
     final navigator = GlobalKey<NavigatorState>();
     Widget page(String name) => RouteChrome(
       builder: (_, settled) => Text(
-        '$name-${settled ? 'native' : 'flutter'}',
+        '$name-${settled ? 'native' : 'image'}',
         textDirection: TextDirection.ltr,
       ),
     );
@@ -39,15 +117,15 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('root-flutter'), findsOneWidget);
-    expect(find.text('detail-flutter'), findsOneWidget);
+    expect(find.text('root-image'), findsOneWidget);
+    expect(find.text('detail-image'), findsOneWidget);
     await tester.pumpAndSettle();
     expect(find.text('detail-native'), findsOneWidget);
     navigator.currentState!.pop();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('root-flutter'), findsOneWidget);
-    expect(find.text('detail-flutter'), findsOneWidget);
+    expect(find.text('root-image'), findsOneWidget);
+    expect(find.text('detail-image'), findsOneWidget);
     await tester.pumpAndSettle();
     expect(find.text('root-native'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());

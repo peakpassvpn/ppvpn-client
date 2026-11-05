@@ -87,6 +87,16 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
     surface.tabController.delegate = self
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else { return result(nil) }
+      if call.method == "snapshot" {
+        self.surface.layoutIfNeeded()
+        guard self.surface.window != nil, self.surface.bounds.width > 0, self.surface.bounds.height > 0 else { return result(nil) }
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(bounds: self.surface.bounds, format: format).image { _ in
+          self.surface.drawHierarchy(in: self.surface.bounds, afterScreenUpdates: true)
+        }
+        return result(image.pngData().map { FlutterStandardTypedData(bytes: $0) })
+      }
       guard call.method == "update", let next = call.arguments as? [String: Any] else {
         return result(FlutterMethodNotImplemented)
       }
