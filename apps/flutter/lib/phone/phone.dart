@@ -444,7 +444,11 @@ class PhoneScaffold extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
-            height: top + (NativeChrome.enabled && supportsActions ? (back || brand ? 44 : 96) : Tokens.phoneTopBar),
+            height:
+                top +
+                (NativeChrome.enabled && supportsActions
+                    ? (back || brand ? 44 : 96)
+                    : Tokens.phoneTopBar),
             padding: EdgeInsets.fromLTRB(
               back ? 4 : Tokens.phoneBarStart,
               top,

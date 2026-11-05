@@ -630,7 +630,8 @@ mod tests {
                 .rev()
                 .find(|r| r["path"] == "/v1/apply-profile")
                 .unwrap();
-            assert_eq!(apply["body"]["pins"], json!([]));
+            // The host contract decodes omitted pins as an empty list.
+            assert!(apply["body"].get("pins").is_none());
             assert_eq!(
                 requests.iter().filter(|r| r["path"] == "/v1/start").count(),
                 1

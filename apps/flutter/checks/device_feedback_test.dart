@@ -131,25 +131,43 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
-  testWidgets('tap and long press have distinct mobile feedback', (tester) async {
+  testWidgets('tap and long press have distinct mobile feedback', (
+    tester,
+  ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final calls = <String>[];
-    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
-      if (call.method == 'HapticFeedback.vibrate') calls.add(call.arguments as String);
+      if (call.method == 'HapticFeedback.vibrate')
+        calls.add(call.arguments as String);
       return null;
     });
-    addTearDown(() => messenger.setMockMethodCallHandler(SystemChannels.platform, null));
-    await tester.pumpWidget(host(Center(child: Pressable(
-      onPress: () {}, onLongPress: () {},
-      builder: (_, _) => const SizedBox(width: 120, height: 50, child: Text('touch')),
-    ))));
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    await tester.pumpWidget(
+      host(
+        Center(
+          child: Pressable(
+            onPress: () {},
+            onLongPress: () {},
+            builder: (_, _) =>
+                const SizedBox(width: 120, height: 50, child: Text('touch')),
+          ),
+        ),
+      ),
+    );
     await tester.tap(find.text('touch'));
     await tester.pumpAndSettle();
     await tester.longPress(find.text('touch'));
     await tester.pumpAndSettle();
-    expect(calls, ['HapticFeedbackType.selectionClick', 'HapticFeedbackType.mediumImpact']);
+    expect(calls, [
+      'HapticFeedbackType.selectionClick',
+      'HapticFeedbackType.mediumImpact',
+    ]);
+    debugDefaultTargetPlatformOverride = null;
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets('restoring a stored session never shows sign-in', (tester) async {
