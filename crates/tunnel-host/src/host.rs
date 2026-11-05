@@ -1,9 +1,9 @@
 //! The one host of the process: its runtime, the engine, the socket server
 //! and the health loop, from `start` to `stop`.
 
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::CString;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ppvpn_core::{
@@ -42,31 +42,14 @@ impl Options {
     }
 }
 
-/// The native side's `on_exit`.
-#[derive(Clone)]
-pub struct ExitCallback {
-    function: extern "C" fn(*mut c_void, *const c_char),
-    context: usize,
-}
+pub use crate::exit::ExitCallback;
 
 impl ExitCallback {
-    pub fn new(function: extern "C" fn(*mut c_void, *const c_char), context: *mut c_void) -> Self {
-        Self {
-            function,
-            context: context as usize,
-        }
-    }
-
-    /// Calls it on a thread of its own: the native side may call
-    /// `ppvpn_tunnel_stop` from it, which waits for this host's runtime.
-    pub(crate) fn call(self, code: &str, message: &str) {
+    pub(crate) fn notify(self, code: &str, message: &str) {
         let reason = json!({ "code": code, "message": message }).to_string();
-        let _ = std::thread::Builder::new()
-            .name("ppvpn-tunnel-exit".into())
-            .spawn(move || {
-                let reason = CString::new(reason).unwrap_or_default();
-                (self.function)(self.context as *mut c_void, reason.as_ptr());
-            });
+        if let Err(error) = self.call(CString::new(reason).unwrap_or_default()) {
+            eprintln!("tunnel exit callback: {error}");
+        }
     }
 }
 
@@ -99,9 +82,63 @@ struct Host {
     signals: mpsc::UnboundedSender<Signal>,
     socket: PathBuf,
     log: Arc<HostLog>,
+    exit: Option<ExitCallback>,
 }
 
-static HOST: Mutex<Option<Host>> = Mutex::new(None);
+// Keep the stop's completion and callback even after the runtime is gone:
+// a second caller must not release the native context while the first
+// caller is still shutting down, or while its callback is returning.
+enum HostSlot {
+    Empty,
+    Running(Host),
+    Stopping(Arc<Stopping>),
+}
+
+struct Stopping {
+    done: Mutex<bool>,
+    finished: Condvar,
+    exit: Option<ExitCallback>,
+}
+
+struct StopCompletion {
+    stopping: Arc<Stopping>,
+    socket: PathBuf,
+    log: Arc<HostLog>,
+}
+
+impl Drop for StopCompletion {
+    fn drop(&mut self) {
+        // Also run on unwind: the C boundary catches panics, and a later
+        // stop must never be left waiting for an abandoned shutdown.
+        if let Some(exit) = &self.stopping.exit {
+            exit.cancel_and_wait();
+        }
+        let _ = std::fs::remove_file(&self.socket);
+        self.log.line("stopped");
+        *lock(&self.stopping.done) = true;
+        self.stopping.finished.notify_all();
+    }
+}
+
+impl Stopping {
+    fn wait(&self) {
+        // Another caller may be stopping the runtime while waiting for
+        // this callback. Waiting here would make them wait on each other.
+        if self.exit.as_ref().is_some_and(ExitCallback::is_current) {
+            return;
+        }
+        let mut done = lock(&self.done);
+        while !*done {
+            done = self.finished.wait(done).unwrap_or_else(|e| e.into_inner());
+        }
+        drop(done);
+        if let Some(exit) = &self.exit {
+            exit.cancel_and_wait();
+        }
+    }
+}
+
+static HOST: Mutex<HostSlot> = Mutex::new(HostSlot::Empty);
 /// The last network the native side reported, before start too.
 static NETWORK: Mutex<Option<NetworkState>> = Mutex::new(None);
 
@@ -149,7 +186,14 @@ pub(crate) fn start_with(
     configure: impl FnOnce(EngineConfig) -> EngineConfig,
 ) -> Result<(), ApiError> {
     let mut slot = lock(&HOST);
-    if slot.is_some() {
+    let busy = match &*slot {
+        HostSlot::Empty => false,
+        HostSlot::Running(_) => true,
+        HostSlot::Stopping(stop) => {
+            !*lock(&stop.done) || stop.exit.as_ref().is_some_and(ExitCallback::is_running)
+        }
+    };
+    if busy {
         return Err(api_error(
             "TUNNEL_ALREADY_RUNNING",
             "the tunnel host is already running",
@@ -204,44 +248,90 @@ pub(crate) fn start_with(
         log: log.clone(),
     };
     runtime.spawn(crate::server::serve(listener, shared.clone()));
-    runtime.spawn(crate::health::run(shared, signals_rx, exit));
+    runtime.spawn(crate::health::run(shared, signals_rx, exit.clone()));
     log.line(&format!(
         "started: ppvpn-core {}, {platform:?}, socket {}",
         Engine::version().core_version,
         socket.display()
     ));
-    *slot = Some(Host {
+    *slot = HostSlot::Running(Host {
         runtime,
         engine,
         shutdown,
         signals,
         socket: socket.to_path_buf(),
         log,
+        exit,
     });
     Ok(())
 }
 
 pub(crate) fn stop() {
-    // Taken out first: the engine's shutdown is waited for without the lock.
-    let Some(host) = lock(&HOST).take() else {
-        return;
+    stop_using(|host| {
+        let _ = host.shutdown.send(true);
+        if let Err(error) = host.runtime.block_on(host.engine.shutdown()) {
+            host.log.line(&format!(
+                "engine shutdown: {}: {}",
+                error.code, error.message
+            ));
+        }
+        host.runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
+    });
+}
+
+fn stop_using(shutdown: impl FnOnce(Host) + Send) {
+    let (host, stopping) = {
+        let mut slot = lock(&HOST);
+        match &*slot {
+            HostSlot::Empty => return,
+            HostSlot::Stopping(stopping) => {
+                let stopping = stopping.clone();
+                drop(slot);
+                stopping.wait();
+                return;
+            }
+            HostSlot::Running(host) => {
+                let stopping = Arc::new(Stopping {
+                    done: Mutex::new(false),
+                    finished: Condvar::new(),
+                    exit: host.exit.clone(),
+                });
+                let HostSlot::Running(host) =
+                    std::mem::replace(&mut *slot, HostSlot::Stopping(stopping.clone()))
+                else {
+                    unreachable!();
+                };
+                (host, stopping)
+            }
+        }
     };
-    let _ = host.shutdown.send(true);
-    if let Err(error) = host.runtime.block_on(host.engine.shutdown()) {
-        host.log.line(&format!(
-            "engine shutdown: {}: {}",
-            error.code, error.message
-        ));
+    // Never hold HOST across shutdown or across a native callback.
+    let finish = move || {
+        let _completion = StopCompletion {
+            stopping,
+            socket: host.socket.clone(),
+            log: host.log.clone(),
+        };
+        shutdown(host);
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        // Runtime::block_on and dropping Runtime both panic inside a
+        // Tokio context, even a different runtime's. A native caller may
+        // have entered its own runtime; finish outside that context.
+        std::thread::scope(|scope| {
+            if let Err(panic) = scope.spawn(finish).join() {
+                std::panic::resume_unwind(panic);
+            }
+        });
+    } else {
+        finish();
     }
-    host.runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
-    let _ = std::fs::remove_file(&host.socket);
-    host.log.line("stopped");
 }
 
 pub(crate) fn network_changed(state: NetworkState) -> Result<(), ApiError> {
     *lock(&NETWORK) = Some(state.clone());
     let slot = lock(&HOST);
-    if let Some(host) = slot.as_ref() {
+    if let HostSlot::Running(host) = &*slot {
         host.engine
             .set_network_state(state)
             .map_err(ApiError::from)?;
@@ -252,9 +342,10 @@ pub(crate) fn network_changed(state: NetworkState) -> Result<(), ApiError> {
 
 /// The running host's engine and a handle to its runtime, if any.
 fn engine() -> Option<(tokio::runtime::Handle, Engine)> {
-    lock(&HOST)
-        .as_ref()
-        .map(|host| (host.runtime.handle().clone(), host.engine.clone()))
+    match &*lock(&HOST) {
+        HostSlot::Running(host) => Some((host.runtime.handle().clone(), host.engine.clone())),
+        _ => None,
+    }
 }
 
 pub(crate) fn sleep() {
@@ -328,6 +419,250 @@ mod tests {
             Options::default(),
             None,
         )
+    }
+
+    struct ExitProbe {
+        entered: std::sync::mpsc::Sender<()>,
+        proceed: Mutex<std::sync::mpsc::Receiver<()>>,
+        self_stop: bool,
+        stopped: std::sync::mpsc::Sender<()>,
+    }
+
+    extern "C" fn on_exit(context: *mut std::ffi::c_void, _: *const std::ffi::c_char) {
+        // The test drains the callback before dropping its probe.
+        let probe = unsafe { &*(context as *const ExitProbe) };
+        if probe.self_stop {
+            stop();
+        }
+        let _ = probe.entered.send(());
+        let _ = lock(&probe.proceed).recv();
+        // Also exercise a callback asking to stop while another caller
+        // already owns shutdown and is draining this callback.
+        stop();
+        let _ = probe.stopped.send(());
+    }
+
+    fn with_exit(dir: &Path, tun: &std::fs::File, probe: &ExitProbe) -> ExitCallback {
+        use std::os::fd::AsRawFd;
+        let exit = ExitCallback::new(on_exit, std::ptr::from_ref(probe).cast_mut().cast());
+        start(
+            tun.as_raw_fd(),
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            Platform::Ios,
+            Options::default(),
+            Some(exit.clone()),
+        )
+        .unwrap();
+        exit
+    }
+
+    #[test]
+    fn concurrent_stops_drain_a_callback_that_itself_calls_stop() {
+        let _serial = test_lock();
+        let dir = dir("exit-drain");
+        let tun = fake_tun();
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (proceed, wait) = std::sync::mpsc::channel();
+        let (stopped, callback_done) = std::sync::mpsc::channel();
+        let probe = ExitProbe {
+            entered,
+            proceed: Mutex::new(wait),
+            self_stop: false,
+            stopped,
+        };
+        let exit = with_exit(&dir, &tun, &probe);
+        exit.clone().notify("TEST_EXIT", "test");
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (done, all_done) = std::sync::mpsc::channel();
+        let callers: Vec<_> = (0..2)
+            .map(|_| {
+                let done = done.clone();
+                std::thread::spawn(move || {
+                    stop();
+                    done.send(()).unwrap();
+                })
+            })
+            .collect();
+        // Wait until a real host shutdown owns the slot, rather than
+        // merely assuming the stopping thread has been scheduled.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(&*lock(&HOST), HostSlot::Stopping(_)) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(all_done.recv_timeout(Duration::from_millis(50)).is_err());
+        proceed.send(()).unwrap();
+        callback_done.recv_timeout(Duration::from_secs(5)).unwrap();
+        for _ in 0..2 {
+            all_done.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+        for caller in callers {
+            caller.join().unwrap();
+        }
+        exit.cancel_and_wait();
+        stop();
+        assert!(!dir.join("tunnel.sock").exists());
+        use std::os::fd::AsRawFd;
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        // An old generation cannot invoke the native callback again.
+        exit.notify("LATE_EXIT", "old host");
+        assert_eq!(
+            call(&dir.join("tunnel.sock"), json!({"path":"/v1/get-version"}))["ok"],
+            true
+        );
+        stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_self_stopped_callback_is_drained_before_a_foreign_stop_or_new_start() {
+        let _serial = test_lock();
+        let dir = dir("exit-self-stop");
+        let tun = fake_tun();
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (proceed, wait) = std::sync::mpsc::channel();
+        let (stopped, callback_done) = std::sync::mpsc::channel();
+        let probe = ExitProbe {
+            entered,
+            proceed: Mutex::new(wait),
+            self_stop: true,
+            stopped,
+        };
+        let exit = with_exit(&dir, &tun, &probe);
+        exit.clone().notify("TEST_EXIT", "test");
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        use std::os::fd::AsRawFd;
+        assert_eq!(
+            start_at(
+                &dir.join("tunnel.sock"),
+                &dir.join("state"),
+                tun.as_raw_fd()
+            )
+            .unwrap_err()
+            .code,
+            "TUNNEL_ALREADY_RUNNING"
+        );
+        let (done, finished) = std::sync::mpsc::channel();
+        let foreign = std::thread::spawn(move || {
+            stop();
+            done.send(()).unwrap();
+        });
+        assert!(finished.recv_timeout(Duration::from_millis(50)).is_err());
+        proceed.send(()).unwrap();
+        callback_done.recv_timeout(Duration::from_secs(5)).unwrap();
+        finished.recv_timeout(Duration::from_secs(5)).unwrap();
+        foreign.join().unwrap();
+        exit.cancel_and_wait();
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_start_never_owns_or_calls_the_native_context() {
+        let _serial = test_lock();
+        let dir = dir("exit-failed-start");
+        let tun = fake_tun();
+        extern "C" fn count(context: *mut std::ffi::c_void, _: *const std::ffi::c_char) {
+            let calls = unsafe { &*(context as *const std::sync::atomic::AtomicUsize) };
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let exit = ExitCallback::new(count, std::ptr::from_ref(&calls).cast_mut().cast());
+        use std::os::fd::AsRawFd;
+        let error = start(
+            tun.as_raw_fd(),
+            &dir.join("missing/socket"),
+            &dir.join("state"),
+            Platform::Ios,
+            Options::default(),
+            Some(exit),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "TUNNEL_SOCKET_FAILED");
+        stop();
+        stop();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_shutdown_panic_finishes_the_stop_and_allows_another_start() {
+        let _serial = test_lock();
+        let dir = dir("stop-unwind");
+        let tun = fake_tun();
+        use std::os::fd::AsRawFd;
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        let panic = std::panic::catch_unwind(|| {
+            stop_using(|_host| panic!("test: shutdown unwound"));
+        });
+        assert!(panic.is_err());
+        let (done, finished) = std::sync::mpsc::channel();
+        let caller = std::thread::spawn(move || {
+            stop();
+            done.send(()).unwrap();
+        });
+        finished.recv_timeout(Duration::from_secs(5)).unwrap();
+        caller.join().unwrap();
+        assert!(!dir.join("tunnel.sock").exists());
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stop_from_a_callers_tokio_context_finishes_outside_that_context() {
+        let _serial = test_lock();
+        let dir = dir("stop-entered-runtime");
+        let tun = fake_tun();
+        use std::os::fd::AsRawFd;
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        let caller = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        caller.block_on(async {
+            stop();
+        });
+        assert!(!dir.join("tunnel.sock").exists());
+        stop();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -437,12 +772,5 @@ mod tests {
                 .code,
             "REQUEST_INVALID"
         );
-    }
-}
-
-#[cfg(test)]
-impl ExitCallback {
-    pub(crate) fn notify(self, code: &str, message: &str) {
-        self.call(code, message);
     }
 }

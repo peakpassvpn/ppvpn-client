@@ -4,7 +4,7 @@ use crate::host::{self, ExitCallback, Options};
 use ppvpn_core::Platform;
 use std::ffi::{c_char, c_void};
 use std::os::fd::AsRawFd;
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 struct Probe {
@@ -14,8 +14,12 @@ struct Probe {
 }
 
 extern "C" fn on_exit(context: *mut c_void, _: *const c_char) {
-    // The test always unblocks and drains this callback before dropping it.
-    let probe = unsafe { &*(context as *const Probe) };
+    // Keep the probe alive even on the broken implementation: the test
+    // demonstrates the early return without itself freeing live memory.
+    let probe = unsafe {
+        Arc::increment_strong_count(context as *const Probe);
+        Arc::from_raw(context as *const Probe)
+    };
     let _ = probe.entered.send(());
     let _ = probe.release.lock().unwrap().recv();
     let _ = probe.returned.send(());
@@ -30,12 +34,12 @@ fn stop_does_not_return_while_the_native_exit_callback_is_running() {
     let (entered, ready) = mpsc::channel();
     let (release, wait) = mpsc::channel();
     let (returned, callback_done) = mpsc::channel();
-    let probe = Probe {
+    let probe = Arc::new(Probe {
         entered,
         release: Mutex::new(wait),
         returned,
-    };
-    let exit = ExitCallback::new(on_exit, std::ptr::from_ref(&probe).cast_mut().cast());
+    });
+    let exit = ExitCallback::new(on_exit, Arc::as_ptr(&probe).cast_mut().cast());
     host::start(
         tun.as_raw_fd(),
         &dir.join("tunnel.sock"),
