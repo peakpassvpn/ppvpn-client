@@ -56,6 +56,14 @@ void main() {
         address: '2001:db8::1',
       ));
       expect(nodeIdentity(node('Hong Kong Route 2')).address, isNull);
+      expect(nodeIdentity(node('Los Angeles Native IP 203.0.113.12 ①')), (
+        name: 'Los Angeles Native IP ①',
+        address: '203.0.113.12',
+      ));
+      expect(nodeIdentity(node('Tokyo [2001:db8::1] (21)')), (
+        name: 'Tokyo (21)',
+        address: '2001:db8::1',
+      ));
     },
   );
   test('selected symbols keep the same glyph as the outline', () {

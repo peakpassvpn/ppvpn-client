@@ -12,13 +12,19 @@ import 'widgets.dart';
 ({String name, String? address}) nodeIdentity(rust.UiNode node) {
   final title = nodeTitle(node);
   final parts = title.split(RegExp(r'\s+'));
-  final tail = parts.last;
+  var index = parts.length - 1;
+  // The backend may append a replica marker after the address.
+  if (RegExp(r'^[①-⑳]$|^\([0-9]+\)$').hasMatch(parts[index]) && index > 0)
+    index--;
   final address = InternetAddress.tryParse(
-    tail.replaceAll(RegExp(r'^\[|\]$'), ''),
+    parts[index].replaceAll(RegExp(r'^\[|\]$'), ''),
   );
   if (address == null || parts.length == 1) return (name: title, address: null);
   return (
-    name: parts.take(parts.length - 1).join(' '),
+    name: [
+      for (var i = 0; i < parts.length; i++)
+        if (i != index) parts[i],
+    ].join(' '),
     address: address.address,
   );
 }
