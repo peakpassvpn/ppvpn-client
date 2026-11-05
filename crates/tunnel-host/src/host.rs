@@ -279,7 +279,23 @@ pub(crate) fn stop() {
     });
 }
 
-fn stop_using(shutdown: impl FnOnce(Host) + Send) {
+fn stop_using(shutdown: impl FnOnce(Host) + Send + 'static) {
+    stop_with_executor(
+        shutdown,
+        tokio::runtime::Handle::try_current().is_ok(),
+        |task| {
+            std::thread::Builder::new()
+                .name("ppvpn-tunnel-stop".into())
+                .spawn(task)
+        },
+    );
+}
+
+fn stop_with_executor(
+    shutdown: impl FnOnce(Host) + Send + 'static,
+    offload: bool,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>,
+) {
     let (host, stopping) = {
         let mut slot = lock(&HOST);
         match &*slot {
@@ -306,25 +322,48 @@ fn stop_using(shutdown: impl FnOnce(Host) + Send) {
         }
     };
     // Never hold HOST across shutdown or across a native callback.
-    let finish = move || {
-        let _completion = StopCompletion {
-            stopping,
-            socket: host.socket.clone(),
-            log: host.log.clone(),
-        };
-        shutdown(host);
+    // The original caller owns completion, including when it is the
+    // callback itself inside a Tokio context. A cleanup worker waiting
+    // for that callback would deadlock with the caller joining the worker.
+    // Construct it before dispatch so a failed spawn also finishes the stop.
+    let _completion = StopCompletion {
+        stopping,
+        socket: host.socket.clone(),
+        log: host.log.clone(),
     };
-    if tokio::runtime::Handle::try_current().is_ok() {
+    if offload {
         // Runtime::block_on and dropping Runtime both panic inside a
         // Tokio context, even a different runtime's. A native caller may
         // have entered its own runtime; finish outside that context.
-        std::thread::scope(|scope| {
-            if let Err(panic) = scope.spawn(finish).join() {
-                std::panic::resume_unwind(panic);
+        // Do not move the runtime into the spawn request: when thread
+        // creation fails, that request is dropped on the caller's Tokio
+        // thread, where dropping Runtime would panic again. Hand it over
+        // only after the worker exists.
+        let (send, receive) = std::sync::mpsc::sync_channel::<Box<dyn FnOnce() + Send>>(1);
+        match spawn(Box::new(move || {
+            if let Ok(task) = receive.recv() {
+                task();
             }
-        });
+        })) {
+            Ok(worker) => {
+                assert!(send.send(Box::new(move || shutdown(host))).is_ok());
+                if let Err(panic) = worker.join() {
+                    std::panic::resume_unwind(panic);
+                }
+            }
+            Err(error) => {
+                let _ = host.shutdown.send(true);
+                host.log.line(&format!(
+                    "shutdown worker: {error}; stopping the runtime in background"
+                ));
+                // Tokio's nonblocking shutdown is valid in a caller's
+                // runtime too. Completion still cancels/drains the native
+                // callback before the caller may free its context.
+                host.runtime.shutdown_background();
+            }
+        }
     } else {
-        finish();
+        shutdown(host);
     }
 }
 
@@ -425,6 +464,7 @@ mod tests {
         entered: std::sync::mpsc::Sender<()>,
         proceed: Mutex<std::sync::mpsc::Receiver<()>>,
         self_stop: bool,
+        tokio_stop: bool,
         stopped: std::sync::mpsc::Sender<()>,
     }
 
@@ -432,7 +472,17 @@ mod tests {
         // The test drains the callback before dropping its probe.
         let probe = unsafe { &*(context as *const ExitProbe) };
         if probe.self_stop {
-            stop();
+            if probe.tokio_stop {
+                let caller = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                caller.block_on(async {
+                    stop();
+                });
+            } else {
+                stop();
+            }
         }
         let _ = probe.entered.send(());
         let _ = lock(&probe.proceed).recv();
@@ -469,6 +519,7 @@ mod tests {
             entered,
             proceed: Mutex::new(wait),
             self_stop: false,
+            tokio_stop: false,
             stopped,
         };
         let exit = with_exit(&dir, &tun, &probe);
@@ -525,6 +576,15 @@ mod tests {
 
     #[test]
     fn a_self_stopped_callback_is_drained_before_a_foreign_stop_or_new_start() {
+        self_stopped_callback(false);
+    }
+
+    #[test]
+    fn a_self_stopped_callback_in_a_tokio_context_does_not_wait_for_itself() {
+        self_stopped_callback(true);
+    }
+
+    fn self_stopped_callback(tokio_stop: bool) {
         let _serial = test_lock();
         let dir = dir("exit-self-stop");
         let tun = fake_tun();
@@ -535,6 +595,7 @@ mod tests {
             entered,
             proceed: Mutex::new(wait),
             self_stop: true,
+            tokio_stop,
             stopped,
         };
         let exit = with_exit(&dir, &tun, &probe);
@@ -662,6 +723,63 @@ mod tests {
         });
         assert!(!dir.join("tunnel.sock").exists());
         stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_shutdown_spawn_finishes_stop() {
+        failed_shutdown_spawn(false);
+    }
+
+    #[test]
+    fn a_failed_shutdown_spawn_in_tokio_does_not_drop_a_runtime_in_tokio() {
+        failed_shutdown_spawn(true);
+    }
+
+    fn failed_shutdown_spawn(in_tokio: bool) {
+        let _serial = test_lock();
+        let dir = dir("stop-spawn-failure");
+        let tun = fake_tun();
+        use std::os::fd::AsRawFd;
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        let stop = || {
+            stop_with_executor(
+                |_| panic!("no shutdown task can run without its worker"),
+                true,
+                |_| Err(std::io::Error::other("test: no thread available")),
+            )
+        };
+        if in_tokio {
+            let caller = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            caller.block_on(async {
+                stop();
+            });
+        } else {
+            stop();
+        }
+        let (done, finished) = std::sync::mpsc::channel();
+        let caller = std::thread::spawn(move || {
+            super::stop();
+            done.send(()).unwrap();
+        });
+        finished.recv_timeout(Duration::from_secs(5)).unwrap();
+        caller.join().unwrap();
+        assert!(!dir.join("tunnel.sock").exists());
+        start_at(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            tun.as_raw_fd(),
+        )
+        .unwrap();
+        super::stop();
         std::fs::remove_dir_all(dir).unwrap();
     }
 
