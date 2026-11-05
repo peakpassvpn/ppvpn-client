@@ -501,7 +501,10 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: |
           bash -n tools/desktop/*.sh tools/desktop/ci/*.sh
+          command -v pwsh
           python3 -m unittest discover -s tools/desktop/ci -p '*_test.py' -v
+          npm ci --prefix tools/desktop/ci --ignore-scripts
+          npm test --prefix tools/desktop/ci
       # swift.org's toolchain for the runner's Ubuntu, its signature checked
       # against swift.org's keys. Not cached: about 1 GB of the repository's
       # 20 GB, for about a minute of download.
@@ -808,7 +811,9 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      # Fork PR smoke tests use mock backends and may lack this variable.
+      # Release builds still require their configured backend.
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE || 'https://api.example.invalid' }}
     defaults:
       run:
         shell: bash
@@ -1145,7 +1150,7 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE || 'https://api.example.invalid' }}
     defaults:
       run:
         shell: bash
@@ -1283,7 +1288,7 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE || 'https://api.example.invalid' }}
     defaults:
       run:
         shell: bash
