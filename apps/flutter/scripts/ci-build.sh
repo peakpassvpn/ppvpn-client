@@ -230,7 +230,7 @@ open(path, "w").write(text)
 
 delegate = "ios/Runner/AppDelegate.swift"
 code = open(delegate).read()
-plugin = open("runner/ios/Runner/PPVPNPlugin.swift").read()
+plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["PPVPNPlugin.swift", "NativeChrome.swift"])
 imports = [line for line in plugin.splitlines() if line.startswith("import ")]
 body = "\n".join(line for line in plugin.splitlines() if not line.startswith("import "))
 code, registered = re.subn(
@@ -242,7 +242,7 @@ if not registered:
 missing = [line for line in imports if line not in code.splitlines()]
 open(delegate, "w").write("\n".join(missing) + "\n" + code + "\n" + body + "\n")
 PY
-    rm ios/Runner/PPVPNPlugin.swift
+    rm ios/Runner/PPVPNPlugin.swift ios/Runner/NativeChrome.swift
     plist=ios/Runner/Info.plist
     # The export compliance answer (#470): only the system's and standard
     # encryption, so no question per TestFlight build.
@@ -316,7 +316,7 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   # Run once on Linux, after the bridge types have been generated.
   if [ "$os" = linux ]; then
     PPVPN_UI_TEST_CJK_FONT="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}" \
-      flutter test checks/mobile_layout_test.dart --no-pub
+      flutter test checks/mobile_layout_test.dart checks/native_chrome_test.dart --no-pub
   fi
 fi
 
