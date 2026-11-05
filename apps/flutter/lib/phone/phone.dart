@@ -24,6 +24,7 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'me.dart';
 import 'nodes.dart';
+import 'native_chrome.dart';
 import 'overview.dart';
 import 'sign_in.dart';
 
@@ -171,6 +172,25 @@ class _TabBar extends StatelessWidget {
     final t = Tokens.of(context);
     final s = S.current;
     final bottom = MediaQuery.paddingOf(context).bottom;
+    if (NativeChrome.enabled) {
+      return SizedBox(
+        height: Tokens.phoneTabBar + bottom,
+        child: NativeChromeView(
+          kind: 'tabs',
+          configuration: {
+            'labels': [s('overview'), s('nodes'), s('me')],
+            'selected': tab.index,
+            'dark': t.brightness == Brightness.dark,
+            'accent': t.accent.toARGB32(),
+          },
+          onAction: (action) {
+            if (!action.startsWith('tab:')) return;
+            final index = int.tryParse(action.substring(4));
+            if (index != null && index >= 0 && index < _Tab.values.length) onTab(_Tab.values[index]);
+          },
+        ),
+      );
+    }
     Widget item(_Tab value, String label) {
       final on = value == tab;
       final color = on ? t.accent : t.t3;
@@ -284,6 +304,7 @@ class PhoneScaffold extends StatelessWidget {
     this.back = false,
     this.brand = false,
     this.background,
+    this.nativeActions,
   });
 
   final String title;
@@ -292,11 +313,55 @@ class PhoneScaffold extends StatelessWidget {
   final bool back;
   final bool brand;
   final Decoration? background;
+  final List<NativeChromeAction>? nativeActions;
 
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final top = MediaQuery.paddingOf(context).top;
+    final bell = trailing is PhoneBell ? trailing as PhoneBell : null;
+    final supportsActions = trailing == null || bell != null || nativeActions != null;
+    if (NativeChrome.enabled && supportsActions) {
+      final s = S.current;
+      final actions = nativeActions ?? [
+        if (bell != null)
+          NativeChromeAction(
+            id: 'messages', label: bell.unread > 0
+                ? '${s('messages')}, ${s('unreadN', {'n': '${bell.unread}'})}' : s('messages'),
+            symbol: 'bell', badge: bell.unread, onPress: bell.onPress,
+          ),
+      ];
+      final large = !back && !brand;
+      return AnimatedContainer(
+        duration: Tokens.motion(context, Tokens.motionBase),
+        curve: Tokens.motionCurve,
+        decoration: background ?? BoxDecoration(color: t.bg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: top + (large ? 96 : 44),
+              child: NativeChromeView(
+                kind: 'navigation',
+                configuration: {
+                  'title': brand ? s('app') : title, 'back': back, 'backLabel': s('back'),
+                  'largeTitle': large, 'topInset': top,
+                  'dark': t.brightness == Brightness.dark, 'accent': t.accent.toARGB32(),
+                  'actions': [for (final action in actions) action.configuration],
+                },
+                onAction: (id) {
+                  if (id == 'back') { unawaited(Navigator.of(context).maybePop()); return; }
+                  for (final action in actions) {
+                    if (action.id == id && action.enabled) { action.onPress(); return; }
+                  }
+                },
+              ),
+            ),
+            Expanded(child: MediaQuery.removePadding(context: context, removeTop: true, child: child)),
+          ],
+        ),
+      );
+    }
     final Widget heading = brand
         ? Row(
             children: [
