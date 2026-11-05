@@ -465,6 +465,7 @@ mod tests {
         proceed: Mutex<std::sync::mpsc::Receiver<()>>,
         self_stop: bool,
         tokio_stop: bool,
+        failed_spawn: bool,
         stopped: std::sync::mpsc::Sender<()>,
     }
 
@@ -472,16 +473,27 @@ mod tests {
         // The test drains the callback before dropping its probe.
         let probe = unsafe { &*(context as *const ExitProbe) };
         if probe.self_stop {
+            let stop_host = || {
+                if probe.failed_spawn {
+                    stop_with_executor(
+                        |_| panic!("no worker can run this task"),
+                        true,
+                        |_| Err(std::io::Error::other("test: no thread available")),
+                    );
+                } else {
+                    stop();
+                }
+            };
             if probe.tokio_stop {
                 let caller = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .unwrap();
                 caller.block_on(async {
-                    stop();
+                    stop_host();
                 });
             } else {
-                stop();
+                stop_host();
             }
         }
         let _ = probe.entered.send(());
@@ -509,6 +521,15 @@ mod tests {
 
     #[test]
     fn concurrent_stops_drain_a_callback_that_itself_calls_stop() {
+        concurrent_stops(false);
+    }
+
+    #[test]
+    fn a_failed_shutdown_spawn_still_drains_a_running_callback() {
+        concurrent_stops(true);
+    }
+
+    fn concurrent_stops(failed_spawn: bool) {
         let _serial = test_lock();
         let dir = dir("exit-drain");
         let tun = fake_tun();
@@ -520,6 +541,7 @@ mod tests {
             proceed: Mutex::new(wait),
             self_stop: false,
             tokio_stop: false,
+            failed_spawn: false,
             stopped,
         };
         let exit = with_exit(&dir, &tun, &probe);
@@ -530,7 +552,15 @@ mod tests {
             .map(|_| {
                 let done = done.clone();
                 std::thread::spawn(move || {
-                    stop();
+                    if failed_spawn {
+                        stop_with_executor(
+                            |_| panic!("no worker can run this task"),
+                            true,
+                            |_| Err(std::io::Error::other("test: no thread available")),
+                        );
+                    } else {
+                        stop();
+                    }
                     done.send(()).unwrap();
                 })
             })
@@ -576,15 +606,20 @@ mod tests {
 
     #[test]
     fn a_self_stopped_callback_is_drained_before_a_foreign_stop_or_new_start() {
-        self_stopped_callback(false);
+        self_stopped_callback(false, false);
     }
 
     #[test]
     fn a_self_stopped_callback_in_a_tokio_context_does_not_wait_for_itself() {
-        self_stopped_callback(true);
+        self_stopped_callback(true, false);
     }
 
-    fn self_stopped_callback(tokio_stop: bool) {
+    #[test]
+    fn a_callback_in_tokio_can_stop_when_its_shutdown_worker_cannot_start() {
+        self_stopped_callback(true, true);
+    }
+
+    fn self_stopped_callback(tokio_stop: bool, failed_spawn: bool) {
         let _serial = test_lock();
         let dir = dir("exit-self-stop");
         let tun = fake_tun();
@@ -596,6 +631,7 @@ mod tests {
             proceed: Mutex::new(wait),
             self_stop: true,
             tokio_stop,
+            failed_spawn,
             stopped,
         };
         let exit = with_exit(&dir, &tun, &probe);
