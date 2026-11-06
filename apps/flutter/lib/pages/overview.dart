@@ -1175,20 +1175,42 @@ class _Sparkline extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (samples.length < 2) return;
+    if (samples.length < 2 || size.isEmpty) return;
     final step = size.width / (AppState.historyLength - 1);
     final start = size.width - step * (samples.length - 1) + step * shift;
     canvas.clipRect(Offset.zero & size);
     Path line(int Function(rust.UiTraffic) pick) {
-      final path = Path();
-      for (var i = 0; i < samples.length; i++) {
-        final point = Offset(
-          start + step * i,
-          size.height - 2 - (size.height - 6) * pick(samples[i]) / peak,
+      final points = [
+        for (var i = 0; i < samples.length; i++)
+          Offset(
+            start + step * i,
+            size.height - 2 - (size.height - 6) * pick(samples[i]) / peak,
+          ),
+      ];
+      final slopes = [
+        for (var i = 0; i < points.length - 1; i++)
+          (points[i + 1].dy - points[i].dy) / step,
+      ];
+      final tangents = List<double>.filled(points.length, 0);
+      tangents.first = slopes.first;
+      tangents.last = slopes.last;
+      // Shape-preserving cubic interpolation: harmonic-mean tangents flatten
+      // at peaks/plateaus, so a sudden spike cannot create negative traffic
+      // or overshoot its adjacent samples.
+      for (var i = 1; i < points.length - 1; i++) {
+        final before = slopes[i - 1], after = slopes[i];
+        if (before * after > 0) tangents[i] = 2 / (1 / before + 1 / after);
+      }
+      final path = Path()..moveTo(points.first.dx, points.first.dy);
+      for (var i = 0; i < points.length - 1; i++) {
+        path.cubicTo(
+          points[i].dx + step / 3,
+          points[i].dy + tangents[i] * step / 3,
+          points[i + 1].dx - step / 3,
+          points[i + 1].dy - tangents[i + 1] * step / 3,
+          points[i + 1].dx,
+          points[i + 1].dy,
         );
-        i == 0
-            ? path.moveTo(point.dx, point.dy)
-            : path.lineTo(point.dx, point.dy);
       }
       return path;
     }
@@ -1197,6 +1219,7 @@ class _Sparkline extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final downLine = line((s) => s.down);
     final area = Path.from(downLine)
