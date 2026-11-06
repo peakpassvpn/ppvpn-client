@@ -721,11 +721,20 @@ fn sail_settings(config: &EngineConfig) -> Option<serde_json::Value> {
     if crate::mobile::mobile(config.platform) {
         settings.insert("profile".into(), "mobile".into());
     }
+    let mut overrides = Vec::new();
     if let Some(max) = config.max_connections {
-        settings.insert(
-            "set".into(),
-            serde_json::json!([format!("inbound.max_connections={max}")]),
-        );
+        overrides.push(format!("inbound.max_connections={max}"));
+    }
+    if config.platform == crate::Platform::Ios && config.role == crate::Role::Tun {
+        // A completed DNS reply marks its UDP mapping expired, but the
+        // mapping still holds its session permit until sail's sweep. Ten
+        // seconds let DNS bursts exhaust the extension's 128-session cap.
+        // Reclaim expired mappings sooner without changing idle timeouts,
+        // the connection cap, or the treatment of active streams.
+        overrides.push("udp.session_check_interval=1s".into());
+    }
+    if !overrides.is_empty() {
+        settings.insert("set".into(), serde_json::json!(overrides));
     }
     (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
 }
@@ -950,13 +959,19 @@ mod tests {
         for platform in [Platform::Ios, Platform::Android] {
             assert_eq!(
                 settings(platform, None),
-                Some(serde_json::json!({"profile": "mobile"}))
+                Some(if platform == Platform::Ios {
+                    serde_json::json!({"profile": "mobile", "set": ["udp.session_check_interval=1s"]})
+                } else {
+                    serde_json::json!({"profile": "mobile"})
+                })
             );
         }
         // The host's cap replaces the profile's; 0 lifts it.
         assert_eq!(
             settings(Platform::Ios, Some(128)),
-            Some(serde_json::json!({"profile": "mobile", "set": ["inbound.max_connections=128"]}))
+            Some(
+                serde_json::json!({"profile": "mobile", "set": ["inbound.max_connections=128", "udp.session_check_interval=1s"]})
+            )
         );
         assert_eq!(
             settings(Platform::Android, Some(0)),
@@ -966,6 +981,14 @@ mod tests {
             settings(Platform::Linux, Some(64)),
             Some(serde_json::json!({"set": ["inbound.max_connections=64"]}))
         );
+        // Local proxy and desktop roles retain sail's default cleanup cadence.
+        for role in [Role::Standard] {
+            let config = EngineConfig::new(role, Platform::Ios, "/x");
+            assert_eq!(
+                sail_settings(&config),
+                Some(serde_json::json!({"profile": "mobile"}))
+            );
+        }
         // sail takes them.
         for platform in [Platform::Ios, Platform::Android, Platform::Linux] {
             let config = EngineConfig::new(Role::Tun, platform, "/x").with_max_connections(64);
