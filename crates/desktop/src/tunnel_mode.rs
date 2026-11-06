@@ -21,7 +21,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::core_ipc::{self, ApplyChoices, CoreCallError, CoreStatus};
+use crate::core_ipc::{self, ApplyChoices, CoreCallError, CoreStatus, CoreTraffic};
 use crate::errors::{ClientError, ClientErrorInfo, ErrorCode};
 use crate::tunnel::TunnelTransport;
 use crate::{ConnectionPhase, EnhancedState};
@@ -232,14 +232,11 @@ impl TunnelMode {
     }
 
     /// The running engine's traffic counters; `None` while not on.
-    pub(crate) async fn traffic_totals(&self) -> Option<(u64, u64)> {
+    pub(crate) async fn traffic_sample(&self) -> Option<CoreTraffic> {
         if !self.inner.is_on() {
             return None;
         }
-        core_ipc::get_traffic(&self.inner.transport)
-            .await
-            .ok()
-            .map(|traffic| traffic.totals())
+        core_ipc::get_traffic(&self.inner.transport).await.ok()
     }
 
     /// App exit: the tunnel outlives the app, so only the watch ends.
@@ -669,7 +666,10 @@ mod tests {
             apply["body"]["allowed_rule_set_hosts"],
             json!(["www.example.com"])
         );
-        assert_eq!(mode.traffic_totals().await, Some((5, 7)));
+        assert_eq!(
+            mode.traffic_sample().await.map(|t| t.totals()),
+            Some((5, 7))
+        );
     }
 
     #[tokio::test]

@@ -15,6 +15,7 @@ import 'messages_state.dart';
 import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
 import 'vpn.dart';
+import 'traffic_history.dart';
 
 /// A speed-test result as the nodes page shows it.
 sealed class Latency {
@@ -89,6 +90,8 @@ class AppState with WidgetsBindingObserver {
   final ValueNotifier<List<rust.UiTraffic>> history = ValueNotifier(
     List.filled(historyLength, const rust.UiTraffic(up: 0, down: 0)),
   );
+  final _historyClock = Stopwatch()..start();
+  final _historySampler = TrafficHistory();
   static const historyVisibleLength = 30;
   // Two extra neighbours support a gentle three-sample visual filter;
   // three more keep changing endpoint tangents outside the visible window.
@@ -243,10 +246,13 @@ class AppState with WidgetsBindingObserver {
       final sample = events.traffic;
       if (sample != null) {
         traffic.value = sample;
-        final list = [...history.value, sample];
-        history.value = list.length > historyLength
-            ? list.sublist(list.length - historyLength)
-            : list;
+        final buckets = _historySampler.add(sample, _historyClock.elapsed);
+        if (buckets.isNotEmpty) {
+          final list = [...history.value, ...buckets];
+          history.value = list.length > historyLength
+              ? list.sublist(list.length - historyLength)
+              : list;
+        }
       }
       if (events.probes.isNotEmpty) {
         final map = Map.of(latency.value);
