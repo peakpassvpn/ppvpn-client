@@ -330,6 +330,7 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
     # Loopback update-feed checks need neither native bindings nor a GUI.
     flutter test checks/update_feed_test.dart --no-pub
   fi
+  flutter test checks/local_proxies_test.dart --no-pub
   flutter analyze --no-fatal-infos
   # Phone constraints and text scaling need no emulator or system VPN.
   # Run once on Linux, after the bridge types have been generated.

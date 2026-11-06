@@ -17,7 +17,7 @@ class ProbeApi implements RustLibApi {
   List<UiNode> crateApiNodes() => nodes;
 
   @override
-  Future<List<UiLocalProxy>> crateApiLocalProxies() async => [];
+  Future<List<UiLocalProxy>> crateApiLocalProxies({required int generation}) async => [];
 
   @override
   Future<UiEvents> crateApiNextEvents() {
