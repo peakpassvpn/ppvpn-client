@@ -431,8 +431,29 @@ impl CaptureMachine {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 #[cfg(feature = "driver")]
 pub mod driver;
+
+/// Read-only observation of one forwarding owner. Registry IDs describe only
+/// this process; this is not proof of uniqueness across processes or devices.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeObservation {
+    pub owner: ForwarderIdentity,
+    pub backend: RuntimeBackend,
+    pub native_runtime_id: Option<u64>,
+    pub state: String,
+    pub running: bool,
+    /// Actual Sail running registry; absent for test backends.
+    pub active_runtime_ids: Option<Vec<u64>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeBackend {
+    Sail,
+    Fake,
+}
+
+#[cfg(test)]
+mod tests;

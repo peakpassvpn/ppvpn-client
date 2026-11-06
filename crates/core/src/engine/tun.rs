@@ -73,6 +73,22 @@ impl TunState {
 /// dns-local servers, a mobile TUN descriptor elsewhere, and mobile socket
 /// protection on a desktop platform. Standard mobile probes need protection too.
 pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
+    if config.role == Role::Shared && config.platform != Platform::Macos {
+        return Err(Error::invalid(
+            codes::CORE_OPERATION_FAILED,
+            "role",
+            "shared forwarding is currently macOS-only; existing mobile lifecycle is unchanged",
+        ));
+    }
+
+    if config.role == Role::Shared && config.local_proxy.is_none() {
+        return Err(Error::invalid(
+            codes::CORE_OPERATION_FAILED,
+            "local_proxy",
+            "shared forwarding requires its authenticated mixed listener",
+        ));
+    }
+
     let fd = config.tun.as_ref().and_then(|tun| tun.fd);
     let mobile_tun = config.role == Role::Tun && crate::mobile::mobile(config.platform);
     if fd.is_some() && !mobile_tun {
@@ -96,7 +112,7 @@ pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
             "only iOS or Android instances protect their sockets",
         ));
     }
-    if config.role == Role::Tun {
+    if config.role.has_dns_policy() {
         local_dns(config)?;
     }
     Ok(())
@@ -207,6 +223,14 @@ impl Inner {
         if self.config.role != Role::Tun {
             return None;
         }
+        self.dns_policy_options()
+    }
+
+    /// DNS/routing inputs belong to the Shared forwarding owner, not capture.
+    pub(super) fn dns_policy_options(&self) -> Option<Tun> {
+        if !self.config.role.has_dns_policy() {
+            return None;
+        }
         let host = *self.tun.host.lock().expect("host ipv6");
         Some(Tun {
             desktop: desktop(self.config.platform),
@@ -226,7 +250,7 @@ impl Inner {
     /// and asks them through sail's direct outbound, which binds the
     /// physical interface; sail's network events make it read them again.
     pub(super) async fn start_local_dns(&self) -> Result<(), Error> {
-        if self.config.role != Role::Tun || !desktop(self.config.platform) {
+        if !self.config.role.has_dns_policy() || !desktop(self.config.platform) {
             return Ok(());
         }
         // Zones kept: a link-local resolver of the default interface is
@@ -298,7 +322,7 @@ impl Inner {
 
     /// Probes the host's IPv6 for the next translation (apply and start).
     pub(super) fn probe_host_ipv6(&self) {
-        if self.config.role != Role::Tun {
+        if !self.config.role.has_dns_policy() {
             return;
         }
         let state = self.read_host_ipv6();
@@ -337,7 +361,7 @@ impl Inner {
     }
 
     pub(super) async fn reprobe_host_ipv6(self: &Arc<Self>) {
-        if self.config.role != Role::Tun {
+        if !self.config.role.has_dns_policy() {
             return;
         }
         if self.admit().is_err() {

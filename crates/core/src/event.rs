@@ -235,10 +235,12 @@ pub enum EventItem {
 /// A subscription ([`crate::Engine::subscribe`]); dropping it unsubscribes.
 /// Closed (`recv` returns `None`) after `shutdown`.
 #[derive(Debug)]
+#[cfg(feature = "forwarder")]
 pub struct EventReceiver {
     pub(crate) subscription: crate::engine::Subscription,
 }
 
+#[cfg(feature = "forwarder")]
 impl EventReceiver {
     pub async fn recv(&mut self) -> Option<EventItem> {
         self.subscription.recv().await

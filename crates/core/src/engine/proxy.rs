@@ -73,7 +73,9 @@ impl Proxies {
     /// with a local proxy, or one that may host the system proxy listener
     /// (its port is kept there too).
     pub(super) fn open(config: &EngineConfig) -> Result<Option<Mutex<Proxies>>, Error> {
-        if config.role != Role::Standard || (config.local_proxy.is_none() && !config.system_proxy) {
+        if !config.role.has_local_proxies()
+            || (config.local_proxy.is_none() && !config.system_proxy)
+        {
             return Ok(None);
         }
         let local = config.local_proxy.clone().unwrap_or_default();
@@ -133,11 +135,15 @@ impl Inner {
             };
             proxies.unavailable = false;
             let moved = if self.config.local_proxy.is_some() {
-                proxies.reconcile().unwrap_or_else(|error| {
-                    tracing::warn!(error = %error.message, "local proxy listener unavailable");
-                    proxies.unavailable = true;
-                    None
-                })
+                match proxies.reconcile() {
+                    Ok(moved) => moved,
+                    Err(error) if self.config.role == Role::Shared => return Err(error),
+                    Err(error) => {
+                        tracing::warn!(error = %error.message, "local proxy listener unavailable");
+                        proxies.unavailable = true;
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -158,6 +164,9 @@ impl Inner {
     /// After a start that failed with the shared listener in it: whether
     /// the start is worth trying again without it (it was in it).
     pub(super) fn leave_out_local_proxy(&self) -> bool {
+        if self.config.role == Role::Shared {
+            return false;
+        }
         match self.local_proxy() {
             Ok(mut proxies) if !proxies.unavailable => {
                 proxies.unavailable = true;
@@ -319,7 +328,7 @@ impl Inner {
     /// `status.system_proxy`: listening while running and turned on.
     pub(super) fn system_proxy_status(&self, running: bool) -> SystemProxyStatus {
         let mut status = SystemProxyStatus {
-            available: self.config.role == Role::Standard && self.config.system_proxy,
+            available: self.config.role.has_local_proxies() && self.config.system_proxy,
             ..SystemProxyStatus::default()
         };
         if let Some(proxies) = self.proxies() {

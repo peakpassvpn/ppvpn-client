@@ -1,7 +1,8 @@
 # Shared forwarding core and optional TUN capture
 
-Status: protocol v1 and fake-driver implementation; native Sail support pending. Existing platform hosts still use separate Standard/Tun
-instances. This document does not claim that those hosts have migrated.
+Status: protocol v1, fake-driver implementation, macOS Shared role and runtime
+observation; native Sail capture support pending. Existing platform hosts still
+use separate Standard/Tun instances. This document does not claim that those hosts have migrated.
 
 ## Invariants
 
@@ -37,17 +38,27 @@ falls back to restarting the core or creating a second runtime.
 
 ## Platform boundaries and dependencies
 
-macOS: the service is the sole forwarding owner; UI and other clients control it
-through authenticated IPC. Disconnecting VPN detaches capture. The service must
-remain alive while local proxy sessions are in use. Platform IPC/installation
-and Runner changes belong to the desktop specialist.
+macOS: a signed per-user LaunchAgent is the sole forwarding owner. The UI uses
+authenticated IPC; the root service only brokers privileged capture resources
+and never parses profiles or starts a forwarding runtime. Disconnecting VPN or
+exiting the UI detaches capture and clears owned system proxy settings, while
+the user agent and established mixed sessions stay alive. Platform IPC,
+installation, FD validation/transport and Runner changes belong to the desktop
+specialist. Broker handle closure alone cannot revoke the agent's duplicate;
+lease loss must remove owned routes/DNS and explicitly detach capture.
 
-iOS: Network Extension owns the active forwarding core while VPN is active.
-A UI process cannot migrate live TCP, UDP or DNS state into/out of the extension.
-Stopping the extension ends its listeners and sessions. A design requiring a
-proxy while the extension is absent must explicitly stop the former owner before
-starting another; uninterrupted cross-process migration is unsupported. The
-mobile specialist owns provider lifecycle, network settings and handle supply.
+Mobile product boundary: iOS and Android remove their local HTTP/SOCKS server,
+proxy credentials/ports and app-side Standard forwarding instance. PacketTunnel
+(iOS) or VpnService (Android) is the unique active forwarding owner while VPN is
+on. The app retains validated profile/selection/pins and direct entrance probes
+without creating another forwarding engine. iOS cannot migrate live sessions
+across app/extension processes; Android removal is a product choice, not that
+same OS restriction. Socket protection, physical-network switching, revoke and
+foreground-notification lifecycle remain Android host responsibilities. Traffic,
+connection logs and proxied availability while on come from the VPN owner; off,
+the host may display explicitly saved snapshots and must not fabricate live
+traffic or silently start another engine. Mobile platform and bridge changes
+belong to the mobile specialist; APNs work does not replace Android push.
 
 Sail dependency: native capture attach/detach on the same embedded instance,
 transactional rollback, resource-scoped cleanup, mixed TCP/UDP preservation and
@@ -142,3 +153,50 @@ native capture driver into Engine. Those changes require Sail's same-instance
 capture primitives and preservation acceptance. Platform hosts must keep the
 new path gated off until that integration exists, rather than launching a
 legacy second core as an undocumented fallback.
+
+
+## Shared role and runtime observation
+
+`Role::Shared` is currently accepted only for macOS with an authenticated mixed
+listener configured. Its initial start has mixed listeners and the full DNS and
+routing policy, with no TUN inbound. Local DNS remains owned by the forwarder.
+Internal capture preparation creates a candidate with the same profile,
+selection, credentials, DNS, rules and outbounds, changing only capture ingress.
+A host-lease candidate disables automatic route setup because the broker owns
+that resource ledger. Preparation does not mutate the runtime or consume a host
+handle; the frozen native adapter must resolve and adopt the lease separately.
+Shared startup refuses listener fallback, and profile changes requiring restart
+return an error. These guards do not implement native attach/detach by themselves.
+Legacy Standard/Tun translation is retained; mobile hosts use Tun as their only
+forwarding owner and the lightweight control API below in the app.
+
+`/v1/get-runtime-observation` exposes a best-effort `RuntimeObservation`:
+`owner={instance,generation}`, `backend`, `native_runtime_id`, `state`, `running`,
+and `active_runtime_ids`. The instance nonce is private per Runtime object;
+generation counts successful starts, starting at zero before the first start,
+and stays constant on reload. Sail IDs and the running registry come directly
+from Sail. They identify live instances within this process only, and IDs may be
+reused after an object is destroyed. Fake tests explicitly report backend `fake`
+with no native ID or registry. A snapshot can race lifecycle operations; native
+capture transactions must hold the Engine operation lease. The observation is
+not authorization and does not prove there is no forwarding process elsewhere.
+
+The following identities have separate scopes and must not be substituted:
+
+| Value | Meaning |
+| --- | --- |
+| Forwarder instance nonce + generation | Runtime object and its successful start; survives reload |
+| Native Sail runtime ID | Actual process-local Sail instance; may be reused after destruction |
+| Capture status epoch | Monotonic accepted attach/detach attempt, including rolled-back attempts |
+| Capture lease attachment epoch | Exact successful attachment being detached; bound to forwarder owner |
+| Broker service/session generation | Authentication incarnation and audit-bound owner; invalidates stale grants |
+| Broker capture resource ID and expiry | Broker resource ledger and its independently renewed lifetime |
+
+`HostLease.lease_id` is an opaque resolver token bound to the authenticated broker
+owner and resource; it is not a raw descriptor, a capture epoch, or a runtime
+start generation. Broker renewals do not change the forwarder generation or
+capture epoch. Broker-side idempotent cleanup does not relax core detach's exact
+owner/attachment/expected-epoch checks; after an uncertain reply, fetch status
+and reconcile the existing lease instead of replaying with invented epochs.
+The macOS candidate uses a 45-second broker lease renewed every 15 seconds;
+that timer is independent of IPC credential expiry and the capture transaction.

@@ -82,6 +82,7 @@ pub async fn dispatch(engine: &Engine, path: &str, body: Value) -> Result<Value,
             version["core_api_version"] = json!(1);
             Ok(version)
         }
+        "/v1/get-runtime-observation" => data(engine.runtime_observation()),
         "/v1/get-capture-capabilities" => data(engine.capture_capabilities()),
         "/v1/get-capture-status" => Err(capture_unsupported()),
         "/v1/attach-capture" => {
@@ -305,6 +306,16 @@ mod tests {
             dir.path(),
         ));
         let before = engine.status().state;
+        let observation: capture::RuntimeObservation = serde_json::from_value(
+            dispatch(&engine, "/v1/get-runtime-observation", json!({}))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(observation.backend, capture::RuntimeBackend::Fake);
+        assert_eq!(observation.owner.generation, 0);
+        assert!(!observation.running);
+        assert_eq!(observation.active_runtime_ids, None);
         let capabilities = dispatch(&engine, "/v1/get-capture-capabilities", json!({}))
             .await
             .unwrap();
