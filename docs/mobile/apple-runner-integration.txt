@@ -1,0 +1,50 @@
+Apple receiver integration boundary (pending implementation)
+
+Native iOS launch
+  Install one strong IOSApplePushReceiver before returning from
+  application(_:didFinishLaunchingWithOptions:), not only when Flutter's
+  implicit engine initializes later. Forward OS token success/failure and
+  background callbacks. The receiver owns UNUserNotificationCenterDelegate;
+  do not replace it after installation without preserving all callbacks.
+  Keep cold taps buffered until Flutter and authenticated restoration finish.
+
+Generated iOS project source inclusion
+  Current ci-build.sh appends NetworkState.swift/PPVPNPlugin.swift/
+  NativeChrome.swift into generated AppDelegate.swift. The new shared
+  runner/apple/ApplePushState.swift and iOS Runner/ApplePush.swift are NOT
+  currently in that list and therefore are NOT part of the built App.
+  Future integration must explicitly include them in the App target only,
+  preserve imports including @preconcurrency, and compile the real Runner.
+  Do not include these in PacketTunnel or assume copying a Swift file into
+  the generated directory makes it an Xcode build source.
+
+Control-plane bridge requirements
+  Use UiSnapshot.account_id (stable authenticated id) already added here;
+  never account_name. Do not resolve restoring to signedOut prematurely.
+  Attach register/unregister transport and notice delivery only after the
+  authenticated account transport can serialize them with logout.
+  Native -> transport registration has request/accountGeneration/accountID/
+  token/platform/bundleID/environment. Native completion must acknowledge
+  exact request and success. request/generation are local completion keys.
+  Transport -> native account restoration/setAccount and retry requests must
+  reject stale generations. OS registration requests fresh tokens at launch.
+  Notice -> Flutter only carries deliveryID/accountID/messageID/opened;
+  fetch inbox data with current auth, discard stale async results and clear
+  old account/team message state. Do not pass body or URL as trusted content.
+  Keep foreground receive and opened-tap dedupe separate.
+
+Backend dependency
+  apple-push-contract.json is a proposal, not an implemented endpoint map.
+  Existing token-only register cannot safely substitute for explicit topic/
+  APNs environment/installation lease/logout ordering. Server must define
+  installation ownership proof before issuing a replacement lease: an
+  installation UUID plus a different account bearer is not sufficient proof.
+  Do not turn on the rollout flag before backend contract and signed-package
+  entitlement/profile equality have been confirmed.
+
+macOS boundary
+  MacApplePushReceiver reads actual signed entitlement through SecTask.
+  MainFlutterWindow/AppDelegate and agent retirement remain separate desktop
+  integration work. Developer ID APNs capability requires the correct signed
+  entitlement/profile; App Store receipt sandbox is not an APNs selector.
+  Keep the self-hosted agent until real platform delivery equivalence passes.
