@@ -410,8 +410,7 @@ impl Client {
     pub(crate) async fn connect_now(&self) -> Result<(), ClientError> {
         self.current_session()?;
         if let Some(tunnel) = &self.tunnel {
-            self.prime_enhanced().await?;
-            return tunnel.enable().await;
+            return self.enable_mobile_tunnel(tunnel).await;
         }
         match self.connection_mode() {
             ConnectionMode::Enhanced => {
@@ -451,8 +450,7 @@ impl Client {
     pub(crate) async fn retry_now(&self) -> Result<(), ClientError> {
         self.current_session()?;
         if let Some(tunnel) = &self.tunnel {
-            self.prime_enhanced().await?;
-            return tunnel.enable().await;
+            return self.enable_mobile_tunnel(tunnel).await;
         }
         match self.connection_mode() {
             ConnectionMode::Enhanced => {

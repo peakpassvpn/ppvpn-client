@@ -243,6 +243,13 @@ impl TunnelMode {
         core_ipc::run_probe(transport, method, node_ids, None, on_result).await
     }
 
+    /// A cached disconnected profile has not been accepted by an owner.
+    pub(crate) fn has_applied_profile(&self, revision: &str) -> bool {
+        self.inner.with_data(|data| {
+            data.state.phase == ConnectionPhase::On && data.applied.as_deref() == Some(revision)
+        })
+    }
+
     /// The running engine's status; `None` while not on.
     pub(crate) async fn core_status(&self) -> Option<CoreStatus> {
         if !self.inner.is_on() {
@@ -810,7 +817,9 @@ mod tests {
         let (mode, _) = mode(&dir);
         mode.set_profile(PROFILE, "r1").await.unwrap();
         assert!(host.paths().is_empty());
+        assert!(!mode.has_applied_profile("r1"));
         mode.enable().await.unwrap();
+        assert!(mode.has_applied_profile("r1"));
         mode.set_profile(PROFILE, "r1").await.unwrap();
         mode.set_profile(br#"{"revision":"r2","nodes":[]}"#, "r2")
             .await
@@ -821,6 +830,10 @@ mod tests {
             .filter(|path| *path == "/v1/apply-profile")
             .count();
         assert_eq!(applies, 2);
+        assert!(mode.has_applied_profile("r2"));
+        assert!(!mode.has_applied_profile("r1"));
+        mode.disable().await.unwrap();
+        assert!(!mode.has_applied_profile("r2"));
     }
 
     #[tokio::test]
