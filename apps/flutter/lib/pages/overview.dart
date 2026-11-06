@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../traffic_history.dart';
 import '../node_identity.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
@@ -1118,15 +1119,25 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
     return peak.toDouble();
   }
 
+  double _rangeProgress() {
+    // Range changes settle quickly; scrolling still spans the sample interval.
+    // Sharing its full duration with the range left spikes offscreen for seconds.
+    final duration = _slide.duration;
+    final fraction = duration == null
+        ? _slide.value
+        : (_slide.value * duration.inMicroseconds / 350000).clamp(0.0, 1.0);
+    return Curves.easeOutCubic.transform(fraction);
+  }
+
   void _sampled() {
     final now = DateTime.now();
     final since = _last == null ? Duration.zero : now.difference(_last!);
     _last = now;
-    _fromPeak = _fromPeak + (_toPeak - _fromPeak) * _slide.value;
+    _fromPeak = _fromPeak + (_toPeak - _fromPeak) * _rangeProgress();
     _toPeak = _peak(widget.app.history.value);
     final duration = Tokens.motion(
       context,
-      since > const Duration(seconds: 3) ? const Duration(seconds: 3) : since,
+      since > TrafficHistory.interval ? TrafficHistory.interval : since,
     );
     if (duration == Duration.zero) {
       _slide.value = 1;
@@ -1141,10 +1152,9 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
     animation: _slide,
     builder: (context, _) {
       final t = _slide.value;
-      final peak =
-          _fromPeak + (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(t);
+      final peak = _fromPeak + (_toPeak - _fromPeak) * _rangeProgress();
       return CustomPaint(
-        painter: _Sparkline(
+        painter: TrafficSparklinePainter(
           widget.app.history.value,
           up: widget.up,
           down: widget.down,
@@ -1158,8 +1168,8 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
 
 /// Download (filled) and upload lines over the last samples, on one scale
 /// ([peak]), [shift] steps to the right of their place (the slide in).
-class _Sparkline extends CustomPainter {
-  _Sparkline(
+class TrafficSparklinePainter extends CustomPainter {
+  TrafficSparklinePainter(
     this.samples, {
     required this.up,
     required this.down,
@@ -1175,20 +1185,43 @@ class _Sparkline extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (samples.length < 2) return;
-    final step = size.width / (AppState.historyLength - 1);
-    final start = size.width - step * (samples.length - 1) + step * shift;
+    if (samples.length < 4 || size.isEmpty) return;
+    final step = size.width / (AppState.historyVisibleLength - 1);
+    // Retain one offscreen segment on the left. Local Bezier handles and
+    // causal filtering keep existing segments unchanged as the window rolls.
+    final start = size.width - step * (samples.length - 3) + step * shift;
     canvas.clipRect(Offset.zero & size);
     Path line(int Function(rust.UiTraffic) pick) {
-      final path = Path();
-      for (var i = 0; i < samples.length; i++) {
-        final point = Offset(
-          start + step * i,
-          size.height - 2 - (size.height - 6) * pick(samples[i]) / peak,
+      final points = [
+        for (var i = 2; i < samples.length; i++)
+          Offset(
+            start + step * (i - 2),
+            // Causal smoothing tames packet/batch spikes without waiting
+            // for a future sample before new traffic can enter the plot.
+            // The rate labels above continue to display unfiltered traffic.
+            size.height -
+                2 -
+                (size.height - 6) *
+                    ((pick(samples[i - 2]) +
+                                2 * pick(samples[i - 1]) +
+                                pick(samples[i])) /
+                            (4 * peak))
+                        .clamp(0.0, 1.0),
+          ),
+      ];
+      // Horizontal handles make each sample a soft crest/trough. Both
+      // handles remain inside their segment, so the cubic stays within its
+      // measured range and does not create negative traffic or overshoots.
+      final path = Path()..moveTo(points.first.dx, points.first.dy);
+      for (var i = 0; i < points.length - 1; i++) {
+        path.cubicTo(
+          points[i].dx + step * 0.45,
+          points[i].dy,
+          points[i + 1].dx - step * 0.45,
+          points[i + 1].dy,
+          points[i + 1].dx,
+          points[i + 1].dy,
         );
-        i == 0
-            ? path.moveTo(point.dx, point.dy)
-            : path.lineTo(point.dx, point.dy);
       }
       return path;
     }
@@ -1197,6 +1230,7 @@ class _Sparkline extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final downLine = line((s) => s.down);
     final area = Path.from(downLine)
@@ -1217,7 +1251,7 @@ class _Sparkline extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_Sparkline old) =>
+  bool shouldRepaint(TrafficSparklinePainter old) =>
       !identical(old.samples, samples) ||
       old.up != up ||
       old.down != down ||

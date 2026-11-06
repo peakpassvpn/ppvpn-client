@@ -312,9 +312,9 @@ const _zh = <String, String>{
   'validUntil': '有效期至 {d}',
   // The phone's sign-in (#535): the page opens in a sheet, no code to
   // compare.
-  'phoneSignInLine': '用 PPVPN 账户登录。授权页面在应用内弹出，确认一次就回到这里，无需输入密码。',
+  'phoneSignInLine': '在授权页面登录你的 PPVPN 账户并确认授权，完成后会自动返回应用。',
   'phoneStep1': '点“登录”，授权页面从下方弹出',
-  'phoneStep2': '在授权页面里点“授权”',
+  'phoneStep2': '登录账户后点“授权”',
   'phoneStep3': '页面自动关闭，完成登录',
   'reopenAuth': '重新打开授权页面',
 };
@@ -586,9 +586,9 @@ const _en = <String, String>{
   'accountHelp': 'Account and Help',
   'openInWeb': 'Opens on the web',
   'validUntil': 'Valid until {d}',
-  'phoneSignInLine': 'Sign in with your PPVPN account. The authorization page opens in the app; confirm once and you are back here, no password needed.',
+  'phoneSignInLine': 'Sign in to your PPVPN account on the authorization page, then authorize this device to return to the app.',
   'phoneStep1': 'Tap Sign In: the authorization page slides up',
-  'phoneStep2': 'Tap Authorize on that page',
+  'phoneStep2': 'Sign in, then tap Authorize',
   'phoneStep3': 'The page closes and you are signed in',
   'reopenAuth': 'Open the Authorization Page Again',
 };

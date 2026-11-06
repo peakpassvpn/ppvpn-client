@@ -15,6 +15,7 @@ import 'messages_state.dart';
 import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
 import 'vpn.dart';
+import 'traffic_history.dart';
 
 /// A speed-test result as the nodes page shows it.
 sealed class Latency {
@@ -85,11 +86,16 @@ class AppState with WidgetsBindingObserver {
     const rust.UiTraffic(up: 0, down: 0),
   );
 
-  /// The last [historyLength] samples, oldest first (the sparkline).
+  /// Visible traffic plus offscreen neighbours for stable curve tangents.
   final ValueNotifier<List<rust.UiTraffic>> history = ValueNotifier(
     List.filled(historyLength, const rust.UiTraffic(up: 0, down: 0)),
   );
-  static const historyLength = 30;
+  final _historyClock = Stopwatch()..start();
+  final _historySampler = TrafficHistory();
+  static const historyVisibleLength = 4;
+  // Two older samples feed the causal filter; an offscreen segment keeps
+  // the left edge covered while a new point slides into view.
+  static const historyLength = historyVisibleLength + 3;
 
   /// When the connection last came on; null while it is not on. The
   /// connection card's 「本次连接」 timer counts from it.
@@ -240,10 +246,13 @@ class AppState with WidgetsBindingObserver {
       final sample = events.traffic;
       if (sample != null) {
         traffic.value = sample;
-        final list = [...history.value, sample];
-        history.value = list.length > historyLength
-            ? list.sublist(list.length - historyLength)
-            : list;
+        final buckets = _historySampler.add(sample, _historyClock.elapsed);
+        if (buckets.isNotEmpty) {
+          final list = [...history.value, ...buckets];
+          history.value = list.length > historyLength
+              ? list.sublist(list.length - historyLength)
+              : list;
+        }
       }
       if (events.probes.isNotEmpty) {
         final map = Map.of(latency.value);
@@ -266,9 +275,9 @@ class AppState with WidgetsBindingObserver {
     if (!mobile) return;
     final url = after.deviceCode?.verificationUrl;
     if (url != null && url != before.deviceCode?.verificationUrl)
-      unawaited(openUrl(url));
-    if (after.auth == rust.UiAuth.signedIn &&
-        before.auth == rust.UiAuth.awaitingBrowser) {
+      unawaited(openAuthenticationUrl(url));
+    if (before.auth == rust.UiAuth.awaitingBrowser &&
+        after.auth != rust.UiAuth.awaitingBrowser) {
       unawaited(closeBrowser());
     }
   }

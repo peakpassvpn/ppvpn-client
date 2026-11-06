@@ -78,15 +78,36 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
   let channel: FlutterMethodChannel
   private var config: [String: Any] = [:]
   private var applied = false
+  private var layoutSize: CGSize?
 
   init(frame: CGRect, id: Int64, kind: String, config: [String: Any], messenger: FlutterBinaryMessenger) {
     surface = ChromeSurface(frame: frame, kind: kind)
     channel = FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/native-chrome/\(id)", binaryMessenger: messenger)
     super.init()
+    // Platform views are created before Flutter gives them their final bounds.
+    // Do not let UIKit measure item titles against that zero-width surface.
+    surface.onLayout = { [weak self] in
+      guard let self else { return }
+      self.apply(self.config)
+    }
     surface.navigation.delegate = self
     surface.tabController.delegate = self
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else { return result(nil) }
+      if call.method == "setFrozen", let frozen = call.arguments as? Bool {
+        // Offstage prevents Flutter painting but UIKit's backing surface can
+        // retain its last onscreen position during compositor transactions.
+        // Hide it explicitly before a route moves; the Flutter chrome moves
+        // with that route. Restore only the fully laid-out native geometry.
+        UIView.performWithoutAnimation {
+          self.surface.isHidden = frozen
+          self.surface.setNeedsLayout()
+          self.surface.layoutIfNeeded()
+          self.surface.navigation.layoutIfNeeded()
+        }
+        result(nil)
+        return
+      }
       if call.method == "snapshot" {
         self.snapshot(result, deadline: CACurrentMediaTime() + 1)
         return
@@ -113,12 +134,12 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
   }
   func view() -> UIView { surface }
 
-  // Only cache a settled tab indicator. A screenshot of the selection spring
-  // would replay its halfway position when the covered page becomes visible.
+  // Cache settled geometry, including the back control and tab indicator.
+  // A transient position would replay as a jump on the next transition.
   private func snapshot(_ result: @escaping FlutterResult, deadline: CFTimeInterval, stableFrames: Int = 0) {
     surface.layoutIfNeeded()
-    guard surface.window != nil, surface.bounds.width > 0, surface.bounds.height > 0 else { return result(nil) }
-    if surface.kind == "tabs" {
+    guard !surface.isHidden, surface.window != nil, surface.bounds.width > 0, surface.bounds.height > 0 else { return result(nil) }
+    do {
       let moving = Self.geometryMoving(surface.layer)
       let stable = moving ? 0 : stableFrames + 1
       if stable < 2 {
@@ -153,9 +174,16 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
   private func emit(_ action: String) { channel.invokeMethod("action", arguments: action) }
 
   private func apply(_ next: [String: Any]) {
-    if applied && NSDictionary(dictionary: config).isEqual(to: next) { return }
-    applied = true
+    let sameSize = layoutSize == surface.bounds.size
+    if applied && sameSize && NSDictionary(dictionary: config).isEqual(to: next) { return }
     config = next
+    guard surface.window != nil, surface.bounds.width > 0, surface.bounds.height > 0,
+      surface.kind != "tabs" || surface.tabController.parent != nil else {
+      applied = false
+      return
+    }
+    layoutSize = surface.bounds.size
+    applied = true
     surface.overrideUserInterfaceStyle = next["dark"] as? Bool == true ? .dark : .light
     let color = (next["accent"] as? NSNumber)?.uint32Value ?? 0xFF3D63C9
     let accent = UIColor(red: CGFloat((color >> 16) & 255) / 255,
@@ -183,6 +211,9 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
         }
         surface.tabController.setViewControllers(pages, animated: false)
       }
+      surface.tabController.view.setNeedsLayout()
+      surface.tabs.setNeedsLayout()
+      surface.tabController.view.layoutIfNeeded()
       let currentItems = surface.tabs.items ?? items
       let selected = (next["selected"] as? NSNumber)?.intValue ?? 0
       let target = currentItems.indices.contains(selected) ? selected : 0
@@ -244,6 +275,7 @@ private final class ChromeSurface: UIView {
   let tabController = UITabBarController()
   var tabs: UITabBar { tabController.tabBar }
   var topInset: CGFloat = 0
+  var onLayout: (() -> Void)?
 
   init(frame: CGRect, kind: String) {
     self.kind = kind
@@ -272,6 +304,7 @@ private final class ChromeSurface: UIView {
         if let parent = current as? UIViewController {
           parent.addChild(tabController)
           tabController.didMove(toParent: parent)
+          setNeedsLayout()
           break
         }
         responder = current.next
@@ -286,5 +319,6 @@ private final class ChromeSurface: UIView {
     } else {
       navigation.frame = CGRect(x: 0, y: topInset, width: bounds.width, height: max(0, bounds.height - topInset))
     }
+    onLayout?()
   }
 }
