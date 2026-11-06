@@ -520,11 +520,19 @@ class _NodeRow extends StatelessWidget {
           context,
           pressed ? Duration.zero : Tokens.motionFast,
         ),
-        color: pressed
-            ? t.phonePress
-            : current
-            ? t.accentSoft
-            : t.phonePress.withValues(alpha: 0),
+        decoration: BoxDecoration(
+          color: pressed
+              ? t.phonePress
+              : current
+              ? t.accentSoft
+              : t.phonePress.withValues(alpha: 0),
+          // An inset stroke marks selection without stealing name/tag width.
+          border: Border.all(
+            color: current
+                ? t.accent.withValues(alpha: 0.35)
+                : t.accent.withValues(alpha: 0),
+          ),
+        ),
         constraints: const BoxConstraints(minHeight: Tokens.phoneRowTwoLines),
         padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 14, 8),
         child: Row(
@@ -539,7 +547,7 @@ class _NodeRow extends StatelessWidget {
                   NodeIdentity(
                     node: node,
                     phone: true,
-                    strong: current,
+                    strong: true,
                     tag: true,
                   ),
                   if (linesText(node).isNotEmpty)
@@ -557,37 +565,6 @@ class _NodeRow extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             LatencyPill(latency: latency),
-            // The check grows in from 0.6 as the node becomes current.
-            AnimatedSwitcher(
-              duration: Tokens.motion(context, Tokens.motionBase),
-              switchInCurve: Tokens.motionCurve,
-              transitionBuilder: (child, animation) => FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween(begin: 0.6, end: 1.0).animate(animation),
-                  child: child,
-                ),
-              ),
-              child: current
-                  ? Padding(
-                      key: const ValueKey('check'),
-                      padding: const EdgeInsetsDirectional.only(start: 8),
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          color: t.accent,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          AppIcons.check,
-                          size: 13,
-                          color: t.onAccent,
-                        ),
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-            ),
           ],
         ),
       ),
