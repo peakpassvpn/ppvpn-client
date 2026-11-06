@@ -1199,27 +1199,16 @@ class TrafficSparklinePainter extends CustomPainter {
                     (4 * peak),
           ),
       ];
-      final slopes = [
-        for (var i = 0; i < points.length - 1; i++)
-          (points[i + 1].dy - points[i].dy) / step,
-      ];
-      final tangents = List<double>.filled(points.length, 0);
-      tangents.first = slopes.first;
-      tangents.last = slopes.last;
-      // Shape-preserving cubic interpolation: harmonic-mean tangents flatten
-      // at peaks/plateaus, so a sudden spike cannot create negative traffic
-      // or overshoot its adjacent samples.
-      for (var i = 1; i < points.length - 1; i++) {
-        final before = slopes[i - 1], after = slopes[i];
-        if (before * after > 0) tangents[i] = 2 / (1 / before + 1 / after);
-      }
+      // Horizontal handles make each sample a soft crest/trough. Both
+      // handles remain inside their segment, so the cubic stays within its
+      // measured range and does not create negative traffic or overshoots.
       final path = Path()..moveTo(points.first.dx, points.first.dy);
       for (var i = 0; i < points.length - 1; i++) {
         path.cubicTo(
-          points[i].dx + step / 3,
-          points[i].dy + tangents[i] * step / 3,
-          points[i + 1].dx - step / 3,
-          points[i + 1].dy - tangents[i + 1] * step / 3,
+          points[i].dx + step * 0.45,
+          points[i].dy,
+          points[i + 1].dx - step * 0.45,
+          points[i + 1].dy,
           points[i + 1].dx,
           points[i + 1].dy,
         );

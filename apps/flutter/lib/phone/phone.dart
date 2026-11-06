@@ -530,6 +530,7 @@ class _TransitionHeader extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.only(top: top),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SizedBox(
             height: 44,

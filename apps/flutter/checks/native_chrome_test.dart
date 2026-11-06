@@ -8,6 +8,7 @@ import 'package:flutter/cupertino.dart'
     show CupertinoApp, CupertinoPageRoute, DefaultCupertinoLocalizations;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ppvpn_flutter/phone/native_chrome.dart';
+import 'package:ppvpn_flutter/icons.dart';
 import 'package:ppvpn_flutter/phone/phone.dart';
 import 'package:ppvpn_flutter/theme.dart';
 import 'package:ppvpn_flutter/widgets.dart';
@@ -102,6 +103,13 @@ void main() {
       expect(route.allowSnapshotting, isFalse);
       expect(find.byType(UiKitView), findsNothing);
       expect(find.text('Detail'), findsOneWidget);
+      final pageLeft = tester.getTopLeft(find.byType(PhoneScaffold).last).dx;
+      final arrowX = tester.getCenter(find.byIcon(AppIcons.chevronLeft)).dx;
+      expect(
+        arrowX - pageLeft,
+        closeTo(38, 0.01),
+        reason: 'the moving back control must match the native left inset',
+      );
       pending.complete(null);
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
