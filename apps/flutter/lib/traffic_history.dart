@@ -2,7 +2,7 @@ import 'src/rust/api.dart' as rust;
 
 /// Time-weighted chart buckets. Numeric rates keep using the original events.
 class TrafficHistory {
-  static const interval = Duration(seconds: 10);
+  static const interval = Duration(seconds: 2);
   Duration? _last;
   var _used = 0;
   var _up = 0;

@@ -1119,13 +1119,21 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
     return peak.toDouble();
   }
 
+  double _rangeProgress() {
+    // Range changes settle quickly; scrolling still spans the sample interval.
+    // Sharing its full duration with the range left spikes offscreen for seconds.
+    final duration = _slide.duration;
+    final fraction = duration == null
+        ? _slide.value
+        : (_slide.value * duration.inMicroseconds / 350000).clamp(0.0, 1.0);
+    return Curves.easeOutCubic.transform(fraction);
+  }
+
   void _sampled() {
     final now = DateTime.now();
     final since = _last == null ? Duration.zero : now.difference(_last!);
     _last = now;
-    _fromPeak =
-        _fromPeak +
-        (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(_slide.value);
+    _fromPeak = _fromPeak + (_toPeak - _fromPeak) * _rangeProgress();
     _toPeak = _peak(widget.app.history.value);
     final duration = Tokens.motion(
       context,
@@ -1144,8 +1152,7 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
     animation: _slide,
     builder: (context, _) {
       final t = _slide.value;
-      final peak =
-          _fromPeak + (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(t);
+      final peak = _fromPeak + (_toPeak - _fromPeak) * _rangeProgress();
       return CustomPaint(
         painter: TrafficSparklinePainter(
           widget.app.history.value,
@@ -1180,24 +1187,26 @@ class TrafficSparklinePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (samples.length < 4 || size.isEmpty) return;
     final step = size.width / (AppState.historyVisibleLength - 1);
-    // Keep endpoint tangents outside the clip. Appending/removing a sample
-    // must not reshape either visible edge before the horizontal slide starts.
-    final start = size.width - step * (samples.length - 4) + step * shift;
+    // Retain one offscreen segment on the left. Local Bezier handles and
+    // causal filtering keep existing segments unchanged as the window rolls.
+    final start = size.width - step * (samples.length - 3) + step * shift;
     canvas.clipRect(Offset.zero & size);
     Path line(int Function(rust.UiTraffic) pick) {
       final points = [
-        for (var i = 1; i < samples.length - 1; i++)
+        for (var i = 2; i < samples.length; i++)
           Offset(
-            start + step * (i - 1),
-            // Visual-only triangular smoothing tames packet/batch spikes.
+            start + step * (i - 2),
+            // Causal smoothing tames packet/batch spikes without waiting
+            // for a future sample before new traffic can enter the plot.
             // The rate labels above continue to display unfiltered traffic.
             size.height -
                 2 -
                 (size.height - 6) *
-                    (pick(samples[i - 1]) +
-                        2 * pick(samples[i]) +
-                        pick(samples[i + 1])) /
-                    (4 * peak),
+                    ((pick(samples[i - 2]) +
+                                2 * pick(samples[i - 1]) +
+                                pick(samples[i])) /
+                            (4 * peak))
+                        .clamp(0.0, 1.0),
           ),
       ];
       // Horizontal handles make each sample a soft crest/trough. Both

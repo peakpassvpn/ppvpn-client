@@ -92,10 +92,10 @@ class AppState with WidgetsBindingObserver {
   );
   final _historyClock = Stopwatch()..start();
   final _historySampler = TrafficHistory();
-  static const historyVisibleLength = 12;
-  // Two extra neighbours support a gentle three-sample visual filter;
-  // three more keep changing endpoint tangents outside the visible window.
-  static const historyLength = historyVisibleLength + 5;
+  static const historyVisibleLength = 6;
+  // Two older samples feed the causal filter; an offscreen segment keeps
+  // the left edge covered while a new point slides into view.
+  static const historyLength = historyVisibleLength + 3;
 
   /// When the connection last came on; null while it is not on. The
   /// connection card's 「本次连接」 timer counts from it.
