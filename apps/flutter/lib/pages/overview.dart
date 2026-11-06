@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../traffic_history.dart';
 import '../node_identity.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
@@ -1128,7 +1129,7 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
     _toPeak = _peak(widget.app.history.value);
     final duration = Tokens.motion(
       context,
-      since > const Duration(seconds: 3) ? const Duration(seconds: 3) : since,
+      since > TrafficHistory.interval ? TrafficHistory.interval : since,
     );
     if (duration == Duration.zero) {
       _slide.value = 1;
