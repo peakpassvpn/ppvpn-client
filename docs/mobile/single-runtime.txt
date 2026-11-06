@@ -23,6 +23,9 @@ Consumed core-owner commits
   ProfileSession::prepare now validates offline; direct ICMP/TCP uses
   ProfileSession::probe_entrances with cancellation and a 12-second outer
   bound, without Engine/Sail/listeners/locks/rule-set download.
+  Structural validation while disconnected does not overwrite the last
+  owner-accepted fallback. Only a serving owner that applied the same
+  revision advances that cache; rejected startup preserves prior rollback.
   Protocol availability requires On; VPN_REQUIRED while off. Native VPN
   state changes cancel direct probes, and Flutter user actions serialize
   direct probing with complete native start + Rust connect.

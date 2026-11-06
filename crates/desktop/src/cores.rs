@@ -350,7 +350,11 @@ impl Client {
                     Err(error) => Err(error),
                 };
                 match result {
-                    Ok(()) => self.mark_core_accepted(&current),
+                    Ok(()) => {
+                        if tunnel.has_applied_profile(&current.revision) {
+                            self.mark_core_accepted(&current);
+                        }
+                    }
                     Err(error) => {
                         if let Some(info) = error.info() {
                             if is_profile_rejection(&info) {
@@ -441,6 +445,44 @@ impl Client {
             }
         }
         Ok(())
+    }
+
+    /// Serializes profile priming and owner startup with profile sync.
+    /// Preserve the last owner-accepted fallback while disconnected; pure
+    /// structural validation cannot verify downloaded rule-set contents.
+    pub(crate) async fn enable_mobile_tunnel(
+        &self,
+        tunnel: &TunnelMode,
+    ) -> Result<(), ClientError> {
+        let _sync = self.cores.lock().await;
+        let current = self
+            .current_profile()
+            .ok_or(ClientError::StandardNotReady)?;
+        let result = async {
+            self.prepare_mobile_profile(&current.raw)?;
+            tunnel.set_profile(&current.raw, &current.revision).await?;
+            tunnel.enable().await
+        }
+        .await;
+        let still_current = self.current_profile().is_some_and(|latest| {
+            latest.revision == current.revision
+                && latest.team_id == current.team_id
+                && latest.raw == current.raw
+        });
+        if still_current {
+            match &result {
+                Ok(()) if tunnel.has_applied_profile(&current.revision) => {
+                    self.mark_core_accepted(&current)
+                }
+                Err(error) => {
+                    if let Some(info) = error.info().filter(is_profile_rejection) {
+                        self.mark_core_rejected(&current.revision, info);
+                    }
+                }
+                _ => {}
+            }
+        }
+        result
     }
 
     pub(crate) fn selected_node(&self) -> Option<String> {
