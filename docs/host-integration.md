@@ -761,3 +761,30 @@ it never starts the Engine itself. Legacy desktop Tun refusal remains unchanged.
 rejects Sail, BoringSSL, QUIC or TUN packages in its normal dependency graph. The
 core's dev-dependency intentionally enables full testing, so the default unit
 test graph is not evidence of a lightweight production dependency graph.
+
+
+### Native Shared capture host integration
+
+The signed macOS user agent configures `EngineConfig::with_capture_host` using
+`ppvpn_core::capture_host::{CaptureHost, CaptureHostApi, CaptureAttachment}` and
+pushes a physical `NetworkState` before start. Attach/detach/status use the exact
+`ppvpn_core::capture` DTOs through `Engine::{attach_capture, detach_capture,
+capture_status, capture_capabilities}` or the matching engine-host Core API
+paths. The broker's service/session generation, expiring resource lease, capture
+epoch and forwarder successful-start generation have separate scopes; do not
+substitute one for another. No raw FD is serialized. See
+[shared-core-capture.md](shared-core-capture.md#native-host-hooks-and-physical-network)
+for callback ordering, deadline/cancellation requirements, FD validation,
+physical-network filtering, cleanup/recovery and the remaining platform gate.
+
+
+For a public iOS packet-flow owner, construct `EngineConfig::new(Role::Tun,
+Platform::Ios, state_dir).with_capture_host(...)`, push the physical network,
+apply the profile and start the Engine. It initially has no inbound listener.
+Call `attach_capture` with a host-private HostLease token; the registered
+attachment must declare Packets transport and connect the queues to public
+NEPacketTunnelFlow APIs. Startup `tun.fd` and Device transport are refused in
+this mode. Android can opt in with the same sequence while keeping SocketProtect,
+or retain its static VpnService FD mode. `stop` detaches the current lease and
+stops that unique VPN forwarding owner. This is an explicit host migration,
+not automatic iOS descriptor extraction or a second App runtime.

@@ -1,7 +1,7 @@
 //! Shared-owner capture translation preparation. No native mutation occurs
 //! here; the frozen Sail driver will apply a plan under the Engine lease.
 use super::{Error, Inner};
-use crate::{error::codes, translate, Role};
+use crate::{error::codes, translate};
 
 impl Inner {
     /// Called while holding op, so profile/selection/pins/DNS cannot change
@@ -11,11 +11,11 @@ impl Inner {
         &self,
         capture: Option<&crate::capture::CaptureSpec>,
     ) -> Result<translate::Translation, Error> {
-        if self.config.role != Role::Shared {
+        if !self.config.uses_dynamic_capture() {
             return Err(Error::new(
                 codes::CORE_OPERATION_FAILED,
                 false,
-                "capture plans require a shared forwarding owner",
+                "capture plans require a dynamic forwarding owner",
             ));
         }
         let applied = self.live().applied.clone().ok_or_else(super::not_applied)?;
@@ -31,12 +31,9 @@ impl Inner {
             inbound.ipv6 = capture.ipv6;
             // Broker/host resources already own interface configuration and
             // routes. Native adoption must not duplicate auto_route setup.
-            if matches!(
-                capture.resource,
-                crate::capture::CaptureResource::HostLease { .. }
-            ) {
-                inbound.desktop = false;
-            }
+            // Frozen Sail dynamic TUN deliberately rejects auto_route for
+            // both host handles and internally created managed devices.
+            inbound.desktop = false;
             options.tun = Some(inbound);
         }
         translate::translate(&applied.profile, &options)

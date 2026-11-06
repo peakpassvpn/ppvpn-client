@@ -284,3 +284,61 @@ async fn forwarding_shutdown_waits_for_settlement_and_rejects_new_capture_work()
     assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
     assert_eq!(runtime.forwarding.lock().unwrap().stops, 0);
 }
+
+#[tokio::test]
+async fn shutdown_detaches_only_the_exact_active_capture_and_closes_admission() {
+    let driver = FakeRuntime::new();
+    let before = driver.forwarding.lock().unwrap().clone();
+    let controller = CaptureController::new(driver.clone());
+    controller.attach(attach(0)).await.unwrap();
+    let stopped = controller.detach_for_shutdown().await.unwrap();
+    assert_eq!(stopped.phase, CapturePhase::Detached);
+    assert!(!*driver.capture.lock().unwrap());
+    assert_eq!(*driver.forwarding.lock().unwrap(), before);
+    assert_eq!(
+        controller
+            .attach(attach(stopped.epoch))
+            .await
+            .unwrap_err()
+            .code,
+        CaptureErrorCode::CaptureOwnerStopping
+    );
+    assert_eq!(controller.detach_for_shutdown().await.unwrap(), stopped);
+}
+
+#[tokio::test]
+async fn native_invalidation_quarantines_a_settled_attachment() {
+    let controller = CaptureController::new(FakeRuntime::new());
+    let attached = controller.attach(attach(0)).await.unwrap();
+    let status = controller.invalidate_attached(vec![CaptureLeftover {
+        kind: ResourceKind::Worker,
+        resource_id: "native-failed".into(),
+    }]);
+    assert_eq!(status.phase, CapturePhase::RecoveryRequired);
+    assert_eq!(status.lease, attached.lease);
+    assert_eq!(
+        controller
+            .attach(attach(status.epoch))
+            .await
+            .unwrap_err()
+            .code,
+        CaptureErrorCode::CaptureRecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn cancelled_shutdown_detach_keeps_settling_native_cleanup() {
+    let driver = FakeRuntime::new();
+    let controller = CaptureController::new(driver.clone());
+    controller.attach(attach(0)).await.unwrap();
+    let gate = Arc::new(Gate::default());
+    *driver.gate.lock().unwrap() = Some(gate.clone());
+    let work = controller.clone();
+    let caller = tokio::spawn(async move { work.detach_for_shutdown().await });
+    gate.entered.notified().await;
+    caller.abort();
+    gate.release.notify_one();
+    controller.quiesce().await;
+    assert_eq!(controller.status().phase, CapturePhase::Detached);
+    assert!(!*driver.capture.lock().unwrap());
+}

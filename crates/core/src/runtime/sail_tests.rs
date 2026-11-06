@@ -1541,3 +1541,6 @@ async fn observation_reads_native_registry_and_successful_start_generation() {
     assert_eq!(next.native_runtime_id, Some(id));
     runtime.stop().await.unwrap();
 }
+
+#[path = "sail_capture_tests.rs"]
+mod capture_tests;

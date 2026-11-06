@@ -319,6 +319,10 @@ impl Inner {
     /// phase took (Go's `start timing`); none when already running.
     pub(super) async fn start(self: &Arc<Self>) -> Result<(), Error> {
         self.admit()?;
+        let capture_start_ticket = self
+            .capture
+            .stop_epoch
+            .load(std::sync::atomic::Ordering::SeqCst);
         let _op = self.op.lock().await;
         self.admit()?;
         if self.live().running {
@@ -326,6 +330,9 @@ impl Inner {
         }
         let mut timer = PhaseTimer::new();
         let result = self.start_phases(&mut timer).await;
+        if result.is_ok() {
+            self.install_capture(capture_start_ticket);
+        }
         tracing::info!(
             outcome = outcome(&result),
             tun = self.config.role == Role::Tun,
