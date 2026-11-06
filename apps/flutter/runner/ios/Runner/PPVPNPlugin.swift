@@ -9,7 +9,8 @@
 //   the simulator). `openUrl` -> Bool: an http(s) page in an
 //   SFSafariViewController presented as a page sheet over the app
 //   (lib/links.dart, #473, #535), anything else through the system.
-//   `closeBrowser`: that page dismissed, if up. `sampleSettings`: the
+//   `openAuthenticationUrl`: a private ASWebAuthenticationSession for device login.
+//   `closeBrowser`: the browsing or authentication page dismissed, if up. `sampleSettings`: the
 //   screenshot mode's page and theme in a simulator build (lib/sample.dart).
 // - com.peakpassvpn.ppvpn/vpn: `prepare` -> Bool (the VPN configuration is
 //   saved; the system asks the user the first time), `start`, `stop`.
@@ -26,6 +27,7 @@ import Flutter
 import NetworkExtension
 import Network
 import SafariServices
+import AuthenticationServices
 import UIKit
 import os
 
@@ -37,6 +39,9 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var sink: FlutterEventSink?
   private var observer: NSObjectProtocol?
   private weak var browser: SFSafariViewController?
+  private var authenticationSession: ASWebAuthenticationSession?
+  private var authenticationContext: PPVPNAuthenticationContext?
+  private var authenticationID: UUID?
   private let network = PPVPNAppNetworkMonitor()
   private var backgroundTasks: [Int: UIBackgroundTaskIdentifier] = [:]
 
@@ -58,7 +63,9 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
           result(nil)
         case "chooseLine": plugin.chooseLine(call.arguments, result: result)
         case "openUrl": plugin.open(call.arguments as? String, result: result)
+        case "openAuthenticationUrl": plugin.openAuthentication(call.arguments as? String, result: result)
         case "closeBrowser":
+          plugin.closeAuthentication()
           plugin.browser?.dismiss(animated: true)
           result(nil)
         case "sampleSettings": result(sampleSettings())
@@ -150,6 +157,42 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     top.present(page, animated: true)
     browser = page
     result(true)
+  }
+
+  /// The device-code flow completes through backend polling, not a redirect.
+  /// A fresh private session prevents the last browser account from silently
+  /// taking over after the app signs out. Do not fall back to shared cookies.
+  private func openAuthentication(_ text: String?, result: @escaping FlutterResult) {
+    guard let text, let url = URL(string: text),
+      ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+      let window = Self.topController()?.view.window else { return result(false) }
+    closeAuthentication()
+    let id = UUID()
+    let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { [weak self] _, _ in
+      DispatchQueue.main.async {
+        guard let self, self.authenticationID == id else { return }
+        self.authenticationID = nil
+        self.authenticationSession = nil
+        self.authenticationContext = nil
+      }
+    }
+    let context = PPVPNAuthenticationContext(window: window)
+    session.presentationContextProvider = context
+    session.prefersEphemeralWebBrowserSession = true
+    authenticationID = id
+    authenticationContext = context
+    authenticationSession = session
+    let started = session.start()
+    if !started { closeAuthentication() }
+    result(started)
+  }
+
+  private func closeAuthentication() {
+    authenticationID = nil
+    let session = authenticationSession
+    authenticationSession = nil
+    session?.cancel()
+    authenticationContext = nil
   }
 
   /// The controller on top of the app's key window, to present over.
@@ -332,4 +375,11 @@ private final class PPVPNAppNetworkMonitor: NSObject, FlutterStreamHandler {
     monitor = nil
     return nil
   }
+}
+
+/// Retained for the whole authentication session; its provider is weak.
+private final class PPVPNAuthenticationContext: NSObject, ASWebAuthenticationPresentationContextProviding {
+  let window: UIWindow
+  init(window: UIWindow) { self.window = window }
+  func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { window }
 }

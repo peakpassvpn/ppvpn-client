@@ -4,6 +4,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter/cupertino.dart'
+    show CupertinoApp, CupertinoPageRoute, DefaultCupertinoLocalizations;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ppvpn_flutter/phone/native_chrome.dart';
 import 'package:ppvpn_flutter/phone/phone.dart';
@@ -15,7 +17,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'secondary navigation starts while native image work is pending',
+    'secondary navigation keeps the same native controls during route motion',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       NativeChrome.enabled = true;
@@ -55,7 +57,10 @@ void main() {
       await tester.pumpWidget(
         WidgetsApp(
           color: const Color(0xff000000),
-          localizationsDelegates: FLocalizations.localizationsDelegates,
+          localizationsDelegates: [
+            ...FLocalizations.localizationsDelegates,
+            DefaultCupertinoLocalizations.delegate,
+          ],
           pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
             settings: settings,
             pageBuilder: (context, _, _) => builder(context),
@@ -90,6 +95,22 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
       expect(pending.isCompleted, isFalse);
       expect(find.text('detail content'), findsOneWidget);
+      final detailContext = tester.element(find.text('detail content'));
+      final route = ModalRoute.of(detailContext)!;
+      expect(route, isA<CupertinoPageRoute<void>>());
+      expect(route.barrierColor, isNull);
+      expect(route.allowSnapshotting, isFalse);
+      expect(find.byType(UiKitView), findsNWidgets(2));
+      expect(
+        tester
+            .widgetList<NativeChromeView>(find.byType(NativeChromeView))
+            .where((view) => view.kind == 'navigation')
+            .every((view) => !view.frozen),
+        isTrue,
+      );
+      // A first visit must not flash a differently styled Flutter header
+      // while UIKit prepares its own navigation image in the background.
+      expect(find.text('Detail'), findsNothing);
       pending.complete(null);
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
@@ -117,6 +138,7 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     var creates = 0;
     var snapshots = 0;
+    final visibility = <bool>[];
     int? id;
     messenger.setMockMethodCallHandler(SystemChannels.platform_views, (
       call,
@@ -127,6 +149,8 @@ void main() {
         messenger.setMockMethodCallHandler(
           MethodChannel('com.peakpassvpn.ppvpn/native-chrome/$id'),
           (call) async {
+            if (call.method == 'setFrozen')
+              visibility.add(call.arguments as bool);
             if (call.method == 'snapshot') {
               snapshots++;
               return bytes;
@@ -144,14 +168,15 @@ void main() {
         null,
       );
     });
-    Widget view(bool frozen) => Directionality(
+    Widget view(bool frozen, {int selected = 2}) => Directionality(
       textDirection: TextDirection.ltr,
       child: SizedBox(
         width: 375,
         height: 100,
         child: NativeChromeView(
           kind: 'tabs',
-          configuration: const {'selected': 2},
+          configuration: {'selected': selected},
+          placeholder: const Text('transition chrome'),
           frozen: frozen,
           onAction: (_) {},
         ),
@@ -164,13 +189,23 @@ void main() {
     );
     await tester.pump();
     expect(snapshots, greaterThan(0));
+    expect(visibility.last, isFalse);
     await tester.pumpWidget(view(true));
     await tester.pumpAndSettle();
+    expect(visibility.last, isTrue);
     expect(find.byType(Image), findsOneWidget);
     expect(find.byType(UiKitView, skipOffstage: false), findsOneWidget);
     expect(creates, 1);
-    await tester.pumpWidget(view(false));
+    await tester.pumpWidget(view(true, selected: 1));
     await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNothing);
+    expect(find.text('transition chrome'), findsOneWidget);
+    expect(find.byType(UiKitView), findsNothing);
+    expect(find.byType(UiKitView, skipOffstage: false), findsOneWidget);
+    expect(creates, 1);
+    await tester.pumpWidget(view(false, selected: 1));
+    await tester.pumpAndSettle();
+    expect(visibility.last, isFalse);
     expect(find.byType(Image), findsNothing);
     expect(creates, 1);
     await tester.pumpWidget(const SizedBox());
@@ -299,4 +334,72 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     },
   );
+  testWidgets('iOS detail route supports cancelled and completed back swipes', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    NativeChrome.enabled = false;
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final navigator = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      CupertinoApp(
+        navigatorKey: navigator,
+        localizationsDelegates: FLocalizations.localizationsDelegates,
+        home: FTheme(
+          data: Tokens.light.forui,
+          child: Builder(
+            builder: (context) => PhoneScaffold(
+              title: 'Root',
+              child: Center(
+                child: Pressable(
+                  onPress: () => pushPhonePage<void>(
+                    context,
+                    const PhoneScaffold(
+                      title: 'Detail',
+                      back: true,
+                      child: Text('gesture detail'),
+                    ),
+                  ),
+                  builder: (_, _) => const Text('open gesture detail'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('open gesture detail'));
+    await tester.pumpAndSettle();
+    final route =
+        ModalRoute.of(tester.element(find.text('gesture detail')))!
+            as CupertinoPageRoute<void>;
+    expect(route.barrierColor, isNull);
+    expect(route.popGestureEnabled, isTrue);
+    final cancel = await tester.startGesture(const Offset(2, 400));
+    await cancel.moveBy(const Offset(90, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(navigator.currentState!.userGestureInProgress, isTrue);
+    await cancel.moveBy(const Offset(-80, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    await cancel.up();
+    await tester.pumpAndSettle();
+    expect(find.text('gesture detail'), findsOneWidget);
+    expect(route.animation!.value, 1);
+    final complete = await tester.startGesture(const Offset(2, 400));
+    await complete.moveBy(const Offset(350, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    await complete.up();
+    await tester.pumpAndSettle();
+    expect(find.text('gesture detail'), findsNothing);
+    expect(navigator.currentState!.userGestureInProgress, isFalse);
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
+  });
 }

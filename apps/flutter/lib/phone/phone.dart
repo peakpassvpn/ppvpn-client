@@ -8,9 +8,11 @@
 import '../icons.dart';
 
 import 'dart:async';
-import 'dart:io' show Platform;
+
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
@@ -213,6 +215,7 @@ class _TabBar extends StatelessWidget {
         child: NativeChromeView(
           kind: 'tabs',
           frozen: !settled,
+          placeholder: _TransitionTabs(selected: tab.index, bottom: bottom),
           configuration: {
             'labels': [s('overview'), s('nodes'), s('me')],
             'selected': tab.index,
@@ -377,7 +380,8 @@ class PhoneScaffold extends StatelessWidget {
               height: top + (large ? 96 : 44),
               child: NativeChromeView(
                 kind: 'navigation',
-                frozen: !settled,
+                // Keep one native bar throughout the route transition.
+                frozen: false,
                 configuration: {
                   'title': brand ? s('app') : title,
                   'back': back,
@@ -490,6 +494,75 @@ class PhoneScaffold extends StatelessWidget {
   }
 }
 
+class _TransitionTabs extends StatelessWidget {
+  const _TransitionTabs({required this.selected, required this.bottom});
+  final int selected;
+  final double bottom;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final s = S.current;
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 0, 16, bottom > 20 ? bottom - 12 : 8),
+        child: Container(
+          width: 280,
+          height: 62,
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: t.phoneBarFill,
+            borderRadius: BorderRadius.circular(32),
+            border: Border.all(color: t.hair),
+          ),
+          child: Row(
+            children: [
+              for (final (index, name, label) in [
+                (0, 'overview', s('overview')),
+                (1, 'nodes', s('nodes')),
+                (2, 'me', s('me')),
+              ])
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(28),
+                      color: selected == index
+                          ? t.t1.withValues(alpha: .06)
+                          : null,
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TabIcon(
+                          tab: name,
+                          filled: selected == index,
+                          color: selected == index ? t.accent : t.t1,
+                          size: 24,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          label,
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontFamily: '.SF Pro Text',
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                            color: selected == index ? t.accent : t.t1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// The scroll padding of a phone page: the page padding, and at the bottom
 /// the safe area (with the tab bar, PhoneShell) as well.
 EdgeInsets phoneScrollPadding(BuildContext context) => EdgeInsets.fromLTRB(
@@ -582,6 +655,15 @@ class PhoneBell extends StatelessWidget {
   }
 }
 
+/// The phone keeps iOS gestures and edge shadow without dimming the exposed
+/// route with a rectangular modal barrier during push/pop or a cancelled swipe.
+class _PhonePageRoute<T> extends CupertinoPageRoute<T> {
+  _PhonePageRoute({required super.builder}) : super(allowSnapshotting: false);
+
+  @override
+  Color? get barrierColor => null;
+}
+
 /// Pushes [page] full screen. iOS: the platform's page route, which also
 /// goes back with a swipe from the screen's left edge (#535). Elsewhere it
 /// slides in from the end over [Tokens.motionPage]. Routes sit beside the
@@ -595,10 +677,8 @@ Future<T?> pushPhonePage<T>(BuildContext context, Widget page) {
     );
   }
 
-  if (Platform.isIOS)
-    return Navigator.of(
-      context,
-    ).push<T>(CupertinoPageRoute<T>(builder: themed, allowSnapshotting: false));
+  if (defaultTargetPlatform == TargetPlatform.iOS)
+    return Navigator.of(context).push<T>(_PhonePageRoute<T>(builder: themed));
   return Navigator.of(context).push<T>(
     PageRouteBuilder<T>(
       transitionDuration: Tokens.motion(context, Tokens.motionPage),

@@ -64,8 +64,10 @@ class NativeChromeView extends StatefulWidget {
     required this.configuration,
     required this.onAction,
     this.frozen = false,
+    this.placeholder,
   });
   final bool frozen;
+  final Widget? placeholder;
   final String kind;
   final Map<String, Object?> configuration;
   final ValueChanged<String> onAction;
@@ -125,7 +127,18 @@ class _NativeChromeViewState extends State<NativeChromeView> {
         widget.onAction(call.arguments as String);
       }
     });
+    unawaited(_setFrozen());
     unawaited(_update());
+  }
+
+  Future<void> _setFrozen() async {
+    try {
+      await _channel?.invokeMethod<void>('setFrozen', widget.frozen);
+    } on PlatformException catch (error) {
+      debugPrint('native chrome visibility: ${error.code}');
+    } on MissingPluginException {
+      // Older runners still receive Flutter's offstage visibility.
+    }
   }
 
   Future<void> _update() async {
@@ -136,7 +149,7 @@ class _NativeChromeViewState extends State<NativeChromeView> {
       _configuration = configuration;
       // Cache the exact native appearance while idle; route motion uses this
       // Flutter image instead of swapping to a differently styled header.
-      _warmSnapshot();
+      if (widget.kind == 'tabs') _warmSnapshot();
     } on PlatformException catch (error) {
       debugPrint('native chrome update: ${error.code}');
     } on MissingPluginException {
@@ -154,9 +167,10 @@ class _NativeChromeViewState extends State<NativeChromeView> {
   @override
   void didUpdateWidget(covariant NativeChromeView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.frozen != widget.frozen) unawaited(_setFrozen());
     unawaited(_update());
     if (oldWidget.frozen && !widget.frozen) {
-      _warmSnapshot();
+      if (widget.kind == 'tabs') _warmSnapshot();
     }
   }
 
@@ -171,10 +185,9 @@ class _NativeChromeViewState extends State<NativeChromeView> {
     fit: StackFit.expand,
     children: [
       Offstage(
-        offstage:
-            widget.frozen &&
-            _snapshot != null &&
-            _snapshotConfiguration == jsonEncode(widget.configuration),
+        // Platform-view backing surfaces must never participate in a moving
+        // route, even on a first visit or after theme/locale invalidates PNGs.
+        offstage: widget.frozen,
         child: UiKitView(
           viewType: 'com.peakpassvpn.ppvpn/native-${widget.kind}',
           creationParams: widget.configuration,
@@ -186,6 +199,11 @@ class _NativeChromeViewState extends State<NativeChromeView> {
           onPlatformViewCreated: _created,
         ),
       ),
+      if (widget.frozen &&
+          (_snapshot == null ||
+              _snapshotConfiguration != jsonEncode(widget.configuration)) &&
+          widget.placeholder != null)
+        ExcludeSemantics(child: IgnorePointer(child: widget.placeholder!)),
       if (widget.frozen &&
           _snapshot != null &&
           _snapshotConfiguration == jsonEncode(widget.configuration))
@@ -202,9 +220,9 @@ class _NativeChromeViewState extends State<NativeChromeView> {
   );
 }
 
-/// UIKit glass remains native while settled. During push/pop (including an
-/// interrupted back swipe), use cached native images so platform-view backing
-/// surfaces never cross the moving route's shadow or clip, without style swaps.
+/// Track route motion for the bottom tabs' cached transition image.
+/// Navigation bars remain native throughout the route so their system fonts
+/// and back controls never swap to a differently styled placeholder.
 class RouteChrome extends StatefulWidget {
   const RouteChrome({super.key, required this.builder});
   final Widget Function(BuildContext context, bool settled) builder;

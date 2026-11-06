@@ -335,7 +335,7 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   # Phone constraints and text scaling need no emulator or system VPN.
   # Run once on Linux, after the bridge types have been generated.
   if [ "$os" = linux ]; then
-    flutter test checks/native_chrome_test.dart --no-pub
+    flutter test checks/authentication_browser_test.dart checks/native_chrome_test.dart --no-pub
     cjk_font="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}"
     if [ -n "${PPVPN_UI_TEST_CJK_FONT:-}" ] || [ -f "$cjk_font" ]; then
       PPVPN_UI_TEST_CJK_FONT="$cjk_font" \

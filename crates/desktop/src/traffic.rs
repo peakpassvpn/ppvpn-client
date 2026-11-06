@@ -22,12 +22,12 @@ const TRAFFIC_INTERVAL: Duration = if cfg!(test) {
 pub(crate) fn accumulate(
     sample: &mut TrafficSample,
     meter: &mut TrafficMeter,
-    totals: Option<(u64, u64)>,
+    totals: Option<core_ipc::CoreTraffic>,
     now: Instant,
 ) {
     match totals {
-        Some((up, down)) => {
-            let part = meter.sample(up, down, now);
+        Some(traffic) => {
+            let part = meter.sample_core(traffic, now);
             sample.up_bps = sample.up_bps.saturating_add(part.up_bps);
             sample.down_bps = sample.down_bps.saturating_add(part.down_bps);
             sample.up_total = sample.up_total.saturating_add(part.up_total);
@@ -54,15 +54,12 @@ impl Client {
                     return;
                 }
                 let standard = match client.standard.transport() {
-                    Ok(transport) => core_ipc::get_traffic(transport.as_ref())
-                        .await
-                        .ok()
-                        .map(|traffic| traffic.totals()),
+                    Ok(transport) => core_ipc::get_traffic(transport.as_ref()).await.ok(),
                     Err(_) => None,
                 };
                 let enhanced = match &client.tunnel {
-                    Some(tunnel) => tunnel.traffic_totals().await,
-                    None => client.enhanced.traffic_totals().await,
+                    Some(tunnel) => tunnel.traffic_sample().await,
+                    None => client.enhanced.traffic_sample().await,
                 };
                 let now = Instant::now();
                 let mut sample = TrafficSample {
@@ -108,28 +105,82 @@ mod tests {
         let start = Instant::now();
         let (mut standard, mut enhanced) = (TrafficMeter::default(), TrafficMeter::default());
         let mut first = empty();
-        accumulate(&mut first, &mut standard, Some((100, 1_000)), start);
-        accumulate(&mut first, &mut enhanced, Some((50, 500)), start);
+        accumulate(
+            &mut first,
+            &mut standard,
+            Some(core_ipc::CoreTraffic {
+                upload_bytes: 100,
+                download_bytes: 1_000,
+                measured_at: None,
+            }),
+            start,
+        );
+        accumulate(
+            &mut first,
+            &mut enhanced,
+            Some(core_ipc::CoreTraffic {
+                upload_bytes: 50,
+                download_bytes: 500,
+                measured_at: None,
+            }),
+            start,
+        );
         assert_eq!((first.up_bps, first.down_bps), (0, 0));
         assert_eq!((first.up_total, first.down_total), (150, 1_500));
 
         let later = start + Duration::from_secs(1);
         let mut second = empty();
-        accumulate(&mut second, &mut standard, Some((300, 2_000)), later);
-        accumulate(&mut second, &mut enhanced, Some((150, 700)), later);
+        accumulate(
+            &mut second,
+            &mut standard,
+            Some(core_ipc::CoreTraffic {
+                upload_bytes: 300,
+                download_bytes: 2_000,
+                measured_at: None,
+            }),
+            later,
+        );
+        accumulate(
+            &mut second,
+            &mut enhanced,
+            Some(core_ipc::CoreTraffic {
+                upload_bytes: 150,
+                download_bytes: 700,
+                measured_at: None,
+            }),
+            later,
+        );
         assert_eq!((second.up_bps, second.down_bps), (300, 1_200));
 
         // Enhanced mode turned off: only the standard core counts.
         let third_at = later + Duration::from_secs(1);
         let mut third = empty();
-        accumulate(&mut third, &mut standard, Some((400, 2_100)), third_at);
+        accumulate(
+            &mut third,
+            &mut standard,
+            Some(core_ipc::CoreTraffic {
+                upload_bytes: 400,
+                download_bytes: 2_100,
+                measured_at: None,
+            }),
+            third_at,
+        );
         accumulate(&mut third, &mut enhanced, None, third_at);
         assert_eq!((third.up_bps, third.down_bps), (100, 100));
 
         // Back on with fresh counters: the first tick is a baseline.
         let fourth_at = third_at + Duration::from_secs(1);
         let mut fourth = empty();
-        accumulate(&mut fourth, &mut enhanced, Some((10, 10)), fourth_at);
+        accumulate(
+            &mut fourth,
+            &mut enhanced,
+            Some(core_ipc::CoreTraffic {
+                upload_bytes: 10,
+                download_bytes: 10,
+                measured_at: None,
+            }),
+            fourth_at,
+        );
         assert_eq!((fourth.up_bps, fourth.down_bps), (0, 0));
     }
 }
