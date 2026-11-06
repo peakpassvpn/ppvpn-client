@@ -319,3 +319,10 @@ nonblocking mode is shared by duplicated open-file descriptions. Transport and
 actual interface identity remain fixed for the staged resource. A native ingress
 that has already failed during host commit is rolled back rather than reported
 as a successful attachment.
+
+
+Shared endpoint data-plane bypass rules are restricted to TUN ingress, so they
+cannot preempt a mixed user's fixed-node credential route or the routed user's
+profile rules. Their bootstrap DNS matchers remain explicit physical-resolver
+overrides in the DNS policy. Legacy translation is unchanged; Shared capture
+preparation keeps these same route and DNS rules in both attached/detached plans.
