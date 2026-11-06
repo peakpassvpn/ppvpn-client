@@ -1,4 +1,4 @@
-//! Shared-owner capture translation preparation. No native mutation occurs
+//! Dynamic-owner capture translation preparation. No native mutation occurs
 //! here; the frozen Sail driver will apply a plan under the Engine lease.
 use super::{Error, Inner};
 use crate::{error::codes, translate};

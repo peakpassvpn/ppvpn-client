@@ -220,6 +220,7 @@ async fn native_dirty_rollback_blocks_capture_but_keeps_forwarder_running() {
         .any(|l| l.name == "capture/native-capture-1" && l.kind == crate::LeftoverKind::Task));
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mobile_native_packet_owner_has_no_proxy_and_keeps_android_protection() {
     for platform in [crate::Platform::Ios, crate::Platform::Android] {
