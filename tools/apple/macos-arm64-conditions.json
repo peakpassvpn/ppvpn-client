@@ -11,13 +11,18 @@
     "agent_ffi": "strip -x",
     "service": "strip=true"
   },
-  "signing": "ad-hoc, no notarization",
+  "signing": {
+    "app": "ad-hoc",
+    "dmg": "ad-hoc",
+    "pkg": "unsigned",
+    "notarization": false
+  },
   "toolchain": {
     "rust": "1.98.1",
     "flutter_pinned": "3.47.7",
-    "flutter_actual": null,
-    "xcode_actual": null,
-    "macos_sdk_historical": "26.5"
+    "flutter_engine_verified_sdk": "3.47.7",
+    "xcode": "26.6 (17F113)",
+    "macos_sdk": "26.5 (25F70)"
   },
   "build_number": "343",
   "deployment_target": "macOS 13.0",

@@ -39,11 +39,13 @@ architectures, build number and signing/strip settings. Record generated-source 
 separately from authored changes. A reference checkout containing generated files or device
 diagnostics is not a clean reproducible source snapshot.
 
-The conditions JSON is a template. Its unknown historical toolchain fields are deliberately
-`null`; the comparator rejects incomplete conditions. Pin and record the actual toolchains
-for a fresh baseline and candidate before using the comparison as final evidence. Source
-commit arguments are provenance supplied by the caller; the inventory cannot prove how a
-binary was compiled.
+The conditions JSON records the historical macOS recipe. App metadata identifies Xcode
+26.6 (17F113) and macOS SDK 26.5 (25F70); the retained Flutter 3.47.7 SDK's release engine
+has the same arm64 Mach-O UUID as the signed baseline framework. This cross-check does not
+independently attest every Dart compiler invocation. Preserve source/build logs alongside
+these artifact facts, and record the actual candidate toolchain before comparing. The
+comparator rejects unknown/null conditions. Source commit arguments are supplied by the
+caller; inventory cannot prove how a binary was compiled.
 
 ## Current packaging entry points
 
