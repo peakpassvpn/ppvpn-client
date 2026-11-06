@@ -361,6 +361,16 @@ impl Inner {
                 a.pins.clone(),
             )
         };
+        if self.config.uses_dynamic_capture()
+            && self.config.capture_host.is_some()
+            && self.network.host().is_none()
+        {
+            return Err(Error::new(
+                codes::CORE_OPERATION_FAILED,
+                true,
+                "native owner requires physical network state before start",
+            ));
+        }
         // The listeners' ports may have been taken while stopped.
         self.prepare_listeners()?;
         timer.mark("local_proxy");
