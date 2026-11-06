@@ -515,6 +515,7 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 - **内存**：
   - 移动端的实例用 Sail 的 mobile profile：单线程，小缓冲和小窗口，`inbound.max_connections` 为 512。`sail::embed` 默认是 desktop profile，所以由引擎按 `platform` 设置。
   - `EngineConfig::with_max_connections(n)` 替换 profile 的上限，0 表示不限。**iOS 网络扩展设 128**：系统在 50 MiB 时结束扩展进程，#388 在这组参数下测得各场景峰值 28.8 MiB。Android 用 profile 的 512。
+  - iOS 的 TUN 实例把 `udp.session_check_interval` 设为 `1s`：已应答的 DNS UDP 会话虽已标记过期，仍要等清理才释放并发名额；默认 `10s` 会让短时 DNS 请求占满 128 个名额。只加快过期回收，不改变会话上限或空闲超时。其他平台及 Standard 实例保持默认清理周期。
   - 没有内存告警接口，因为 Sail 没有收缩缓存的手段。内存上限靠 profile 加并发上限保证。
 - **休眠**：iOS 的 `sleep()` / `wake()` 照转 `Engine::sleep` / `Engine::wake`（第 4.7 节）。
 - **Profile**：经 `apply` 传入，只放在内存里（`docs/mobile.md`）。
