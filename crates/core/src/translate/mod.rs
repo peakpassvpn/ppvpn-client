@@ -296,7 +296,11 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     b.outbounds.extend(node_outbounds);
 
     let dns_policy = options.dns_policy.as_ref().or(options.tun.as_ref());
-    if options.dns_policy.is_some() {
+    if options
+        .dns_policy
+        .as_ref()
+        .is_some_and(|policy| policy.desktop)
+    {
         b.auto_detect_interface = true;
     }
     if let Some(tun) = dns_policy {

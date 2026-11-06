@@ -77,7 +77,7 @@ pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
         return Err(Error::invalid(
             codes::CORE_OPERATION_FAILED,
             "role",
-            "shared forwarding is currently macOS-only; existing mobile lifecycle is unchanged",
+            "Shared forwarding is macOS-only; mobile forwarding belongs to the VPN owner",
         ));
     }
 
@@ -90,6 +90,13 @@ pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
     }
 
     let fd = config.tun.as_ref().and_then(|tun| tun.fd);
+    if fd.is_some() && config.uses_dynamic_capture() {
+        return Err(Error::invalid(
+            codes::CORE_OPERATION_FAILED,
+            "tun.fd",
+            "dynamic capture takes only the registered host transport, not a startup descriptor",
+        ));
+    }
     let mobile_tun = config.role == Role::Tun && crate::mobile::mobile(config.platform);
     if fd.is_some() && !mobile_tun {
         return Err(Error::invalid(
@@ -220,7 +227,7 @@ impl Inner {
     /// The TUN of a TUN instance (None otherwise), with the host's IPv6 as
     /// last probed.
     pub(super) fn tun_options(&self) -> Option<Tun> {
-        if self.config.role != Role::Tun {
+        if self.config.role != Role::Tun || self.config.uses_dynamic_capture() {
             return None;
         }
         self.dns_policy_options()
@@ -334,7 +341,7 @@ impl Inner {
     /// the path is the pushed network's; none pushed yet, or offline, is
     /// read as a path (no hand-off): the next network probes again.
     fn read_host_ipv6(&self) -> Ipv6State {
-        if !desktop(self.config.platform) {
+        if !desktop(self.config.platform) || self.config.role == Role::Shared {
             let route = self.host_ipv6_route();
             let state = Ipv6State {
                 ipv6: true,

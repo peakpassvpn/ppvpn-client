@@ -56,7 +56,7 @@ impl NetworkState {
         self.track.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn host(&self) -> MutexGuard<'_, Option<String>> {
+    pub(super) fn host(&self) -> MutexGuard<'_, Option<String>> {
         self.host.lock().unwrap_or_else(|e| e.into_inner())
     }
 }

@@ -249,9 +249,9 @@ impl Inner {
                 // a restart, and a listener that could not move (it
                 // listens no more) is one too.
                 Err(e) if e.code == "needs_restart" || e.code == "inbound_lost" => {
-                    if self.config.role == crate::Role::Shared {
+                    if self.config.uses_dynamic_capture() {
                         return Err(Error::new(crate::error::codes::CORE_OPERATION_FAILED, false,
-                            "shared forwarding refuses a reload requiring restart; existing proxy sessions must survive"));
+                            "dynamic forwarding refuses a reload requiring restart; capture ownership must survive"));
                     }
                     tracing::warn!(error = %e, "the reload needs a restart");
                     reasons.push(e.code.clone());
@@ -259,11 +259,11 @@ impl Inner {
                 Err(e) => return Err(self.runtime_error(&e)),
             }
         }
-        if self.config.role == crate::Role::Shared {
+        if self.config.uses_dynamic_capture() {
             return Err(Error::new(
                 crate::error::codes::CORE_OPERATION_FAILED,
                 false,
-                "shared forwarding refuses a capture change requiring runtime restart",
+                "dynamic forwarding refuses a capture change requiring runtime restart",
             ));
         }
         tracing::info!(reasons = reasons.join("; "), "full restart");
