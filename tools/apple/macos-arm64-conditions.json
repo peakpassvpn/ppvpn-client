@@ -1,0 +1,26 @@
+{
+  "architecture": "arm64",
+  "optimization": {
+    "flutter_bridge": "release",
+    "agent_ffi": "release",
+    "service": "service: opt-level=s, fat LTO, codegen-units=1",
+    "shell": "Flutter release, identical Dart feature set"
+  },
+  "strip": {
+    "flutter_bridge": "shipping release recipe, no additional strip -x",
+    "agent_ffi": "strip -x",
+    "service": "strip=true"
+  },
+  "signing": "ad-hoc, no notarization",
+  "toolchain": {
+    "rust": "1.98.1",
+    "flutter_pinned": "3.47.7",
+    "flutter_actual": null,
+    "xcode_actual": null,
+    "macos_sdk_historical": "26.5"
+  },
+  "build_number": "343",
+  "deployment_target": "macOS 13.0",
+  "package_recipe": "package-app.sh; HFS+ UDZO zlib-level=9 DMG; pkgbuild",
+  "measurement": "regular file bytes, symlinks not dereferenced"
+}
