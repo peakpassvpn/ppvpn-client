@@ -93,6 +93,16 @@ async fn engine() -> (Engine, Arc<Host>, tempfile::TempDir) {
         .with_local_proxy(crate::LocalProxyConfig::new().with_preferred_port(0))
         .with_capture_host(CaptureHost::new(Arc::new(Provider(host.clone()))));
     let engine = Engine::new(config).await.unwrap();
+    engine
+        .apply(ApplyRequest::new(super::lifecycle_tests::profile(
+            super::lifecycle_tests::R1,
+        )))
+        .await
+        .unwrap();
+    let missing_network = engine.start().await.unwrap_err();
+    assert_eq!(missing_network.code, crate::codes::CORE_OPERATION_FAILED);
+    assert!(missing_network.retryable);
+    assert_eq!(engine.runtime_observation().owner.generation, 0);
     // Explicit physical network input overrides Sail detection; no host OS
     // network state is changed. All test destinations are loopback.
     let state = crate::NetworkState {
@@ -101,12 +111,6 @@ async fn engine() -> (Engine, Arc<Host>, tempfile::TempDir) {
         ..Default::default()
     };
     engine.set_network_state(state).unwrap();
-    engine
-        .apply(ApplyRequest::new(super::lifecycle_tests::profile(
-            super::lifecycle_tests::R1,
-        )))
-        .await
-        .unwrap();
     engine.start().await.unwrap();
     (engine, host, dir)
 }
@@ -324,6 +328,9 @@ async fn mobile_dynamic_owner_never_restarts_to_recover_a_failed_reload() {
         CaptureHost::new(Arc::new(Provider(Arc::new(Host::default())))),
     );
     let engine = Engine::with_runtime(config, fake.clone());
+    engine
+        .set_network_state(crate::NetworkState::offline())
+        .unwrap();
     engine
         .apply(ApplyRequest::new(super::lifecycle_tests::profile(
             super::lifecycle_tests::R1,
