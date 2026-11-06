@@ -176,9 +176,9 @@ impl Engine {
         self.inner.runtime.observation()
     }
 
-    /// Dynamic capture is separate from legacy Role::Tun. The pinned Sail
-    /// adapter is enabled only for a Shared owner with native host hooks and
-    /// an explicit physical-network snapshot. Legacy roles refuse capture.
+    /// Dynamic capture is separate from static Tun startup. Shared and
+    /// explicitly opted-in mobile Tun owners require native host hooks and
+    /// a physical-network snapshot. Other configurations refuse capture.
     pub fn capture_capabilities(&self) -> crate::capture::CaptureCapabilities {
         self.inner.capture_capabilities()
     }
