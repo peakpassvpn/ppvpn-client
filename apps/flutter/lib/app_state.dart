@@ -85,11 +85,14 @@ class AppState with WidgetsBindingObserver {
     const rust.UiTraffic(up: 0, down: 0),
   );
 
-  /// The last [historyLength] samples, oldest first (the sparkline).
+  /// Visible traffic plus offscreen neighbours for stable curve tangents.
   final ValueNotifier<List<rust.UiTraffic>> history = ValueNotifier(
     List.filled(historyLength, const rust.UiTraffic(up: 0, down: 0)),
   );
-  static const historyLength = 30;
+  static const historyVisibleLength = 30;
+  // Two extra neighbours support a gentle three-sample visual filter;
+  // three more keep changing endpoint tangents outside the visible window.
+  static const historyLength = historyVisibleLength + 5;
 
   /// When the connection last came on; null while it is not on. The
   /// connection card's 「本次连接」 timer counts from it.

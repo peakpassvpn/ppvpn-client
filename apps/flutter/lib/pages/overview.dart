@@ -1122,7 +1122,9 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
     final now = DateTime.now();
     final since = _last == null ? Duration.zero : now.difference(_last!);
     _last = now;
-    _fromPeak = _fromPeak + (_toPeak - _fromPeak) * _slide.value;
+    _fromPeak =
+        _fromPeak +
+        (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(_slide.value);
     _toPeak = _peak(widget.app.history.value);
     final duration = Tokens.motion(
       context,
@@ -1144,7 +1146,7 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
       final peak =
           _fromPeak + (_toPeak - _fromPeak) * Curves.easeOutCubic.transform(t);
       return CustomPaint(
-        painter: _Sparkline(
+        painter: TrafficSparklinePainter(
           widget.app.history.value,
           up: widget.up,
           down: widget.down,
@@ -1158,8 +1160,8 @@ class _SlidingSparklineState extends State<_SlidingSparkline>
 
 /// Download (filled) and upload lines over the last samples, on one scale
 /// ([peak]), [shift] steps to the right of their place (the slide in).
-class _Sparkline extends CustomPainter {
-  _Sparkline(
+class TrafficSparklinePainter extends CustomPainter {
+  TrafficSparklinePainter(
     this.samples, {
     required this.up,
     required this.down,
@@ -1175,16 +1177,26 @@ class _Sparkline extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (samples.length < 2 || size.isEmpty) return;
-    final step = size.width / (AppState.historyLength - 1);
-    final start = size.width - step * (samples.length - 1) + step * shift;
+    if (samples.length < 4 || size.isEmpty) return;
+    final step = size.width / (AppState.historyVisibleLength - 1);
+    // Keep endpoint tangents outside the clip. Appending/removing a sample
+    // must not reshape either visible edge before the horizontal slide starts.
+    final start = size.width - step * (samples.length - 4) + step * shift;
     canvas.clipRect(Offset.zero & size);
     Path line(int Function(rust.UiTraffic) pick) {
       final points = [
-        for (var i = 0; i < samples.length; i++)
+        for (var i = 1; i < samples.length - 1; i++)
           Offset(
-            start + step * i,
-            size.height - 2 - (size.height - 6) * pick(samples[i]) / peak,
+            start + step * (i - 1),
+            // Visual-only triangular smoothing tames packet/batch spikes.
+            // The rate labels above continue to display unfiltered traffic.
+            size.height -
+                2 -
+                (size.height - 6) *
+                    (pick(samples[i - 1]) +
+                        2 * pick(samples[i]) +
+                        pick(samples[i + 1])) /
+                    (4 * peak),
           ),
       ];
       final slopes = [
@@ -1240,7 +1252,7 @@ class _Sparkline extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_Sparkline old) =>
+  bool shouldRepaint(TrafficSparklinePainter old) =>
       !identical(old.samples, samples) ||
       old.up != up ||
       old.down != down ||

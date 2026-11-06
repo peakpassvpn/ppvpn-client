@@ -129,6 +129,7 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     var creates = 0;
     var snapshots = 0;
+    final visibility = <bool>[];
     int? id;
     messenger.setMockMethodCallHandler(SystemChannels.platform_views, (
       call,
@@ -139,6 +140,8 @@ void main() {
         messenger.setMockMethodCallHandler(
           MethodChannel('com.peakpassvpn.ppvpn/native-chrome/$id'),
           (call) async {
+            if (call.method == 'setFrozen')
+              visibility.add(call.arguments as bool);
             if (call.method == 'snapshot') {
               snapshots++;
               return bytes;
@@ -177,8 +180,10 @@ void main() {
     );
     await tester.pump();
     expect(snapshots, greaterThan(0));
+    expect(visibility.last, isFalse);
     await tester.pumpWidget(view(true));
     await tester.pumpAndSettle();
+    expect(visibility.last, isTrue);
     expect(find.byType(Image), findsOneWidget);
     expect(find.byType(UiKitView, skipOffstage: false), findsOneWidget);
     expect(creates, 1);
@@ -191,6 +196,7 @@ void main() {
     expect(creates, 1);
     await tester.pumpWidget(view(false, selected: 1));
     await tester.pumpAndSettle();
+    expect(visibility.last, isFalse);
     expect(find.byType(Image), findsNothing);
     expect(creates, 1);
     await tester.pumpWidget(const SizedBox());

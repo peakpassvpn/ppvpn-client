@@ -127,7 +127,18 @@ class _NativeChromeViewState extends State<NativeChromeView> {
         widget.onAction(call.arguments as String);
       }
     });
+    unawaited(_setFrozen());
     unawaited(_update());
+  }
+
+  Future<void> _setFrozen() async {
+    try {
+      await _channel?.invokeMethod<void>('setFrozen', widget.frozen);
+    } on PlatformException catch (error) {
+      debugPrint('native chrome visibility: ${error.code}');
+    } on MissingPluginException {
+      // Older runners still receive Flutter's offstage visibility.
+    }
   }
 
   Future<void> _update() async {
@@ -156,6 +167,7 @@ class _NativeChromeViewState extends State<NativeChromeView> {
   @override
   void didUpdateWidget(covariant NativeChromeView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.frozen != widget.frozen) unawaited(_setFrozen());
     unawaited(_update());
     if (oldWidget.frozen && !widget.frozen) {
       _warmSnapshot();
