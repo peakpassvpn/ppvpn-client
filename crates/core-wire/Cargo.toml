@@ -1,0 +1,23 @@
+[package]
+name = "ppvpn-core-wire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Versioned shared-core capture protocol and transaction state machine"
+
+[features]
+default = []
+# Optional host-side coordinator; DTO-only consumers do not link an executor.
+driver = ["dep:async-trait", "dep:tokio", "dep:futures-util"]
+
+[dependencies]
+serde.workspace = true
+async-trait = { version = "0.1", optional = true }
+tokio = { version = "1", features = ["rt", "sync"], optional = true }
+futures-util = { version = "0.3", optional = true }
+
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

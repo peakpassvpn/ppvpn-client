@@ -5,6 +5,9 @@
 //! Entry point: [`Engine`]. Values are serialisable (serde) for the future
 //! FFI; enums and structs are `non_exhaustive` and only grow.
 
+/// Separately versioned capture DTOs; no platform handle crosses this wire.
+pub use ppvpn_core_wire as capture;
+
 pub mod config;
 mod engine;
 pub mod error;
