@@ -67,7 +67,7 @@ netlink-sys = { version = "0.8", optional = true }
 # App-side profile/selection/entrance probes can be built without a forwarding
 # engine. Extension and desktop hosts keep the default feature.
 default = ["forwarder"]
-forwarder = ["dep:sail", "dep:hickory-proto", "dep:h2", "dep:http-body-util",
+forwarder = ["ppvpn-core-wire/driver", "dep:sail", "dep:hickory-proto", "dep:h2", "dep:http-body-util",
     "dep:hyper", "dep:hyper-util", "dep:miniz_oxide", "dep:tracing-subscriber",
     "dep:netlink-packet-core", "dep:netlink-packet-route", "dep:netlink-sys"]
 # ppvpn-core-lab only: test hooks (dns-local's PPVPN_LOCALDNS_TEST_FILE,

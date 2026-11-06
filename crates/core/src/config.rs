@@ -77,9 +77,21 @@ pub struct EngineConfig {
     /// connects (`VpnService.protect`). Not serialised: an FFI layer sets it.
     #[serde(skip)]
     pub socket_protect: Option<SocketProtect>,
+    /// Native capture hooks: macOS Shared user agent, or explicit mobile Tun
+    /// packet/device transport. Never accepted from serialized IPC config.
+    #[cfg(feature = "forwarder")]
+    #[serde(skip)]
+    pub capture_host: Option<crate::capture_host::CaptureHost>,
 }
 
 impl EngineConfig {
+    #[cfg(feature = "forwarder")]
+    pub(crate) fn uses_dynamic_capture(&self) -> bool {
+        self.role == Role::Shared
+            || (self.role == Role::Tun
+                && matches!(self.platform, Platform::Ios | Platform::Android)
+                && self.capture_host.is_some())
+    }
     pub fn new(role: Role, platform: Platform, state_dir: impl Into<PathBuf>) -> Self {
         Self {
             role,
@@ -91,7 +103,14 @@ impl EngineConfig {
             log: LogConfig::default(),
             max_connections: None,
             socket_protect: None,
+            #[cfg(feature = "forwarder")]
+            capture_host: None,
         }
+    }
+    #[cfg(feature = "forwarder")]
+    pub fn with_capture_host(mut self, host: crate::capture_host::CaptureHost) -> Self {
+        self.capture_host = Some(host);
+        self
     }
     pub fn with_local_proxy(mut self, local_proxy: LocalProxyConfig) -> Self {
         self.local_proxy = Some(local_proxy);

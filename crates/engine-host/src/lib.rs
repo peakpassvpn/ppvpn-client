@@ -84,16 +84,26 @@ pub async fn dispatch(engine: &Engine, path: &str, body: Value) -> Result<Value,
         }
         "/v1/get-runtime-observation" => data(engine.runtime_observation()),
         "/v1/get-capture-capabilities" => data(engine.capture_capabilities()),
-        "/v1/get-capture-status" => Err(capture_unsupported()),
+        "/v1/get-capture-status" => data(engine.capture_status().map_err(ApiError::from)?),
         "/v1/attach-capture" => {
             let request: capture::AttachCapture = decode(body)?;
             capture_version(request.protocol_version)?;
-            Err(capture_unsupported())
+            data(
+                engine
+                    .attach_capture(request)
+                    .await
+                    .map_err(ApiError::from)?,
+            )
         }
         "/v1/detach-capture" => {
             let request: capture::DetachCapture = decode(body)?;
             capture_version(request.protocol_version)?;
-            Err(capture_unsupported())
+            data(
+                engine
+                    .detach_capture(request)
+                    .await
+                    .map_err(ApiError::from)?,
+            )
         }
         "/v1/validate-profile" => {
             reply(Engine::validate(&apply_request(&body)?).map(|()| json!({ "valid": true })))
@@ -253,13 +263,6 @@ fn apply_request(body: &Value) -> Result<ApplyRequest, ApiError> {
         Some(node_id) => request.with_selected_node_id(node_id),
         None => request,
     })
-}
-
-fn capture_unsupported() -> ApiError {
-    ApiError::new(
-        "CAPTURE_UNSUPPORTED",
-        "this runtime cannot attach or detach capture without restarting",
-    )
 }
 
 fn capture_version(version: u32) -> Result<(), ApiError> {

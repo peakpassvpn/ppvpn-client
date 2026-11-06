@@ -8,6 +8,8 @@
 /// Separately versioned capture DTOs; no platform handle crosses this wire.
 pub use ppvpn_core_wire as capture;
 
+#[cfg(feature = "forwarder")]
+pub mod capture_host;
 pub mod config;
 pub mod control;
 #[cfg(feature = "forwarder")]
