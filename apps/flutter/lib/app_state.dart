@@ -92,7 +92,7 @@ class AppState with WidgetsBindingObserver {
   );
   final _historyClock = Stopwatch()..start();
   final _historySampler = TrafficHistory();
-  static const historyVisibleLength = 30;
+  static const historyVisibleLength = 12;
   // Two extra neighbours support a gentle three-sample visual filter;
   // three more keep changing endpoint tangents outside the visible window.
   static const historyLength = historyVisibleLength + 5;

@@ -10,6 +10,8 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   Future<List<int>> pixels(List<rust.UiTraffic> samples, double shift) async {
+    // Use whole-pixel steps to isolate endpoint geometry from raster rounding.
+    const width = (AppState.historyVisibleLength - 1) * 30;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     TrafficSparklinePainter(
@@ -18,9 +20,9 @@ void main() {
       down: const Color(0xff00cc88),
       peak: 100,
       shift: shift,
-    ).paint(canvas, const Size(290, 48));
+    ).paint(canvas, Size(width.toDouble(), 48));
     final picture = recorder.endRecording();
-    final image = await picture.toImage(290, 48);
+    final image = await picture.toImage(width, 48);
     final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     final result = data!.buffer.asUint8List().toList();
     image.dispose();
