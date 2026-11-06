@@ -2805,6 +2805,7 @@ dependencies = [
  "netlink-packet-route",
  "netlink-sys 0.8.8",
  "ppvpn-core",
+ "ppvpn-core-wire",
  "sail",
  "serde",
  "serde_json",
@@ -2832,6 +2833,17 @@ dependencies = [
  "hyper-util",
  "libc",
  "ppvpn-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ppvpn-core-wire"
+version = "0.7.4"
+dependencies = [
+ "async-trait",
+ "futures-util",
  "serde",
  "serde_json",
  "tokio",
@@ -2870,8 +2882,11 @@ name = "ppvpn-engine-host"
 version = "0.7.4"
 dependencies = [
  "ppvpn-core",
+ "ppvpn-core-wire",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

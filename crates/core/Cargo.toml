@@ -12,6 +12,7 @@ publish = false
 name = "ppvpn_core"
 
 [dependencies]
+ppvpn-core-wire = { path = "../core-wire" }
 base64.workspace = true
 chrono.workspace = true
 idna.workspace = true
@@ -75,6 +76,8 @@ testing = []
 fault-injection = ["sail/fault-injection"]
 
 [dev-dependencies]
+# Exercise the optional capture coordinator in the default unit-test graph.
+ppvpn-core-wire = { path = "../core-wire", features = ["driver"] }
 # The rule set tests' TLS server and its certificate (sail's BoringSSL).
 btls = "0.5.6"
 ppvpn-core = { path = ".", features = ["testing"] }

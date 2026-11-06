@@ -678,3 +678,16 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 
 - 老版本的服务不认识这个命令，不回答就关闭连接。应用把这种情况和 `UPDATE_UNSUPPORTED`、服务没装或没运行一样处理：回到原来的 Sparkle、WinSparkle 提示。
 - 新版本的应用遇到老服务时照旧在首次增强连接时替换服务（要管理员授权），之后的更新才是静默的。
+
+
+## Shared forwarding and optional capture protocol
+
+The separately versioned capture v1 contract, DTOs, ownership, transaction and
+platform boundaries are in [shared-core-capture.md](shared-core-capture.md).
+`Engine::capture_capabilities()` and `/v1/get-capture-capabilities` distinguish
+live attachment from the legacy `Role::Tun` startup configuration. The current
+Sail adapter advertises unsupported; attach/detach/status calls explicitly fail
+with `CAPTURE_UNSUPPORTED` and do not stop, reload or restart the engine. A new
+host must negotiate this capability before choosing the shared-core path.
+The wire format never transfers a raw OS descriptor. Existing legacy hosts and
+their startup behavior are unchanged by introducing this contract.
