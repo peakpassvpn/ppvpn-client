@@ -47,6 +47,7 @@ class AppState with WidgetsBindingObserver {
     : fixed = false,
       snapshot = ValueNotifier(initial) {
     _refreshNodes(initial);
+    _followMessageOwner(initial);
     if (Platform.isIOS) {
       WidgetsBinding.instance.addObserver(this);
       _network = const EventChannel('com.peakpassvpn.ppvpn/network-state')
@@ -78,6 +79,7 @@ class AppState with WidgetsBindingObserver {
     : fixed = true,
       snapshot = ValueNotifier(initial) {
     _stopped = true;
+    _followMessageOwner(initial);
   }
 
   /// Made by [AppState.fixed]: sample data, no client.
@@ -244,6 +246,7 @@ class AppState with WidgetsBindingObserver {
           connectedSince = null;
         }
         snapshot.value = next;
+        _followMessageOwner(next);
         _refreshNodes(next);
       }
       final sample = events.traffic;
@@ -270,6 +273,17 @@ class AppState with WidgetsBindingObserver {
         latency.value = map;
       }
     }
+  }
+
+  void _followMessageOwner(rust.UiSnapshot state) {
+    final signedIn = state.auth == rust.UiAuth.signedIn;
+    messages.followOwner(
+      accountId: signedIn ? state.accountId : null,
+      teamId: signedIn ? state.teamId : null,
+      restoring:
+          state.auth == rust.UiAuth.restoring ||
+          (signedIn && state.accountId == null),
+    );
   }
 
   /// Phone: the client hands the sign-in's page to the app (rust/src/hooks.rs
