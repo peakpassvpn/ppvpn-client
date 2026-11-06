@@ -16,7 +16,7 @@ use chrono::Utc;
 use tokio::sync::Notify;
 
 use super::{now, Error, Inner};
-use crate::config::{EngineConfig, Role};
+use crate::config::EngineConfig;
 use crate::error::codes;
 use crate::event::Event;
 use crate::profile::{Profile, RuleSet};
@@ -99,7 +99,7 @@ impl Dial for EngineDial {
         let runtime = self
             .inner
             .upgrade()
-            .filter(|inner| inner.config.role == Role::Tun && inner.live().running)
+            .filter(|inner| inner.config.role.has_dns_policy() && inner.live().running)
             .map(|inner| inner.runtime.clone());
         let Some(runtime) = runtime else {
             return DirectDial.dial(host, port).await;

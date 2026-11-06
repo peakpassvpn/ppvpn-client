@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-/// Which instance this is (section 2). Desktop runs one of each; the CLI
-/// runs a standard instance only.
+/// Which instance this is (section 2). Legacy desktop hosts run Standard
+/// and Tun; the new macOS user agent uses Shared. The CLI uses Standard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -16,10 +16,23 @@ pub enum Role {
     /// Unprivileged: the shared local proxy, the system proxy listener,
     /// probes, traffic and connections.
     Standard,
+    /// macOS user-agent forwarding owner. Mixed proxy and DNS policy remain
+    /// live independently of capture; no TUN is opened by start.
+    Shared,
     /// Privileged: the TUN, its routing guard (Linux), DNS inside the TUN
     /// (dns-local) and the switch in place. At most one per process
     /// (`TUN_INSTANCE_EXISTS`).
     Tun,
+}
+
+#[cfg(feature = "forwarder")]
+impl Role {
+    pub(crate) fn has_local_proxies(self) -> bool {
+        matches!(self, Self::Standard | Self::Shared)
+    }
+    pub(crate) fn has_dns_policy(self) -> bool {
+        matches!(self, Self::Tun | Self::Shared)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -42,14 +55,14 @@ pub struct EngineConfig {
     /// Private directory: rule set cache and local proxy state. Locked by
     /// the instance (`STATE_DIR_IN_USE`). No profile is ever written here.
     pub state_dir: PathBuf,
-    /// Standard only: the shared local proxy.
+    /// Standard or Shared: the authenticated mixed local proxy.
     #[serde(default)]
     pub local_proxy: Option<LocalProxyConfig>,
-    /// Standard only: whether `set_system_proxy_listener` is allowed (the
+    /// Standard or Shared: whether `set_system_proxy_listener` is allowed (the
     /// CLI leaves it off).
     #[serde(default)]
     pub system_proxy: bool,
-    /// Tun only.
+    /// Tun configuration, or DNS policy inputs for a Shared owner.
     #[serde(default)]
     pub tun: Option<TunConfig>,
     #[serde(default)]

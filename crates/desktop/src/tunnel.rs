@@ -33,6 +33,7 @@ pub(crate) const SOCKET_FILE: &str = "tunnel.sock";
 const MAX_FRAME: usize = 16 << 20;
 
 /// Calls the tunnel host at `socket`.
+#[derive(Clone)]
 pub(crate) struct TunnelTransport {
     socket: PathBuf,
 }

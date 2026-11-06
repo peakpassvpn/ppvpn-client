@@ -11,6 +11,7 @@
 //! default interface, and with none both fail at once with
 //! NO_DEFAULT_INTERFACE (retryable) and probe nothing (#69).
 
+#[cfg(feature = "forwarder")]
 mod availability;
 mod entrance;
 mod icmp;
@@ -21,6 +22,7 @@ use tokio::sync::watch;
 
 use crate::error::{codes, Error};
 
+#[cfg(feature = "forwarder")]
 pub(crate) use availability::{probe_availability, AVAILABILITY_TIMEOUT};
 pub(crate) use entrance::{
     probe_entrances, Net, SystemNet, ENTRANCE_CONCURRENCY, ENTRANCE_TIMEOUT,

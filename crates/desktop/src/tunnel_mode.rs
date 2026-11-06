@@ -223,6 +223,26 @@ impl TunnelMode {
             .map_err(|error| error.into_client_error(ErrorCode::ConnectFailed))
     }
 
+    /// A transport is exposed only while the system VPN is serving. Probing
+    /// must never wake or launch a stopped provider.
+    pub(crate) fn transport(&self) -> Option<Arc<dyn core_ipc::CoreTransport>> {
+        self.inner
+            .is_on()
+            .then(|| Arc::new(self.inner.transport.clone()) as Arc<dyn core_ipc::CoreTransport>)
+    }
+
+    pub(crate) async fn probe(
+        &self,
+        method: crate::ProbeMethod,
+        node_ids: Vec<String>,
+        on_result: &(dyn Fn(crate::ProbeResult) + Send + Sync),
+    ) -> Result<(), ClientError> {
+        let transport = self
+            .transport()
+            .ok_or_else(|| ClientError::failed(ErrorCode::ProbeFailed, "VPN_REQUIRED"))?;
+        core_ipc::run_probe(transport, method, node_ids, None, on_result).await
+    }
+
     /// The running engine's status; `None` while not on.
     pub(crate) async fn core_status(&self) -> Option<CoreStatus> {
         if !self.inner.is_on() {
@@ -584,6 +604,24 @@ mod tests {
             Arc::new(move |state: EnhancedState| seen.lock().unwrap().push(state.phase)),
         );
         (mode, phases)
+    }
+
+    #[tokio::test]
+    async fn disconnected_probe_never_contacts_or_wakes_the_host() {
+        let dir = temp_dir();
+        let host = host(&dir, "stopped");
+        let (mode, _) = mode(&dir);
+        assert!(mode.transport().is_none());
+        let error = mode
+            .probe(crate::ProbeMethod::Connect, vec!["hk".into()], &|_| {
+                panic!("a disconnected protocol probe must not emit fabricated results");
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.info().unwrap().detail, "VPN_REQUIRED");
+        assert!(host.requests.lock().unwrap().is_empty());
+        drop(host);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     async fn eventually(what: &str, check: impl Fn() -> bool) {

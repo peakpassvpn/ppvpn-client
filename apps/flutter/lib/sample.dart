@@ -120,6 +120,7 @@ AppState sampleState() {
     rust.UiSnapshot(
       auth: rust.UiAuth.signedIn,
       deviceCode: null,
+      accountId: 'sample-account',
       accountName: 'Jordan',
       teamName: 'Acme Studio',
       teamId: 'acme',

@@ -249,11 +249,22 @@ impl Inner {
                 // a restart, and a listener that could not move (it
                 // listens no more) is one too.
                 Err(e) if e.code == "needs_restart" || e.code == "inbound_lost" => {
+                    if self.config.role == crate::Role::Shared {
+                        return Err(Error::new(crate::error::codes::CORE_OPERATION_FAILED, false,
+                            "shared forwarding refuses a reload requiring restart; existing proxy sessions must survive"));
+                    }
                     tracing::warn!(error = %e, "the reload needs a restart");
                     reasons.push(e.code.clone());
                 }
                 Err(e) => return Err(self.runtime_error(&e)),
             }
+        }
+        if self.config.role == crate::Role::Shared {
+            return Err(Error::new(
+                crate::error::codes::CORE_OPERATION_FAILED,
+                false,
+                "shared forwarding refuses a capture change requiring runtime restart",
+            ));
         }
         tracing::info!(reasons = reasons.join("; "), "full restart");
         self.live().restarting = true;
@@ -344,7 +355,10 @@ impl Inner {
         let mut translation = build()?;
         let mut started = self.runtime.start(&translation.json).await;
         if let Err(e) = &started {
-            if e.code != "panicked" && self.leave_out_local_proxy() {
+            if self.config.role != crate::Role::Shared
+                && e.code != "panicked"
+                && self.leave_out_local_proxy()
+            {
                 tracing::warn!(error = %e, "start failed with the local proxy listener, starting without it");
                 translation = build()?;
                 started = self.runtime.start(&translation.json).await;

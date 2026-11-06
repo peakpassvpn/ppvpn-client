@@ -317,6 +317,7 @@ pub(crate) fn ui_snapshot(snapshot: &ClientSnapshot) -> UiSnapshot {
     UiSnapshot {
         auth,
         device_code,
+        account_id: snapshot.account.as_ref().map(|account| account.id.clone()),
         account_name: snapshot
             .account
             .as_ref()
