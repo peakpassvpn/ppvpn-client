@@ -64,8 +64,10 @@ class NativeChromeView extends StatefulWidget {
     required this.configuration,
     required this.onAction,
     this.frozen = false,
+    this.placeholder,
   });
   final bool frozen;
+  final Widget? placeholder;
   final String kind;
   final Map<String, Object?> configuration;
   final ValueChanged<String> onAction;
@@ -171,10 +173,9 @@ class _NativeChromeViewState extends State<NativeChromeView> {
     fit: StackFit.expand,
     children: [
       Offstage(
-        offstage:
-            widget.frozen &&
-            _snapshot != null &&
-            _snapshotConfiguration == jsonEncode(widget.configuration),
+        // Platform-view backing surfaces must never participate in a moving
+        // route, even on a first visit or after theme/locale invalidates PNGs.
+        offstage: widget.frozen,
         child: UiKitView(
           viewType: 'com.peakpassvpn.ppvpn/native-${widget.kind}',
           creationParams: widget.configuration,
@@ -186,6 +187,11 @@ class _NativeChromeViewState extends State<NativeChromeView> {
           onPlatformViewCreated: _created,
         ),
       ),
+      if (widget.frozen &&
+          (_snapshot == null ||
+              _snapshotConfiguration != jsonEncode(widget.configuration)) &&
+          widget.placeholder != null)
+        ExcludeSemantics(child: IgnorePointer(child: widget.placeholder!)),
       if (widget.frozen &&
           _snapshot != null &&
           _snapshotConfiguration == jsonEncode(widget.configuration))

@@ -11,7 +11,8 @@ import 'dart:async';
 
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
@@ -214,6 +215,7 @@ class _TabBar extends StatelessWidget {
         child: NativeChromeView(
           kind: 'tabs',
           frozen: !settled,
+          placeholder: _TransitionTabs(selected: tab.index, bottom: bottom),
           configuration: {
             'labels': [s('overview'), s('nodes'), s('me')],
             'selected': tab.index,
@@ -379,6 +381,13 @@ class PhoneScaffold extends StatelessWidget {
               child: NativeChromeView(
                 kind: 'navigation',
                 frozen: !settled,
+                placeholder: _TransitionHeader(
+                  title: brand ? s('app') : title,
+                  back: back,
+                  large: large,
+                  top: top,
+                  actions: actions,
+                ),
                 configuration: {
                   'title': brand ? s('app') : title,
                   'back': back,
@@ -486,6 +495,243 @@ class PhoneScaffold extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// First-visit chrome has no native PNG yet. These non-interactive controls
+// keep the system bar's geometry and typography during route motion; once
+// settled, the existing live UIKit view takes over without recreating it.
+class _TransitionHeader extends StatelessWidget {
+  const _TransitionHeader({
+    required this.title,
+    required this.back,
+    required this.large,
+    required this.top,
+    required this.actions,
+  });
+  final String title;
+  final bool back;
+  final bool large;
+  final double top;
+  final List<NativeChromeAction> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final label = TextStyle(
+      fontFamily: '.SF Pro Text',
+      fontSize: 17,
+      fontWeight: FontWeight.w600,
+      color: t.t1,
+      height: 1.2,
+    );
+    return Padding(
+      padding: EdgeInsets.only(top: top),
+      child: Column(
+        children: [
+          SizedBox(
+            height: 44,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (!large)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 64),
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: label,
+                    ),
+                  ),
+                if (back)
+                  Positioned(
+                    left: 16,
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: t.phoneRoundFill,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: t.hair),
+                      ),
+                      child: Icon(AppIcons.chevronLeft, size: 26, color: t.t1),
+                    ),
+                  ),
+                Positioned(
+                  right: 16,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final action in actions)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Container(
+                                height: 44,
+                                constraints: const BoxConstraints(minWidth: 44),
+                                alignment: Alignment.center,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: action.prominent
+                                      ? t.accent
+                                      : t.phoneRoundFill,
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(color: t.hair),
+                                ),
+                                child: action.symbol == 'bell'
+                                    ? Icon(
+                                        AppIcons.bell,
+                                        size: 22,
+                                        color: t.accent,
+                                      )
+                                    : Text(
+                                        action.label,
+                                        style: label.copyWith(
+                                          fontWeight: FontWeight.w400,
+                                          color: action.enabled
+                                              ? (action.prominent
+                                                    ? t.onBad
+                                                    : t.accent)
+                                              : t.t3,
+                                        ),
+                                      ),
+                              ),
+                              if (action.badge > 0)
+                                Positioned(
+                                  top: -3,
+                                  right: -3,
+                                  child: Container(
+                                    constraints: const BoxConstraints(
+                                      minWidth: 18,
+                                    ),
+                                    height: 18,
+                                    alignment: Alignment.center,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: t.bad,
+                                      borderRadius: BorderRadius.circular(9),
+                                    ),
+                                    child: Text(
+                                      action.badge > 99
+                                          ? '99+'
+                                          : '${action.badge}',
+                                      style: label.copyWith(
+                                        fontSize: 11,
+                                        color: t.onBad,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (large)
+            Expanded(
+              child: Align(
+                alignment: AlignmentDirectional.bottomStart,
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.only(
+                    start: 20,
+                    bottom: 8,
+                  ),
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: label.copyWith(
+                      fontFamily: '.SF Pro Display',
+                      fontSize: 34,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TransitionTabs extends StatelessWidget {
+  const _TransitionTabs({required this.selected, required this.bottom});
+  final int selected;
+  final double bottom;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final s = S.current;
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 0, 16, bottom > 20 ? bottom - 12 : 8),
+        child: Container(
+          width: 280,
+          height: 62,
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: t.phoneBarFill,
+            borderRadius: BorderRadius.circular(32),
+            border: Border.all(color: t.hair),
+          ),
+          child: Row(
+            children: [
+              for (final (index, name, label) in [
+                (0, 'overview', s('overview')),
+                (1, 'nodes', s('nodes')),
+                (2, 'me', s('me')),
+              ])
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(28),
+                      color: selected == index
+                          ? t.t1.withValues(alpha: .06)
+                          : null,
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TabIcon(
+                          tab: name,
+                          filled: selected == index,
+                          color: selected == index ? t.accent : t.t1,
+                          size: 24,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          label,
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontFamily: '.SF Pro Text',
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                            color: selected == index ? t.accent : t.t1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
