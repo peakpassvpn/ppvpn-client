@@ -149,7 +149,7 @@ class _NativeChromeViewState extends State<NativeChromeView> {
       _configuration = configuration;
       // Cache the exact native appearance while idle; route motion uses this
       // Flutter image instead of swapping to a differently styled header.
-      _warmSnapshot();
+      if (widget.kind == 'tabs') _warmSnapshot();
     } on PlatformException catch (error) {
       debugPrint('native chrome update: ${error.code}');
     } on MissingPluginException {
@@ -170,7 +170,7 @@ class _NativeChromeViewState extends State<NativeChromeView> {
     if (oldWidget.frozen != widget.frozen) unawaited(_setFrozen());
     unawaited(_update());
     if (oldWidget.frozen && !widget.frozen) {
-      _warmSnapshot();
+      if (widget.kind == 'tabs') _warmSnapshot();
     }
   }
 
@@ -220,9 +220,9 @@ class _NativeChromeViewState extends State<NativeChromeView> {
   );
 }
 
-/// UIKit glass remains native while settled. During push/pop (including an
-/// interrupted back swipe), use cached native images so platform-view backing
-/// surfaces never cross the moving route's shadow or clip, without style swaps.
+/// Track route motion for the bottom tabs' cached transition image.
+/// Navigation bars remain native throughout the route so their system fonts
+/// and back controls never swap to a differently styled placeholder.
 class RouteChrome extends StatefulWidget {
   const RouteChrome({super.key, required this.builder});
   final Widget Function(BuildContext context, bool settled) builder;

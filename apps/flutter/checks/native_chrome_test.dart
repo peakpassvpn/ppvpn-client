@@ -8,7 +8,6 @@ import 'package:flutter/cupertino.dart'
     show CupertinoApp, CupertinoPageRoute, DefaultCupertinoLocalizations;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ppvpn_flutter/phone/native_chrome.dart';
-import 'package:ppvpn_flutter/icons.dart';
 import 'package:ppvpn_flutter/phone/phone.dart';
 import 'package:ppvpn_flutter/theme.dart';
 import 'package:ppvpn_flutter/widgets.dart';
@@ -18,7 +17,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'secondary navigation starts while native image work is pending',
+    'secondary navigation keeps the same native controls during route motion',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       NativeChrome.enabled = true;
@@ -101,15 +100,17 @@ void main() {
       expect(route, isA<CupertinoPageRoute<void>>());
       expect(route.barrierColor, isNull);
       expect(route.allowSnapshotting, isFalse);
-      expect(find.byType(UiKitView), findsNothing);
-      expect(find.text('Detail'), findsOneWidget);
-      final pageLeft = tester.getTopLeft(find.byType(PhoneScaffold).last).dx;
-      final arrowX = tester.getCenter(find.byIcon(AppIcons.chevronLeft)).dx;
+      expect(find.byType(UiKitView), findsNWidgets(2));
       expect(
-        arrowX - pageLeft,
-        closeTo(38, 0.01),
-        reason: 'the moving back control must match the native left inset',
+        tester
+            .widgetList<NativeChromeView>(find.byType(NativeChromeView))
+            .where((view) => view.kind == 'navigation')
+            .every((view) => !view.frozen),
+        isTrue,
       );
+      // A first visit must not flash a differently styled Flutter header
+      // while UIKit prepares its own navigation image in the background.
+      expect(find.text('Detail'), findsNothing);
       pending.complete(null);
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());

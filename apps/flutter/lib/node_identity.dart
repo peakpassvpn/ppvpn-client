@@ -71,7 +71,7 @@ class NodeIdentity extends StatelessWidget {
                 Flexible(
                   child: Text(
                     nodeDisplayName(node),
-                    maxLines: phone ? 2 : 1,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: (phone ? t.phoneBody : t.body).copyWith(
                       fontWeight: strong ? FontWeight.w600 : FontWeight.w500,
