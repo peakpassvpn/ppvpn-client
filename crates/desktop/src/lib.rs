@@ -798,7 +798,8 @@ impl Client {
     /// after every requested node has reported exactly one result (nodes past
     /// the deadline report `Timeout`; ICMP refused by the OS reports
     /// `IcmpNotPermitted`). Fails with `StandardNotReady` until
-    /// `snapshot.standard` is `Ready`.
+    /// `snapshot.standard` is `Ready` on desktop. Native network/session
+    /// changes quietly discard stale direct-probe results on mobile.
     pub async fn probe(
         &self,
         method: ProbeMethod,
@@ -823,7 +824,10 @@ impl Client {
             Some(_) => self.probe_mobile_direct(method, node_ids, &deliver).await,
             None => self.standard.probe(method, node_ids, &deliver).await,
         };
-        self.finish_action(result)
+        match result {
+            Err(ClientError::Cancelled) => Ok(()),
+            other => self.finish_action(other),
+        }
     }
 
     /// Cancels direct entrance probes when the native VPN changes state.
