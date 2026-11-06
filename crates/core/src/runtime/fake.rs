@@ -41,6 +41,8 @@ pub(crate) enum Op {
 const LOG_CAPACITY: usize = 64;
 
 pub(crate) struct FakeRuntime {
+    owner_nonce: String,
+    successful_starts: AtomicU64,
     calls: Mutex<Vec<Call>>,
     config: Mutex<Option<String>>,
     failures: Mutex<HashMap<Op, RuntimeError>>,
@@ -117,6 +119,8 @@ impl Default for FakeRuntime {
         let (dns_tx, dns_rx) = mpsc::channel(64);
         let (system_tx, system_rx) = mpsc::channel(64);
         Self {
+            owner_nonce: super::owner_nonce().expect("test owner identity"),
+            successful_starts: AtomicU64::new(0),
             calls: Mutex::default(),
             config: Mutex::default(),
             failures: Mutex::default(),
@@ -440,6 +444,21 @@ impl FakeRuntime {
 
 #[async_trait]
 impl Runtime for FakeRuntime {
+    fn observation(&self) -> crate::capture::RuntimeObservation {
+        let state = self.state.borrow().clone();
+        crate::capture::RuntimeObservation {
+            owner: crate::capture::ForwarderIdentity {
+                instance: self.owner_nonce.clone(),
+                generation: self.successful_starts.load(Ordering::Acquire),
+            },
+            backend: crate::capture::RuntimeBackend::Fake,
+            native_runtime_id: None,
+            running: state == RuntimeState::Running,
+            state: format!("{state:?}").to_ascii_lowercase(),
+            active_runtime_ids: None,
+        }
+    }
+
     async fn start(&self, config: &str) -> Result<(), RuntimeError> {
         self.record(Call::Start(config.to_owned()));
         if *self.state.borrow() == RuntimeState::Running {
@@ -460,6 +479,7 @@ impl Runtime for FakeRuntime {
         *self.config.lock().unwrap() = Some(config.to_owned());
         self.take_groups_of(config);
         self.take_inbounds_of(config);
+        self.successful_starts.fetch_add(1, Ordering::AcqRel);
         self.state.send_replace(RuntimeState::Running);
         Ok(())
     }

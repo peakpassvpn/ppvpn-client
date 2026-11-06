@@ -346,6 +346,7 @@ pub(crate) struct NetworkChange {
 /// implementation serialises what sail needs serialised.
 #[async_trait]
 pub(crate) trait Runtime: Send + Sync + 'static {
+    fn observation(&self) -> crate::capture::RuntimeObservation;
     /// Runs `config` (sing-box JSON, the translation's output). An error
     /// leaves it not running.
     async fn start(&self, config: &str) -> Result<(), RuntimeError>;
@@ -506,6 +507,14 @@ mod netns_tests;
 mod windows_helper;
 #[cfg(all(test, windows, feature = "fault-injection"))]
 mod windows_tests;
+
+/// Random per-object identity; unlike a process ID or native registry ID it
+/// cannot alias another Engine after that Engine has been destroyed.
+fn owner_nonce() -> Result<String, RuntimeError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| RuntimeError::new("io", e.to_string()))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
 
 #[cfg(test)]
 mod tests {

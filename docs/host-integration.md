@@ -691,3 +691,73 @@ with `CAPTURE_UNSUPPORTED` and do not stop, reload or restart the engine. A new
 host must negotiate this capability before choosing the shared-core path.
 The wire format never transfers a raw OS descriptor. Existing legacy hosts and
 their startup behavior are unchanged by introducing this contract.
+
+
+### Lightweight mobile app control (no forwarding engine)
+
+For the iOS App and Android UI library, use
+`ppvpn-core = { path = ".../crates/core", default-features = false }`. This omits
+Sail, BoringSSL, QUIC, tunnel/routing mutation, the Engine implementation and its
+listeners. The extension/VpnService links the default `forwarder` feature and
+owns the sole active Engine. Cargo features unify within a build graph: linking
+another crate that enables core's defaults in the same app reintroduces the
+forwarder; compile the app and VPN host as distinct targets and audit their
+normal dependency graph.
+
+Exact App API in `ppvpn_core::control`:
+
+- `ProfileSession::prepare(ApplyRequest) -> Result<(ProfileSession, ApplyResult), Error>`
+  validates profile expiry, schemas, routing/rule-set references, allowed hosts
+  and pins. Missing selections/pins reconcile with the same outcomes as Engine
+  apply. No rule set is downloaded; the extension performs its normal verified
+  rule-set loading before forwarding.
+- `nodes() -> Vec<NodeInfo>`, `selected_node() -> NodeInfo`,
+  `select_node(&mut self, &str) -> Result<NodeInfo, Error>`,
+  `set_routing_mode(&mut self, RoutingMode)`, `pins() -> &[Pin]`,
+  `pin_ingress(&mut self, node_id, endpoint_key) -> Result<(), Error>`,
+  `unpin_ingress(&mut self, node_id) -> Result<(), Error>` and `revision() -> &str` work without VPN.
+- `apply_request() -> ApplyRequest` returns the canonical selected node, valid
+  pins, mode, allowed hosts and original raw profile/rules for private host
+  persistence and the next extension start. It includes credentials: never log
+  it or send it through unauthenticated IPC. Selection while VPN is active must
+  also be applied to the owning extension and acknowledged before the host
+  presents it as live; this memory-only session is not an IPC queue.
+- `probe_entrances(&self, ProbeEntrancesRequest, ProbeNetwork, &ProbeCancellation)`
+  is async and returns `Result<Vec<EntranceResult>, Error>`. `ProbeNetwork` is
+  unknown/online/offline, supplied by the platform network monitor; offline fails
+  immediately. `ProbeCancellation::default()` starts active; `cancel()` aborts
+  pending probes. TCP/ICMP samples, stagger, concurrency and result codes reuse
+  the existing entrance-probe implementation. ICMP can return ICMP_UNSUPPORTED
+  on a restricted platform; hosts may explicitly request TCP instead. This is
+  entrance latency/reachability, not authenticated proxy availability, throughput
+  or traffic. Proxied availability requires the active VPN owner; it must not
+  spawn an app forwarding runtime when VPN is off.
+- Android can call `session.with_socket_protect(SocketProtect)` to protect each
+  direct probe socket before connect/send. Protection failure fails that probe;
+  it never falls back through the VPN. Existing VPN owner protection and network
+  notifications remain enabled.
+
+These controls do not own accounts, logs or historical counters. Mobile hosts
+retain login/account state, persist desired controls privately, and retrieve
+live rules/status/traffic/log streams from the extension while connected.
+Disconnected views retain explicitly marked last observations; zero/new live
+traffic is not synthesized by this API. Removing mobile proxy UI and listener
+configuration is a target-specific host change and does not affect desktop
+mixed authentication, HTTP/SOCKS TCP or SOCKS UDP support.
+
+Shared macOS runtime observation is available through
+`Engine::runtime_observation()` and `/v1/get-runtime-observation`. See
+[shared-core-capture.md](shared-core-capture.md) for process-local observation,
+identity/generation scopes and the native capture dependency.
+
+
+Mobile `Role::Tun` owners may call `Engine::probe_availability` without a mixed
+listener: it dials the existing node outbound and reuses that Engine's runtime.
+Before start or after stop it returns `CORE_NOT_RUNNING`, after profile validation;
+it never starts the Engine itself. Legacy desktop Tun refusal remains unchanged.
+
+
+`tools/check-lightweight-core.sh` checks the production no-default build and
+rejects Sail, BoringSSL, QUIC or TUN packages in its normal dependency graph. The
+core's dev-dependency intentionally enables full testing, so the default unit
+test graph is not evidence of a lightweight production dependency graph.

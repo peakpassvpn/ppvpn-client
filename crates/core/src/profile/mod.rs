@@ -10,5 +10,9 @@ mod validate;
 
 pub use model::*;
 pub use parse::parse;
-pub use ruleset::{normalize_rule_set_host, rule_set_host, validate_rule_set_hosts};
-pub use validate::{normalize_domain, parse_port_range, validate};
+pub use ruleset::validate_rule_set_hosts;
+#[cfg(feature = "forwarder")]
+pub use ruleset::{normalize_rule_set_host, rule_set_host};
+pub use validate::validate;
+#[cfg(feature = "forwarder")]
+pub use validate::{normalize_domain, parse_port_range};

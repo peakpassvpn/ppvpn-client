@@ -132,6 +132,9 @@ jobs:
       - name: fetch
         if: steps.scope.outputs.code == 'true'
         run: cargo fetch --locked
+      - name: mobile app lightweight core dependency boundary
+        if: steps.scope.outputs.code == 'true'
+        run: tools/check-lightweight-core.sh
       # sail's own check, from the checkout of the sail commit Cargo.lock pins.
       - name: sail's [patch.crates-io], as of the pinned sail commit
         if: steps.scope.outputs.code == 'true'

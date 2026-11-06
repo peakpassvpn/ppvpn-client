@@ -84,6 +84,7 @@ pub struct Leftover {
     pub detail: String,
 }
 
+#[cfg(feature = "forwarder")]
 impl Leftover {
     pub(crate) fn new(
         kind: LeftoverKind,

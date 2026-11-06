@@ -63,6 +63,8 @@ const SYSTEM_BUFFER: usize = 16;
 type Members = Arc<Mutex<HashMap<String, String>>>;
 
 pub(crate) struct SailRuntime {
+    owner_nonce: String,
+    successful_starts: AtomicU64,
     instance: Instance,
     states: watch::Receiver<RuntimeState>,
     switches: Mutex<Option<mpsc::Receiver<GroupSwitch>>>,
@@ -113,6 +115,7 @@ impl SailRuntime {
     /// An idle instance with `options` (data directory, threads); must be
     /// called on a tokio runtime (the Engine's `new`).
     pub(crate) fn new(options: Options) -> Result<SailRuntime, RuntimeError> {
+        let owner_nonce = super::owner_nonce()?;
         let instance = Instance::new(options).map_err(error)?;
         let mut tasks = Vec::new();
 
@@ -167,6 +170,8 @@ impl SailRuntime {
         )));
 
         Ok(SailRuntime {
+            owner_nonce,
+            successful_starts: AtomicU64::new(0),
             instance,
             states,
             switches: Mutex::new(Some(switch_rx)),
@@ -559,13 +564,36 @@ impl Datagram for SailDatagram {
 
 #[async_trait]
 impl Runtime for SailRuntime {
+    fn observation(&self) -> crate::capture::RuntimeObservation {
+        let id = u64::from(self.instance.id());
+        let mut active: Vec<_> = sail::runtime_managers()
+            .keys()
+            .copied()
+            .map(u64::from)
+            .collect();
+        active.sort_unstable();
+        crate::capture::RuntimeObservation {
+            owner: crate::capture::ForwarderIdentity {
+                instance: self.owner_nonce.clone(),
+                generation: self.successful_starts.load(Ordering::Acquire),
+            },
+            backend: crate::capture::RuntimeBackend::Sail,
+            native_runtime_id: Some(id),
+            state: self.instance.state().name().into(),
+            running: active.contains(&id),
+            active_runtime_ids: Some(active),
+        }
+    }
+
     async fn start(&self, config: &str) -> Result<(), RuntimeError> {
         // A new run's groups start over.
         self.members.lock().expect("members").clear();
         self.instance
             .start(Config::Json(config.into()))
             .await
-            .map_err(error)
+            .map_err(error)?;
+        self.successful_starts.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 
     /// Each reload rechecks the connections open against the new rules and

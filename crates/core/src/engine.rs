@@ -51,6 +51,7 @@ mod rule_sets;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
+mod shared;
 mod sleep;
 #[cfg(test)]
 mod sleep_tests;
@@ -165,9 +166,15 @@ impl std::fmt::Debug for Engine {
 }
 
 impl Engine {
-    /// Dynamic capture is a separate capability from legacy Role::Tun. The
-    /// pinned Sail adapter cannot change TUN without restarting its runtime;
-    /// advertise that honestly until its live transaction driver is wired.
+    /// Best-effort read-only observation. Registry IDs cover this process
+    /// only; callers must not infer cross-process uniqueness from them.
+    pub fn runtime_observation(&self) -> crate::capture::RuntimeObservation {
+        self.inner.runtime.observation()
+    }
+
+    /// Dynamic capture is separate from legacy Role::Tun. The pinned Sail
+    /// adapter cannot change TUN without restarting; advertise unsupported
+    /// until its live transaction driver is wired and verified.
     pub fn capture_capabilities(&self) -> crate::capture::CaptureCapabilities {
         crate::capture::CaptureCapabilities::unsupported()
     }
@@ -489,14 +496,19 @@ impl Engine {
     }
 
     /// An availability probe through the node's outbound (4.5):
-    /// `LOCAL_PROXY_DISABLED` on an instance without a local proxy (a TUN
-    /// instance too, as Go), then `PROFILE_NOT_APPLIED`, `CORE_NOT_RUNNING`.
+    /// Mobile VPN owners probe directly through their node outbounds with no
+    /// local proxy listener. Legacy desktop hosts still require local proxy.
+    /// Then checks `PROFILE_NOT_APPLIED`, `CORE_NOT_RUNNING`.
     pub async fn probe_availability(
         &self,
         request: ProbeAvailabilityRequest,
     ) -> Result<AvailabilityResult, Error> {
         self.inner.admit()?;
-        self.standard()?;
+        if !(self.inner.config.role == Role::Tun
+            && crate::mobile::mobile(self.inner.config.platform))
+        {
+            self.standard()?;
+        }
         self.inner.probe_availability(request).await
     }
 
@@ -528,7 +540,7 @@ impl Engine {
         enabled: bool,
     ) -> Result<SystemProxyStatus, Error> {
         self.inner.admit()?;
-        if self.inner.config.role != Role::Standard || !self.inner.config.system_proxy {
+        if !self.inner.config.role.has_local_proxies() || !self.inner.config.system_proxy {
             return Err(proxy::system_proxy_unavailable());
         }
         self.inner.set_system_proxy_listener(enabled).await
@@ -562,7 +574,7 @@ impl Engine {
     }
 
     fn standard(&self) -> Result<(), Error> {
-        if self.inner.config.role != Role::Standard || self.inner.config.local_proxy.is_none() {
+        if !self.inner.config.role.has_local_proxies() || self.inner.config.local_proxy.is_none() {
             return Err(proxy::local_proxy_disabled());
         }
         Ok(())
@@ -651,6 +663,9 @@ impl Inner {
             }
             .into(),
             tun: self.tun_options(),
+            dns_policy: (self.config.role == Role::Shared)
+                .then(|| self.dns_policy_options())
+                .flatten(),
             rule_sets: self.rule_set_files(),
             ..translate::Options::default()
         }
@@ -989,13 +1004,11 @@ mod tests {
             Some(serde_json::json!({"set": ["inbound.max_connections=64"]}))
         );
         // Local proxy and desktop roles retain sail's default cleanup cadence.
-        for role in [Role::Standard] {
-            let config = EngineConfig::new(role, Platform::Ios, "/x");
-            assert_eq!(
-                sail_settings(&config),
-                Some(serde_json::json!({"profile": "mobile"}))
-            );
-        }
+        let config = EngineConfig::new(Role::Standard, Platform::Ios, "/x");
+        assert_eq!(
+            sail_settings(&config),
+            Some(serde_json::json!({"profile": "mobile"}))
+        );
         // sail takes them.
         for platform in [Platform::Ios, Platform::Android, Platform::Linux] {
             let config = EngineConfig::new(Role::Tun, platform, "/x").with_max_connections(64);
