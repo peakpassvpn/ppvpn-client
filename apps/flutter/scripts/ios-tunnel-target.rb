@@ -70,6 +70,8 @@ tunnel.build_configurations.each do |config|
   settings["SWIFT_VERSION"] = "5.0"
   settings["SKIP_INSTALL"] = "YES"
   settings["APPLICATION_EXTENSION_API_ONLY"] = "YES"
+  settings["DEAD_CODE_STRIPPING"] = "YES"
+  settings["EXPORTED_SYMBOLS_FILE"] = "$(PROJECT_DIR)/PacketTunnel/Tunnel.exports"
   # The system limits the extension to 50 MiB (#388): no debug dylib.
   settings["ENABLE_DEBUG_DYLIB"] = "NO"
   # Apple silicon's simulator only: the XCFramework's simulator slice is

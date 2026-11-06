@@ -380,8 +380,9 @@ if [ "$os" = android ]; then
     cp "$tunnel/$abi/"*.so "android/app/src/main/jniLibs/$abi/"
   done
 elif [ "$os" = ios ]; then
+  python3 scripts/check-ios-exports.py
   # iOS takes no loose dynamic library: the bridge is a static library the
-  # Runner links whole (-force_load), its symbols exported for the Dart
+  # Runner loads (-force_load), exporting only the bridge entry points for Dart
   # side's lookup (ExternalLibrary.process), with the system libraries it
   # needs as rustc prints them (the lib is touched so that it prints).
   case ${IOS_SDK:-device} in
@@ -405,7 +406,7 @@ elif [ "$os" = ios ]; then
 import json, os
 path = "ios/Runner.xcodeproj/project.pbxproj"
 text = open(path).read()
-flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a", "-Wl,-export_dynamic"]
+flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a"]
 flags += os.environ["NATIVE"].split()
 setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flags) + ");"
 # The Dart side finds the bridge's functions by name (dlsym): an archive
@@ -413,6 +414,8 @@ setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flag
 # the TestFlight build of 0.7.2 stayed white. An archive strips locals
 # only.
 setting += "\n\t\t\t\tSTRIP_STYLE = \"non-global\";"
+setting += '\n\t\t\t\tEXPORTED_SYMBOLS_FILE = "$(PROJECT_DIR)/Runner/Bridge.exports";'
+setting += '\n\t\t\t\tDEAD_CODE_STRIPPING = YES;'
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations")
@@ -571,6 +574,7 @@ case $os in
         { echo "$bundle: R8 renamed or dropped ${kept//\//.}" >&2; exit 1; }
     done ;;
   ios)
+    tunnel_binary=
     if [ "${IOS_SDK:-device}" = simulator ]; then
       bundle=build/ios/iphonesimulator/Runner.app
       test -x "$bundle/Runner"
@@ -580,6 +584,8 @@ case $os in
       # The Runner that ships, after the export's own processing.
       runner=build/ios/Runner.shipped
       unzip -p "$bundle" Payload/Runner.app/Runner >"$runner"
+      tunnel_binary=build/ios/PacketTunnel.shipped
+      unzip -p "$bundle" Payload/Runner.app/PlugIns/PacketTunnel.appex/PacketTunnel >"$tunnel_binary"
     else
       bundle=build/ios/iphoneos/Runner.app
       test -x "$bundle/Runner"
@@ -593,10 +599,16 @@ case $os in
     if [ -n "${runner:-}" ]; then
       test -s "$runner"
       exports=$(xcrun dyld_info -exports "$runner")
-      for name in frb_pde_ffi_dispatcher_primary frb_pde_ffi_dispatcher_sync frb_get_rust_content_hash \
-          frb_dart_fn_deliver_output frb_init_frb_dart_api_dl frb_create_shutdown_callback; do
-        grep -qw "_$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
-      done
+      while IFS= read -r name; do
+        grep -qw "$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
+      done < runner/ios/Runner/Bridge.exports
+      tunnel_binary="${tunnel_binary:-$(dirname "$runner")/PlugIns/PacketTunnel.appex/PacketTunnel}"
+      test -s "$tunnel_binary"
+      tunnel_exports=$(xcrun dyld_info -exports "$tunnel_binary")
+      while IFS= read -r name; do
+        grep -qw "$name" <<<"$tunnel_exports" || { echo "$tunnel_binary does not export $name" >&2; exit 1; }
+      done < runner/ios/PacketTunnel/Tunnel.exports
+      python3 scripts/check-ios-exports.py "$runner" "$tunnel_binary"
       echo "$runner: $(grep -c '_frb_' <<<"$exports") bridge functions exported"
     fi ;;
   linux)
