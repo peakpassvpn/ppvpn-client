@@ -208,3 +208,16 @@ The initial local toolchain inventory found no Android SDK, NDK, usable JDK, Gra
 bundletool and no retained APK/AAB baseline. Android outputs therefore remain unbuilt until
 an SDK-equipped Linux build slot and integrated mobile commit are available. No Apple or
 historical two-runtime PoC sizes are substituted for Android results.
+
+## Contained package regression
+
+`python3 tools/apple/package_fixture.py` is an opt-in real macOS packaging regression.
+It compiles tiny synthetic Mach-O files, signs the temporary app ad hoc and produces a
+real DMG/PKG with the production packaging script. It verifies artifact hashes/lengths
+against release metadata and never installs or launches the fixture. Its output is
+explicitly fixture-only and must never enter client size comparisons. DiskImages access
+is required; a sandbox may reject `hdiutil` with a device-configuration error.
+
+DMG retries no longer detach arbitrary volumes named PPVPN. PKG payload validation consumes
+the complete pkgutil listing, preventing an early grep exit from turning a valid payload
+into a pipefail/SIGPIPE error. No shared cache or other checkout is cleaned.

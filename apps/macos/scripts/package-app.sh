@@ -280,17 +280,14 @@ ln -s /Applications "$STAGE/Applications"
 mkdir -p "$OUT_DIR"
 rm -f "$DMG"
 # hdiutil create sometimes fails with "Resource busy" on CI runners (its
-# temporary image is still attached, or a leftover volume is). Detach those
-# and try again, three times at most.
+# temporary image is still attached, or a leftover volume is). Retry only
+# this build output; never detach a user-owned volume by its display name.
 for try in 1 2 3; do
   if hdiutil create -volname "PPVPN" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" >/dev/null; then
     break
   fi
   [[ "$try" -lt 3 ]] || { echo "error: hdiutil create failed $try times" >&2; exit 1; }
   echo "warning: hdiutil create failed (try $try), retrying" >&2
-  for volume in /Volumes/PPVPN*; do
-    [[ -d "$volume" ]] && hdiutil detach -force "$volume" >/dev/null 2>&1 || true
-  done
   rm -f "$DMG"
   sleep $((try * 5))
 done
@@ -326,7 +323,9 @@ if [[ -n "$INSTALLER_IDENTITY" ]]; then
     && pkgutil --check-signature "$PKG" | grep -qF "($TEAM)" \
     || { echo "error: $PKG is not signed by the Developer ID Installer of $TEAM" >&2; exit 1; }
 fi
-pkgutil --payload-files "$PKG" | grep -qx './PPVPN.app/Contents/MacOS/PPVPN' \
+# Consume the full listing: grep -q can close early and make pkgutil fail
+# with SIGPIPE under pipefail even when the payload is correct.
+pkgutil --payload-files "$PKG" | grep -x './PPVPN.app/Contents/MacOS/PPVPN' >/dev/null \
   || { echo "error: $PKG does not install PPVPN.app" >&2; exit 1; }
 echo "wrote $PKG"
 
