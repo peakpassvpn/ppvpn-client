@@ -1,10 +1,14 @@
-# Apple single-active-core build and measurement contract
+# Single-active-core platform build and measurement contract
 
 Status: preparation only. The implementation commits and final candidate measurements are pending.
 The functional baseline is `1ddf0a168610172773fe3f479133ecbe5acf932f`
 (client 0.7.4, Sail v0.22.0 at `7513c15139e3c8cddb59952d93a8f8b59ec934f1`).
 Packaging core code once is insufficient: the runtime acceptance gate is exactly one active
-forwarding core. The earlier UI stdio child plus privileged TUN PoC has two runtime roles and
+forwarding core. macOS retains authenticated mixed HTTP/SOCKS and UDP.
+The user approved removing local proxy servers, proxy authentication/port UI and the
+unrelated App Standard forwarder on both iOS and Android. Android removal is a product
+decision, not a claim that Android has the same process restrictions as iOS.
+The earlier UI stdio child plus privileged TUN PoC has two runtime roles and
 cannot satisfy that gate, even if it produces a smaller installer.
 
 ## Build matrix
@@ -19,10 +23,15 @@ than deleting other checkouts or artifacts.
 | macOS arm64 app | Flutter release; arm64 bridge release; UniFFI release + `strip -x`; service profile (`s`, fat LTO, one codegen unit, strip=true) | Core runtime commit + desktop integration commit, generated consumers and packaging handoff agreed | Regular file bytes for the whole app, including login item, helpers, frameworks and resources; no symlink dereferencing |
 | macOS arm64 DMG/PKG | Same complete app, ad-hoc signing, no notarization; HFS+ UDZO zlib-level=9 and pkgbuild | Same recipe and signing for both measurements | Actual installer bytes and SHA-256; no mounting or installation during measurement |
 | macOS x86_64 | Same supported architecture and optimization recipe | Runtime/desktop APIs and native helpers still compile for Intel | Separate row; do not compare Intel or universal output against arm64 |
-| iOS device arm64 | Rust bridge release; tunnel `mobile` profile (thin LTO, one codegen unit); Release Runner + PacketTunnel; iOS 15 minimum | Mobile implementation commit + runtime transport commit; system lifecycle boundary documented | App and extension executable bytes, each embedded shared library, resources; record xcarchive separately from its Products application |
+| iOS device arm64 | Rust bridge release; tunnel `mobile` profile (thin LTO, one codegen unit); Release Runner + PacketTunnel; iOS 15 minimum | App has no Standard forwarding engine or proxy server; PacketTunnel is sole forwarding owner. Require mobile implementation/control API commits | App and extension executable bytes, each embedded shared library, resources; record xcarchive separately from its Products application |
 | iOS simulator arm64 | Existing debug simulator smoke recipe | ABI/host integration smoke only | Diagnostic row; never compare its debug bytes with device Release |
 | iOS exported IPA | Export baseline/candidate archives under identical export, signing and thinning options | Authorized usable distribution profiles; preserve exact ExportOptions and export logs | Actual compressed IPA bytes plus uncompressed Payload app; no upload |
 | iOS device download | Matching device model/OS, architecture, thinning settings and delivery report | Actual App Thinning report / device download evidence | Report Apple's device-specific download/install values separately; an IPA or xcarchive is not this metric |
+| Android universal APK | Same release Rust bridge, mobile-profile VpnService library, R8/strip/signing/SDK/NDK/JDK/build number, arm64-v8a + x86_64 | App has no Standard forwarder or proxy server; VpnService alone owns forwarding | Compressed signed APK, DEX/resources and per-ABI ELF libraries |
+| Android ABI APK | `apk-split`, same release recipe, one row per arm64-v8a / x86_64 APK | Same per-ABI content and signing as its baseline | Never compare an ABI APK with universal APK bytes |
+| Android AAB | `aab`, same selected ABIs and upload-signing conditions | Candidate Android implementation commit | Container bytes and per-module native/DEX/resources; AAB is not a Play device download |
+| Android device splits | Matching bundletool/device spec and signing; generated from matching AABs | Available bundletool, isolated device/emulator and mobile owner acceptance | Record actual selected split APKs separately; do not substitute Apple or universal APK results |
+
 
 Before each new build, preserve source commit, source changes, Cargo.lock hash, Sail revision,
 Flutter/Dart/Rust/Xcode/SDK versions, enabled crate features, Rust flags, deployment target,
@@ -62,9 +71,11 @@ before/after feature graph and prove that all baseline protocols and push capabi
 | --- | --- |
 | One active forwarding core | Runtime instance identity and lifecycle traces across standard mode, TUN attach/detach and recovery. A single Mach-O or one executable path does not establish this. Never start a fallback second core silently. |
 | macOS proxy continuity | Maintain already established authenticated HTTP CONNECT and SOCKS connections while repeatedly enabling/disabling VPN. Verify mixed listener identity, port and credentials remain stable. Use an isolated test service/host, not the user's installed VPN. |
-| Mixed proxy equivalence | HTTP forwarding/CONNECT, SOCKS authentication rejection and success, UDP associations, DNS and routing policy, ingress/protocol coverage and connection accounting. Include real routed data, not only successful handshakes. |
+| Desktop mixed proxy equivalence | HTTP forwarding/CONNECT, SOCKS authentication rejection and success, UDP associations, DNS and routing policy, ingress/protocol coverage and connection accounting. Include real routed data, not only successful handshakes. |
 | macOS lifecycle | TUN-on/off/recovery races, connect/disconnect cancellation, sleep/wake, helper authentication, daemon restart, rollback and logout. Report which events necessarily end sessions. |
 | iOS lifecycle | Identify which process owns the core in each system state; prove no overlap during handoff. Exercise extension restart, host suspension/termination and VPN start/stop. Any system-imposed interruption or unavailable proxy endpoint must be explicit; macOS continuity is not assumed on iOS. |
+| Approved mobile removals | iOS and Android local HTTP/SOCKS listeners, proxy authentication/port UI and unrelated App Standard forwarding instance are intentionally removed. These are disclosed feature changes, not protocol regressions on desktop. |
+| Retained mobile functionality | Login, VPN, rules, statistics, logs, line selection and pin remain. With VPN off, PING/TCP checks must use lightweight capabilities without starting a second forwarding core. Android retains socket protect, physical-network updates, revoke/onRevoke and foreground notification lifecycle. |
 | Push and updates | macOS login-item/APNs/notification path, iOS token registration and notification navigation, Sparkle and installer/helper verification stay covered. No deletion of push or update code merely to reduce bytes. |
 | FRB | Preserve the 14 `frb_` exports plus `store_dart_post_cobject` used by the baseline; verify generated Dart/Rust content-hash agreement and run actual bridge calls. |
 | UniFFI | Baseline packaged library has 176 `uniffi_`/`ffi_` exports. Verify generated Swift/C declarations and UniFFI checksums against the built library; unchanged names alone do not validate ABI types. Regenerate consumers together when a reviewed API changes. |
@@ -133,3 +144,67 @@ all detected Mach-O files are arm64. This verifies retained artifact identity, n
 reproducible build. The earlier 73,351,281-byte PoC app remains explicitly excluded from final
 single-active-core results. There is no final candidate size yet. There is also no attested
 clean iOS archive/export baseline or App Thinning result yet.
+
+
+## Apple push build/export integration
+
+The common and platform receivers originate in mobile-owned `e45b79e`. The build script
+adds both sources to an existing generated target entry, without editing the owned Runner
+source templates. This includes them in Xcode projects using explicit source lists and
+avoids duplicate copied definitions. It does not start a receiver or enable APNs.
+
+`PPVPN_APPLE_PUSH_ENABLED=0` is the default. Enabling requires the explicit real profile
+path in `PPVPN_APPLE_PUSH_PROFILE`. `tools/apple/push_config.py prepare` derives the
+platform entitlement and app environment stamp from that profile, checking the exact topic,
+team, App ID prefix and expiry. App ID prefixes can differ from Team IDs; the validator
+checks both separately, as documented in [Apple TN2415](https://developer.apple.com/library/archive/technotes/tn2415/).
+It preserves unrelated VPN/App Group entitlements. No DEBUG, build flavor
+or receipt heuristic selects TestFlight's APNs environment.
+
+The macOS packager carries APNs through its final inside-out signing pass and embeds the
+matching profile. iOS verification reads the exported IPA's actual signed app and embedded
+profile after export. App Store/distribution exports require production APNs. A re-sign that
+changes environment or team without a matching app stamp is rejected; signed products are
+never patched to conceal a mismatch. The final validator may be re-run on a separately
+re-signed app/IPA. It checks configuration, not real APNs delivery or backend binding.
+
+The IPA check refuses unsafe ZIP paths/duplicates/symlinks and requires extraction headroom.
+An unsigned disabled-push diagnostic build may be inspected only with an explicit option;
+that path cannot pass enabled APNs or distribution validation. Existing Agent retirement,
+backend registration/account generation, launch integration and real notification acceptance
+remain owned integration gates. Android's current push transport is unchanged.
+
+## Android build and measurement
+
+`tools/android/build-size-artifact.sh CHECKOUT OUTPUT apk|aab|apk-split|all` executes the existing
+Linux Android recipe against one clean isolated checkout, with no upload or installation.
+It validates SDK/build-tools, API-26 NDK compilers and tools, checks disk headroom, and records
+source/lockfile/build number/toolchain/backend-hash provenance without emitting credentials.
+Run the baseline and integrated candidate serially with identical conditions. The optional
+`--preflight` checks readiness without building. Do not pass the read-only reference checkout.
+
+`apk-split` first prepares JNI libraries with the standard recipe, then uses Flutter's
+`--split-per-abi` release build; both arm64-v8a and x86_64 APKs remain separate outputs.
+`aab` keeps the existing Play App Bundle recipe. `all` reuses one JNI preparation and
+serially emits universal APK, both ABI APKs and AAB; it does not run parallel native builds.
+Output directories must be new and empty. APK signatures are verified with apksigner and
+AAB signatures with jarsigner/keytool; certificate SHA-256 digests are recorded for matching
+baseline/candidate signing conditions. The driver does not replace Android push,
+modify VpnService, drop socket protect, provision SDKs or clean shared caches.
+
+Use `tools/android/measure_size.py inventory` with explicit `--kind apk|aab`,
+`--variant universal|abi-split|bundle`, `--abis` and matching `--conditions`. It validates ELF
+architectures against native ABI directories and reports container/DEX/native/resource bytes
+and hashes. Its `compare` rejects unlike variants, ABI sets, optimization/signing/toolchain
+conditions or baselines. AAB/universal bytes are never labeled as device download size.
+
+Both measurement tools accept `--approved-removal mobile-local-proxy-server`,
+`--approved-removal mobile-proxy-settings-ui` and `--approved-removal app-standard-forwarder`
+for the mobile candidate. Keep these out of the optimization/signing conditions shared by
+both builds. Reports disclose those changes; total savings cannot be attributed exclusively
+to runtime deduplication. macOS inventory rejects mobile-removal flags.
+
+The initial local toolchain inventory found no Android SDK, NDK, usable JDK, Gradle, adb or
+bundletool and no retained APK/AAB baseline. Android outputs therefore remain unbuilt until
+an SDK-equipped Linux build slot and integrated mobile commit are available. No Apple or
+historical two-runtime PoC sizes are substituted for Android results.

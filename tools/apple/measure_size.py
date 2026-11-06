@@ -120,12 +120,15 @@ def blob(path):
 def inventory(args):
     path = args.artifact
     conditions = json.loads(args.conditions.read_text())
+    removals = sorted(getattr(args, "approved_removal", []))
+    if args.platform == "macos" and removals:
+        raise ValueError("mobile feature removals cannot be applied to macOS")
     required = REQUIRED_CONDITIONS
     if not required <= conditions.keys():
         raise ValueError("conditions missing: " + ", ".join(sorted(required - conditions.keys())))
     result = {"schema": 1, "platform": args.platform, "kind": args.kind,
               "source_commit": args.source_commit, "functional_baseline": args.functional_baseline,
-              "conditions": conditions, "artifact_name": path.name,
+              "conditions": conditions, "artifact_name": path.name, "approved_removals": removals,
               "provenance": "Source/conditions supplied by caller; preserve build logs separately.",
               "runtime_verdict": "Not assessed by a file-size inventory."}
     if args.kind in ("app", "xcarchive"):
@@ -191,7 +194,9 @@ def compare(before, after):
             raise ValueError("incomparable measurements: " + key)
     result = {"baseline_commit": before["source_commit"], "candidate_commit": after["source_commit"],
               "runtime_verdict": "Requires independent one-active-core and functionality evidence.",
-              "savings": {}}
+              "savings": {}, "baseline_approved_removals": before.get("approved_removals", []),
+              "candidate_approved_removals": after.get("approved_removals", []),
+              "feature_scope_note": "Approved mobile removals must be disclosed; savings are not solely runtime deduplication."}
     metrics = [("application", "regular_file_bytes"), ("container", "bytes")]
     if before["kind"] == "xcarchive":
         metrics.append(("artifact", "regular_file_bytes"))
@@ -247,6 +252,8 @@ def main():
     inv.add_argument("--source-commit", required=True)
     inv.add_argument("--functional-baseline", required=True)
     inv.add_argument("--conditions", type=Path, required=True)
+    inv.add_argument("--approved-removal", action="append", default=[], choices=(
+        "mobile-local-proxy-server", "mobile-proxy-settings-ui", "app-standard-forwarder"))
     cmp = commands.add_parser("compare")
     cmp.add_argument("baseline", type=Path)
     cmp.add_argument("candidate", type=Path)
