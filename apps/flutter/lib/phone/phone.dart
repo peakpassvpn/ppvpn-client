@@ -8,9 +8,10 @@
 import '../icons.dart';
 
 import 'dart:async';
-import 'dart:io' show Platform;
+
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
@@ -582,6 +583,15 @@ class PhoneBell extends StatelessWidget {
   }
 }
 
+/// The phone keeps iOS gestures and edge shadow without dimming the exposed
+/// route with a rectangular modal barrier during push/pop or a cancelled swipe.
+class _PhonePageRoute<T> extends CupertinoPageRoute<T> {
+  _PhonePageRoute({required super.builder}) : super(allowSnapshotting: false);
+
+  @override
+  Color? get barrierColor => null;
+}
+
 /// Pushes [page] full screen. iOS: the platform's page route, which also
 /// goes back with a swipe from the screen's left edge (#535). Elsewhere it
 /// slides in from the end over [Tokens.motionPage]. Routes sit beside the
@@ -595,10 +605,8 @@ Future<T?> pushPhonePage<T>(BuildContext context, Widget page) {
     );
   }
 
-  if (Platform.isIOS)
-    return Navigator.of(
-      context,
-    ).push<T>(CupertinoPageRoute<T>(builder: themed, allowSnapshotting: false));
+  if (defaultTargetPlatform == TargetPlatform.iOS)
+    return Navigator.of(context).push<T>(_PhonePageRoute<T>(builder: themed));
   return Navigator.of(context).push<T>(
     PageRouteBuilder<T>(
       transitionDuration: Tokens.motion(context, Tokens.motionPage),

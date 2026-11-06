@@ -78,11 +78,18 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
   let channel: FlutterMethodChannel
   private var config: [String: Any] = [:]
   private var applied = false
+  private var tabLayoutSize: CGSize?
 
   init(frame: CGRect, id: Int64, kind: String, config: [String: Any], messenger: FlutterBinaryMessenger) {
     surface = ChromeSurface(frame: frame, kind: kind)
     channel = FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/native-chrome/\(id)", binaryMessenger: messenger)
     super.init()
+    // Platform views are created before Flutter gives them their final bounds.
+    // Do not let UIKit measure item titles against that zero-width surface.
+    surface.onLayout = { [weak self] in
+      guard let self, self.surface.kind == "tabs" else { return }
+      self.apply(self.config)
+    }
     surface.navigation.delegate = self
     surface.tabController.delegate = self
     channel.setMethodCallHandler { [weak self] call, result in
@@ -153,9 +160,18 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
   private func emit(_ action: String) { channel.invokeMethod("action", arguments: action) }
 
   private func apply(_ next: [String: Any]) {
-    if applied && NSDictionary(dictionary: config).isEqual(to: next) { return }
-    applied = true
+    let sameSize = surface.kind != "tabs" || tabLayoutSize == surface.bounds.size
+    if applied && sameSize && NSDictionary(dictionary: config).isEqual(to: next) { return }
     config = next
+    if surface.kind == "tabs" {
+      guard surface.window != nil, surface.tabController.parent != nil,
+        surface.bounds.width > 0, surface.bounds.height > 0 else {
+        applied = false
+        return
+      }
+      tabLayoutSize = surface.bounds.size
+    }
+    applied = true
     surface.overrideUserInterfaceStyle = next["dark"] as? Bool == true ? .dark : .light
     let color = (next["accent"] as? NSNumber)?.uint32Value ?? 0xFF3D63C9
     let accent = UIColor(red: CGFloat((color >> 16) & 255) / 255,
@@ -183,6 +199,9 @@ private final class ChromePlatformView: NSObject, @preconcurrency FlutterPlatfor
         }
         surface.tabController.setViewControllers(pages, animated: false)
       }
+      surface.tabController.view.setNeedsLayout()
+      surface.tabs.setNeedsLayout()
+      surface.tabController.view.layoutIfNeeded()
       let currentItems = surface.tabs.items ?? items
       let selected = (next["selected"] as? NSNumber)?.intValue ?? 0
       let target = currentItems.indices.contains(selected) ? selected : 0
@@ -244,6 +263,7 @@ private final class ChromeSurface: UIView {
   let tabController = UITabBarController()
   var tabs: UITabBar { tabController.tabBar }
   var topInset: CGFloat = 0
+  var onLayout: (() -> Void)?
 
   init(frame: CGRect, kind: String) {
     self.kind = kind
@@ -272,6 +292,7 @@ private final class ChromeSurface: UIView {
         if let parent = current as? UIViewController {
           parent.addChild(tabController)
           tabController.didMove(toParent: parent)
+          setNeedsLayout()
           break
         }
         responder = current.next
@@ -283,6 +304,7 @@ private final class ChromeSurface: UIView {
     super.layoutSubviews()
     if kind == "tabs" {
       tabController.view.frame = bounds
+      onLayout?()
     } else {
       navigation.frame = CGRect(x: 0, y: topInset, width: bounds.width, height: max(0, bounds.height - topInset))
     }

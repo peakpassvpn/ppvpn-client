@@ -4,6 +4,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter/cupertino.dart'
+    show CupertinoPageRoute, DefaultCupertinoLocalizations;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ppvpn_flutter/phone/native_chrome.dart';
 import 'package:ppvpn_flutter/phone/phone.dart';
@@ -55,7 +57,10 @@ void main() {
       await tester.pumpWidget(
         WidgetsApp(
           color: const Color(0xff000000),
-          localizationsDelegates: FLocalizations.localizationsDelegates,
+          localizationsDelegates: [
+            ...FLocalizations.localizationsDelegates,
+            DefaultCupertinoLocalizations.delegate,
+          ],
           pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
             settings: settings,
             pageBuilder: (context, _, _) => builder(context),
@@ -90,6 +95,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
       expect(pending.isCompleted, isFalse);
       expect(find.text('detail content'), findsOneWidget);
+      final detailContext = tester.element(find.text('detail content'));
+      final route = ModalRoute.of(detailContext)!;
+      expect(route, isA<CupertinoPageRoute<void>>());
+      expect(route.barrierColor, isNull);
+      expect(route.allowSnapshotting, isFalse);
       pending.complete(null);
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
