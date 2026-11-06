@@ -44,6 +44,7 @@ pub(crate) fn api_error(code: &str, message: impl Into<String>, retryable: bool)
     ApiError {
         code: code.to_string(),
         field: None,
+        capture_status: None,
         message: message.into(),
         retryable,
     }
