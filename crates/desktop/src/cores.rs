@@ -286,17 +286,23 @@ impl Client {
                 format!("MOBILE_NETWORK_INVALID: {error}"),
             )
         })?;
-        self.standard.network_changed(state).map_err(Into::into)
+        if PHONE {
+            self.mobile_control.network_changed(state);
+            Ok(())
+        } else {
+            self.standard.network_changed(state).map_err(Into::into)
+        }
     }
 
-    /// iOS suspends its UI process while the packet-tunnel extension keeps
-    /// running. Release the in-process engine's file lock before suspension;
-    /// profile refreshes must not restart it until the app returns.
+    /// iOS may suspend the App while its packet-tunnel owner keeps running.
+    /// Suspend App profile synchronization and cancel direct probes; the
+    /// App must never start a forwarding engine on foreground restoration.
     pub async fn set_app_foreground(&self, active: bool) {
         {
             let mut sync = self.cores.lock().await;
             sync.foreground_suspended = !active;
             if !active {
+                self.mobile_control.cancel();
                 self.standard.stop().await;
             }
         }
@@ -309,6 +315,7 @@ impl Client {
     async fn sync_cores(&self, trigger: Trigger) {
         let mut sync = self.cores.lock().await;
         if trigger == Trigger::SessionEnded {
+            self.mobile_control.cancel();
             self.disconnect_all("session end").await;
             self.standard.stop().await;
             sync.applied_team = None;
@@ -331,6 +338,32 @@ impl Client {
             self.standard.stop().await;
         }
         sync.applied_team = current.team_id.clone();
+        // Mobile profiles are stored by TunnelMode while disconnected. Only
+        // the system VPN host may instantiate a forwarding engine.
+        if PHONE {
+            self.mobile_control
+                .profile_changed(&current.revision, current.team_id.as_deref());
+            if let Some(tunnel) = &self.tunnel {
+                let validated = self.prepare_mobile_profile(&current.raw);
+                let result = match validated {
+                    Ok(_) => tunnel.set_profile(&current.raw, &current.revision).await,
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(()) => self.mark_core_accepted(&current),
+                    Err(error) => {
+                        if let Some(info) = error.info() {
+                            if is_profile_rejection(&info) {
+                                self.mark_core_rejected(&current.revision, info);
+                            } else {
+                                self.report_background(info);
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // Standard-core failures surface through its state sink; a rejected
         // update of a running core keeps it ready and is reported here. Both
         // cores get the selection and the pins with the profile.

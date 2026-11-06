@@ -65,7 +65,10 @@ class AppState with WidgetsBindingObserver {
             },
           );
     }
-    if (mobile) SystemVpn.listen();
+    if (mobile) {
+      SystemVpn.listen();
+      SystemVpn.state.addListener(_systemVpnChanged);
+    }
     unawaited(_pump());
   }
 
@@ -301,6 +304,10 @@ class AppState with WidgetsBindingObserver {
     return true;
   }
 
+  void _systemVpnChanged() {
+    if (SystemVpn.state.value != VpnState.off) rust.cancelMobileProbes();
+  }
+
   Future<void> _stopVpn() async {
     try {
       await SystemVpn.stop();
@@ -318,7 +325,9 @@ class AppState with WidgetsBindingObserver {
         debugPrint('nodes: $error');
       }
     }
-    if (next.standardReady && !_standardReady) unawaited(_loadProxies());
+    if (!mobile && next.standardReady && !_standardReady) {
+      unawaited(_loadProxies());
+    }
     _standardReady = next.standardReady;
   }
 
@@ -338,12 +347,21 @@ class AppState with WidgetsBindingObserver {
     return null;
   }
 
-  Future<void> _run(Future<void> Function() action) async {
-    try {
-      await action();
-    } catch (error) {
-      actionError.value = '$error';
+  Future<void> _mobileActions = Future<void>.value();
+
+  Future<void> _run(Future<void> Function() action) {
+    Future<void> run() async {
+      try {
+        await action();
+      } catch (error) {
+        actionError.value = '$error';
+      }
     }
+
+    // A direct probe must finish before SystemVpn.start installs routes.
+    // Keep the complete native-start + Rust-connect action in this queue.
+    if (!mobile) return run();
+    return _mobileActions = _mobileActions.then((_) => run());
   }
 
   Future<void> signIn() => _run(rust.signIn);
@@ -405,11 +423,31 @@ class AppState with WidgetsBindingObserver {
     await _run(() => rust.pinIngress(nodeId: nodeId, endpointKey: key));
   }
 
+  /// Direct ingress tests work without VPN; protocol tests need its host.
+  bool canProbe(rust.UiSnapshot state, rust.UiProbeMethod method) => mobile
+      ? state.auth == rust.UiAuth.signedIn &&
+            state.profileRevision != null &&
+            (method != rust.UiProbeMethod.connect ||
+                state.phase == rust.UiPhase.connected)
+      : state.standardReady;
+
   Future<void> testAll(rust.UiProbeMethod method) async {
     latency.value = {
       for (final node in nodes.value) node.id: const LatencyTesting(),
     };
-    await _run(() => rust.probeAll(method: method));
+    await _run(() async {
+      if (mobile &&
+          SystemVpn.state.value != VpnState.off &&
+          snapshot.value.phase != rust.UiPhase.connected)
+        return;
+      await rust.probeAll(method: method);
+    });
+    latency.value = {
+      for (final entry in latency.value.entries)
+        entry.key: entry.value is LatencyTesting
+            ? const LatencyFailed()
+            : entry.value,
+    };
   }
 
   /// Puts the system proxy back and stops the core; before the app quits.
@@ -417,6 +455,7 @@ class AppState with WidgetsBindingObserver {
     if (_stopped) return;
     _stopped = true;
     WidgetsBinding.instance.removeObserver(this);
+    SystemVpn.state.removeListener(_systemVpnChanged);
     unawaited(_network?.cancel());
     rust.shutdown();
   }

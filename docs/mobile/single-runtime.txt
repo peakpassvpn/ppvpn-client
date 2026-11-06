@@ -1,0 +1,43 @@
+Mobile single forwarding owner — implementation handoff, 2026-11-07
+
+Scope
+  iOS and Android remove App-local HTTP/SOCKS servers, authentication ports
+  and their UI. macOS/Windows/Linux keep Standard and mixed proxy behavior.
+  Android's change is a product decision, not an iOS platform restriction.
+  PacketTunnel/VpnService owns the only forwarding Engine. The authenticated
+  App control-plane runtime remains. No fake-running disconnected provider.
+
+Candidate implementation
+  Mobile Client::new uses NoAppEngine (fail closed); engine.rs is not compiled
+  for mobile. sync_cores stores/applies profiles only through TunnelMode.
+  local_proxies/routed_local_proxy return empty on mobile. Desktop unchanged.
+  Running-tunnel probes and latency sampling use its existing Core API.
+  Tablet layouts hide compatible/system proxy and local proxy copy controls.
+  Pins, selection, routing and traffic already use TunnelMode; no new wire.
+  Native VpnService socket protect/network/onRevoke/foreground notification
+  and PacketTunnel lifecycle/packet descriptor code are untouched.
+
+Consumed core-owner commits
+  94ec64d and ea59e30 were cherry-picked without authoring changes to public
+  core/wire files (local dependent commits 83a354d and b2f6275).
+  ProfileSession::prepare now validates offline; direct ICMP/TCP uses
+  ProfileSession::probe_entrances with cancellation and a 12-second outer
+  bound, without Engine/Sail/listeners/locks/rule-set download.
+  Protocol availability requires On; VPN_REQUIRED while off. Native VPN
+  state changes cancel direct probes, and Flutter user actions serialize
+  direct probing with complete native start + Rust connect.
+  App core tracing-layer installation is desktop-only; extension retains
+  its own engine logging. The App continues reading log files as before.
+
+Remaining integration/acceptance
+  Verify native external VPN-start/probe races on real devices. Mobile
+  readiness now permits direct ICMP/TCP with a profile and requires serving
+  tunnel for Connect. Stable account_id is in the Flutter bridge. Selected
+  latency while disconnected is refreshed by explicit probes; it no longer
+  uses an idle forwarding core as a periodic probe source.
+  Integrate APNs registration with negotiated backend environment/lease
+  contract, then native App lifecycle. APNs remains explicitly disabled.
+  Run actual unsigned device project builds and matched release-size
+  comparison, plus device lifecycle/network/probe tests separately on iOS
+  and Android. No installed app, active VPN, system routing or production
+  service is changed by this candidate. Android push channel is outside this scope.

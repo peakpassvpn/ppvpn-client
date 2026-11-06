@@ -89,7 +89,10 @@ impl Client {
 
     async fn monitor_tick(&self, session: u64) {
         let selected = self.selected_node();
-        let standard = self.standard.transport().ok();
+        let standard = match &self.tunnel {
+            Some(tunnel) => tunnel.transport(),
+            None => self.standard.transport().ok(),
+        };
 
         // Standard core: replica, and re-select the current node if needed.
         let mut standard_detail = ConnectionDetail::default();

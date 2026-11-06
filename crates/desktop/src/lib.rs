@@ -19,11 +19,13 @@ mod detect;
 mod device;
 #[cfg(all(test, target_os = "linux", feature = "linux-e2e"))]
 mod e2e_linux;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod engine;
 mod enhanced;
 mod errors;
 mod ingress;
 mod logging;
+mod mobile_control;
 mod monitor;
 mod notifications;
 mod push_agent;
@@ -598,6 +600,7 @@ pub struct Client {
     session: Mutex<session::SessionState>,
     /// Standard-mode core (local proxies, speed tests).
     standard: standard::StandardCore,
+    mobile_control: mobile_control::MobileControl,
     /// Enhanced mode through the privileged service.
     enhanced: enhanced::Enhanced,
     /// Phones: tunnel mode in place of enhanced mode (#448), see
@@ -635,8 +638,11 @@ impl Client {
     ) -> Arc<Self> {
         logging::install(&config.log_dir, &config.app_version);
         tracing::info!(app_version = %config.app_version, api = %config.api_base, "client created");
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let launcher: Arc<dyn standard::CoreLauncher> =
             Arc::new(engine::EngineLauncher::new(&config));
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let launcher: Arc<dyn standard::CoreLauncher> = Arc::new(mobile_control::NoAppEngine);
         let rule_set_hosts = core_ipc::rule_set_hosts(&config.api_base);
         Self::with_parts(
             config,
@@ -810,13 +816,28 @@ impl Client {
             }
             listener.on_probe_result(result);
         };
-        let result = self.standard.probe(method, node_ids, &deliver).await;
+        let result = match &self.tunnel {
+            Some(tunnel) if method == ProbeMethod::Connect || tunnel.transport().is_some() => {
+                tunnel.probe(method, node_ids, &deliver).await
+            }
+            Some(_) => self.probe_mobile_direct(method, node_ids, &deliver).await,
+            None => self.standard.probe(method, node_ids, &deliver).await,
+        };
         self.finish_action(result)
+    }
+
+    /// Cancels direct entrance probes when the native VPN changes state.
+    /// Bypasses the user-action queue so stale physical-path results drop.
+    pub fn cancel_mobile_probes(&self) {
+        self.mobile_control.cancel();
     }
 
     /// Per-node loopback proxies (with credentials) served by the
     /// standard-mode core. Fails with `StandardNotReady` until it is ready.
     pub async fn local_proxies(&self) -> Result<Vec<LocalProxy>, ClientError> {
+        if cores::PHONE {
+            return Ok(Vec::new());
+        }
         let result = self.standard.local_proxies().await;
         self.finish_action(result)
     }
@@ -828,6 +849,9 @@ impl Client {
     /// `StandardNotReady` until the core is ready. Examples should use
     /// `http://` or `socks5h://` (SOCKS5 by IP misses domain rules).
     pub async fn routed_local_proxy(&self) -> Result<Option<LocalProxy>, ClientError> {
+        if cores::PHONE {
+            return Ok(None);
+        }
         let result = self.standard.routed_local_proxy().await;
         self.finish_action(result)
     }
@@ -1055,6 +1079,7 @@ impl Client {
                 auth,
                 session: Mutex::new(session::SessionState::default()),
                 standard,
+                mobile_control: mobile_control::MobileControl::default(),
                 enhanced,
                 tunnel,
                 compat,

@@ -78,7 +78,7 @@ class _PhoneNodesState extends State<PhoneNodes> {
         NativeChromeAction(
           id: 'test-all',
           label: S.current('testAll'),
-          enabled: !_testing && snapshot.standardReady,
+          enabled: !_testing && app.canProbe(snapshot, _method),
           onPress: () => unawaited(_testAll()),
         ),
       ],
@@ -89,11 +89,28 @@ class _PhoneNodesState extends State<PhoneNodes> {
           const SizedBox(width: 8),
           _TestAllButton(
             testing: _testing,
-            onPress: _testing || !snapshot.standardReady ? null : _testAll,
+            onPress: _testing || !app.canProbe(snapshot, _method)
+                ? null
+                : _testAll,
           ),
         ],
       ),
-      child: _body(context, snapshot),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: Tokens.phonePadding,
+              vertical: 4,
+            ),
+            child: Text(
+              S.current.probeNote(_method, snapshot.phase),
+              style: Tokens.of(context).note,
+            ),
+          ),
+          Expanded(child: _body(context, snapshot)),
+        ],
+      ),
     ),
   );
 

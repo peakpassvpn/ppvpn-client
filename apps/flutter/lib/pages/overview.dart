@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../mobile.dart';
 import '../traffic_history.dart';
 import '../node_identity.dart';
 import '../src/rust/api.dart' as rust;
@@ -175,13 +176,14 @@ class OverviewPage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Expanded(child: TrafficCard(app: app)),
-                    const SizedBox(width: Tokens.cardGap),
-                    Expanded(
-                      child: _LocalProxy(
-                        app: app,
-                        nodeId: snapshot.selectedNodeId,
+                    if (!mobile) const SizedBox(width: Tokens.cardGap),
+                    if (!mobile)
+                      Expanded(
+                        child: _LocalProxy(
+                          app: app,
+                          nodeId: snapshot.selectedNodeId,
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -636,25 +638,26 @@ class _Modes extends StatelessWidget {
     return CardBox(
       child: Column(
         children: [
-          SettingRow(
-            icon: AppIcons.monitor,
-            title: s('stdMode'),
-            description: s('stdDesc'),
-            trailing: TriSwitch(
-              key: const ValueKey('switch-system-proxy'),
-              label: s('stdMode'),
-              state: switchState(snapshot, rust.UiConnectionMode.compatible),
-              enabled: enabled(rust.UiConnectionMode.compatible),
-              onChanged: (on) => on
-                  ? app.connectIn(rust.UiConnectionMode.compatible)
-                  : app.disconnect(),
+          if (!mobile)
+            SettingRow(
+              icon: AppIcons.monitor,
+              title: s('stdMode'),
+              description: s('stdDesc'),
+              trailing: TriSwitch(
+                key: const ValueKey('switch-system-proxy'),
+                label: s('stdMode'),
+                state: switchState(snapshot, rust.UiConnectionMode.compatible),
+                enabled: enabled(rust.UiConnectionMode.compatible),
+                onChanged: (on) => on
+                    ? app.connectIn(rust.UiConnectionMode.compatible)
+                    : app.disconnect(),
+              ),
             ),
-          ),
           SettingRow(
             icon: AppIcons.zap,
             title: s('tunMode'),
             description: s('tunDesc'),
-            divider: true,
+            divider: !mobile,
             trailing: TriSwitch(
               label: s('tunMode'),
               state: switchState(snapshot, rust.UiConnectionMode.enhanced),

@@ -77,6 +77,8 @@ pub struct UiSnapshot {
     pub auth: UiAuth,
     /// While `auth` is `AwaitingBrowser`.
     pub device_code: Option<UiDeviceCode>,
+    /// Authenticated stable identity; display names are not account keys.
+    pub account_id: Option<String>,
     pub account_name: Option<String>,
     pub team_name: Option<String>,
     /// The current team's id, one of [`teams`]' [`UiTeam::id`]s.
@@ -267,6 +269,13 @@ pub async fn pin_ingress(node_id: String, endpoint_key: Option<String>) -> Resul
 
 /// Tests every node; results arrive in [`next_events`]. Fails until the
 /// standard-mode core is ready.
+/// Native VPN state changes must cancel direct probes before their results render.
+#[frb(sync)]
+pub fn cancel_mobile_probes() -> Result<(), String> {
+    bridge::get()?.client.cancel_mobile_probes();
+    Ok(())
+}
+
 pub async fn probe_all(method: UiProbeMethod) -> Result<(), String> {
     let method = bridge::probe_method(method);
     bridge::get()?

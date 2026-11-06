@@ -15,6 +15,13 @@ import 'src/rust/api.dart' as rust;
 class S {
   S._(this._table, this.locale);
 
+  String probeNote(rust.UiProbeMethod method, rust.UiPhase phase) =>
+      method != rust.UiProbeMethod.connect
+      ? this('probeDirectNote')
+      : phase == rust.UiPhase.connected
+      ? this('probeTunnelNote')
+      : this('probeVpnRequired');
+
   final Map<String, String> _table;
 
   /// For forui's own strings (WidgetsApp.locale).
@@ -107,6 +114,9 @@ const _zh = <String, String>{
   'lineN': '线路 {n}',
   'probe': '测速方式',
   'testAll': '全部测速',
+  'probeDirectNote': '直接检测入口延迟，不代表代理可用性',
+  'probeTunnelNote': '通过 VPN 核心验证节点代理可用性',
+  'probeVpnRequired': 'Connect 可用性测试需要先连接 VPN',
   'refreshNodes': '刷新节点',
   'timeout': '超时',
   'failed': '失败',
@@ -383,6 +393,10 @@ const _en = <String, String>{
   'lineN': 'Route {n}',
   'probe': 'Test Method',
   'testAll': 'Test All',
+  'probeDirectNote':
+      'Direct ingress latency; does not verify proxy availability',
+  'probeTunnelNote': 'Checks proxy availability through the VPN core',
+  'probeVpnRequired': 'Connect availability tests require a connected VPN',
   'refreshNodes': 'Refresh Nodes',
   'timeout': 'Timeout',
   'failed': 'Failed',

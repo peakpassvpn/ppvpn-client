@@ -8,6 +8,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../app_state.dart';
+import '../mobile.dart';
 import '../node_identity.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
@@ -59,10 +60,23 @@ class _NodesPageState extends State<NodesPage> {
                 method: _method,
                 onMethod: (method) => setState(() => _method = method),
                 testing: _testing,
-                canTest: snapshot.standardReady,
+                canTest: app.canProbe(snapshot, _method),
                 onTestAll: _testAll,
                 onRefresh: app.refreshNodes,
               ),
+              if (mobile)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    Tokens.pageInset,
+                    0,
+                    Tokens.pageInset,
+                    8,
+                  ),
+                  child: Text(
+                    S.current.probeNote(_method, snapshot.phase),
+                    style: Tokens.of(context).note,
+                  ),
+                ),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
@@ -372,7 +386,7 @@ class _Footer extends StatelessWidget {
         child: ValueListenableBuilder(
           valueListenable: app.proxies,
           builder: (context, proxies, _) {
-            final proxy = proxies[node?.id];
+            final proxy = mobile ? null : proxies[node?.id];
             final selected = node;
             return Row(
               children: [
