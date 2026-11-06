@@ -256,6 +256,7 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         direct_resolver: None,
         auto_detect_interface: false,
         no_dns_mirror: HashSet::new(),
+        dns_rule_overrides: HashMap::new(),
         udp_off: profile
             .nodes
             .iter()
@@ -304,7 +305,11 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         b.auto_detect_interface = true;
     }
     if let Some(tun) = dns_policy {
-        b.tun_rules(profile, tun);
+        b.tun_rules(
+            profile,
+            tun,
+            options.dns_policy.is_some() && options.local_proxy.is_some(),
+        );
         b.label_rules("tun");
     }
     if let Some(local_proxy) = &options.local_proxy {
@@ -496,6 +501,9 @@ struct Builder {
     auto_detect_interface: bool,
     /// Rules made for D4: never mirrored into DNS.
     no_dns_mirror: HashSet<usize>,
+    /// Shared ingress bootstrap DNS stays direct while the corresponding
+    /// data route is scoped to TUN, preserving mixed credential routing.
+    dns_rule_overrides: HashMap<usize, Value>,
     /// Node tags whose node carries no UDP.
     udp_off: HashSet<String>,
 }
