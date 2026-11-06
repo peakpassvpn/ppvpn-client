@@ -165,6 +165,13 @@ impl std::fmt::Debug for Engine {
 }
 
 impl Engine {
+    /// Dynamic capture is a separate capability from legacy Role::Tun. The
+    /// pinned Sail adapter cannot change TUN without restarting its runtime;
+    /// advertise that honestly until its live transaction driver is wired.
+    pub fn capture_capabilities(&self) -> crate::capture::CaptureCapabilities {
+        crate::capture::CaptureCapabilities::unsupported()
+    }
+
     /// Creates an instance (section 3): sweeps what a previous one left,
     /// locks `state_dir`, reads or creates the local proxy state. Applies
     /// nothing and starts nothing. Errors known at creation are returned

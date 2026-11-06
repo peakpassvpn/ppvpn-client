@@ -7,6 +7,10 @@
 
 pub mod health;
 
+/// Shared capture protocol; platform hosts may use its optional driver coordinator.
+pub use ppvpn_core::capture;
+pub use ppvpn_core_wire::driver::{CaptureController, CaptureDriver};
+
 use ppvpn_core::{
     ApplyRequest, Engine, EngineState, Event, EventItem, EventReceiver, Pin,
     ProbeAvailabilityRequest, ProbeEntrancesRequest, RoutingMode,
@@ -24,6 +28,9 @@ pub struct ApiError {
     pub field: Option<String>,
     pub message: String,
     pub retryable: bool,
+    /// Present for negotiated capture transactions, not legacy core errors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_status: Option<Box<capture::CaptureStatus>>,
 }
 
 impl ApiError {
@@ -33,6 +40,7 @@ impl ApiError {
             field: None,
             message: message.into(),
             retryable: false,
+            capture_status: None,
         }
     }
 
@@ -48,6 +56,19 @@ impl From<ppvpn_core::Error> for ApiError {
             field: error.field,
             message: error.message,
             retryable: error.retryable,
+            capture_status: None,
+        }
+    }
+}
+
+impl From<capture::CaptureError> for ApiError {
+    fn from(error: capture::CaptureError) -> Self {
+        Self {
+            code: error.code.as_str().to_owned(),
+            field: None,
+            message: "capture transaction refused".to_owned(),
+            retryable: error.code == capture::CaptureErrorCode::CaptureBusy,
+            capture_status: Some(error.status),
         }
     }
 }
@@ -60,6 +81,18 @@ pub async fn dispatch(engine: &Engine, path: &str, body: Value) -> Result<Value,
             let mut version = data(Engine::version())?;
             version["core_api_version"] = json!(1);
             Ok(version)
+        }
+        "/v1/get-capture-capabilities" => data(engine.capture_capabilities()),
+        "/v1/get-capture-status" => Err(capture_unsupported()),
+        "/v1/attach-capture" => {
+            let request: capture::AttachCapture = decode(body)?;
+            capture_version(request.protocol_version)?;
+            Err(capture_unsupported())
+        }
+        "/v1/detach-capture" => {
+            let request: capture::DetachCapture = decode(body)?;
+            capture_version(request.protocol_version)?;
+            Err(capture_unsupported())
         }
         "/v1/validate-profile" => {
             reply(Engine::validate(&apply_request(&body)?).map(|()| json!({ "valid": true })))
@@ -221,6 +254,24 @@ fn apply_request(body: &Value) -> Result<ApplyRequest, ApiError> {
     })
 }
 
+fn capture_unsupported() -> ApiError {
+    ApiError::new(
+        "CAPTURE_UNSUPPORTED",
+        "this runtime cannot attach or detach capture without restarting",
+    )
+}
+
+fn capture_version(version: u32) -> Result<(), ApiError> {
+    if version == capture::CAPTURE_PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            "CAPTURE_PROTOCOL_UNSUPPORTED",
+            "capture protocol version is not supported",
+        ))
+    }
+}
+
 fn reply<T: Serialize>(result: Result<T, ppvpn_core::Error>) -> Result<Value, ApiError> {
     data(result?)
 }
@@ -245,6 +296,95 @@ fn string(body: &Value, key: &str) -> Result<String, ApiError> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn legacy_capture_calls_refuse_without_starting_or_switching_the_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = ppvpn_core::internal::engine_on_fake_runtime(ppvpn_core::EngineConfig::new(
+            ppvpn_core::Role::Standard,
+            ppvpn_core::Platform::Macos,
+            dir.path(),
+        ));
+        let before = engine.status().state;
+        let capabilities = dispatch(&engine, "/v1/get-capture-capabilities", json!({}))
+            .await
+            .unwrap();
+        let capabilities: capture::CaptureCapabilities =
+            serde_json::from_value(capabilities).unwrap();
+        assert!(!capabilities.supports_live_capture());
+        let attach = json!({"protocol_version":1,"expected_epoch":0,
+            "spec":{"resource":{"kind":"managed","resource_id":"synthetic-tun"},"ipv6":true}});
+        assert_eq!(
+            dispatch(&engine, "/v1/attach-capture", attach.clone())
+                .await
+                .unwrap_err()
+                .code,
+            "CAPTURE_UNSUPPORTED"
+        );
+        assert_eq!(
+            dispatch(&engine, "/v1/get-capture-status", json!({}))
+                .await
+                .unwrap_err()
+                .code,
+            "CAPTURE_UNSUPPORTED"
+        );
+        let mut future = attach.clone();
+        future["protocol_version"] = 2.into();
+        assert_eq!(
+            dispatch(&engine, "/v1/attach-capture", future)
+                .await
+                .unwrap_err()
+                .code,
+            "CAPTURE_PROTOCOL_UNSUPPORTED"
+        );
+        let mut raw = attach;
+        raw["spec"]["resource"]["fd"] = 7.into();
+        assert_eq!(
+            dispatch(&engine, "/v1/attach-capture", raw)
+                .await
+                .unwrap_err()
+                .code,
+            "REQUEST_INVALID"
+        );
+        assert_eq!(engine.status().state, before);
+        engine.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn capture_errors_keep_the_status_without_changing_legacy_error_shapes() {
+        let mut machine = capture::CaptureMachine::new(
+            capture::ForwarderIdentity {
+                instance: "synthetic-owner".into(),
+                generation: 1,
+            },
+            capture::CaptureCapabilities::unsupported(),
+        );
+        let error = machine
+            .begin_attach(
+                capture::AttachCapture {
+                    protocol_version: 1,
+                    expected_epoch: 0,
+                    spec: capture::CaptureSpec {
+                        resource: capture::CaptureResource::Managed {
+                            resource_id: "synthetic-capture".into(),
+                        },
+                        ipv6: true,
+                    },
+                },
+                true,
+            )
+            .unwrap_err();
+        let error = ApiError::from(error);
+        assert_eq!(error.code, "CAPTURE_UNSUPPORTED");
+        assert_eq!(error.capture_status.as_ref().unwrap().epoch, 0);
+        assert!(
+            !serde_json::to_value(ApiError::request_invalid("bad field"))
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("capture_status")
+        );
+    }
+
     #[test]
     fn engine_errors_keep_their_code() {
         let error = Engine::validate(&ApplyRequest::new(Vec::new())).unwrap_err();
@@ -255,6 +395,7 @@ mod tests {
                 field: None,
                 message: "profile is required".to_string(),
                 retryable: false,
+                capture_status: None,
             }
         );
     }
