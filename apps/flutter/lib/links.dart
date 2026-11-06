@@ -23,6 +23,20 @@ Future<bool> openUrl(String url) async {
   }
 }
 
+/// Device authorization must not inherit another account's browser cookies.
+/// iOS uses a private system authentication session; ordinary links retain
+/// their normal browsing session. Android keeps its Custom Tab flow.
+Future<bool> openAuthenticationUrl(String url) async {
+  if (defaultTargetPlatform != TargetPlatform.iOS) return openUrl(url);
+  try {
+    return await _app.invokeMethod<bool>('openAuthenticationUrl', url) ?? false;
+  } on PlatformException catch (error) {
+    debugPrint('openAuthenticationUrl: $error');
+    // Never fall back to the cookie-sharing browser for authentication.
+    return false;
+  }
+}
+
 /// Closes the page [openUrl] showed, if it is still up (after the sign-in
 /// it was opened for): iOS dismisses the sheet; Android brings the app back
 /// over its Custom Tab, which finishes it.

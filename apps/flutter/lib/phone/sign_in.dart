@@ -2,8 +2,8 @@
 // brand on top (the brand gradient under the status bar with its
 // mountains, the mark, 「PPVPN」, the title and the line), then a panel
 // rising over it with the three steps and 「登录」. The authorization page
-// opens over the app as a sheet (links.dart: SFSafariViewController as a
-// page sheet, a Custom Tab on Android) with the code in its address, so
+// opens over the app as a sheet (links.dart: a private system authentication session
+// on iOS, a Custom Tab on Android) with the code in its address, so
 // nothing is compared by hand; it closes once signed in (AppState).
 
 import '../icons.dart';
@@ -176,7 +176,7 @@ class _Panel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          _Primary(label: s('reopenAuth'), onPress: () => unawaited(openUrl(code.verificationUrl))),
+          _Primary(label: s('reopenAuth'), onPress: () => unawaited(openAuthenticationUrl(code.verificationUrl))),
           const SizedBox(height: 4),
           Pressable(
             onPress: app.cancelSignIn,

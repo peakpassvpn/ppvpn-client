@@ -266,9 +266,9 @@ class AppState with WidgetsBindingObserver {
     if (!mobile) return;
     final url = after.deviceCode?.verificationUrl;
     if (url != null && url != before.deviceCode?.verificationUrl)
-      unawaited(openUrl(url));
-    if (after.auth == rust.UiAuth.signedIn &&
-        before.auth == rust.UiAuth.awaitingBrowser) {
+      unawaited(openAuthenticationUrl(url));
+    if (before.auth == rust.UiAuth.awaitingBrowser &&
+        after.auth != rust.UiAuth.awaitingBrowser) {
       unawaited(closeBrowser());
     }
   }
