@@ -3,13 +3,19 @@ import 'package:ppvpn_flutter/traffic_history.dart';
 import 'package:ppvpn_flutter/src/rust/api.dart' as rust;
 
 void main() {
-  test('chart averages two seconds while numeric rate events stay live', () {
+  test('chart averages a bucket while numeric rate events stay live', () {
     final history = TrafficHistory();
     const zero = rust.UiTraffic(up: 0, down: 0);
     const burst = rust.UiTraffic(up: 100, down: 200);
     expect(history.add(zero, Duration.zero), isEmpty);
-    expect(history.add(zero, const Duration(seconds: 1)), isEmpty);
-    final result = history.add(burst, const Duration(seconds: 2));
+    expect(
+      history.add(
+        zero,
+        Duration(microseconds: TrafficHistory.interval.inMicroseconds ~/ 2),
+      ),
+      isEmpty,
+    );
+    final result = history.add(burst, TrafficHistory.interval);
     expect((result.single.up, result.single.down), (50, 100));
     expect((burst.up, burst.down), (100, 200));
   });
@@ -18,16 +24,16 @@ void main() {
     history.add(const rust.UiTraffic(up: 0, down: 0), Duration.zero);
     history.add(
       const rust.UiTraffic(up: 100, down: 0),
-      const Duration(milliseconds: 500),
+      Duration(microseconds: TrafficHistory.interval.inMicroseconds ~/ 4),
     );
     final first = history.add(
       const rust.UiTraffic(up: 200, down: 0),
-      const Duration(milliseconds: 2500),
+      Duration(microseconds: TrafficHistory.interval.inMicroseconds * 5 ~/ 4),
     );
     expect(first.single.up, 175);
     final second = history.add(
       const rust.UiTraffic(up: 0, down: 0),
-      const Duration(seconds: 4),
+      TrafficHistory.interval * 2,
     );
     expect(second.single.up, 50);
   });

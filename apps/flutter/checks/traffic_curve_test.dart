@@ -49,7 +49,7 @@ void main() {
         ];
         expect(
           opaqueStroke.length,
-          greaterThan(100),
+          greaterThanOrEqualTo((AppState.historyVisibleLength - 1) * 30),
           reason: 'the waveform must not leave the canvas at scale $peak',
         );
       }

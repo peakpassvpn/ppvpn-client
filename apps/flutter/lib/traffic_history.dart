@@ -2,7 +2,9 @@ import 'src/rust/api.dart' as rust;
 
 /// Time-weighted chart buckets. Numeric rates keep using the original events.
 class TrafficHistory {
-  static const interval = Duration(seconds: 2);
+  // Four visible points span about ten seconds (three equal segments).
+  // Native rate events still arrive every second.
+  static const interval = Duration(microseconds: 10000000 ~/ 3);
   Duration? _last;
   var _used = 0;
   var _up = 0;

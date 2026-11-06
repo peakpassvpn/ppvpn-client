@@ -92,7 +92,7 @@ class AppState with WidgetsBindingObserver {
   );
   final _historyClock = Stopwatch()..start();
   final _historySampler = TrafficHistory();
-  static const historyVisibleLength = 6;
+  static const historyVisibleLength = 4;
   // Two older samples feed the causal filter; an offscreen segment keeps
   // the left edge covered while a new point slides into view.
   static const historyLength = historyVisibleLength + 3;
