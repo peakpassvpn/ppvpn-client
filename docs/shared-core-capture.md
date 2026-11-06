@@ -326,3 +326,11 @@ cannot preempt a mixed user's fixed-node credential route or the routed user's
 profile rules. Their bootstrap DNS matchers remain explicit physical-resolver
 overrides in the DNS policy. Legacy translation is unchanged; Shared capture
 preparation keeps these same route and DNS rules in both attached/detached plans.
+
+
+A configured native owner with no physical-network snapshot refuses start with
+a retryable error before opening forwarding inbounds or incrementing the
+successful-start generation. This enforces the bootstrap ordering instead of
+starting mixed forwarding with a controller that would later require restart
+merely to enable capture. A known offline snapshot is valid; the host continues
+pushing genuine physical-network changes once monitoring starts.
