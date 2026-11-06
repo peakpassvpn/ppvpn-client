@@ -52,6 +52,37 @@ async fn capture_planning_preserves_forwarding_policy_and_mixed_credentials() {
         .iter()
         .any(|i| i["type"] == "mixed" && !i["users"].as_array().unwrap().is_empty()));
     assert!(!base["dns"].is_null());
+    let source: Value = serde_json::from_slice(&profile(R1)).unwrap();
+    let ingress_domain = source["nodes"][0]["ingresses"][0]["endpoint"]["domain"]
+        .as_str()
+        .unwrap();
+    let bypass = base["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            r["domain"]
+                .as_array()
+                .is_some_and(|d| d.iter().any(|d| d == ingress_domain))
+                && r["outbound"] == crate::translate::DIRECT_TAG
+        })
+        .unwrap();
+    assert_eq!(
+        bypass["inbound"],
+        serde_json::json!([crate::translate::TUN_INBOUND_TAG]),
+        "TUN endpoint bypass must not override credentialed mixed users"
+    );
+    assert!(
+        base["dns"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["domain"]
+                .as_array()
+                .is_some_and(|d| d.iter().any(|d| d == ingress_domain))
+                && r["server"] == crate::translate::DNS_LOCAL_TAG),
+        "node bootstrap DNS remains on the physical resolver"
+    );
     for ipv6 in [false, true] {
         let attached = engine
             .inner

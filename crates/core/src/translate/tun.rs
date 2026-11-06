@@ -330,7 +330,7 @@ impl Builder {
     /// reverse-mapped), and direct resolves names to IPv4 only. IPv4,
     /// private, ULA and link-local destinations, and addresses whose name is
     /// unknown, go out unchanged.
-    pub(super) fn tun_rules(&mut self, profile: &Profile, tun: &Tun) {
+    pub(super) fn tun_rules(&mut self, profile: &Profile, tun: &Tun, scope_ingress: bool) {
         self.rules.extend([
             json!({ "inbound": [TUN_INBOUND_TAG], "action": "sniff" }),
             json!({ "inbound": [TUN_INBOUND_TAG], "action": "route-options", "override_destination": true }),
@@ -379,17 +379,27 @@ impl Builder {
         for ingress in profile.nodes.iter().flat_map(|n| &n.ingresses) {
             if let Some(domain) = normalize_domain(&ingress.endpoint.domain) {
                 if domains.insert(domain.clone()) {
-                    self.rules.push(
+                    self.ingress_bypass(
                         json!({ "domain": [domain], "action": "route", "outbound": DIRECT_TAG }),
+                        scope_ingress,
                     );
                 }
             }
             if let Some(ip) = ingress_ip(&ingress.endpoint.ip) {
                 if ips.insert(ip) {
-                    self.rules.push(json!({ "ip_cidr": [ip.to_string()], "action": "route", "outbound": DIRECT_TAG }));
+                    self.ingress_bypass(json!({ "ip_cidr": [ip.to_string()], "action": "route", "outbound": DIRECT_TAG }), scope_ingress);
                 }
             }
         }
+    }
+
+    fn ingress_bypass(&mut self, mut rule: Value, scope_ingress: bool) {
+        if scope_ingress {
+            self.dns_rule_overrides
+                .insert(self.rules.len(), rule.clone());
+            rule["inbound"] = json!([TUN_INBOUND_TAG]);
+        }
+        self.rules.push(rule);
     }
 
     /// The TUN inbound.
@@ -514,6 +524,7 @@ impl Builder {
     fn mirror_dns_rules(&self, dns_rule_sets: &HashSet<String>) -> Vec<Value> {
         let mut out = Vec::new();
         for (i, rule) in self.rules.iter().enumerate() {
+            let rule = self.dns_rule_overrides.get(&i).unwrap_or(rule);
             let Some(rule) = rule.as_object() else {
                 continue;
             };
