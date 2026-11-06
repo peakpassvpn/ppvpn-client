@@ -31,6 +31,8 @@
 #                        of <abi>/libppvpn_tunnel.so as crates/tunnel-host/
 #                        scripts/build-android.sh leaves it (default: built
 #                        here, into build/tunnel-android)
+#   PPVPN_APPLE_PUSH_ENABLED  0 (default) | 1, explicit Apple push rollout
+#   PPVPN_APPLE_PUSH_PROFILE  real matching profile; required when enabled
 #   IOS_SDK              ios: simulator (a debug build for Apple silicon's
 #                        simulator, ci.yml) or device (release; the default)
 #   IOS_TEAM_ID, IOS_APP_PROFILE, IOS_TUNNEL_PROFILE
@@ -165,6 +167,17 @@ case $os in
     for f in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
       /usr/libexec/PlistBuddy -c 'Set :com.apple.security.app-sandbox false' "$f"
     done
+    # Include shared/platform push code in an existing generated target file.
+    # This does not start a receiver or enable APNs by default.
+    python3 "$root/tools/apple/push_config.py" sources --platform macos \
+      --app-root "$app" --entry macos/Runner/MainFlutterWindow.swift
+    push_profile=()
+    [ -z "${PPVPN_APPLE_PUSH_PROFILE:-}" ] || push_profile=(--profile "$PPVPN_APPLE_PUSH_PROFILE")
+    python3 "$root/tools/apple/push_config.py" prepare --platform macos \
+      --info "$plist" --entitlements macos/Runner/DebugProfile.entitlements \
+      --entitlements macos/Runner/Release.entitlements \
+      --enabled "${PPVPN_APPLE_PUSH_ENABLED:-0}" --topic com.peakpassvpn.ppvpn.desktop \
+      ${push_profile[@]+"${push_profile[@]}"}
     # The ppvpn:// scheme: the push agent opens ppvpn://push/<id> for a click
     # on a notification.
     /usr/libexec/PlistBuddy -c 'Delete :CFBundleURLTypes' "$plist" 2>/dev/null || true
@@ -242,6 +255,14 @@ if not registered:
 missing = [line for line in imports if line not in code.splitlines()]
 open(delegate, "w").write("\n".join(missing) + "\n" + code + "\n" + body + "\n")
 PY
+    python3 "$root/tools/apple/push_config.py" sources --platform ios \
+      --app-root "$app" --entry ios/Runner/AppDelegate.swift
+    push_profile=()
+    [ -z "${PPVPN_APPLE_PUSH_PROFILE:-}" ] || push_profile=(--profile "$PPVPN_APPLE_PUSH_PROFILE")
+    python3 "$root/tools/apple/push_config.py" prepare --platform ios \
+      --info ios/Runner/Info.plist --entitlements ios/Runner/Runner.entitlements \
+      --enabled "${PPVPN_APPLE_PUSH_ENABLED:-0}" --topic com.peakpassvpn.ppvpn \
+      ${push_profile[@]+"${push_profile[@]}"}
     rm ios/Runner/PPVPNPlugin.swift ios/Runner/NativeChrome.swift
     plist=ios/Runner/Info.plist
     # The export compliance answer (#470): only the system's and standard
@@ -561,6 +582,8 @@ case $os in
       # The Runner that ships, after the export's own processing.
       runner=build/ios/Runner.shipped
       unzip -p "$bundle" Payload/Runner.app/Runner >"$runner"
+      tunnel_binary=build/ios/PacketTunnel.shipped
+      unzip -p "$bundle" Payload/Runner.app/PlugIns/PacketTunnel.appex/PacketTunnel >"$tunnel_binary"
     else
       bundle=build/ios/iphoneos/Runner.app
       test -x "$bundle/Runner"
@@ -577,13 +600,22 @@ case $os in
       while IFS= read -r name; do
         grep -qw "$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
       done < runner/ios/Runner/Bridge.exports
-      tunnel_binary="$(dirname "$runner")/PlugIns/PacketTunnel.appex/PacketTunnel"
+      tunnel_binary="${tunnel_binary:-$(dirname "$runner")/PlugIns/PacketTunnel.appex/PacketTunnel}"
       tunnel_exports=$(xcrun dyld_info -exports "$tunnel_binary")
       while IFS= read -r name; do
         grep -qw "$name" <<<"$tunnel_exports" || { echo "$tunnel_binary does not export $name" >&2; exit 1; }
       done < runner/ios/PacketTunnel/Tunnel.exports
       python3 scripts/check-ios-exports.py "$runner" "$tunnel_binary"
       echo "$runner: $(grep -c '_frb_' <<<"$exports") bridge functions exported"
+      push_verify=()
+      if [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
+        push_verify=(--export-options "$IOS_EXPORT_OPTIONS")
+      elif [ -z "${IOS_TEAM_ID:-}" ]; then
+        push_verify=(--allow-unsigned-disabled)
+      fi
+      python3 "$root/tools/apple/push_config.py" verify --platform ios --artifact "$bundle" \
+        --enabled "${PPVPN_APPLE_PUSH_ENABLED:-0}" --topic com.peakpassvpn.ppvpn \
+        ${push_verify[@]+"${push_verify[@]}"}
     fi ;;
   linux)
     bundle=build/linux/x64/release/bundle

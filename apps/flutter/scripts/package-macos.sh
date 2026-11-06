@@ -110,9 +110,28 @@ for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   install -m 755 "$file" "$contents/MacOS/$bin"
 done
 
-PPVPN_APP_ENTITLEMENTS="$app_dir/packaging/macos/PPVPN.entitlements" \
+# Carry the real APNs entitlement through the final inside-out signing pass.
+push_entitlements="$build/PPVPN.entitlements"
+cp "$app_dir/packaging/macos/PPVPN.entitlements" "$push_entitlements"
+push_profile=()
+[ -z "${PPVPN_APPLE_PUSH_PROFILE:-}" ] || push_profile=(--profile "$PPVPN_APPLE_PUSH_PROFILE")
+python3 "$root/tools/apple/push_config.py" prepare --platform macos \
+  --info "$contents/Info.plist" --entitlements "$push_entitlements" \
+  --enabled "${PPVPN_APPLE_PUSH_ENABLED:-0}" --topic com.peakpassvpn.ppvpn.desktop \
+  ${push_profile[@]+"${push_profile[@]}"}
+if [ "${PPVPN_APPLE_PUSH_ENABLED:-0}" = 1 ]; then
+  install -m 644 "$PPVPN_APPLE_PUSH_PROFILE" "$contents/embedded.provisionprofile"
+fi
+
+PPVPN_APP_ENTITLEMENTS="$push_entitlements" \
 PPVPN_SOURCE_PACKAGES="$build/xcode/SourcePackages" \
   "$macos/scripts/package-app.sh" "$app" "$arch"
+
+push_verify=()
+[ "${PPVPN_RELEASE_CHANNEL:-}" != stable ] || push_verify=(--distribution)
+python3 "$root/tools/apple/push_config.py" verify --platform macos --artifact "$app" \
+  --enabled "${PPVPN_APPLE_PUSH_ENABLED:-0}" --topic com.peakpassvpn.ppvpn.desktop \
+  ${push_verify[@]+"${push_verify[@]}"}
 
 # What the native app holds besides its own code (package-app.sh checked the
 # signatures, the helpers' identifiers and the agent's link).
