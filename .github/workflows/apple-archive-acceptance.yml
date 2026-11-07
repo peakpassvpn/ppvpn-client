@@ -4,6 +4,11 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: Apple platform to build serially
+        type: choice
+        options: [ios, macos]
+        default: ios
       source_ref:
         description: Exact product source commit
         required: true
@@ -21,6 +26,7 @@ concurrency:
 
 jobs:
   archives:
+    if: inputs.platform != 'macos'
     runs-on: macos-15
     timeout-minutes: 240
     defaults:
@@ -122,5 +128,109 @@ jobs:
         with:
           name: ios-unsigned-archive-comparison
           path: ${{ runner.temp }}/apple-output
+          if-no-files-found: warn
+          retention-days: 3
+
+  macos:
+    if: inputs.platform == 'macos'
+    runs-on: macos-15
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_BUILD_NUMBER: '344'
+      PPVPN_APPLE_PUSH_ENABLED: '0'
+      PPVPN_APPLE_TARGETS: aarch64-apple-darwin
+      SOURCE_REF: ${{ inputs.source_ref }}
+      BASELINE_REF: ${{ inputs.baseline_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
+      - name: Xcode and generator
+        run: |
+          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodebuild -version
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: macos
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+      - name: Serial full macOS packages
+        env:
+          PPVPN_SKIP_ANALYZE: '1'
+        run: |
+          set -euo pipefail
+          unset PPVPN_API_BASE PPVPN_FLUTTER_HOME PPVPN_FLUTTER_SAMPLE PPVPN_FLUTTER_SYNTHETIC_TRAFFIC
+          mkdir -p "$CARGO_TARGET_DIR" "$RUNNER_TEMP/macos-output"
+          for side in candidate baseline; do
+            checkout="$RUNNER_TEMP/macos-$side"
+            output="$RUNNER_TEMP/macos-output/$side"
+            mkdir -p "$output"
+            git clone --no-hardlinks "$GITHUB_WORKSPACE" "$checkout"
+            if [[ "$side" == baseline ]]; then git -C "$checkout" checkout --detach "$BASELINE_REF"; fi
+            ln -s "$CARGO_TARGET_DIR" "$checkout/target"
+            echo /target >> "$checkout/.git/info/exclude"
+            export PPVPN_MACOS_SINGLE_RUNTIME=0
+            [[ "$side" != candidate ]] || export PPVPN_MACOS_SINGLE_RUNTIME=1
+            (cd "$checkout" && FLUTTER_TARGET=macos MACOS_ARCHS=arm64 bash apps/flutter/scripts/ci-build.sh) >"$output/flutter-build.log" 2>&1
+            (cd "$checkout" && bash tools/desktop/build-service.sh macos-arm64) >"$output/helper-build.log" 2>&1
+            (cd "$checkout" && bash apps/macos/scripts/bootstrap.sh --release) >"$output/ffi-build.log" 2>&1
+            app="$checkout/apps/flutter/build/macos/Build/Products/Release/PPVPN.app"
+            (cd "$checkout" && SKIP_BOOTSTRAP=1 bash apps/flutter/scripts/package-macos.sh "$app" arm64) >"$output/package.log" 2>&1
+            cp "$checkout"/dist/macos/* "$output/"
+            CHECKOUT="$checkout" OUTPUT="$output" python3 - <<'PYCODE'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root,out=Path(os.environ['CHECKOUT']),Path(os.environ['OUTPUT'])
+          app=root/'apps/flutter/build/macos-package-arm64/PPVPN.app'
+          rows={str(p.relative_to(app)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in app.rglob('*') if p.is_file() and not p.is_symlink()}
+          data={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
+                'layout':os.environ['PPVPN_MACOS_SINGLE_RUNTIME'],'signing':'ad-hoc measurement only; no production peer acceptance',
+                'api_origin_sha256':hashlib.sha256(os.environ['PPVPN_API_BASE_DEFAULT'].encode()).hexdigest(),
+                'xcode':subprocess.check_output(['xcodebuild','-version'],text=True).strip(),
+                'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
+                'logical_bundle_bytes':sum(v['bytes'] for v in rows.values()),'files':rows,
+                'installed':False,'real_vpn_acceptance':False}
+          (out/'build-provenance.json').write_text(json.dumps(data,indent=2)+'\n')
+          PYCODE
+            tar -czf "$output/PPVPN.app.tar.gz" -C "$checkout/apps/flutter/build/macos-package-arm64" PPVPN.app
+          done
+          python3 - <<'PYCODE'
+          import json,os
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'macos-output'
+          a,b=[json.loads((out/side/'build-provenance.json').read_text()) for side in ('candidate','baseline')]
+          for field in ('api_origin_sha256','xcode','rust','signing'): assert a[field]==b[field],field
+          result={'candidate_bytes':a['logical_bundle_bytes'],'baseline_bytes':b['logical_bundle_bytes'],
+                  'saved_bytes':b['logical_bundle_bytes']-a['logical_bundle_bytes'],
+                  'saved_percent':100*(1-a['logical_bundle_bytes']/b['logical_bundle_bytes']),
+                  'scope':'arm64 Release fully packaged app; ad-hoc measurement signatures; same compiler/SDK/API; no runtime acceptance'}
+          (out/'comparison.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result))
+          PYCODE
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: macos-package-comparison
+          path: ${{ runner.temp }}/macos-output
           if-no-files-found: warn
           retention-days: 3
