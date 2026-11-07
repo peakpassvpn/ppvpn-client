@@ -51,8 +51,8 @@ class AcceptanceEvidenceTests(unittest.TestCase):
                                   "owner": {"id": "one-owner"}, "runtime_ids": [42]})
         self.rows.append({"probe": "complete", "cycles": 20, "runtime_ids": [],
                           "http_connect": True, "socks_tcp": True, "socks_udp": True,
-                          "per_node_http_connect": True, "per_node_socks_tcp": True,
-                          "per_node_socks_udp": True})
+                          "per_node_tcp": True, "per_node_upstream_connections": 1,
+                          "per_node_sink_accepts": 1})
         self.write_events()
         for stage in ("before", "detached", "after"):
             for kind, value in (("dns", DNS), ("routes", ROUTES),
@@ -88,9 +88,19 @@ class AcceptanceEvidenceTests(unittest.TestCase):
         self.reject("owner/runtime changed")
 
     def test_routed_only_probe_is_insufficient(self):
-        del self.rows[-1]["per_node_socks_udp"]
+        del self.rows[-1]["per_node_tcp"]
         self.write_events()
-        self.reject("per_node_socks_udp")
+        self.reject("per_node_tcp")
+
+    def test_reconnected_upstream_is_not_continuity(self):
+        self.rows[-1]["per_node_upstream_connections"] = 2
+        self.write_events()
+        self.reject("exactly one established connection")
+
+    def test_boolean_cannot_replace_measured_connection_count(self):
+        self.rows[-1]["per_node_sink_accepts"] = True
+        self.write_events()
+        self.reject("exactly one established connection")
 
     def test_dns_server_change_is_not_reachability_noise(self):
         (self.directory / "dns-detached.txt").write_text(
