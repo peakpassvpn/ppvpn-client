@@ -1,0 +1,57 @@
+Isolated mobile device acceptance preparation
+
+Before running
+  Build owner must consume the latest mobile commits and frozen core/Sail,
+  regenerate Flutter bindings, build App AND PacketTunnel/JNI, verify export
+  lists and package identity/signature, and record exact source/binary hashes.
+  A prior cd73960 package does not contain the new public packet C exports.
+  Build the candidate with repository PPVPN_API_BASE (formal release origin),
+  without inherited PPVPN_API_BASE overrides. Keep diagnostic placeholder
+  bundles separate; they cannot be used for functional acceptance.
+
+  Use a designated isolated phone/tablet/emulator with no live user VPN.
+  Do not install over a live user's app or replace current App Group data.
+  Keep the provisioned App/extension IDs and matching App Group; use a unique
+  internal build counter assigned by the build owner and a separate artifact
+  directory. Device profiles must cover that device. Do not upload to
+  TestFlight/Play before acceptance. APNs remains OFF with current profiles
+  lacking its entitlement; VPN-only success is not push delivery success.
+
+  Sign into an authorized test account normally before the test. The harness
+  does not store credentials, clear auth, create accounts or grant a plan.
+  Choose an explicitly authorized HTTPS endpoint expected to return <400.
+
+Opt-in harness (never executed as part of ordinary checks)
+  integration_test/system_vpn_acceptance_test.dart requires all definitions:
+    PPVPN_LIVE_VPN_ACCEPTANCE=true
+    PPVPN_ISOLATED_TEST_DEVICE=true
+    PPVPN_EXPECTED_API_ORIGIN=<repository formal origin>
+    PPVPN_VPN_ACCEPTANCE_URL=<authorized HTTPS test URL>
+  Run with Flutter integration-test tooling against the designated device,
+  after exact Rust/native libraries have been rebuilt for this candidate.
+  It checks the actual running backend origin before any VPN action. It
+  refuses an existing client/provider connection, requires normal consent,
+  checks empty local proxies and off-VPN ICMP/TCP, then performs three
+  connect/HTTPS/protocol-probe/disconnect cycles. Runtime observation must
+  show one real Sail id; iOS capture must be attached. Owner/id must remain
+  unchanged during each connected request/probe episode. Finally cleans up
+  only a VPN connection it started, without signing out.
+
+Required manual/device-specific evidence still outstanding
+  Permission denial and revocation from Settings, start outside App, native
+  exit vs new start, OS process loss, sleep/wake, Wi-Fi/cellular/offline,
+  IPv4/IPv6/DNS, packetFlow settings timeout quarantine, Android protect
+  refusal/onRevoke/notification lifecycle. Record latency/throughput/memory
+  under sustained traffic; bounded native packet queues drop under pressure,
+  and current iOS downlink pump polls every5ms, so performance must be measured.
+  Verify rule/profile rejection retains the last actual owner-accepted profile;
+  preserve login, selected node/pins, traffic and logs across foregrounding.
+
+Push acceptance is separate
+  Require actual backend OpenAPI/SDK source commit, implementation/tests,
+  installation proof/binding CAS/logout guards, signed APNs capability and
+  matching environment/topic/profile. check-ios-apple-push.py verifies an
+  enabled exported app; --testflight requires production APNs. Then test
+  foreground/background/terminated/cold tap, rotation, duplicate delivery,
+  offline authorized catch-up, same-name different-account switch and logout.
+  Mock tests and Swift typechecks do not establish actual Apple delivery.
