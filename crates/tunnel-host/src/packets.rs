@@ -291,7 +291,9 @@ mod tests {
         packet[24..26].copy_from_slice(&((payload.len() + 8) as u16).to_be_bytes());
         packet[28..].copy_from_slice(payload);
         let mut sum: u32 = packet[..20]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| u32::from(u16::from_be_bytes([p[0], p[1]])))
             .sum();
         while sum > 0xffff {
@@ -300,99 +302,107 @@ mod tests {
         packet[10..12].copy_from_slice(&(!(sum as u16)).to_be_bytes());
         packet
     }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn native_ios_owner_echoes_public_packets_and_fences_reattachment() {
+    #[test]
+    fn native_ios_owner_echoes_public_packets_and_fences_reattachment() {
+        // Serialize process-global C ABI state outside the async runtime.
         let _serial = crate::host::test_lock();
-        let dir = std::env::temp_dir().join(format!("ppvpn-packet-ffi-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let engine = Engine::new(
-            ppvpn_core::EngineConfig::new(ppvpn_core::Role::Tun, Platform::Ios, &dir)
-                .with_capture_host(CaptureHost::new(Arc::new(Provider {
-                    settings: accept,
-                    context: 0,
-                }))),
-        )
-        .await
-        .unwrap();
-        let mut profile: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../testdata/golden/contract/profiles/base.json"
-        ))
-        .unwrap();
-        profile["routing"]["final"] = serde_json::json!({"type":"direct"});
-        engine
-            .apply(ppvpn_core::ApplyRequest::new(
-                serde_json::to_vec(&profile).unwrap(),
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let dir = std::env::temp_dir().join(format!("ppvpn-packet-ffi-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let engine = Engine::new(
+                ppvpn_core::EngineConfig::new(ppvpn_core::Role::Tun, Platform::Ios, &dir)
+                    .with_capture_host(CaptureHost::new(Arc::new(Provider {
+                        settings: accept,
+                        context: 0,
+                    }))),
+            )
+            .await
+            .unwrap();
+            let mut profile: serde_json::Value = serde_json::from_slice(include_bytes!(
+                "../../../testdata/golden/contract/profiles/base.json"
             ))
-            .await
             .unwrap();
-        let mut network = ppvpn_core::NetworkState::default();
-        network.interface = Some("lo0".into());
-        network.addresses = vec!["127.0.0.1/8".into()];
-        engine.set_network_state(network).unwrap();
-        engine.start().await.unwrap();
-        let owner = engine.runtime_observation().owner;
-        let echo = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let port = echo.local_addr().unwrap().port();
-        let task = tokio::spawn(async move {
-            let mut buffer = [0; 256];
-            while let Ok((n, peer)) = echo.recv_from(&mut buffer).await {
-                echo.send_to(&buffer[..n], peer).await.unwrap();
-            }
-        });
-        let packet = udp_packet(port);
-        let mut previous = 0;
-        for _ in 0..2 {
-            ensure_capture(&engine).await.unwrap();
-            let generation = CURRENT.load(Ordering::SeqCst);
-            assert_ne!(generation, previous);
-            if previous != 0 {
-                assert!(!send(previous, &packet));
-            }
-            assert_eq!(
-                unsafe {
-                    crate::ppvpn_tunnel_packet_send(generation, packet.as_ptr(), packet.len())
-                },
-                1
-            );
-            let mut buffer = vec![0; 65535];
-            let length = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                    let n = unsafe {
-                        crate::ppvpn_tunnel_packet_receive(
-                            generation,
-                            buffer.as_mut_ptr(),
-                            buffer.len(),
-                        )
-                    };
-                    if n > 0 {
-                        break n;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-            })
-            .await
-            .unwrap();
-            assert!(buffer[..length]
-                .windows(b"public-packet-bridge".len())
-                .any(|p| p == b"public-packet-bridge"));
-            let status = engine.capture_status().unwrap();
+            profile["routing"]["final"] = serde_json::json!({"type":"direct"});
             engine
-                .detach_capture(DetachCapture {
-                    protocol_version: 1,
-                    expected_epoch: status.epoch,
-                    lease: status.lease.unwrap(),
+                .apply(ppvpn_core::ApplyRequest::new(
+                    serde_json::to_vec(&profile).unwrap(),
+                ))
+                .await
+                .unwrap();
+            let mut network = ppvpn_core::NetworkState::default();
+            network.interface = Some("lo0".into());
+            network.addresses = vec!["127.0.0.1/8".into()];
+            engine.set_network_state(network).unwrap();
+            engine.start().await.unwrap();
+            let owner = engine.runtime_observation().owner;
+            let echo = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let port = echo.local_addr().unwrap().port();
+            let task = tokio::spawn(async move {
+                let mut buffer = [0; 256];
+                while let Ok((n, peer)) = echo.recv_from(&mut buffer).await {
+                    echo.send_to(&buffer[..n], peer).await.unwrap();
+                }
+            });
+            let packet = udp_packet(port);
+            let mut previous = 0;
+            for _ in 0..2 {
+                ensure_capture(&engine).await.unwrap();
+                let generation = CURRENT.load(Ordering::SeqCst);
+                assert_ne!(generation, previous);
+                if previous != 0 {
+                    assert!(!send(previous, &packet));
+                }
+                assert_eq!(
+                    unsafe {
+                        crate::ppvpn_tunnel_packet_send(generation, packet.as_ptr(), packet.len())
+                    },
+                    1
+                );
+                let mut buffer = vec![0; 65535];
+                let length = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let n = unsafe {
+                            crate::ppvpn_tunnel_packet_receive(
+                                generation,
+                                buffer.as_mut_ptr(),
+                                buffer.len(),
+                            )
+                        };
+                        if n > 0 {
+                            break n;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    }
                 })
                 .await
                 .unwrap();
-            assert_eq!(CURRENT.load(Ordering::SeqCst), 0);
-            assert!(!send(generation, &packet));
-            assert_eq!(receive(generation, &mut buffer), 0);
-            assert_eq!(engine.runtime_observation().owner, owner);
-            previous = generation;
-        }
-        engine.shutdown().await.unwrap();
-        task.abort();
-        std::fs::remove_dir_all(&dir).unwrap();
+                assert!(buffer[..length]
+                    .windows(b"public-packet-bridge".len())
+                    .any(|p| p == b"public-packet-bridge"));
+                let status = engine.capture_status().unwrap();
+                engine
+                    .detach_capture(DetachCapture {
+                        protocol_version: 1,
+                        expected_epoch: status.epoch,
+                        lease: status.lease.unwrap(),
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(CURRENT.load(Ordering::SeqCst), 0);
+                assert!(!send(generation, &packet));
+                assert_eq!(receive(generation, &mut buffer), 0);
+                assert_eq!(engine.runtime_observation().owner, owner);
+                previous = generation;
+            }
+            engine.shutdown().await.unwrap();
+            task.abort();
+            std::fs::remove_dir_all(&dir).unwrap();
+        });
     }
     extern "C" fn refuse(_: *mut c_void, _: u64, _: *const c_char) -> i32 {
         0
