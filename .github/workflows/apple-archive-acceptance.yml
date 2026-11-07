@@ -4,6 +4,10 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      build_number:
+        description: Actual native and Flutter release counter for newly compiled archives
+        default: '345'
+        required: true
       macos_apns_probe_json:
         description: Explicit reviewed draft and hashes for bounded hosted Mac OS registration only
         required: false
@@ -54,7 +58,7 @@ jobs:
       CANDIDATE_ONLY: ${{ inputs.candidate_only && '1' || '0' }}
       REUSE_BASELINE_RUN: ${{ inputs.reuse_baseline_run }}
       BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
-      PPVPN_BUILD_NUMBER: '344'
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number || '345' }}
       PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
       PPVPN_APPLE_PUSH_ENABLED: '0'
     steps:
@@ -205,7 +209,7 @@ jobs:
       CARGO_TERM_COLOR: never
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
-      PPVPN_BUILD_NUMBER: '344'
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number || '345' }}
       PPVPN_APPLE_PUSH_ENABLED: '0'
       PPVPN_APPLE_TARGETS: aarch64-apple-darwin
       SOURCE_REF: ${{ inputs.source_ref }}
