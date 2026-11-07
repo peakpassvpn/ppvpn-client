@@ -26,7 +26,10 @@ PY
 team="$(tr -d '\n' < crates/service/src/macos_team_id)"
 for name in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   id="com.peakpassvpn.ppvpn.${name#ppvpn-}"
-  codesign --verify --strict --verbose=2 -R "anchor apple generic and identifier \"$id\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team\"" "$artifact/$name"
+  codesign --verify --strict --verbose=2 -R "=anchor apple generic and identifier \"$id\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team\"" "$artifact/$name" > "$out/$name-signature-check.txt" 2>&1 || {
+    cat "$out/$name-signature-check.txt" >&2
+    exit 1
+  }
 done
 "$artifact/ppvpn-service" --build-info > "$out/build-info.json"
 python3 - "$out/build-info.json" <<'PY'
