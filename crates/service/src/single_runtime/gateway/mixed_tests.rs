@@ -56,6 +56,67 @@ impl CaptureAttachment for PacketResource {
         Ok(())
     }
 }
+// The upstream fixture is a separate Go/sing-box loopback server. It has no
+// ppvpn-core or Sail runtime and counts actual decoded SS TCP and sink accepts.
+struct NodeFixture {
+    child: tokio::process::Child,
+    ss_port: u16,
+    sink: std::net::SocketAddr,
+    stats: std::net::SocketAddr,
+}
+impl NodeFixture {
+    async fn start(required: bool) -> Option<Self> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let path = match std::env::var_os("PPVPN_CAPTURE_NODE") {
+            Some(path) => std::path::PathBuf::from(path).canonicalize().unwrap(),
+            None if !required => return None,
+            None => panic!("PPVPN_CAPTURE_NODE must name the real SS 2022 fixture"),
+        };
+        let mut child = {
+            let _gate = ppvpn_core::capture_host::fd_spawn_guard();
+            tokio::process::Command::new(path)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::inherit())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap()
+        };
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let line = tokio::time::timeout(Duration::from_secs(20), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("SS fixture readiness");
+        let info: Value = serde_json::from_str(&line).unwrap();
+        Some(Self {
+            child,
+            ss_port: info["ss_port"].as_u64().unwrap().try_into().unwrap(),
+            sink: info["sink"].as_str().unwrap().parse().unwrap(),
+            stats: info["stats"].as_str().unwrap().parse().unwrap(),
+        })
+    }
+    async fn counters(&self) -> Value {
+        let mut stream = TcpStream::connect(self.stats).await.unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        assert!(header(&mut stream).await.starts_with(b"HTTP/1.0 200"));
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+    async fn stop(mut self) {
+        self.child.stdin.take();
+        if tokio::time::timeout(Duration::from_secs(5), self.child.wait())
+            .await
+            .is_err()
+        {
+            self.child.kill().await.unwrap();
+        }
+    }
+}
 async fn header(stream: &mut TcpStream) -> Vec<u8> {
     let mut data = vec![];
     while !data.ends_with(b"\r\n\r\n") {
@@ -142,6 +203,7 @@ async fn authenticated_http_socks_tcp_udp_survive_native_capture_transactions_an
 }
 pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
     tokio::time::timeout(Duration::from_secs(180),async {
+        let node_fixture=NodeFixture::start(native).await;
         let dir=std::env::temp_dir().join(format!("ppvpn-mixed-{}",uuid::Uuid::new_v4()));
         let tcp=TcpListener::bind("127.0.0.1:0").await.unwrap();let target=tcp.local_addr().unwrap();
         let tcp_task=tokio::spawn(async move {loop {let(mut socket,_)=tcp.accept().await.unwrap();tokio::spawn(async move {let(mut read,mut write)=socket.split();let _=tokio::io::copy(&mut read,&mut write).await;});}});
@@ -153,6 +215,12 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         profile["nodes"][0]["ingresses"].as_array_mut().unwrap().truncate(1);
         profile["routing"]=json!({"rule_sets":[],"rules":[],"final":{"type":"direct"}});
         for node in profile["nodes"].as_array_mut().unwrap() {for ingress in node["ingresses"].as_array_mut().unwrap() {ingress["endpoint"]=json!({"domain":"127.0.0.1","port":9});}}
+        if let Some(node)=&node_fixture {
+            let ingress=&mut profile["nodes"][0]["ingresses"][0];
+            ingress["endpoint"]=json!({"domain":"127.0.0.1","ip":"127.0.0.1","port":node.ss_port});
+            ingress["credentials"]=json!({"shadowsocks":{"method":"2022-blake3-aes-128-gcm","user_key":"AAAAAAAAAAAAAAAAAAAAAA=="}});
+        }
+        let node_id=profile["nodes"][0]["id"].as_str().unwrap().to_owned();
         backend.call("/v1/apply-profile",json!({"profile":profile,"routing_mode":"rules"})).await.unwrap();
         // Exercise real physical auto-binding with loopback destinations. A
         // blanket IP_BOUND_IF host callback breaks core's own DNS-local loopback.
@@ -169,8 +237,21 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         let mut socks=socks_auth(&proxy,user,password).await;let mut connect=vec![5,1,0,1,127,0,0,1];connect.extend_from_slice(&target.port().to_be_bytes());socks.write_all(&connect).await.unwrap();let _=socks_reply(&mut socks).await;
         let mut association=socks_auth(&proxy,user,password).await;association.write_all(&[5,3,0,1,0,0,0,0,0,0]).await.unwrap();let mut relay=socks_reply(&mut association).await;if relay.ip().is_unspecified() {relay.set_ip("127.0.0.1".parse().unwrap());}
         let udp_client=UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut per_node=None;
+        if let Some(node)=&node_fixture {
+            let node_credential=backend.call("/v1/get-local-proxy-credential",json!({"node_id":node_id})).await.unwrap();
+            assert_ne!(node_credential["username"],credential["username"]);
+            assert_eq!(node_credential["port"],credential["port"]);
+            let mut stream=socks_auth(&proxy,node_credential["username"].as_str().unwrap(),node_credential["password"].as_str().unwrap()).await;
+            let mut request=vec![5,1,0,1,127,0,0,1];request.extend_from_slice(&node.sink.port().to_be_bytes());
+            stream.write_all(&request).await.unwrap();let _=socks_reply(&mut stream).await;
+            echo(&mut stream,1000).await;
+            let counts=node.counters().await;
+            assert_eq!(counts["upstream_connections"],1);assert_eq!(counts["sink_accepts"],1);
+            per_node=Some((stream,node_credential));
+        }
         let mut epoch=0;
-        for sequence in 0..10 {
+        for sequence in 0..20 {
             let attached=backend.call("/v1/attach-capture",json!({"protocol_version":1,"expected_epoch":epoch,"spec":{"resource":{"kind":"host_lease","lease_id":uuid::Uuid::new_v4().to_string()},"ipv6":true}})).await.unwrap();
             assert_eq!(attached["phase"],"attached");
             if native {
@@ -179,15 +260,25 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
                 println!("{}",json!({"probe":"attached","cycle":sequence,"owner":identity,"runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids(),"broker_registry_verified_empty":true}));
             }
             echo(&mut http,sequence).await;echo(&mut socks,sequence).await;
+            if let Some((stream,_))=&mut per_node { echo(stream,sequence+2000).await; }
             let mut packet=vec![0,0,0,1,127,0,0,1];packet.extend_from_slice(&udp_target.port().to_be_bytes());packet.extend_from_slice(&sequence.to_be_bytes());udp_client.send_to(&packet,relay).await.unwrap();let mut reply=[0;2048];let(n,_)=udp_client.recv_from(&mut reply).await.unwrap();assert_eq!(&reply[n-4..n],&sequence.to_be_bytes());
             let detached=backend.call("/v1/detach-capture",json!({"protocol_version":1,"expected_epoch":attached["epoch"],"lease":attached["lease"]})).await.unwrap();
             assert_eq!(detached["phase"],"detached");epoch=detached["epoch"].as_u64().unwrap();
             if native { println!("{}",json!({"probe":"detached","cycle":sequence,"owner":identity,"runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids()})); }
             echo(&mut http,sequence+100).await;echo(&mut socks,sequence+100).await;
+            if let Some((stream,node_credential))=&mut per_node {
+                echo(stream,sequence+3000).await;
+                let after=backend.call("/v1/get-local-proxy-credential",json!({"node_id":node_id})).await.unwrap();assert_eq!(*node_credential,after);
+                let counts=node_fixture.as_ref().unwrap().counters().await;assert_eq!(counts["upstream_connections"],1);assert_eq!(counts["sink_accepts"],1);
+            }
             let after=backend.call("/v1/get-local-proxy-credential",json!({"kind":"routed"})).await.unwrap();assert!(credential==after);assert_eq!(identity,backend.identity());
         }
         drop(gateway);echo(&mut http,99).await;echo(&mut socks,99).await;
+        if let Some((stream,_))=&mut per_node { echo(stream,9999).await; }
+        let per_node_counts=if let Some(node)=&node_fixture { Some(node.counters().await) } else { None };
+        drop(per_node);
         drop((http,socks,association,udp_client));backend.shutdown().await.unwrap();tcp_task.abort();udp_task.abort();let _=std::fs::remove_dir_all(dir);
-        if native { assert!(ppvpn_core::capture_host::forwarding_runtime_ids().is_empty()); println!("{}",json!({"probe":"complete","cycles":10,"http_connect":true,"socks_tcp":true,"socks_udp":true,"runtime_ids":[]})); }
+        if native { assert!(ppvpn_core::capture_host::forwarding_runtime_ids().is_empty()); println!("{}",json!({"probe":"complete","cycles":20,"http_connect":true,"socks_tcp":true,"socks_udp":true,"per_node_tcp":per_node_counts.is_some(),"per_node_upstream_connections":per_node_counts.as_ref().map(|c|c["upstream_connections"].clone()),"per_node_sink_accepts":per_node_counts.as_ref().map(|c|c["sink_accepts"].clone()),"runtime_ids":[]})); }
+        if let Some(node)=node_fixture { node.stop().await; }
     }).await.expect("mixed traffic fixture must be bounded");
 }

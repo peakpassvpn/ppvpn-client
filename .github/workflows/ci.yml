@@ -1470,6 +1470,8 @@ jobs:
           gh release download "$ARTIFACT_TAG" --pattern native-acceptance.tar.gz --dir "$RUNNER_TEMP/native-artifact"
           tar -xzf "$RUNNER_TEMP/native-artifact/native-acceptance.tar.gz" -C "$RUNNER_TEMP/native-artifact"
       - name: Exercise actual broker utun routes DNS and held mixed streams
+        env:
+          PPVPN_CAPTURE_NODE: ${{ runner.temp }}/native-artifact/ppvpn-native-node
         run: bash tools/desktop/macos-capture-acceptance.sh "$RUNNER_TEMP/native-artifact" "$RUNNER_TEMP/native-evidence"
       - name: Upload native evidence, including failed probes and rollback
         if: always()
