@@ -3,9 +3,11 @@ Apple native entry and transport candidate — 2026-11-07
 Contract and rollout
   docs/mobile/apple-push-contract.json pins exact candidate OpenAPI/DTO/
   handlers by SHA256 and generated SDK4ac1d60c (web PR465). The backend
-  implementation is still uncommitted at this client snapshot; this is not
-  deployed-service acceptance. Replace the pending commit with the final
-  matching source/OpenAPI/SDK commit after backend owner freezes it. No
+  implementation is pinned to e04eb59435b3be1a4c40fd4311a26e7887490411
+  (backend PR1439). All six pinned contract files were independently hashed
+  from that commit and match the client snapshot byte-for-byte. SDK4ac1d60c
+  remains unchanged. Managed HTTP integration URL/lease is not yet provided;
+  commit provenance is not deployed-service or real APNs acceptance. No
   *_version or semantics_version business fields. Rollout stays OFF.
 
 Native and storage

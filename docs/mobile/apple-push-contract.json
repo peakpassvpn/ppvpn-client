@@ -1,9 +1,9 @@
 {
-  "status": "client-mock-candidate; backend final commit and deployed service not yet verified",
+  "status": "backend implementation/OpenAPI and SDK pinned; managed HTTP integration and deployed-service acceptance pending",
   "contract_authority": "Same backend Huma/OpenAPI source snapshot plus generated SDK commit; no business protocol version field",
   "backend": {
     "base_commit": "de79cd62639287580c1901b3667aa3fa296d40e2",
-    "implementation_commit": null,
+    "implementation_commit": "e04eb59435b3be1a4c40fd4311a26e7887490411",
     "source_snapshot_sha256": {
       "api/docs/openapi.yaml": "13c3de4d73f11fb6f81e58dea30be722e5b6e0557d7ae372ccfe69a09a70bae1",
       "api/api/dto/apple_device.go": "a981367426e9e491670f66645197ba71d845b3adaf2b978da21563f0600dc1cd",
@@ -11,7 +11,8 @@
       "api/api/dto/message.go": "ee890b154960cdccd073de7fa579ba83d24d62a66534a7bfbdfa476b0a1aecdf",
       "api/internal/handler/message_handler.go": "eda8847d11fe90a0b36ac09eab4ae249a48d3bf056476d952617d63cfdaf5113",
       "docs/drafts/apns-installation-binding-design.md": "c6948ca58ef99e727f5b046189b2ec60290f0c7180b19989c4b8a69df41c7b67"
-    }
+    },
+    "pr": "https://github.com/peakpassvpn/ppvpn-backend/pull/1439"
   },
   "sdk": {
     "repository": "peakpassvpn/ppvpn-web",
