@@ -75,7 +75,9 @@ char *ppvpn_tunnel_start(int32_t tun_fd, const char *socket_path, const char *st
  * generation's I/O; NULL fences/joins native writes and clears settings.
  * Return 1 only after settlement, within 2 seconds; 0 quarantines uncertain
  * work and the native host must cancel the provider. context stays valid
- * until stop returns. All queues are bounded; full admission drops a packet.
+ * until stop returns. Stop drains scheduled settings calls as well as exit
+ * callbacks. A settings callback must not synchronously call stop itself.
+ * All queues are bounded; full admission drops a packet.
  * Packet send/receive never block, copy bytes during the call, require the
  * exact generation, and carry raw IPv4/IPv6 without a family header.
  * receive needs capacity >=65535, returns length or 0 when empty/ended.

@@ -3,9 +3,8 @@
 // configuration and starts it (runner/ios PPVPNPlugin); the app's client then
 // speaks Core API v1 to the tunnel host over the Unix socket tunnel.sock in
 // the App Group's data directory (Flutter's ClientConfig.data_dir). Here:
-// the tunnel as the host's settings say
-// (docs/host-integration.md section 11), its utun descriptor handed to the
-// host, the network pushed to it (NWPathMonitor), sleep and wake.
+// the tunnel as the host's settings say, its public packetFlow bridged to
+// bounded native queues, physical NWPathMonitor snapshots, sleep and wake.
 //
 // The host's C functions (crates/tunnel-host ppvpn_tunnel.h, in the
 // PPVPNTunnel XCFramework, linked into this extension only) are behind
@@ -26,6 +25,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private var lifecycleEpoch: UInt64 = 0
   private var stopping = false
   private var starting = false
+  private var pendingStart: StartupCompletion?
+  private final class StartupCompletion {
+    private var completion: ((Error?) -> Void)?
+    init(_ completion: @escaping (Error?) -> Void) { self.completion = completion }
+    func finish(_ error: Error?) {
+      let callback = completion
+      completion = nil
+      callback?(error)
+    }
+  }
   private var settingsUncertain = false
   private var initialSettingsPending = false
   private let stopLock = NSLock()
@@ -43,14 +52,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       lifecycleEpoch &+= 1
       starting = true
       let epoch = lifecycleEpoch
+      let start = StartupCompletion(completionHandler)
+      pendingStart = start
       beginTunnel(epoch: epoch) { [weak self] error in
-        guard let self else { return completionHandler(error ?? TunnelError("provider is gone")) }
+        guard let self else { return start.finish(error ?? TunnelError("provider is gone")) }
         self.queue.async {
           guard self.lifecycleEpoch == epoch else {
-            return completionHandler(TunnelError("tunnel startup cancelled"))
+            return start.finish(TunnelError("tunnel startup cancelled"))
           }
           self.starting = false
-          completionHandler(error)
+          if self.pendingStart === start { self.pendingStart = nil }
+          start.finish(error)
         }
       }
     }
@@ -81,11 +93,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     setTunnelNetworkSettings(network) { [weak self] error in
       guard let self else { return completionHandler(TunnelError("the provider is gone")) }
       self.queue.async {
-      self.initialSettingsPending = false
       guard self.lifecycleEpoch == epoch, !self.stopping else {
         self.setTunnelNetworkSettings(nil) { _ in }
         return completionHandler(TunnelError("tunnel startup cancelled"))
       }
+      self.initialSettingsPending = false
       if let error {
         self.settingsUncertain = true
         self.log.error("network settings: \(error.localizedDescription, privacy: .public)")
@@ -144,6 +156,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     let oldHost: TunnelHost? = queue.sync {
       stopping = true
       starting = false
+      pendingStart?.finish(TunnelError("tunnel startup cancelled"))
+      pendingStart = nil
       // An outstanding initial settings operation cannot be cancelled/joined
       // through a public API. Quarantine this provider instead of reusing it.
       if initialSettingsPending { settingsUncertain = true }
@@ -178,8 +192,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     let monitor = NWPathMonitor()
     let epoch = lifecycleEpoch
     var first = true
-    monitor.pathUpdateHandler = { [weak self] path in
-      guard let self, self.lifecycleEpoch == epoch, !self.stopping else { return }
+    monitor.pathUpdateHandler = { [weak self, weak monitor] path in
+      guard let self, let monitor, self.monitor === monitor,
+        self.lifecycleEpoch == epoch, !self.stopping else { return }
       let state = NetworkState(path).json
       if let error = TunnelHost.networkChanged(state) {
         self.log.error("network: \(error, privacy: .public)")

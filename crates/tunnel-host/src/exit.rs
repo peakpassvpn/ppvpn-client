@@ -11,6 +11,7 @@ pub struct ExitCallback(Arc<Callback>);
 struct Callback {
     state: Mutex<State>,
     finished: Condvar,
+    drain: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 type Handler = Box<dyn Fn(&CStr) + Send + Sync>;
@@ -31,6 +32,20 @@ impl ExitCallback {
     /// An owned callback, used by JNI to bind a listener to this host
     /// instead of looking up a process-global listener during delivery.
     pub(crate) fn from_fn(function: impl Fn(&CStr) + Send + Sync + 'static) -> Self {
+        Self::owned(function, None)
+    }
+
+    pub(crate) fn from_fn_and_drain(
+        function: impl Fn(&CStr) + Send + Sync + 'static,
+        drain: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        Self::owned(function, Some(Box::new(drain)))
+    }
+
+    fn owned(
+        function: impl Fn(&CStr) + Send + Sync + 'static,
+        drain: Option<Box<dyn Fn() + Send + Sync>>,
+    ) -> Self {
         Self(Arc::new(Callback {
             state: Mutex::new(State {
                 cancelled: false,
@@ -38,6 +53,7 @@ impl ExitCallback {
                 function: Some(Box::new(function)),
             }),
             finished: Condvar::new(),
+            drain,
         }))
     }
 
@@ -114,6 +130,9 @@ impl ExitCallback {
         }
         drop(state);
         drop(pending);
+        if let Some(drain) = &self.0.drain {
+            drain();
+        }
     }
 }
 
