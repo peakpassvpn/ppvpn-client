@@ -277,14 +277,22 @@ impl CaptureAttachment for Attachment {
 impl Drop for Attachment {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        let grant = self.grant.clone();
-        // Core has already removed routes/DNS before dropping a successful
-        // detached attachment. Root retains its independent expiry cleanup if
-        // this bounded final release cannot be delivered.
-        let _ = std::thread::Builder::new()
-            .name("ppvpn-capture-release".into())
-            .spawn(move || {
-                let _ = Client.call("release", &grant, false);
-            });
+        // Native detach drops its final attachment before completing the core
+        // transaction. Settle release here so a following attach cannot race an
+        // old disarmed root grant. Merely queueing a thread left that slot busy.
+        // This is bounded control-plane IPC; a Tokio worker is replaced while
+        // waiting, rather than blocking the forwarding executor's worker pool.
+        let release = || {
+            let _ = Client.call("release", &self.grant, false);
+        };
+        if tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+        {
+            tokio::task::block_in_place(release);
+        } else {
+            release();
+        }
+        // If the root channel fails, its independent expiry and persisted
+        // ledger remain authoritative; no successor can silently steal it.
     }
 }
