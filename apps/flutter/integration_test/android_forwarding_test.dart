@@ -84,6 +84,11 @@ void main() {
               );
             }
             previousOwner = owner;
+            await _controlCall('dns-baseline', {
+              'cycle': cycle,
+              'observation': before,
+              'status': await _rpc('/v1/get-status'),
+            });
             final baseline = await _rpc('/v1/get-traffic');
             final tcp = await Socket.connect(
               _target,
@@ -106,7 +111,26 @@ void main() {
               );
               expect(lines.current, '$token-tcp');
               await _udpEcho('$token-udp');
-              await _dns(cycle);
+              try {
+                await _dns(cycle);
+              } catch (error) {
+                // Preserve owner diagnostics before flutter test uninstalls
+                // the APK. Diagnostic failure must not replace the DNS error.
+                try {
+                  await _controlCall('diagnostics', {
+                    'cycle': cycle,
+                    'error': error.toString(),
+                    'status': await _rpc('/v1/get-status'),
+                    'observation': await _rpc('/v1/get-runtime-observation'),
+                    'logs': await _ownerLogs(directory!),
+                  });
+                } catch (diagnosticError) {
+                  developer.log(
+                    'DNS diagnostic capture failed: $diagnosticError',
+                  );
+                }
+                rethrow;
+              }
               await _until(() async {
                 final traffic = await _rpc('/v1/get-traffic');
                 return (traffic['upload_bytes'] as int) >
@@ -194,6 +218,23 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 8)),
   );
+}
+
+Future<Map<String, String>> _ownerLogs(String directory) async {
+  final result = <String, String>{};
+  for (final name in ['ppvpn-core.log', 'tunnel-host.log']) {
+    final file = File('$directory/tunnel-state/logs/$name');
+    if (!await file.exists()) continue;
+    final length = await file.length();
+    final tail = length > 65536 ? length - 65536 : 0;
+    result[name] = utf8.decode(
+      await file
+          .openRead(tail)
+          .fold<List<int>>(<int>[], (bytes, part) => bytes..addAll(part)),
+      allowMalformed: true,
+    );
+  }
+  return result;
 }
 
 Future<void> _until(Future<bool> Function() ready) async {

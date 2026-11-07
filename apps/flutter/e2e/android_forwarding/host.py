@@ -14,6 +14,8 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from dns_baseline import baseline
+
 PACKAGE = 'com.peakpassvpn.ppvpn'
 RIVAL = PACKAGE + '.acceptance.revoke'
 TARGET = '192.0.2.10'
@@ -125,6 +127,8 @@ class Evidence:
             raise AssertionError('Unknown checkpoint')
         if cycle is not None and (type(cycle) is not int or cycle not in range(3)):
             raise AssertionError('Invalid cycle')
+        (self.directory / f'dns-baseline-{stage}-{cycle}.json').write_text(
+            json.dumps(baseline(), indent=2) + '\n')
         evidence = self.snapshot(f'{stage}-{cycle}')
         app = [p for p in evidence['processes'] if p['name'] == PACKAGE]
         owners = [p for p in evidence['processes'] if p['name'] == PACKAGE + ':tunnel']
@@ -193,6 +197,17 @@ class Evidence:
                 return {'ok': True}
             if path == '/checkpoint':
                 return self.checkpoint(body)
+            if path in ('/dns-baseline', '/diagnostics'):
+                cycle = body['cycle']
+                assert type(cycle) is int and cycle in range(3)
+                if path == '/dns-baseline':
+                    value = {'baseline': baseline(), 'owner': body,
+                             'os': self.snapshot(f'before-traffic-{cycle}')}
+                    name = f'dns-baseline-during-{cycle}.json'
+                else:
+                    value, name = body, f'dns-failure-{cycle}.json'
+                (self.directory / name).write_text(json.dumps(value, indent=2) + '\n')
+                return {'ok': True}
             if path == '/revoke':
                 assert self.connected == {0, 1, 2} and self.ended == {0, 1}
                 self.adb('shell', 'appops', 'set', RIVAL, 'ACTIVATE_VPN', 'allow')

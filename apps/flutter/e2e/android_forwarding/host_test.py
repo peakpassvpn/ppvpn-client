@@ -1,11 +1,17 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from host import Evidence, PACKAGE, owned_internet_sockets, owned_listeners, profile
 
 
 class HostEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        probe = patch('host.baseline', return_value={'resolvers': []})
+        probe.start()
+        self.addCleanup(probe.stop)
+
     def test_namespace_table_must_intersect_pid_socket_inodes(self):
         table = '''  sl  local_address rem_address st tx rx tr tm retr inode
 0: 0100007F:1234 00000000:0000 0A 0:0 00:0 0 10000 0 111

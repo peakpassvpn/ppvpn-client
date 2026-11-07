@@ -63,6 +63,10 @@ DNS prerequisite and incomplete boundaries
   host egress preflight records TCP853 reachability and fails before fixture
   builds when all three are blocked. No insecure certificate or alternate DNS
   test hook is added. Blocked DNS means NOT RUN/PASSED, not a transport pass.
+  See dns-acceptance-diagnostics.txt for exact Core/Sail defaults, profile
+  mapping, per-stage TCP/TLS/DNS baselines and the distinct macOS dns-local path.
+  Per-member baselines preserve errors; they never satisfy the real device
+  DNS assertion. Failure diagnostics preserve native log tails before uninstall.
   Test initialization is signed out; it bypasses account/profile-download/UI
   connect logic by giving the real owner a fixture profile. Authenticated
   account restoration, profile refresh, App selections/pins, consent denial,
