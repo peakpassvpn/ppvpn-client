@@ -59,6 +59,15 @@ class AcceptanceEvidenceTests(unittest.TestCase):
                                 ("default", DEFAULT), ("interfaces", "lo0 en0\n")):
                 (self.directory / f"{kind}-{stage}.txt").write_text(value)
 
+        for stage in ("before", "attached"):
+            network = [{"kind": kind, "endpoint": "1.1.1.1:80", "http_header": True}
+                       for kind in ("http", "http-bound-en0")]
+            network += [{"kind": "dot", "endpoint": address + ":853", "tls_verified": True,
+                         "matching_id": True, "rcode": 0, "answers": 1}
+                        for address in ("1.1.1.1", "8.8.8.8", "9.9.9.9")]
+            (self.directory / f"network-{stage}.json").write_text(json.dumps(network))
+            (self.directory / f"physical-route-{stage}.txt").write_text(DEFAULT + "flags: <UP,GATEWAY,IFSCOPE>\n")
+
     def write_events(self):
         (self.directory / "native-probes.jsonl").write_text(
             "\n".join(json.dumps(row) for row in self.rows) + "\n")
@@ -71,6 +80,41 @@ class AcceptanceEvidenceTests(unittest.TestCase):
         (self.directory / "dns-after.txt").write_text(
             DNS.replace("0x00000002 (Reachable)", "0x00000000 (Not Reachable)"))
         self.assertEqual(check.validate(self.directory)["cycles"], 20)
+
+    def test_required_network_probe_errors_missing_or_false_are_rejected(self):
+        for stage in ("before", "attached"):
+            path = self.directory / f"network-{stage}.json"
+            original = path.read_text()
+            for index in range(5):
+                for mutation in ("missing", "error", "false"):
+                    with self.subTest(stage=stage, index=index, mutation=mutation):
+                        rows = json.loads(original)
+                        if mutation == "missing":
+                            rows.pop(index)
+                        elif mutation == "error":
+                            rows[index]["error"] = "TimeoutError"
+                        else:
+                            rows[index]["http_header" if index < 2 else "tls_verified"] = False
+                        path.write_text(json.dumps(rows))
+                        self.reject(stage + ":")
+            path.write_text(original)
+
+    def test_scoped_route_must_use_original_physical_gateway(self):
+        path = self.directory / "physical-route-attached.txt"
+        original = path.read_text()
+        for replacement in (original.replace("en0", "utun7"),
+                            original.replace("192.0.2.1", "192.0.2.2"),
+                            original.replace("IFSCOPE", "GLOBAL")):
+            path.write_text(replacement)
+            self.reject("invalid scoped physical route")
+
+    def test_failure_restore_check_is_independent_of_incomplete_cycles(self):
+        self.rows.pop()
+        self.write_events()
+        self.assertTrue(check.validate_restoration(self.directory)["dns_routes_default_and_utun_restored"])
+        (self.directory / "interfaces-after.txt").write_text("lo0 en0 utun7\n")
+        with self.assertRaisesRegex(ValueError, "utun_interfaces not restored after"):
+            check.validate_restoration(self.directory)
 
     def test_twenty_events_cannot_repeat_one_cycle(self):
         self.rows[12]["cycle"] = 0

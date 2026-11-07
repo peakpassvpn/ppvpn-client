@@ -47,6 +47,7 @@ ifconfig -l > "$out/interfaces-before.txt"
 python3 tools/desktop/macos_capture_network_probe.py "$out" before
 installed=0
 cleanup() {
+  local original_status=$?
   set +e
   if (( installed )); then
     sudo /usr/bin/tail -c 65536 /Library/Logs/PPVPN/ppvpn-service.err.log > "$out/root-stderr.txt" 2>&1
@@ -61,6 +62,10 @@ cleanup() {
   ifconfig -l > "$out/interfaces-after.txt"
   [[ ! -e "/Library/Application Support/PPVPN/run/capture/grant.json" ]] || echo BROKER_JOURNAL_LEFTOVER > "$out/cleanup-failed.txt" # sensitive-check: allow — canonical macOS runtime journal
   [[ ! -e "$image" && ! -e "$plist" && ! -e "/Library/LaunchAgents/$agent.plist" ]] || echo INSTALLATION_LEFTOVER >> "$out/cleanup-failed.txt"
+  python3 tools/desktop/check_macos_capture_acceptance.py "$out" --restore-only
+  local restore_status=$?
+  (( original_status == 0 )) || return "$original_status"
+  return "$restore_status"
 }
 trap cleanup EXIT
 sudo /usr/bin/install -o root -g wheel -m 644 /dev/null "$marker"
