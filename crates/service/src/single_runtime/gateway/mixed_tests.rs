@@ -159,6 +159,20 @@ async fn socks_reply(stream: &mut TcpStream) -> std::net::SocketAddr {
 // Native-only probes originate as ordinary OS sockets: unlike the held mixed
 // streams they must enter the utun before reaching core DNS and physical egress.
 async fn native_ingress_probes(sequence: u16) {
+    if sequence == 0 {
+        if let Some(out) = std::env::var_os("PPVPN_CAPTURE_EVIDENCE") {
+            let mut child = {
+                let _guard = ppvpn_core::capture_host::fd_spawn_guard();
+                tokio::process::Command::new("python3")
+                    .args(["tools/desktop/macos_capture_network_probe.py"])
+                    .arg(out).arg("attached")
+                    .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+                    .kill_on_drop(true).spawn().unwrap()
+            };
+            let status=tokio::time::timeout(Duration::from_secs(30),child.wait()).await;
+            assert!(matches!(status,Ok(Ok(status)) if status.success()),"network diagnostic helper failed");
+        }
+    }
     let http=tokio::time::timeout(Duration::from_secs(10),async {
         let mut tcp=TcpStream::connect("1.1.1.1:80").await?;
         tcp.write_all(b"GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n").await?;
