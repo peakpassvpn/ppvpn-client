@@ -5,6 +5,11 @@ on:
     paths: [.github/workflows/mobile-runtime-acceptance.yml]
   workflow_dispatch:
     inputs:
+      platform:
+        description: Select the platform without rebuilding unrelated targets
+        type: choice
+        options: [both, android, ios]
+        default: both
       api_origin:
         description: Explicit authorized HTTPS origin; empty uses repository configuration
         required: false
@@ -18,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   android:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'ios'
     # The Flutter app's Android target (#448 step 3): the bridge and the
     # tunnel host for arm64 and x86_64 (the NDK's clang), the APK (signed
     # with the debug key until the Play upload key exists: the artifact
@@ -28,7 +33,7 @@ jobs:
     # `android`).
     name: android
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     env:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
@@ -139,11 +144,19 @@ jobs:
           api-level: 34
           target: google_apis
           arch: x86_64
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.scope.outputs.android == 'true'
+        with:
+          go-version-file: test/go.mod
+          cache: false
+      - uses: ./.github/actions/go-modules
+        if: steps.scope.outputs.android == 'true'
+      # Forwarding requires the fresh emulator before smoke installs the app.
       # A tablet: in landscape (1280 dp across, the desktop layout), then set
       # to a phone's screen in portrait (the phone layout, #448 step 5).
-      - name: Smoke test (emulator)
+      - name: Real forwarding and smoke tests (emulator)
         if: steps.scope.outputs.android == 'true'
-        timeout-minutes: 30
+        timeout-minutes: 45
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
@@ -152,7 +165,17 @@ jobs:
           profile: pixel_c
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
-          script: apps/flutter/e2e/android_smoke.sh
+          script: |
+            ANDROID_SERIAL=emulator-5554 apps/flutter/e2e/android_forwarding.sh
+            apps/flutter/e2e/android_smoke.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.scope.outputs.android == 'true'
+        timeout-minutes: 10
+        with:
+          name: android-real-forwarding
+          path: apps/flutter/build/android-forwarding
+          if-no-files-found: ignore
+          retention-days: 14
       # A failed smoke test's evidence: each leg's flutter test report (JSON
       # events) and TunnelService's log lines.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -165,7 +188,7 @@ jobs:
           retention-days: 14
 
   ios:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'android'
     # The Flutter app's iOS target (#448): the bridge as a static library
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
