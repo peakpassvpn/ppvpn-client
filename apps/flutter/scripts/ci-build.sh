@@ -445,8 +445,6 @@ settings = {
     "CODE_SIGN_ENTITLEMENTS": "Runner/Runner.entitlements",
 }
 lines = "".join(f"\n\t\t\t\t{key} = {json.dumps(value)};" for key, value in settings.items())
-setting += '\n\t\t\t\tEXPORTED_SYMBOLS_FILE = "$(PROJECT_DIR)/Runner/Bridge.exports";'
-setting += '\n\t\t\t\tDEAD_CODE_STRIPPING = YES;'
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations")
