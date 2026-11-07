@@ -207,9 +207,43 @@ fn interface_of(snapshot: &NetworkSnapshot) -> Option<Interface> {
         return None;
     }
     snapshot.interface.as_ref().map(|name| Interface {
-        index: snapshot.index.unwrap_or(0),
+        // Host-pushed network JSON carries a name but no interface index.
+        // macOS scoped DNS and IPv6 resolver zones require the real index;
+        // zero would reject every scoped resolver after capture publishes DNS.
+        index: dns_interface_index(name, snapshot.index),
         name: name.clone(),
     })
+}
+
+fn dns_interface_index(name: &str, index: Option<u32>) -> u32 {
+    if let Some(index) = index.filter(|index| *index != 0) {
+        return index;
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(name) = std::ffi::CString::new(name) {
+        // SAFETY: a valid NUL-terminated interface name; no OS mutation.
+        return unsafe { libc::if_nametoindex(name.as_ptr()) };
+    }
+    let _ = name;
+    0
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[test]
+fn host_pushed_dns_interface_keeps_the_real_scoped_resolver_index() {
+    let loopback = std::ffi::CString::new("lo0").unwrap();
+    let actual = unsafe { libc::if_nametoindex(loopback.as_ptr()) };
+    assert_ne!(actual, 0);
+    let snapshot = NetworkSnapshot {
+        interface: Some("lo0".into()),
+        index: None,
+        ..Default::default()
+    };
+    assert_eq!(interface_of(&snapshot).unwrap().index, actual);
+    assert_eq!(dns_interface_index("lo0", Some(0)), actual);
+    assert_eq!(dns_interface_index("lo0", Some(123)), 123);
+    assert_eq!(dns_interface_index("ppvpn-missing-interface", None), 0);
+    assert_eq!(dns_interface_index("invalid\0interface", None), 0);
 }
 
 /// The interface dns-local asks the resolvers of: the network the run last
