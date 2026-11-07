@@ -1,0 +1,59 @@
+Physical iPhone passive APNs trace-text capture
+
+Verified transport: installed idevicesyslog1.4.0 and actual connected-phone
+pidlist/Runner output, without App launch, install, VPN action or raw-log save.
+Observed pidlist rows have form "PID Runner"; actual ostrace text header is:
+  Mon  d HH:MM:SS.ffffff Runner(optional-image)[PID] <Level>: message
+The connected Runner's ordinary output includes image names and multiline
+continuations. No actual new-candidate APNs callback was observed while
+checking this formatter. The fixed receipt message grammar comes from the
+ef494213 native emitter, not from a fabricated device callback.
+
+Important: idevicesyslog's ostrace text output drops subsystem/category.
+Upstream formatter explicitly omits those fields and prints the message:
+https://github.com/libimobiledevice/libimobiledevice/blob/master/tools/idevicesyslog.c
+Therefore this is a separate text adapter, NOT fake unified-log NDJSON.
+Output says PROCESS_BOUND_FIXED_TRACE_TEXT, subsystem_category_verified=false,
+os_delivery_inferred=false and runtime_acceptance=NOT INFERRED, even when rows
+match. Message text and process-name matching alone cannot attest OS delivery.
+
+Root first verifies the exact signed package/installed bundle and observes its
+actual current Runner PID (e.g. through the existing read-only app/process
+inventory). Never reuse an old build's PID or guess a PID from an app name.
+Then, on the already paired authorized host, run:
+
+  python3 tools/apple/ios_apns_syslog_receipts.py \
+    --device-udid "$HARDWARE_DEVICE_UDID" --pid "$ACTUAL_CANDIDATE_RUNNER_PID" \
+    --duration 300 --output "$NEW_PRIVATE_TEXT_RECEIPTS_NDJSON"
+
+This uses actual device pidlist to require the exact PID/name Runner, then
+starts idevicesyslog with numeric-PID filter, --no-colors, --exit and the
+substring filter "apns stage=". The adapter independently validates a complete
+header, exact PID/process Runner, Info severity, main Runner image (or omitted
+duplicate main image), exact fixed stage/domain/boolean/integer schema. Flutter,
+framework/debug-image, another PID/name, ANSI color, tool status, continuation,
+unknown stage/domain, body/URL suffixes and malformed lines are discarded.
+It rechecks the PID/name table and stops on lost/unavailable identity rather
+than following another PID. Captures are bounded15..1800s. Ctrl-C/SIGTERM stops
+only the owned relay subprocess. The App, device and VPN are never controlled.
+
+Only fixed-schema text observations are saved, exclusively0600, with a separate
+0600 .summary.json containing source limitations/counts/stop reason. Raw stdout
+stays memory-only and raw stderr is discarded. No device hostname/UDID, token,
+nonce, account, message/delivery ID, body, URL or raw error is retained. The
+summary's expected PID/name is operator/device identity metadata, not a public
+artifact; keep both outputs private. Native callback receipt text should be
+paired with the exact candidate identity, real provider/backend correlation
+and externally observed UI. No row count or matching text becomes a PASS.
+
+This strict entry cannot capture the earliest cold-launch events before the
+new PID is independently known. Do not silently loosen to a name-only match,
+replay an old PID or relaunch the App to fill that gap. Mark early events NOT
+OBSERVED and use a separately reviewed early-armed/namespace-preserving route
+if that evidence is required. After any restart/cold click, root must verify
+the new actual candidate PID and start a new bounded capture. Missing/zero
+rows are NOT OBSERVED, never proof of no callback, error or OS delivery.
+
+Only helper parsing changed; no App/Swift/FRB/profile/rollout change or new IPA
+is needed. Existing macOS unified NDJSON collector retains its exact namespace
+and process checks; only its pure message grammar is shared with this adapter.

@@ -20,6 +20,21 @@ LINE = re.compile(r'apns stage=(' + '|'.join(STAGES) +
     r'domain=(none|cocoa|url|os_status|other) code=(-?[0-9]{1,20})')
 
 
+def parse_message(message):
+    """Fixed message grammar only; conveys no source/OS delivery assurance."""
+    match = LINE.fullmatch(message) if isinstance(message, str) else None
+    if match is None:
+        return None
+    stage, accepted, current, opened, remote, domain, code = match.groups()
+    number = int(code)
+    if not -(2**63) <= number < 2**63:
+        return None
+    if stage != 'registration_failed' and (domain != 'none' or number != 0):
+        return None
+    return dict(stage=stage, accepted=accepted == '1', current=current == '1',
+                opened=opened == '1', remote=remote == '1', domain=domain, code=number)
+
+
 def parse(event, pids, process_path=None):
     if not isinstance(event, dict):
         return None
@@ -33,18 +48,7 @@ def parse(event, pids, process_path=None):
             return None
     elif pid not in pids:
         return None
-    message = event.get('eventMessage')
-    match = LINE.fullmatch(message) if isinstance(message, str) else None
-    if match is None:
-        return None
-    stage, accepted, current, opened, remote, domain, code = match.groups()
-    number = int(code)
-    if not -(2**63) <= number < 2**63:
-        return None
-    if stage != 'registration_failed' and (domain != 'none' or number != 0):
-        return None
-    return dict(stage=stage, accepted=accepted == '1', current=current == '1',
-                opened=opened == '1', remote=remote == '1', domain=domain, code=number)
+    return parse_message(event.get('eventMessage'))
 
 
 def main():
