@@ -6,6 +6,7 @@ import re
 import socket
 import ssl
 import struct
+import subprocess
 import sys
 
 QUERY = b'\x71\x21\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01'
@@ -40,11 +41,24 @@ def measure(out, stage):
             row.update(error=type(exc).__name__, errno=getattr(exc, 'errno', None))
         rows.append(row)
 
-    def http():
-        with socket.create_connection(('1.1.1.1', 80), timeout=2) as stream:
+    physical = (out / 'dns-before.txt').read_text()
+    match = re.search(r'if_index\s*:\s*\d+\s*\(([^)]+)\)', physical)
+    interface = match.group(1) if match else None
+    def http(bound=False):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+            stream.settimeout(2)
+            if bound:
+                # Darwin SDK netinet/in.h: IP_BOUND_IF = 25.
+                stream.setsockopt(socket.IPPROTO_IP, 25, socket.if_nametoindex(interface))
+            stream.connect(('1.1.1.1', 80))
             stream.sendall(b'GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n')
             return dict(http_header=stream.recv(16).startswith(b'HTTP/1.'))
     attempt('http', '1.1.1.1:80', http)
+    if interface:
+        attempt('http-bound-' + interface, '1.1.1.1:80', lambda: http(True))
+        route = subprocess.run(['/sbin/route', '-n', 'get', '-ifscope', interface, '1.1.1.1'],
+                               capture_output=True, text=True, timeout=3)
+        (out / ('physical-route-' + stage + '.txt')).write_text(route.stdout + route.stderr)
     # These are the production proxy-mode DoT endpoints. Direct-mode local DNS
     # is measured separately; no endpoint here replaces its system resolver.
     for address, hostname in [('1.1.1.1', 'cloudflare-dns.com'),
@@ -56,7 +70,6 @@ def measure(out, stage):
                 with context.wrap_socket(stream, server_hostname=hostname) as tls:
                     return dict(tls_verified=True, **dns_reply(tls))
         attempt('dot', address + ':853', dot)
-    physical = (out / 'dns-before.txt').read_text()
     servers = dict.fromkeys(re.findall(r'nameserver\[\d+\]\s*:\s*(\S+)', physical))
     for server in servers:
         for transport in ['udp', 'tcp']:
