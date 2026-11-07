@@ -111,9 +111,11 @@ def validate(directory):
     complete = rows[-1]
     require(complete.get("cycles") == 20 and complete.get("runtime_ids") == [],
             "runtime did not settle after twenty cycles")
-    for key in ("http_connect", "socks_tcp", "socks_udp", "per_node_http_connect",
-                "per_node_socks_tcp", "per_node_socks_udp"):
+    for key in ("http_connect", "socks_tcp", "socks_udp", "per_node_tcp"):
         require(complete.get(key) is True, f"missing actual {key} continuity result")
+    for key in ("per_node_upstream_connections", "per_node_sink_accepts"):
+        require(type(complete.get(key)) is int and complete[key] == 1,
+                f"{key}: exactly one established connection required")
     baseline = {}
     for stage in ("before", "detached", "after"):
         dns_text = (directory / f"dns-{stage}.txt").read_text()
@@ -132,7 +134,7 @@ def validate(directory):
         else:
             for key, value in state.items():
                 require(value == baseline[key], f"{key} not restored {stage}")
-    return {"cycles": 20, "routed_and_per_node_tcp_udp": True,
+    return {"cycles": 20, "routed_tcp_udp_and_per_node_tcp": True,
             "owner_unchanged": True, "dns_and_capture_routes_restored": True,
             "utun_interfaces_restored": True}
 
