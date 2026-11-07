@@ -166,7 +166,7 @@ of the push agent are separate mobile acceptance; this candidate claims none of 
 
 The service test uses the actual Sail runtime and core native capture coordinator,
 with isolated packet transport. It holds authenticated HTTP CONNECT, SOCKS TCP and
-one SOCKS UDP association through ten successful attach/detach transactions and
+one SOCKS UDP association through twenty successful attach/detach transactions and
 presentation disconnect, checking stable payloads, credentials, port and owner.
 It does not open a system utun or change host routes/DNS. Physical-view/loopback binding,
 FD validation, HMAC/audit identity, lease expiry/quarantine and route ownership
@@ -193,8 +193,14 @@ The manual CI input `macos_capture_artifact` downloads an unpublished draft
 `runtime-qa-<sha>` artifact, verifies its source SHA, file hashes and actual Apple
 Developer ID signatures, and invokes `tools/desktop/macos-capture-acceptance.sh`.
 No signing requirement is weakened for CI. The script verifies the generated
-root/user job roles, then exercises ten real utun attach/detach cycles with held
-authenticated HTTP CONNECT, SOCKS TCP and SOCKS UDP. Ordinary OS UDP DNS requests
+root/user job roles, then exercises twenty real utun attach/detach cycles with held
+authenticated HTTP CONNECT, SOCKS TCP and SOCKS UDP, plus a distinct per-node
+SOCKS TCP stream through a real separate loopback SS 2022 fixture. Its decoded
+upstream and target TCP accept counters must stay exactly one; credentials and
+payloads are checked after every attach/detach and presentation disconnect.
+The Go fixture uses the existing pinned sing-box dependencies and shared Go
+caches, contains no Sail forwarding owner, and is included in the artifact's
+hash manifest. Per-node HTTP CONNECT and UDP are not claimed by this probe. Ordinary OS UDP DNS requests
 to the tunnel DNS and ordinary OS HTTP requests to a public IP verify native
 capture ingress and physical egress. Signed broker replies report an empty real
 Sail registry; the forwarding process checks exactly one live runtime and stable

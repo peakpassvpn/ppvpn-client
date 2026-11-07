@@ -20,7 +20,7 @@ python3 - "$artifact" "${GITHUB_SHA:?}" <<'PY'
 import hashlib,json,pathlib,sys
 p=pathlib.Path(sys.argv[1]); m=json.loads((p/'manifest.json').read_text())
 assert m['commit']==sys.argv[2], 'artifact/source commit mismatch'
-for name in ['ppvpn-service','ppvpn-service-install','ppvpn-service-uninstall']:
+for name in ['ppvpn-service','ppvpn-service-install','ppvpn-service-uninstall','ppvpn-native-node']:
     assert hashlib.sha256((p/name).read_bytes()).hexdigest()==m['sha256'][name], name
 PY
 team="$(tr -d '\n' < crates/service/src/macos_team_id)"
