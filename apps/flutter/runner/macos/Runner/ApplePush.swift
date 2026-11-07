@@ -8,15 +8,29 @@ import Security
 struct MacApplePushSystem {
   let installDelegate: (MacApplePushReceiver) -> Void
   let register: () -> Void
-  let permission: () -> Void
+  let permission: (@escaping @MainActor () -> Bool, @escaping @MainActor (Bool) -> Void) -> Void
 
   static var live: Self {
     Self(installDelegate: { $0.installNativeDelegate() }, register: {
       NSApplication.shared.registerForRemoteNotifications()
-    }, permission: {
-      UNUserNotificationCenter.current().getNotificationSettings { settings in
-        guard settings.authorizationStatus == .notDetermined else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
+    }, permission: { isCurrent, done in
+      let center = UNUserNotificationCenter.current()
+      center.getNotificationSettings { settings in
+        DispatchQueue.main.async {
+          guard isCurrent(), NSApp.isActive else { done(false); return }
+          guard settings.authorizationStatus == .notDetermined else {
+            let allowed = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+            ApplePushTrace.emit(ApplePushTrace.Receipt(.permissionResult, accepted: allowed))
+            done(true)
+            return
+          }
+          center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            DispatchQueue.main.async {
+              ApplePushTrace.emit(ApplePushTrace.Receipt(.permissionResult, accepted: granted, opened: true, error: error as NSError?))
+              done(isCurrent())
+            }
+          }
+        }
       }
     })
   }
@@ -77,9 +91,10 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
     return true
   }
 
-  func requestPermission() {
-    guard configured else { return }
-    system.permission()
+  func requestPermission(whileCurrent: @escaping @MainActor () -> Bool = { true },
+    completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
+    guard configured, whileCurrent() else { completion(false); return }
+    system.permission(whileCurrent, completion)
   }
 
   func record(_ stage: ApplePushTrace.Stage, accepted: Bool = false, current: Bool = true,

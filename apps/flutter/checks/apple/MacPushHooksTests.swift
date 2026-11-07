@@ -16,7 +16,7 @@ struct MacPushHooksTests {
       var offReceipts: [ApplePushTrace.Receipt] = []
       let receiver = MacApplePushReceiver(app: validApp, enabled: validApp == nil,
         system: MacApplePushSystem(installDelegate: { _ in effects += 1 },
-          register: { effects += 1 }, permission: { effects += 1 }), trace: { offReceipts.append($0) })
+          register: { effects += 1 }, permission: { _, _ in effects += 1 }), trace: { offReceipts.append($0) })
       let bridge = MacApplePushBridge(receiver: receiver)
       bridge.prepareForLaunch(); bridge.start(); bridge.start()
       bridge.attach(FlutterPluginRegistrar())
@@ -43,7 +43,7 @@ struct MacPushHooksTests {
     weak var installed: MacApplePushReceiver?
     let receiver = MacApplePushReceiver(app: app, enabled: true,
       system: MacApplePushSystem(installDelegate: { installed = $0; events.append("delegate") },
-        register: { registrations += 1; events.append("register") }, permission: { permissions += 1 }), trace: { receipts.append($0) })
+        register: { registrations += 1; events.append("register") }, permission: { _, done in permissions += 1; done(true) }), trace: { receipts.append($0) })
     let bridge = MacApplePushBridge(receiver: receiver)
     bridge.prepareForLaunch()
     require(installed === receiver && events == ["delegate"], "early strong owner/delegate preparation")
@@ -111,7 +111,7 @@ struct MacPushHooksTests {
     channel.reply(channel.sent.count - 1, true)
     channel.call("retry")
     require(registrations == 2 && permissions == 0, "retry must ask OS without implicit permission prompt")
-    channel.call("permission")
+    channel.call("permission", ["clientEpoch": "3"])
     require(permissions == 1, "explicit permission hook missing")
     cases += 1
 

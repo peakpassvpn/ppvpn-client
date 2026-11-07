@@ -103,7 +103,7 @@ def main():
                 written += 1
                 counts[observation['receipt']['stage']] += 1
             child = subprocess.Popen([tool, '-u', args.device_udid, '--no-colors', '--exit',
-                                      '-p', 'Runner', '-m', 'apns stage='], stdout=subprocess.PIPE,
+                                      '-p', 'Runner', '-m', 'apns'], stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
             selector.register(child.stdout, selectors.EVENT_READ)
             os.set_blocking(child.stdout.fileno(), False)

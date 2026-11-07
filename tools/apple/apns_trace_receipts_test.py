@@ -4,10 +4,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from apns_trace_receipts import CATEGORY, SUBSYSTEM, STAGES, parse
+from apns_trace_receipts import CATEGORY, SUBSYSTEM, STAGES, parse, parse_settings_message
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_typed_notification_settings_namespace_and_privacy(self):
+        line = 'apns_settings phase=explicit authorization=authorized delegate=receiver alert=enabled style=banner center=enabled lock=disabled sound=enabled badge=disabled'
+        event = self.event() | {'category': 'settings', 'eventMessage': line}
+        self.assertEqual(parse(event, {42})['authorization'], 'authorized')
+        self.assertIsNone(parse(event | {'category': CATEGORY}, {42}))
+        for text in [line + ' token=SECRET', line.replace('receiver', 'SECRET_CLASS'), line.replace('authorized', 'SECRET')]:
+            self.assertIsNone(parse_settings_message(text))
     def event(self, stage='tap_received'):
         return dict(subsystem=SUBSYSTEM, category=CATEGORY, processID=42,
                     eventMessage=f'apns stage={stage} accepted=0 current=1 opened=1 remote=1 domain=none code=0')

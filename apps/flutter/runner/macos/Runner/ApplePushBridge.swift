@@ -69,7 +69,11 @@ final class MacApplePushBridge {
         }
         result(nil)
       case "retry": self.receiver.start(); self.receiver.state.requestRegistration(); result(nil)
-      case "permission": self.receiver.requestPermission(); result(nil)
+      case "permission":
+        guard let args = call.arguments as? [String: Any], let epoch = args["clientEpoch"] as? String,
+          epoch == self.clientEpoch else { result(false); return }
+        self.receiver.requestPermission(whileCurrent: { [weak self] in self?.clientEpoch == epoch },
+          completion: { result($0) })
       default: result(FlutterMethodNotImplemented)
       }
     }
