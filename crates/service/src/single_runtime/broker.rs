@@ -196,7 +196,10 @@ impl Ledger {
                 .acquire(owner, g.lease.clone(), now, |_| {
                     Resources::prepare(&token, settings)
                         .map(|r| (token.clone(), r))
-                        .map_err(|_| "CAPTURE_PREPARE_FAILED".into())
+                        .map_err(|e| {
+                            native::diagnostic("resource-prepare", &e);
+                            "CAPTURE_PREPARE_FAILED".into()
+                        })
                 })
                 .map_err(|e| anyhow!("{e:?}"))?;
             return self
@@ -352,11 +355,14 @@ fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Re
             let response =
                 session.sign_response(request.id, true, Some(json!({"interface":name,"root_runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids()})), None)?;
             write_frame(stream, &response)?;
+            native::trace_phase("broker-response-written");
             if let Some(fd) = fd {
                 fdpass::send(stream, &fd)?;
+                native::trace_phase("broker-device-sent");
             }
         }
-        Err(_) => {
+        Err(error) => {
+            native::diagnostic("broker-operation", &error);
             let clean = request.payload.get("path").and_then(|v| v.as_str()) == Some("prepare")
                 && !ledger.capture.occupied();
             write_frame(
@@ -416,7 +422,9 @@ pub fn start() -> Result<()> {
                 }
                 match endpoint.listener.accept() {
                     Ok((mut stream, _)) => {
-                        let _ = transact(&mut stream, &mut ledger, generation);
+                        if let Err(error) = transact(&mut stream, &mut ledger, generation) {
+                            native::diagnostic("broker-transport", &error);
+                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(50))

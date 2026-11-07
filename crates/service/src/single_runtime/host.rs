@@ -43,6 +43,7 @@ impl Client {
         descriptor: bool,
         attempted: &mut bool,
     ) -> Result<(Option<OwnedFd>, Option<String>)> {
+        native::trace_phase("host-connect");
         let mut stream = UnixStream::connect(broker::SOCKET)?;
         stream.set_read_timeout(Some(Duration::from_millis(2400)))?;
         stream.set_write_timeout(Some(Duration::from_millis(600)))?;
@@ -52,6 +53,7 @@ impl Client {
             crate::mac_identity::SERVICE_IDENTIFIER,
             Path::new(broker::IMAGE),
         )?;
+        native::trace_phase("host-peer-verified");
         let hello = Request {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: protocol::now_epoch(),
@@ -96,6 +98,7 @@ impl Client {
             Some(hello.auth_token),
             &key,
         )?;
+        native::trace_phase("host-handshake-complete");
         *attempted = true;
         broker::write_frame(&mut stream, &request)?;
         let response: Response = broker::read_frame(&mut stream)?;
@@ -124,6 +127,7 @@ impl Client {
         {
             bail!("CAPTURE_BROKER_ROLE_VIOLATION");
         }
+        native::trace_phase("host-response-verified");
         if !descriptor {
             return Ok((None, None));
         }
@@ -140,6 +144,7 @@ impl Client {
             Err(e) if e.requires_process_restart() => std::process::abort(),
             Err(_) => bail!("CAPTURE_DESCRIPTOR_INVALID"),
         };
+        native::trace_phase("host-device-received");
         if native::interface(&fd)? != name {
             bail!("CAPTURE_DEVICE_NAME_MISMATCH");
         }
@@ -233,8 +238,14 @@ impl CaptureHostApi for Host {
         .await;
         let (fd, name) = match result {
             Ok((Ok(device), _)) => device,
-            Ok((Err(_), false)) => return Err(vec![]),
-            _ => return Err(leftovers(&grant)),
+            Ok((Err(error), attempted)) => {
+                native::diagnostic("host-prepare", &error);
+                return Err(if attempted { leftovers(&grant) } else { vec![] });
+            }
+            Err(error) => {
+                native::diagnostic("host-worker", &error.into());
+                return Err(leftovers(&grant));
+            }
         };
         let failed = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
@@ -273,7 +284,10 @@ impl Attachment {
         let grant = self.grant.clone();
         match tokio::task::spawn_blocking(move || Client.call(path, &grant, false)).await {
             Ok(Ok(_)) => Ok(()),
-            _ => {
+            outcome => {
+                if let Ok(Err(error)) = outcome {
+                    native::diagnostic("host-operation", &error);
+                }
                 self.failed.store(true, Ordering::SeqCst);
                 Err(leftovers(&self.grant))
             }

@@ -181,6 +181,33 @@ pub fn physical() -> Result<NetworkState> {
 pub fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
     ppvpn_core::capture_host::fd_spawn_guard()
 }
+/// Control-plane diagnostics contain only a fixed phase, static error code,
+/// ErrorKind/errno and elapsed time. Never payloads, paths, tokens or settings.
+pub fn diagnostic(stage: &'static str, error: &anyhow::Error) {
+    let os = error.chain().find_map(|e| e.downcast_ref::<io::Error>());
+    let text = error.to_string();
+    let code = text
+        .split(':')
+        .next()
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 80
+                && s.bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        })
+        .unwrap_or("CAPTURE_CONTROL_FAILED");
+    eprintln!(
+        "capture-control stage={stage} code={code} kind={:?} errno={:?}",
+        os.map(io::Error::kind),
+        os.and_then(io::Error::raw_os_error)
+    );
+}
+pub fn trace_phase(stage: &'static str) {
+    #[cfg(feature = "macos-capture-acceptance")]
+    eprintln!("capture-control stage={stage}");
+    #[cfg(not(feature = "macos-capture-acceptance"))]
+    let _ = stage;
+}
 pub fn command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = {
         let _guard = spawn_guard();
@@ -197,6 +224,11 @@ pub fn command(program: &str, args: &[&str]) -> Result<()> {
             if status.success() {
                 return Ok(());
             }
+            #[cfg(feature = "macos-capture-acceptance")]
+            eprintln!(
+                "capture-control stage=os-command code=OS_COMMAND_FAILED exit={:?}",
+                status.code()
+            );
             bail!("OS_COMMAND_FAILED");
         }
         if Instant::now() >= end {
@@ -325,8 +357,10 @@ pub struct Resources {
 impl Resources {
     pub fn prepare(token: &str, settings: Settings) -> Result<Self> {
         settings.validate()?;
+        trace_phase("resource-store-create");
         let dns = Store::new()?;
-        let fd = device()?;
+        trace_phase("utun-create");
+        let fd = device().inspect_err(|e| diagnostic("utun-create", e))?;
         let name = interface(&fd)?;
         let mut routes = vec![("-inet", "0.0.0.0/1"), ("-inet", "128.0.0.0/1")];
         if settings.ipv6_address.is_some() {
@@ -336,6 +370,7 @@ impl Resources {
         marker[0] = 0xfd;
         let marker = std::net::Ipv6Addr::from(marker);
         let key = format!("State:/Network/Service/com.peakpassvpn.capture.{token}/DNS");
+        trace_phase("resource-journal-create");
         let journal = Journal {
             name: name.clone(),
             index: index(&name)?,
@@ -358,10 +393,14 @@ impl Resources {
             journal,
         };
         if let Err(e) = resource.configure() {
+            diagnostic("utun-configure", &e);
             let _ = resource.cleanup();
             return Err(e);
         }
-        resource.save()?;
+        resource
+            .save()
+            .inspect_err(|e| diagnostic("journal-save", e))?;
+        trace_phase("resource-prepared");
         Ok(resource)
     }
     fn save(&mut self) -> Result<()> {
@@ -371,6 +410,7 @@ impl Resources {
     fn configure(&self) -> Result<()> {
         let address = self.settings.ipv4_address.split('/').next().unwrap();
         let mtu = self.settings.mtu.to_string();
+        trace_phase("ifconfig-v4");
         command(
             "/sbin/ifconfig",
             &[
@@ -386,8 +426,10 @@ impl Resources {
             ],
         )?;
         if let Some(address) = &self.settings.ipv6_address {
+            trace_phase("ifconfig-v6");
             command("/sbin/ifconfig", &[&self.name, "inet6", address])?;
         }
+        trace_phase("ifconfig-ownership-marker");
         command(
             "/sbin/ifconfig",
             &[

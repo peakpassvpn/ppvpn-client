@@ -303,14 +303,32 @@ impl NativeDriver {
                 }
             }
         };
-        let Ok((prepared, flow)) = prepared else {
-            return self.rollback_attach(inner, &active, epoch).await;
+        let (prepared, flow) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let code = if error.code.len() <= 64
+                    && error
+                        .code
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    error.code.as_str()
+                } else {
+                    "NATIVE_CAPTURE_FAILURE"
+                };
+                eprintln!("capture-control stage=native-prepare code={code}");
+                return self.rollback_attach(inner, &active, epoch).await;
+            }
         };
-        if !matches!(
-            tokio::time::timeout(STEP_LIMIT, prepared.commit()).await,
-            Ok(Ok(()))
-        ) {
-            return self.rollback_attach(inner, &active, epoch).await;
+        match tokio::time::timeout(STEP_LIMIT, prepared.commit()).await {
+            Ok(Ok(())) => (),
+            outcome => {
+                eprintln!(
+                    "capture-control stage=native-commit timed_out={}",
+                    outcome.is_err()
+                );
+                return self.rollback_attach(inner, &active, epoch).await;
+            }
         }
         if let Some(flow) = flow {
             if resource.publish_packets(flow).is_err() {
@@ -330,7 +348,14 @@ impl NativeDriver {
     async fn rollback_attach(&self, inner: &Inner, active: &Active, epoch: u64) -> CaptureOutcome {
         let native = tokio::time::timeout(STEP_LIMIT, inner.runtime.detach_native_capture()).await;
         let host = host_step(active.resource.rollback_attach(), epoch).await;
-        if matches!(native,Ok(Ok(ref r)) if r.clean()) && host.is_ok() {
+        let native_clean = matches!(native,Ok(Ok(ref r)) if r.clean());
+        if !native_clean || host.is_err() {
+            eprintln!(
+                "capture-control stage=attach-rollback native_clean={native_clean} host_clean={}",
+                host.is_ok()
+            );
+        }
+        if native_clean && host.is_ok() {
             let _ = inner.runtime.stage_capture_device(None);
             *self.active.lock().unwrap_or_else(|p| p.into_inner()) = None;
             CaptureOutcome::RolledBack
