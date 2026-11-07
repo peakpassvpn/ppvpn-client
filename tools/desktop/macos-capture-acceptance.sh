@@ -91,6 +91,19 @@ PY
 # broker. Stop the login job first so the harness is the sole forwarding owner.
 if /bin/launchctl print "gui/$uid/$agent" > "$out/user-job-before-probe.txt" 2>&1; then
   sudo /bin/launchctl bootout "gui/$uid/$agent"
+  # bootout may return before ordered core shutdown. Wait for that exact PID
+  # to leave the immutable image before starting the sole QA forwarding owner.
+  python3 - "$out/user-job-before-probe.txt" "$image" <<'PY_OLD_OWNER'
+import pathlib,re,subprocess,sys,time
+match=re.search(r'^\s*pid = (\d+)\s*$',pathlib.Path(sys.argv[1]).read_text(),re.MULTILINE)
+if match:
+    deadline=time.monotonic()+90
+    while True:
+        process=subprocess.run(['/bin/ps','-p',match.group(1),'-o','comm='],capture_output=True,text=True,timeout=2)
+        if process.returncode==1 or (process.returncode==0 and process.stdout.strip()!=sys.argv[2]):break
+        if process.returncode!=0 or time.monotonic()>=deadline:raise SystemExit('PREVIOUS_USER_RUNTIME_NOT_SETTLED')
+        time.sleep(.1)
+PY_OLD_OWNER
 fi
 PPVPN_CAPTURE_EVIDENCE="$out" "$image" --capture-acceptance > "$out/native-probes.jsonl" 2> "$out/native-probes.stderr"
 route -n get default > "$out/default-detached.txt"
