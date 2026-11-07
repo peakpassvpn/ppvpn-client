@@ -1444,6 +1444,10 @@ jobs:
           retention-days: 14
 
   macos-capture-acceptance:
+    # GitHub draft releases require push-level access even for download. This
+    # job only downloads; it contains no release/tag/publication mutation.
+    permissions:
+      contents: write
     if: github.event_name == 'workflow_dispatch' && inputs.macos_capture_artifact != ''
     runs-on: macos-15
     timeout-minutes: 15
