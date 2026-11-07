@@ -208,6 +208,15 @@ pub fn trace_phase(stage: &'static str) {
     #[cfg(not(feature = "macos-capture-acceptance"))]
     let _ = stage;
 }
+pub fn trace_operation(stage: &'static str, elapsed: Duration, ok: bool) {
+    #[cfg(feature = "macos-capture-acceptance")]
+    eprintln!(
+        "capture-control stage={stage} elapsed_ms={} ok={ok}",
+        elapsed.as_millis()
+    );
+    #[cfg(not(feature = "macos-capture-acceptance"))]
+    let _ = (stage, elapsed, ok);
+}
 pub fn command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = {
         let _guard = spawn_guard();
