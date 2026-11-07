@@ -26,7 +26,7 @@ async fn identity<S: ServiceApi + ?Sized>(service: &S) -> Result<SessionRef, Cli
         .get_status()
         .await
         .map_err(|_| failure("USER_RUNTIME_UNAVAILABLE"))?;
-    if status.mode != "user-runtime" || status.generation == 0 {
+    if status.mode != "user-runtime" {
         return Err(failure("USER_RUNTIME_IDENTITY_INVALID"));
     }
     let session_id = status
@@ -54,7 +54,14 @@ impl<S: ServiceApi + ?Sized> CoreTransport for PresentationTransport<S> {
             if path == "/v1/stop" {
                 return Ok(json!({}));
             }
-            self.inner.call(path, body, timeout).await
+            let session = identity(self.inner.service.as_ref())
+                .await
+                .map_err(|_| CoreCallError::Transport("USER_RUNTIME_UNAVAILABLE".into()))?;
+            self.inner
+                .service
+                .core_api(&session, path, body, timeout)
+                .await
+                .map_err(crate::service::forwarded_core_error)
         })
     }
 }
@@ -76,7 +83,7 @@ impl<S: ServiceApi + ?Sized + 'static> CoreLauncher for RemoteLauncher<S> {
                         _=&mut stopped=>return "presentation detached".into(),
                         _=tokio::time::sleep(Duration::from_secs(5))=>{
                             match identity(service.as_ref()).await {
-                                Ok(current) if current==session=>(),
+                                Ok(current) if current.session_id==session.session_id=>(),
                                 _=>return "user runtime unavailable or replaced".into(),
                             }
                         }
@@ -219,3 +226,6 @@ mod tests {
         assert!(service.calls.lock().unwrap().is_empty());
     }
 }
+
+mod capture_service;
+pub(crate) use capture_service::CaptureService;

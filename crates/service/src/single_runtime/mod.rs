@@ -16,3 +16,10 @@ pub mod server;
 
 #[cfg(target_os = "macos")]
 pub mod agent;
+
+#[cfg(target_os = "macos")]
+pub mod broker;
+#[cfg(target_os = "macos")]
+pub mod host;
+#[cfg(target_os = "macos")]
+pub mod native;

@@ -649,8 +649,10 @@ impl Client {
         );
         #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
         let launcher: Arc<dyn standard::CoreLauncher> = Arc::new(
-            user_runtime::RemoteLauncher::new(service.clone(), rule_set_hosts),
+            user_runtime::RemoteLauncher::new(service.clone(), rule_set_hosts.clone()),
         );
+        #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+        let service = Arc::new(user_runtime::CaptureService::new(service, rule_set_hosts));
         #[cfg(not(all(target_os = "macos", feature = "macos-user-runtime")))]
         let service =
             Arc::new(service::ServiceClient::default().with_rule_set_hosts(rule_set_hosts));

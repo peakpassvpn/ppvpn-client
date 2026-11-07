@@ -33,15 +33,34 @@ pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
         .thread_name("ppvpn-user-core")
         .build()?;
     runtime.block_on(async {
+        let physical = super::native::physical().unwrap_or_else(|_|ppvpn_core::NetworkState::offline());
+        let protect = Arc::new(super::native::Protect::new(&physical)?);
+        let capture_host = Arc::new(super::host::Host::default());
         let config = ppvpn_core::EngineConfig::new(
-            ppvpn_core::Role::Standard,
+            ppvpn_core::Role::Shared,
             ppvpn_core::Platform::Macos,
             dir.join("state"),
         )
+        .with_capture_host(ppvpn_core::capture_host::CaptureHost::new(capture_host.clone()))
+        .with_socket_protect({ let bound = protect.clone(); ppvpn_core::SocketProtect::new(move |fd|bound.protect(fd)) })
         .with_local_proxy(ppvpn_core::LocalProxyConfig::default())
-        .with_system_proxy(false)
+        .with_system_proxy(true)
         .with_log(ppvpn_core::LogConfig::new(ppvpn_core::LogLevel::Info, ppvpn_core::LogSink::Channel));
         let backend = EngineForwarder::new(config).await?;
+        backend.network(physical.clone())?;
+        let monitor_backend = backend.clone();
+        let monitor = tokio::spawn(async move {
+            let mut previous = physical;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let current = tokio::task::spawn_blocking(super::native::physical).await
+                    .ok().and_then(Result::ok).unwrap_or_else(ppvpn_core::NetworkState::offline);
+                if current != previous && protect.update(&current).is_ok() && monitor_backend.network(current.clone()).is_ok() { previous = current; }
+                if capture_host.lease_lost() || monitor_backend.capture_expired() {
+                    let _ = monitor_backend.reconcile_lost_capture().await;
+                }
+            }
+        });
         let gateway = Gateway::new(backend.clone(), uid)?;
         let writer = Arc::new(parking_lot::Mutex::new(tracing_appender::rolling::RollingFileAppender::builder()
             .rotation(tracing_appender::rolling::Rotation::DAILY).filename_prefix("ppvpn-core")
@@ -72,7 +91,8 @@ pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
         };
         let served = server::serve(endpoint, gateway, verify, stop).await;
         // UI socket closes do not reach this branch. The agent owns forwarding
-        // shutdown; capture remains explicitly unsupported by the pinned Sail.
+        // shutdown; root resource expiry never stops this forwarding owner.
+        monitor.abort();
         let stopped = backend.shutdown().await;
         let _ = log_stop.send(());
         let _ = logging.await;

@@ -1,0 +1,859 @@
+//! macOS capture-only OS operations. No Engine, profile, proxy or dispatcher.
+//! Commands have fixed executable paths, argument arrays and bounded settlement.
+use anyhow::{bail, Result};
+use core_foundation::{
+    array::CFArray,
+    base::{CFType, CFTypeRef, TCFType},
+    dictionary::CFDictionary,
+    number::CFNumber,
+    string::CFString,
+};
+use ppvpn_core::{capture_host::CaptureNetworkSettings, NetworkKind, NetworkState};
+use serde::{Deserialize, Serialize};
+use std::{
+    ffi::{c_void, CStr, CString},
+    io,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    process::{Command, Stdio},
+    sync::atomic::{AtomicU32, Ordering},
+    time::{Duration, Instant},
+};
+
+#[link(name = "SystemConfiguration", kind = "framework")]
+extern "C" {
+    fn SCDynamicStoreCreate(
+        a: CFTypeRef,
+        name: CFTypeRef,
+        callout: *const c_void,
+        context: *mut c_void,
+    ) -> CFTypeRef;
+    fn SCDynamicStoreCopyValue(store: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
+    fn SCDynamicStoreAddTemporaryValue(store: CFTypeRef, key: CFTypeRef, value: CFTypeRef) -> u8;
+    fn SCDynamicStoreRemoveValue(store: CFTypeRef, key: CFTypeRef) -> u8;
+}
+pub struct Store(CFType);
+// Only used under its owner's mutex, with no callbacks; CFType owns the session.
+unsafe impl Send for Store {}
+impl Store {
+    pub fn new() -> Result<Self> {
+        let name = CFString::new("com.peakpassvpn.capture");
+        let raw = unsafe {
+            SCDynamicStoreCreate(
+                std::ptr::null(),
+                name.as_CFTypeRef(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
+        if raw.is_null() {
+            bail!("DYNAMIC_STORE_UNAVAILABLE");
+        }
+        Ok(Self(unsafe { CFType::wrap_under_create_rule(raw) }))
+    }
+    fn copy(&self, key: &str) -> Option<CFType> {
+        let key = CFString::new(key);
+        let raw = unsafe { SCDynamicStoreCopyValue(self.0.as_CFTypeRef(), key.as_CFTypeRef()) };
+        (!raw.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(raw) })
+    }
+    pub fn dictionary(&self, key: &str) -> Option<CFDictionary<CFString, CFType>> {
+        // Check the untyped dictionary first; typed values are CFType, keys are
+        // the OS schema's CFStrings. Missing/wrong schema is treated as offline.
+        self.copy(key)?
+            .downcast::<CFDictionary>()
+            .map(|d| unsafe { CFDictionary::wrap_under_get_rule(d.as_concrete_TypeRef()) })
+    }
+    pub fn remove(&self, key: &str) -> Result<()> {
+        let k = CFString::new(key);
+        if unsafe { SCDynamicStoreRemoveValue(self.0.as_CFTypeRef(), k.as_CFTypeRef()) } == 0
+            && self.copy(key).is_some()
+        {
+            bail!("DNS_REMOVE_FAILED");
+        }
+        Ok(())
+    }
+    pub fn add_dns(&self, key: &str, servers: &[String]) -> Result<()> {
+        let servers: Vec<_> = servers.iter().map(|s| CFString::new(s)).collect();
+        let values = CFDictionary::from_CFType_pairs(&[
+            (
+                CFString::new("ServerAddresses"),
+                CFArray::from_CFTypes(&servers).as_CFType(),
+            ),
+            (
+                CFString::new("SupplementalMatchDomains"),
+                CFArray::from_CFTypes(&[CFString::new("")]).as_CFType(),
+            ),
+            (
+                CFString::new("SearchOrder"),
+                CFNumber::from(100_000i32).as_CFType(),
+            ),
+        ]);
+        let key = CFString::new(key);
+        if unsafe {
+            SCDynamicStoreAddTemporaryValue(
+                self.0.as_CFTypeRef(),
+                key.as_CFTypeRef(),
+                values.as_CFTypeRef(),
+            )
+        } == 0
+        {
+            bail!("DNS_ADD_FAILED");
+        }
+        Ok(())
+    }
+}
+fn field(d: &CFDictionary<CFString, CFType>, name: &str) -> Option<String> {
+    d.find(CFString::new(name))?
+        .downcast::<CFString>()
+        .map(|s| s.to_string())
+}
+/// Physical global primary service only. Capture publishes a separate DNS key
+/// and split routes; it never changes Global/IPv4 or a real service's DNS.
+/// Refuse other tunnels instead of treating a competitor as an uplink.
+pub fn physical() -> Result<NetworkState> {
+    let store = Store::new()?;
+    let Some(global) = store
+        .dictionary("State:/Network/Global/IPv4")
+        .or_else(|| store.dictionary("State:/Network/Global/IPv6"))
+    else {
+        return Ok(NetworkState::offline());
+    };
+    let Some(name) = field(&global, "PrimaryInterface") else {
+        return Ok(NetworkState::offline());
+    };
+    if name.starts_with("utun") || name.starts_with("tun") || name.starts_with("ppp") {
+        bail!("PHYSICAL_NETWORK_CONTENDED");
+    }
+    let mut head = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    struct Addresses(*mut libc::ifaddrs);
+    impl Drop for Addresses {
+        fn drop(&mut self) {
+            unsafe { libc::freeifaddrs(self.0) }
+        }
+    }
+    let _addresses = Addresses(head);
+    let mut node = head;
+    let mut addresses = vec![];
+    while !node.is_null() {
+        let a = unsafe { &*node };
+        if !a.ifa_addr.is_null()
+            && !a.ifa_netmask.is_null()
+            && unsafe { CStr::from_ptr(a.ifa_name) }.to_bytes() == name.as_bytes()
+            && a.ifa_flags & libc::IFF_UP as u32 != 0
+        {
+            let family = unsafe { (*a.ifa_addr).sa_family as i32 };
+            if family == libc::AF_INET {
+                let ip = unsafe { &*(a.ifa_addr.cast::<libc::sockaddr_in>()) };
+                let mask = unsafe { &*(a.ifa_netmask.cast::<libc::sockaddr_in>()) };
+                addresses.push(format!(
+                    "{}/{}",
+                    std::net::Ipv4Addr::from(ip.sin_addr.s_addr.to_ne_bytes()),
+                    mask.sin_addr.s_addr.count_ones()
+                ));
+            } else if family == libc::AF_INET6 {
+                let ip = unsafe { &*(a.ifa_addr.cast::<libc::sockaddr_in6>()) };
+                let mask = unsafe { &*(a.ifa_netmask.cast::<libc::sockaddr_in6>()) };
+                addresses.push(format!(
+                    "{}/{}",
+                    std::net::Ipv6Addr::from(ip.sin6_addr.s6_addr),
+                    mask.sin6_addr
+                        .s6_addr
+                        .iter()
+                        .map(|b| b.count_ones())
+                        .sum::<u32>()
+                ));
+            }
+        }
+        node = a.ifa_next;
+    }
+    addresses.sort();
+    addresses.dedup();
+    let mut state = NetworkState::new(name, NetworkKind::Other).with_addresses(addresses);
+    state.gateway = field(&global, "Router");
+    Ok(state)
+}
+pub struct Protect(AtomicU32);
+impl Protect {
+    pub fn new(state: &NetworkState) -> Result<Self> {
+        let p = Self(AtomicU32::new(0));
+        p.update(state)?;
+        Ok(p)
+    }
+    pub fn update(&self, state: &NetworkState) -> Result<()> {
+        let index = match &state.interface {
+            None => 0,
+            Some(name) => {
+                let name = CString::new(name.as_bytes())?;
+                let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+                if index == 0 {
+                    bail!("PHYSICAL_INTERFACE_GONE");
+                }
+                index
+            }
+        };
+        self.0.store(index, Ordering::SeqCst);
+        Ok(())
+    }
+}
+impl Protect {
+    pub fn protect(&self, fd: i32) -> io::Result<()> {
+        let index = self.0.load(Ordering::SeqCst);
+        if index == 0 {
+            return Err(io::ErrorKind::NetworkUnreachable.into());
+        }
+        let mut address: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut size = std::mem::size_of_val(&address) as libc::socklen_t;
+        if unsafe {
+            libc::getsockname(
+                fd,
+                (&mut address as *mut libc::sockaddr_storage).cast(),
+                &mut size,
+            )
+        } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let (level, option) = match address.ss_family as i32 {
+            libc::AF_INET => (libc::IPPROTO_IP, libc::IP_BOUND_IF),
+            libc::AF_INET6 => (libc::IPPROTO_IPV6, libc::IPV6_BOUND_IF),
+            _ => return Err(io::ErrorKind::InvalidInput.into()),
+        };
+        if unsafe {
+            libc::setsockopt(
+                fd,
+                level,
+                option,
+                (&index as *const u32).cast(),
+                std::mem::size_of_val(&index) as _,
+            )
+        } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+/// No shell, inherited input, PATH lookup, payload logging or unbounded wait.
+/// Child is reaped before returning even after timeout; OS operation settlement
+/// remains serialized by the broker worker, never abandoned on async timeout.
+// Root owns all child creation in its process. The user capture receiver must
+// additionally share this coordination with core's DNS spawn (integration gate).
+pub fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GATE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+pub fn command(program: &str, args: &[&str]) -> Result<()> {
+    let mut child = {
+        let _guard = spawn_guard();
+        Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?
+    };
+    let end = Instant::now() + Duration::from_millis(300);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if status.success() {
+                return Ok(());
+            }
+            bail!("OS_COMMAND_FAILED");
+        }
+        if Instant::now() >= end {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("OS_COMMAND_TIMEOUT");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Settings {
+    pub mtu: u16,
+    pub ipv4_address: String,
+    pub ipv6_address: Option<String>,
+    pub dns_servers: Vec<String>,
+}
+impl From<&CaptureNetworkSettings> for Settings {
+    fn from(s: &CaptureNetworkSettings) -> Self {
+        Self {
+            mtu: s.mtu,
+            ipv4_address: s.ipv4_address.clone(),
+            ipv6_address: s.ipv6_address.clone(),
+            dns_servers: s.dns_servers.clone(),
+        }
+    }
+}
+impl Settings {
+    pub fn validate(&self) -> Result<()> {
+        // Broker accepts exactly the shipped core contract, never arbitrary
+        // addresses, executable arguments, route prefixes or DNS keys.
+        if self.mtu != 9000
+            || self.ipv4_address != "10.60.159.89/30"
+            || self
+                .ipv6_address
+                .as_deref()
+                .is_some_and(|a| a != "fde2:ec40:9312:c7fd::1/126")
+            || self.dns_servers != ["10.60.159.90"]
+        {
+            bail!("CAPTURE_SETTINGS_INVALID");
+        }
+        Ok(())
+    }
+}
+#[repr(C)]
+struct ControlInfo {
+    id: u32,
+    name: [u8; 96],
+}
+#[repr(C)]
+struct ControlAddress {
+    len: u8,
+    family: u8,
+    sysaddr: u16,
+    id: u32,
+    unit: u32,
+    reserved: [u32; 5],
+}
+pub fn interface(fd: &OwnedFd) -> Result<String> {
+    let mut bytes = [0u8; 64];
+    let mut length = bytes.len() as libc::socklen_t;
+    if unsafe { libc::getsockopt(fd.as_raw_fd(), 2, 2, bytes.as_mut_ptr().cast(), &mut length) } < 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    let size = (length as usize).min(bytes.len());
+    let end = bytes[..size].iter().position(|b| *b == 0).unwrap_or(size);
+    let name = std::str::from_utf8(&bytes[..end])?;
+    if !name.starts_with("utun")
+        || name.len() > 15
+        || !name[4..].bytes().all(|b| b.is_ascii_digit())
+    {
+        bail!("CAPTURE_DEVICE_INVALID");
+    }
+    Ok(name.into())
+}
+pub fn device() -> Result<OwnedFd> {
+    let _guard = spawn_guard();
+    let raw = unsafe { libc::socket(libc::PF_SYSTEM, libc::SOCK_DGRAM, 2) };
+    if raw < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let mut info = ControlInfo {
+        id: 0,
+        name: [0; 96],
+    };
+    let name = b"com.apple.net.utun_control";
+    info.name[..name.len()].copy_from_slice(name);
+    if unsafe { libc::ioctl(fd.as_raw_fd(), 0xc0644e03, &mut info) } < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let addr = ControlAddress {
+        len: 32,
+        family: libc::AF_SYSTEM as u8,
+        sysaddr: 2,
+        id: info.id,
+        unit: 0,
+        reserved: [0; 5],
+    };
+    if unsafe { libc::connect(fd.as_raw_fd(), (&addr as *const ControlAddress).cast(), 32) } < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    interface(&fd)?;
+    Ok(fd)
+}
+/// Exact ordered resources, retained through detach rollback. Split default
+/// routes preserve the physical default and bound outbound sockets bypass them.
+/// A temporary DNS key is removed by configd on broker death as well as detach.
+pub struct Resources {
+    pub fd: OwnedFd,
+    pub name: String,
+    settings: Settings,
+    dns: Store,
+    key: String,
+    routes: Vec<(&'static str, &'static str)>,
+    published: Vec<bool>,
+    dns_live: bool,
+    admitted: bool,
+    journal: Journal,
+}
+impl Resources {
+    pub fn prepare(token: &str, settings: Settings) -> Result<Self> {
+        settings.validate()?;
+        let dns = Store::new()?;
+        let fd = device()?;
+        let name = interface(&fd)?;
+        let mut routes = vec![("-inet", "0.0.0.0/1"), ("-inet", "128.0.0.0/1")];
+        if settings.ipv6_address.is_some() {
+            routes.extend([("-inet6", "::/1"), ("-inet6", "8000::/1")]);
+        }
+        let mut marker = *uuid::Uuid::new_v4().as_bytes();
+        marker[0] = 0xfd;
+        let marker = std::net::Ipv6Addr::from(marker);
+        let key = format!("State:/Network/Service/com.peakpassvpn.capture.{token}/DNS");
+        let journal = Journal {
+            name: name.clone(),
+            index: index(&name)?,
+            marker,
+            boot: boot()?,
+            key: key.clone(),
+            settings: settings.clone(),
+            published: vec![false; routes.len()],
+        };
+        let mut resource = Self {
+            fd,
+            name,
+            settings,
+            dns,
+            key: format!("State:/Network/Service/com.peakpassvpn.capture.{token}/DNS"),
+            published: vec![false; routes.len()],
+            routes,
+            dns_live: false,
+            admitted: false,
+            journal,
+        };
+        if let Err(e) = resource.configure() {
+            let _ = resource.cleanup();
+            return Err(e);
+        }
+        resource.save()?;
+        Ok(resource)
+    }
+    fn save(&mut self) -> Result<()> {
+        self.journal.published.clone_from(&self.published);
+        persist(&self.journal)
+    }
+    fn configure(&self) -> Result<()> {
+        let address = self.settings.ipv4_address.split('/').next().unwrap();
+        let mtu = self.settings.mtu.to_string();
+        command(
+            "/sbin/ifconfig",
+            &[
+                &self.name,
+                "inet",
+                address,
+                "10.60.159.90",
+                "netmask",
+                "255.255.255.252",
+                "mtu",
+                &mtu,
+                "up",
+            ],
+        )?;
+        if let Some(address) = &self.settings.ipv6_address {
+            command("/sbin/ifconfig", &[&self.name, "inet6", address])?;
+        }
+        command(
+            "/sbin/ifconfig",
+            &[
+                &self.name,
+                "inet6",
+                &format!("{}/128", self.journal.marker),
+                "alias",
+            ],
+        )?;
+        Ok(())
+    }
+    pub fn heal(&mut self) -> Result<()> {
+        if self.admitted {
+            self.attach()?;
+        }
+        Ok(())
+    }
+    pub fn attach(&mut self) -> Result<()> {
+        if !marked(&self.journal)? {
+            bail!("CAPTURE_DEVICE_OWNERSHIP_LOST");
+        }
+        for i in 0..self.routes.len() {
+            if self.published[i] {
+                let (family, prefix) = self.routes[i];
+                if !route_owned(&self.name, family, prefix)? {
+                    self.published[i] = false;
+                }
+            }
+            if !self.published[i] {
+                // Persist intent before mutation, including an ambiguous child
+                // timeout/crash. Rollback checks actual route ownership.
+                self.published[i] = true;
+                self.save()?;
+                let (family, prefix) = self.routes[i];
+                command(
+                    "/sbin/route",
+                    &[
+                        "-n",
+                        "add",
+                        family,
+                        "-net",
+                        prefix,
+                        "-interface",
+                        &self.name,
+                    ],
+                )?;
+            }
+        }
+        if self.dns.copy(&self.key).is_none() {
+            self.dns_live = false;
+        }
+        if !self.dns_live {
+            self.dns.add_dns(&self.key, &self.settings.dns_servers)?;
+            self.dns_live = true;
+        }
+        self.admitted = true;
+        Ok(())
+    }
+    pub fn detach(&mut self) -> Result<()> {
+        self.admitted = false;
+        if !marked(&self.journal)? {
+            bail!("CAPTURE_DEVICE_OWNERSHIP_LOST");
+        }
+        let dns = self.dns.remove(&self.key);
+        if dns.is_ok() {
+            self.dns_live = false;
+        }
+        let routes = clear_routes(&self.name, &self.routes, &mut self.published);
+        self.save()?;
+        dns?;
+        routes
+    }
+    pub fn cleanup(&mut self) -> Result<()> {
+        let routes = self.detach();
+        let down = command("/sbin/ifconfig", &[&self.name, "down"]);
+        routes?;
+        down?;
+        forget_journal()
+    }
+}
+
+impl super::capture::Resources for Resources {
+    fn cleanup(&mut self) -> std::result::Result<(), String> {
+        Resources::cleanup(self).map_err(|_| "CAPTURE_LEDGER_UNSETTLED".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn validates_utun_not_arbitrary_descriptor() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        assert!(interface(&file.into()).is_err());
+    }
+    #[test]
+    fn physical_snapshot_is_read_only_and_protection_rejects_offline() {
+        let _ = physical();
+        let p = Protect::new(&NetworkState::offline()).unwrap();
+        assert_eq!(
+            p.protect(-1).unwrap_err().kind(),
+            io::ErrorKind::NetworkUnreachable
+        );
+    }
+}
+
+const JOURNAL: &str = "/private/var/run/com.peakpassvpn.capture/grant.json"; // sensitive-check: allow — canonical macOS system runtime location
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Journal {
+    name: String,
+    index: u32,
+    marker: std::net::Ipv6Addr,
+    boot: i64,
+    key: String,
+    settings: Settings,
+    published: Vec<bool>,
+}
+fn boot() -> Result<i64> {
+    let mut value: libc::timeval = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of_val(&value);
+    if unsafe {
+        libc::sysctlbyname(
+            c"kern.boottime".as_ptr(),
+            (&mut value as *mut libc::timeval).cast(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    } < 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(value.tv_sec)
+}
+fn index(name: &str) -> Result<u32> {
+    Ok(unsafe { libc::if_nametoindex(CString::new(name)?.as_ptr()) })
+}
+fn marked(j: &Journal) -> Result<bool> {
+    if index(&j.name)? != j.index {
+        return Ok(false);
+    }
+    let mut head = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut head) } < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let mut node = head;
+    let mut matches = false;
+    while !node.is_null() {
+        let a = unsafe { &*node };
+        if !a.ifa_addr.is_null()
+            && unsafe { CStr::from_ptr(a.ifa_name) }.to_bytes() == j.name.as_bytes()
+            && unsafe { (*a.ifa_addr).sa_family as i32 } == libc::AF_INET6
+        {
+            let address = unsafe { &*a.ifa_addr.cast::<libc::sockaddr_in6>() };
+            matches |= address.sin6_addr.s6_addr == j.marker.octets();
+        }
+        node = a.ifa_next;
+    }
+    unsafe { libc::freeifaddrs(head) };
+    Ok(matches)
+}
+fn persist(j: &Journal) -> Result<()> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let temporary = format!("{JOURNAL}.{}.tmp", uuid::Uuid::new_v4());
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&temporary)?;
+    let result = (|| {
+        file.write_all(&serde_json::to_vec(j)?)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, JOURNAL)?;
+        std::fs::File::open(super::broker::DIRECTORY)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+fn forget_journal() -> Result<()> {
+    match std::fs::remove_file(JOURNAL) {
+        Ok(()) => {
+            std::fs::File::open(super::broker::DIRECTORY)?.sync_all()?;
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+fn command_output(program: &str, args: &[&str]) -> Result<String> {
+    use std::io::Read;
+    let mut child = {
+        let _guard = spawn_guard();
+        Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?
+    };
+    let end = Instant::now() + Duration::from_millis(300);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let mut output = String::new();
+            if let Some(pipe) = child.stdout.take() {
+                pipe.take(8192).read_to_string(&mut output)?;
+            }
+            if status.success() {
+                return Ok(output);
+            }
+            bail!("ROUTE_QUERY_FAILED");
+        }
+        if Instant::now() >= end {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("ROUTE_QUERY_TIMEOUT");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+/// A longest-prefix result is not necessarily the requested route. Verify the
+/// exact /1 mask and network as well as the unique owned interface before delete.
+fn route_owned(name: &str, family: &str, prefix: &str) -> Result<bool> {
+    let text = command_output("/sbin/route", &["-n", "get", family, "-net", prefix])?;
+    Ok(route_matches(&text, name, family, prefix))
+}
+fn route_matches(text: &str, name: &str, family: &str, prefix: &str) -> bool {
+    let field = |key: &str| {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(key).map(str::trim))
+    };
+    let destination = field("destination:").unwrap_or_default();
+    let mask = field("mask:").unwrap_or_default();
+    let network = prefix.split('/').next().unwrap();
+    let exact = if family == "-inet" {
+        mask == "128.0.0.0"
+            && (destination == network || (network == "0.0.0.0" && destination == "default"))
+    } else {
+        (mask == "8000::" || mask == "1")
+            && (destination == network
+                || destination == prefix
+                || (network == "::" && destination == "default"))
+    };
+    exact && field("interface:") == Some(name)
+}
+fn clear_routes(name: &str, routes: &[(&str, &str)], published: &mut [bool]) -> Result<()> {
+    let mut failed = false;
+    for i in (0..routes.len()).rev() {
+        if published[i] {
+            let (family, prefix) = routes[i];
+            match route_owned(name, family, prefix) {
+                Ok(false) => published[i] = false,
+                Ok(true) => match command(
+                    "/sbin/route",
+                    &["-n", "delete", family, "-net", prefix, "-interface", name],
+                ) {
+                    Ok(()) => published[i] = false,
+                    Err(_) => failed = true,
+                },
+                Err(_) => failed = true,
+            }
+        }
+    }
+    if failed {
+        bail!("CAPTURE_ROUTES_UNSETTLED");
+    }
+    Ok(())
+}
+/// Only an idle, root-locked broker invokes recovery. An unpredictable /128
+/// interface marker plus boot identity and interface index fences off recycled
+/// utun names. No blanket route/DNS cleanup is allowed.
+pub fn recover() -> Result<()> {
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt},
+    };
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(JOURNAL)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let m = file.metadata()?;
+    if !m.is_file()
+        || m.uid() != 0
+        || m.mode() & 0o077 != 0
+        || m.nlink() != 1
+        || m.len() > 16 * 1024
+    {
+        bail!("CAPTURE_JOURNAL_UNSAFE");
+    }
+    let mut bytes = vec![];
+    file.take(16 * 1024).read_to_end(&mut bytes)?;
+    let mut j: Journal = serde_json::from_slice(&bytes)?;
+    j.settings.validate()?;
+    if !j.name.starts_with("utun")
+        || !j.name[4..].bytes().all(|b| b.is_ascii_digit())
+        || j.name.len() > 15
+        || !j
+            .key
+            .starts_with("State:/Network/Service/com.peakpassvpn.capture.")
+        || !j.key.ends_with("/DNS")
+    {
+        bail!("CAPTURE_JOURNAL_INVALID");
+    }
+    if j.boot != boot()? || index(&j.name)? == 0 {
+        return forget_journal();
+    }
+    if !marked(&j)? {
+        bail!("CAPTURE_RECOVERY_OWNERSHIP_UNVERIFIED");
+    }
+    let mut routes = vec![("-inet", "0.0.0.0/1"), ("-inet", "128.0.0.0/1")];
+    if j.settings.ipv6_address.is_some() {
+        routes.extend([("-inet6", "::/1"), ("-inet6", "8000::/1")]);
+    }
+    if j.published.len() != routes.len() {
+        bail!("CAPTURE_JOURNAL_INVALID");
+    }
+    let dns = Store::new()?;
+    let removed = dns.remove(&j.key);
+    let routes = clear_routes(&j.name, &routes, &mut j.published);
+    let down = command("/sbin/ifconfig", &[&j.name, "down"]);
+    removed?;
+    routes?;
+    down?;
+    forget_journal()
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    #[test]
+    fn the_broker_settings_match_the_public_core_tunnel_contract() {
+        let core = ppvpn_core::tun_settings(ppvpn_core::Platform::Ios).unwrap();
+        let settings = Settings {
+            mtu: core.mtu,
+            ipv4_address: core.ipv4_address,
+            ipv6_address: Some(core.ipv6_address),
+            dns_servers: core.dns_servers,
+        };
+        settings.validate().unwrap();
+        let mut invalid = settings.clone();
+        invalid.mtu = 1500;
+        assert!(invalid.validate().is_err());
+        let mut invalid = settings;
+        invalid.dns_servers = vec!["192.0.2.1".into()];
+        assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn cleanup_never_accepts_a_default_fallback_or_foreign_interface() {
+        let exact = "destination: 128.0.0.0\nmask: 128.0.0.0\ninterface: utun99\n";
+        assert!(route_matches(exact, "utun99", "-inet", "128.0.0.0/1"));
+        assert!(!route_matches(exact, "utun98", "-inet", "128.0.0.0/1"));
+        assert!(!route_matches(
+            "destination: default\nmask: default\ninterface: utun99\n",
+            "utun99",
+            "-inet",
+            "0.0.0.0/1"
+        ));
+        assert!(!route_matches(exact, "utun99", "-inet", "0.0.0.0/1"));
+        assert!(route_matches(
+            "destination: 8000::\nmask: 8000::\ninterface: utun99\n",
+            "utun99",
+            "-inet6",
+            "8000::/1"
+        ));
+    }
+    #[test]
+    fn actual_socket_binding_is_physical_and_offline_fails_closed() {
+        let physical =
+            NetworkState::new("lo0", NetworkKind::Other).with_addresses(vec!["127.0.0.1/8".into()]);
+        let protect = Protect::new(&physical).unwrap();
+        let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+        assert!(raw >= 0);
+        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        protect.protect(fd.as_raw_fd()).unwrap();
+        let mut bound = 0u32;
+        let mut length = std::mem::size_of_val(&bound) as libc::socklen_t;
+        assert_eq!(
+            unsafe {
+                libc::getsockopt(
+                    fd.as_raw_fd(),
+                    libc::IPPROTO_IP,
+                    libc::IP_BOUND_IF,
+                    (&mut bound as *mut u32).cast(),
+                    &mut length,
+                )
+            },
+            0
+        );
+        assert_eq!(bound, index("lo0").unwrap());
+        protect.update(&NetworkState::offline()).unwrap();
+        assert_eq!(
+            protect.protect(fd.as_raw_fd()).unwrap_err().kind(),
+            io::ErrorKind::NetworkUnreachable
+        );
+    }
+}

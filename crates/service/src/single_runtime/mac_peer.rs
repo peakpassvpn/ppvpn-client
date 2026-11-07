@@ -59,8 +59,16 @@ pub fn secure_installed_image(path: &Path) -> Result<()> {
     Ok(())
 }
 pub fn verify(stream: &UnixStream, uid: u32, identifier: &str, image: &Path) -> Result<Peer> {
+    if uid == 0 {
+        return Err(anyhow!("PEER_USER_REJECTED"));
+    }
+    verify_exact(stream, uid, identifier, image)
+}
+/// Root server identity is accepted only by callers that explicitly request
+/// uid zero; the ordinary UI/user-runtime verifier continues to refuse root.
+pub fn verify_exact(stream: &UnixStream, uid: u32, identifier: &str, image: &Path) -> Result<Peer> {
     let (peer, token) = audit_peer(stream)?;
-    if uid == 0 || peer.uid != uid {
+    if peer.uid != uid {
         return Err(anyhow!("PEER_USER_REJECTED"));
     }
     secure_installed_image(image)?;
