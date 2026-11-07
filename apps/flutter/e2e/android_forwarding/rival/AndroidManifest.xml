@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.peakpassvpn.ppvpn.acceptance.revoke">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+    <application android:label="VPN acceptance revoke fixture" android:debuggable="true">
+        <activity android:name=".RevokeActivity" android:exported="true" />
+        <service android:name=".RevokeService" android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
+        </service>
+    </application>
+</manifest>
