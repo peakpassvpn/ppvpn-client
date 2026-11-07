@@ -61,6 +61,8 @@ impl CaptureAttachment for PacketResource {
 struct NodeFixture {
     child: tokio::process::Child,
     ss_port: u16,
+    native_tcp_port: u16,
+    native_udp_port: u16,
     sink: std::net::SocketAddr,
     stats: std::net::SocketAddr,
 }
@@ -91,6 +93,8 @@ impl NodeFixture {
         let info: Value = serde_json::from_str(&line).unwrap();
         Some(Self {
             child,
+            native_tcp_port: info["native_tcp_port"].as_u64().unwrap().try_into().unwrap(),
+            native_udp_port: info["native_udp_port"].as_u64().unwrap().try_into().unwrap(),
             ss_port: info["ss_port"].as_u64().unwrap().try_into().unwrap(),
             sink: info["sink"].as_str().unwrap().parse().unwrap(),
             stats: info["stats"].as_str().unwrap().parse().unwrap(),
@@ -158,7 +162,24 @@ async fn socks_reply(stream: &mut TcpStream) -> std::net::SocketAddr {
 }
 // Native-only probes originate as ordinary OS sockets: unlike the held mixed
 // streams they must enter the utun before reaching core DNS and physical egress.
-async fn native_ingress_probes(sequence: u16) {
+async fn native_ingress_probes(sequence: u16, node: &NodeFixture) {
+    // TEST-NET is never assigned on the host. Only the SS upstream maps this
+    // narrow destination to its independent native sinks, preserving ports.
+    let controlled=tokio::time::timeout(Duration::from_secs(10),async {
+        let target=std::net::SocketAddr::from(([192,0,2,10],node.native_tcp_port));
+        let mut tcp=TcpStream::connect(target).await?;
+        let bytes=sequence.to_be_bytes();tcp.write_all(&bytes).await?;
+        let mut reply=[0;2];tcp.read_exact(&mut reply).await?;
+        if reply!=bytes { return Err(std::io::Error::other("TCP_ECHO_MISMATCH")); }
+        let udp=UdpSocket::bind("0.0.0.0:0").await?;
+        let target=std::net::SocketAddr::from(([192,0,2,10],node.native_udp_port));
+        udp.send_to(&bytes,target).await?;
+        let mut answer=[0;16];let(n,peer)=udp.recv_from(&mut answer).await?;
+        if peer!=target || answer[..n]!=bytes { return Err(std::io::Error::other("UDP_ECHO_MISMATCH")); }
+        Ok::<_,std::io::Error>(())
+    }).await;
+    let controlled_ok=matches!(controlled,Ok(Ok(())));
+    eprintln!("native-ingress controlled-tcp-udp={controlled_ok} outcome={:?}",controlled.as_ref().map(|r|r.as_ref().map_err(|e|(e.kind(),e.raw_os_error()))));
     if sequence == 0 {
         if let Some(out) = std::env::var_os("PPVPN_CAPTURE_EVIDENCE") {
             let mut child = {
@@ -204,6 +225,11 @@ async fn native_ingress_probes(sequence: u16) {
     eprintln!("native-ingress dns-rcode={} answers={}",answer[3]&15,u16::from_be_bytes([answer[6],answer[7]]));
     assert_eq!(answer[3] & 15, 0);
     assert!(u16::from_be_bytes([answer[6], answer[7]]) > 0);
+    assert!(controlled_ok,"controlled native TCP/UDP probe failed");
+    let counts=node.counters().await;
+    assert_eq!(counts["native_upstream_tcp"],sequence as u64+1);
+    assert_eq!(counts["native_sink_accepts"],sequence as u64+1);
+    assert!(counts["native_udp_packets"].as_u64().unwrap()>sequence as u64);
     assert!(http_ok,"native HTTP probe failed");
 }
 async fn echo(stream: &mut TcpStream, sequence: u32) {
@@ -232,13 +258,14 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         let mut lines=backend.logs();
         let dns_logging=tokio::spawn(async move {
             while let Some(line)=lines.recv().await {
-                if native && (line.contains("local dns servers") || (line.contains("outbound failed") && line.contains("outbound=direct")) || line.contains("server=dns-local") || line.contains("server=\"dns-local\"")) { eprintln!("native-dns {line}"); }
+                if native && (line.contains("socket bind ") || line.contains("tcp dialing ") || line.contains("no default interface") || line.contains("outbound traffic goes through") || line.contains("local dns servers") || (line.contains("outbound failed") && line.contains("outbound=direct")) || line.contains("server=dns-local") || line.contains("server=\"dns-local\"")) { eprintln!("native-dns {line}"); }
             }
         });
         let mut profile:Value=serde_json::from_str(include_str!("../../../../account/tests/fixtures/proxy-profile.json")).unwrap();
         profile["nodes"].as_array_mut().unwrap().truncate(1);
         profile["nodes"][0]["ingresses"].as_array_mut().unwrap().truncate(1);
         profile["routing"]=json!({"rule_sets":[],"rules":[],"final":{"type":"direct"}});
+        if node_fixture.is_some() { profile["routing"]["rules"]=json!([{"id":"native-capture-probe","match":{"ip_cidrs":["192.0.2.10/32"]},"action":{"type":"proxy","target":"selected"}}]); }
         for node in profile["nodes"].as_array_mut().unwrap() {for ingress in node["ingresses"].as_array_mut().unwrap() {ingress["endpoint"]=json!({"domain":"127.0.0.1","port":9});}}
         if let Some(node)=&node_fixture {
             let ingress=&mut profile["nodes"][0]["ingresses"][0];
@@ -273,6 +300,14 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
             echo(&mut stream,1000).await;
             let counts=node.counters().await;
             assert_eq!(counts["upstream_connections"],1);assert_eq!(counts["sink_accepts"],1);
+            if !native {
+                let mut mapped=socks_auth(&proxy,node_credential["username"].as_str().unwrap(),node_credential["password"].as_str().unwrap()).await;
+                let mut request=vec![5,1,0,1,192,0,2,10];request.extend_from_slice(&node.native_tcp_port.to_be_bytes());
+                mapped.write_all(&request).await.unwrap();let _=socks_reply(&mut mapped).await;
+                echo(&mut mapped,1234).await;
+                let counts=node.counters().await;assert_eq!(counts["native_upstream_tcp"],1);assert_eq!(counts["native_sink_accepts"],1);
+                assert_eq!(counts["upstream_connections"],1);assert_eq!(counts["sink_accepts"],1);
+            }
             per_node=Some((stream,node_credential));
         }
         let mut epoch=0;
@@ -280,7 +315,7 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
             let attached=backend.call("/v1/attach-capture",json!({"protocol_version":1,"expected_epoch":epoch,"spec":{"resource":{"kind":"host_lease","lease_id":uuid::Uuid::new_v4().to_string()},"ipv6":true}})).await.unwrap();
             assert_eq!(attached["phase"],"attached");
             if native {
-                native_ingress_probes(sequence as u16).await;
+                native_ingress_probes(sequence as u16,node_fixture.as_ref().unwrap()).await;
                 assert_eq!(ppvpn_core::capture_host::forwarding_runtime_ids().len(),1);
                 println!("{}",json!({"probe":"attached","cycle":sequence,"owner":identity,"runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids(),"broker_registry_verified_empty":true}));
             }
