@@ -140,6 +140,8 @@ class AppState with WidgetsBindingObserver {
     );
   }
 
+  int _appleOpenRequest = 0;
+
   Future<bool> _appleNotice(
     String? accountId,
     int? messageId,
@@ -153,6 +155,9 @@ class AppState with WidgetsBindingObserver {
         (accountId != null && accountId != current.accountId))
       return false;
     final epoch = messages.ownerEpoch;
+    // A newer tap supersedes an older asynchronous lookup. Passive receipts
+    // refresh data without cancelling the user's pending navigation intent.
+    final openRequest = opened ? ++_appleOpenRequest : null;
     rust.UiMessage message;
     try {
       message = await rust.applePushMessage(
@@ -164,10 +169,12 @@ class AppState with WidgetsBindingObserver {
       return false;
     }
     if (_stopped || epoch != messages.ownerEpoch) return false;
-    if (opened) messages.requestOpen((messageId: message.id, push: message));
     await messages.reload();
     if (_stopped || epoch != messages.ownerEpoch) return false;
-    if (opened) showPage(WindowPage.messages);
+    if (opened && openRequest == _appleOpenRequest) {
+      showPage(WindowPage.messages);
+      messages.requestOpen((messageId: message.id, push: message));
+    }
     return !messages.view.value.failed;
   }
 
@@ -253,9 +260,9 @@ class AppState with WidgetsBindingObserver {
       return false;
     }
     if (signedIn) {
+      showPage(WindowPage.messages);
       if (push != null)
         messages.requestOpen((messageId: messageId, push: push.message));
-      showPage(WindowPage.messages);
     }
     return true;
   }

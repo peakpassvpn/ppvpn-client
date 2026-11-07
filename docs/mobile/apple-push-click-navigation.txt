@@ -1,0 +1,31 @@
+Apple notification click navigation
+==================================
+
+A passive APNs receipt refreshes the message data without opening a page.
+A tap finishes its authorized lookup and inbox refresh before selecting the
+message center and then issuing the detail request. A newer tap supersedes an
+older unfinished lookup; a passive receipt does not supersede a tap.
+
+Phone navigation keeps one inbox route per Navigator. Selecting Messages
+reuses that route, popping covering detail pages before delivering the new
+request. A covered inbox cannot consume a request. An asynchronous detail
+lookup checks the owner, latest request number and current route before push.
+The native state still deduplicates by delivery ID and event (received versus
+opened); a different delivery referencing the same message remains openable.
+
+Regression checks:
+  flutter test checks/phone_notification_navigation_test.dart \
+    checks/apple_push_quit_test.dart checks/messages_owner_test.dart
+  bash checks/apple/run.sh
+
+The route observer exercises both Cupertino and Android page routes, verifies
+one inbox, distinct subsequent details, repeated page selection, superseded
+lookup and owner changes. The production AppState method-channel tests verify
+receive/tap separation, page-before-detail ordering and out-of-order tap lookups.
+Original runtime negative controls fail with one extra inbox push on each
+platform, premature detail dispatch and an older lookup replacing a newer tap.
+
+These are controlled regressions. Actual-device notification display has been
+observed, but the reported repeated navigation remains an acceptance failure
+until a newly compiled and signed candidate passes a human click check. The
+consumed push authorization must not be reused to retry that device run.

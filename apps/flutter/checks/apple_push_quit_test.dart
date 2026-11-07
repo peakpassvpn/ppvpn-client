@@ -57,16 +57,19 @@ void main() {
     messenger.setMockMethodCallHandler(channel, (_) async => null);
   });
   tearDown(() => messenger.setMockMethodCallHandler(channel, null));
-  Future<Object?> openedNotice() {
+  Future<Object?> openedNotice({
+    bool opened = true,
+    String delivery = 'push:1',
+  }) {
     final result = Completer<Object?>();
     messenger.handlePlatformMessage(
       channel.name,
       const StandardMethodCodec().encodeMethodCall(
-        const MethodCall('notice', {
+        MethodCall('notice', {
           'accountID': 'A',
           'messageID': '1',
-          'deliveryID': 'push:1',
-          'opened': true,
+          'deliveryID': delivery,
+          'opened': opened,
         }),
       ),
       (reply) => result.complete(
@@ -128,6 +131,65 @@ void main() {
       expect(await reply, false);
       expect(app.messages.openRequests.value, requestsBeforeStop);
       expect(app.pageRequests.value, isNull);
+    },
+  );
+  test(
+    'receive only refreshes; tap selects the inbox before issuing its open request',
+    skip: !Platform.isMacOS,
+    () async {
+      api.lookup = () async => message('authorized');
+      api.reload = () async => const rust.UiMessagePage(items: [], total: 0);
+      final app = AppState(ownerSnapshot('A', 'Owner'));
+      addTearDown(() async {
+        app.stop();
+        await Future<void>.delayed(Duration.zero);
+      });
+      expect(await openedNotice(opened: false), true);
+      expect(api.reloads, 1);
+      expect(app.pageRequests.value, isNull);
+      expect(app.messages.openRequests.value, 0);
+      final entered = Completer<void>();
+      final refreshed = Completer<rust.UiMessagePage>();
+      api.reload = () {
+        entered.complete();
+        return refreshed.future;
+      };
+      final order = <String>[];
+      app.pageRequests.addListener(() => order.add('page'));
+      app.messages.openRequests.addListener(() => order.add('detail'));
+      final tap = openedNotice();
+      await entered.future;
+      expect(order, isEmpty);
+      expect(app.messages.takeOpen(), isNull);
+      refreshed.complete(const rust.UiMessagePage(items: [], total: 0));
+      expect(await tap, true);
+      expect(order, ['page', 'detail']);
+      expect(app.messages.takeOpen()?.push.title, 'authorized');
+    },
+  );
+  test(
+    'late older tap cannot replace a newer distinct notification',
+    skip: !Platform.isMacOS,
+    () async {
+      final first = Completer<rust.UiMessage>();
+      final second = Completer<rust.UiMessage>();
+      var lookups = 0;
+      api.lookup = () => ++lookups == 1 ? first.future : second.future;
+      api.reload = () async => const rust.UiMessagePage(items: [], total: 0);
+      final app = AppState(ownerSnapshot('A', 'Owner'));
+      addTearDown(() async {
+        app.stop();
+        await Future<void>.delayed(Duration.zero);
+      });
+      final oldTap = openedNotice(delivery: 'first');
+      final newTap = openedNotice(delivery: 'second');
+      second.complete(message('second'));
+      expect(await newTap, true);
+      expect(app.messages.takeOpen()?.push.title, 'second');
+      first.complete(message('first'));
+      expect(await oldTap, true);
+      expect(app.pageRequests.value?.request, 1);
+      expect(app.messages.takeOpen(), isNull);
     },
   );
 }

@@ -40,12 +40,20 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
 
   void _requested() => unawaited(_openRequested());
   Future<void> _openRequested() async {
+    // Covered inboxes must not steal a click intended for the visible route.
+    if (ModalRoute.of(context)?.isCurrent != true) return;
     final request = messages.takeOpen();
     if (request == null) return;
+    final owner = messages.ownerEpoch;
+    final requestNumber = messages.openRequests.value;
     final index = request.messageId == null
         ? null
         : await messages.locate(request.messageId!);
-    if (!mounted) return;
+    if (!mounted ||
+        owner != messages.ownerEpoch ||
+        requestNumber != messages.openRequests.value ||
+        ModalRoute.of(context)?.isCurrent != true)
+      return;
     _open(
       index == null ? request.push : messages.view.value.items[index],
       readOnly: index == null,
