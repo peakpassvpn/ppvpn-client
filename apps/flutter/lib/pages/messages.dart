@@ -57,6 +57,7 @@ class _MessagesPageState extends State<MessagesPage> {
     _scroll.addListener(_nearEnd);
     _tick = Timer.periodic(const Duration(minutes: 1), (_) => setState(() {}));
     messages.openRequests.addListener(_onOpenRequest);
+    messages.ownerChanges.addListener(_onOwnerChanged);
     unawaited(messages.reload());
     _onOpenRequest();
   }
@@ -64,6 +65,7 @@ class _MessagesPageState extends State<MessagesPage> {
   @override
   void dispose() {
     messages.openRequests.removeListener(_onOpenRequest);
+    messages.ownerChanges.removeListener(_onOwnerChanged);
     _tick?.cancel();
     _scroll.dispose();
     _selection.dispose();
@@ -93,6 +95,17 @@ class _MessagesPageState extends State<MessagesPage> {
     _push = null;
   });
 
+  void _onOwnerChanged() {
+    if (!mounted) return;
+    setState(() {
+      _open = null;
+      _push = null;
+    });
+    if (widget.app.snapshot.value.auth == rust.UiAuth.signedIn) {
+      unawaited(messages.reload());
+    }
+  }
+
   void _onOpenRequest() => unawaited(_openRequested());
 
   /// A notification click's message: found in the list (loading pages as
@@ -100,9 +113,11 @@ class _MessagesPageState extends State<MessagesPage> {
   Future<void> _openRequested() async {
     final request = messages.takeOpen();
     if (request == null) return;
+    final owner = messages.ownerEpoch;
+    final requestNumber = messages.openRequests.value;
     final id = request.messageId;
     final index = id == null ? null : await messages.locate(id);
-    if (!mounted) return;
+    if (!mounted || owner != messages.ownerEpoch || requestNumber != messages.openRequests.value) return;
     if (index != null) {
       _show(index);
     } else {

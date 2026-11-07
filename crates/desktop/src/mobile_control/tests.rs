@@ -96,6 +96,57 @@ async fn an_offline_request_reports_a_duplicate_node_once() {
 }
 
 #[tokio::test]
+async fn a_network_change_cancels_inflight_direct_results() {
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepted = Arc::new(tokio::sync::Notify::new());
+    let signal = accepted.clone();
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            signal.notify_one();
+            drop(stream);
+        }
+    });
+    let mut raw: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../../testdata/golden/contract/profiles/base.json"
+    ))
+    .unwrap();
+    let id = raw["nodes"][0]["id"].as_str().unwrap().to_string();
+    for ingress in raw["nodes"][0]["ingresses"].as_array_mut().unwrap() {
+        ingress["endpoint"]["ip"] = serde_json::json!("");
+        ingress["endpoint"]["domain"] = serde_json::json!("localhost");
+        ingress["endpoint"]["port"] = serde_json::json!(port);
+        if let Some(tls) = ingress.get_mut("tls") {
+            tls["server_name"] = serde_json::json!("localhost");
+        }
+    }
+    let session = ProfileSession::prepare(ppvpn_core::ApplyRequest::new(
+        serde_json::to_vec(&raw).unwrap(),
+    ))
+    .unwrap()
+    .0;
+    let control = MobileControl::default();
+    let results = Mutex::new(Vec::new());
+    let deliver = |result| results.lock().unwrap().push(result);
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(
+            control.probe_profile(session, ProbeMethod::Tcp, vec![id], &deliver),
+            async {
+                accepted.notified().await;
+                control.network_changed(ppvpn_core::NetworkState::default());
+            }
+        )
+    })
+    .await
+    .unwrap();
+    server.abort();
+    assert!(matches!(result, Err(ClientError::Cancelled)));
+    assert!(results.into_inner().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_protocol_test_never_uses_the_direct_probe_path() {
     let error = MobileControl::default()
         .probe_profile(profile(), ProbeMethod::Connect, Vec::new(), &|_| {

@@ -81,7 +81,7 @@ class MessagesState {
 
   int _pages = 0;
 
-  /// Bumped by [reload]: answers to an older load are dropped.
+  /// Bumped by [reload] and owner changes; stale answers cannot update the view.
   int _generation = 0;
 
   /// The failed load was a further page (retry loads it again).
@@ -90,6 +90,49 @@ class MessagesState {
   /// The loads in flight, for [locate] to wait on.
   Future<void>? _reloading;
   Future<void>? _loadingMore;
+
+  String? _accountId;
+  String? _teamId;
+  bool _ownerKnown = false;
+  bool _initialOwnerPending = true;
+
+  /// Changes only when auth ownership changes, not for ordinary reloads.
+  final ValueNotifier<int> ownerChanges = ValueNotifier(0);
+  int get ownerEpoch => ownerChanges.value;
+
+  /// Stable account ids identify owners; display-name changes retain data.
+  /// Initial restoration keeps a cold tap until its authenticated owner is known.
+  void followOwner({
+    String? accountId,
+    String? teamId,
+    bool restoring = false,
+  }) {
+    if (restoring && !_ownerKnown) return;
+    if (!restoring &&
+        _ownerKnown &&
+        accountId == _accountId &&
+        teamId == _teamId)
+      return;
+    // Resolving the initial team is metadata hydration of the same owner.
+    if (!restoring && _ownerKnown && accountId != null &&
+        accountId == _accountId && _teamId == null && teamId != null) {
+      _teamId = teamId;
+      return;
+    }
+    final keepPendingOpen = _initialOwnerPending && !restoring && accountId != null;
+    _initialOwnerPending = false;
+    _ownerKnown = !restoring;
+    _accountId = restoring ? null : accountId;
+    _teamId = restoring ? null : teamId;
+    _generation++;
+    _pages = 0;
+    _failedMore = false;
+    _reloading = null;
+    _loadingMore = null;
+    if (!keepPendingOpen) _openRequest = null;
+    view.value = const MessagesView();
+    ownerChanges.value++;
+  }
 
   OpenRequest? _openRequest;
 
@@ -114,14 +157,17 @@ class MessagesState {
   /// Null when it is not there or a load fails.
   Future<int?> locate(int id) async {
     if (fixed) return null;
+    final owner = ownerEpoch;
     final reloading = _reloading;
     await (view.value.loading && reloading != null ? reloading : reload());
+    if (owner != ownerEpoch) return null;
     for (var pages = 1; ; pages++) {
       final current = view.value;
       final index = current.items.indexWhere((message) => message.id == id);
       if (index >= 0) return index;
       if (current.failed || !current.hasMore || pages >= searchPages) return null;
       await loadMore();
+      if (owner != ownerEpoch) return null;
     }
   }
 
@@ -194,6 +240,7 @@ class MessagesState {
     if (message.read == read) return;
     _replace(message.id, read);
     if (fixed) return;
+    final generation = _generation;
     try {
       if (read) {
         await rust.markNotificationRead(id: message.id);
@@ -201,6 +248,7 @@ class MessagesState {
         await rust.markNotificationUnread(id: message.id);
       }
     } catch (error) {
+      if (generation != _generation) return;
       _replace(message.id, !read);
       onError('$error');
     }
@@ -210,9 +258,11 @@ class MessagesState {
     final before = view.value.items;
     view.value = view.value.copyWith(items: [for (final message in before) _withRead(message, true)]);
     if (fixed) return;
+    final generation = _generation;
     try {
       await rust.markAllNotificationsRead();
     } catch (error) {
+      if (generation != _generation) return;
       view.value = view.value.copyWith(items: before);
       onError('$error');
     }
