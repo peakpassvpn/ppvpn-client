@@ -103,6 +103,54 @@ def utun_interfaces(text):
     return sorted(name for name in names if re.fullmatch(r"utun\d+", name))
 
 
+
+def validate_restoration(directory, stages=("after",)):
+    baseline = {}
+    for stage in ("before", *stages):
+        dns_text = (directory / f"dns-{stage}.txt").read_text()
+        require("com.peakpassvpn.capture." not in dns_text and
+                "10.60.159.90" not in dns_text, f"capture DNS remains {stage}")
+        state = {
+            "dns": dns_state(dns_text),
+            "routes": capture_routes((directory / f"routes-{stage}.txt").read_text()),
+            "default": default_route((directory / f"default-{stage}.txt").read_text()),
+            "utun_interfaces": utun_interfaces(
+                (directory / f"interfaces-{stage}.txt").read_text()),
+        }
+        if stage == "before":
+            baseline = state
+        else:
+            for key, value in state.items():
+                require(value == baseline[key], f"{key} not restored {stage}")
+    require(not (directory / "cleanup-failed.txt").exists(), "cleanup reported leftovers")
+    return {"stages": list(stages), "dns_routes_default_and_utun_restored": True}
+
+
+def validate_network(directory):
+    physical = default_route((directory / "default-before.txt").read_text())["interface"]
+    require(not physical.startswith("utun"), "baseline default is not physical")
+    for stage in ("before", "attached"):
+        rows = json.loads((directory / f"network-{stage}.json").read_text())
+        def one(kind, endpoint):
+            matches = [row for row in rows if row.get("kind") == kind and row.get("endpoint") == endpoint]
+            require(len(matches) == 1 and "error" not in matches[0], f"{stage}: missing or failed {kind} {endpoint}")
+            return matches[0]
+        for kind in ("http", "http-bound-" + physical):
+            require(one(kind, "1.1.1.1:80").get("http_header") is True, f"{stage}: invalid {kind} response")
+        for address in ("1.1.1.1", "8.8.8.8", "9.9.9.9"):
+            row = one("dot", address + ":853")
+            require(row.get("tls_verified") is True and row.get("matching_id") is True and
+                    type(row.get("rcode")) is int and row["rcode"] == 0 and
+                    type(row.get("answers")) is int and row["answers"] > 0,
+                    f"{stage}: invalid verified DoT reply {address}")
+        text = (directory / f"physical-route-{stage}.txt").read_text()
+        route = default_route(text)
+        require(route["interface"] == physical and route["gateway"] ==
+                default_route((directory / "default-before.txt").read_text())["gateway"] and
+                "IFSCOPE" in text and not route["gateway"].startswith("link#"),
+                f"{stage}: invalid scoped physical route")
+
+
 def validate(directory):
     rows = [json.loads(line) for line in
             (directory / "native-probes.jsonl").read_text().splitlines()
@@ -141,23 +189,8 @@ def validate(directory):
     udp_peers = complete.get("routed_udp_upstream_peers")
     require(type(udp_peers) is int and udp_peers == 1,
             "routed UDP upstream socket changed or measurement missing")
-    baseline = {}
-    for stage in ("before", "detached", "after"):
-        dns_text = (directory / f"dns-{stage}.txt").read_text()
-        require("com.peakpassvpn.capture." not in dns_text and
-                "10.60.159.90" not in dns_text, f"capture DNS remains {stage}")
-        state = {
-            "dns": dns_state(dns_text),
-            "routes": capture_routes((directory / f"routes-{stage}.txt").read_text()),
-            "default": default_route((directory / f"default-{stage}.txt").read_text()),
-            "utun_interfaces": utun_interfaces(
-                (directory / f"interfaces-{stage}.txt").read_text()),
-        }
-        if stage == "before":
-            baseline = state
-        else:
-            for key, value in state.items():
-                require(value == baseline[key], f"{key} not restored {stage}")
+    validate_restoration(directory, ("detached", "after"))
+    validate_network(directory)
     return {"cycles": 20, "routed_tcp_udp_and_per_node_tcp": True,
             "owner_unchanged": True, "dns_and_capture_routes_restored": True,
             "utun_interfaces_restored": True}
@@ -166,10 +199,13 @@ def validate(directory):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("evidence", type=Path)
+    parser.add_argument("--restore-only", action="store_true")
     args = parser.parse_args()
     try:
-        result = validate(args.evidence)
+        result = validate_restoration(args.evidence) if args.restore_only else validate(args.evidence)
     except (ValueError, KeyError, OSError) as error:
+        if args.restore_only:
+            (args.evidence / "verified-network-restoration.json").write_text(json.dumps({"passed": False, "error": str(error)}, indent=2) + "\n")
         raise SystemExit(f"native acceptance failed: {error}") from error
-    (args.evidence / "verified-native-acceptance.json").write_text(
+    (args.evidence / ("verified-network-restoration.json" if args.restore_only else "verified-native-acceptance.json")).write_text(
         json.dumps(result, indent=2) + "\n")
