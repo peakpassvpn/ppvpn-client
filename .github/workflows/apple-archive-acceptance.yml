@@ -1,0 +1,127 @@
+name: Apple archive acceptance
+run-name: iOS unsigned archives for frozen product source
+
+on:
+  push:
+    branches: [codex/apple-single-core-build-matrix]
+    paths: [.github/workflows/apple-archive-acceptance.yml]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact product source commit
+        default: 47b11a36b518a1a01624abae98c94ba521b7a8d9
+        required: true
+      baseline_ref:
+        description: Exact functional baseline commit
+        default: 1ddf0a168610172773fe3f479133ecbe5acf932f
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-archive-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  archives:
+    runs-on: macos-15
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      SOURCE_REF: ${{ inputs.source_ref || '47b11a36b518a1a01624abae98c94ba521b7a8d9' }}
+      BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
+      PPVPN_BUILD_NUMBER: '344'
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_APPLE_PUSH_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
+      - name: Xcode 26
+        run: |
+          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          [[ -d "$xcode" ]] || { echo 'Xcode 26 is unavailable'; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          df -h /
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: macos
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: ${{ runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
+      - uses: ./.github/actions/flutter-toolchain
+      - name: Serial Release archives on one compiler and SDK
+        env:
+          PPVPN_SKIP_ANALYZE: '1'
+        run: |
+          set -euo pipefail
+          unset IOS_TEAM_ID IOS_APP_PROFILE IOS_TUNNEL_PROFILE IOS_EXPORT_OPTIONS
+          unset PPVPN_API_BASE PPVPN_FLUTTER_HOME PPVPN_FLUTTER_SAMPLE PPVPN_FLUTTER_SYNTHETIC_TRAFFIC
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/apple-candidate"
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/apple-baseline"
+          git -C "$RUNNER_TEMP/apple-baseline" checkout --detach "$BASELINE_REF"
+          mkdir -p "$CARGO_TARGET_DIR" "$RUNNER_TEMP/apple-output"
+          for side in candidate baseline; do
+            checkout="$RUNNER_TEMP/apple-$side"
+            output="$RUNNER_TEMP/apple-output/$side"
+            mkdir -p "$output"
+            ln -s "$CARGO_TARGET_DIR" "$checkout/target"
+            (cd "$checkout" && tools/release-features-check.sh --target aarch64-apple-ios -p ppvpn-flutter)
+            (cd "$checkout" && FLUTTER_TARGET=ios IOS_SDK=device bash apps/flutter/scripts/ci-build.sh) >"$output/build.log" 2>&1
+            archive="$checkout/apps/flutter/build/ios/archive/Runner.xcarchive"
+            (cd "$checkout/apps/flutter" && xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner \
+              -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+              -archivePath "$archive" -derivedDataPath "$RUNNER_TEMP/apple-derived-$side" archive \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+              LD_GENERATE_MAP_FILE=YES COMPILER_INDEX_STORE_ENABLE=NO) >"$output/archive.log" 2>&1
+            python3 apps/flutter/scripts/check-ios-exports.py \
+              "$archive/Products/Applications/Runner.app/Runner" \
+              "$archive/Products/Applications/Runner.app/PlugIns/PacketTunnel.appex/PacketTunnel"
+            tar -czf "$output/Runner.xcarchive.tar.gz" -C "$(dirname "$archive")" Runner.xcarchive
+            CHECKOUT="$checkout" OUTPUT="$output" SIDE="$side" python3 - <<'PY'
+          from pathlib import Path
+          import gzip, hashlib, json, os, subprocess
+          checkout, output = Path(os.environ['CHECKOUT']), Path(os.environ['OUTPUT'])
+          archive = output / 'Runner.xcarchive.tar.gz'
+          for src in Path(os.environ['RUNNER_TEMP']).joinpath('apple-derived-' + os.environ['SIDE']).rglob('*LinkMap*.txt'):
+              with gzip.open(output / (src.name + '.gz'), 'wb') as f:
+                  f.write(src.read_bytes())
+          data = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip(),
+                  'cargo_lock_sha256': hashlib.sha256((checkout / 'Cargo.lock').read_bytes()).hexdigest(),
+                  'backend_origin_sha256': hashlib.sha256(os.environ['PPVPN_API_BASE_DEFAULT'].encode()).hexdigest(),
+                  'build_number': os.environ['PPVPN_BUILD_NUMBER'], 'architecture': 'arm64',
+                  'xcode': subprocess.check_output(['xcodebuild', '-version'], text=True).strip(),
+                  'iphoneos_sdk': subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True).strip(),
+                  'rust': subprocess.check_output(['rustc', '--version'], text=True).strip(),
+                  'flutter': json.loads(subprocess.check_output(['flutter', '--version', '--machine'], text=True)),
+                  'archive_tar_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+                  'signing': 'unsigned; local provisioning/signing/export verification follows',
+                  'apns_enabled': False, 'device_install_or_upload': False}
+          (output / 'build-provenance.json').write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          done
+      # No signing environment, credentials, TestFlight or publication step.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: ios-unsigned-archive-comparison
+          path: ${{ runner.temp }}/apple-output
+          if-no-files-found: warn
+          retention-days: 3
