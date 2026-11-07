@@ -22,7 +22,8 @@ PRIVATE_DIRECTORY must be ClientConfig.data_dir; LOG_DIRECTORY must be
 ClientConfig.log_dir. Both must already exist, be canonical, owned by this uid,
 and have mode 0700. The agent refuses root/setuid execution. Both roles use the
 fixed installed helper bundle and the existing release signing identifiers.
-There is no development signature/path bypass. An unsigned local executable
+A single-runtime helper with no role arguments refuses startup instead of
+falling back to the legacy root forwarding entry. There is no development signature/path bypass. An unsigned local executable
 cannot impersonate an installed helper or UI.
 
 The feature-enabled install-service generates the root daemon's explicit
