@@ -1,0 +1,137 @@
+Real macOS OS-token feasibility probe — builder execution contract
+
+This is the executable first stage of macos-real-apns-acceptance.txt, not
+another mock test. It does not require a DB lease, p8, login, Worker or send.
+The diagnostic .app uses the frozen production ApplePushState.swift and
+macOS ApplePush.swift receiver unchanged, a real AppKit application delegate,
+the existing exact desktop AppID, production APNs profile and real Developer
+ID signer. The real NSApplication registration callback supplies the token to
+the production receiver. The token stays in process memory; only fixed native
+receipts are exported. No fixed/pasted/mock token or direct didRegister call
+exists in this diagnostic host. No Flutter, forwarding core, proof store,
+credentials or additional auth namespace is linked. It never requests alert
+permission, so it does not pass the later notification consent/UI gates.
+
+Distinct artifact / preserve production Agent
+The diagnostic app is named PPVPN APNs Capability Probe.app, with binary
+PPVPNAPNsProbe and signed Info marker PPVPNAPNsCapabilityProbe=true. It is NOT
+the ordinary PPVPN app or final production artifact. It has no Agent component;
+no production source, packaged App, installed Agent or service is removed or
+changed. Build/use only in a fresh GitHub-hosted Mac VM, outside Applications,
+with no existing PPVPN process, Agent job or per-user PPVPN data. The helper
+refuses current/local Macs and self-hosted jobs BEFORE creating its result file.
+It never relaxes Gatekeeper, TCC, SIP, recipient guards, provisioning or signing.
+If LaunchServices/signature/path/GUI/APNs blocks it, record that actual stage;
+do not bypass the condition or claim all VMs lack APNs. An ordinary full App
+is also accepted by the runner helper only if its legacy Agent stays bundled.
+
+Builder-owned one-shot job (no workflow edited/dispatched by mobile owner)
+Use an existing standard GitHub-hosted macOS label on the same source checkout
+that contains ef494213 receipts plus this helper commit. No Flutter, Rust, Go,
+simulator, FFI or full Mac package build is needed for this first stage. Record
+actual workflow SHA separately from product checkout, runner image/arch and
+Xcode/SDK version. No new permanent runner or remote-desktop resource.
+Runner probe timeout120s, ceiling180s; ordinary job budget about10min including
+signing setup. The existing signing/profile context is builder/root-owned.
+Use the already authorized private Developer ID identity and actual production
+profile; do not pass certificate/password/profile through public dispatch
+inputs, print their raw contents, or invent new production credential names.
+
+Frozen source hashes from ef494213 (public source content, not secret values):
+  apps/flutter/runner/apple/ApplePushState.swift
+  5f5ead41daf2360968db864095bbbcc012fb2987b1363cc298cbb9a909af71b3
+  apps/flutter/runner/macos/Runner/ApplePush.swift
+  d1b2202d261872fab4ca7b925f7c26217c428549cab9f1b526a667740b2f70d7
+The assembler fails before compilation if either source differs. If builder
+has a later legitimate source correction, have root review its new hashes
+explicitly rather than asserting this probe still executes ef494213 bytes.
+
+Commands for the existing clean job, after private signing context is ready
+(these commands have NOT been run against a real hosted Mac by mobile owner):
+
+  python3 tools/apple/build_macos_apns_capability_probe.py \
+    --output "$RUNNER_TEMP/native-apns-probe" --arch arm64 --build-number 344 \
+    --state-sha256 5f5ead41daf2360968db864095bbbcc012fb2987b1363cc298cbb9a909af71b3 \
+    --receiver-sha256 d1b2202d261872fab4ca7b925f7c26217c428549cab9f1b526a667740b2f70d7
+
+Use --arch x86_64 only if that is the actual chosen Intel job. The assembler
+compiles the original Swift sources with warnings-as-errors against the real
+Mac SDK. It only writes an UNSIGNED, rollout-OFF diagnostic App; no OS request,
+profile install, signing, permission, App launch or network settings operation.
+
+  probe_app="$RUNNER_TEMP/native-apns-probe/PPVPN APNs Capability Probe.app"
+  python3 tools/apple/push_config.py prepare --platform macos \
+    --info "$probe_app/Contents/Info.plist" \
+    --entitlements "$RUNNER_TEMP/native-apns-probe/probe.entitlements" \
+    --enabled 1 --topic com.peakpassvpn.ppvpn.desktop \
+    --profile "$PPVPN_APPLE_PUSH_PROFILE" --identity-entitlements-from-profile
+  /usr/bin/install -m 644 "$PPVPN_APPLE_PUSH_PROFILE" "$probe_app/Contents/embedded.provisionprofile"
+
+Builder signs with its existing temporary signing-keychain procedure:
+  /usr/bin/codesign --force --options runtime --timestamp \
+    --sign "$PPVPN_CODESIGN_IDENTITY" \
+    --entitlements "$RUNNER_TEMP/native-apns-probe/probe.entitlements" "$probe_app"
+Do not use an ad hoc identity, development/sandbox profile or mutate plist/files
+after signing. The existing builder verifier must then pass:
+  python3 tools/apple/push_config.py verify --platform macos --artifact "$probe_app" \
+    --enabled 1 --topic com.peakpassvpn.ppvpn.desktop --distribution
+This uses real signature, exact topic/profile/environment and profile-authorized
+certificate checks. This locally built, unsigned-then-real-signed diagnostic App
+is not a downloaded distribution-release notarization acceptance claim. If the
+OS asks for Gatekeeper review or refuses launch, stop and report; never remove
+quarantine or disable assessment to force it to run.
+
+Freeze and record SHA256 of the SIGNED executable, embedded profile and actual
+builder-owned push_config.py; the runner helper requires those exact values.
+The currently inspected b3112ff2 tree's verifier SHA256 is
+e6a500cd19667745f384cc03b50035a81ece195f8d4aa0141aa7c6ac9393f2d1.
+A different verifier hash requires an updated reviewed source record, not a
+blind reuse of that value. The previous macos_apns_preflight helper is only a
+partial static supplement; the builder verifier above is authoritative.
+
+  python3 tools/apple/macos_apns_runner_probe.py --app "$probe_app" \
+    --executable-sha256 "$REVIEWED_SIGNED_EXECUTABLE_SHA256" \
+    --profile-sha256 "$REVIEWED_EMBEDDED_PROFILE_SHA256" \
+    --verifier tools/apple/push_config.py --verifier-sha256 "$REVIEWED_VERIFIER_SHA256" \
+    --timeout 120 --output "$RUNNER_TEMP/native-apns-os-result.json"
+
+Execution behavior / output
+The real-run helper checks GitHub-hosted Mac context, console uid/GUI launchd
+session, fresh PPVPN data/process/Agent absence, staged path and reviewed hashes.
+It repeats the real signing verifier, starts unified-log Info capture BEFORE
+LaunchServices opens the exact App, and accepts only exact native subsystem,
+category, reviewed process image and newly observed source PID. A nonempty
+token callback only counts after register_requested in that SAME process.
+This is actual OS registration, not authorization to send or proof of delivery.
+LaunchServices return0 is recorded separately from observed app launch.
+The helper retains only typed fixed receipts/counts/status/hash metadata in a
+new0600 result. No token/nonce/IDs, raw error text, profile/certificate bytes,
+credential contents, host/user identifiers or raw log stream is exported.
+It terminates only its log-capture child and newly launched exact-image App
+in this fresh VM, never pkill/bootout/service/VPN/Surge or settings operations.
+
+Result meanings
+- OS_TOKEN_CALLBACK_OBSERVED: real OS callback nonempty in the same process as
+  its observed request. Backend bind/register, real send/delivery and UI remain
+  NOT RUN. No permission prompt was requested by the diagnostic host.
+- OS_REGISTRATION_ERROR_OBSERVED: actual failure callback; report its fixed
+  domain class and numerical code from native receipts. Root can diagnose that
+  exact entitlement/network/OS condition. Unknown raw domains stay other.
+- TIMED_OUT_NO_VERIFIED_OS_TOKEN_CHAIN: timed out without the full trace chain.
+  Could be log availability, AppKit launch or OS registration; not universal
+  VM/APNs incompatibility. Do not label a timeout as a provider rejection.
+- Named preflight/LaunchServices/log-capture failure: actual missing capability,
+  no token outcome claimed. Preserve its sanitized status, not a fabricated
+  error. No physical fallback request until root reviews this actual evidence.
+
+Upload only the sanitized result, source-build manifest and safe signing-check
+summary. Do not publish the signed diagnostic App, embedded profile, P12,
+keychain, cert subject, raw signing stderr or raw unified logs. Builder/root
+can retain those through existing private custody if needed, not public artifacts.
+No isolated backend lease is consumed by this probe. After it completes, root
+can use normal manager <=30min slot for the separately gated full Mac package,
+normal owned account login/registration and approved real notifications.
+The full package must contain 6184203 + ef494213 (or verified equivalents),
+and ordinary Agent/rollout/credential protections remain intact. iPhone results
+cannot substitute for any Mac stage, and diagnostic token success cannot pass
+foreground/background/cold-click, complete Mac integration or Agent retirement.
