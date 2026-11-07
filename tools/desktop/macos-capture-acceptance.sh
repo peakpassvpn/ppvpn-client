@@ -36,6 +36,7 @@ PY
 netstat -rn > "$out/routes-before.txt"
 scutil --dns > "$out/dns-before.txt"
 route -n get default > "$out/default-before.txt"
+ifconfig -l > "$out/interfaces-before.txt"
 installed=0
 cleanup() {
   set +e
@@ -47,6 +48,7 @@ cleanup() {
   netstat -rn > "$out/routes-after.txt"
   scutil --dns > "$out/dns-after.txt"
   route -n get default > "$out/default-after.txt"
+  ifconfig -l > "$out/interfaces-after.txt"
   [[ ! -e /private/var/run/com.peakpassvpn.capture/grant.json ]] || echo BROKER_JOURNAL_LEFTOVER > "$out/cleanup-failed.txt" # sensitive-check: allow — canonical macOS runtime journal
   [[ ! -e "$image" && ! -e "$plist" && ! -e "/Library/LaunchAgents/$agent.plist" ]] || echo INSTALLATION_LEFTOVER >> "$out/cleanup-failed.txt"
 }
@@ -70,16 +72,12 @@ if /bin/launchctl print "gui/$uid/$agent" > "$out/user-job-before-probe.txt" 2>&
 fi
 "$image" --capture-acceptance > "$out/native-probes.jsonl" 2> "$out/native-probes.stderr"
 route -n get default > "$out/default-detached.txt"
-python3 - "$out" <<'PY'
-import json,pathlib,sys
-p=pathlib.Path(sys.argv[1]); rows=[json.loads(x) for x in (p/'native-probes.jsonl').read_text().splitlines() if x.startswith('{')]
-assert len([x for x in rows if x.get('probe')=='attached'])==10
-assert rows[-1]['probe']=='complete'
-def route(file):
-    return [x.strip() for x in file.read_text().splitlines() if x.strip().startswith(('gateway:','interface:','destination:','mask:'))]
-assert route(p/'default-before.txt')==route(p/'default-detached.txt'), 'default route changed'
-PY
+netstat -rn > "$out/routes-detached.txt"
+scutil --dns > "$out/dns-detached.txt"
+ifconfig -l > "$out/interfaces-detached.txt"
 cleanup
 trap - EXIT
+set -e
 [[ ! -e "$out/cleanup-failed.txt" ]] || exit 1
+python3 tools/desktop/check_macos_capture_acceptance.py "$out"
 echo 'native capture acceptance passed'
