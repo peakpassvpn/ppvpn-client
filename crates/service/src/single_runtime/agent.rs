@@ -21,11 +21,7 @@ pub fn validate_installation() -> Result<u32> {
     if std::env::current_exe()?.canonicalize()? != image {
         return Err(anyhow!("USER_RUNTIME_INSTALL_IMAGE_MISMATCH"));
     }
-    let requirement = crate::mac_identity::requirement(
-        crate::mac_identity::SERVICE_IDENTIFIER,
-        crate::mac_identity::team_id(),
-    )?;
-    crate::mac_identity::check_file(image, &requirement)?;
+    super::image_verification::prevalidate_helper()?;
     Ok(uid)
 }
 pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {

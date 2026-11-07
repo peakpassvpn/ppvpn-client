@@ -67,40 +67,100 @@ pub fn verify(stream: &UnixStream, uid: u32, identifier: &str, image: &Path) -> 
 /// Root server identity is accepted only by callers that explicitly request
 /// uid zero; the ordinary UI/user-runtime verifier continues to refuse root.
 pub fn verify_exact(stream: &UnixStream, uid: u32, identifier: &str, image: &Path) -> Result<Peer> {
+    verify_using(stream, uid, identifier, image, &SystemChecks)
+}
+pub(crate) trait IdentityChecks {
+    fn image(&self, image: &Path) -> Result<()>;
+    fn process(
+        &self,
+        token: &[u8],
+        requirement: &security_framework::os::macos::code_signing::SecRequirement,
+    ) -> Result<()>;
+    fn file(
+        &self,
+        image: &Path,
+        identifier: &str,
+        requirement: &security_framework::os::macos::code_signing::SecRequirement,
+    ) -> Result<()>;
+    fn process_path(&self, pid: u32) -> Result<std::path::PathBuf>;
+}
+struct SystemChecks;
+impl IdentityChecks for SystemChecks {
+    fn image(&self, image: &Path) -> Result<()> {
+        secure_installed_image(image)
+    }
+    fn process(
+        &self,
+        token: &[u8],
+        requirement: &security_framework::os::macos::code_signing::SecRequirement,
+    ) -> Result<()> {
+        crate::mac_identity::check_process(token, requirement)
+    }
+    fn file(
+        &self,
+        image: &Path,
+        identifier: &str,
+        requirement: &security_framework::os::macos::code_signing::SecRequirement,
+    ) -> Result<()> {
+        super::image_verification::verify(image, identifier, requirement)
+    }
+    fn process_path(&self, pid: u32) -> Result<std::path::PathBuf> {
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let length =
+            unsafe { libc::proc_pidpath(pid as _, buffer.as_mut_ptr().cast(), buffer.len() as _) };
+        if length <= 0 {
+            return Err(anyhow!("PEER_IMAGE_UNAVAILABLE"));
+        }
+        let end = buffer
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(buffer.len());
+        Ok(std::path::PathBuf::from(std::str::from_utf8(
+            &buffer[..end],
+        )?))
+    }
+}
+fn verify_using<C: IdentityChecks>(
+    stream: &UnixStream,
+    uid: u32,
+    identifier: &str,
+    image: &Path,
+    checks: &C,
+) -> Result<Peer> {
     let (peer, token) = audit_peer(stream)?;
     if peer.uid != uid {
         return Err(anyhow!("PEER_USER_REJECTED"));
     }
     // The single-runtime installation layout keeps both the UI and helper
     // immutable and root-owned. Packaging must not chown the installed App.
-    secure_installed_image(image)?;
+    checks.image(image)?;
     let requirement = crate::mac_identity::requirement(identifier, crate::mac_identity::team_id())?;
     let bytes: Vec<u8> = token.iter().flat_map(|word| word.to_ne_bytes()).collect();
     super::native::timed("peer-process-first", || {
-        crate::mac_identity::check_process(&bytes, &requirement)
+        checks.process(&bytes, &requirement)
     })?;
     super::native::timed("peer-static-file", || {
-        crate::mac_identity::check_file(image, &requirement)
+        checks.file(image, identifier, &requirement)
     })?;
-    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    let length =
-        unsafe { libc::proc_pidpath(peer.pid as _, buffer.as_mut_ptr().cast(), buffer.len() as _) };
-    if length <= 0 {
-        return Err(anyhow!("PEER_IMAGE_UNAVAILABLE"));
-    }
-    let end = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(buffer.len());
-    if Path::new(std::str::from_utf8(&buffer[..end])?) != image {
+    if checks.process_path(peer.pid)? != image {
         return Err(anyhow!("PEER_INSTALL_IMAGE_MISMATCH"));
     }
     // Check the audit-token signature again after the PID path lookup, preventing
     // a recycled PID from substituting its executable during verification.
     super::native::timed("peer-process-second", || {
-        crate::mac_identity::check_process(&bytes, &requirement)
+        checks.process(&bytes, &requirement)
     })?;
     Ok(peer)
+}
+#[cfg(test)]
+pub(crate) fn verify_test<C: IdentityChecks>(
+    stream: &UnixStream,
+    uid: u32,
+    identifier: &str,
+    image: &Path,
+    checks: &C,
+) -> Result<Peer> {
+    verify_using(stream, uid, identifier, image, checks)
 }
 #[cfg(test)]
 mod tests {

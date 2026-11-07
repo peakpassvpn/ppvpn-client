@@ -637,11 +637,15 @@ jobs:
             -p ppvpn-core -p ppvpn-cli -p ppvpn-desktop -p ppvpn-service \
             --lib --bin ppvpn-service --test keystore > build/macos-tests.json
           bin() { python3 tools/test-binary.py "$PWD/build/macos-tests.json" "$1"; }
-          core=$(bin ppvpn_core) cli=$(bin ppvpn_cli) desktop=$(bin ppvpn_client) service=$(bin ppvpn-service)
+          core=$(bin ppvpn_core) cli=$(bin ppvpn_cli) desktop=$(bin ppvpn_client) service=$(bin ppvpn-service) service_lib=$(bin ppvpn_service)
           (cd crates/core && "$core" hostipv6::darwin localdns::source probe::icmp runtime::sail_tests)
           (cd crates/cli && "$cli" identity)
           (cd crates/desktop && "$desktop" detect service sysproxy)
           (cd crates/service && PPVPN_TEST_CODESIGN=1 "$service" macsign update::)
+          (cd crates/service && "$service_lib")
+          # Isolate the broker's real no-forwarding-owner registry assertion.
+          # Ordinary libtest runs skip these explicit protocol barrier cases.
+          (cd crates/service && "$service_lib" handshake_regression --ignored --test-threads=1)
       - name: macOS tests, the Keychain
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 5
