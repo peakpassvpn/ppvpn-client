@@ -10,6 +10,7 @@ typedef ApplePushNotice = Future<bool> Function(
   String? accountId,
   int? messageId,
   bool opened,
+  String deliveryID,
 );
 
 class ApplePush {
@@ -17,12 +18,15 @@ class ApplePush {
     required this.notice,
     this.register,
     this.unregister,
+    this.ownerChanged,
     this.channel = const MethodChannel('com.peakpassvpn.ppvpn/apple-push'),
   });
   final MethodChannel channel;
   final ApplePushNotice notice;
   final ApplePushEffect? register;
   final ApplePushEffect? unregister;
+  final void Function(String? owner)? ownerChanged;
+  int _ownerEpoch = 0;
   Future<void> _effects = Future.value();
   String? _account;
   String? _lastState;
@@ -34,10 +38,13 @@ class ApplePush {
     if (_disposed || (state == _lastState && id == _account)) return;
     _lastState = state;
     _account = state == 'signedIn' ? id : null;
+    _ownerEpoch++;
+    ownerChanged?.call(_account);
     try {
       await channel.invokeMethod<void>('account', {
         'state': state,
         if (id != null) 'id': id,
+        'clientEpoch': _ownerEpoch.toString(),
       });
     } on MissingPluginException {
       /* Native channel is absent in older/test runners. */
@@ -78,26 +85,41 @@ class ApplePush {
       final id = raw is String && RegExp(r'^[0-9]+$').hasMatch(raw)
           ? int.tryParse(raw)
           : null;
+      final delivery = args['deliveryID'];
+      if (delivery is! String || delivery.isEmpty || delivery.length > 256)
+        return false;
       return notice(
         owner as String?,
         id != null && id > 0 ? id : null,
         args['opened'] == true,
+        delivery,
       );
     }
     if (call.method != 'register' && call.method != 'unregister') return false;
     final remove = call.method == 'unregister';
     final effect = remove ? unregister : register;
+    if (!remove && args['clientEpoch'] != _ownerEpoch.toString()) return false;
     // No backend contract means no registration acknowledgement. Tokens and
     // payloads are deliberately absent from diagnostic output and exceptions.
     if (effect == null) return false;
     final result = Completer<bool>();
+    final epoch = _ownerEpoch;
     _effects = _effects.then((_) async {
-      if (_disposed || (!remove && args['accountID'] != _account)) {
+      if (_disposed ||
+          (!remove &&
+              (epoch != _ownerEpoch || args['accountID'] != _account))) {
         result.complete(false);
         return;
       }
       try {
-        result.complete(await effect(args));
+        final committed = await effect(args);
+        result.complete(
+          committed &&
+              (remove ||
+                  (!_disposed &&
+                      epoch == _ownerEpoch &&
+                      args['accountID'] == _account)),
+        );
       } catch (_) {
         result.complete(false);
       }

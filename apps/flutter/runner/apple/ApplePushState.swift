@@ -138,7 +138,10 @@ final class ApplePushState {
     guard !bytes.isEmpty else { return }
     let next = bytes.map { String(format: "%02x", $0) }.joined()
     if next != token {
-      invalidateRegistration()
+      // Token rotation updates the same binding; only account invalidation
+      // unbinds. Late old-token acknowledgements cannot settle this request.
+      registered = nil
+      registering = nil
       token = next
     }
     requestRegistration()

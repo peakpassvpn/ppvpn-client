@@ -9,6 +9,7 @@ final class IOSApplePushBridge {
   static let shared = IOSApplePushBridge()
   let receiver = IOSApplePushReceiver()
   private var channel: FlutterMethodChannel?
+  private var clientEpoch = "0"
   private var pendingEffects = 0
   private var drains: [FlutterResult] = []
 
@@ -21,13 +22,29 @@ final class IOSApplePushBridge {
       guard let self else { return result(nil) }
       switch call.method {
       case "configured": result(self.receiver.configured)
+      case "installation":
+        guard self.receiver.configured, let app = self.receiver.app,
+          let scope = call.arguments as? [String: Any],
+          scope["platform"] as? String == app.platform,
+          scope["bundleID"] as? String == app.bundleID,
+          scope["environment"] as? String == app.environment.rawValue else {
+          return result(FlutterError(code: "push-scope", message: nil, details: nil))
+        }
+        do {
+          let proof = try ApplePushInstallation.load(app: app)
+          result(["installation_id": proof.installationID, "installation_secret": proof.secret])
+        } catch {
+          result(FlutterError(code: "push-store-unavailable", message: nil, details: nil))
+        }
       case "drain":
         if self.pendingEffects == 0 { result(nil) }
         else { self.drains.append(result) }
       case "account":
-        guard let args = call.arguments as? [String: Any], let state = args["state"] as? String else {
+        guard let args = call.arguments as? [String: Any], let state = args["state"] as? String,
+          let epoch = args["clientEpoch"] as? String, !epoch.isEmpty, epoch.utf8.count <= 32 else {
           return result(FlutterError(code: "invalid-account", message: nil, details: nil))
         }
+        self.clientEpoch = epoch
         switch state {
         case "restoring": self.receiver.state.beginRestoration()
         case "signedOut": self.receiver.state.setAccount(nil)
@@ -46,13 +63,13 @@ final class IOSApplePushBridge {
     }
     receiver.state.attach(register: { [weak self] request in
       self?.pendingEffects += 1
-      self?.channel?.invokeMethod("register", arguments: Self.arguments(request)) { [weak self] reply in
+      self?.channel?.invokeMethod("register", arguments: Self.arguments(request, clientEpoch: self?.clientEpoch ?? "")) { [weak self] reply in
         self?.receiver.state.acknowledge(request, success: reply as? Bool == true)
         self?.finishEffect()
       }
     }, unregister: { [weak self] request in
       self?.pendingEffects += 1
-      self?.channel?.invokeMethod("unregister", arguments: Self.arguments(request)) { [weak self] _ in
+      self?.channel?.invokeMethod("unregister", arguments: Self.arguments(request, clientEpoch: self?.clientEpoch ?? "")) { [weak self] _ in
         self?.finishEffect()
       }
     }, deliver: { [weak self] notice, opened in
@@ -82,8 +99,8 @@ final class IOSApplePushBridge {
     channel.invokeMethod("notice", arguments: args) { reply in completion(reply as? Bool == true) }
   }
 
-  private static func arguments(_ r: ApplePushRegistration) -> [String: Any] {
-    ["request": String(r.request), "accountGeneration": String(r.accountGeneration),
+  private static func arguments(_ r: ApplePushRegistration, clientEpoch: String) -> [String: Any] {
+    ["clientEpoch": clientEpoch, "request": String(r.request), "accountGeneration": String(r.accountGeneration),
      "accountID": r.accountID, "token": r.token, "platform": r.app.platform,
      "bundleID": r.app.bundleID, "environment": r.app.environment.rawValue]
   }

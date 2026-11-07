@@ -9,7 +9,10 @@ void main() {
   const channel = MethodChannel('com.peakpassvpn.ppvpn/apple-push');
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  var epoch = "0";
   Future<Object?> native(String method, Map<String, Object?> arguments) {
+    if (method == 'register') arguments = {'clientEpoch': epoch, ...arguments};
+    if (method == 'notice') arguments = {'deliveryID': 'push:1', ...arguments};
     final result = Completer<Object?>();
     messenger.handlePlatformMessage(
       channel.name,
@@ -22,11 +25,18 @@ void main() {
     return result.future;
   }
 
-  setUp(() => messenger.setMockMethodCallHandler(channel, (_) async => null));
+  setUp(() {
+    epoch = '0';
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'account')
+        epoch = (call.arguments as Map)['clientEpoch'] as String;
+      return null;
+    });
+  });
   tearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
   test('absent backend adapter never confirms native registration', () async {
-    final push = ApplePush(notice: (_, _, _) async => true)..start();
+    final push = ApplePush(notice: (_, _, _, _) async => true)..start();
     await push.followAccount(state: 'signedIn', id: 'one');
     expect(
       await native('register', {'accountID': 'one', 'token': 'fresh'}),
@@ -40,7 +50,7 @@ void main() {
       final committed = Completer<bool>();
       var calls = 0;
       final push = ApplePush(
-        notice: (_, _, _) async => true,
+        notice: (_, _, _, _) async => true,
         register: (_) {
           calls++;
           return committed.future;
@@ -61,7 +71,7 @@ void main() {
     () async {
       int? lookedUp;
       final push = ApplePush(
-        notice: (_, id, _) async {
+        notice: (_, id, _, _) async {
           lookedUp = id;
           return true;
         },
@@ -92,7 +102,7 @@ void main() {
     () async {
       final settled = Completer<bool>();
       final push = ApplePush(
-        notice: (_, _, _) async => false,
+        notice: (_, _, _, _) async => false,
         unregister: (_) => settled.future,
       )..start();
       await push.followAccount(state: 'signedIn', id: 'one');
@@ -110,7 +120,7 @@ void main() {
     },
   );
   test('restoration blocks previous owner delivery', () async {
-    final push = ApplePush(notice: (_, _, _) async => true)..start();
+    final push = ApplePush(notice: (_, _, _, _) async => true)..start();
     await push.followAccount(state: 'signedIn', id: 'one');
     await push.followAccount(state: 'restoring');
     expect(await native('notice', {'accountID': 'one'}), false);
@@ -122,7 +132,7 @@ void main() {
       calls.add(call.method);
       return call.method == 'configured' ? false : null;
     });
-    final push = ApplePush(notice: (_, _, _) async => true)..start();
+    final push = ApplePush(notice: (_, _, _, _) async => true)..start();
     expect(await push.resume(), false);
     expect(calls, ['configured']);
     push.dispose();
@@ -135,9 +145,50 @@ void main() {
         calls.add(call.method);
         return call.method == 'configured' ? true : null;
       });
-      final push = ApplePush(notice: (_, _, _) async => true)..start();
+      final push = ApplePush(notice: (_, _, _, _) async => true)..start();
       expect(await push.resume(), true);
       expect(calls, ['configured', 'retry']);
+      push.dispose();
+    },
+  );
+  test(
+    'late registration success cannot acknowledge a replacement owner',
+    () async {
+      final committed = Completer<bool>();
+      final push = ApplePush(
+        notice: (_, _, _, _) async => true,
+        register: (_) => committed.future,
+      )..start();
+      await push.followAccount(state: 'signedIn', id: 'one');
+      final result = native('register', {'accountID': 'one'});
+      await Future<void>.delayed(Duration.zero);
+      await push.followAccount(state: 'signedIn', id: 'two');
+      committed.complete(true);
+      expect(await result, false);
+      push.dispose();
+    },
+  );
+  test(
+    'native old epoch cannot register after relogin to the same public id',
+    () async {
+      var calls = 0;
+      final push = ApplePush(
+        notice: (_, _, _, _) async => true,
+        register: (_) async {
+          calls++;
+          return true;
+        },
+      )..start();
+      await push.followAccount(state: 'signedIn', id: 'one');
+      final old = epoch;
+      await push.followAccount(state: 'signedOut');
+      await push.followAccount(state: 'signedIn', id: 'one');
+      expect(
+        await native('register', {'accountID': 'one', 'clientEpoch': old}),
+        false,
+      );
+      expect(calls, 0);
+      expect(await native('register', {'accountID': 'one'}), true);
       push.dispose();
     },
   );

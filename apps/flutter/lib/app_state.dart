@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +14,7 @@ import 'links.dart';
 import 'haptics.dart';
 import 'messages_state.dart';
 import 'apple_push.dart';
+import 'apple_push_transport.dart';
 import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
 import 'vpn.dart';
@@ -49,10 +51,35 @@ class AppState with WidgetsBindingObserver {
       snapshot = ValueNotifier(initial) {
     _refreshNodes(initial);
     _followMessageOwner(initial);
-    if (Platform.isIOS) {
-      _applePush = ApplePush(notice: _appleNotice)..start();
+    if (Platform.isIOS || Platform.isMacOS) {
+      const channel = MethodChannel('com.peakpassvpn.ppvpn/apple-push');
+      final transport = ApplePushTransport(
+        http: (owner, operation, body) async => ApplePushReply.decode(
+          await rust.applePushHttp(
+            owner: owner,
+            operation: operation,
+            body: jsonEncode(body),
+          ),
+        ),
+        proof: (scope) async => Map<String, Object?>.from(
+          (await channel.invokeMapMethod<String, Object?>(
+                'installation',
+                scope,
+              )) ??
+              {},
+        ),
+      );
+      _appleTransport = transport;
+      _applePush = ApplePush(
+        notice: _appleNotice,
+        register: transport.register,
+        unregister: transport.unregister,
+        ownerChanged: transport.followAccount,
+      )..start();
       _followAppleOwner(initial);
       WidgetsBinding.instance.addObserver(this);
+    }
+    if (Platform.isIOS) {
       _network = const EventChannel('com.peakpassvpn.ppvpn/network-state')
           .receiveBroadcastStream()
           .listen(
@@ -88,6 +115,7 @@ class AppState with WidgetsBindingObserver {
   /// Made by [AppState.fixed]: sample data, no client.
   final bool fixed;
   ApplePush? _applePush;
+  ApplePushTransport? _appleTransport;
 
   void _followAppleOwner(rust.UiSnapshot state) {
     final restoring =
@@ -109,6 +137,7 @@ class AppState with WidgetsBindingObserver {
     String? accountId,
     int? messageId,
     bool opened,
+    String deliveryID,
   ) async {
     final current = snapshot.value;
     if (current.auth != rust.UiAuth.signedIn ||
@@ -116,18 +145,19 @@ class AppState with WidgetsBindingObserver {
         (accountId != null && accountId != current.accountId))
       return false;
     final epoch = messages.ownerEpoch;
-    if (opened && messageId != null) {
-      final index = await messages.locate(messageId);
-      if (epoch != messages.ownerEpoch) return false;
-      if (index != null) {
-        messages.requestOpen((
-          messageId: messageId,
-          push: messages.view.value.items[index],
-        ));
-      }
-    } else {
-      await messages.reload();
+    rust.UiMessage message;
+    try {
+      message = await rust.applePushMessage(
+        owner: current.accountId!,
+        deliveryId: deliveryID,
+        messageId: messageId,
+      );
+    } catch (_) {
+      return false;
     }
+    if (epoch != messages.ownerEpoch) return false;
+    if (opened) messages.requestOpen((messageId: message.id, push: message));
+    await messages.reload();
     if (epoch != messages.ownerEpoch) return false;
     if (opened) showPage(WindowPage.messages);
     return !messages.view.value.failed;
@@ -250,16 +280,19 @@ class AppState with WidgetsBindingObserver {
         owner != messages.ownerEpoch ||
         snapshot.value.auth != rust.UiAuth.signedIn)
       return;
+    await _appleTransport?.updates(snapshot.value.accountId!);
+    if (owner != messages.ownerEpoch || _stopped) return;
     await messages.reload();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (fixed || !Platform.isIOS) return;
+    if (fixed || (!Platform.isIOS && !Platform.isMacOS)) return;
     if (state != AppLifecycleState.paused && state != AppLifecycleState.resumed)
       return;
     final active = state == AppLifecycleState.resumed;
     if (active) unawaited(_refreshAppleOnResume());
+    if (!Platform.isIOS) return;
     // Begin the system background assertion immediately, before queuing Rust
     // work; release it only once the engine has dropped its file locks.
     final task = active

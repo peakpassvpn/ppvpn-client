@@ -872,3 +872,33 @@ pub fn mark_user_quit() {
 pub fn quit_after_relaunch() -> bool {
     crate::silent::quit_after_relaunch()
 }
+
+/// Narrow authenticated Apple API; credentials remain inside Rust. The JSON
+/// status/body envelope is local bridge data, not a server data wrapper.
+pub async fn apple_push_http(
+    owner: String,
+    operation: String,
+    body: String,
+) -> Result<String, String> {
+    bridge::get()?
+        .fetch(move |client| async move { client.apple_push_http(owner, operation, body).await })
+        .await
+}
+
+/// Authorized single-message resolution. An unknown/foreign delivery never
+/// falls back to notification text, another endpoint or a payload URL.
+pub async fn apple_push_message(
+    owner: String,
+    delivery_id: String,
+    message_id: Option<i64>,
+) -> Result<UiMessage, String> {
+    let message_id = message_id.map(crate::messages::backend_id).transpose()?;
+    let message = bridge::get()?
+        .fetch(move |client| async move {
+            client
+                .apple_push_message(owner, delivery_id, message_id)
+                .await
+        })
+        .await?;
+    Ok(crate::messages::ui_message(message))
+}

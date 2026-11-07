@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 
 mod api;
+mod apple_push;
 mod auth;
 mod compat;
 mod connection;

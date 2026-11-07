@@ -5,6 +5,7 @@ import UIKit
 
 @MainActor
 final class IOSApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
+  let app: ApplePushApp?
   let state: ApplePushState
   let configured: Bool
   var registrationFailed: ((String, Int) -> Void)?
@@ -18,6 +19,7 @@ final class IOSApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
     // an App Store receipt (TestFlight receipts are not an APNs selector).
     let app = ApplePushApp(platform: "ios", bundleID: bundle.bundleIdentifier,
       entitlement: bundle.object(forInfoDictionaryKey: "PPVPNAPNsEntitlementEnvironment") as? String)
+    self.app = app
     configured = bundle.object(forInfoDictionaryKey: "PPVPNApplePushEnabled") as? Bool == true && app != nil
     state = ApplePushState(app: configured ? app : nil)
   }

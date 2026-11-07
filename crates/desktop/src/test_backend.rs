@@ -16,6 +16,11 @@ use crate::auth::test_support::token_set;
 
 pub(crate) const PUSH_TOKEN: &str = "ppd_test_token";
 
+pub(crate) struct AppleConfigGate {
+    pub(crate) entered: std::sync::mpsc::Sender<()>,
+    pub(crate) release: std::sync::mpsc::Receiver<()>,
+}
+
 #[derive(Default)]
 pub(crate) struct Backend {
     pub(crate) messages: Mutex<Vec<Value>>,
@@ -37,6 +42,7 @@ pub(crate) struct Backend {
     /// Body of `GET /api/v1/me/proxy-profile`; none answers 404
     /// `SUBSCRIPTION_NOT_FOUND`.
     pub(crate) profile: Mutex<Option<String>>,
+    pub(crate) apple_config_gate: Mutex<Option<AppleConfigGate>>,
 }
 
 impl Backend {
@@ -128,6 +134,14 @@ impl Backend {
             }
         }
         match (method, path) {
+            ("GET", "/api/v1/devices/apple/config") => {
+                let gate = self.apple_config_gate.lock().unwrap().take();
+                if let Some(gate) = gate {
+                    gate.entered.send(()).unwrap();
+                    gate.release.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                ("200 OK", json!({"configured": false, "bundle_id_ios": "", "bundle_id_macos": "", "environments": []}).to_string())
+            }
             // The backend's unauthenticated health route (200, no-store).
             ("GET", "/api/v1/health") => {
                 self.health_heads.lock().unwrap().push(headers.to_string());
