@@ -21,7 +21,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 use super::Inner;
-use crate::config::Role;
+
 use crate::runtime::{NetworkChange, NetworkSnapshot};
 
 /// How long the network must stay unchanged before the host's IPv6 path is
@@ -56,7 +56,7 @@ impl NetworkState {
         self.track.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn host(&self) -> MutexGuard<'_, Option<String>> {
+    pub(super) fn host(&self) -> MutexGuard<'_, Option<String>> {
         self.host.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
@@ -225,7 +225,7 @@ impl Inner {
     /// a re-probe under way runs to its end, and the next waits for it on
     /// the operation lock. The re-probe itself skips while offline.
     pub(super) fn arm_reprobe(self: &Arc<Self>) {
-        if self.config.role != Role::Tun {
+        if !self.config.role.has_dns_policy() {
             return;
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {

@@ -171,6 +171,9 @@ pub(crate) struct Options {
     pub health_check: HealthCheck,
     /// Enhanced mode.
     pub tun: Option<Tun>,
+    /// Shared forwarding DNS/routing policy, kept even with no capture inbound.
+    /// Legacy callers leave this None and take policy from tun as before.
+    pub dns_policy: Option<Tun>,
     /// sail's log level (`warn`, `info`, `debug`); no log section when
     /// empty.
     pub log_level: String,
@@ -253,6 +256,7 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         direct_resolver: None,
         auto_detect_interface: false,
         no_dns_mirror: HashSet::new(),
+        dns_rule_overrides: HashMap::new(),
         udp_off: profile
             .nodes
             .iter()
@@ -292,8 +296,20 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }));
     b.outbounds.extend(node_outbounds);
 
-    if let Some(tun) = &options.tun {
-        b.tun_rules(profile, tun);
+    let dns_policy = options.dns_policy.as_ref().or(options.tun.as_ref());
+    if options
+        .dns_policy
+        .as_ref()
+        .is_some_and(|policy| policy.desktop)
+    {
+        b.auto_detect_interface = true;
+    }
+    if let Some(tun) = dns_policy {
+        b.tun_rules(
+            profile,
+            tun,
+            options.dns_policy.is_some() && options.local_proxy.is_some(),
+        );
         b.label_rules("tun");
     }
     if let Some(local_proxy) = &options.local_proxy {
@@ -314,7 +330,7 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
     }
     let routing = effective_routing(profile, options.mode);
     let final_tag = b.routing(&routing, &options.rule_sets)?;
-    let dns = match &options.tun {
+    let dns = match dns_policy {
         Some(tun) => {
             let dns_rule_sets: HashSet<String> = options
                 .rule_sets
@@ -375,7 +391,7 @@ pub(crate) fn translate(profile: &Profile, options: &Options) -> Result<Translat
         // physical interface so they cannot loop into the tunnel.
         route.insert("auto_detect_interface".into(), true.into());
     }
-    if options.tun.is_some() {
+    if dns_policy.is_some() {
         route.insert(
             "default_domain_resolver".into(),
             json!({ "server": tun::DNS_LOCAL_TAG }),
@@ -485,6 +501,9 @@ struct Builder {
     auto_detect_interface: bool,
     /// Rules made for D4: never mirrored into DNS.
     no_dns_mirror: HashSet<usize>,
+    /// Shared ingress bootstrap DNS stays direct while the corresponding
+    /// data route is scoped to TUN, preserving mixed credential routing.
+    dns_rule_overrides: HashMap<usize, Value>,
     /// Node tags whose node carries no UDP.
     udp_off: HashSet<String>,
 }

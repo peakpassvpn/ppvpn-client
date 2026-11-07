@@ -9,6 +9,8 @@
 // process stays flat however long the page is open (#387). Not in the
 // prototype: selecting text.
 
+import '../icons.dart';
+
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
@@ -279,64 +281,79 @@ class _LogsPageState extends State<LogsPage> {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _Tools(
-          kind: _kind,
-          day: _day,
-          nowUtc: _nowUtc,
-          onSelect: _select,
-          following: _following,
-          onFollow: _follow,
-          onReveal: _dir == null ? null : _reveal,
-        ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(Tokens.pageInset, 0, Tokens.pageInset, 16),
-            child: CardBox(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: Semantics(
-                      label: S.current('logs'),
-                      container: true,
-                      child: ListView.builder(
-                        controller: _scroll,
-                        padding: Tokens.logPadding,
-                        itemCount: _lines.length,
-                        itemBuilder: (context, index) => Text(_lines.elementAt(index), style: t.logLine),
+    return LayoutBuilder(
+      builder: (context, box) {
+        final inset = box.maxWidth < Tokens.phoneBreakpoint
+            ? Tokens.phonePadding
+            : Tokens.pageInset;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _Tools(
+              inset: inset,
+              kind: _kind,
+              day: _day,
+              nowUtc: _nowUtc,
+              onSelect: _select,
+              following: _following,
+              onFollow: _follow,
+              onReveal: _dir == null ? null : _reveal,
+            ),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  inset,
+                  0,
+                  inset,
+                  16 + MediaQuery.paddingOf(context).bottom,
+                ),
+                child: CardBox(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: Semantics(
+                          label: S.current('logs'),
+                          container: true,
+                          child: ListView.builder(
+                            controller: _scroll,
+                            padding: Tokens.logPadding,
+                            itemCount: _lines.length,
+                            itemBuilder: (context, index) =>
+                                Text(_lines.elementAt(index), style: t.logLine),
+                          ),
+                        ),
                       ),
-                    ),
+                      Container(
+                        height: Tokens.logFooterHeight,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        alignment: Alignment.centerLeft,
+                        decoration: BoxDecoration(
+                          color: t.sunk,
+                          border: Border(top: BorderSide(color: t.hair)),
+                        ),
+                        child: Text(
+                          _path ?? '—',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: t.logPath,
+                        ),
+                      ),
+                    ],
                   ),
-                  Container(
-                    height: Tokens.logFooterHeight,
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    alignment: Alignment.centerLeft,
-                    decoration: BoxDecoration(
-                      color: t.sunk,
-                      border: Border(top: BorderSide(color: t.hair)),
-                    ),
-                    child: Text(
-                      _path ?? '—',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: t.logPath,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
 
 class _Tools extends StatelessWidget {
   const _Tools({
+    required this.inset,
     required this.kind,
     required this.day,
     required this.nowUtc,
@@ -346,6 +363,7 @@ class _Tools extends StatelessWidget {
     required this.onReveal,
   });
 
+  final double inset;
   final LogKind kind;
   final LogDay day;
   final DateTime nowUtc;
@@ -364,13 +382,14 @@ class _Tools extends StatelessWidget {
         : Platform.isWindows
         ? s('revealWin')
         : s('revealLinux');
+    final canReveal =
+        Platform.isMacOS || Platform.isWindows || Platform.isLinux;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Tokens.pageInset, 0, Tokens.pageInset, 12),
-      child: Row(
-        children: [
-          Text(s('logFile'), style: t.sub),
-          const SizedBox(width: 8),
-          FPopoverMenu(
+      padding: EdgeInsets.fromLTRB(inset, 8, inset, 12),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final compact = box.maxWidth < 720;
+          final menu = FPopoverMenu(
             menuAnchor: Alignment.topLeft,
             childAnchor: Alignment.bottomLeft,
             menu: [
@@ -391,12 +410,12 @@ class _Tools extends StatelessWidget {
               onPress: controller.toggle,
               label: '${s('logFile')}: ${label(kind, day)}',
               builder: (context, hovered) => Container(
-                width: Tokens.logMenuWidth,
-                height: Tokens.controlHeight,
+                width: compact ? null : Tokens.logMenuWidth,
+                height: compact ? Tokens.phoneControl : Tokens.controlHeight,
                 padding: const EdgeInsets.fromLTRB(11, 0, 10, 0),
                 decoration: BoxDecoration(
                   color: t.brightness == Brightness.light ? t.card : t.sunk,
-                  borderRadius: BorderRadius.circular(Tokens.controlRadius),
+                  borderRadius: BorderRadius.circular(compact ? Tokens.phoneControlRadius : Tokens.controlRadius),
                   border: Border.all(color: t.line),
                 ),
                 child: Row(
@@ -410,30 +429,72 @@ class _Tools extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Icon(FLucideIcons.chevronDown, size: 12, color: t.t3),
+                    Icon(AppIcons.chevronDown, size: 12, color: t.t3),
                   ],
                 ),
               ),
             ),
-          ),
-          const Spacer(),
-          if (following)
-            Semantics(
-              container: true,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const _BreathingDot(),
-                  const SizedBox(width: 6),
-                  Text(s('following'), style: t.note.copyWith(color: t.t2)),
-                ],
-              ),
-            )
-          else
-            Button(kind: ButtonKind.text, icon: FLucideIcons.arrowDown, label: s('live'), height: 26, fontSize: 12, onPress: onFollow),
-          const SizedBox(width: 12),
-          Button(kind: ButtonKind.secondary, icon: FLucideIcons.folderOpen, label: reveal, onPress: onReveal),
-        ],
+          );
+          final follow = following
+              ? Semantics(
+                  container: true,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const _BreathingDot(),
+                      const SizedBox(width: 6),
+                      Text(s('following'), style: t.note.copyWith(color: t.t2)),
+                    ],
+                  ),
+                )
+              : Button(
+                  kind: ButtonKind.text,
+                  icon: AppIcons.arrowDown,
+                  label: s('live'),
+                  height: 26,
+                  fontSize: 12,
+                  onPress: onFollow,
+                );
+          final revealButton = Button(
+            kind: ButtonKind.secondary,
+            icon: AppIcons.folderOpen,
+            label: reveal,
+            onPress: onReveal,
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Text(s('logFile'), style: t.sub),
+                    const SizedBox(width: 8),
+                    Expanded(child: menu),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.end,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [follow, if (canReveal) revealButton],
+                ),
+              ],
+            );
+          }
+          return Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(s('logFile'), style: t.sub),
+              menu,
+              follow,
+              if (canReveal) revealButton,
+            ],
+          );
+        },
       ),
     );
   }

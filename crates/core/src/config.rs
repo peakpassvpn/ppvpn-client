@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-/// Which instance this is (section 2). Desktop runs one of each; the CLI
-/// runs a standard instance only.
+/// Which instance this is (section 2). Legacy desktop hosts run Standard
+/// and Tun; the new macOS user agent uses Shared. The CLI uses Standard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -16,10 +16,23 @@ pub enum Role {
     /// Unprivileged: the shared local proxy, the system proxy listener,
     /// probes, traffic and connections.
     Standard,
+    /// macOS user-agent forwarding owner. Mixed proxy and DNS policy remain
+    /// live independently of capture; no TUN is opened by start.
+    Shared,
     /// Privileged: the TUN, its routing guard (Linux), DNS inside the TUN
     /// (dns-local) and the switch in place. At most one per process
     /// (`TUN_INSTANCE_EXISTS`).
     Tun,
+}
+
+#[cfg(feature = "forwarder")]
+impl Role {
+    pub(crate) fn has_local_proxies(self) -> bool {
+        matches!(self, Self::Standard | Self::Shared)
+    }
+    pub(crate) fn has_dns_policy(self) -> bool {
+        matches!(self, Self::Tun | Self::Shared)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -42,14 +55,14 @@ pub struct EngineConfig {
     /// Private directory: rule set cache and local proxy state. Locked by
     /// the instance (`STATE_DIR_IN_USE`). No profile is ever written here.
     pub state_dir: PathBuf,
-    /// Standard only: the shared local proxy.
+    /// Standard or Shared: the authenticated mixed local proxy.
     #[serde(default)]
     pub local_proxy: Option<LocalProxyConfig>,
-    /// Standard only: whether `set_system_proxy_listener` is allowed (the
+    /// Standard or Shared: whether `set_system_proxy_listener` is allowed (the
     /// CLI leaves it off).
     #[serde(default)]
     pub system_proxy: bool,
-    /// Tun only.
+    /// Tun configuration, or DNS policy inputs for a Shared owner.
     #[serde(default)]
     pub tun: Option<TunConfig>,
     #[serde(default)]
@@ -64,9 +77,21 @@ pub struct EngineConfig {
     /// connects (`VpnService.protect`). Not serialised: an FFI layer sets it.
     #[serde(skip)]
     pub socket_protect: Option<SocketProtect>,
+    /// Native capture hooks: macOS Shared user agent, or explicit mobile Tun
+    /// packet/device transport. Never accepted from serialized IPC config.
+    #[cfg(feature = "forwarder")]
+    #[serde(skip)]
+    pub capture_host: Option<crate::capture_host::CaptureHost>,
 }
 
 impl EngineConfig {
+    #[cfg(feature = "forwarder")]
+    pub(crate) fn uses_dynamic_capture(&self) -> bool {
+        self.role == Role::Shared
+            || (self.role == Role::Tun
+                && matches!(self.platform, Platform::Ios | Platform::Android)
+                && self.capture_host.is_some())
+    }
     pub fn new(role: Role, platform: Platform, state_dir: impl Into<PathBuf>) -> Self {
         Self {
             role,
@@ -78,7 +103,14 @@ impl EngineConfig {
             log: LogConfig::default(),
             max_connections: None,
             socket_protect: None,
+            #[cfg(feature = "forwarder")]
+            capture_host: None,
         }
+    }
+    #[cfg(feature = "forwarder")]
+    pub fn with_capture_host(mut self, host: crate::capture_host::CaptureHost) -> Self {
+        self.capture_host = Some(host);
+        self
     }
     pub fn with_local_proxy(mut self, local_proxy: LocalProxyConfig) -> Self {
         self.local_proxy = Some(local_proxy);

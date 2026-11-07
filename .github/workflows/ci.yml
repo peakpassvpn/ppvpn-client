@@ -132,6 +132,9 @@ jobs:
       - name: fetch
         if: steps.scope.outputs.code == 'true'
         run: cargo fetch --locked
+      - name: mobile app lightweight core dependency boundary
+        if: steps.scope.outputs.code == 'true'
+        run: tools/check-lightweight-core.sh
       # sail's own check, from the checkout of the sail commit Cargo.lock pins.
       - name: sail's [patch.crates-io], as of the pinned sail commit
         if: steps.scope.outputs.code == 'true'
@@ -856,7 +859,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config \
             libgtk-3-dev libx11-dev libxi-dev xvfb imagemagick libgl1-mesa-dri mesa-vulkan-drivers \
-            gsettings-desktop-schemas dconf-gsettings-backend dconf-service
+            gsettings-desktop-schemas dconf-gsettings-backend dconf-service fonts-noto-cjk
       - uses: ./.github/actions/flutter-toolchain
         if: steps.scope.outputs.flutter == 'true'
         with:
@@ -1294,6 +1297,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      - name: Xcode 26
+        if: steps.scope.outputs.flutter == 'true'
+        run: |
+          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          [[ -d "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         if: steps.scope.outputs.flutter == 'true'
         with:

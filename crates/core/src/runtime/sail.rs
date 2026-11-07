@@ -63,6 +63,10 @@ const SYSTEM_BUFFER: usize = 16;
 type Members = Arc<Mutex<HashMap<String, String>>>;
 
 pub(crate) struct SailRuntime {
+    dynamic_capture: bool,
+    capture_device: crate::capture_host::DeviceSlot,
+    owner_nonce: String,
+    successful_starts: AtomicU64,
     instance: Instance,
     states: watch::Receiver<RuntimeState>,
     switches: Mutex<Option<mpsc::Receiver<GroupSwitch>>>,
@@ -113,6 +117,38 @@ impl SailRuntime {
     /// An idle instance with `options` (data directory, threads); must be
     /// called on a tokio runtime (the Engine's `new`).
     pub(crate) fn new(options: Options) -> Result<SailRuntime, RuntimeError> {
+        Self::new_inner(options, false)
+    }
+
+    pub(crate) fn with_dynamic_capture(options: Options) -> Result<SailRuntime, RuntimeError> {
+        Self::with_dynamic_capture_protected(options, None)
+    }
+    pub(crate) fn with_dynamic_capture_protected(
+        options: Options,
+        protect: Option<crate::SocketProtect>,
+    ) -> Result<SailRuntime, RuntimeError> {
+        Self::new_inner_protected(options.dynamic_tun(true), true, protect)
+    }
+
+    fn new_inner(options: Options, dynamic_capture: bool) -> Result<SailRuntime, RuntimeError> {
+        Self::new_inner_protected(options, dynamic_capture, None)
+    }
+    fn new_inner_protected(
+        options: Options,
+        dynamic_capture: bool,
+        protect: Option<crate::SocketProtect>,
+    ) -> Result<SailRuntime, RuntimeError> {
+        let owner_nonce = super::owner_nonce()?;
+        let capture_device = crate::capture_host::DeviceSlot::default();
+        let options = if dynamic_capture {
+            options.platform(Arc::new(crate::capture_host::DevicePlatform {
+                #[cfg(unix)]
+                slot: capture_device.clone(),
+                protect,
+            }))
+        } else {
+            options
+        };
         let instance = Instance::new(options).map_err(error)?;
         let mut tasks = Vec::new();
 
@@ -167,6 +203,10 @@ impl SailRuntime {
         )));
 
         Ok(SailRuntime {
+            dynamic_capture,
+            capture_device,
+            owner_nonce,
+            successful_starts: AtomicU64::new(0),
             instance,
             states,
             switches: Mutex::new(Some(switch_rx)),
@@ -559,13 +599,95 @@ impl Datagram for SailDatagram {
 
 #[async_trait]
 impl Runtime for SailRuntime {
+    fn has_dynamic_capture(&self) -> bool {
+        self.dynamic_capture
+    }
+    fn capture_interface_name(&self) -> Option<String> {
+        self.capture_device
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|r| r.interface_name().to_owned())
+    }
+
+    fn stage_capture_device(
+        &self,
+        resource: Option<Arc<dyn crate::capture_host::CaptureAttachment>>,
+    ) -> Result<(), RuntimeError> {
+        if !self.dynamic_capture {
+            return Err(RuntimeError::new(
+                "unsupported",
+                "dynamic capture unavailable",
+            ));
+        }
+        *self
+            .capture_device
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = resource;
+        Ok(())
+    }
+
+    fn native_capture_state(&self) -> Result<embed::TunState, RuntimeError> {
+        self.instance.tun_state().map_err(error)
+    }
+
+    async fn prepare_capture_packets(
+        &self,
+        inbound: &str,
+        capacity: usize,
+    ) -> Result<(embed::PreparedTun, embed::TunPacketFlow), RuntimeError> {
+        self.instance
+            .prepare_tun_packets(inbound, capacity)
+            .await
+            .map_err(error)
+    }
+
+    #[cfg(unix)]
+    async fn prepare_capture_device(
+        &self,
+        inbound: &str,
+    ) -> Result<embed::PreparedTun, RuntimeError> {
+        self.instance
+            .prepare_tun_device(inbound)
+            .await
+            .map_err(error)
+    }
+
+    async fn detach_native_capture(
+        &self,
+    ) -> Result<sail::runtime::scope::StopReport, RuntimeError> {
+        self.instance.detach_tun().await.map_err(error)
+    }
+    fn observation(&self) -> crate::capture::RuntimeObservation {
+        let id = u64::from(self.instance.id());
+        let mut active: Vec<_> = sail::runtime_managers()
+            .keys()
+            .copied()
+            .map(u64::from)
+            .collect();
+        active.sort_unstable();
+        crate::capture::RuntimeObservation {
+            owner: crate::capture::ForwarderIdentity {
+                instance: self.owner_nonce.clone(),
+                generation: self.successful_starts.load(Ordering::Acquire),
+            },
+            backend: crate::capture::RuntimeBackend::Sail,
+            native_runtime_id: Some(id),
+            state: self.instance.state().name().into(),
+            running: active.contains(&id),
+            active_runtime_ids: Some(active),
+        }
+    }
+
     async fn start(&self, config: &str) -> Result<(), RuntimeError> {
         // A new run's groups start over.
         self.members.lock().expect("members").clear();
         self.instance
             .start(Config::Json(config.into()))
             .await
-            .map_err(error)
+            .map_err(error)?;
+        self.successful_starts.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 
     /// Each reload rechecks the connections open against the new rules and

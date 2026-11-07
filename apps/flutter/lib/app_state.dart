@@ -4,14 +4,18 @@
 // connection (vpn.dart).
 
 import 'dart:async';
+import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart';
 
 import 'links.dart';
+import 'haptics.dart';
 import 'messages_state.dart';
 import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
 import 'vpn.dart';
+import 'traffic_history.dart';
 
 /// A speed-test result as the nodes page shows it.
 sealed class Latency {
@@ -38,16 +42,38 @@ class LatencyFailed extends Latency {
 /// The window's pages the tray opens.
 enum WindowPage { messages, settings }
 
-class AppState {
-  AppState(rust.UiSnapshot initial) : fixed = false, snapshot = ValueNotifier(initial) {
+class AppState with WidgetsBindingObserver {
+  AppState(rust.UiSnapshot initial)
+    : fixed = false,
+      snapshot = ValueNotifier(initial) {
     _refreshNodes(initial);
+    if (Platform.isIOS) {
+      WidgetsBinding.instance.addObserver(this);
+      _network = const EventChannel('com.peakpassvpn.ppvpn/network-state')
+          .receiveBroadcastStream()
+          .listen(
+            (event) {
+              if (event is! String) return;
+              _networkUpdates = _networkUpdates
+                  .then((_) => rust.setMobileNetwork(json: event))
+                  .catchError((Object error) {
+                    debugPrint('mobile network: $error');
+                  });
+            },
+            onError: (Object error) {
+              debugPrint('mobile network stream: $error');
+            },
+          );
+    }
     if (mobile) SystemVpn.listen();
     unawaited(_pump());
   }
 
   /// Fixed state with no client behind it (sample.dart, for CI
   /// screenshots): nothing is read from Rust, actions fail quietly.
-  AppState.fixed(rust.UiSnapshot initial) : fixed = true, snapshot = ValueNotifier(initial) {
+  AppState.fixed(rust.UiSnapshot initial)
+    : fixed = true,
+      snapshot = ValueNotifier(initial) {
     _stopped = true;
   }
 
@@ -56,17 +82,28 @@ class AppState {
 
   final ValueNotifier<rust.UiSnapshot> snapshot;
   final ValueNotifier<List<rust.UiNode>> nodes = ValueNotifier(const []);
-  final ValueNotifier<rust.UiTraffic> traffic = ValueNotifier(const rust.UiTraffic(up: 0, down: 0));
+  final ValueNotifier<rust.UiTraffic> traffic = ValueNotifier(
+    const rust.UiTraffic(up: 0, down: 0),
+  );
 
-  /// The last [historyLength] samples, oldest first (the sparkline).
-  final ValueNotifier<List<rust.UiTraffic>> history = ValueNotifier(const []);
-  static const historyLength = 30;
+  /// Visible traffic plus offscreen neighbours for stable curve tangents.
+  final ValueNotifier<List<rust.UiTraffic>> history = ValueNotifier(
+    List.filled(historyLength, const rust.UiTraffic(up: 0, down: 0)),
+  );
+  final _historyClock = Stopwatch()..start();
+  final _historySampler = TrafficHistory();
+  static const historyVisibleLength = 4;
+  // Two older samples feed the causal filter; an offscreen segment keeps
+  // the left edge covered while a new point slides into view.
+  static const historyLength = historyVisibleLength + 3;
 
   /// When the connection last came on; null while it is not on. The
   /// connection card's 「本次连接」 timer counts from it.
   DateTime? connectedSince;
   final ValueNotifier<Map<String, Latency>> latency = ValueNotifier(const {});
-  final ValueNotifier<Map<String, rust.UiLocalProxy>> proxies = ValueNotifier(const {});
+  final ValueNotifier<Map<String, rust.UiLocalProxy>> proxies = ValueNotifier(
+    const {},
+  );
 
   /// The latest failed action, for the one-time error dialog.
   final ValueNotifier<String?> actionError = ValueNotifier(null);
@@ -76,16 +113,24 @@ class AppState {
   final ValueNotifier<List<rust.UiTeam>> teams = ValueNotifier(const []);
 
   /// The message center's list.
-  late final MessagesState messages = MessagesState(fixed: fixed, onError: (error) => actionError.value = error);
+  late final MessagesState messages = MessagesState(
+    fixed: fixed,
+    onError: (error) => actionError.value = error,
+  );
+
   /// Bumped when the tray turns enhanced mode on before the service is
   /// installed: the window shows the install explanation first (shell.dart).
   final ValueNotifier<int> enhancedRequests = ValueNotifier(0);
 
   /// The tray's latest ask for a page in the window (shell.dart); `request`
   /// counts up, so asking for the same page again still notifies.
-  final ValueNotifier<({WindowPage page, int request})?> pageRequests = ValueNotifier(null);
+  final ValueNotifier<({WindowPage page, int request})?> pageRequests =
+      ValueNotifier(null);
 
-  void showPage(WindowPage page) => pageRequests.value = (page: page, request: (pageRequests.value?.request ?? 0) + 1);
+  void showPage(WindowPage page) => pageRequests.value = (
+    page: page,
+    request: (pageRequests.value?.request ?? 0) + 1,
+  );
 
   /// A notification click (activation.dart), handled as the native apps
   /// do. The push behind it opens its http(s) link in the browser (and
@@ -117,7 +162,8 @@ class AppState {
       return false;
     }
     if (signedIn) {
-      if (push != null) messages.requestOpen((messageId: messageId, push: push.message));
+      if (push != null)
+        messages.requestOpen((messageId: messageId, push: push.message));
       showPage(WindowPage.messages);
     }
     return true;
@@ -135,6 +181,37 @@ class AppState {
       await changed.future;
       snapshot.removeListener(done);
     }
+  }
+
+  StreamSubscription<dynamic>? _network;
+  Future<void> _networkUpdates = Future.value();
+  Future<void> _lifecycle = Future.value();
+  static const _native = MethodChannel('com.peakpassvpn.ppvpn/app');
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (fixed || !Platform.isIOS) return;
+    if (state != AppLifecycleState.paused && state != AppLifecycleState.resumed)
+      return;
+    final active = state == AppLifecycleState.resumed;
+    // Begin the system background assertion immediately, before queuing Rust
+    // work; release it only once the engine has dropped its file locks.
+    final task = active
+        ? Future<int?>.value()
+        : _native.invokeMethod<int>('beginBackgroundTask');
+    _lifecycle = _lifecycle
+        .then((_) async {
+          final id = await task;
+          try {
+            await rust.setAppForeground(active: active);
+          } finally {
+            if (id != null)
+              await _native.invokeMethod<void>('endBackgroundTask', id);
+          }
+        })
+        .catchError((Object error) {
+          debugPrint('app lifecycle: $error');
+        });
   }
 
   /// Set once [stop] runs: the event loop ends.
@@ -157,6 +234,8 @@ class AppState {
         _followVpn(snapshot.value.phase, next.phase);
         _followSignIn(snapshot.value, next);
         if (next.phase == rust.UiPhase.connected) {
+          if (snapshot.value.phase != rust.UiPhase.connected)
+            unawaited(AppHaptics.connected());
           connectedSince ??= DateTime.now();
         } else if (next.phase != rust.UiPhase.reconnecting) {
           connectedSince = null;
@@ -167,8 +246,13 @@ class AppState {
       final sample = events.traffic;
       if (sample != null) {
         traffic.value = sample;
-        final list = [...history.value, sample];
-        history.value = list.length > historyLength ? list.sublist(list.length - historyLength) : list;
+        final buckets = _historySampler.add(sample, _historyClock.elapsed);
+        if (buckets.isNotEmpty) {
+          final list = [...history.value, ...buckets];
+          history.value = list.length > historyLength
+              ? list.sublist(list.length - historyLength)
+              : list;
+        }
       }
       if (events.probes.isNotEmpty) {
         final map = Map.of(latency.value);
@@ -190,8 +274,10 @@ class AppState {
   void _followSignIn(rust.UiSnapshot before, rust.UiSnapshot after) {
     if (!mobile) return;
     final url = after.deviceCode?.verificationUrl;
-    if (url != null && url != before.deviceCode?.verificationUrl) unawaited(openUrl(url));
-    if (after.auth == rust.UiAuth.signedIn && before.auth == rust.UiAuth.awaitingBrowser) {
+    if (url != null && url != before.deviceCode?.verificationUrl)
+      unawaited(openAuthenticationUrl(url));
+    if (before.auth == rust.UiAuth.awaitingBrowser &&
+        after.auth != rust.UiAuth.awaitingBrowser) {
       unawaited(closeBrowser());
     }
   }
@@ -201,7 +287,8 @@ class AppState {
   /// tunnel is left up with no engine behind it. Retry starts it again.
   void _followVpn(rust.UiPhase before, rust.UiPhase after) {
     if (!mobile || before == after) return;
-    if (after == rust.UiPhase.off || after == rust.UiPhase.error) unawaited(_stopVpn());
+    if (after == rust.UiPhase.off || after == rust.UiPhase.error)
+      unawaited(_stopVpn());
   }
 
   /// Phone: the permission (the system asks the first time), then the
@@ -285,7 +372,9 @@ class AppState {
   Future<void> connectIn(rust.UiConnectionMode mode) => _run(() async {
     final before = snapshot.value;
     await rust.setConnectionMode(mode: mode);
-    if ((before.connectionMode == mode || before.phase == rust.UiPhase.off) && await _startVpn()) await rust.connect();
+    if ((before.connectionMode == mode || before.phase == rust.UiPhase.off) &&
+        await _startVpn())
+      await rust.connect();
   });
 
   /// "Use on this device" while enhanced mode is contended.
@@ -295,12 +384,31 @@ class AppState {
   Future<void> installService() => _run(rust.serviceInstall);
   Future<void> refreshNodes() => _run(rust.refreshNodes);
   Future<void> selectNode(String id) => _run(() => rust.selectNode(nodeId: id));
-  Future<void> refreshTeams() => _run(() async => teams.value = await rust.teams());
+  Future<void> refreshTeams() =>
+      _run(() async => teams.value = await rust.teams());
   Future<void> switchTeam(String id) => _run(() => rust.switchTeam(teamId: id));
-  Future<void> setRoutingMode(rust.UiRoutingMode mode) => _run(() => rust.setRoutingMode(mode: mode));
+  Future<void> setRoutingMode(rust.UiRoutingMode mode) =>
+      _run(() => rust.setRoutingMode(mode: mode));
+
+  final Map<String, String> _fixedPins = {};
+  String? pinnedLine(String nodeId) =>
+      fixed ? _fixedPins[nodeId] : rust.pinnedIngress(nodeId: nodeId);
+  Future<void> pinLine(String nodeId, String? key) async {
+    if (fixed) {
+      if (key == null) {
+        _fixedPins.remove(nodeId);
+      } else {
+        _fixedPins[nodeId] = key;
+      }
+      return;
+    }
+    await _run(() => rust.pinIngress(nodeId: nodeId, endpointKey: key));
+  }
 
   Future<void> testAll(rust.UiProbeMethod method) async {
-    latency.value = {for (final node in nodes.value) node.id: const LatencyTesting()};
+    latency.value = {
+      for (final node in nodes.value) node.id: const LatencyTesting(),
+    };
     await _run(() => rust.probeAll(method: method));
   }
 
@@ -308,6 +416,8 @@ class AppState {
   void stop() {
     if (_stopped) return;
     _stopped = true;
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_network?.cancel());
     rust.shutdown();
   }
 }

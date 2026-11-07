@@ -101,6 +101,9 @@ pub(crate) struct Launched {
 /// engine ([`crate::engine::EngineLauncher`]); tests substitute a fake.
 pub(crate) trait CoreLauncher: Send + Sync {
     fn launch(&self) -> BoxFuture<'_, Result<Launched, ClientErrorInfo>>;
+    fn network_changed(&self, _state: ppvpn_core::NetworkState) -> Result<(), ClientErrorInfo> {
+        Ok(())
+    }
 }
 
 /// Shared with the client.
@@ -296,6 +299,13 @@ impl StandardCore {
             Some(running) if running.started => Ok(running.transport.clone()),
             _ => Err(ClientError::StandardNotReady),
         }
+    }
+
+    pub(crate) fn network_changed(
+        &self,
+        state: ppvpn_core::NetworkState,
+    ) -> Result<(), ClientErrorInfo> {
+        self.inner.launcher.network_changed(state)
     }
 
     /// Speed test through this core; see [`core_ipc::run_probe`]. Exactly one

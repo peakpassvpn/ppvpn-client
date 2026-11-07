@@ -3,10 +3,11 @@
 // out; waiting for the browser (the device code in 40×52 boxes, the wait
 // ring with the countdown, the three steps); and the three errors.
 
+import '../icons.dart';
+
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
-import 'package:forui/forui.dart';
 
 import '../app_state.dart';
 import '../links.dart';
@@ -119,7 +120,7 @@ class _SignedOut extends StatelessWidget {
           text: text,
           icon: error == null
               ? null
-              : Icon(FLucideIcons.circleAlert, size: 32, color: error == SignInError.network ? t.warn : t.bad),
+              : Icon(AppIcons.circleAlert, size: 32, color: error == SignInError.network ? t.warn : t.bad),
         ),
         const SizedBox(height: 32),
         Button(kind: ButtonKind.primary, label: button, fontSize: 14, onPress: app.signIn),

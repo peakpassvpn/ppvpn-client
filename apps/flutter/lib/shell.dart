@@ -8,6 +8,8 @@
 // settings, both as pages (#401 step 3). Signed out, the sign-in brand
 // panel takes the sidebar's place.
 
+import 'icons.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -93,6 +95,7 @@ class _ShellState extends State<Shell> {
     valueListenable: widget.app.snapshot,
     builder: (context, snapshot, _) {
       final t = Tokens.of(context);
+      if (snapshot.auth == rust.UiAuth.restoring) return const RestoringSession();
       if (snapshot.auth != rust.UiAuth.signedIn) {
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -334,7 +337,7 @@ class _Bell extends StatelessWidget {
                   color: selected || hovered ? t.accentSoft : null,
                   borderRadius: BorderRadius.circular(Tokens.controlRadius),
                 ),
-                child: Icon(FLucideIcons.bell, size: 18, color: t.t2),
+                child: Icon(AppIcons.bell, size: 18, color: t.t2),
               ),
             ),
             if (unread > 0)
@@ -413,14 +416,14 @@ class _CaptionButtonsState extends State<_CaptionButtons> with WindowListener {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        button(FLucideIcons.minus, s('minimize'), () => unawaited(windowManager.minimize())),
+        button(AppIcons.minus, s('minimize'), () => unawaited(windowManager.minimize())),
         button(
-          _maximized ? FLucideIcons.copy : FLucideIcons.square,
+          _maximized ? AppIcons.copy : AppIcons.square,
           s('maximize'),
           () => unawaited(_maximized ? windowManager.unmaximize() : windowManager.maximize()),
         ),
         // Close hides the window, as the system button did (setPreventClose).
-        button(FLucideIcons.x, s('close'), () => unawaited(windowManager.close()), close: true),
+        button(AppIcons.x, s('close'), () => unawaited(windowManager.close()), close: true),
       ],
     );
   }
@@ -470,7 +473,7 @@ class _Sidebar extends StatelessWidget {
           const SizedBox(height: Tokens.navGap),
           _NavItem(
             key: const ValueKey('nav-nodes'),
-            icon: (color, _) => Icon(FLucideIcons.globe, size: 17, color: color),
+            icon: (color, _) => Icon(AppIcons.globe, size: 17, color: color),
             label: s('nodes'),
             selected: page == _Page.nodes,
             onPress: () => onPage(_Page.nodes),
@@ -478,7 +481,7 @@ class _Sidebar extends StatelessWidget {
           const SizedBox(height: Tokens.navGap),
           _NavItem(
             key: const ValueKey('nav-logs'),
-            icon: (color, _) => Icon(FLucideIcons.list, size: 17, color: color),
+            icon: (color, _) => Icon(AppIcons.list, size: 17, color: color),
             label: s('logs'),
             selected: page == _Page.logs,
             onPress: () => onPage(_Page.logs),
@@ -570,7 +573,7 @@ class _AccountCard extends StatelessWidget {
                             key: ValueKey('team-${team.id}'),
                             selected: team.id == snapshot.teamId,
                             enabled: team.active,
-                            prefix: Icon(FLucideIcons.check, size: 14, color: team.id == snapshot.teamId ? t.accent : const Color(0x00000000)),
+                            prefix: Icon(AppIcons.check, size: 14, color: team.id == snapshot.teamId ? t.accent : const Color(0x00000000)),
                             title: Text(
                               team.personal ? S.current('personal') : team.name,
                               maxLines: 1,
@@ -634,7 +637,7 @@ class _AccountCard extends StatelessWidget {
               ),
             ),
           ),
-          Button(kind: ButtonKind.icon, icon: FLucideIcons.settings, height: 28, semanticsLabel: S.current('settings'), onPress: onSettings),
+          Button(kind: ButtonKind.icon, icon: AppIcons.settings, height: 28, semanticsLabel: S.current('settings'), onPress: onSettings),
         ],
       ),
     );

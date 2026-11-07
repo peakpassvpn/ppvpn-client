@@ -33,6 +33,7 @@ import 'theme.dart';
 import 'tray.dart';
 import 'update_notices.dart';
 import 'updates.dart';
+import 'phone/native_chrome.dart';
 
 /// The native side's answers on Android and iOS (runner/android
 /// MainActivity): the app's own directory, where the tunnel's socket also
@@ -57,6 +58,7 @@ Future<void> main() async {
   mark('main');
   WidgetsFlutterBinding.ensureInitialized();
   await loadSampleSettings();
+  await NativeChrome.initialize();
   final AppState app;
   var background = false;
   if (samplePage != null) {

@@ -230,7 +230,7 @@ open(path, "w").write(text)
 
 delegate = "ios/Runner/AppDelegate.swift"
 code = open(delegate).read()
-plugin = open("runner/ios/Runner/PPVPNPlugin.swift").read()
+plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
 imports = [line for line in plugin.splitlines() if line.startswith("import ")]
 body = "\n".join(line for line in plugin.splitlines() if not line.startswith("import "))
 code, registered = re.subn(
@@ -242,7 +242,7 @@ if not registered:
 missing = [line for line in imports if line not in code.splitlines()]
 open(delegate, "w").write("\n".join(missing) + "\n" + code + "\n" + body + "\n")
 PY
-    rm ios/Runner/PPVPNPlugin.swift
+    rm ios/Runner/PPVPNPlugin.swift ios/Runner/NativeChrome.swift
     plist=ios/Runner/Info.plist
     # The export compliance answer (#470): only the system's and standard
     # encryption, so no question per TestFlight build.
@@ -312,6 +312,12 @@ grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> ru
 # others set PPVPN_SKIP_ANALYZE=1 (#459).
 if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   flutter analyze --no-fatal-infos
+  # Phone constraints and text scaling need no emulator or system VPN.
+  # Run once on Linux, after the bridge types have been generated.
+  if [ "$os" = linux ]; then
+    PPVPN_UI_TEST_CJK_FONT="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}" \
+      flutter test checks/authentication_browser_test.dart checks/mobile_layout_test.dart checks/native_chrome_test.dart checks/logs_layout_test.dart checks/device_feedback_test.dart --no-pub
+  fi
 fi
 
 lib="$root/target/release"
@@ -350,8 +356,9 @@ if [ "$os" = android ]; then
     cp "$tunnel/$abi/"*.so "android/app/src/main/jniLibs/$abi/"
   done
 elif [ "$os" = ios ]; then
+  python3 scripts/check-ios-exports.py
   # iOS takes no loose dynamic library: the bridge is a static library the
-  # Runner links whole (-force_load), its symbols exported for the Dart
+  # Runner loads (-force_load), exporting only the bridge entry points for Dart
   # side's lookup (ExternalLibrary.process), with the system libraries it
   # needs as rustc prints them (the lib is touched so that it prints).
   case ${IOS_SDK:-device} in
@@ -375,7 +382,7 @@ elif [ "$os" = ios ]; then
 import json, os
 path = "ios/Runner.xcodeproj/project.pbxproj"
 text = open(path).read()
-flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a", "-Wl,-export_dynamic"]
+flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a"]
 flags += os.environ["NATIVE"].split()
 setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flags) + ");"
 # The Dart side finds the bridge's functions by name (dlsym): an archive
@@ -383,6 +390,8 @@ setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flag
 # the TestFlight build of 0.7.2 stayed white. An archive strips locals
 # only.
 setting += "\n\t\t\t\tSTRIP_STYLE = \"non-global\";"
+setting += '\n\t\t\t\tEXPORTED_SYMBOLS_FILE = "$(PROJECT_DIR)/Runner/Bridge.exports";'
+setting += '\n\t\t\t\tDEAD_CODE_STRIPPING = YES;'
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations")
@@ -407,6 +416,8 @@ settings = {
     "CODE_SIGN_ENTITLEMENTS": "Runner/Runner.entitlements",
 }
 lines = "".join(f"\n\t\t\t\t{key} = {json.dumps(value)};" for key, value in settings.items())
+setting += '\n\t\t\t\tEXPORTED_SYMBOLS_FILE = "$(PROJECT_DIR)/Runner/Bridge.exports";'
+setting += '\n\t\t\t\tDEAD_CODE_STRIPPING = YES;'
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations")
@@ -563,10 +574,15 @@ case $os in
     if [ -n "${runner:-}" ]; then
       test -s "$runner"
       exports=$(xcrun dyld_info -exports "$runner")
-      for name in frb_pde_ffi_dispatcher_primary frb_pde_ffi_dispatcher_sync frb_get_rust_content_hash \
-          frb_dart_fn_deliver_output frb_init_frb_dart_api_dl frb_create_shutdown_callback; do
-        grep -qw "_$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
-      done
+      while IFS= read -r name; do
+        grep -qw "$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
+      done < runner/ios/Runner/Bridge.exports
+      tunnel_binary="$(dirname "$runner")/PlugIns/PacketTunnel.appex/PacketTunnel"
+      tunnel_exports=$(xcrun dyld_info -exports "$tunnel_binary")
+      while IFS= read -r name; do
+        grep -qw "$name" <<<"$tunnel_exports" || { echo "$tunnel_binary does not export $name" >&2; exit 1; }
+      done < runner/ios/PacketTunnel/Tunnel.exports
+      python3 scripts/check-ios-exports.py "$runner" "$tunnel_binary"
       echo "$runner: $(grep -c '_frb_' <<<"$exports") bridge functions exported"
     fi ;;
   linux)

@@ -30,6 +30,9 @@ use crate::types::{
 };
 
 mod bus;
+mod capture;
+#[cfg(test)]
+mod capture_tests;
 mod cleanup;
 mod fatal;
 mod lifecycle;
@@ -51,6 +54,7 @@ mod rule_sets;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
+mod shared;
 mod sleep;
 #[cfg(test)]
 mod sleep_tests;
@@ -78,6 +82,7 @@ pub struct Engine {
 }
 
 struct Inner {
+    capture: capture::State,
     config: EngineConfig,
     runtime: Arc<dyn Runtime>,
     /// Serialises the lifecycle calls.
@@ -165,6 +170,19 @@ impl std::fmt::Debug for Engine {
 }
 
 impl Engine {
+    /// Best-effort read-only observation. Registry IDs cover this process
+    /// only; callers must not infer cross-process uniqueness from them.
+    pub fn runtime_observation(&self) -> crate::capture::RuntimeObservation {
+        self.inner.runtime.observation()
+    }
+
+    /// Dynamic capture is separate from static Tun startup. Shared and
+    /// explicitly opted-in mobile Tun owners require native host hooks and
+    /// a physical-network snapshot. Other configurations refuse capture.
+    pub fn capture_capabilities(&self) -> crate::capture::CaptureCapabilities {
+        self.inner.capture_capabilities()
+    }
+
     /// Creates an instance (section 3): sweeps what a previous one left,
     /// locks `state_dir`, reads or creates the local proxy state. Applies
     /// nothing and starts nothing. Errors known at creation are returned
@@ -187,7 +205,12 @@ impl Engine {
         let options = sail_options(&config)?
             .run_dir(cleanup::run_dir(&config))
             .runtime(sail_runtime());
-        let runtime = SailRuntime::new(options).map_err(|e| e.to_error_on(config.platform))?;
+        let runtime = if config.uses_dynamic_capture() {
+            SailRuntime::with_dynamic_capture_protected(options, config.socket_protect.clone())
+        } else {
+            SailRuntime::new(options)
+        }
+        .map_err(|e| e.to_error_on(config.platform))?;
         let engine = Engine::assemble(config, Arc::new(runtime), log)?;
         *engine.inner.state_dir.lock().expect("state dir lock") = Some(state_dir);
         engine.inner.start_local_dns().await?;
@@ -210,6 +233,7 @@ impl Engine {
         let proxies = proxy::Proxies::open(&config)?;
         log.attach(&runtime);
         let inner = Arc::new_cyclic(|weak| Inner {
+            capture: capture::State::default(),
             this: weak.clone(),
             fatal: fatal::FatalCleanup::default(),
             rule_sets: rule_sets::manager(&config, weak.clone()),
@@ -249,13 +273,31 @@ impl Engine {
         }
         // An apply or start in flight finishes first, within the limit.
         let deadline = tokio::time::Instant::now() + cleanup::SHUTDOWN_LIMIT;
+        let mut capture_leftovers = Vec::new();
+        if let Some(capture) = inner.close_capture_admission() {
+            let status =
+                match tokio::time::timeout_at(deadline, capture.detach_for_shutdown()).await {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(error)) => Some(*error.status),
+                    Err(_) => Some(capture.status()),
+                };
+            if let Some(status) = status {
+                capture_leftovers.push(crate::Leftover::new(
+                    crate::LeftoverKind::Runtime,
+                    "capture",
+                    "capture resource cleanup uncertain; broker must reconcile its owned ledger",
+                ));
+                capture_leftovers.extend(capture::shutdown_leftovers(&status));
+            }
+        }
         let op = tokio::time::timeout_at(deadline, inner.op.lock())
             .await
             .ok();
         // A runtime that failed or panicked was stopped then (#208): that
         // stop finishes first, within the limit, and what it left is
         // reported.
-        let earlier = inner.fatal_leftovers(deadline).await;
+        let mut earlier = inner.fatal_leftovers(deadline).await;
+        earlier.extend(capture_leftovers);
         // Also a runtime that failed or panicked and is not stopped yet:
         // stopping it takes down what it opened (the TUN, its filters).
         let running = {
@@ -321,6 +363,15 @@ impl Engine {
 
     /// Stops; the profile stays applied (`Configured`). Idempotent.
     pub async fn stop(&self) -> Result<(), Error> {
+        if let Some(capture) = self.inner.close_capture_admission() {
+            capture.detach_for_shutdown().await.map_err(|e| {
+                Error::new(
+                    codes::CORE_OPERATION_FAILED,
+                    false,
+                    format!("capture cleanup: {}", e.code.as_str()),
+                )
+            })?;
+        }
         self.inner.stop().await
     }
 
@@ -357,14 +408,28 @@ impl Engine {
     /// and given to sail at each start of the runtime; sail then goes by it
     /// instead of its own detection, and a change is seen as sail's are
     /// (NetworkChanged, the offline state). `CORE_OPERATION_FAILED` on a
-    /// desktop platform, where sail's own monitor is the source.
+    /// legacy desktop platform, where sail's own monitor is the source.
+    /// Shared macOS hosts supply only the physical uplink, excluding capture;
+    /// this overrides detection so TUN route changes cannot reset mixed flows.
     pub fn set_network_state(&self, state: NetworkState) -> Result<(), Error> {
         self.inner.admit()?;
-        if !crate::mobile::mobile(self.inner.config.platform) {
+        if !crate::mobile::mobile(self.inner.config.platform)
+            && self.inner.config.role != Role::Shared
+        {
             return Err(Error::new(
                 codes::CORE_OPERATION_FAILED,
                 false,
-                "only iOS and Android hosts push the network",
+                "only mobile or Shared hosts push the physical network",
+            ));
+        }
+        if self.inner.config.role == Role::Shared
+            && state.interface.is_some()
+            && state.interface == self.inner.runtime.capture_interface_name()
+        {
+            return Err(Error::invalid(
+                codes::CORE_OPERATION_FAILED,
+                "network.interface",
+                "capture device cannot be used as the physical uplink",
             ));
         }
         self.inner.set_host_network(&state);
@@ -482,14 +547,19 @@ impl Engine {
     }
 
     /// An availability probe through the node's outbound (4.5):
-    /// `LOCAL_PROXY_DISABLED` on an instance without a local proxy (a TUN
-    /// instance too, as Go), then `PROFILE_NOT_APPLIED`, `CORE_NOT_RUNNING`.
+    /// Mobile VPN owners probe directly through their node outbounds with no
+    /// local proxy listener. Legacy desktop hosts still require local proxy.
+    /// Then checks `PROFILE_NOT_APPLIED`, `CORE_NOT_RUNNING`.
     pub async fn probe_availability(
         &self,
         request: ProbeAvailabilityRequest,
     ) -> Result<AvailabilityResult, Error> {
         self.inner.admit()?;
-        self.standard()?;
+        if !(self.inner.config.role == Role::Tun
+            && crate::mobile::mobile(self.inner.config.platform))
+        {
+            self.standard()?;
+        }
         self.inner.probe_availability(request).await
     }
 
@@ -521,7 +591,7 @@ impl Engine {
         enabled: bool,
     ) -> Result<SystemProxyStatus, Error> {
         self.inner.admit()?;
-        if self.inner.config.role != Role::Standard || !self.inner.config.system_proxy {
+        if !self.inner.config.role.has_local_proxies() || !self.inner.config.system_proxy {
             return Err(proxy::system_proxy_unavailable());
         }
         self.inner.set_system_proxy_listener(enabled).await
@@ -555,7 +625,7 @@ impl Engine {
     }
 
     fn standard(&self) -> Result<(), Error> {
-        if self.inner.config.role != Role::Standard || self.inner.config.local_proxy.is_none() {
+        if !self.inner.config.role.has_local_proxies() || self.inner.config.local_proxy.is_none() {
             return Err(proxy::local_proxy_disabled());
         }
         Ok(())
@@ -644,6 +714,11 @@ impl Inner {
             }
             .into(),
             tun: self.tun_options(),
+            dns_policy: self
+                .config
+                .uses_dynamic_capture()
+                .then(|| self.dns_policy_options())
+                .flatten(),
             rule_sets: self.rule_set_files(),
             ..translate::Options::default()
         }
@@ -721,11 +796,20 @@ fn sail_settings(config: &EngineConfig) -> Option<serde_json::Value> {
     if crate::mobile::mobile(config.platform) {
         settings.insert("profile".into(), "mobile".into());
     }
+    let mut overrides = Vec::new();
     if let Some(max) = config.max_connections {
-        settings.insert(
-            "set".into(),
-            serde_json::json!([format!("inbound.max_connections={max}")]),
-        );
+        overrides.push(format!("inbound.max_connections={max}"));
+    }
+    if config.platform == crate::Platform::Ios && config.role == crate::Role::Tun {
+        // A completed DNS reply marks its UDP mapping expired, but the
+        // mapping still holds its session permit until sail's sweep. Ten
+        // seconds let DNS bursts exhaust the extension's 128-session cap.
+        // Reclaim expired mappings sooner without changing idle timeouts,
+        // the connection cap, or the treatment of active streams.
+        overrides.push("udp.session_check_interval=1s".into());
+    }
+    if !overrides.is_empty() {
+        settings.insert("set".into(), serde_json::json!(overrides));
     }
     (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
 }
@@ -950,13 +1034,19 @@ mod tests {
         for platform in [Platform::Ios, Platform::Android] {
             assert_eq!(
                 settings(platform, None),
-                Some(serde_json::json!({"profile": "mobile"}))
+                Some(if platform == Platform::Ios {
+                    serde_json::json!({"profile": "mobile", "set": ["udp.session_check_interval=1s"]})
+                } else {
+                    serde_json::json!({"profile": "mobile"})
+                })
             );
         }
         // The host's cap replaces the profile's; 0 lifts it.
         assert_eq!(
             settings(Platform::Ios, Some(128)),
-            Some(serde_json::json!({"profile": "mobile", "set": ["inbound.max_connections=128"]}))
+            Some(
+                serde_json::json!({"profile": "mobile", "set": ["inbound.max_connections=128", "udp.session_check_interval=1s"]})
+            )
         );
         assert_eq!(
             settings(Platform::Android, Some(0)),
@@ -965,6 +1055,12 @@ mod tests {
         assert_eq!(
             settings(Platform::Linux, Some(64)),
             Some(serde_json::json!({"set": ["inbound.max_connections=64"]}))
+        );
+        // Local proxy and desktop roles retain sail's default cleanup cadence.
+        let config = EngineConfig::new(Role::Standard, Platform::Ios, "/x");
+        assert_eq!(
+            sail_settings(&config),
+            Some(serde_json::json!({"profile": "mobile"}))
         );
         // sail takes them.
         for platform in [Platform::Ios, Platform::Android, Platform::Linux] {
