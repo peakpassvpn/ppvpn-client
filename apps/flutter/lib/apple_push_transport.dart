@@ -73,6 +73,8 @@ class _Intent {
   _Operation? resolve;
   _Operation? bind;
   _Operation? registration;
+  _Operation? rotationResolve;
+  String? rotationToken;
   _Operation? unbind;
   String? binding;
   String? registrationID;
@@ -215,10 +217,25 @@ class ApplePushTransport {
       if (prior != null &&
           prior.body['token'] != token &&
           prior.success == null) {
-        // Unknown commit of an older token cannot be replaced with a guessed
-        // CAS. No automatic rebind; logout/session revocation remains valid.
-        i.blocked = true;
-        return false;
+        // A new OS token may reconcile an uncertain prior registration by
+        // reading the exact existing binding. This never creates/replaces a
+        // binding, and a changed/closed owner stops the intent permanently.
+        if (i.rotationToken != token) {
+          i.rotationToken = token;
+          i.rotationResolve = _Operation('resolve', Map.of(i.resolve!.body));
+        }
+        final observed = await i.rotationResolve!.run(http, owner);
+        if (!_current(i) || observed == null) return false;
+        if (observed.body['installation_id'] != p['installation_id'] ||
+            observed.body['binding_id'] != i.binding ||
+            observed.body['bound_to_current_user'] != true ||
+            observed.body['bound_to_current_session'] != true ||
+            (observed.body['registration_id'] != null &&
+                !_id(observed.body['registration_id']))) {
+          i.blocked = true;
+          return false;
+        }
+        i.registrationID = observed.body['registration_id'] as String?;
       }
       if (prior == null || prior.body['token'] != token) {
         i.registration = _Operation('register', {
