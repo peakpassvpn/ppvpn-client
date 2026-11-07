@@ -67,6 +67,22 @@ char *ppvpn_tunnel_start(int32_t tun_fd, const char *socket_path, const char *st
                          int32_t platform, const char *options,
                          ppvpn_tunnel_exit_fn on_exit, void *context);
 
+/* Public iOS packetFlow transport. No raw descriptor is used. settings is
+ * invoked on a blocking host thread: JSON installs settings + starts the
+ * generation's I/O; NULL fences/joins native writes and clears settings.
+ * Return 1 only after settlement, within 2 seconds; 0 quarantines uncertain
+ * work and the native host must cancel the provider. context stays valid
+ * until stop returns. All queues are bounded; full admission drops a packet.
+ * Packet send/receive never block, copy bytes during the call, require the
+ * exact generation, and carry raw IPv4/IPv6 without a family header.
+ * receive needs capacity >=65535, returns length or 0 when empty/ended.
+ */
+typedef int32_t (*ppvpn_tunnel_packet_settings_fn)(void *, uint64_t, const char *);
+char *ppvpn_tunnel_start_packets(const char *socket_path, const char *state_dir,
+    ppvpn_tunnel_packet_settings_fn settings, ppvpn_tunnel_exit_fn on_exit, void *context);
+int32_t ppvpn_tunnel_packet_send(uint64_t generation, const uint8_t *bytes, uintptr_t length);
+uintptr_t ppvpn_tunnel_packet_receive(uint64_t generation, uint8_t *bytes, uintptr_t capacity);
+
 /*
  * Stops the engine (routes are the system's: nothing to undo), closes the
  * socket and its watch connections, removes the socket file. Blocks until

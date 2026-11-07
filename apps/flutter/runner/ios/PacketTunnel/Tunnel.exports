@@ -3,6 +3,9 @@ _ppvpn_tunnel_network_changed
 _ppvpn_tunnel_settings
 _ppvpn_tunnel_sleep
 _ppvpn_tunnel_start
+_ppvpn_tunnel_start_packets
+_ppvpn_tunnel_packet_send
+_ppvpn_tunnel_packet_receive
 _ppvpn_tunnel_stop
 _ppvpn_tunnel_wake
 _ppvpn_tunnel_version

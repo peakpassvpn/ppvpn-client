@@ -98,8 +98,9 @@ pub(crate) async fn run(
                 publish(&shared, "recovering", None);
                 shared.log.line("health: restarting the engine");
                 let restarted = async {
-                    shared.engine.stop().await?;
-                    shared.engine.start().await
+                    shared.engine.stop().await.map_err(crate::ApiError::from)?;
+                    shared.engine.start().await.map_err(crate::ApiError::from)?;
+                    crate::packets::ensure_capture(&shared.engine).await
                 }
                 .await;
                 if let Err(error) = restarted {

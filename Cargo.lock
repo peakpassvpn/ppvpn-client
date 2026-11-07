@@ -2959,6 +2959,7 @@ dependencies = [
 name = "ppvpn-tunnel-host"
 version = "0.7.4"
 dependencies = [
+ "async-trait",
  "jni",
  "ppvpn-core",
  "ppvpn-engine-host",
