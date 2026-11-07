@@ -48,7 +48,7 @@ class AcceptanceEvidenceTests(unittest.TestCase):
         for cycle in range(20):
             for phase in ("attached", "detached"):
                 self.rows.append({"probe": phase, "cycle": cycle,
-                                  "owner": {"id": "one-owner"}, "runtime_ids": [42]})
+                                  "owner": {"instance": "one-owner", "generation": 1}, "runtime_ids": [42]})
         self.rows.append({"probe": "complete", "cycles": 20, "runtime_ids": [],
                           "http_connect": True, "socks_tcp": True, "socks_udp": True,
                           "per_node_tcp": True, "per_node_upstream_connections": 1,
