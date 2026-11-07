@@ -26,7 +26,11 @@ Actual traffic and lifecycle
     - App has no Standard-ready state or local proxy entries. /proc socket
       tables are intersected with that PID's actual FDs, not interpreted as
       a namespace-wide claim. Its only permitted TCP listener is the exact
-      loopback Debug VM service port reported by dart:developer. No App TUN FD.
+      loopback Debug VM socket published in DEVICE logcat for that PID after
+      its /proc starttime, intersected with the PID's current FD inode. DDS may
+      redirect dart:developer to a host URI; that hint and adb-forward ports
+      cannot authorize an exception. The known VM socket must reject SOCKS5
+      negotiation and HTTP CONNECT/proxy auth. No App TUN FD.
     - One :tunnel process, one TUN interface, one actual Sail running registry
       ID equal to native_runtime_id. No owner TCP proxy listener. Native ID
       and forwarding identity stay stable over actual traffic; a new provider

@@ -28,12 +28,9 @@ void main() {
       await tester.pump();
       await tester.runAsync(() async {
         final info = await developer.Service.getInfo();
-        final vmPort = info.serverUri?.port;
-        expect(
-          vmPort,
-          isNotNull,
-          reason: 'Identify the debug VM listener exactly',
-        );
+        // DDS may advertise a HOST URI here. Keep as a diagnostic hint only;
+        // host.py identifies the device VM from logcat/PID lifetime/socket FD.
+        final vmHint = info.serverUri?.toString();
         final directory = await const MethodChannel('com.peakpassvpn.ppvpn/app')
             .invokeMethod<String>('filesDir');
         expect(directory, isNotNull);
@@ -50,10 +47,12 @@ void main() {
         await _until(() async => SystemVpn.state.value == VpnState.off);
         await _negativeTCP();
         await _negativeUDP();
-        await _controlCall('checkpoint', {
+        final initial = await _controlCall('checkpoint', {
           'stage': 'initial-off',
-          'vm_port': vmPort,
+          'reported_vm_uri': vmHint,
         });
+        final deviceVm = initial['device_vm'];
+        if (deviceVm != null) await _notProxy(deviceVm['port'] as int);
         Map<String, dynamic>? previousOwner;
         try {
           for (var cycle = 0; cycle < 3; cycle++) {
@@ -146,7 +145,7 @@ void main() {
                 'stage': 'connected',
                 'cycle': cycle,
                 'token': token,
-                'vm_port': vmPort,
+                'reported_vm_uri': vmHint,
                 'observation': after,
                 'traffic': await _rpc('/v1/get-traffic'),
               });
@@ -179,7 +178,7 @@ void main() {
             await _controlCall('checkpoint', {
               'stage': cycle == 2 ? 'revoked' : 'stopped',
               'cycle': cycle,
-              'vm_port': vmPort,
+              'reported_vm_uri': vmHint,
             });
             if (cycle == 2) await _controlCall('release-rival');
             await _negativeTCP();
@@ -194,6 +193,66 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 8)),
   );
+}
+
+Future<void> _notProxy(int port) async {
+  Future<List<int>> exchange(List<int> request, {bool header = false}) async {
+    final socket = await Socket.connect(
+      '127.0.0.1',
+      port,
+      timeout: const Duration(seconds: 3),
+    );
+    final data = BytesBuilder();
+    try {
+      socket.add(request);
+      await socket.flush();
+      try {
+        await for (final chunk in socket.timeout(const Duration(seconds: 3))) {
+          data.add(chunk);
+          if (data.length > 8192)
+            fail('Unexpectedly large VM protocol response');
+          if (!header ||
+              ascii
+                  .decode(data.toBytes(), allowInvalid: true)
+                  .contains('\r\n\r\n')) {
+            break;
+          }
+        }
+      } on TimeoutException {
+        if (header && data.isNotEmpty) fail('Incomplete VM HTTP response');
+      } on SocketException {
+        /* Rejected/reset, no tunnel. */
+      }
+      return data.toBytes();
+    } finally {
+      socket.destroy();
+    }
+  }
+
+  final socks = await exchange([5, 1, 0]);
+  expect(
+    socks.isNotEmpty && socks.first == 5,
+    isFalse,
+    reason: 'Device VM exception must not negotiate SOCKS5',
+  );
+  final http = ascii.decode(
+    await exchange(
+      ascii.encode(
+        'CONNECT 192.0.2.10:18081 HTTP/1.1\r\nHost: 192.0.2.10:18081\r\n\r\n',
+      ),
+      header: true,
+    ),
+    allowInvalid: true,
+  );
+  final status = RegExp(r'^HTTP/1\.[01] (\d{3})').firstMatch(http);
+  if (status != null) {
+    final code = int.parse(status[1]!);
+    expect(
+      code >= 200 && code < 300 || code == 407,
+      isFalse,
+      reason: 'Device VM exception must not serve HTTP CONNECT/proxy auth',
+    );
+  }
 }
 
 Future<void> _until(Future<bool> Function() ready) async {

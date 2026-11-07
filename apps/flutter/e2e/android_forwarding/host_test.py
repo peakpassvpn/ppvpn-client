@@ -2,7 +2,46 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from host import Evidence, PACKAGE, owned_internet_sockets, owned_listeners, profile
+from host import Evidence, PACKAGE, device_vm_identity, owned_internet_sockets, owned_listeners, profile
+
+
+class DeviceVmTests(unittest.TestCase):
+    def process(self):
+        return {'pid': 5951, 'start_ticks': 123400, 'start_epoch': 1000.0,
+                'listeners': [{'address': '0100007F', 'port': 46405, 'inode': '63297'}]}
+
+    def test_device_publication_matches_same_pid_lifetime_and_fd(self):
+        log = '1001.545 5951 6043 I flutter : The Dart VM service is listening on http://127.0.0.1:46405/test-auth=/\n'
+        value = device_vm_identity(log, self.process())
+        self.assertEqual((5951, 123400, 46405, '63297'),
+                         (value['pid'], value['start_ticks'], value['port'], value['inode']))
+
+    def test_stale_pid_other_pid_host_port_and_wildcard_cannot_authorize(self):
+        for stamp, pid, host, port in [(999.0, 5951, '127.0.0.1', 46405),
+                                      (1001.0, 5950, '127.0.0.1', 46405),
+                                      (1001.0, 5951, '127.0.0.1', 55555),
+                                      (1001.0, 5951, '0.0.0.0', 46405)]:
+            log = f'{stamp:.3f} {pid} 6043 I flutter : The Dart VM service is listening on http://{host}:{port}/auth=/\n'
+            with self.subTest(log=log), self.assertRaises(AssertionError):
+                device_vm_identity(log, self.process())
+
+    def test_published_device_vm_does_not_authorize_an_extra_listener(self):
+        process = self.process()
+        process['listeners'].append({'address': '0100007F', 'port': 1080, 'inode': 'proxy'})
+        log = '1001.545 5951 6043 I flutter : The Dart VM service is listening on http://127.0.0.1:46405/auth=/\n'
+        identity = device_vm_identity(log, process)
+        self.assertFalse(all(all(listener[key] == identity[key] for key in ('port', 'inode', 'address'))
+                             for listener in process['listeners']))
+
+    def test_reused_pid_or_new_vm_socket_lifetime_is_not_silently_allowed(self):
+        with tempfile.TemporaryDirectory() as work:
+            evidence = Evidence('emulator-test', Path(work), Path(work) / 'node.jsonl')
+            evidence.vm_identity = {'pid': 5951, 'start_ticks': 123400, 'port': 46405,
+                                    'address': '0100007F', 'inode': '63297'}
+            process = self.process()
+            process['start_ticks'] += 100
+            with self.assertRaises(AssertionError):
+                evidence.vm_for(process)
 
 
 class HostEvidenceTests(unittest.TestCase):
@@ -24,12 +63,13 @@ class HostEvidenceTests(unittest.TestCase):
             evidence = Evidence('emulator-test', root, node)
             process = {'name': PACKAGE, 'listeners': [], 'tun_interfaces': []}
             evidence.snapshot = lambda _: {'processes': [process], 'links': ''}
+            evidence.vm_for = lambda _: {'port': 12345, 'inode': 'vm', 'address': '0100007F'}
             body = {'stage': 'initial-off', 'vm_port': 12345}
             evidence.checkpoint(body)
-            process['listeners'] = [{'address': '00000000', 'port': 12345}]
+            process['listeners'] = [{'address': '00000000', 'port': 12345, 'inode': 'vm'}]
             with self.assertRaises(AssertionError):
                 evidence.checkpoint(body)
-            process['listeners'] = [{'address': '0100007F', 'port': 1080}]
+            process['listeners'] = [{'address': '0100007F', 'port': 1080, 'inode': 'proxy'}]
             with self.assertRaises(AssertionError):
                 evidence.checkpoint(body)
             process['listeners'] = []
