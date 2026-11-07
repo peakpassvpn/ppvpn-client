@@ -1,0 +1,90 @@
+Android actual forwarding acceptance (disposable emulator)
+
+Builder hook
+  Source base: integrated apple-single-core-build-matrix, including mobile
+  cd9acbb/e8e0ed5 and frozen Sail593286824. Only test/fixture/docs are added.
+  No workflow, ci-build.sh, AppState, apple_push.dart or production lifecycle
+  changes are required. Build owner schedules this after the normal Android
+  build, inside the existing Ubuntu emulator/KVM step:
+
+    ANDROID_SERIAL=emulator-5554 apps/flutter/e2e/android_forwarding.sh
+
+  Adapt serial to the runner's existing emulator. Requires its installed
+  Flutter, JDK, Android SDK build-tools/platform android.jar, adb, Python3,
+  zip and the Go version in test/go.mod. Uses injected shared Go caches,
+  never GOBIN or a second cache. Does not install an SDK or start an emulator.
+  Requires fresh app data: the product must not already be installed, no
+  existing TUN may be present. Refuses physical devices and non-Linux hosts.
+  adb root is required for independently auditing PID-owned socket/TUN FDs.
+
+Actual traffic and lifecycle
+  The real Flutter App starts signed out. Test sends a valid schema1 profile
+  through the production tunnel.sock Core API, then explicitly starts Engine.
+  Checking host-on with Engine stopped first makes a no-profile smoke unable
+  to satisfy this test. This is not a mocked native host or mocked Engine.
+  Three complete provider/Engine generations are exercised. In each:
+    - App has no Standard-ready state or local proxy entries. /proc socket
+      tables are intersected with that PID's actual FDs, not interpreted as
+      a namespace-wide claim. Its only permitted TCP listener is the exact
+      loopback Debug VM service port reported by dart:developer. No App TUN FD.
+    - One :tunnel process, one TUN interface, one actual Sail running registry
+      ID equal to native_runtime_id. No owner TCP proxy listener. Native ID
+      and forwarding identity stay stable over actual traffic; a new provider
+      generation gets a fresh forwarding identity.
+    - TCP and UDP echo to TEST-NET192.0.2.10, reachable only through the
+      controlled SS2022 node on the emulator host. Device tokens must appear
+      in independent node logs; connections and upload/download must advance.
+      Off-state TCP AND UDP negative controls must fail before/between cycles.
+    - A real UDP A query to VPN DNS VIP10.60.159.90 must receive a correlated
+      NOERROR answer. The controlled SS node must also record a new DoT853
+      connection in that same cycle. Production remote DNS/TLS is unchanged.
+    - First two cycles stop Engine by its API (empty Sail registry required)
+      and stop VpnService. Last cycle installs/starts a separate fixture VPN;
+      its real establish() causes framework takeover and production onRevoke.
+      A marker written only after successful rival establish is required.
+      No test-only onRevoke method is inserted in the production plugin.
+    - Existing TCP must terminate, tunnel.sock disappear, old TUN FDs/link/
+      routes and owner Internet socket FDs disappear after stop/revoke.
+
+Controlled node
+  test/androidnode is test/go.mod's stock sing-box SS2022 implementation.
+  Only192.0.2.10/32 is redirected to loopback TCP18081/UDP18082. Other traffic
+  leaves normally, including production DoT1.1.1.1/8.8.8.8/9.9.9.9:853.
+  It listens on host loopback18388, accessible via emulator alias10.0.2.2.
+  Fixture key is public test data. Independent tests verify encrypted TCP,
+  UDP data and UDP source address through this exact redirect, plus large
+  fragmented stream echoes. No host route or current Mac VPN is modified.
+  The tiny separate revoke APK uses existing aapt2/javac/d8/apksigner. Its
+  temporary signing key and legacy target SDK are confined to this fixture,
+  never copied to product source/builds. It is stopped/uninstalled on exit.
+
+DNS prerequisite and incomplete boundaries
+  The SS node is controlled, but production DoT resolvers are external. A
+  host egress preflight records TCP853 reachability and fails before fixture
+  builds when all three are blocked. No insecure certificate or alternate DNS
+  test hook is added. Blocked DNS means NOT RUN/PASSED, not a transport pass.
+  Test initialization is signed out; it bypasses account/profile-download/UI
+  connect logic by giving the real owner a fixture profile. Authenticated
+  account restoration, profile refresh, App selections/pins, consent denial,
+  background/process-death races, Wi-Fi/cellular transitions, IPv6 forwarding,
+  and real Android devices remain separate acceptance. No iOS/macOS pass is
+  implied. Process-local registry plus PID FD/source boundary checks support
+  the single active owner result; registry alone is not cross-process proof.
+
+Evidence and verdict
+  apps/flutter/build/android-forwarding contains source head, emulator props,
+  preflight, Flutter JSON/log, node JSON events, per-checkpoint FD/socket/link/
+  route/connectivity snapshots, logcat and final cleanup snapshots. Flutter
+  must exit0 AND host evidence/PASS.json must exist with all three traffic
+  and teardown checkpoints. Any host failures.jsonl rejects the run. A skipped
+  test, a host-only smoke, successful version RPC, or an uninstall error cannot
+  be upgraded to a forwarding pass. Builder should upload this entire folder
+  on failure as well as success; keep source/ABI and standard build evidence.
+
+Lightweight local checks (no Android SDK/emulator needed)
+  (cd test && go test ./androidnode)
+  python3 -m unittest discover -s apps/flutter/e2e/android_forwarding -p '*_test.py'
+  bash -n apps/flutter/e2e/android_forwarding.sh apps/flutter/e2e/android_forwarding/build-rival.sh
+  Dart analyze/format against the generated bridge of the integrated candidate.
+  The emulator run and the revoke APK build must still be performed by builder;
+  these local checks do not claim Android forwarding acceptance.
