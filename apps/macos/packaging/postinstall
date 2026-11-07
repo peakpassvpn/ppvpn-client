@@ -17,7 +17,7 @@ if [ "$layout" = user-core-broker-v1 ]; then
   done
   unsafe=$(/usr/bin/find "$app" ! -type l \( ! -user root -o -perm -002 -o -perm -020 \) -print -quit)
   [ -z "$unsafe" ] || exit 1
-  /usr/bin/codesign --verify --deep --strict -R 'anchor apple generic and identifier "com.peakpassvpn.ppvpn.desktop" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "HSVMRQBQJ2"' "$app"
+  /usr/bin/codesign --verify --deep --strict -R '=anchor apple generic and identifier "com.peakpassvpn.ppvpn.desktop" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "HSVMRQBQJ2"' "$app"
   exec "$app/Contents/MacOS/ppvpn-service-install"
 fi
 user=$(/usr/bin/stat -f %Su /dev/console)
