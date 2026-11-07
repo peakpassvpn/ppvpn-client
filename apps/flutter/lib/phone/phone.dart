@@ -9,11 +9,14 @@ import '../icons.dart';
 
 import 'dart:async';
 
+import 'package:flutter/scheduler.dart' show TickerFuture;
+
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, TargetPlatform;
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
+import 'package:flutter/cupertino.dart'
+    show CupertinoPageRoute, CupertinoRouteTransitionMixin;
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
@@ -85,7 +88,11 @@ class _PhoneShellState extends State<PhoneShell> {
       return;
     switch (request.page) {
       case WindowPage.messages:
-        openMessages(context, widget.app);
+        openMessages(
+          context,
+          widget.app,
+          openingMessage: request.openingMessage,
+        );
       case WindowPage.settings:
         setState(() => _tab = _Tab.me);
     }
@@ -659,9 +666,34 @@ class PhoneBell extends StatelessWidget {
 /// route with a rectangular modal barrier during push/pop or a cancelled swipe.
 class _PhonePageRoute<T> extends CupertinoPageRoute<T> {
   _PhonePageRoute({required super.builder}) : super(allowSnapshotting: false);
-
   @override
   Color? get barrierColor => null;
+}
+
+// A notification's back-stack inbox starts without presenting a second screen.
+// The Cupertino mixin retains its normal reverse transition and edge gesture.
+class _PhoneInboxRoute<T> extends PageRoute<T>
+    with CupertinoRouteTransitionMixin<T> {
+  _PhoneInboxRoute({required this.builder}) : super(allowSnapshotting: false);
+  final WidgetBuilder builder;
+  @override
+  String? get title => null;
+  @override
+  bool get maintainState => true;
+  @override
+  bool get opaque => false;
+  @override
+  Color? get barrierColor => null;
+  @override
+  bool canTransitionFrom(TransitionRoute<dynamic> previousRoute) => false;
+  @override
+  Widget buildContent(BuildContext context) => builder(context);
+  @override
+  TickerFuture didPush() {
+    final result = super.didPush();
+    controller!.value = 1;
+    return result;
+  }
 }
 
 /// Pushes [page] full screen. iOS: the platform's page route, which also
@@ -669,9 +701,13 @@ class _PhonePageRoute<T> extends CupertinoPageRoute<T> {
 /// slides in from the end over [Tokens.motionPage]. Routes sit beside the
 /// app's home, so the page gets forui's theme and the body text style here.
 Future<T?> pushPhonePage<T>(BuildContext context, Widget page) =>
-    Navigator.of(context).push<T>(_phonePageRoute<T>(context, page));
+    Navigator.of(context).push<T>(createPhonePageRoute<T>(context, page));
 
-Route<T> _phonePageRoute<T>(BuildContext context, Widget page) {
+PageRoute<T> createPhonePageRoute<T>(
+  BuildContext context,
+  Widget page, {
+  bool background = false,
+}) {
   Widget themed(BuildContext context) {
     final t = Tokens.of(context);
     return FTheme(
@@ -680,10 +716,15 @@ Route<T> _phonePageRoute<T>(BuildContext context, Widget page) {
     );
   }
 
-  if (defaultTargetPlatform == TargetPlatform.iOS)
+  if (defaultTargetPlatform == TargetPlatform.iOS) {
+    if (background) return _PhoneInboxRoute<T>(builder: themed);
     return _PhonePageRoute<T>(builder: themed);
+  }
   return PageRouteBuilder<T>(
-    transitionDuration: Tokens.motion(context, Tokens.motionPage),
+    opaque: !background,
+    transitionDuration: background
+        ? Duration.zero
+        : Tokens.motion(context, Tokens.motionPage),
     reverseTransitionDuration: Tokens.motion(context, Tokens.motionFast),
     pageBuilder: (context, _, _) => themed(context),
     transitionsBuilder: (context, animation, _, child) => SlideTransition(
@@ -863,24 +904,47 @@ class PhoneTile extends StatelessWidget {
 final _messageRoutes = Expando<Route<void>>();
 
 /// The message center, pushed once per navigator and reused on later clicks.
-void openMessages(BuildContext context, AppState app) {
+void openMessages(
+  BuildContext context,
+  AppState app, {
+  bool openingMessage = false,
+}) {
   final navigator = Navigator.of(context);
   final existing = _messageRoutes[navigator];
   if (existing != null && existing.isActive) {
-    navigator.popUntil((route) => identical(route, existing));
+    if (!openingMessage)
+      navigator.popUntil((route) => identical(route, existing));
     return;
   }
-  final route = _phonePageRoute<void>(
+  final visible = ValueNotifier(!openingMessage);
+  final route = createPhonePageRoute<void>(
     context,
-    PhoneScaffold(
-      title: S.current('msgCenter'),
-      back: true,
-      child: PhoneMessagesPage(app: app),
+    ValueListenableBuilder<bool>(
+      valueListenable: visible,
+      builder: (context, shown, child) => IgnorePointer(
+        ignoring: !shown,
+        child: Opacity(opacity: shown ? 1 : 0, child: child),
+      ),
+      child: PhoneScaffold(
+        title: S.current('msgCenter'),
+        back: true,
+        child: PhoneMessagesPage(
+          app: app,
+          onDetailPresented: () => visible.value = true,
+        ),
+      ),
     ),
+    background: openingMessage,
   );
   _messageRoutes[navigator] = route;
+  void ownerChanged() {
+    if (!visible.value && route.isActive) navigator.removeRoute(route);
+  }
+
+  app.messages.ownerChanges.addListener(ownerChanged);
   unawaited(
     navigator.push<void>(route).whenComplete(() {
+      app.messages.ownerChanges.removeListener(ownerChanged);
       if (identical(_messageRoutes[navigator], route)) {
         _messageRoutes[navigator] = null;
       }

@@ -172,7 +172,7 @@ class AppState with WidgetsBindingObserver {
     await messages.reload();
     if (_stopped || epoch != messages.ownerEpoch) return false;
     if (opened && openRequest == _appleOpenRequest) {
-      showPage(WindowPage.messages);
+      showPage(WindowPage.messages, openingMessage: true);
       messages.requestOpen((messageId: message.id, push: message));
     }
     return !messages.view.value.failed;
@@ -222,13 +222,15 @@ class AppState with WidgetsBindingObserver {
 
   /// The tray's latest ask for a page in the window (shell.dart); `request`
   /// counts up, so asking for the same page again still notifies.
-  final ValueNotifier<({WindowPage page, int request})?> pageRequests =
-      ValueNotifier(null);
+  final ValueNotifier<({WindowPage page, int request, bool openingMessage})?>
+  pageRequests = ValueNotifier(null);
 
-  void showPage(WindowPage page) => pageRequests.value = (
-    page: page,
-    request: (pageRequests.value?.request ?? 0) + 1,
-  );
+  void showPage(WindowPage page, {bool openingMessage = false}) =>
+      pageRequests.value = (
+        page: page,
+        openingMessage: openingMessage,
+        request: (pageRequests.value?.request ?? 0) + 1,
+      );
 
   /// A notification click (activation.dart), handled as the native apps
   /// do. The push behind it opens its http(s) link in the browser (and
@@ -260,7 +262,7 @@ class AppState with WidgetsBindingObserver {
       return false;
     }
     if (signedIn) {
-      showPage(WindowPage.messages);
+      showPage(WindowPage.messages, openingMessage: push != null);
       if (push != null)
         messages.requestOpen((messageId: messageId, push: push.message));
     }

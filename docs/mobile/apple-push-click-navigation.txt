@@ -6,10 +6,15 @@ A tap finishes its authorized lookup and inbox refresh before selecting the
 message center and then issuing the detail request. A newer tap supersedes an
 older unfinished lookup; a passive receipt does not supersede a tap.
 
-Phone navigation keeps one inbox route per Navigator. Selecting Messages
-reuses that route, popping covering detail pages before delivering the new
-request. A covered inbox cannot consume a request. An asynchronous detail
-lookup checks the owner, latest request number and current route before push.
+Phone navigation keeps one inbox route per Navigator. A notification's inbox
+starts as a transparent, non-animated back-stack layer: its body stays hidden
+until the native detail animation completes, so the previous screen transitions
+directly to the detail. The reveal follows animation status, with no timer.
+A notification updates an already current detail in place, including repeated
+taps on the same message. Ordinary inbox selection still returns to its list.
+Only the managed inbox handles taps while covered; an asynchronous lookup
+checks owner and request freshness. A hidden pending inbox is removed when its
+owner changes. Normal detail routes and iOS reverse/edge gestures remain native.
 The native state still deduplicates by delivery ID and event (received versus
 opened); a different delivery referencing the same message remains openable.
 
@@ -18,12 +23,16 @@ Regression checks:
     checks/apple_push_quit_test.dart checks/messages_owner_test.dart
   bash checks/apple/run.sh
 
-The route observer exercises both Cupertino and Android page routes, verifies
-one inbox, distinct subsequent details, repeated page selection, superseded
-lookup and owner changes. The production AppState method-channel tests verify
+The route observer exercises both Cupertino and Android page routes. It pumps
+16 ms frames to check the hidden inbox, a monotonic single detail transition,
+and stable current route during repeated and distinct notification clicks.
+It tests iOS edge-swipe cancellation and completion, the back-stack inbox,
+ordinary inbox selection, superseded lookup and owner changes. The production AppState method-channel tests verify
 receive/tap separation, page-before-detail ordering and out-of-order tap lookups.
 Original runtime negative controls fail with one extra inbox push on each
 platform, premature detail dispatch and an older lookup replacing a newer tap.
+The intermediate route-deduplication patch also fails the frame fixture on each
+platform: its inbox is not hidden and its current detail gets popped/re-pushed.
 
 These are controlled regressions. Actual-device notification display has been
 observed, but the reported repeated navigation remains an acceptance failure
