@@ -99,6 +99,8 @@ struct ApplePushTests {
       check(state.receive(notice("same"), opened: true), "receipt must not consume tap")
       check(!state.receive(notice("same"), opened: true), "duplicate tap")
       check(deliveries == [false, true], "independent histories")
+      check(state.receive(notice("different-delivery-same-message"), opened: true), "different notification with same message remains openable")
+      check(deliveries == [false, true, true], "dedupe is by delivery and event, not message id")
       check(!state.receive(notice("owner-order", "B"), opened: true), "reject foreign owner first")
       check(state.receive(notice("owner-order", "A"), opened: true), "rejection must not consume current delivery")
       count += 1
