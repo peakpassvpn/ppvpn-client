@@ -156,6 +156,17 @@ struct ApplePushTests {
       check(calls == 0, "missing validated environment disables registration")
       count += 1
     }
+    do {
+      let state = ApplePushState(app: app)
+      var deliveries = 0
+      state.attach(register: { _ in }, unregister: { _ in }, deliver: { _, _ in deliveries += 1 })
+      state.setAccount("A")
+      state.beginRestoration()
+      check(!state.receive(notice("old-during-restore"), opened: true), "restoration blocks previous owner")
+      state.setAccount("B")
+      check(deliveries == 0, "buffered foreign owner cannot follow replacement auth")
+      count += 1
+    }
     print("\(count) Apple push state cases passed")
   }
 }

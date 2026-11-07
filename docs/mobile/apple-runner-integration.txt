@@ -1,50 +1,44 @@
-Apple receiver integration boundary (pending implementation)
+Apple native entry and transport integration status (2026-11-07)
 
-Native iOS launch
-  Install one strong IOSApplePushReceiver before returning from
-  application(_:didFinishLaunchingWithOptions:), not only when Flutter's
-  implicit engine initializes later. Forward OS token success/failure and
-  background callbacks. The receiver owns UNUserNotificationCenterDelegate;
-  do not replace it after installation without preserving all callbacks.
-  Keep cold taps buffered until Flutter and authenticated restoration finish.
+Implemented in source
+  ci-build.sh explicitly concatenates ApplePushState.swift, ApplePush.swift,
+  ApplePushBridge.swift into the generated AppDelegate build source, preserving
+  @preconcurrency imports. The native launch hook starts the strong receiver
+  before implicit Flutter initialization. Token/failure/background callbacks
+  forward to that receiver; callbacks complete once and background work has
+  a 25s deadline. Copied standalone Runner sources are removed after inclusion
+  so generated project styles cannot accidentally compile duplicates.
 
-Generated iOS project source inclusion
-  Current ci-build.sh appends NetworkState.swift/PPVPNPlugin.swift/
-  NativeChrome.swift into generated AppDelegate.swift. The new shared
-  runner/apple/ApplePushState.swift and iOS Runner/ApplePush.swift are NOT
-  currently in that list and therefore are NOT part of the built App.
-  Future integration must explicitly include them in the App target only,
-  preserve imports including @preconcurrency, and compile the real Runner.
-  Do not include these in PacketTunnel or assume copying a Swift file into
-  the generated directory makes it an Xcode build source.
+  IOSApplePushBridge attaches its MethodChannel at PPVPNPlugin registration.
+  Cold notices remain in the bounded native mailbox until the stable account
+  is restored. Dart AppState follows account_id, not account_name. Notices
+  perform authorized inbox lookup and never use notification body/URL for UI.
+  Explicit sign-out waits for the serialized unregister effect before Rust
+  revokes the bearer. Restoring/replacement owners fence prior delivery.
 
-Control-plane bridge requirements
-  Use UiSnapshot.account_id (stable authenticated id) already added here;
-  never account_name. Do not resolve restoring to signedOut prematurely.
-  Attach register/unregister transport and notice delivery only after the
-  authenticated account transport can serialize them with logout.
-  Native -> transport registration has request/accountGeneration/accountID/
-  token/platform/bundleID/environment. Native completion must acknowledge
-  exact request and success. request/generation are local completion keys.
-  Transport -> native account restoration/setAccount and retry requests must
-  reject stale generations. OS registration requests fresh tokens at launch.
-  Notice -> Flutter only carries deliveryID/accountID/messageID/opened;
-  fetch inbox data with current auth, discard stale async results and clear
-  old account/team message state. Do not pass body or URL as trusted content.
-  Keep foreground receive and opened-tap dedupe separate.
+Not completed
+  ApplePush.register/unregister transport hooks intentionally have no default
+  HTTP implementation. They return no successful native acknowledgement until
+  the backend owner delivers actual OpenAPI/SDK and precise source commit.
+  apple-push-contract.json identifies the actual handoff and required guards;
+  the previous speculative endpoints/version fields have been superseded.
+  No token-only legacy endpoint fallback. No rollout flag enabled.
 
-Backend dependency
-  apple-push-contract.json is a proposal, not an implemented endpoint map.
-  Existing token-only register cannot safely substitute for explicit topic/
-  APNs environment/installation lease/logout ordering. Server must define
-  installation ownership proof before issuing a replacement lease: an
-  installation UUID plus a different account bearer is not sufficient proof.
-  Do not turn on the rollout flag before backend contract and signed-package
-  entitlement/profile equality have been confirmed.
+Packaging and acceptance
+  Formal API origin is read from repository PPVPN_API_BASE (the release.md
+  authority), never inferred from its hostname. A diagnostic package built
+  with api.example.invalid is not eligible for network acceptance.
+  check-ios-apple-push.py validates an enabled signed package's actual aps
+  entitlement, embedded provisioning profile, declared environment and topic.
+  TestFlight requires production APNs. Sandbox receipt is not environment.
+  Keep iOS package/App Group identities for a provisioned isolated test device;
+  do not install over a live user VPN. Use build number0 for unsigned compile
+  diagnostics; signed internal candidates require build group's unique number,
+  app+extension profile equality and separate artifact directory/manifest.
+  Do not upload a package before actual signed runtime acceptance.
 
-macOS boundary
-  MacApplePushReceiver reads actual signed entitlement through SecTask.
-  MainFlutterWindow/AppDelegate and agent retirement remain separate desktop
-  integration work. Developer ID APNs capability requires the correct signed
-  entitlement/profile; App Store receipt sandbox is not an APNs selector.
-  Keep the self-hosted agent until real platform delivery equivalence passes.
+macOS
+  Existing agent remains. Receiver state is shared, but macOS native entry,
+  authenticated transport, signed capability and actual foreground/background/
+  terminated/cold tap/token rotation/logout/account-switch parity still need
+  desktop-owner integration and verification before agent retirement.

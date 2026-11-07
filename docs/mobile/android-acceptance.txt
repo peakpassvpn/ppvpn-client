@@ -22,7 +22,9 @@ Native paths inventoried; not changed
 Not yet accepted
   Full Android Rust/JNI/Gradle compilation has not run. This machine has no
   configured ANDROID_HOME/ANDROID_SDK_ROOT/ANDROID_NDK_HOME/JAVA_HOME and no
-  Android Rust target installed. iOS compile results do not cover Android.
+  Android Rust target installed. The authorized Linux test-host inventory has
+  the arm64 Rust target and NDK r27d but no SDK/JDK/Flutter. Build owner uses
+  SDK-equipped Ubuntu CI for real APK/AAB; compilation must actually pass. iOS compile results do not cover Android.
   Need arm64 APK/AAB and x86_64 emulator build, then actual lifecycle tests:
     permission accepted/denied, repeated start/stop, onRevoke, process loss,
     native exit concurrent with a new start, foreground service notification,

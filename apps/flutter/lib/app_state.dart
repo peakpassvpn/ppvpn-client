@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'links.dart';
 import 'haptics.dart';
 import 'messages_state.dart';
+import 'apple_push.dart';
 import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
 import 'vpn.dart';
@@ -49,6 +50,8 @@ class AppState with WidgetsBindingObserver {
     _refreshNodes(initial);
     _followMessageOwner(initial);
     if (Platform.isIOS) {
+      _applePush = ApplePush(notice: _appleNotice)..start();
+      _followAppleOwner(initial);
       WidgetsBinding.instance.addObserver(this);
       _network = const EventChannel('com.peakpassvpn.ppvpn/network-state')
           .receiveBroadcastStream()
@@ -84,6 +87,51 @@ class AppState with WidgetsBindingObserver {
 
   /// Made by [AppState.fixed]: sample data, no client.
   final bool fixed;
+  ApplePush? _applePush;
+
+  void _followAppleOwner(rust.UiSnapshot state) {
+    final restoring =
+        state.auth == rust.UiAuth.restoring ||
+        (state.auth == rust.UiAuth.signedIn && state.accountId == null);
+    unawaited(
+      _applePush?.followAccount(
+        state: restoring
+            ? 'restoring'
+            : state.auth == rust.UiAuth.signedIn
+            ? 'signedIn'
+            : 'signedOut',
+        id: state.auth == rust.UiAuth.signedIn ? state.accountId : null,
+      ),
+    );
+  }
+
+  Future<bool> _appleNotice(
+    String? accountId,
+    int? messageId,
+    bool opened,
+  ) async {
+    final current = snapshot.value;
+    if (current.auth != rust.UiAuth.signedIn ||
+        current.accountId == null ||
+        (accountId != null && accountId != current.accountId))
+      return false;
+    final epoch = messages.ownerEpoch;
+    if (opened && messageId != null) {
+      final index = await messages.locate(messageId);
+      if (epoch != messages.ownerEpoch) return false;
+      if (index != null) {
+        messages.requestOpen((
+          messageId: messageId,
+          push: messages.view.value.items[index],
+        ));
+      }
+    } else {
+      await messages.reload();
+    }
+    if (epoch != messages.ownerEpoch) return false;
+    if (opened) showPage(WindowPage.messages);
+    return !messages.view.value.failed;
+  }
 
   final ValueNotifier<rust.UiSnapshot> snapshot;
   final ValueNotifier<List<rust.UiNode>> nodes = ValueNotifier(const []);
@@ -247,6 +295,7 @@ class AppState with WidgetsBindingObserver {
         }
         snapshot.value = next;
         _followMessageOwner(next);
+        _followAppleOwner(next);
         _refreshNodes(next);
       }
       final sample = events.traffic;
@@ -400,7 +449,10 @@ class AppState with WidgetsBindingObserver {
 
   Future<void> signIn() => _run(rust.signIn);
   void cancelSignIn() => rust.cancelSignIn();
-  Future<void> signOut() => _run(rust.signOut);
+  Future<void> signOut() => _run(() async {
+    await _applePush?.beforeSignOut();
+    await rust.signOut();
+  });
   Future<void> connect() => _run(() => _connectUsingVpn(rust.connect));
 
   /// Phone: the client first (it stops the tunnel host), then the system VPN.
@@ -484,6 +536,7 @@ class AppState with WidgetsBindingObserver {
   void stop() {
     if (_stopped) return;
     _stopped = true;
+    _applePush?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     SystemVpn.state.removeListener(_systemVpnChanged);
     unawaited(_network?.cancel());

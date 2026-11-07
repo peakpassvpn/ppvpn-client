@@ -1,10 +1,13 @@
-Apple push receiver candidate
+Apple push receiver and iOS entry integration
 
 Scope
   ApplePushState.swift is shared Foundation-only lifecycle/payload code.
   ios/Runner/ApplePush.swift and macos/Runner/ApplePush.swift are independent
-  native adapters. They do not start themselves. No existing Agent is
-  unregistered, removed or changed, and no default build enables APNs.
+  native adapters. The iOS bridge is explicitly included by ci-build.sh and
+  starts at native launch before Flutter attaches. macOS entry remains with
+  the desktop owner. No existing Agent is removed or changed; no default
+  build enables APNs. Authenticated HTTP effects still require the backend
+  contract implementation.
 
 Integration boundaries
   Include the common state and matching receiver in the App's target, NOT
