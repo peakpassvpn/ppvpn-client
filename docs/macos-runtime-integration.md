@@ -54,7 +54,9 @@ identity rather than allocating another capture generation.
 Core commits native ingress before the host publishes OS admission. Host detach
 removes owned admission while retaining the original for native rollback. Root
 resources survive an individual IPC disconnect and remain in an exact lease
-ledger until release, expiry or process death cleanup.
+ledger until release, expiry or process death cleanup. Final attachment release
+settles before the detach transaction completes, preventing an immediate next
+attach from racing a queued release of the old disarmed grant.
 
 ## Authentication and resource ledger
 
