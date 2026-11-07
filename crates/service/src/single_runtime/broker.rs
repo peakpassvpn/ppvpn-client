@@ -35,8 +35,9 @@ use std::{
     time::{Duration, Instant},
 };
 pub const IMAGE:&str="/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle/Contents/MacOS/ppvpn-service";
-pub const DIRECTORY: &str = "/private/var/run/com.peakpassvpn.capture"; // sensitive-check: allow — canonical macOS system runtime location
-pub const SOCKET: &str = "/private/var/run/com.peakpassvpn.capture/broker.sock"; // sensitive-check: allow — canonical macOS system runtime location
+pub const DIRECTORY: &str = "/Library/Application Support/PPVPN/run/capture";
+pub const SOCKET: &str = "/Library/Application Support/PPVPN/run/capture/broker.sock";
+pub const JOURNAL: &str = "/Library/Application Support/PPVPN/run/capture/grant.json";
 const FRAME_LIMIT: usize = 16 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,15 +100,16 @@ impl Endpoint {
             bail!("CAPTURE_BROKER_ROOT_REQUIRED");
         }
         let dir = Path::new(DIRECTORY);
-        if !dir.exists() {
-            std::fs::create_dir(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))?;
-        }
-        for ancestor in dir.ancestors() {
-            let m = std::fs::symlink_metadata(ancestor)?;
-            if !m.is_dir() || m.uid() != 0 || m.mode() & 0o022 != 0 {
-                bail!("CAPTURE_DIRECTORY_UNSAFE");
-            }
+        // /private/var/run is legitimately root:daemon group-writable on // sensitive-check: allow — canonical macOS system directory
+        // macOS. Use the existing protected system IPC hierarchy instead of
+        // relaxing the ancestry policy or modifying a system directory.
+        for directory in [
+            "/Library/Application Support",
+            "/Library/Application Support/PPVPN",
+            "/Library/Application Support/PPVPN/run",
+            DIRECTORY,
+        ] {
+            super::login::root_directory(Path::new(directory))?;
         }
         let lock = OpenOptions::new()
             .read(true)
@@ -462,6 +464,23 @@ pub fn shutdown() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capture_paths_share_the_protected_system_ipc_hierarchy() {
+        let base = Path::new(crate::protocol::IPC_SOCKET_PATH)
+            .parent()
+            .unwrap();
+        assert!(Path::new(DIRECTORY).starts_with(base));
+        assert_eq!(Path::new(SOCKET).parent(), Some(Path::new(DIRECTORY)));
+        assert_eq!(Path::new(JOURNAL).parent(), Some(Path::new(DIRECTORY)));
+        // Read only: never create a directory or modify the workstation.
+        for path in Path::new(DIRECTORY).ancestors() {
+            if let Ok(m) = std::fs::symlink_metadata(path) {
+                assert!(m.is_dir() && !m.file_type().is_symlink());
+                assert_eq!(m.uid(), 0);
+                assert_eq!(m.mode() & 0o022, 0);
+            }
+        }
+    }
     #[test]
     fn readiness_probe_cannot_allocate_an_os_grant_or_bypass_grant_validation() {
         let peer = Peer {

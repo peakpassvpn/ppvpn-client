@@ -226,3 +226,43 @@ pub fn uninstall() -> Result<()> {
         Err(e) => Err(e.into()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unsafe_system_ancestors_are_rejected_without_permission_repairs() {
+        let mut checked = 0;
+        const SYSTEM_RUN: &str = "/private/var/run"; // sensitive-check: allow — canonical macOS system directory
+        for path in [SYSTEM_RUN, "/private/tmp"] {
+            let path = Path::new(path);
+            let before = std::fs::symlink_metadata(path).unwrap();
+            if before.mode() & 0o022 == 0 {
+                continue;
+            }
+            assert!(root_directory(path).is_err());
+            let after = std::fs::symlink_metadata(path).unwrap();
+            assert_eq!(
+                (before.uid(), before.gid(), before.mode(), before.ino()),
+                (after.uid(), after.gid(), after.mode(), after.ino())
+            );
+            checked += 1;
+        }
+        assert!(checked > 0);
+    }
+    #[test]
+    fn root_directory_refuses_a_symlink_without_touching_its_target() {
+        let root = std::env::temp_dir().join(format!("ppvpn-root-path-{}", uuid::Uuid::new_v4()));
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let before = std::fs::symlink_metadata(&target).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        assert!(root_directory(&alias).is_err());
+        assert_eq!(
+            before.mode(),
+            std::fs::symlink_metadata(&target).unwrap().mode()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
