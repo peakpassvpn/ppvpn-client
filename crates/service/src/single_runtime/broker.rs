@@ -250,7 +250,10 @@ impl Ledger {
                     "release" => r.cleanup(),
                     _ => return Err("CAPTURE_OPERATION_INVALID".into()),
                 }
-                .map_err(|_| "CAPTURE_LEDGER_UNSETTLED".into())
+                .map_err(|error| {
+                    native::diagnostic("resource-control", &error);
+                    "CAPTURE_LEDGER_UNSETTLED".into()
+                })
             })
             .map_err(|e| anyhow!("{e:?}"))?;
         Ok(None)
