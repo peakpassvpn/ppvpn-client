@@ -1,5 +1,10 @@
 package com.peakpassvpn.ppvpn
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.pm.ServiceInfo
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -52,6 +57,10 @@ class TunnelService : VpnService() {
     private val worker = Executors.newSingleThreadExecutor()
     private var tun: ParcelFileDescriptor? = null
     private var network: NetworkWatch? = null
+    private var ownsHost = false
+    @Volatile private var destroyed = false
+    @Volatile private var foreground = false
+    private val notifications by lazy { getSystemService(NotificationManager::class.java) }
     // Worker-owned. A queued native exit must not stop a newer tunnel.
     private var generation = 0L
 
@@ -61,6 +70,9 @@ class TunnelService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        notifications.createNotificationChannel(NotificationChannel(
+            CHANNEL_ID, getString(R.string.ppvpn_vpn_channel), NotificationManager.IMPORTANCE_LOW,
+        ))
         val filter = IntentFilter(ACTION_QUERY)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(query, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -72,7 +84,15 @@ class TunnelService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastStartId = startId
         when (intent?.action) {
-            ACTION_START -> run(::start)
+            ACTION_START -> {
+                try {
+                    showForeground()
+                    run(::start)
+                } catch (error: RuntimeException) {
+                    Log.e(TAG, "unable to enter VPN foreground service", error)
+                    stop(startId)
+                }
+            }
             ACTION_STOP -> stop(startId)
             else -> run { if (state == STATE_OFF) stopSelfResult(startId) }
         }
@@ -83,13 +103,13 @@ class TunnelService : VpnService() {
     override fun onRevoke() = stop(lastStartId)
 
     override fun onDestroy() {
+        destroyed = true
         unregisterReceiver(query)
-        // Destroyed without a stop first (by the system): the host still
-        // goes down before the process may.
-        run(::shutDown)
+        // Keep native teardown ordered without blocking Android's main thread.
+        // The worker owns the host/FD until cleanup; an old destroyed service
+        // never opens another host, and duplicate cleanup cannot stop a new one.
+        run { shutDown(); set(STATE_OFF) }
         worker.shutdown()
-        worker.awaitTermination(SHUTDOWN_WAIT_S, TimeUnit.SECONDS)
-        set(STATE_OFF)
         super.onDestroy()
     }
 
@@ -104,6 +124,7 @@ class TunnelService : VpnService() {
 
     /** On the worker. */
     private fun start() {
+        if (destroyed) return
         if (state != STATE_OFF) {
             publish()
             return
@@ -111,6 +132,9 @@ class TunnelService : VpnService() {
         generation += 1
         set(STATE_CONNECTING)
         val failure = try {
+            // Re-promote on the worker as well: an earlier queued stop may
+            // have removed the eager notification after the new start intent.
+            showForeground()
             open()
         } catch (e: Exception) {
             error(e.toString())
@@ -143,14 +167,18 @@ class TunnelService : VpnService() {
         settings.getJSONArray("dns_servers").strings().forEach { builder.addDnsServer(it) }
         val fd = builder.establish() ?: return error("the VPN is not allowed (establish)")
         tun = fd
-        network = NetworkWatch(this).also { it.start() }
-        return TunnelHost.start(
+        val watch = NetworkWatch(this)
+        network = watch
+        watch.start()
+        val failure = TunnelHost.start(
             fd.fd,
             File(filesDir, SOCKET_FILE).path,
             File(filesDir, STATE_DIR).path,
             null,
             listener(generation),
         )
+        ownsHost = failure == null
+        return failure
     }
 
     private fun listener(hostGeneration: Long) = object : TunnelHost.Listener {
@@ -183,14 +211,54 @@ class TunnelService : VpnService() {
         generation += 1
         network?.stop()
         network = null
-        TunnelHost.stop()
+        if (ownsHost) {
+            ownsHost = false
+            TunnelHost.stop()
+        }
         tun?.close()
         tun = null
     }
 
     private fun set(next: String) {
         state = next
+        if (next == STATE_OFF) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            foreground = false
+        } else if (foreground) {
+            notifications.notify(NOTIFICATION_ID, notification())
+        }
         publish()
+    }
+
+    private fun notification(): Notification {
+        val message = when (state) {
+            STATE_ON -> R.string.ppvpn_vpn_connected
+            STATE_DISCONNECTING -> R.string.ppvpn_vpn_disconnecting
+            else -> R.string.ppvpn_vpn_connecting
+        }
+        val builder = Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_vpn_status)
+            .setContentTitle(SESSION)
+            .setContentText(getString(message))
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+        packageManager.getLaunchIntentForPackage(packageName)?.let { intent ->
+            builder.setContentIntent(PendingIntent.getActivity(this, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        }
+        return builder.build()
+    }
+
+    private fun showForeground() {
+        val notification = notification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Public Android VPN eligibility: permission was granted by prepare.
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        foreground = true
     }
 
     private fun publish() {
@@ -213,7 +281,8 @@ class TunnelService : VpnService() {
         /** In filesDir, where the app's client connects (crates/desktop tunnel.rs SOCKET_FILE). */
         private const val SOCKET_FILE = "tunnel.sock"
         private const val STATE_DIR = "tunnel-state"
-        private const val SHUTDOWN_WAIT_S = 10L
+        private const val CHANNEL_ID = "ppvpn-vpn"
+        private const val NOTIFICATION_ID = 0x5650
 
         fun intent(context: Context, action: String): Intent =
             Intent(context, TunnelService::class.java).setAction(action)
@@ -247,6 +316,8 @@ private class NetworkWatch(private val service: VpnService) {
     private val thread = HandlerThread("ppvpn-network").apply { start() }
     private val handler = Handler(thread.looper)
     private val first = CountDownLatch(1)
+    private val delivery = Any()
+    private var closed = false
 
     // On the handler's thread.
     private var current: Network? = null
@@ -303,6 +374,9 @@ private class NetworkWatch(private val service: VpnService) {
     }
 
     fun stop() {
+        // Join any in-progress delivery before the worker stops/replaces host.
+        synchronized(delivery) { closed = true }
+        handler.removeCallbacksAndMessages(null)
         try {
             connectivity.unregisterNetworkCallback(callback)
         } catch (e: IllegalArgumentException) {
@@ -311,7 +385,8 @@ private class NetworkWatch(private val service: VpnService) {
         thread.quitSafely()
     }
 
-    private fun push() {
+    private fun push() = synchronized(delivery) {
+        if (closed) { first.countDown(); return@synchronized }
         val state = json()
         if (state != sent) {
             sent = state
