@@ -1,9 +1,46 @@
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from host import Evidence, PACKAGE, device_vm_identity, owned_internet_sockets, owned_listeners, profile
+from host import ControlRequestError, read_control_body, Evidence, PACKAGE, device_vm_identity, owned_internet_sockets, owned_listeners, profile
+
+
+class ControlFramingTests(unittest.TestCase):
+    def headers(self, length=None):
+        headers = Message()
+        if length is not None:
+            headers['Content-Length'] = str(length)
+        return headers
+
+    def test_empty_object_and_fragmented_body_are_valid(self):
+        class Fragmented(BytesIO):
+            def read(self, length):
+                return super().read(min(length, 1))
+        self.assertEqual({}, read_control_body(Fragmented(b'{}'), self.headers(2)))
+
+    def test_aborted_release_body_is_reported_as_truncated_not_empty_json(self):
+        with self.assertRaisesRegex(ControlRequestError, 'expected=2 received=0'):
+            read_control_body(BytesIO(b''), self.headers(2))
+        with self.assertRaisesRegex(ControlRequestError, 'expected=2 received=1'):
+            read_control_body(BytesIO(b'{'), self.headers(2))
+
+    def test_invalid_or_ambiguous_framing_and_nonobjects_are_rejected(self):
+        for length in [None, 0, -1, 1048577, 'bad']:
+            with self.subTest(length=length), self.assertRaises(ControlRequestError):
+                read_control_body(BytesIO(b'{}'), self.headers(length))
+        duplicate = self.headers(2)
+        duplicate['Content-Length'] = '2'
+        chunked = self.headers(2)
+        chunked['Transfer-Encoding'] = 'chunked'
+        for headers in [duplicate, chunked]:
+            with self.assertRaises(ControlRequestError):
+                read_control_body(BytesIO(b'{}'), headers)
+        for payload in [b'[]', b'xx', b'\xff\xff']:
+            with self.assertRaises(ControlRequestError):
+                read_control_body(BytesIO(payload), self.headers(len(payload)))
 
 
 class DeviceVmTests(unittest.TestCase):

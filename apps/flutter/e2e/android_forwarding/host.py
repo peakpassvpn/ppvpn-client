@@ -23,6 +23,36 @@ TARGET = '192.0.2.10'
 LOOPBACK_HEX = ('0100007F', '00000000000000000000000001000000')
 
 
+class ControlRequestError(ValueError):
+    pass
+
+
+def read_control_body(stream, headers):
+    """Reject incomplete framing; never turn an aborted request into {}."""
+    lengths = headers.get_all('Content-Length', [])
+    if len(lengths) != 1 or headers.get('Transfer-Encoding') is not None:
+        raise ControlRequestError('Need one Content-Length and no Transfer-Encoding')
+    try:
+        length = int(lengths[0])
+    except ValueError as error:
+        raise ControlRequestError('Invalid Content-Length') from error
+    if not 0 < length <= 1024 * 1024:
+        raise ControlRequestError(f'Invalid body length: {length}')
+    data = bytearray()
+    while len(data) < length:
+        chunk = stream.read(length - len(data))
+        if not chunk:
+            raise ControlRequestError(f'Truncated control body: expected={length} received={len(data)}')
+        data.extend(chunk)
+    try:
+        body = json.loads(data)
+    except (ValueError, UnicodeError) as error:
+        raise ControlRequestError(f'Invalid JSON control body: bytes={len(data)}') from error
+    if not isinstance(body, dict):
+        raise ControlRequestError('Control body must be an object')
+    return body
+
+
 def device_vm_identity(log, process):
     """Bind a device VM publication to this process lifetime and socket FD.
 
@@ -300,13 +330,12 @@ def main():
         def do_POST(self):
             body = None
             try:
-                length = int(self.headers.get('Content-Length', '0'))
-                assert 0 <= length <= 1024 * 1024
-                body = json.loads(self.rfile.read(length))
+                body = read_control_body(self.rfile, self.headers)
                 result = state.action(self.path, body)
                 status = 200
             except Exception as error:
-                result, status = {'error': str(error), 'type': type(error).__name__}, 500
+                result = {'error': str(error), 'type': type(error).__name__}
+                status = 400 if isinstance(error, ControlRequestError) else 500
                 with (args.directory / 'failures.jsonl').open('a') as file:
                     file.write(json.dumps({'path': self.path, 'request': body, **result}) + '\n')
             data = json.dumps(result).encode()

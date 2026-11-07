@@ -54,8 +54,11 @@ void main() {
         final deviceVm = initial['device_vm'];
         if (deviceVm != null) await _notProxy(deviceVm['port'] as int);
         Map<String, dynamic>? previousOwner;
+        Object? primaryFailure;
+        var activeCycle = -1;
         try {
           for (var cycle = 0; cycle < 3; cycle++) {
+            activeCycle = cycle;
             await SystemVpn.start();
             await _until(() async => SystemVpn.state.value == VpnState.on);
             final idle = await _rpc('/v1/get-runtime-observation');
@@ -209,9 +212,49 @@ void main() {
             await _negativeUDP();
           }
           await _controlCall('complete');
+        } catch (error, stack) {
+          primaryFailure = error;
+          // Cleanup can reset fixture sockets. Preserve the original failing
+          // operation before teardown and before flutter uninstalls the App.
+          print(
+            'android-forwarding primary-failure cycle=$activeCycle: $error',
+          );
+          print(stack);
+          if (activeCycle >= 0) {
+            try {
+              await _controlCall('diagnostics', {
+                'cycle': activeCycle,
+                'stage': 'primary-failure',
+                'error': error.toString(),
+                'logs': await _ownerLogs(directory!),
+              });
+            } catch (diagnosticError) {
+              print('android-forwarding diagnostic-failure: $diagnosticError');
+            }
+          }
+          rethrow;
         } finally {
-          await SystemVpn.stop(force: true);
-          await _controlCall('release-rival');
+          Object? cleanupFailure;
+          StackTrace? cleanupStack;
+          for (final cleanup in <Future<void> Function()>[
+            () => SystemVpn.stop(force: true),
+            () async {
+              await _controlCall('release-rival');
+            },
+          ]) {
+            try {
+              await cleanup();
+            } catch (error, stack) {
+              print('android-forwarding cleanup-failure: $error');
+              cleanupFailure ??= error;
+              cleanupStack ??= stack;
+            }
+          }
+          // A cleanup error still fails a successful test, but must not
+          // replace the original traffic/lifecycle failure and stack.
+          if (primaryFailure == null && cleanupFailure != null) {
+            Error.throwWithStackTrace(cleanupFailure, cleanupStack!);
+          }
         }
       });
     },
@@ -352,6 +395,15 @@ Future<Map<String, dynamic>> _controlCall(
   );
   try {
     final payload = utf8.encode(jsonEncode(body));
+    final bytes = BytesBuilder();
+    // Subscribe before writing: a reset during flush must reach this awaited
+    // response future, rather than an unobserved Socket stream error.
+    final response = socket.timeout(const Duration(seconds: 30)).forEach((
+      chunk,
+    ) {
+      bytes.add(chunk);
+      if (bytes.length > 1024 * 1024) fail('Oversized fixture response');
+    });
     socket.add(
       ascii.encode(
         'POST /$path HTTP/1.0\r\nHost: 10.0.2.2\r\n'
@@ -359,12 +411,7 @@ Future<Map<String, dynamic>> _controlCall(
       ),
     );
     socket.add(payload);
-    await socket.flush();
-    final bytes = BytesBuilder();
-    await for (final chunk in socket.timeout(const Duration(seconds: 30))) {
-      bytes.add(chunk);
-      if (bytes.length > 1024 * 1024) fail('Oversized fixture response');
-    }
+    await Future.wait<void>([socket.flush(), response], eagerError: true);
     final text = utf8.decode(bytes.toBytes());
     final split = text.indexOf('\r\n\r\n');
     expect(split, greaterThan(0), reason: text);
