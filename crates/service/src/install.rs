@@ -331,7 +331,17 @@ fn main() -> Result<(), anyhow::Error> {
         executable_mode,
         &check_service,
     )?;
-    fs::write(&info_plist, INFO_PLIST).with_context(|| format!("write {info_plist}"))?;
+    if cfg!(feature = "macos-user-runtime") {
+        // This is an individually signed Mach-O, not a signed CFBundle. An
+        // unsigned generated Info.plist makes Security reinterpret it as a
+        // bundle whose resource seal is missing. Keep the immutable image's
+        // original standalone signing layout; do not weaken resource checks.
+        if Path::new(&info_plist).exists() {
+            fs::remove_file(&info_plist).context("remove legacy helper bundle metadata")?;
+        }
+    } else {
+        fs::write(&info_plist, INFO_PLIST).with_context(|| format!("write {info_plist}"))?;
+    }
 
     // The service's and the engine's logs (and launchd's stdout / stderr
     // files) live here, outside the helper bundle, so they survive

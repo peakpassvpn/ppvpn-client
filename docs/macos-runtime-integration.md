@@ -23,7 +23,11 @@ ClientConfig.log_dir. Both must already exist, be canonical, owned by this uid,
 and have mode 0700. The agent refuses root/setuid execution. Both roles use the
 fixed installed helper bundle and the existing release signing identifiers.
 A single-runtime helper with no role arguments refuses startup instead of
-falling back to the legacy root forwarding entry. There is no development signature/path bypass. An unsigned local executable
+falling back to the legacy root forwarding entry. The installed helper is an individually signed Mach-O under the legacy `.bundle`
+directory name. Single-runtime installation removes the old generated unsigned
+Info.plist: adding bundle metadata after signing invalidates the resource layout.
+Full code/resource validity, runtime flags, Developer ID and exact-image checks
+remain enabled. There is no development signature/path bypass. An unsigned local executable
 cannot impersonate an installed helper or UI.
 
 The feature-enabled install-service generates the root daemon's explicit

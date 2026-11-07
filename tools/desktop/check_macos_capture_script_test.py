@@ -2,6 +2,8 @@
 import shlex
 import subprocess
 import sys
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +20,27 @@ class SigningContract(unittest.TestCase):
                            "1.2.840.113635.100.6.2.6", "certificate leaf",
                            "1.2.840.113635.100.6.1.13", "subject.OU"):
             self.assertIn(constraint, requirement)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires system Apple signature")
+    def test_standalone_image_relocation_must_not_add_unsigned_bundle_metadata(self):
+        with tempfile.TemporaryDirectory(prefix="ppvpn-sign-layout-") as directory:
+            contents = Path(directory) / "helper.bundle" / "Contents"
+            image = contents / "MacOS" / "true"
+            image.parent.mkdir(parents=True)
+            shutil.copyfile("/usr/bin/true", image)
+            image.chmod(0o755)
+            info = contents / "Info.plist"
+            import plistlib
+            info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.apple.true",
+                                            "CFBundleExecutable": "true",
+                                            "CFBundlePackageType": "BNDL"}))
+            def verify():
+                return subprocess.run(["/usr/bin/codesign", "--verify", "--strict",
+                                       "-R", "=anchor apple", str(image)],
+                                      capture_output=True, timeout=15)
+            self.assertNotEqual(verify().returncode, 0)
+            info.unlink()
+            self.assertEqual(verify().returncode, 0)
 
     @unittest.skipUnless(sys.platform == "darwin", "requires system Apple signature")
     def test_actual_inline_parser_accepts_apple_and_rejects_wrong_identifier(self):

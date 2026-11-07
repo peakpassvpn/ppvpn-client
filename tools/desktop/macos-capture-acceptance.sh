@@ -24,12 +24,15 @@ for name in ['ppvpn-service','ppvpn-service-install','ppvpn-service-uninstall','
     assert hashlib.sha256((p/name).read_bytes()).hexdigest()==m['sha256'][name], name
 PY
 team="$(tr -d '\n' < crates/service/src/macos_team_id)"
-for name in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
-  id="com.peakpassvpn.ppvpn.${name#ppvpn-}"
-  codesign --verify --strict --verbose=2 -R "=anchor apple generic and identifier \"$id\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team\"" "$artifact/$name" > "$out/$name-signature-check.txt" 2>&1 || {
-    cat "$out/$name-signature-check.txt" >&2
-    exit 1
+verify_signature() {
+  local file="$1" identifier="$2" evidence="$3"
+  codesign --verify --strict --verbose=2 -R "=anchor apple generic and identifier \"$identifier\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team\"" "$file" > "$evidence" 2>&1 || {
+    cat "$evidence" >&2
+    return 1
   }
+}
+for name in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
+  verify_signature "$artifact/$name" "com.peakpassvpn.ppvpn.${name#ppvpn-}" "$out/$name-signature-check.txt"
 done
 "$artifact/ppvpn-service" --build-info > "$out/build-info.json"
 python3 - "$out/build-info.json" <<'PY'
@@ -44,6 +47,8 @@ installed=0
 cleanup() {
   set +e
   if (( installed )); then
+    sudo /usr/bin/tail -c 65536 /Library/Logs/PPVPN/ppvpn-service.err.log > "$out/root-stderr.txt" 2>&1
+    sudo /usr/bin/tail -c 65536 /Library/Logs/PPVPN/ppvpn-service.out.log > "$out/root-stdout.txt" 2>&1
     sudo /bin/launchctl bootout "gui/$uid/$agent" 2>/dev/null
     sudo "$artifact/ppvpn-service-uninstall" > "$out/uninstall.txt" 2>&1
   fi
@@ -59,6 +64,7 @@ trap cleanup EXIT
 sudo /usr/bin/install -o root -g wheel -m 644 /dev/null "$marker"
 installed=1
 sudo "$artifact/ppvpn-service-install" > "$out/install.txt" 2>&1
+verify_signature "$image" com.peakpassvpn.ppvpn.service "$out/installed-helper-signature-check.txt"
 sudo /bin/launchctl print "system/$daemon" > "$out/root-job.txt"
 plutil -convert json -o "$out/daemon.json" "$plist"
 plutil -convert json -o "$out/agent.json" "/Library/LaunchAgents/$agent.plist"
