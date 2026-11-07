@@ -14,6 +14,16 @@ from push_config import decode_profile, profile_contract as push_profile_contrac
 from verify_ios_package import profile_contract, verify
 
 
+def prepare_background_modes(info, enabled):
+    if not enabled:
+        return
+    modes = info.get('UIBackgroundModes', [])
+    if not isinstance(modes, list) or not all(isinstance(mode, str) for mode in modes):
+        raise ValueError('iOS background modes must be an array of strings')
+    if 'remote-notification' not in modes:
+        info['UIBackgroundModes'] = [*modes, 'remote-notification']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive', type=Path)
@@ -37,6 +47,7 @@ def main():
               ('PacketTunnel', 'com.peakpassvpn.ppvpn.tunnel', args.tunnel_profile)]
     prepared = []
     original_app = args.archive / 'Products/Applications/Runner.app'
+    original_modes = plistlib.loads((original_app / 'Info.plist').read_bytes()).get('UIBackgroundModes', [])
     for target, topic, path in inputs:
         profile = decode_profile(path)
         if args.identity.upper() not in {hashlib.sha1(cert).hexdigest().upper()
@@ -54,6 +65,7 @@ def main():
             ent['beta-reports-active'] = permitted['beta-reports-active']
         ent.pop('aps-environment', None)
         if target == 'Runner':
+            prepare_background_modes(info, args.push_enabled)
             info['PPVPNApplePushEnabled'] = args.push_enabled
             info.pop('PPVPNAPNsEntitlementEnvironment', None)
             if args.push_enabled:
@@ -98,6 +110,10 @@ def main():
     archive_info['ApplicationProperties'].update(SigningIdentity=authority, Team=args.team)
     info_path.write_bytes(plistlib.dumps(archive_info))
     result = verify(app, args)
+    result['background_mode_conversion'] = {
+        'unsigned': original_modes,
+        'signed': plistlib.loads((app / 'Info.plist').read_bytes()).get('UIBackgroundModes', []),
+    }
     result['archive_preparation'] = 'separate signed copy with source entitlements and unchanged embedded profiles'
     args.output.with_suffix('.verification.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps({'signed_archive': args.output.name, 'method': args.method,
