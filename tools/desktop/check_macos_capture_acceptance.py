@@ -66,12 +66,17 @@ def capture_routes(text):
         elif fields and fields[0] == "Destination":
             require("Netif" in fields, "missing route interface column")
             interface_column = fields.index("Netif")
-        elif interface_column is not None and len(fields) > interface_column:
+            # An empty or absent family table is distinct from a table whose
+            # routes happened not to match the capture filter.
+            rows.append(("table", "IPv6" if ipv6 else "IPv4", "", ""))
+        elif interface_column is not None and fields:
+            require(len(fields) > interface_column, "truncated route row")
+            interface = fields[interface_column]
             network = route_network(fields[0], ipv6)
             if network is None:
+                require(not interface.startswith("utun"), "unparsed utun route")
                 continue
-            interface = fields[interface_column]
-            relevant = (network in split_routes or interface.startswith("utun") or
+            relevant = (network.prefixlen == 0 or network in split_routes or interface.startswith("utun") or
                         any(network.version == subnet.version and
                             network.subnet_of(subnet) for subnet in owned))
             if relevant:
@@ -88,6 +93,14 @@ def default_route(text):
             values[key] = value.strip()
     require("gateway" in values and "interface" in values, "missing default route")
     return values
+
+
+def utun_interfaces(text):
+    names = text.split()
+    require("lo0" in names and len(names) == len(set(names)) and
+            all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", name) for name in names),
+            "missing interface snapshot or malformed interface inventory")
+    return sorted(name for name in names if re.fullmatch(r"utun\d+", name))
 
 
 def validate(directory):
@@ -108,6 +121,15 @@ def validate(directory):
             "missing unique forwarding owner")
     require(all(row.get("owner") == owner and row.get("runtime_ids") == runtime
                 for row in events), "forwarding owner/runtime changed")
+    for row in events:
+        current_owner, current_runtime = row["owner"], row["runtime_ids"][0]
+        require(isinstance(current_owner, dict) and
+                isinstance(current_owner.get("instance"), str) and
+                bool(current_owner["instance"].strip()) and
+                type(current_owner.get("generation")) is int and
+                0 <= current_owner["generation"] < 2 ** 64, "invalid forwarding owner")
+        require(type(current_runtime) is int and 0 <= current_runtime < 2 ** 64,
+                "invalid runtime identity")
     complete = rows[-1]
     require(complete.get("cycles") == 20 and complete.get("runtime_ids") == [],
             "runtime did not settle after twenty cycles")
@@ -125,9 +147,8 @@ def validate(directory):
             "dns": dns_state(dns_text),
             "routes": capture_routes((directory / f"routes-{stage}.txt").read_text()),
             "default": default_route((directory / f"default-{stage}.txt").read_text()),
-            "utun_interfaces": sorted(name for name in
-                (directory / f"interfaces-{stage}.txt").read_text().split()
-                if re.fullmatch(r"utun\d+", name)),
+            "utun_interfaces": utun_interfaces(
+                (directory / f"interfaces-{stage}.txt").read_text()),
         }
         if stage == "before":
             baseline = state
