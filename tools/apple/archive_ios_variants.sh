@@ -88,6 +88,10 @@ for name in ('AppDelegate.swift', 'GeneratedPluginRegistrant.h', 'GeneratedPlugi
 for src in Path(os.environ['RUNNER_TEMP']).joinpath('apple-derived-' + os.environ['SIDE']).rglob('*LinkMap*.txt'):
     with gzip.open(output / (src.name + '.gz'), 'wb') as f:
         f.write(src.read_bytes())
+try:
+    host_go = subprocess.check_output(['go', 'version'], text=True, stderr=subprocess.DEVNULL).strip()
+except (OSError, subprocess.CalledProcessError):
+    host_go = None
 data = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip(),
         'generated_ios_source_sha256': generated_hashes,
         'cargo_lock_sha256': hashlib.sha256((checkout / 'Cargo.lock').read_bytes()).hexdigest(),
@@ -95,7 +99,8 @@ data = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], c
         'build_number': os.environ['PPVPN_BUILD_NUMBER'], 'architecture': 'arm64',
         'variant': os.environ['SIDE'], 'canonical_build_seconds': int(os.environ['BUILD_SECONDS']),
         'same_checkout_pair': bool(os.environ.get('PAIRED_CANDIDATE_JSON')),
-        'host_go': subprocess.check_output(['go', 'version'], text=True).strip(),
+        'host_go': host_go,
+        'host_go_scope': 'parent PATH only; null does not assert the build script Go toolchain',
         'xcode': subprocess.check_output(['xcodebuild', '-version'], text=True).strip(),
         'iphoneos_sdk': subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True).strip(),
         'rust': subprocess.check_output(['rustc', '--version'], text=True).strip(),

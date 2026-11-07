@@ -14,7 +14,7 @@ from candidate_variants import plan
 
 @unittest.skipUnless(shutil.which('ruby') and shutil.which('bash'), 'requires workflow shell/YAML reader')
 class PairedArchiveShell(unittest.TestCase):
-    def execute(self, stale=False, expired=False):
+    def execute(self, stale=False, expired=False, missing_go=False):
         repo = Path(__file__).resolve().parents[2]
         workflow = json.loads(subprocess.check_output(
             ['ruby', '-rjson', '-ryaml', '-e', 'puts JSON.generate(YAML.load_file(ARGV[0]))',
@@ -59,6 +59,8 @@ with (Path(os.environ['RUNNER_TEMP'])/'build-calls').open('a') as f:f.write(os.e
                                  ('go', 'go fixture'), ('xcrun', 'fixture SDK'),
                                  ('flutter', '{"frameworkVersion":"fixture"}')]:
                 write(bins / name, '#!/bin/sh\nprintf \'%s\\n\' \'' + output + '\'\n')
+            if missing_go:
+                write(bins / 'go', '#!/bin/sh\nexit 127\n')
             for command in [['git', 'init', '-q'], ['git', 'add', '.'],
                             ['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                              'commit', '-qm', 'controller fixture']]:
@@ -98,10 +100,15 @@ with (Path(os.environ['RUNNER_TEMP'])/'build-calls').open('a') as f:f.write(os.e
                 self.assertEqual(proof['source_commit'], ref)
                 self.assertEqual(proof['variant'], 'secondary')
                 self.assertTrue(proof['same_checkout_pair'])
+                if missing_go:
+                    self.assertIsNone(proof['host_go'])
             self.assertEqual(calls, [primary] if expired else [primary, secondary])
 
     def test_canonical_pair_preserves_first_archive_and_uses_shared_target(self):
         self.execute()
+
+    def test_absent_parent_go_does_not_discard_valid_archives(self):
+        self.execute(missing_go=True)
 
     def test_stale_native_origin_cannot_produce_second_provenance(self):
         self.execute(stale=True)
