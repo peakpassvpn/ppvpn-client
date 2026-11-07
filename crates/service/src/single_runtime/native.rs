@@ -717,7 +717,10 @@ impl ScopedRoute {
             || address.is_multicast()
             || (self.family != "-inet" && self.family != "-inet6")
             || (self.family == "-inet") != address.is_ipv4()
-            || zone.is_some_and(|zone| self.family != "-inet6" || zone != self.interface)
+            || zone.is_some_and(|zone| {
+                self.family != "-inet6"
+                    || (zone != self.interface && zone != self.index.to_string())
+            })
         {
             bail!("CAPTURE_UPLINK_INVALID");
         }
@@ -727,7 +730,7 @@ impl ScopedRoute {
         self.family == other.family
             && self.interface == other.interface
             && self.index == other.index
-            && self.gateway == other.gateway
+            && scoped_gateway_matches(&self.gateway, other)
     }
 }
 fn scoped_candidates(store: &Store, own_interface: &str, ipv6: bool) -> Result<Vec<ScopedRoute>> {
@@ -785,6 +788,27 @@ fn scoped_arguments<'a>(route: &'a ScopedRoute, operation: &'a str) -> Vec<&'a s
     }
     args
 }
+fn scoped_gateway_matches(actual: &str, route: &ScopedRoute) -> bool {
+    let split = |value: &str| {
+        let (address, zone) = value
+            .split_once('%')
+            .map_or((value, None), |(ip, zone)| (ip, Some(zone)));
+        (
+            address.parse::<std::net::IpAddr>().ok(),
+            zone.map(str::to_owned),
+        )
+    };
+    let (actual, actual_zone) = split(actual);
+    let (expected, expected_zone) = split(&route.gateway);
+    actual.is_some()
+        && actual == expected
+        && (actual.is_some_and(|ip| ip.is_ipv6())
+            || (actual_zone.is_none() && expected_zone.is_none()))
+        && [actual_zone, expected_zone].iter().all(|zone| {
+            zone.as_ref()
+                .is_none_or(|zone| zone == &route.interface || zone == &route.index.to_string())
+        })
+}
 fn scoped_matches(text: &str, route: &ScopedRoute, require_gateway: bool) -> bool {
     let field = |key: &str| {
         text.lines()
@@ -802,7 +826,8 @@ fn scoped_matches(text: &str, route: &ScopedRoute, require_gateway: bool) -> boo
         && mask
         && scoped
         && field("interface:") == Some(route.interface.as_str())
-        && (!require_gateway || field("gateway:") == Some(route.gateway.as_str()))
+        && (!require_gateway
+            || field("gateway:").is_some_and(|gateway| scoped_gateway_matches(gateway, route)))
 }
 fn clear_scoped_route(route: &mut ScopedRoute) -> Result<()> {
     if !route.owned {
@@ -1086,6 +1111,21 @@ mod ownership_tests {
                 "192.168.64.1"
             ]
         );
+        assert!(!scoped_gateway_matches("192.168.64.1%en0", &route));
+        let v6 = ScopedRoute {
+            family: "-inet6".into(),
+            interface: "en0".into(),
+            index: 7,
+            gateway: "fe80::1%en0".into(),
+            owned: true,
+        };
+        v6.validate().unwrap();
+        assert!(scoped_gateway_matches(
+            "fe80:0000:0000:0000:0000:0000:0000:0001%7",
+            &v6
+        ));
+        assert!(!scoped_gateway_matches("fe80::1%en1", &v6));
+        assert!(!scoped_gateway_matches("fe80::2%en0", &v6));
         let mut borrowed = route.clone();
         borrowed.owned = false;
         clear_scoped_route(&mut borrowed).unwrap();
