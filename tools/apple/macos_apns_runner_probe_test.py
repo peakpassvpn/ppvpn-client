@@ -5,7 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from macos_apns_runner_probe import Refused, outcome, require_hosted_mac, source_hashes
+from macos_apns_runner_probe import Refused, existing_ppvpn, owned_candidate_pids, outcome, require_hosted_mac, source_hashes
 
 
 class ProbeBoundaries(unittest.TestCase):
@@ -51,6 +51,16 @@ class ProbeBoundaries(unittest.TestCase):
         for mutated in [values | {'SECRET': 'c' * 64}, values | {next(iter(values)): 'SECRET'}, {}]:
             with self.assertRaises(Refused):
                 source_hashes({'source_sha256': mutated})
+
+    def test_reused_diagnostic_in_a_different_path_also_blocks_fresh_probe(self):
+        self.assertTrue(existing_ppvpn([(42, '/old/Probe.app/Contents/MacOS/PPVPNAPNsProbe')], '/new/PPVPNAPNsProbe'))
+        self.assertTrue(existing_ppvpn([(42, '/old/PPVPN Agent')], '/new/PPVPNAPNsProbe'))
+        self.assertFalse(existing_ppvpn([(42, '/usr/bin/other')], '/new/PPVPNAPNsProbe'))
+
+    def test_cleanup_selects_only_new_exact_image_never_agent_or_other_process(self):
+        rows = [(1, '/owned/PPVPNAPNsProbe'), (2, '/owned/PPVPNAPNsProbe'),
+                (3, '/different/PPVPNAPNsProbe'), (4, '/owned/PPVPN Agent'), (5, '/usr/bin/other')]
+        self.assertEqual(owned_candidate_pids(rows, {1}, '/owned/PPVPNAPNsProbe'), [2])
 
     def test_local_cli_refuses_before_any_file_or_app_action(self):
         with tempfile.TemporaryDirectory() as temp:

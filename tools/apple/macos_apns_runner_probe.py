@@ -69,6 +69,15 @@ def processes():
     return rows
 
 
+def existing_ppvpn(rows, executable):
+    names = {'PPVPN', 'PPVPN Agent', 'PPVPNAPNsProbe', 'ppvpn-service', Path(executable).name}
+    return any(Path(path).name in names for _, path in rows)
+
+
+def owned_candidate_pids(rows, baseline_pids, executable):
+    return [pid for pid, path in rows if path == executable and pid not in baseline_pids]
+
+
 def outcome(receipts):
     # Callers preserve source PID privately while filtering the exact image
     # path. A request from another launch cannot prove this callback's chain.
@@ -149,7 +158,7 @@ def probe(args, report):
     if any(path.exists() for path in [home / 'Library/Application Support/PPVPN', home / 'Library/Logs/PPVPN']):
         raise Refused('PREEXISTING_PPVPN_USER_DATA')
     before = processes()
-    if any(Path(path).name in ('PPVPN', 'PPVPN Agent', 'ppvpn-service') or path == str(executable) for _, path in before):
+    if existing_ppvpn(before, str(executable)):
         raise Refused('PREEXISTING_PPVPN_PROCESS')
     agent = run(['/bin/launchctl', 'print', 'gui/' + str(os.getuid()) + '/com.peakpassvpn.ppvpn.desktop.agent'])
     if agent.returncode == 0:
@@ -178,7 +187,7 @@ def probe(args, report):
             raise Refused('LAUNCHSERVICES_REJECTED_CANDIDATE')
         launched = True
         report['launch_requested'] = True
-        report['app_launched'] = any(path == str(executable) and pid not in baseline_pids for pid, path in processes())
+        report['app_launched'] = bool(owned_candidate_pids(processes(), baseline_pids, str(executable)))
         while time.monotonic() - started < args.timeout:
             if stream.poll() is not None:
                 report['result'] = 'UNIFIED_LOG_STREAM_EXITED'
@@ -226,17 +235,29 @@ def probe(args, report):
             stream.kill(); stream.wait(timeout=5)
         stream.stdout.close()
         stopped = 0
+        cleanup_errors = []
         try:
             if launched:
-                for pid, path in processes():
-                    if path == str(executable) and pid not in baseline_pids:
-                        try:
-                            os.kill(pid, signal.SIGTERM)
-                            stopped += 1
-                        except ProcessLookupError:
-                            pass
+                for pid in owned_candidate_pids(processes(), baseline_pids, str(executable)):
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        stopped += 1
+                    except ProcessLookupError:
+                        pass
+                    except OSError as error:
+                        cleanup_errors.append(error.errno or 0)
+                stop_deadline = time.monotonic() + 3
+                remaining = owned_candidate_pids(processes(), baseline_pids, str(executable))
+                while remaining and time.monotonic() < stop_deadline:
+                    time.sleep(0.25)
+                    remaining = owned_candidate_pids(processes(), baseline_pids, str(executable))
+                report['owned_candidate_processes_remaining'] = len(remaining)
         except Refused:
             report['owned_candidate_cleanup_inventory_failed'] = True
+        report['owned_candidate_cleanup_complete'] = not (
+            cleanup_errors or report.get('owned_candidate_processes_remaining', 0)
+            or report.get('owned_candidate_cleanup_inventory_failed', False))
+        report['owned_candidate_termination_error_codes'] = cleanup_errors
         report['owned_candidate_termination_requests'] = stopped
         report['receipts'] = [receipt for _, receipt in receipts]
         report['stage_counts'] = {stage: sum(r['stage'] == stage for _, r in receipts)
@@ -278,7 +299,7 @@ def main():
         json.dump(report, output, indent=2)
         output.write('\n')
     print(json.dumps({'result': report['result'], 'real_delivery_acceptance': 'NOT RUN'}))
-    return 0 if report['result'] == 'OS_TOKEN_CALLBACK_OBSERVED' else 2
+    return 0 if report['result'] == 'OS_TOKEN_CALLBACK_OBSERVED' and report.get('owned_candidate_cleanup_complete') is True else 2
 
 
 if __name__ == '__main__':
