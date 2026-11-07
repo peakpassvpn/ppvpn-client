@@ -75,9 +75,16 @@ class AppState with WidgetsBindingObserver {
         register: transport.register,
         unregister: transport.unregister,
         ownerChanged: transport.followAccount,
+        isForeground: () =>
+            WidgetsBinding.instance.lifecycleState ==
+                AppLifecycleState.resumed &&
+            !authenticationPresentationActive.value,
       )..start();
       _followAppleOwner(initial);
       WidgetsBinding.instance.addObserver(this);
+      authenticationPresentationActive.addListener(
+        _authenticationPresentationChanged,
+      );
     }
     if (Platform.isIOS) {
       _network = const EventChannel('com.peakpassvpn.ppvpn/network-state')
@@ -284,6 +291,16 @@ class AppState with WidgetsBindingObserver {
     await _appleTransport?.updates(snapshot.value.accountId!);
     if (owner != messages.ownerEpoch || _stopped) return;
     await messages.reload();
+  }
+
+  void _authenticationPresentationChanged() {
+    if (_stopped ||
+        authenticationPresentationActive.value ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed)
+      return;
+    // ASWebAuthenticationSession may close without a distinct resumed event.
+    // Retry the already committed permission intent after normal close ACK.
+    unawaited(_refreshAppleOnResume());
   }
 
   @override
@@ -585,6 +602,9 @@ class AppState with WidgetsBindingObserver {
     _stopped = true;
     _applePush?.dispose();
     WidgetsBinding.instance.removeObserver(this);
+    authenticationPresentationActive.removeListener(
+      _authenticationPresentationChanged,
+    );
     SystemVpn.state.removeListener(_systemVpnChanged);
     unawaited(_network?.cancel());
     rust.shutdown();

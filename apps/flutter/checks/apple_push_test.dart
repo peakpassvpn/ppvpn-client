@@ -230,4 +230,136 @@ void main() {
       push.dispose();
     },
   );
+  test('permission prompt does not block committed registration ACK or logout drain and runs once', () async {
+    final dialog = Completer<bool>();
+    var prompts = 0;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'account')
+        epoch = (call.arguments as Map)['clientEpoch'] as String;
+      if (call.method == 'configured') return true;
+      if (call.method == 'permission') {
+        prompts++;
+        expect((call.arguments as Map)['clientEpoch'], epoch);
+        return dialog.future;
+      }
+      return null;
+    });
+    final push = ApplePush(
+      notice: (_, _, _, _) async => false,
+      register: (_) async => true,
+      isForeground: () => true,
+    )..start();
+    await push.followAccount(state: 'signedIn', id: 'one');
+    expect(
+      await native('register', {
+        'accountID': 'one',
+      }).timeout(const Duration(seconds: 1)),
+      true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(prompts, 1);
+    expect(await native('register', {'accountID': 'one'}), true);
+    await push.beforeSignOut().timeout(const Duration(seconds: 1));
+    expect(prompts, 1);
+    dialog.complete(true);
+    await Future<void>.delayed(Duration.zero);
+    push.dispose();
+  });
+
+  test(
+    'background registration defers prompt until foreground resume',
+    () async {
+      var foreground = false;
+      var prompts = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'account')
+          epoch = (call.arguments as Map)['clientEpoch'] as String;
+        if (call.method == 'configured') return true;
+        if (call.method == 'permission') {
+          prompts++;
+          return true;
+        }
+        return null;
+      });
+      final push = ApplePush(
+        notice: (_, _, _, _) async => false,
+        register: (_) async => true,
+        isForeground: () => foreground,
+      )..start();
+      await push.followAccount(state: 'signedIn', id: 'one');
+      expect(await native('register', {'accountID': 'one'}), true);
+      await Future<void>.delayed(Duration.zero);
+      expect(prompts, 0);
+      foreground = true;
+      await push.resume();
+      await Future<void>.delayed(Duration.zero);
+      expect(prompts, 1);
+      push.dispose();
+    },
+  );
+
+  test('failed or disabled registration never requests permission', () async {
+    var committed = false;
+    var prompts = 0;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'account')
+        epoch = (call.arguments as Map)['clientEpoch'] as String;
+      if (call.method == 'configured') return false;
+      if (call.method == 'permission') prompts++;
+      return null;
+    });
+    final push = ApplePush(
+      notice: (_, _, _, _) async => false,
+      register: (_) async => committed,
+      isForeground: () => true,
+    )..start();
+    await push.followAccount(state: 'signedIn', id: 'one');
+    expect(await native('register', {'accountID': 'one'}), false);
+    committed = true;
+    expect(await native('register', {'accountID': 'one'}), true);
+    await Future<void>.delayed(Duration.zero);
+    expect(prompts, 0);
+    push.dispose();
+  });
+
+  for (final boundary in ['dispose', 'owner', 'background']) {
+    test(
+      'permission rechecks $boundary after native configuration read',
+      () async {
+        final configured = Completer<bool>();
+        final entered = Completer<void>();
+        var foreground = true;
+        var prompts = 0;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'account')
+            epoch = (call.arguments as Map)['clientEpoch'] as String;
+          if (call.method == 'configured') {
+            if (!entered.isCompleted) entered.complete();
+            return configured.future;
+          }
+          if (call.method == 'permission') {
+            prompts++;
+            return true;
+          }
+          return null;
+        });
+        final push = ApplePush(
+          notice: (_, _, _, _) async => false,
+          register: (_) async => true,
+          isForeground: () => foreground,
+        )..start();
+        await push.followAccount(state: 'signedIn', id: 'one');
+        expect(await native('register', {'accountID': 'one'}), true);
+        await entered.future;
+        if (boundary == 'dispose') push.dispose();
+        if (boundary == 'owner')
+          await push.followAccount(state: 'signedIn', id: 'two');
+        if (boundary == 'background') foreground = false;
+        configured.complete(true);
+        await Future<void>.delayed(Duration.zero);
+        expect(prompts, 0);
+        push.dispose();
+      },
+    );
+  }
 }
