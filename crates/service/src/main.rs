@@ -125,12 +125,34 @@ fn main() {
             && role != "--capture-broker"
             && role != "--user-runtime-login"
             && role != "--build-info"
-            && !(cfg!(feature = "macos-capture-acceptance") && role == "--capture-acceptance")
+            && !(cfg!(feature = "macos-capture-acceptance")
+                && (role == "--capture-acceptance" || role == "--capture-lab-acceptance"))
             && role != update::RUNNER_FLAG
         {
             eprintln!("service: SERVICE_ROLE_UNSUPPORTED");
             std::process::exit(1);
         }
+    }
+    #[cfg(all(target_os = "macos", feature = "macos-capture-acceptance"))]
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--capture-lab-acceptance"))
+    {
+        if std::env::args_os().count() != 2 {
+            eprintln!("capture lab acceptance: EXACT_ROLE_REQUIRED");
+            std::process::exit(1);
+        }
+        if let Err(e) = ppvpn_service::single_runtime::acceptance_guard::authorize()
+            .and_then(|_| ppvpn_service::single_runtime::agent::validate_installation())
+        {
+            eprintln!("capture lab acceptance: {e}");
+            std::process::exit(1);
+        }
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(ppvpn_service::single_runtime::gateway::native_acceptance());
+        return;
     }
     #[cfg(all(target_os = "macos", feature = "macos-capture-acceptance"))]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--capture-acceptance")) {

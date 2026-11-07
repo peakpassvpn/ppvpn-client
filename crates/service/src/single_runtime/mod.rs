@@ -26,3 +26,6 @@ pub mod native;
 
 #[cfg(target_os = "macos")]
 pub mod login;
+
+#[cfg(all(target_os = "macos", feature = "macos-capture-acceptance"))]
+pub mod acceptance_guard;
