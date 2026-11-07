@@ -88,7 +88,7 @@ void main() {
       );
       for (final base in [
         '/data/user/0/com.peakpassvpn.ppvpn/files',
-        '/private/var/mobile/Containers/Shared/AppGroup/group',
+        '/private/var/mobile/Containers/Shared/AppGroup/group', // sensitive-check: allow — synthetic canonical iOS AppGroup test path
       ]) {
         expect(hostCoreLogDirectory(base), '$base/tunnel-state/logs');
       }
