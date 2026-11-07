@@ -43,6 +43,47 @@ Widget _host(
 );
 
 void main() {
+  testWidgets('zero-duration completed push reveals the inbox before any pop', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.platformDispatcher.clearAccessibilityFeaturesTestValue();
+    });
+    final app = sampleState();
+    final observer = _Observer();
+    final navigator = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(_host(app, observer, navigator));
+    await tester.pump();
+    app.showPage(WindowPage.messages, openingMessage: true);
+    app.messages.requestOpen((
+      messageId: null,
+      push: app.messages.view.value.items.first,
+    ));
+    await tester.pump();
+    await tester.pump();
+    final detail = observer.pushes.last as PageRoute;
+    expect(detail.transitionDuration, Duration.zero);
+    expect(detail.animation!.status, AnimationStatus.completed);
+    expect(detail.isCurrent, true);
+    expect(observer.pops, isEmpty);
+    final opacity = find.ancestor(
+      of: find.byType(PhoneMessagesPage, skipOffstage: false),
+      matching: find.byType(Opacity, skipOffstage: false),
+    );
+    expect(
+      tester.widget<Opacity>(opacity.first).opacity,
+      1,
+      reason:
+          'Already-completed push must reveal the back-stack list before pop',
+    );
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
+    tester.platformDispatcher.clearAccessibilityFeaturesTestValue();
+  });
   for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
     testWidgets(
       '$platform notification reuses the existing inbox beneath a detail',
