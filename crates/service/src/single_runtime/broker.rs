@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::{
         fd::{AsRawFd, OwnedFd},
         unix::{
@@ -39,9 +39,6 @@ pub const DIRECTORY: &str = "/Library/Application Support/PPVPN/run/capture";
 pub const SOCKET: &str = "/Library/Application Support/PPVPN/run/capture/broker.sock";
 pub const JOURNAL: &str = "/Library/Application Support/PPVPN/run/capture/grant.json";
 const FRAME_LIMIT: usize = 16 * 1024;
-// Both sides must allow the same bounded local-IPC scheduling window. The
-// shared core still limits each host step to three seconds; sessions last five.
-pub const READ_WINDOW: Duration = Duration::from_millis(2400);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grant {
@@ -259,9 +256,14 @@ impl Ledger {
         Ok(None)
     }
 }
+fn configure_accepted_stream(stream: &UnixStream) -> io::Result<()> {
+    // Darwin inherits O_NONBLOCK from the listener. SO_RCVTIMEO alone does not
+    // change that flag: a second frame would immediately fail with EAGAIN.
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_millis(600)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(600)))
+}
 fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Result<()> {
-    stream.set_read_timeout(Some(READ_WINDOW))?;
-    stream.set_write_timeout(Some(Duration::from_millis(600)))?;
     let (untrusted, token) = mac_peer::audit_peer(stream)?;
     let peer = mac_peer::verify(
         stream,
@@ -425,6 +427,10 @@ pub fn start() -> Result<()> {
                 }
                 match endpoint.listener.accept() {
                     Ok((mut stream, _)) => {
+                        if let Err(error) = configure_accepted_stream(&stream) {
+                            native::diagnostic("broker-accepted-stream", &error.into());
+                            continue;
+                        }
                         if let Err(error) = transact(&mut stream, &mut ledger, generation) {
                             native::diagnostic("broker-transport", &error);
                         }
@@ -475,6 +481,133 @@ pub fn shutdown() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn darwin_accepted_stream_blocks_for_a_delayed_signed_second_frame() {
+        for raw_accept in [false, true] {
+            let directory = std::env::temp_dir().canonicalize().unwrap().join(format!(
+                "pv-{}",
+                &uuid::Uuid::new_v4().simple().to_string()[..8]
+            ));
+            std::fs::create_dir(&directory).unwrap();
+            let path = directory.join("s");
+            let listener = UnixListener::bind(&path).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let mut client = UnixStream::connect(&path).unwrap();
+            let mut accepted = if raw_accept {
+                let _gate = ppvpn_core::capture_host::fd_spawn_guard();
+                use std::os::fd::FromRawFd;
+                let fd = unsafe {
+                    libc::accept(
+                        listener.as_raw_fd(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                };
+                assert!(fd >= 0);
+                assert_eq!(
+                    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                    0
+                );
+                unsafe { UnixStream::from_raw_fd(fd) }
+            } else {
+                listener.accept().unwrap().0
+            };
+            assert_ne!(
+                unsafe { libc::fcntl(accepted.as_raw_fd(), libc::F_GETFL) } & libc::O_NONBLOCK,
+                0
+            );
+            let mut byte = [0];
+            let before = Instant::now();
+            assert_eq!(
+                accepted.read(&mut byte).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+            assert!(before.elapsed() < Duration::from_millis(100));
+            configure_accepted_stream(&accepted).unwrap();
+            assert_eq!(
+                accepted.read_timeout().unwrap(),
+                Some(Duration::from_millis(600))
+            );
+            assert_eq!(
+                accepted.write_timeout().unwrap(),
+                Some(Duration::from_millis(600))
+            );
+            assert_eq!(
+                unsafe { libc::fcntl(accepted.as_raw_fd(), libc::F_GETFL) } & libc::O_NONBLOCK,
+                0
+            );
+            let server = std::thread::spawn(move || {
+                let (peer, _) = mac_peer::audit_peer(&accepted).unwrap();
+                let hello: Request = read_frame(&mut accepted).unwrap();
+                assert_eq!(hello.command, Command::Handshake);
+                let key = [0x42; 32];
+                let token = uuid::Uuid::new_v4().to_string();
+                let mut session = Session::new(
+                    peer,
+                    key,
+                    token.clone(),
+                    1,
+                    Instant::now(),
+                    Duration::from_secs(5),
+                )
+                .unwrap();
+                let started = Instant::now();
+                write_frame(
+                    &mut accepted,
+                    &Response::unsigned(
+                        hello.id,
+                        true,
+                        Some(
+                            serde_json::to_value(HandshakeResponse {
+                                auth_token: token,
+                                auth_key: hex::encode(key),
+                                expires_at: protocol::now_epoch() + 5,
+                            })
+                            .unwrap(),
+                        ),
+                        None,
+                    ),
+                )
+                .unwrap();
+                let request: Request = read_frame(&mut accepted).unwrap();
+                assert!(started.elapsed() >= Duration::from_millis(80));
+                session
+                    .verify(peer, &request, 1, Instant::now(), protocol::now_epoch())
+                    .unwrap();
+                let response = session
+                    .sign_response(request.id, true, Some(json!({"probe":true})), None)
+                    .unwrap();
+                write_frame(&mut accepted, &response).unwrap();
+            });
+            let hello = Request {
+                id: uuid::Uuid::new_v4().to_string(),
+                timestamp: protocol::now_epoch(),
+                command: Command::Handshake,
+                payload: json!({}),
+                auth_token: None,
+                signature: String::new(),
+            };
+            write_frame(&mut client, &hello).unwrap();
+            let response: Response = read_frame(&mut client).unwrap();
+            let hello: HandshakeResponse = serde_json::from_value(response.data.unwrap()).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            let key = hex::decode(hello.auth_key).unwrap();
+            let request = Request::signed(
+                uuid::Uuid::new_v4().to_string(),
+                Command::CoreApi,
+                json!({"path":"probe"}),
+                Some(hello.auth_token),
+                &key,
+            )
+            .unwrap();
+            write_frame(&mut client, &request).unwrap();
+            let response: Response = read_frame(&mut client).unwrap();
+            assert!(response.success && response.verify_with(&key).unwrap());
+            server.join().unwrap();
+            drop((client, listener));
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
     #[test]
     fn capture_paths_share_the_protected_system_ipc_hierarchy() {
         let base = Path::new(crate::protocol::IPC_SOCKET_PATH)
