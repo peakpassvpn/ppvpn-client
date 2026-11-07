@@ -21,6 +21,8 @@ class PairedArchiveShell(unittest.TestCase):
              str(repo / '.github/workflows/apple-archive-acceptance.yml')]))
         script = next(s['run'] for s in workflow['jobs']['archives']['steps']
                       if s.get('name') == 'Serial Release archives on one compiler and SDK')
+        secondary_script = next(s['run'] for s in workflow['jobs']['archives']['steps']
+                                if s.get('name') == 'Second canonical origin using warm caches')
         with tempfile.TemporaryDirectory(prefix='ppvpn-paired-controller-') as directory:
             work = Path(directory)
             source, runner, target, bins = [work / n for n in ['source', 'runner', 'target', 'bin']]
@@ -33,6 +35,7 @@ class PairedArchiveShell(unittest.TestCase):
             write(source / 'tools/release-features-check.sh', '#!/bin/sh\nexit 0\n')
             write(source / 'apps/flutter/scripts/check-ios-exports.py', '#!/usr/bin/env python3\n')
             write(source / 'tools/apple/candidate_variants.py', (repo / 'tools/apple/candidate_variants.py').read_text())
+            write(source / 'tools/apple/archive_ios_variants.sh', (repo / 'tools/apple/archive_ios_variants.sh').read_text())
             write(source / 'Cargo.lock', '# fixture native inputs remain unchanged\n')
             write(source / 'runtime.rs', '// retained native source sentinel\n')
             write(source / 'apps/flutter/scripts/ci-build.sh',
@@ -80,6 +83,9 @@ with (Path(os.environ['RUNNER_TEMP'])/'build-calls').open('a') as f:f.write(os.e
             with tarfile.open(first) as archive:
                 data = archive.extractfile('Runner.xcarchive/Products/Applications/Runner.app/Runner').read()
             self.assertEqual(data.decode(), primary)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((runner / 'build-calls').read_text().splitlines(), [primary])
+            result = subprocess.run(['bash', '-c', secondary_script], cwd=source, env=env, capture_output=True, text=True)
             calls = (runner / 'build-calls').read_text().splitlines()
             second = runner / 'apple-output/secondary/build-provenance.json'
             if stale or expired:
