@@ -1,11 +1,23 @@
 import copy
 import datetime as dt
 import unittest
+from pathlib import Path
+import tempfile
 
-from verify_ios_package import profile_contract
+from verify_ios_package import profile_contract, require_selected_profile
 
 
 class IOSPackageContractTests(unittest.TestCase):
+    def test_export_cannot_replace_selected_profile_with_another_valid_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            expected, embedded = Path(directory) / 'approved', Path(directory) / 'embedded'
+            expected.write_bytes(b'fresh Apple profile')
+            embedded.write_bytes(expected.read_bytes())
+            self.assertTrue(require_selected_profile(embedded, expected))
+            embedded.write_bytes(b'older cached Apple profile')
+            with self.assertRaisesRegex(ValueError, 'replaced the explicitly selected'):
+                require_selected_profile(embedded, expected)
+
     def fixture(self):
         bundle = 'com.peakpassvpn.ppvpn'
         ent = {'application-identifier': 'OLDPREFIX.' + bundle,

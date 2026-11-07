@@ -72,6 +72,14 @@ def certificate_digest(bundle):
         return hashlib.sha256(Path(str(prefix) + '0').read_bytes()).hexdigest()
 
 
+def require_selected_profile(embedded, expected):
+    if expected is None:
+        return False
+    if embedded.read_bytes() != Path(expected).read_bytes():
+        raise ValueError('export replaced the explicitly selected provisioning profile')
+    return True
+
+
 def verify(app, args):
     bundles = [app, app / 'PlugIns/PacketTunnel.appex']
     if list((app / 'PlugIns').glob('*.appex')) != [bundles[1]]:
@@ -80,12 +88,16 @@ def verify(app, args):
     for bundle, topic in zip(bundles, ['com.peakpassvpn.ppvpn', 'com.peakpassvpn.ppvpn.tunnel']):
         info = plistlib.loads((bundle / 'Info.plist').read_bytes())
         signed = read_signature(bundle)
-        profile = decode_profile(bundle / 'embedded.mobileprovision')
+        embedded = bundle / 'embedded.mobileprovision'
+        expected = getattr(args, 'app_profile' if bundle == app else 'tunnel_profile', None)
+        selected_profile_verified = require_selected_profile(embedded, expected)
+        profile = decode_profile(embedded)
         row = profile_contract(info, signed, profile, topic, args.team, args.group, args.build, args.method, getattr(args, 'push_enabled', False))
         signer = certificate_digest(bundle)
         if signer not in {hashlib.sha256(cert).hexdigest() for cert in profile.get('DeveloperCertificates', [])}:
             raise ValueError('signer certificate is not authorized by embedded profile')
         row['signer_certificate_sha256'] = signer
+        row['explicitly_selected_profile_verified'] = selected_profile_verified
         rows.append(row)
     if rows[0]['signer_certificate_sha256'] != rows[1]['signer_certificate_sha256']:
         raise ValueError('app and extension signers differ')
@@ -109,6 +121,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact', type=Path)
     parser.add_argument('--method', required=True, choices=['debugging', 'release-testing', 'app-store-connect'])
+    parser.add_argument('--app-profile', type=Path, help='Require exact approved main-app profile bytes after export')
+    parser.add_argument('--tunnel-profile', type=Path, help='Require exact approved tunnel profile bytes after export')
     parser.add_argument('--push-enabled', action='store_true', help='Verify the main app against its actual profile APNs environment')
     parser.add_argument('--build', required=True)
     parser.add_argument('--team', default='HSVMRQBQJ2')
