@@ -108,6 +108,43 @@ class PushContractTests(unittest.TestCase):
             push.prepare(info, [ent], 'ios', False, None, 'com.example.app')
             self.assertNotIn('aps-environment', plistlib.loads(ent.read_bytes()))
 
+    def test_final_macos_identity_is_profile_authorized_and_atomic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            info, ent = Path(directory) / 'Info.plist', Path(directory) / 'Entitlements.plist'
+            profile = self.profile('macos')
+            profile['Entitlements']['keychain-access-groups'] = ['TESTTEAM00.*']
+            for conflict in (None, 'wrong-keychain', 'missing-authorization', 'wrong-identity'):
+                original = {'com.apple.security.network.client': True}
+                if conflict == 'wrong-keychain':
+                    original['keychain-access-groups'] = ['TESTTEAM00.other']
+                if conflict == 'wrong-identity':
+                    original[push.APP_KEYS['macos']] = 'OTHER.com.example.app'
+                profile['Entitlements']['keychain-access-groups'] = ([] if conflict == 'missing-authorization' else ['TESTTEAM00.*'])
+                info.write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.app'}))
+                ent.write_bytes(plistlib.dumps(original))
+                before = (info.read_bytes(), ent.read_bytes())
+                with patch.object(push, 'decode_profile', return_value=profile):
+                    if conflict:
+                        with self.assertRaises(ValueError):
+                            push.prepare(info, [ent], 'macos', True, Path('fixture'), 'com.example.app', True)
+                        self.assertEqual((info.read_bytes(), ent.read_bytes()), before)
+                    else:
+                        push.prepare(info, [ent], 'macos', True, Path('fixture'), 'com.example.app', True)
+                        actual = plistlib.loads(ent.read_bytes())
+                        self.assertEqual(actual['keychain-access-groups'], ['TESTTEAM00.com.example.app'])
+                        self.assertEqual(actual[push.APP_KEYS['macos']], 'TESTTEAM00.com.example.app')
+                        self.assertTrue(actual['com.apple.security.network.client'])
+
+    def test_final_signer_must_be_authorized_by_profile(self):
+        def extract(command, **kwargs):
+            prefix = next(item.split('=', 1)[1] for item in command if item.startswith('--extract-certificates='))
+            Path(prefix + '0').write_bytes(b'synthetic-public-certificate')
+        with patch.object(push.subprocess, 'run', side_effect=extract):
+            digest = push.require_profile_signer(Path('fixture.app'), {'DeveloperCertificates': [b'synthetic-public-certificate']})
+            self.assertEqual(len(digest), 64)
+            with self.assertRaisesRegex(ValueError, 'not authorized'):
+                push.require_profile_signer(Path('fixture.app'), {'DeveloperCertificates': [b'other-certificate']})
+
     def test_sources_are_idempotent_and_remove_only_identical_generated_copy(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -41,6 +41,40 @@ class IOSPackageContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.check(info, ent, profile)
 
+    def test_ad_hoc_production_push_is_device_limited_and_not_store(self):
+        info, ent, profile = self.fixture()
+        profile['ApplicationIdentifierPrefix'] = ['OLDPREFIX']
+        profile['ProvisionedDevices'] = ['fixture-device']
+        info.update(PPVPNApplePushEnabled=True, PPVPNAPNsEntitlementEnvironment='production')
+        ent['aps-environment'] = profile['Entitlements']['aps-environment'] = 'production'
+        row = profile_contract(info, ent, profile, 'com.peakpassvpn.ppvpn', 'TEAM',
+                               'group.product', '344', 'release-testing', True)
+        self.assertTrue(row['apns_enabled'])
+        with self.assertRaisesRegex(ValueError, 'App Store'):
+            profile_contract(info, ent, profile, 'com.peakpassvpn.ppvpn', 'TEAM',
+                             'group.product', '344', 'app-store-connect', True)
+
+    def test_production_distribution_rejects_sandbox_push(self):
+        info, ent, profile = self.fixture()
+        profile['ApplicationIdentifierPrefix'] = ['OLDPREFIX']
+        profile['ProvisionedDevices'] = ['fixture-device']
+        info.update(PPVPNApplePushEnabled=True, PPVPNAPNsEntitlementEnvironment='development')
+        ent['aps-environment'] = profile['Entitlements']['aps-environment'] = 'development'
+        with self.assertRaisesRegex(ValueError, 'production APNs'):
+            profile_contract(info, ent, profile, 'com.peakpassvpn.ppvpn', 'TEAM',
+                             'group.product', '344', 'release-testing', True)
+
+    def test_push_must_be_explicit_and_authorized_by_profile(self):
+        info, ent, profile = self.fixture()
+        profile['ApplicationIdentifierPrefix'] = ['OLDPREFIX']
+        info.update(PPVPNApplePushEnabled=True, PPVPNAPNsEntitlementEnvironment='production')
+        ent['aps-environment'] = 'production'
+        with self.assertRaises(ValueError):
+            self.check(info, ent, profile)
+        with self.assertRaises(ValueError):
+            profile_contract(info, ent, profile, 'com.peakpassvpn.ppvpn', 'TEAM',
+                             'group.product', '344', 'app-store-connect', True)
+
 
 if __name__ == '__main__':
     unittest.main()

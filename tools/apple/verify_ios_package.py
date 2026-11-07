@@ -10,10 +10,10 @@ import plistlib
 import subprocess
 import tempfile
 
-from push_config import decode_profile, inspect_artifact, read_signature
+from push_config import check_contract as push_contract, decode_profile, inspect_artifact, read_signature
 
 
-def profile_contract(info, signed, profile, bundle, team, group, build, method):
+def profile_contract(info, signed, profile, bundle, team, group, build, method, push_enabled=False):
     def require(value, message):
         if not value:
             raise ValueError(message)
@@ -37,6 +37,9 @@ def profile_contract(info, signed, profile, bundle, team, group, build, method):
     require(bool(ent.get('get-task-allow')) == development, 'profile development entitlement differs')
     if development:
         require(bool(profile.get('ProvisionedDevices')), 'development profile has no allowed device')
+    elif method == 'release-testing':
+        require(bool(profile.get('ProvisionedDevices')) and not profile.get('ProvisionsAllDevices'),
+                'Ad Hoc profile must authorize devices without enterprise scope')
     else:
         require(not profile.get('ProvisionedDevices') and not profile.get('ProvisionsAllDevices'),
                 'App Store profile retains a device list or enterprise scope')
@@ -46,13 +49,19 @@ def profile_contract(info, signed, profile, bundle, team, group, build, method):
     allowed = ent.get('keychain-access-groups', [])
     for access in signed.get('keychain-access-groups', []):
         require(any(fnmatch.fnmatchcase(access, pattern) for pattern in allowed), 'keychain access group exceeds profile')
-    require(not info.get('PPVPNApplePushEnabled', False) and 'PPVPNAPNsEntitlementEnvironment' not in info,
-            'push must remain disabled for this rollout')
-    require('aps-environment' not in signed, 'disabled push retains signed APNs entitlement')
+    app_push = push_enabled and bundle == 'com.peakpassvpn.ppvpn'
+    if app_push:
+        push_contract(info, signed, profile, 'ios', True, bundle,
+                      distribution=method != 'debugging', app_store=method == 'app-store-connect')
+    else:
+        require(not info.get('PPVPNApplePushEnabled', False) and 'PPVPNAPNsEntitlementEnvironment' not in info,
+                'push must remain disabled for this rollout or extension')
+        require('aps-environment' not in signed, 'disabled push retains signed APNs entitlement')
     return {'bundle': bundle, 'team': team, 'app_group': group, 'build_number': build,
             'profile_expires': expiry.isoformat(), 'xcode_managed_profile': profile.get('IsXcodeManaged', False),
             'profile_uuid_sha256': hashlib.sha256(profile.get('UUID', '').encode()).hexdigest(),
-            'get_task_allow': development}
+            'get_task_allow': development, 'apns_enabled': app_push,
+            'apns_environment': signed.get('aps-environment')}
 
 
 def certificate_digest(bundle):
@@ -72,7 +81,7 @@ def verify(app, args):
         info = plistlib.loads((bundle / 'Info.plist').read_bytes())
         signed = read_signature(bundle)
         profile = decode_profile(bundle / 'embedded.mobileprovision')
-        row = profile_contract(info, signed, profile, topic, args.team, args.group, args.build, args.method)
+        row = profile_contract(info, signed, profile, topic, args.team, args.group, args.build, args.method, getattr(args, 'push_enabled', False))
         signer = certificate_digest(bundle)
         if signer not in {hashlib.sha256(cert).hexdigest() for cert in profile.get('DeveloperCertificates', [])}:
             raise ValueError('signer certificate is not authorized by embedded profile')
@@ -92,14 +101,15 @@ def verify(app, args):
         raise ValueError('unexpected runtime data at package root')
     return {'signature_and_profile_verified': True, 'method': args.method, 'bundles': rows,
             'frameworks_verified': len(frameworks), 'backend_origin_sha256': hashlib.sha256(origin.encode()).hexdigest(),
-            'runtime_data_at_package_root': False, 'apns_enabled': False,
+            'runtime_data_at_package_root': False, 'apns_enabled': getattr(args, 'push_enabled', False),
             'note': 'Static package verification only; no device install, VPN activation, push delivery or store upload.'}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact', type=Path)
-    parser.add_argument('--method', required=True, choices=['debugging', 'app-store-connect'])
+    parser.add_argument('--method', required=True, choices=['debugging', 'release-testing', 'app-store-connect'])
+    parser.add_argument('--push-enabled', action='store_true', help='Verify the main app against its actual profile APNs environment')
     parser.add_argument('--build', required=True)
     parser.add_argument('--team', default='HSVMRQBQJ2')
     parser.add_argument('--group', default='group.com.peakpassvpn.ppvpn')

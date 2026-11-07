@@ -114,7 +114,12 @@ done
 push_entitlements="$build/PPVPN.entitlements"
 cp "$app_dir/packaging/macos/PPVPN.entitlements" "$push_entitlements"
 push_profile=()
-[ -z "${PPVPN_APPLE_PUSH_PROFILE:-}" ] || push_profile=(--profile "$PPVPN_APPLE_PUSH_PROFILE")
+if [ "${PPVPN_APPLE_PUSH_ENABLED:-0}" = 1 ]; then
+  [ -n "${PPVPN_CODESIGN_TEAM:-}" ] && [ "${PPVPN_CODESIGN_IDENTITY:--}" != - ] \
+    || { echo "Enabled push requires the profile-authorized Developer ID identity and team" >&2; exit 1; }
+  push_profile+=(--identity-entitlements-from-profile)
+fi
+[ -z "${PPVPN_APPLE_PUSH_PROFILE:-}" ] || push_profile+=(--profile "$PPVPN_APPLE_PUSH_PROFILE")
 python3 "$root/tools/apple/push_config.py" prepare --platform macos \
   --info "$contents/Info.plist" --entitlements "$push_entitlements" \
   --enabled "${PPVPN_APPLE_PUSH_ENABLED:-0}" --topic com.peakpassvpn.ppvpn.desktop \

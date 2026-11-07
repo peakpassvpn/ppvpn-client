@@ -5,6 +5,8 @@ Never registers with APNs, installs profiles, signs, or modifies signed products
 Profile contents and codesign diagnostics are captured and never printed.
 """
 import argparse
+import fnmatch
+import hashlib
 from datetime import datetime, timezone
 import json
 from pathlib import Path, PurePosixPath
@@ -62,7 +64,7 @@ def profile_contract(profile, platform, topic, now=None):
     return {'environment': environment, 'team': teams[0], 'application_identifier': identifier}
 
 
-def prepare(info_path, entitlement_paths, platform, enabled, profile_path, topic):
+def prepare(info_path, entitlement_paths, platform, enabled, profile_path, topic, identity_entitlements=False):
     info = plistlib.loads(info_path.read_bytes())
     if not isinstance(info, dict):
         raise ConfigurationError('Info.plist must contain a dictionary')
@@ -70,12 +72,32 @@ def prepare(info_path, entitlement_paths, platform, enabled, profile_path, topic
     if actual not in (topic, '$(PRODUCT_BUNDLE_IDENTIFIER)', '${PRODUCT_BUNDLE_IDENTIFIER}'):
         raise ConfigurationError('build bundle identifier does not match the requested topic')
     contract = None
+    profile = None
+    if identity_entitlements and (platform != 'macos' or not enabled):
+        raise ConfigurationError('profile identity entitlements require enabled final macOS signing')
     if enabled:
         if profile_path is None:
             raise ConfigurationError('APNs enabled without an explicit real provisioning profile')
-        contract = profile_contract(decode_profile(profile_path), platform, topic)
+        profile = decode_profile(profile_path)
+        contract = profile_contract(profile, platform, topic)
     # Validate every input before writing any generated file.
     entitlements = [(path, plistlib.loads(path.read_bytes())) for path in entitlement_paths]
+    if identity_entitlements:
+        app_id = contract['application_identifier']
+        allowed = profile['Entitlements'].get('keychain-access-groups', [])
+        if (not isinstance(allowed, list) or not all(isinstance(pattern, str) for pattern in allowed)
+                or not any(fnmatch.fnmatchcase(app_id, pattern) for pattern in allowed)):
+            raise ConfigurationError('profile does not authorize the application Keychain namespace')
+        for _, value in entitlements:
+            for key, expected in ((APP_KEYS[platform], app_id),
+                                  ('com.apple.developer.team-identifier', contract['team'])):
+                if key in value and value[key] != expected:
+                    raise ConfigurationError('existing signing identity differs from profile')
+            if value.get('keychain-access-groups', [app_id]) != [app_id]:
+                raise ConfigurationError('existing Keychain namespace needs an explicit ownership review')
+            value[APP_KEYS[platform]] = app_id
+            value['com.apple.developer.team-identifier'] = contract['team']
+            value['keychain-access-groups'] = [app_id]
     info['PPVPNApplePushEnabled'] = enabled
     if enabled:
         info['PPVPNAPNsEntitlementEnvironment'] = contract['environment']
@@ -162,6 +184,20 @@ def check_contract(info, signed, profile, platform, expected_enabled, topic, dis
             'environment_source': 'matching final signed entitlements, embedded provision and app stamp'}
 
 
+def require_profile_signer(bundle, profile):
+    with tempfile.TemporaryDirectory(prefix='ppvpn-public-signing-certificate-') as work:
+        prefix = Path(work) / 'certificate'
+        subprocess.run(['codesign', '-d', '--extract-certificates=' + str(prefix), str(bundle)],
+                       capture_output=True, check=True)
+        leaf = Path(str(prefix) + '0')
+        if not leaf.exists():
+            raise ConfigurationError('enabled push requires a certificate-backed signer')
+        digest = hashlib.sha256(leaf.read_bytes()).hexdigest()
+    if digest not in {hashlib.sha256(value).hexdigest() for value in profile.get('DeveloperCertificates', [])}:
+        raise ConfigurationError('actual signing certificate is not authorized by the provision')
+    return digest
+
+
 def verify_bundle(app, platform, enabled, topic, distribution=False, allow_unsigned_disabled=False, app_store=False):
     contents = app / 'Contents' if platform == 'macos' else app
     info = plistlib.loads((contents / 'Info.plist').read_bytes())
@@ -178,7 +214,11 @@ def verify_bundle(app, platform, enabled, topic, distribution=False, allow_unsig
         if not path.is_file():
             raise ConfigurationError('final bundle is missing its embedded provisioning profile')
         profile = decode_profile(path)
+        if platform == 'macos':
+            signer = require_profile_signer(app, profile)
     result = check_contract(info, signed, profile, platform, enabled, topic, distribution, app_store)
+    if enabled and platform == 'macos':
+        result['profile_authorized_signer_sha256'] = signer
     result['signature_verified'] = not allow_unsigned_disabled
     result['note'] = 'Configuration check only; does not prove backend registration or real push delivery.'
     return result
@@ -221,6 +261,8 @@ def main():
     config.add_argument('--info', type=Path, required=True)
     config.add_argument('--entitlements', type=Path, action='append', required=True)
     config.add_argument('--profile', type=Path)
+    config.add_argument('--identity-entitlements-from-profile', action='store_true',
+                        help='Final macOS signing only: use the provision-authorized application Keychain namespace')
     sources = commands.add_parser('sources')
     sources.add_argument('--app-root', type=Path, required=True)
     sources.add_argument('--entry', type=Path, required=True)
@@ -242,7 +284,7 @@ def main():
             return 0
         if args.command == 'prepare':
             result = prepare(args.info, args.entitlements, args.platform, args.enabled == '1',
-                             args.profile, args.topic)
+                             args.profile, args.topic, args.identity_entitlements_from_profile)
         else:
             distribution = args.distribution
             app_store = False

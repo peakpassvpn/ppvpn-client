@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tempfile
 
-from push_config import decode_profile
+from push_config import decode_profile, profile_contract as push_profile_contract
 from verify_ios_package import profile_contract, verify
 
 
@@ -21,7 +21,8 @@ def main():
     parser.add_argument('--app-profile', type=Path, required=True)
     parser.add_argument('--tunnel-profile', type=Path, required=True)
     parser.add_argument('--identity', required=True, help='Authorized signing certificate SHA-1')
-    parser.add_argument('--method', choices=['debugging', 'app-store-connect'], required=True)
+    parser.add_argument('--method', choices=['debugging', 'release-testing', 'app-store-connect'], required=True)
+    parser.add_argument('--push-enabled', action='store_true', help='Activate only profile-authorized main-app APNs; extension remains disabled')
     parser.add_argument('--build', required=True)
     parser.add_argument('--team', default='HSVMRQBQJ2')
     parser.add_argument('--group', default='group.com.peakpassvpn.ppvpn')
@@ -52,8 +53,17 @@ def main():
         if 'beta-reports-active' in permitted:
             ent['beta-reports-active'] = permitted['beta-reports-active']
         ent.pop('aps-environment', None)
-        profile_contract(info, ent, profile, topic, args.team, args.group, args.build, args.method)
-        prepared.append((relative, path, ent))
+        if target == 'Runner':
+            info['PPVPNApplePushEnabled'] = args.push_enabled
+            info.pop('PPVPNAPNsEntitlementEnvironment', None)
+            if args.push_enabled:
+                push = push_profile_contract(profile, 'ios', topic)
+                if push['team'] != args.team:
+                    raise ValueError('push profile team differs')
+                ent['aps-environment'] = push['environment']
+                info['PPVPNAPNsEntitlementEnvironment'] = push['environment']
+        profile_contract(info, ent, profile, topic, args.team, args.group, args.build, args.method, args.push_enabled)
+        prepared.append((relative, path, ent, info))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['ditto', str(args.archive), str(args.output)], capture_output=True, check=True)
     app = args.output / 'Products/Applications/Runner.app'
@@ -66,8 +76,9 @@ def main():
 
         # All modifications precede the inside-out signing pass. Neither the
         # original archive nor the original Apple-signed profiles are edited.
-        for relative, profile, entitlements in prepared:
+        for relative, profile, entitlements, info in prepared:
             shutil.copyfile(profile, app / relative / 'embedded.mobileprovision')
+            (app / relative / 'Info.plist').write_bytes(plistlib.dumps(info))
         for library in sorted(app.rglob('*.dylib'), key=lambda p: len(p.parts), reverse=True):
             if not library.is_symlink():
                 sign(library)
@@ -75,7 +86,7 @@ def main():
             if not framework.is_symlink():
                 sign(framework)
         for index in (1, 0):
-            relative, _, entitlements = prepared[index]
+            relative, _, entitlements, _ = prepared[index]
             path = Path(work) / (str(index) + '.plist')
             path.write_bytes(plistlib.dumps(entitlements))
             sign(app / relative, path)
