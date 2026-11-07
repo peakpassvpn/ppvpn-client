@@ -4,6 +4,11 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      candidate_lane:
+        description: Independent candidate scheduling; measurements retain their own serial lane
+        type: choice
+        options: [measurement, isolated, production]
+        default: measurement
       build_number:
         description: Actual native and Flutter release counter for newly compiled archives
         default: '345'
@@ -39,7 +44,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}
+  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}-${{ inputs.candidate_lane || 'measurement' }}
   cancel-in-progress: false
 
 jobs:
@@ -68,6 +73,10 @@ jobs:
           fetch-depth: 0
       - name: Validate archive mode
         run: |
+          if [[ "${{ inputs.candidate_lane || 'measurement' }}" != measurement && "$CANDIDATE_ONLY" != 1 ]]; then
+            echo 'Independent candidate lanes require candidate-only mode' >&2
+            exit 2
+          fi
           if [[ "$CANDIDATE_ONLY" == 1 && -n "$REUSE_BASELINE_RUN" ]]; then
             echo 'Candidate-only mode cannot claim a reused comparison baseline' >&2
             exit 2
