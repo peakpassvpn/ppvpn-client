@@ -1210,7 +1210,6 @@ mod mac_identity;
 #[path = "../../service/src/peer_identity.rs"]
 mod peer_identity;
 #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
-#[path = "../../service/src/single_runtime/mac_peer.rs"]
 mod user_runtime_peer;
 
 #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
