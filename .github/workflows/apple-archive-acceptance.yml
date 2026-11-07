@@ -151,13 +151,23 @@ jobs:
             tar -czf "$output/Runner.xcarchive.tar.gz" -C "$(dirname "$archive")" Runner.xcarchive
             CHECKOUT="$checkout" OUTPUT="$output" SIDE="$side" CONTRACT_STATUS="$contract_status" python3 - <<'PY'
           from pathlib import Path
-          import gzip, hashlib, json, os, subprocess
+          import gzip, hashlib, json, os, shutil, subprocess
           checkout, output = Path(os.environ['CHECKOUT']), Path(os.environ['OUTPUT'])
           archive = output / 'Runner.xcarchive.tar.gz'
+          generated = output / 'generated-ios-source'
+          generated.mkdir()
+          generated_hashes = {}
+          for name in ('AppDelegate.swift', 'GeneratedPluginRegistrant.h', 'GeneratedPluginRegistrant.m', 'Info.plist'):
+              src = checkout / 'apps/flutter/ios/Runner' / name
+              if not src.is_file():
+                  raise SystemExit(f'missing generated iOS source: {name}')
+              shutil.copyfile(src, generated / name)
+              generated_hashes[name] = hashlib.sha256(src.read_bytes()).hexdigest()
           for src in Path(os.environ['RUNNER_TEMP']).joinpath('apple-derived-' + os.environ['SIDE']).rglob('*LinkMap*.txt'):
               with gzip.open(output / (src.name + '.gz'), 'wb') as f:
                   f.write(src.read_bytes())
           data = {'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip(),
+                  'generated_ios_source_sha256': generated_hashes,
                   'cargo_lock_sha256': hashlib.sha256((checkout / 'Cargo.lock').read_bytes()).hexdigest(),
                   'backend_origin_sha256': hashlib.sha256(os.environ['PPVPN_API_BASE_DEFAULT'].encode()).hexdigest(),
                   'build_number': os.environ['PPVPN_BUILD_NUMBER'], 'architecture': 'arm64',
