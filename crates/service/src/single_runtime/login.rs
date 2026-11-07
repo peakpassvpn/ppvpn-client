@@ -23,10 +23,7 @@ fn private(path: &Path, uid: u32) -> Result<()> {
                 if m.is_dir()
                     && !m.file_type().is_symlink()
                     && (m.uid() == uid || m.uid() == 0)
-                    && m.mode() & 0o022 == 0 =>
-            {
-                ()
-            }
+                    && m.mode() & 0o022 == 0 => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
             _ => bail!("USER_RUNTIME_DIRECTORY_UNSAFE"),
         }
