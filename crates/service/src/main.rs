@@ -114,6 +114,11 @@ fn stop_data_plane() {
 
 #[cfg(not(windows))]
 fn main() {
+    #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+    if std::env::args_os().nth(1).is_none() {
+        eprintln!("service: SERVICE_ROLE_REQUIRED");
+        std::process::exit(1);
+    }
     #[cfg(target_os = "macos")]
     if let Some(role) = std::env::args_os().nth(1) {
         if role != "--user-runtime"
