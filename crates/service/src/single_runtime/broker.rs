@@ -39,6 +39,9 @@ pub const DIRECTORY: &str = "/Library/Application Support/PPVPN/run/capture";
 pub const SOCKET: &str = "/Library/Application Support/PPVPN/run/capture/broker.sock";
 pub const JOURNAL: &str = "/Library/Application Support/PPVPN/run/capture/grant.json";
 const FRAME_LIMIT: usize = 16 * 1024;
+// Both sides must allow the same bounded local-IPC scheduling window. The
+// shared core still limits each host step to three seconds; sessions last five.
+pub const READ_WINDOW: Duration = Duration::from_millis(2400);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grant {
@@ -257,7 +260,7 @@ impl Ledger {
     }
 }
 fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Result<()> {
-    stream.set_read_timeout(Some(Duration::from_millis(600)))?;
+    stream.set_read_timeout(Some(READ_WINDOW))?;
     stream.set_write_timeout(Some(Duration::from_millis(600)))?;
     let (untrusted, token) = mac_peer::audit_peer(stream)?;
     let peer = mac_peer::verify(

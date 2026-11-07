@@ -45,7 +45,7 @@ impl Client {
     ) -> Result<(Option<OwnedFd>, Option<String>)> {
         native::trace_phase("host-connect");
         let mut stream = UnixStream::connect(broker::SOCKET)?;
-        stream.set_read_timeout(Some(Duration::from_millis(2400)))?;
+        stream.set_read_timeout(Some(broker::READ_WINDOW))?;
         stream.set_write_timeout(Some(Duration::from_millis(600)))?;
         mac_peer::verify_exact(
             &stream,
@@ -99,8 +99,12 @@ impl Client {
             &key,
         )?;
         native::trace_phase("host-handshake-complete");
-        *attempted = true;
+        // The broker decodes the whole frame before mutation. A failed or
+        // partial frame write cannot submit an operation. A lost reply after
+        // a successful full write remains ambiguous and retains leftovers.
         broker::write_frame(&mut stream, &request)?;
+        *attempted = true;
+        native::trace_phase("host-request-submitted");
         let response: Response = broker::read_frame(&mut stream)?;
         if response.id != request.id || !response.verify_with(&key)? {
             bail!("CAPTURE_REPLY_INVALID");
