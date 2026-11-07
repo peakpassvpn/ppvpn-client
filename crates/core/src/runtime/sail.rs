@@ -142,6 +142,7 @@ impl SailRuntime {
         let capture_device = crate::capture_host::DeviceSlot::default();
         let options = if dynamic_capture {
             options.platform(Arc::new(crate::capture_host::DevicePlatform {
+                #[cfg(unix)]
                 slot: capture_device.clone(),
                 protect,
             }))
