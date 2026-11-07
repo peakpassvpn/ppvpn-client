@@ -112,70 +112,82 @@ void main() {
                 isTrue,
               );
               expect(lines.current, '$token-tcp');
-              await _udpEcho('$token-udp');
-              try {
-                await _dns(cycle);
-              } catch (error) {
-                // Preserve owner diagnostics before flutter test uninstalls
-                // the APK. Diagnostic failure must not replace the DNS error.
-                try {
-                  await _controlCall('diagnostics', {
-                    'cycle': cycle,
-                    'error': error.toString(),
-                    'status': await _rpc('/v1/get-status'),
-                    'observation': await _rpc('/v1/get-runtime-observation'),
-                    'logs': await _ownerLogs(directory!),
+              await _udpEcho(
+                '$token-udp',
+                whileOpen: () async {
+                  try {
+                    await _dns(cycle);
+                  } catch (error) {
+                    // Preserve owner diagnostics before flutter test uninstalls
+                    // the APK. Diagnostic failure must not replace the DNS error.
+                    try {
+                      await _controlCall('diagnostics', {
+                        'cycle': cycle,
+                        'error': error.toString(),
+                        'status': await _rpc('/v1/get-status'),
+                        'observation': await _rpc(
+                          '/v1/get-runtime-observation',
+                        ),
+                        'logs': await _ownerLogs(directory!),
+                      });
+                    } catch (diagnosticError) {
+                      developer.log(
+                        'DNS diagnostic capture failed: $diagnosticError',
+                      );
+                    }
+                    rethrow;
+                  }
+                  await _until(() async {
+                    final traffic = await _rpc('/v1/get-traffic');
+                    return (traffic['upload_bytes'] as int) >
+                            (baseline['upload_bytes'] as int) &&
+                        (traffic['download_bytes'] as int) >
+                            (baseline['download_bytes'] as int);
                   });
-                } catch (diagnosticError) {
-                  developer.log(
-                    'DNS diagnostic capture failed: $diagnosticError',
+                  final connections =
+                      await _rpc('/v1/get-connections') as List<dynamic>;
+                  expect(
+                    connections,
+                    contains(
+                      predicate(
+                        (dynamic value) =>
+                            value['network'] == 'tcp' &&
+                            value['node_id'] == 'android-node',
+                      ),
+                    ),
                   );
-                }
-                rethrow;
-              }
-              await _until(() async {
-                final traffic = await _rpc('/v1/get-traffic');
-                return (traffic['upload_bytes'] as int) >
-                        (baseline['upload_bytes'] as int) &&
-                    (traffic['download_bytes'] as int) >
-                        (baseline['download_bytes'] as int);
-              });
-              final connections =
-                  await _rpc('/v1/get-connections') as List<dynamic>;
-              expect(
-                connections,
-                contains(
-                  predicate(
-                    (dynamic value) =>
-                        value['network'] == 'tcp' &&
-                        value['node_id'] == 'android-node',
-                  ),
-                ),
+                  expect(
+                    connections,
+                    contains(
+                      predicate(
+                        (dynamic value) =>
+                            value['network'] == 'udp' &&
+                            value['node_id'] == 'android-node',
+                      ),
+                    ),
+                  );
+                  final after = await _rpc('/v1/get-runtime-observation');
+                  expect(after['owner'], before['owner']);
+                  expect(
+                    after['native_runtime_id'],
+                    before['native_runtime_id'],
+                  );
+                  expect(
+                    after['active_runtime_ids'],
+                    before['active_runtime_ids'],
+                  );
+                  expect(rust.start().standardReady, isFalse);
+                  expect(await rust.localProxies(), isEmpty);
+                  await _controlCall('checkpoint', {
+                    'stage': 'connected',
+                    'cycle': cycle,
+                    'token': token,
+                    'reported_vm_uri': vmHint,
+                    'observation': after,
+                    'traffic': await _rpc('/v1/get-traffic'),
+                  });
+                },
               );
-              expect(
-                connections,
-                contains(
-                  predicate(
-                    (dynamic value) =>
-                        value['network'] == 'udp' &&
-                        value['node_id'] == 'android-node',
-                  ),
-                ),
-              );
-              final after = await _rpc('/v1/get-runtime-observation');
-              expect(after['owner'], before['owner']);
-              expect(after['native_runtime_id'], before['native_runtime_id']);
-              expect(after['active_runtime_ids'], before['active_runtime_ids']);
-              expect(rust.start().standardReady, isFalse);
-              expect(await rust.localProxies(), isEmpty);
-              await _controlCall('checkpoint', {
-                'stage': 'connected',
-                'cycle': cycle,
-                'token': token,
-                'reported_vm_uri': vmHint,
-                'observation': after,
-                'traffic': await _rpc('/v1/get-traffic'),
-              });
               if (cycle == 2) {
                 // The rival establish() makes Android revoke this provider;
                 // production TunnelService.onRevoke(), not a test method call.
@@ -450,6 +462,7 @@ Future<Datagram> _datagram(
   List<int> payload,
   bool Function(Datagram) accept, {
   Duration timeout = const Duration(seconds: 20),
+  Future<void> Function(Datagram)? whileOpen,
 }) async {
   final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
   final result = Completer<Datagram>();
@@ -462,7 +475,9 @@ Future<Datagram> _datagram(
   }, onError: result.completeError);
   try {
     expect(socket.send(payload, destination, port), payload.length);
-    return await result.future.timeout(timeout);
+    final packet = await result.future.timeout(timeout);
+    if (whileOpen != null) await whileOpen(packet);
+    return packet;
   } finally {
     await subscription.cancel();
     socket.close();
@@ -486,7 +501,10 @@ Future<void> _negativeUDP() async {
   }
 }
 
-Future<void> _udpEcho(String token) async {
+Future<void> _udpEcho(
+  String token, {
+  required Future<void> Function() whileOpen,
+}) async {
   final payload = utf8.encode(token);
   final packet = await _datagram(
     InternetAddress(_target),
@@ -494,6 +512,13 @@ Future<void> _udpEcho(String token) async {
     payload,
     (p) =>
         p.port == 18082 && utf8.decode(p.data, allowMalformed: true) == token,
+    // Observe the routed UDP flow while its App socket is still alive.
+    // Closing it before get-connections races legitimate flow teardown.
+    whileOpen: (packet) async {
+      expect(packet.address.address, _target);
+      expect(packet.data, payload);
+      await whileOpen();
+    },
   );
   expect(packet.address.address, _target);
   expect(packet.data, payload);
