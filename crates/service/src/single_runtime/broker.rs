@@ -175,6 +175,11 @@ impl Ledger {
         g.validate()?;
         let owner = g.owner(peer);
         let now = Instant::now();
+        // A signed readiness probe does not renew, heal, create or remove any
+        // resource. Startup recovery has settled before this server accepts.
+        if path == "probe" {
+            return Ok(None);
+        }
         if !self.capture.occupied() && matches!(path, "detach" | "release") {
             return Ok(None);
         }
