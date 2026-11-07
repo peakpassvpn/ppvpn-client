@@ -1346,6 +1346,7 @@ fn prepare_macos_socket_directory() -> Result<()> {
     for path in [base, directory] {
         let path_text = path.display().to_string();
         for (command, mode) in [("chown", "root:wheel"), ("chmod", "755")] {
+            let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
             let status = Command::new(command)
                 .args([mode, path_text.as_str()])
                 .status()
@@ -1442,6 +1443,7 @@ fn macos_client_path_allowed(path: &std::path::Path) -> bool {
 #[cfg(target_os = "macos")]
 fn set_socket_permissions(path: &str) {
     use std::process::Command;
+    let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
 
     let _ = Command::new("chown").args(["root:wheel", path]).status();
     let _ = Command::new("chmod").args(["666", path]).status();

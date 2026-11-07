@@ -26,9 +26,9 @@ broker boundary; do not reuse it as proof of this stronger identity contract.
 
 ## Shared core / engine-host / core-wire dependencies
 
-The following are required semantics, not agreed Rust symbol names:
+The final native symbols are provided by shared-core PR #592 at 052b412. The following semantics remain the acceptance contract:
 
-* A Standard Engine can attach a host-supplied owned TUN resource and later detach
+* A Shared user Engine can attach a host-supplied owned TUN resource and later detach
   it without stop/start/apply-profile, listener rebind, credential reset, route-mode
   change, counter reset or closure of existing local proxy streams/UDP associations.
 * Attach acknowledges a capture generation only after inbound readiness. Failure
@@ -51,7 +51,7 @@ shared core/wire crates are intentionally not edited by this specialist.
 
 ## Capture lease and FD feasibility
 
-Capture alone uses the existing 45-second lease, renewed every 15 seconds. Owner
+Capture alone uses a 45-second lease; the agent renews the root resource lease every five seconds. Owner
 identity includes OS uid/pid/pid-version/audit-session and application session /
 generation. A stale owner cannot renew or detach its successor. Failed cleanup
 quarantines the slot; the broker must not grant new capture on ambiguous OS state.
@@ -130,3 +130,5 @@ adapter explicitly refuses dynamic capture without creating a privileged core.
 The installed/default product is not changed by the opt-in entry/feature. No test
 in this branch installs it or changes live network settings. Whole-product
 acceptance requires the signed packaging and accepted native capture adapter.
+
+The native candidate is integrated against frozen Sail 5932868; see [macOS integration](macos-runtime-integration.md) for exact entries, implemented ledger/identity behavior and system tests still required. Local packet-transport tests are not system-route acceptance.

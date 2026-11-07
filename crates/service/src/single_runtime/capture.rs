@@ -172,6 +172,24 @@ impl<R: Resources> Capture<R> {
         }
         self.cleanup()
     }
+    /// Operate only on this authenticated, live OS grant. The core owns the
+    /// capture transaction; failed mutation remains available for rollback.
+    pub fn resources<T>(
+        &mut self,
+        owner: &Owner,
+        lease: &CaptureLease,
+        now: Instant,
+        call: impl FnOnce(&mut R) -> Result<T, String>,
+    ) -> Result<T, Error> {
+        let active = self.authorize(owner, lease)?;
+        if active.quarantined {
+            return Err(Error::Quarantined);
+        }
+        if now >= active.deadline {
+            return Err(Error::Expired);
+        }
+        call(&mut self.active.as_mut().unwrap().resources).map_err(Error::Cleanup)
+    }
     pub fn broker_shutdown(&mut self) -> Result<(), Error> {
         self.cleanup()
     }

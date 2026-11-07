@@ -96,6 +96,10 @@ fn stop_data_plane_and_exit() -> ! {
 
 /// Stops taking work, tells the watchers and stops the core.
 fn stop_data_plane() {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = ppvpn_service::single_runtime::broker::shutdown() {
+        log::error!("capture broker shutdown: {error}");
+    }
     ipc::begin_stopping();
     let started = std::time::Instant::now();
     let mut core = core::stop_sequence(&core::CORE, &watch::HUB, watch::CLOSE_GRACE);
@@ -141,6 +145,10 @@ fn main() {
             std::process::exit(1);
         }
         ipc::enter_capture_broker_mode();
+        if let Err(error) = ppvpn_service::single_runtime::broker::start() {
+            eprintln!("capture broker: {error}");
+            std::process::exit(1);
+        }
     }
     run_update_runner_if_asked();
     setup_logger();

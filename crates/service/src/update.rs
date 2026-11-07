@@ -641,6 +641,8 @@ fn spawn_runner(staging: &Staging) -> std::io::Result<std::process::Child> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     platform::detach(&mut command);
+    #[cfg(target_os = "macos")]
+    let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
     command.spawn()
 }
 
@@ -656,10 +658,14 @@ fn run_until(
     deadline: Duration,
 ) -> Result<std::process::ExitStatus, String> {
     let program = command.get_program().to_string_lossy().into_owned();
+    #[cfg(target_os = "macos")]
+    let fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
     let mut child = command
         .stdin(std::process::Stdio::null())
         .spawn()
         .map_err(|error| format!("spawn {program}: {error}"))?;
+    #[cfg(target_os = "macos")]
+    drop(fd_guard);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
@@ -906,11 +912,18 @@ mod platform {
         /// Gatekeeper accepts it as notarized, signed by our team's
         /// Developer ID Installer.
         fn publisher(&self, package: &Path) -> Result<(), String> {
-            let output = Command::new("/usr/sbin/spctl")
-                .args(["--assess", "--type", "install", "-vv"])
-                .arg(package)
-                .output()
-                .map_err(|error| format!("spctl: {error}"))?;
+            let output = {
+                let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
+                Command::new("/usr/sbin/spctl")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .args(["--assess", "--type", "install", "-vv"])
+                    .arg(package)
+                    .spawn()
+            }
+            .map_err(|error| format!("spctl: {error}"))?
+            .wait_with_output()
+            .map_err(|error| format!("spctl: {error}"))?;
             let text = format!(
                 "{}{}",
                 String::from_utf8_lossy(&output.stdout),
@@ -927,16 +940,21 @@ mod platform {
         fn version(&self, package: &Path, scratch: &Path) -> Result<String, String> {
             let directory = scratch.join("package-info");
             std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
-            let status = Command::new("/usr/bin/xar")
-                .arg("-xf")
-                .arg(package)
-                .arg("-C")
-                .arg(&directory)
-                .arg("PackageInfo")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| format!("xar: {error}"))?;
+            let status = {
+                let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
+                Command::new("/usr/bin/xar")
+                    .arg("-xf")
+                    .arg(package)
+                    .arg("-C")
+                    .arg(&directory)
+                    .arg("PackageInfo")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            }
+            .map_err(|error| format!("xar: {error}"))?
+            .wait()
+            .map_err(|error| format!("xar: {error}"))?;
             let info = std::fs::read_to_string(directory.join("PackageInfo"));
             let _ = std::fs::remove_dir_all(&directory);
             if !status.success() {

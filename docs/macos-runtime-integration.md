@@ -1,130 +1,145 @@
-# macOS user-runtime integration on shared capture protocol v1
+# macOS single forwarding runtime: native host candidate
 
-Status: opt-in build path, not release-ready native TUN acceptance. The source
-base includes shared contract commit 94ec64d from PR #592. No unaccepted Sail
-patch or packet bridge is included. The fixed Sail v0.22.0 still advertises
-CAPTURE_UNSUPPORTED; no second privileged forwarding Engine is used as fallback.
+This opt-in candidate imports shared-core PR #592 at
+052b412cb6b047639593c8a97d9e2cd3438e8652 and frozen Sail
+593286824540aac651ac2f84c6e751fb0e70a4da. It is not a release or a claim of
+macOS system acceptance. No old two-runtime packet bridge is used.
 
-## Build / run boundaries
+## Reproducible entries
 
-Build the service with `cargo build --locked -p ppvpn-service --bin ppvpn-service`.
-The privileged helper also has `ppvpn-service --capture-broker`: startup refuses
-non-root callers and admission blocks all legacy forwarding lifecycle/Core API
-commands after authentication, retaining administrative version/status/update
-handling. It skips the legacy forwarding watchdog and network cleanup path.
-Native resource grants stay CAPTURE_UNSUPPORTED until the accepted provider is
-installed; this role cannot use the old privileged Engine as a fallback.
-
-The user service's explicit invocation is `ppvpn-service --user-runtime PRIVATE_DIRECTORY LOG_DIRECTORY`.
-It refuses root, setuid execution, non-private directories, writable or unsigned
-installation images and unexpected executable paths. The production identity is
-still the signed installed helper bundle; this is not an unsigned development
-bypass. A test VM must stage/sign that image and the UI. Do not replace the live
-installed helper to exercise this entry point.
-
-Build the desktop opt-in path with
+Build the helper with `cargo build --locked -p ppvpn-service --bin ppvpn-service`.
+Build the UI logic with
 `cargo build --locked -p ppvpn-desktop --features macos-user-runtime`.
-That feature excludes the embedded Engine launcher from production UI compilation.
-It connects only to the private runtime.sock in ClientConfig.data_dir and checks
-the server's OS audit uid/pid-version, signing requirement and installed image
-before accepting handshake keys. Missing agent or unsupported capture is an
-explicit error, not a fallback to an embedded or privileged forwarding Engine.
-No packaging script or default release feature is changed here. LOG_DIRECTORY
-must match ClientConfig.log_dir and be private to this uid; the agent writes
-UTC daily ppvpn-core.YYYY-MM-DD.log with seven-file retention via a bounded
-engine log channel, keeping filesystem writes off the forwarding executor.
+Packaging must explicitly enable that feature; defaults remain unchanged.
 
-The user agent creates one Standard Engine, independently of UI socket lifetime.
-Signed UI calls use the existing service Request/Response HMAC envelope; there is
-no second binary canonical form. Capture DTOs, identities and transaction epochs
-come from ppvpn-core-wire. The OS-resource lease consumes CaptureLease rather than
-allocating a duplicate capture generation. It remains a broker resource lease,
-not another capture transition authority.
+The same root-owned, hardened release-signed installed helper image runs two
+roles: root launchd invokes `ppvpn-service --capture-broker`; the per-user
+LaunchAgent invokes `ppvpn-service --user-runtime PRIVATE_DIRECTORY LOG_DIRECTORY`.
+PRIVATE_DIRECTORY must be ClientConfig.data_dir; LOG_DIRECTORY must be
+ClientConfig.log_dir. Both must already exist, be canonical, owned by this uid,
+and have mode 0700. The agent refuses root/setuid execution. Both roles use the
+fixed installed helper bundle and the existing release signing identifiers.
+There is no development signature/path bypass. An unsigned local executable
+cannot impersonate an installed helper or UI.
 
-The user gateway refuses legacy privileged Connect with CAPTURE_UNSUPPORTED and
-other broker commands with BROKER_COMMAND_REQUIRED. The actual native broker
-resource provider and user-agent capture driver cannot be enabled until their
-Sail interfaces and rollback behavior are accepted. Root service defaults remain legacy for installed builds; new packaging must
-select --capture-broker explicitly. The opt-in UI never calls that endpoint as
-a forwarding fallback.
+The helper modes alone do not install/register the LaunchAgent. Signed staging,
+plist installation, bootstrap/logout and update/uninstall ordering belong to
+packaging. Do not replace the current user's helper or alter current routes to
+exercise this candidate; use a dedicated macOS VM/test machine.
 
-## Lifetime / ingress
+## One owner, two capture resource copies
 
-UI exit detaches presentation, not the daemon. Its generic stop request is not
-forwarded to Engine.stop. Explicit account/profile end sends a signed owner_reason
-through the same existing Core API envelope; this stops ingress and existing
-sessions. It is distinct from VPN-off. The agent alone shuts its Engine down on
-its own exit/fatal state, and reports shutdown leftovers as failure.
+Only the user service constructs the forwarding Engine, with Role::Shared,
+physical-network bootstrap, a protected outbound socket callback and a native
+CaptureHost. The UI feature excludes the embedded Engine launcher and routes
+both ordinary APIs and enhanced-mode capture through the user service.
+Engine runtime observation supplies the actual instance/generation identity;
+presentation transport refreshes that identity across whole-runtime starts.
 
-The agent's authenticated mixed listener stays independent of capture. Its
-unauthenticated OS system-proxy listener starts disabled and follows explicit
-Compat enable/disable requests; it is not expanded into an always-on unauthenticated
-cross-user proxy. UI exit restores its own OS settings. The requirement to retain
-mixed connections is not used to justify expanding unauthenticated ingress.
-Profile-switch/credential lifecycle remains part of whole-client acceptance.
-Agent failure necessarily loses its connections.
+The enhanced adapter negotiates capabilities, applies policy to the same owner,
+and calls shared attach/detach transactions. VPN-off never dispatches Engine.stop.
+The user service still rejects legacy privileged Connect; there is no old root
+TUN forwarding fallback. Root's old administrative socket retains authenticated
+version/status/update commands, rejecting forwarding commands. Its separate
+capture broker holds no Engine and accepts no profiles, proxy credentials or
+arbitrary OS commands/route prefixes.
 
-## Network notification audit at locked Sail 7513c151
+CaptureHost.prepare asks the root broker for a staged utun, then validates the
+actual interface of the SCM_RIGHTS descriptor. Root retains its original; the
+agent retains one independently owned fd, and Sail receives a validated duplicate
+through CaptureAttachment. Descriptor integers are never serialized. Core-wire
+owns capture transactions, epochs and CaptureLease; the root lease consumes that
+identity rather than allocating another capture generation.
 
-1. Desktop Client.network_changed calls Enhanced.network_changed, which wakes a
-   health/recovery check; it does not directly stop Standard. The legacy enhanced
-   recovery path can replace its privileged Engine, so it is not a live-capture
-   implementation and is not used as a fallback in the opt-in path.
-2. Standard Engine.set_network_state explicitly rejects macOS (mobile push API).
-   The remote UI launcher deliberately does not synthesize a mobile platform or
-   send generic host network resets. The service's Sail monitor owns detection.
-3. Sail platform/route_socket.rs default_route selects actual unscoped IPv4 default
-   routes; its comment and implementation exclude TUN split routes. Existing
-   protocol/tun/auto_route.rs uses more-specific macOS routes (1/8 through 128/1),
-   preserving the real default route. The broker MUST preserve this behavior.
-4. Sail net/network.rs NetworkState.moved_to treats default interface/index,
-   gateway/kind changes and address loss as moves. NetworkChange.closes closes
-   DefaultRoute flows on those moves, and even an unchanged generic reset may
-   close flows. A mere added interface/address is not necessarily a move. Thus
-   capture attach/detach must not manufacture default-route/reset events.
-5. Retaining the default route is necessary but not yet a runtime proof. The new
-   external-FD adapter must preserve socket egress/protection, underlay DNS,
-   topology events, capture-only cleanup and sleep/wake handling. Test live TCP
-   and SOCKS UDP associations through actual capture transactions before claiming
-   preservation. Real underlay loss and agent death are not promised lossless.
+Core commits native ingress before the host publishes OS admission. Host detach
+removes owned admission while retaining the original for native rollback. Root
+resources survive an individual IPC disconnect and remain in an exact lease
+ledger until release, expiry or process death cleanup.
 
-These findings are a source audit; no live OS routes/DNS/proxy settings were
-changed. Fake broker/socket tests are not a substitute for actual TUN acceptance.
+## Authentication and resource ledger
+
+The private user socket and fixed root capture socket have independent singleton
+locks. Root's directory is root-owned and unwritable to users; its socket accepts
+connections so non-root agents can authenticate. Every broker connection verifies
+OS audit uid/pid/pid-version/audit-session, hardened release signature and exact
+installed helper image before reading handshake bytes. The agent verifies the
+root server equivalently. UI peers are accepted only as the installed signed UI.
+HMAC uses the existing service canonical Request/Response envelope, fresh keys,
+request replay/freshness limits, signed replies and an exact helper build/protocol
+handshake. No auth keys or payloads are logged.
+
+Only one root capture grant may exist system-wide. It is bound to the exact
+agent audit identity, actual shared forwarder owner, attachment epoch and opaque
+token. The root lease is 45 seconds, renewed by the agent every five seconds.
+Expired owners cannot revive the lease. Failed cleanup quarantines the slot.
+Root checks the live audit-token process independently. Signed UI lease renewal
+is separate: 45 seconds without UI capture renewal detaches capture in the agent,
+while mixed forwarding remains live. A root lease loss is reconciled through
+native detach, not a forwarding stop.
+
+The broker configures only the shipped core addresses/MTU, a fresh utun, IPv4 /1
+routes and requested IPv6 /1 routes. It never replaces a real default route or a
+real network service's DNS. DNS is a dedicated temporary SCDynamicStore key,
+removed by configd when the broker session closes. Renewals verify/heal owned
+routes/DNS; another interface's route is not deleted or replaced as ours.
+
+Before route mutation, the root broker fsyncs its cleanup journal. The journal
+contains exact interface/index, boot identity, settings and route intents. An
+independent random /128 interface marker fences recovery against recycled utun
+names. Restart recovery must match that marker/index/boot before touching an
+interface. Ambiguous ownership refuses a new grant. Successful cleanup removes
+owned routes/DNS and brings the interface down even if a receiver still holds an
+fd; closing root's copy alone is not treated as revocation. Unexpected Darwin
+ancillary truncation is a process containment failure, not a recoverable leak.
+
+**Open descriptor/exec integration gate:** root raw-socket creation and root child
+spawns are serialized. The user receiver still requires the same shared gate as
+core DNS scutil spawn; a service-local lock cannot cover that core operation.
+Darwin SCM_RIGHTS followed by fcntl has a proven child-inheritance window. The
+minimal public-core gate patch is prepared separately for the shared-core owner;
+until it is merged and consumed here, this opt-in candidate must not be released
+or claimed to have completed descriptor lifetime/security acceptance.
+
+## Physical network, ingress and process lifetime
+
+The agent reads SystemConfiguration Global IPv4/IPv6 primary-interface state and
+that interface's addresses, excluding tun/utun/ppp competitors. Outbound sockets
+are bound to the physical interface with IP_BOUND_IF/IPV6_BOUND_IF, before connect.
+Offline fails closed. Shared Engine receives the bootstrap before start and only
+changed physical snapshots thereafter. Capture-only routes/DNS are not pushed as
+network moves or generic resets. Existing core DNS-local resolves through the
+physical interface; the broker's supplemental DNS does not replace its service.
+Actual underlay loss can end connections; capture changes must not manufacture it.
+
+Authenticated mixed HTTP/SOCKS, node/routed credentials and UDP belong to the user
+Engine. The OS system-proxy capability is available, but its unauthenticated
+listener starts disabled and follows explicit Compat requests. UI exit restores
+UI-owned OS proxy settings and detaches presentation; account/profile end is an
+explicit signed whole-forwarder stop. The agent shuts down on logout/termination
+or fatal owner failure and reports leftovers. Its daily core log uses the existing
+bounded log channel and seven-file retention.
 
 ## Runner / ApplePush ownership
 
-This branch does not replace MainFlutterWindow.swift or AppDelegate.swift. Build
-scripts and LaunchAgent plist ownership stay with the build specialist. Reserve
-new UserRuntimeBridge.swift for desktop user-agent readiness/registration; its
-single initialization call belongs beside existing Runner bootstrap, coordinated
-with the mobile/push specialist. ApplePush owns native push callbacks and the
-future ApplePush receiver invocation. Do not remove or overwrite those callbacks
-when adding user-runtime bootstrap. Account binding/refresh/logout remains through
-the stable existing Rust Client/auth snapshot bridge; no second native account
-store or callback is introduced here. Native APNs equivalence/removal of the push
-agent is the mobile specialist's acceptance, independent of the forwarding agent.
+No existing Swift Runner files or ApplePush callbacks are changed here. Reserve
+UserRuntimeBridge.swift for agent registration/readiness and coordinate its single
+bootstrap call with the mobile specialist. Keep account/auth snapshot bridging in
+the existing Rust Client. ApplePush registration, APNs callback lifetime and removal
+of the push agent are separate mobile acceptance; this candidate claims none of it.
 
-## Remaining real-system gates
+## Validation and remaining acceptance
 
-- Accepted Sail dynamic TUN plus host FD ownership/route/DNS rollback API and
-  core adapter; no NeedsRestart or whole-runtime fallback.
-- Minimal privileged native resource provider, exact signed agent role admission,
-  single-use descriptor-ticket binding, expiry cleanup and restart ledger recovery.
-- Build-owned signed LaunchAgent packaging, per-user private directory creation,
-  logout/update/uninstall ordering; test-only isolated VM staging.
-- Actual signed UI-to-agent-to-broker tests holding HTTP CONNECT, SOCKS TCP/UDP,
-  ports, credentials and payload sequences stable across repeated capture on/off.
-- Rule/global DNS correctness, sleep/wake, capture loss, broker death, partial
-  cleanup and permission/replay negatives. Build volume comparison follows this
-  functional acceptance; the old two-runtime size PoC is not final evidence.
+The service test uses the actual Sail runtime and core native capture coordinator,
+with isolated packet transport. It holds authenticated HTTP CONNECT, SOCKS TCP and
+one SOCKS UDP association through ten successful attach/detach transactions and
+presentation disconnect, checking stable payloads, credentials, port and owner.
+It does not open a system utun or change host routes/DNS. Actual socket binding,
+FD validation, HMAC/audit identity, lease expiry/quarantine and route ownership
+negatives have separate local checks.
 
-
-## Evidence scope
-
-The real mixed fixture uses one Standard Engine, authenticated HTTP CONNECT and
-SOCKS TCP/UDP to localhost-only echo endpoints. It checks unauthenticated HTTP
-rejection, ten refused capture requests, continuous TCP payload sequence and the
-same UDP association, proxy credentials/port and owner identity, followed by
-presentation-gateway detach. Its route policy is rules/direct for these local
-targets; encrypted-node/global mode, actual TUN changes and system DNS are NOT
-covered. Do not present it as VPN toggling acceptance.
+Required before release: signed UI/agent/root staging in an isolated macOS VM;
+actual utun transfer and repeated VPN on/off with held mixed TCP/UDP; capture lease
+expiry, root/agent death, partial OS failures and restart journal recovery; DNS and
+rule/global encrypted-node paths; sleep/wake and physical moves; multi-user and
+replay/permission negatives; exact process/runtime count; then reproducible signed
+app/helper/DMG size comparison. The old two-runtime size PoC is not acceptance.

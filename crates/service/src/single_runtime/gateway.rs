@@ -23,25 +23,53 @@ pub trait Forwarder: Send + Sync + 'static {
 }
 pub struct EngineForwarder {
     engine: ppvpn_core::Engine,
-    identity: Mutex<ForwarderIdentity>,
     operation: tokio::sync::Mutex<()>,
+    capture_deadline: Mutex<Option<Instant>>,
 }
 impl EngineForwarder {
     pub async fn new(config: ppvpn_core::EngineConfig) -> Result<Arc<Self>> {
-        if config.role != ppvpn_core::Role::Standard {
-            return Err(anyhow!("USER_RUNTIME_REQUIRES_STANDARD_ROLE"));
+        if !matches!(
+            config.role,
+            ppvpn_core::Role::Standard | ppvpn_core::Role::Shared
+        ) {
+            return Err(anyhow!("USER_RUNTIME_REQUIRES_USER_ROLE"));
         }
         let engine = ppvpn_core::Engine::new(config)
             .await
             .map_err(|e| anyhow!("{}", e.code))?;
         Ok(Arc::new(Self {
             engine,
-            identity: Mutex::new(ForwarderIdentity {
-                instance: uuid::Uuid::new_v4().to_string(),
-                generation: 1,
-            }),
             operation: tokio::sync::Mutex::new(()),
+            capture_deadline: Mutex::new(None),
         }))
+    }
+    pub fn network(&self, state: ppvpn_core::NetworkState) -> Result<()> {
+        self.engine
+            .set_network_state(state)
+            .map_err(|e| anyhow!("{}", e.code))
+    }
+    pub fn capture_expired(&self) -> bool {
+        self.capture_deadline
+            .lock()
+            .is_some_and(|d| Instant::now() >= d)
+    }
+    pub async fn reconcile_lost_capture(&self) -> Result<()> {
+        let _operation = self.operation.lock().await;
+        let Ok(status) = self.engine.capture_status() else {
+            return Ok(());
+        };
+        if let Some(lease) = status.lease {
+            self.engine
+                .detach_capture(ppvpn_core_wire::DetachCapture {
+                    protocol_version: 1,
+                    expected_epoch: status.epoch,
+                    lease,
+                })
+                .await
+                .map_err(|_| anyhow!("CAPTURE_LEASE_RECONCILIATION_FAILED"))?;
+        }
+        *self.capture_deadline.lock() = None;
+        Ok(())
     }
     pub fn logs(&self) -> ppvpn_core::LogReceiver {
         self.engine.logs()
@@ -69,37 +97,41 @@ impl EngineForwarder {
 #[async_trait]
 impl Forwarder for EngineForwarder {
     fn identity(&self) -> ForwarderIdentity {
-        self.identity.lock().clone()
+        self.engine.runtime_observation().owner
     }
     async fn call(&self, path: &str, body: Value) -> Result<Value, ppvpn_engine_host::ApiError> {
         let _operation = self.operation.lock().await;
-        let stopping = path == "/v1/stop"
-            && matches!(
-                self.engine.status().state,
-                ppvpn_core::EngineState::Running | ppvpn_core::EngineState::Degraded { .. }
-            );
-        let next = if stopping {
-            Some(
-                self.identity
-                    .lock()
-                    .generation
-                    .checked_add(1)
-                    .ok_or_else(|| ppvpn_engine_host::ApiError {
-                        code: "USER_RUNTIME_GENERATION_EXHAUSTED".into(),
-                        field: None,
-                        message: "forwarder generation exhausted".into(),
-                        retryable: false,
-                        capture_status: None,
-                    })?,
-            )
-        } else {
-            None
-        };
-        let response = ppvpn_engine_host::dispatch(&self.engine, path, body).await?;
-        if let Some(next) = next {
-            self.identity.lock().generation = next;
+        if path == "/v1/renew-capture-lease" {
+            let lease: ppvpn_core_wire::CaptureLease =
+                serde_json::from_value(body).map_err(|_| lease_error())?;
+            if self.capture_expired() {
+                return Err(lease_error());
+            }
+            let status = self.engine.capture_status().map_err(|_| lease_error())?;
+            if status.phase != ppvpn_core_wire::CapturePhase::Attached
+                || status.lease.as_ref() != Some(&lease)
+            {
+                return Err(lease_error());
+            }
+            *self.capture_deadline.lock() = Some(Instant::now() + Duration::from_secs(45));
+            return serde_json::to_value(status).map_err(|_| lease_error());
         }
-        Ok(response)
+        let result = ppvpn_engine_host::dispatch(&self.engine, path, body).await?;
+        if path == "/v1/attach-capture" {
+            *self.capture_deadline.lock() = Some(Instant::now() + Duration::from_secs(45));
+        } else if matches!(path, "/v1/detach-capture" | "/v1/stop") {
+            *self.capture_deadline.lock() = None;
+        }
+        Ok(result)
+    }
+}
+fn lease_error() -> ppvpn_engine_host::ApiError {
+    ppvpn_engine_host::ApiError {
+        code: "CAPTURE_LEASE_MISMATCH".into(),
+        field: None,
+        message: "capture lease is absent or stale".into(),
+        retryable: false,
+        capture_status: None,
     }
 }
 struct Authenticated {
