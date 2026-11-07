@@ -7,7 +7,19 @@
 # console user (root, loginwindow) leaves it as Installer made it.
 layout=$(/usr/libexec/PlistBuddy -c "Print :PPVPNMacRuntimeLayout" /Applications/PPVPN.app/Contents/Info.plist 2>/dev/null || true)
 # The peer policy requires a protected app image for the user-core layout.
-[ "$layout" != user-core-broker-v1 ] || exit 0
+if [ "$layout" = user-core-broker-v1 ]; then
+  set -eu
+  app=/Applications/PPVPN.app
+  # A PKG must provision both roles, not merely embed the helper executables.
+  # Refuse a mutable installation; never chown an untrusted App into approval.
+  for directory in "$app" "$app/Contents" "$app/Contents/MacOS"; do
+    [ ! -L "$directory" ] && [ "$(/usr/bin/stat -f %u "$directory")" = 0 ] || exit 1
+  done
+  unsafe=$(/usr/bin/find "$app" ! -type l \( ! -user root -o -perm -002 -o -perm -020 \) -print -quit)
+  [ -z "$unsafe" ] || exit 1
+  /usr/bin/codesign --verify --deep --strict -R 'anchor apple generic and identifier "com.peakpassvpn.ppvpn.desktop" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "HSVMRQBQJ2"' "$app"
+  exec "$app/Contents/MacOS/ppvpn-service-install"
+fi
 user=$(/usr/bin/stat -f %Su /dev/console)
 case "$user" in
   "" | root | loginwindow | _mbsetupuser) exit 0 ;;

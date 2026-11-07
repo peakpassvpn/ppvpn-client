@@ -40,15 +40,15 @@ Installation ownership contract for the packaging owner:
 
 | Location | Owner and permissions | Lifetime |
 | --- | --- | --- |
-| `/Applications/PPVPN.app` | root or the connecting user's uid; no world/group writable descendants | Existing drag-install/Sparkle ownership policy retained; release signature and exact process path required |
-| `/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle` | root; non-writable to users; executable 0544 | Immutable shared image for broker and per-user role; atomic replacement |
+| `/Applications/PPVPN.app` | root; no world/group writable descendants | Protected PKG installation; release signature and exact process path required; user-owned drag installs need an accepted protected update/install flow |
+| `/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle` | root; non-writable to users; executable 0555 (unprivileged runtime also executes it) | Immutable shared image for broker and per-user role; atomic replacement |
 | `/Library/LaunchAgents/com.peakpassvpn.ppvpn.user-runtime.plist` | root 0644, root non-writable ancestors | Installer-managed global user job, removed on uninstall |
 | User `Library/Application Support/PPVPN` and `Library/Logs/PPVPN` | connecting uid 0700, canonical path, no symlink ancestors | Created by login role after self-validation; account data survives helper uninstall |
 | Root broker directory/journal/socket | root protected directory; authenticated socket admission | Independent root singleton, lease and crash recovery |
 
 `/Applications` alone may retain Apple's root:admin group-write permission;
-helper ancestors never receive that exception. User App ownership does not
-substitute for signature or audit identity. Helpers and UI must share the
+helper ancestors never receive that exception. UI image and ancestors remain
+root-owned; do not relax peer ownership to accommodate a user-owned App. Helpers and UI must share the
 `macos-user-runtime` build mode; the build hash is mode-salted, and `--build-info`
 reports the mode without starting a runtime. Signing/packaging must enable the
 mode for the Rust UI bridge, Swift FFI framework, and service/installer together.

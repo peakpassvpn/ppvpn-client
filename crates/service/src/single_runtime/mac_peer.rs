@@ -39,16 +39,13 @@ pub fn audit_peer(stream: &UnixStream) -> Result<(Peer, [u32; 8])> {
     ))
 }
 pub fn secure_installed_image(path: &Path) -> Result<()> {
-    secure_image(path, None)
-}
-fn secure_image(path: &Path, user_uid: Option<u32>) -> Result<()> {
     if !path.is_absolute() || path.canonicalize()? != path {
         return Err(anyhow!("INSTALL_IMAGE_NOT_CANONICAL"));
     }
     for entry in path.ancestors() {
         let meta = std::fs::symlink_metadata(entry)?;
         if meta.file_type().is_symlink()
-            || (meta.uid() != 0 && Some(meta.uid()) != user_uid)
+            || meta.uid() != 0
             || meta.mode() & 0o002 != 0
             || (meta.mode() & 0o020 != 0
                 && !(entry == Path::new("/Applications") && meta.is_dir() && meta.gid() == 80))
@@ -74,13 +71,7 @@ pub fn verify_exact(stream: &UnixStream, uid: u32, identifier: &str, image: &Pat
     if peer.uid != uid {
         return Err(anyhow!("PEER_USER_REJECTED"));
     }
-    // The UI is intentionally user-owned for drag install and Sparkle. Its
-    // release signature is still mandatory; root helper images remain immutable.
-    if identifier == crate::mac_identity::CLIENT_IDENTIFIER {
-        secure_image(image, Some(uid))?;
-    } else {
-        secure_installed_image(image)?;
-    }
+    secure_installed_image(image)?;
     let requirement = crate::mac_identity::requirement(identifier, crate::mac_identity::team_id())?;
     let bytes: Vec<u8> = token.iter().flat_map(|word| word.to_ne_bytes()).collect();
     crate::mac_identity::check_process(&bytes, &requirement)?;
