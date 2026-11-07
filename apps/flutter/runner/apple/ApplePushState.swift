@@ -12,6 +12,7 @@ enum ApplePushTrace {
     case registerRequested = "register_requested"
     case tokenReceived = "token_received"
     case registrationFailed = "registration_failed"
+    case permissionResult = "permission_result"
     case foregroundReceived = "foreground_received"
     case backgroundReceived = "background_received"
     case tapReceived = "tap_received"

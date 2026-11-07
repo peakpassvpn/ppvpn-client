@@ -2,19 +2,113 @@
 // Keep the receiver alive in the AppDelegate/plugin and install at launch.
 import UIKit
 @preconcurrency import UserNotifications
+import os
+
+// Read-only, finite enums. No delegate class name, user data, token, payload,
+// URL or other free-form value can enter this snapshot or its public OSLog.
+@MainActor
+struct IOSApplePushDiagnostics {
+  enum Phase: String { case explicit, afterPermission = "after_permission" }
+  enum Authorization: String { case notDetermined = "not_determined", denied, authorized, provisional, ephemeral, unknown }
+  enum Ownership: String { case receiver, appDelegate = "app_delegate", other, none }
+  enum Setting: String { case unsupported, disabled, enabled, unknown }
+  enum Style: String { case none, banner, alert, unknown }
+  let phase: Phase
+  let authorization: Authorization
+  let delegate: Ownership
+  let alert: Setting
+  let style: Style
+  let center: Setting
+  let lock: Setting
+  let sound: Setting
+  let badge: Setting
+
+  static func setting(_ value: UNNotificationSetting) -> Setting {
+    switch value {
+    case .notSupported: return .unsupported
+    case .disabled: return .disabled
+    case .enabled: return .enabled
+    @unknown default: return .unknown
+    }
+  }
+
+  init(settings: UNNotificationSettings, delegate: Ownership, phase: Phase) {
+    self.phase = phase; self.delegate = delegate
+    switch settings.authorizationStatus {
+    case .notDetermined: authorization = .notDetermined
+    case .denied: authorization = .denied
+    case .authorized: authorization = .authorized
+    case .provisional: authorization = .provisional
+    case .ephemeral: authorization = .ephemeral
+    @unknown default: authorization = .unknown
+    }
+    switch settings.alertStyle {
+    case .none: style = .none
+    case .banner: style = .banner
+    case .alert: style = .alert
+    @unknown default: style = .unknown
+    }
+    alert = Self.setting(settings.alertSetting); center = Self.setting(settings.notificationCenterSetting)
+    lock = Self.setting(settings.lockScreenSetting); sound = Self.setting(settings.soundSetting)
+    badge = Self.setting(settings.badgeSetting)
+  }
+
+  // Typed fixture constructor, also ensures no arbitrary strings can be logged.
+  init(phase: Phase, authorization: Authorization, delegate: Ownership, alert: Setting,
+    style: Style, center: Setting, lock: Setting, sound: Setting, badge: Setting) {
+    self.phase = phase; self.authorization = authorization; self.delegate = delegate
+    self.alert = alert; self.style = style; self.center = center; self.lock = lock
+    self.sound = sound; self.badge = badge
+  }
+
+  var arguments: [String: Any] {
+    ["configured": true, "phase": phase.rawValue, "authorization": authorization.rawValue,
+     "delegate": delegate.rawValue, "alert": alert.rawValue, "style": style.rawValue,
+     "center": center.rawValue, "lock": lock.rawValue, "sound": sound.rawValue, "badge": badge.rawValue]
+  }
+  var line: String {
+    "apns_settings phase=\(phase.rawValue) authorization=\(authorization.rawValue) delegate=\(delegate.rawValue) alert=\(alert.rawValue) style=\(style.rawValue) center=\(center.rawValue) lock=\(lock.rawValue) sound=\(sound.rawValue) badge=\(badge.rawValue)"
+  }
+  private static let logger = Logger(subsystem: "com.peakpassvpn.ppvpn.apple-push", category: "settings")
+  static func emit(_ value: Self) { logger.info("\(value.line, privacy: .public)") }
+}
 
 @MainActor
 struct IOSApplePushSystem {
   var installDelegate: (IOSApplePushReceiver) -> Void
   var register: () -> Void
-  var permission: () -> Void
+  var permission: (@escaping @MainActor () -> Bool, @escaping @MainActor (Bool, Bool, NSError?) -> Void) -> Void
+  var diagnostics: (IOSApplePushReceiver, IOSApplePushDiagnostics.Phase,
+    @escaping @MainActor (IOSApplePushDiagnostics) -> Void) -> Void = { _, _, _ in }
 
   static var live: Self {
     Self(installDelegate: { UNUserNotificationCenter.current().delegate = $0 },
-      register: { UIApplication.shared.registerForRemoteNotifications() }, permission: {
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
-          guard settings.authorizationStatus == .notDetermined else { return }
-          UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
+      register: { UIApplication.shared.registerForRemoteNotifications() }, permission: { isCurrent, done in
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+          DispatchQueue.main.async {
+            guard isCurrent(), UIApplication.shared.applicationState == .active else { done(false, false, nil); return }
+            guard settings.authorizationStatus == .notDetermined else {
+              let allowed = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional || settings.authorizationStatus == .ephemeral
+              done(false, allowed, nil)
+              return
+            }
+            center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+              DispatchQueue.main.async { done(true, granted, error as NSError?) }
+            }
+          }
+        }
+      }, diagnostics: { receiver, phase, done in
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { [weak receiver] settings in
+          DispatchQueue.main.async {
+            let ownership: IOSApplePushDiagnostics.Ownership
+            if center.delegate == nil { ownership = .none }
+            else if let receiver, center.delegate === receiver { ownership = .receiver }
+            else if center.delegate === UIApplication.shared.delegate { ownership = .appDelegate }
+            else { ownership = .other }
+            done(IOSApplePushDiagnostics(settings: settings, delegate: ownership, phase: phase))
+          }
         }
       })
   }
@@ -27,6 +121,7 @@ final class IOSApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   let configured: Bool
   private let system: IOSApplePushSystem
   private let trace: @MainActor (ApplePushTrace.Receipt) -> Void
+  private let diagnosticTrace: @MainActor (IOSApplePushDiagnostics) -> Void
   var registrationFailed: ((String, Int) -> Void)?
   var fetchBackground: ((ApplePushNotice, @escaping (ApplePushFetchResult) -> Void) -> Void)?
   private(set) var receivingBackground = false
@@ -42,11 +137,13 @@ final class IOSApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   }
 
   init(app: ApplePushApp?, enabled: Bool, system: IOSApplePushSystem,
-    trace: @escaping @MainActor (ApplePushTrace.Receipt) -> Void = ApplePushTrace.emit) {
+    trace: @escaping @MainActor (ApplePushTrace.Receipt) -> Void = ApplePushTrace.emit,
+    diagnosticTrace: @escaping @MainActor (IOSApplePushDiagnostics) -> Void = IOSApplePushDiagnostics.emit) {
     self.app = app
     configured = enabled && app != nil
     state = ApplePushState(app: configured ? app : nil)
     self.trace = trace
+    self.diagnosticTrace = diagnosticTrace
     self.system = system
     super.init()
   }
@@ -61,9 +158,25 @@ final class IOSApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
     return true
   }
 
-  func requestPermission() {
-    guard configured else { return }
-    system.permission()
+  func requestPermission(whileCurrent: @escaping @MainActor () -> Bool = { true },
+    completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
+    guard configured, whileCurrent() else { completion(false); return }
+    system.permission(whileCurrent) { [weak self] requested, granted, error in
+      guard let self else { return }
+      self.record(.permissionResult, accepted: granted, opened: requested, error: error)
+      self.readDiagnostics(phase: .afterPermission) { _ in }
+      completion(whileCurrent())
+    }
+  }
+
+  func readDiagnostics(phase: IOSApplePushDiagnostics.Phase = .explicit,
+    completion: @escaping @MainActor ([String: Any]) -> Void) {
+    guard configured else { completion(["configured": false]); return }
+    system.diagnostics(self, phase) { [weak self] value in
+      guard let self else { return }
+      self.diagnosticTrace(value)
+      completion(value.arguments)
+    }
   }
 
   func record(_ stage: ApplePushTrace.Stage, accepted: Bool = false, current: Bool = true,

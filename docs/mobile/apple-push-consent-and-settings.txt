@@ -1,0 +1,87 @@
+Notification consent fix / safe settings readback
+
+Source-proven problem in b3112ff2: ApplePush accepted the scoped backend
+registration result but never invoked native permission. followAccount only
+sent account, resume only configured/retry, and receiver.start only requested
+an OS token. The native permission handler was unreachable from the normal
+runtime. A valid token/registration is independent of authorization to display
+alerts. The real-device user reported no PPVPN entry in notification settings;
+the old Dart source dynamically fails the new regression (expected1 request,
+actual0). Preserve the actual send's end-to-end failure; no retest is implied.
+
+Shared Dart / production AppState
+- Only a successful scoped backend registration for the still-current owner
+  enables an intent for that local owner epoch. OFF/configured=false, failed
+  registration, disposed/stale owner or nonforeground state cannot request UI.
+- Registration ACK and serialized effects/logout drain complete independently
+  of the OS permission future. Permission is once per current intent; native
+  deferred/unhandled response permits a later normal foreground retry.
+- Production AppState uses the real WidgetsBinding lifecycle (resumed only)
+  AND authenticationPresentationActive. The latter is set around the actual
+  private authentication opening and cleared only after normal native close
+  acknowledgement. Closing authentication explicitly retries the committed
+  intent, even if ASWebAuthenticationSession caused no new resumed event.
+  Ordinary inactive/paused/resumed notifications use the existing observer.
+- Tests exercise real AppState construction, actual transport/controller
+  bodies and WidgetsBinding notifications with controlled Rust/channel edges,
+  plus normal auth open/close acknowledgement. They are not actual UI/device
+  consent acceptance. Native UI presentation timing still requires the rebuilt
+  candidate in a separately authorized real-device window.
+
+Both native bridges
+permission now takes {clientEpoch: decimal-string} and returns Bool handled.
+Handled means a current intent was addressed, NOT that alerts are authorized.
+The current native epoch is rechecked at the asynchronous OS boundary; the
+live adapter also requires the app to be active before requesting OS UI.
+Existing denied/authorized settings do not re-prompt. Missing/old nil responses
+are unhandled by new Dart; ship paired Dart+native sources. No new Rust/FRB or
+business API field is added, and no delegate assignment/ownership policy changed.
+
+Permission result lifecycle receipt
+  apns stage=permission_result accepted={granted} current=1 opened={actually_requested} remote=0 domain={fixed-domain-class} code={NSError-code-or0}
+accepted is the OS authorization callback/result, not notification delivery.
+opened only indicates requestAuthorization was actually called; a previously
+determined status has opened=0. Raw error domain/description/userInfo are never
+logged; existing cocoa/url/os_status/other domain normalization applies.
+
+iOS read-only diagnostics entry
+Native channel com.peakpassvpn.ppvpn/apple-push method diagnostics returns
+configured=false on OFF WITHOUT reading UN center/settings/delegate or store.
+When enabled it returns only configured plus finite enum fields:
+  phase: explicit | after_permission
+  authorization: not_determined | denied | authorized | provisional | ephemeral | unknown
+  delegate: receiver | app_delegate | other | none
+  alert/center/lock/sound/badge: unsupported | disabled | enabled | unknown
+  style: none | banner | alert | unknown
+It does not request authorization, register tokens, query Keychain, mutate the
+delegate or change settings. A readback also runs after normal permission
+resolution, including failures/previously determined states. Granted/error
+alone does not replace this actual getNotificationSettings snapshot.
+
+Exact OSLog subsystem: com.peakpassvpn.ppvpn.apple-push
+Settings category: settings (existing lifecycle category remains lifecycle)
+  subsystem == "com.peakpassvpn.ppvpn.apple-push" AND (category == "lifecycle" OR category == "settings")
+Fixed settings line:
+  apns_settings phase={enum} authorization={enum} delegate={enum} alert={enum} style={enum} center={enum} lock={enum} sound={enum} badge={enum}
+No token, nonce, account/delivery/message id, body, URL, class name or credential
+can be represented by these typed snapshots. The namespace-aware NDJSON parser
+requires settings category for settings lines. iPhone text collectors accept
+both fixed schemas with an upstream "apns" substring filter but keep exact
+PID/image/level/schema checks and mark namespace unavailable / NOT INFERRED.
+
+Packaging companion (separate build-owner-source commit)
+Enabled iOS prepare adds UIBackgroundModes remote-notification without losing
+existing modes; repeated prepare is idempotent. OFF and macOS do not add/remove
+background modes. Export/sign verification rejects enabled iOS artifacts that
+lose the mode despite valid APS. This fixes a known background-path declaration
+gap, not a claim that the prior foreground failure was caused by that mode.
+It does not turn an alert payload into guaranteed background wake or delivery.
+
+Retest boundary
+Rebuild Flutter and native Swift together and re-sign/export with the packaging
+companion. Current344 is unchanged; no resend, reinstall, permission change or
+window extension was performed for this fix. Keep the previous one-send result
+FAILED/NOT ACCEPTED. After QA and actual sender/settings evidence, root owns a
+new exact-candidate normal-login/permission/readback and approved send window.
+User handles the real OS prompt; no script enables notifications or fakes an
+authorization result. Ordinary rollout remains OFF and old Mac Agent retained.

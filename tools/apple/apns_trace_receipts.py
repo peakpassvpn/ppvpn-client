@@ -12,12 +12,27 @@ import sys
 
 SUBSYSTEM = 'com.peakpassvpn.ppvpn.apple-push'
 CATEGORY = 'lifecycle'
-STAGES = ('register_requested', 'token_received', 'registration_failed',
+STAGES = ('register_requested', 'token_received', 'registration_failed', 'permission_result',
           'foreground_received', 'background_received', 'tap_received',
           'bridge_register_reply', 'bridge_unregister_reply', 'bridge_notice_reply')
 LINE = re.compile(r'apns stage=(' + '|'.join(STAGES) +
     r') accepted=([01]) current=([01]) opened=([01]) remote=([01]) '
     r'domain=(none|cocoa|url|os_status|other) code=(-?[0-9]{1,20})')
+SETTINGS = re.compile(
+    r'apns_settings phase=(explicit|after_permission) '
+    r'authorization=(not_determined|denied|authorized|provisional|ephemeral|unknown) '
+    r'delegate=(receiver|app_delegate|other|none) '
+    r'alert=(unsupported|disabled|enabled|unknown) style=(none|banner|alert|unknown) '
+    r'center=(unsupported|disabled|enabled|unknown) lock=(unsupported|disabled|enabled|unknown) '
+    r'sound=(unsupported|disabled|enabled|unknown) badge=(unsupported|disabled|enabled|unknown)')
+
+
+def parse_settings_message(message):
+    match = SETTINGS.fullmatch(message) if isinstance(message, str) else None
+    if match is None:
+        return None
+    return dict(stage='notification_settings', **dict(zip(
+        ('phase', 'authorization', 'delegate', 'alert', 'style', 'center', 'lock', 'sound', 'badge'), match.groups())))
 
 
 def parse_message(message):
@@ -29,7 +44,7 @@ def parse_message(message):
     number = int(code)
     if not -(2**63) <= number < 2**63:
         return None
-    if stage != 'registration_failed' and (domain != 'none' or number != 0):
+    if stage not in ('registration_failed', 'permission_result') and (domain != 'none' or number != 0):
         return None
     return dict(stage=stage, accepted=accepted == '1', current=current == '1',
                 opened=opened == '1', remote=remote == '1', domain=domain, code=number)
@@ -38,7 +53,7 @@ def parse_message(message):
 def parse(event, pids, process_path=None):
     if not isinstance(event, dict):
         return None
-    if event.get('subsystem') != SUBSYSTEM or event.get('category') != CATEGORY:
+    if event.get('subsystem') != SUBSYSTEM or event.get('category') not in (CATEGORY, 'settings'):
         return None
     pid = event.get('processID', event.get('processIdentifier'))
     if type(pid) is not int or pid <= 0:
@@ -48,6 +63,8 @@ def parse(event, pids, process_path=None):
             return None
     elif pid not in pids:
         return None
+    if event.get('category') == 'settings':
+        return parse_settings_message(event.get('eventMessage'))
     return parse_message(event.get('eventMessage'))
 
 
@@ -83,7 +100,7 @@ def main():
             output.write(json.dumps(receipt, separators=(',', ':')) + '\n')
             output.flush()
             count += 1
-            counts[receipt['stage']] += 1
+            counts[receipt['stage']] = counts.get(receipt['stage'], 0) + 1
     print(json.dumps({'receipt_count': count, 'discarded_lines': rejected, 'stages': counts,
                       'runtime_acceptance': 'NOT INFERRED', 'raw_log_saved': False}))
 

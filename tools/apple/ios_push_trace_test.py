@@ -17,10 +17,26 @@ parser.add_argument('--negative-controls', action='store_true')
 args = parser.parse_args()
 
 
+def replace_balanced(source, signature, replacement):
+    start = source.index(signature)
+    brace = source.index('{', start)
+    depth = 1; end = brace + 1
+    while depth:
+        depth += (source[end] == '{') - (source[end] == '}')
+        end += 1
+    return source[:start] + replacement + source[end:]
+
+
 def run(work, common, receiver, bridge):
     r = work / 'IOSReceiver.swift'
     b = work / 'IOSBridge.swift'
-    r.write_text(receiver.replace('import UIKit', 'import Cocoa'))
+    # Replace only UIKit-only live adapters/snapshot conversion on the Mac.
+    # Actual SDK object compilation below uses every original source unchanged.
+    controlled = replace_balanced(receiver, '  static var live: Self {',
+        '  static var live: Self { preconditionFailure("unexpected live UIKit adapter") }')
+    controlled = replace_balanced(controlled,
+        '  init(settings: UNNotificationSettings, delegate: Ownership, phase: Phase) {', '')
+    r.write_text(controlled.replace('import UIKit', 'import Cocoa'))
     b.write_text(bridge.replace('import Flutter\n', '').replace('import UIKit', 'import Cocoa').replace('registrar.messenger()', 'registrar.messenger'))
     exe = work / 'tests'
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-warnings-as-errors',

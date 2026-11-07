@@ -17,7 +17,7 @@ import signal
 import subprocess
 import time
 
-from apns_trace_receipts import parse_message
+from apns_trace_receipts import parse_message, parse_settings_message
 
 HEADER = re.compile(
     r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) {1,2}'
@@ -36,7 +36,7 @@ def parse_syslog_line(line, expected_pid):
     # Production release trace is emitted from Runner, not Flutter/other images.
     if header['image'] not in (None, 'Runner') or header['level'] != 'Info':
         return None
-    receipt = parse_message(header['message'])
+    receipt = parse_message(header['message']) or parse_settings_message(header['message'])
     if receipt is None:
         return None
     return {'observation_kind': 'PROCESS_BOUND_FIXED_TRACE_TEXT',
@@ -107,7 +107,7 @@ def main():
     try:
         with os.fdopen(fd, 'w') as output:
             child = subprocess.Popen([tool, '-u', args.device_udid, '--no-colors', '--exit',
-                                      '-p', str(args.pid), '-m', 'apns stage='],
+                                      '-p', str(args.pid), '-m', 'apns'],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                      stdin=subprocess.DEVNULL)
             selector.register(child.stdout, selectors.EVENT_READ)
