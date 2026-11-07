@@ -1,20 +1,23 @@
 # macOS single forwarding runtime: native host candidate
 
 This opt-in candidate imports shared-core PR #592 at
-052b412cb6b047639593c8a97d9e2cd3438e8652 and frozen Sail
+38562690393327564143b92a163888443fe5d9e5 and frozen Sail
 593286824540aac651ac2f84c6e751fb0e70a4da. It is not a release or a claim of
 macOS system acceptance. No old two-runtime packet bridge is used.
 
 ## Reproducible entries
 
-Build the helper with `cargo build --locked -p ppvpn-service --bin ppvpn-service`.
+Build the helper with `cargo build --locked -p ppvpn-service --features macos-user-runtime --bins`.
 Build the UI logic with
 `cargo build --locked -p ppvpn-desktop --features macos-user-runtime`.
 Packaging must explicitly enable that feature; defaults remain unchanged.
 
 The same root-owned, hardened release-signed installed helper image runs two
 roles: root launchd invokes `ppvpn-service --capture-broker`; the per-user
-LaunchAgent invokes `ppvpn-service --user-runtime PRIVATE_DIRECTORY LOG_DIRECTORY`.
+LaunchAgent invokes `ppvpn-service --user-runtime-login`.
+The login entry derives the OS home using getpwuid_r and chooses the default
+private data/log directories. The explicit
+`--user-runtime PRIVATE_DIRECTORY LOG_DIRECTORY` entry remains available.
 PRIVATE_DIRECTORY must be ClientConfig.data_dir; LOG_DIRECTORY must be
 ClientConfig.log_dir. Both must already exist, be canonical, owned by this uid,
 and have mode 0700. The agent refuses root/setuid execution. Both roles use the
@@ -22,15 +25,40 @@ fixed installed helper bundle and the existing release signing identifiers.
 There is no development signature/path bypass. An unsigned local executable
 cannot impersonate an installed helper or UI.
 
-The helper modes alone do not install/register the LaunchAgent. Signed staging,
-plist installation, bootstrap/logout and update/uninstall ordering belong to
-packaging. Do not replace the current user's helper or alter current routes to
+The feature-enabled install-service generates the root daemon's explicit
+`--capture-broker` argument and atomically installs the global user job at
+`/Library/LaunchAgents/com.peakpassvpn.ppvpn.user-runtime.plist`. Its ProgramArguments
+refer to the fixed root helper with `--user-runtime-login`; Aqua domains receive
+one unprivileged job each. It runs at login, restarts after unsuccessful exits,
+and permits 75 seconds for ordered shutdown. Install/update first boot out user
+jobs, then stop root, replace the validated helper, start root, and bootstrap
+existing GUI domains. Uninstall stops/removes the user job before removing root.
+Packaging must actually invoke this signed installer on initial installation;
+merely embedding it in the App does not provision either role.
+
+Installation ownership contract for the packaging owner:
+
+| Location | Owner and permissions | Lifetime |
+| --- | --- | --- |
+| `/Applications/PPVPN.app` | root or the connecting user's uid; no world/group writable descendants | Existing drag-install/Sparkle ownership policy retained; release signature and exact process path required |
+| `/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle` | root; non-writable to users; executable 0544 | Immutable shared image for broker and per-user role; atomic replacement |
+| `/Library/LaunchAgents/com.peakpassvpn.ppvpn.user-runtime.plist` | root 0644, root non-writable ancestors | Installer-managed global user job, removed on uninstall |
+| User `Library/Application Support/PPVPN` and `Library/Logs/PPVPN` | connecting uid 0700, canonical path, no symlink ancestors | Created by login role after self-validation; account data survives helper uninstall |
+| Root broker directory/journal/socket | root protected directory; authenticated socket admission | Independent root singleton, lease and crash recovery |
+
+`/Applications` alone may retain Apple's root:admin group-write permission;
+helper ancestors never receive that exception. User App ownership does not
+substitute for signature or audit identity. Helpers and UI must share the
+`macos-user-runtime` build mode; the build hash is mode-salted, and `--build-info`
+reports the mode without starting a runtime. Signing/packaging must enable the
+mode for the Rust UI bridge, Swift FFI framework, and service/installer together.
+ApplePush continues to have its existing separate responsibility. Do not replace the current user's helper or alter current routes to
 exercise this candidate; use a dedicated macOS VM/test machine.
 
 ## One owner, two capture resource copies
 
 Only the user service constructs the forwarding Engine, with Role::Shared,
-physical-network bootstrap, a protected outbound socket callback and a native
+physical-network bootstrap, destination-aware Sail physical binding and a native
 CaptureHost. The UI feature excludes the embedded Engine launcher and routes
 both ordinary APIs and enhanced-mode capture through the user service.
 Engine runtime observation supplies the actual instance/generation identity;
@@ -94,20 +122,19 @@ owned routes/DNS and brings the interface down even if a receiver still holds an
 fd; closing root's copy alone is not treated as revocation. Unexpected Darwin
 ancillary truncation is a process containment failure, not a recoverable leak.
 
-**Open descriptor/exec integration gate:** root raw-socket creation and root child
-spawns are serialized. The user receiver still requires the same shared gate as
-core DNS scutil spawn; a service-local lock cannot cover that core operation.
-Darwin SCM_RIGHTS followed by fcntl has a proven child-inheritance window. The
-minimal public-core gate patch is prepared separately for the shared-core owner;
-until it is merged and consumed here, this opt-in candidate must not be released
-or claimed to have completed descriptor lifetime/security acceptance.
+The macOS core exports one process-wide `capture_host::fd_spawn_guard`. Core DNS
+holds it only through child spawn; host raw socket creation and SCM_RIGHTS receive
+hold it until FD_CLOEXEC is set. Root child spawns use the same API. The shared
+lock closes the demonstrated receive/fcntl child-inheritance window. It must not
+be replaced by a service-local mutex or held while waiting for child exit.
 
 ## Physical network, ingress and process lifetime
 
 The agent reads SystemConfiguration Global IPv4/IPv6 primary-interface state and
-that interface's addresses, excluding tun/utun/ppp competitors. Outbound sockets
-are bound to the physical interface with IP_BOUND_IF/IPV6_BOUND_IF, before connect.
-Offline fails closed. Shared Engine receives the bootstrap before start and only
+that interface's addresses, excluding tun/utun/ppp competitors. Sail auto_detect_interface binds non-loopback outbound sockets to that physical
+view with IP_BOUND_IF/IPV6_BOUND_IF; loopback stays on loopback, including core
+DNS-local. A blanket fd-only host callback would incorrectly bind those local
+sockets to en0 and is intentionally absent. Offline fails closed. Shared Engine receives the bootstrap before start and only
 changed physical snapshots thereafter. Capture-only routes/DNS are not pushed as
 network moves or generic resets. Existing core DNS-local resolves through the
 physical interface; the broker's supplemental DNS does not replace its service.
@@ -123,9 +150,9 @@ bounded log channel and seven-file retention.
 
 ## Runner / ApplePush ownership
 
-No existing Swift Runner files or ApplePush callbacks are changed here. Reserve
-UserRuntimeBridge.swift for agent registration/readiness and coordinate its single
-bootstrap call with the mobile specialist. Keep account/auth snapshot bridging in
+No existing Swift Runner files or ApplePush callbacks are changed here. The global
+LaunchAgent uses the existing installer lifecycle and needs no competing Runner
+registration callback. Keep account/auth snapshot bridging in
 the existing Rust Client. ApplePush registration, APNs callback lifetime and removal
 of the push agent are separate mobile acceptance; this candidate claims none of it.
 
@@ -135,7 +162,7 @@ The service test uses the actual Sail runtime and core native capture coordinato
 with isolated packet transport. It holds authenticated HTTP CONNECT, SOCKS TCP and
 one SOCKS UDP association through ten successful attach/detach transactions and
 presentation disconnect, checking stable payloads, credentials, port and owner.
-It does not open a system utun or change host routes/DNS. Actual socket binding,
+It does not open a system utun or change host routes/DNS. Physical-view/loopback binding,
 FD validation, HMAC/audit identity, lease expiry/quarantine and route ownership
 negatives have separate local checks.
 

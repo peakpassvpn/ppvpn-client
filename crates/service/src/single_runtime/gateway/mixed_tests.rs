@@ -113,8 +113,11 @@ async fn authenticated_http_socks_tcp_udp_survive_native_capture_transactions_an
         profile["routing"]=json!({"rule_sets":[],"rules":[],"final":{"type":"direct"}});
         for node in profile["nodes"].as_array_mut().unwrap() {for ingress in node["ingresses"].as_array_mut().unwrap() {ingress["endpoint"]=json!({"domain":"127.0.0.1","port":9});}}
         backend.call("/v1/apply-profile",json!({"profile":profile,"routing_mode":"rules"})).await.unwrap();
-        backend.network(ppvpn_core::NetworkState::new("lo0", ppvpn_core::NetworkKind::Other)
-            .with_addresses(vec!["127.0.0.1/8".into()])).unwrap();
+        // Exercise real physical auto-binding with loopback destinations. A
+        // blanket IP_BOUND_IF host callback breaks core's own DNS-local loopback.
+        let physical=crate::single_runtime::native::physical().ok()
+            .filter(|s|s.interface.is_some()).unwrap_or_else(||ppvpn_core::NetworkState::new("lo0",ppvpn_core::NetworkKind::Other).with_addresses(vec!["127.0.0.1/8".into()]));
+        backend.network(physical).unwrap();
         backend.call("/v1/start",json!({})).await.unwrap();
         let credential=backend.call("/v1/get-local-proxy-credential",json!({"kind":"routed"})).await.unwrap();
         let user=credential["username"].as_str().unwrap();let password=credential["password"].as_str().unwrap();let proxy=format!("127.0.0.1:{}",credential["port"].as_u64().unwrap());

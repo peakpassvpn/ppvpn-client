@@ -228,6 +228,18 @@ const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 "#;
 
 #[cfg(target_os = "macos")]
+fn launchd_plist() -> String {
+    if cfg!(feature = "macos-user-runtime") {
+        LAUNCHD_PLIST.replace(
+            "</array>",
+            "<string>--capture-broker</string>\n    </array>",
+        )
+    } else {
+        LAUNCHD_PLIST.to_owned()
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn main() -> Result<(), anyhow::Error> {
     use anyhow::{anyhow, Context};
     use std::env;
@@ -260,7 +272,7 @@ fn main() -> Result<(), anyhow::Error> {
     // one (the user could swap the file in between). A debug build installs
     // the ad-hoc signed debug service.
     let check_service = |path: &Path| -> Result<(), anyhow::Error> {
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && !cfg!(feature = "macos-user-runtime") {
             return Ok(());
         }
         let requirement = macsign::requirement(macsign::SERVICE_IDENTIFIER, macsign::team_id())?;
@@ -273,6 +285,33 @@ fn main() -> Result<(), anyhow::Error> {
     let target_bin = format!("{macos_dir}/ppvpn-service");
     let info_plist = format!("{BUNDLE_PATH}/Contents/Info.plist");
 
+    // Inspect/create each root component before stopping working jobs or writing
+    // any privileged file. Never repair ownership through an existing symlink.
+    for directory in [
+        "/Library/PrivilegedHelperTools",
+        BUNDLE_PATH,
+        &format!("{BUNDLE_PATH}/Contents"),
+        &macos_dir,
+        LOG_DIR,
+        "/Library/LaunchDaemons",
+    ] {
+        ppvpn_service::single_runtime::login::root_directory(Path::new(directory))?;
+    }
+    for file in [&info_plist, LAUNCHD_PLIST_PATH] {
+        match fs::symlink_metadata(file) {
+            Ok(m) => {
+                use std::os::unix::fs::MetadataExt;
+                anyhow::ensure!(
+                    m.is_file() && m.uid() == 0 && m.nlink() == 1,
+                    "INSTALL_PRIVILEGED_FILE_UNSAFE"
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    #[cfg(feature = "macos-user-runtime")]
+    ppvpn_service::single_runtime::login::stop_users()?;
     // Stop the running service first: on SIGTERM it shuts its TUN instance
     // down (routes, DNS) within ~10 s (ExitTimeOut is 30 s).
     stop_launchd_job()?;
@@ -294,7 +333,7 @@ fn main() -> Result<(), anyhow::Error> {
     if let Some(parent) = Path::new(LAUNCHD_PLIST_PATH).parent() {
         fs::create_dir_all(parent).ok();
     }
-    fs::write(LAUNCHD_PLIST_PATH, LAUNCHD_PLIST)
+    fs::write(LAUNCHD_PLIST_PATH, launchd_plist())
         .with_context(|| format!("write {LAUNCHD_PLIST_PATH}"))?;
 
     // Permissions: launchd refuses to load plists that aren't root:wheel 0644,
@@ -315,6 +354,8 @@ fn main() -> Result<(), anyhow::Error> {
         &["kickstart", "-k", &format!("system/{SERVICE_LABEL}")],
     )?;
 
+    #[cfg(feature = "macos-user-runtime")]
+    ppvpn_service::single_runtime::login::install()?;
     println!("installed {SERVICE_LABEL}");
     Ok(())
 }

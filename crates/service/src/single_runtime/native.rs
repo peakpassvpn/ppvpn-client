@@ -15,7 +15,6 @@ use std::{
     io,
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
     process::{Command, Stdio},
-    sync::atomic::{AtomicU32, Ordering},
     time::{Duration, Instant},
 };
 
@@ -174,76 +173,13 @@ pub fn physical() -> Result<NetworkState> {
     state.gateway = field(&global, "Router");
     Ok(state)
 }
-pub struct Protect(AtomicU32);
-impl Protect {
-    pub fn new(state: &NetworkState) -> Result<Self> {
-        let p = Self(AtomicU32::new(0));
-        p.update(state)?;
-        Ok(p)
-    }
-    pub fn update(&self, state: &NetworkState) -> Result<()> {
-        let index = match &state.interface {
-            None => 0,
-            Some(name) => {
-                let name = CString::new(name.as_bytes())?;
-                let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
-                if index == 0 {
-                    bail!("PHYSICAL_INTERFACE_GONE");
-                }
-                index
-            }
-        };
-        self.0.store(index, Ordering::SeqCst);
-        Ok(())
-    }
-}
-impl Protect {
-    pub fn protect(&self, fd: i32) -> io::Result<()> {
-        let index = self.0.load(Ordering::SeqCst);
-        if index == 0 {
-            return Err(io::ErrorKind::NetworkUnreachable.into());
-        }
-        let mut address: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-        let mut size = std::mem::size_of_val(&address) as libc::socklen_t;
-        if unsafe {
-            libc::getsockname(
-                fd,
-                (&mut address as *mut libc::sockaddr_storage).cast(),
-                &mut size,
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        let (level, option) = match address.ss_family as i32 {
-            libc::AF_INET => (libc::IPPROTO_IP, libc::IP_BOUND_IF),
-            libc::AF_INET6 => (libc::IPPROTO_IPV6, libc::IPV6_BOUND_IF),
-            _ => return Err(io::ErrorKind::InvalidInput.into()),
-        };
-        if unsafe {
-            libc::setsockopt(
-                fd,
-                level,
-                option,
-                (&index as *const u32).cast(),
-                std::mem::size_of_val(&index) as _,
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-}
 /// No shell, inherited input, PATH lookup, payload logging or unbounded wait.
 /// Child is reaped before returning even after timeout; OS operation settlement
 /// remains serialized by the broker worker, never abandoned on async timeout.
-// Root owns all child creation in its process. The user capture receiver must
-// additionally share this coordination with core's DNS spawn (integration gate).
+// The same process-wide gate is used by core DNS child creation and by every
+// host raw-socket/SCM_RIGHTS receive window; a root-local mutex is insufficient.
 pub fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
-    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    GATE.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    ppvpn_core::capture_host::fd_spawn_guard()
 }
 pub fn command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = {
@@ -553,13 +489,8 @@ mod tests {
         assert!(interface(&file.into()).is_err());
     }
     #[test]
-    fn physical_snapshot_is_read_only_and_protection_rejects_offline() {
+    fn physical_snapshot_is_read_only() {
         let _ = physical();
-        let p = Protect::new(&NetworkState::offline()).unwrap();
-        assert_eq!(
-            p.protect(-1).unwrap_err().kind(),
-            io::ErrorKind::NetworkUnreachable
-        );
     }
 }
 
@@ -834,35 +765,5 @@ mod ownership_tests {
             "-inet6",
             "8000::/1"
         ));
-    }
-    #[test]
-    fn actual_socket_binding_is_physical_and_offline_fails_closed() {
-        let physical =
-            NetworkState::new("lo0", NetworkKind::Other).with_addresses(vec!["127.0.0.1/8".into()]);
-        let protect = Protect::new(&physical).unwrap();
-        let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
-        assert!(raw >= 0);
-        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-        protect.protect(fd.as_raw_fd()).unwrap();
-        let mut bound = 0u32;
-        let mut length = std::mem::size_of_val(&bound) as libc::socklen_t;
-        assert_eq!(
-            unsafe {
-                libc::getsockopt(
-                    fd.as_raw_fd(),
-                    libc::IPPROTO_IP,
-                    libc::IP_BOUND_IF,
-                    (&mut bound as *mut u32).cast(),
-                    &mut length,
-                )
-            },
-            0
-        );
-        assert_eq!(bound, index("lo0").unwrap());
-        protect.update(&NetworkState::offline()).unwrap();
-        assert_eq!(
-            protect.protect(fd.as_raw_fd()).unwrap_err().kind(),
-            io::ErrorKind::NetworkUnreachable
-        );
     }
 }

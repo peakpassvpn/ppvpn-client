@@ -1346,11 +1346,14 @@ fn prepare_macos_socket_directory() -> Result<()> {
     for path in [base, directory] {
         let path_text = path.display().to_string();
         for (command, mode) in [("chown", "root:wheel"), ("chmod", "755")] {
-            let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
-            let status = Command::new(command)
-                .args([mode, path_text.as_str()])
-                .status()
-                .with_context(|| format!("run {command}"))?;
+            let mut child = {
+                let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
+                Command::new(command)
+                    .args([mode, path_text.as_str()])
+                    .spawn()
+                    .with_context(|| format!("run {command}"))?
+            };
+            let status = child.wait().with_context(|| format!("wait {command}"))?;
             if !status.success() {
                 return Err(anyhow!("SERVICE_SOCKET_DIRECTORY_PERMISSIONS_FAILED"));
             }
@@ -1443,10 +1446,15 @@ fn macos_client_path_allowed(path: &std::path::Path) -> bool {
 #[cfg(target_os = "macos")]
 fn set_socket_permissions(path: &str) {
     use std::process::Command;
-    let _fd_guard = ppvpn_service::single_runtime::native::spawn_guard();
-
-    let _ = Command::new("chown").args(["root:wheel", path]).status();
-    let _ = Command::new("chmod").args(["666", path]).status();
+    for (command, args) in [("chown", ["root:wheel", path]), ("chmod", ["666", path])] {
+        let child = {
+            let _guard = ppvpn_service::single_runtime::native::spawn_guard();
+            Command::new(command).args(args).spawn()
+        };
+        if let Ok(mut child) = child {
+            let _ = child.wait();
+        }
+    }
 }
 
 /// systemd creates /run/ppvpn (RuntimeDirectory=ppvpn, mode 0755); this only

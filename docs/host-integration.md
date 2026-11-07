@@ -788,3 +788,13 @@ this mode. Android can opt in with the same sequence while keeping SocketProtect
 or retain its static VpnService FD mode. `stop` detaches the current lease and
 stops that unique VPN forwarding owner. This is an explicit host migration,
 not automatic iOS descriptor extraction or a second App runtime.
+
+### macOS descriptor creation and child execution
+
+A native capture host must hold `capture_host::fd_spawn_guard()` across every
+SCM_RIGHTS receive / raw descriptor creation until FD_CLOEXEC is set, and across
+its own child spawns (release before waiting for the child). Core DNS uses the
+same gate around scutil spawn. This closes Darwin's receive-then-fcntl inheritance
+window; a host-only lock cannot coordinate child creation inside core.
+
+`capture_host::forwarding_runtime_ids()` reads the actual process-local Sail registry without creating an Engine. Root brokers must observe an empty registry; a user owner may report its one native id through the existing runtime observation. This is not a cross-process proof by itself.

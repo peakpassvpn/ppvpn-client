@@ -116,10 +116,36 @@ fn stop_data_plane() {
 fn main() {
     #[cfg(target_os = "macos")]
     if let Some(role) = std::env::args_os().nth(1) {
-        if role != "--user-runtime" && role != "--capture-broker" && role != update::RUNNER_FLAG {
+        if role != "--user-runtime"
+            && role != "--capture-broker"
+            && role != "--user-runtime-login"
+            && role != "--build-info"
+            && role != update::RUNNER_FLAG
+        {
             eprintln!("service: SERVICE_ROLE_UNSUPPORTED");
             std::process::exit(1);
         }
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--build-info")) {
+        println!(
+            "{}",
+            serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build_id":protocol::SERVICE_BUILD_ID,"user_runtime":cfg!(feature="macos-user-runtime")})
+        );
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--user-runtime-login")) {
+        let result = if std::env::args_os().count() == 2 {
+            ppvpn_service::single_runtime::login::run()
+        } else {
+            Err(anyhow::anyhow!("USER_RUNTIME_ARGUMENTS_INVALID"))
+        };
+        if let Err(error) = result {
+            eprintln!("user runtime: {error}");
+            std::process::exit(1);
+        }
+        return;
     }
     #[cfg(target_os = "macos")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--user-runtime")) {

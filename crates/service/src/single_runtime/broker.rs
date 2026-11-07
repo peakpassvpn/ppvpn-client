@@ -320,6 +320,9 @@ fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Re
         )
         .map_err(|_| anyhow!("CAPTURE_AUTH_REJECTED"))?;
     let result = (|| {
+        if !ppvpn_core::capture_host::forwarding_runtime_ids().is_empty() {
+            bail!("CAPTURE_BROKER_ROLE_VIOLATION");
+        }
         if request.command != Command::CoreApi {
             bail!("CAPTURE_OPERATION_INVALID");
         }
@@ -340,7 +343,7 @@ fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Re
     match result {
         Ok((fd, name)) => {
             let response =
-                session.sign_response(request.id, true, Some(json!({"interface":name})), None)?;
+                session.sign_response(request.id, true, Some(json!({"interface":name,"root_runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids()})), None)?;
             write_frame(stream, &response)?;
             if let Some(fd) = fd {
                 fdpass::send(stream, &fd)?;

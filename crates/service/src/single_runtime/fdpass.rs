@@ -100,9 +100,11 @@ fn send_envelope(stream: &mut UnixStream, descriptors: &[libc::c_int], tag: u8) 
 /// Reject missing/extra descriptors, malformed marker, ancillary truncation and
 /// unexpected ancillary types. Every received fd is immediately owned and is
 /// closed on error. CLOEXEC is set before returning the descriptor to callers.
-/// The caller must serialize exec/spawn while receiving on Apple platforms,
-/// where recvmsg has no MSG_CMSG_CLOEXEC atomic equivalent.
+/// macOS receipt holds the shared core FD/spawn gate through CLOEXEC setup;
+/// recvmsg has no MSG_CMSG_CLOEXEC atomic equivalent there.
 pub fn receive(stream: &mut UnixStream) -> Result<OwnedFd, ReceiveError> {
+    #[cfg(target_os = "macos")]
+    let _fd_guard = ppvpn_core::capture_host::fd_spawn_guard();
     let mut marker = 0u8;
     let mut vector = libc::iovec {
         iov_base: (&mut marker as *mut u8).cast(),
