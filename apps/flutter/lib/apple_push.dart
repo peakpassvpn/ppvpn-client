@@ -168,8 +168,10 @@ class ApplePush {
         _permissionRequestedEpoch = null;
     } on MissingPluginException {
       // The scoped backend registration remains committed independently.
+      if (_permissionRequestedEpoch == epoch) _permissionRequestedEpoch = null;
     } on PlatformException {
       // Native safe diagnostics own error/status readback; never log details.
+      if (_permissionRequestedEpoch == epoch) _permissionRequestedEpoch = null;
     }
   }
 
