@@ -1,0 +1,80 @@
+DNS acceptance: effective configuration and diagnostic boundaries
+
+Frozen source
+  Sail593286824540aac651ac2f84c6e751fb0e70a4da. Its native fallback when
+  dns.servers is empty is one type=local/tag=local system resolver
+  (sail/src/app/dns/client.rs). Do not confuse that with the explicit DNS
+  configuration ppvpn-core builds for Role::Tun/Shared.
+
+Core-generated remote DNS
+  crates/core/src/translate/tun.rs defines dns-remote as sequential members:
+    dns-remote-1.1.1.1: type=tls, server=1.1.1.1, detour=selected
+    dns-remote-8.8.8.8: type=tls, server=8.8.8.8, detour=selected
+    dns-remote-9.9.9.9: type=tls, server=9.9.9.9, detour=selected
+  No server_port is supplied: Sail TLS defaults to853. No custom server_name,
+  CA, insecure mode or DoH/443 fallback is supplied. TLS peer identity defaults
+  to each IP address. The DNS stream is two-byte-length framed RFC7858 over
+  verified TLS, dialed through selected. Bootstrap ingress addresses bypass
+  via dns-local; that does not send ordinary proxy domains to dns-local.
+  Core config: attempt_timeout3s, budget8s, prefer_for10m, dns.timeout10s,
+  reverse_mapping=true. Initial member order is the list above; last successful
+  member can become first for10m. Sail gives the last member remaining budget
+  and can retry a timed-out kept connection fresh once, within that same budget.
+  Thus not every member consumes exactly3s, and three attempts do not mean9s.
+
+Profile input selects which side is actually used
+  Android e2e/android_forwarding/host.py: schema1, routing.rules=[],
+  routing.final={type:proxy,target:selected}, routing_mode=rules. SS2022 node
+  android-node has numeric domain10.0.2.2:18388. A queries for example.com,
+  example.org and example.net at VPN VIP10.60.159.90 therefore use dns-remote
+  over selected SS to the production resolvers. TCP/UDP TEST-NET echo is a
+  different controlled path; a working echo does not establish DNS success.
+  A profile with no matching domain rule and final.type=direct instead uses
+  dns-local. This is the macOS native capture harness's examined configuration
+  in crates/service/src/single_runtime/gateway/mixed_tests.rs. It must not be
+  diagnosed as DoT853 solely because dns-remote is also present in the config.
+
+Direct/local DNS on macOS
+  Desktop Role::Shared/Tun has a Core DNS-local TCP listener on loopback, which
+  Sail asks. That listener obtains physical-interface resolvers from the
+  Core localdns cache/scutil source and dials them through RuntimeDial direct.
+  Physical UDP53 is normal; TCP may be configured or used after truncation.
+  TunConfig::with_local_dns_servers overrides this local side only, never the
+  remote DoT members. Compare the same physical resolver before/during/after
+  capture, retaining UDP/TCP response, local/peer address, bound interface,
+  raw OS error, route and active network snapshot. A wire SERVFAIL by itself
+  does not distinguish resolver SERVFAIL, discovery failure or transport error.
+
+Available diagnostics (no new RPC/protocol implied)
+  EngineConfig::with_log(LogConfig::new(LogLevel::Debug, LogSink::Channel)),
+  then Engine::logs() once, exposes Core DNS lines. File sink is also supported.
+  DNS debug fields: name,type,server,upstream,attempt,rcode/answers OR error,ms.
+  Sequential-member tags map to logical dns-remote plus actual upstream IP.
+  Cached/rule responses do not generate the same upstream-exchange log line.
+  Local DNS logs Outcome::Failed(error) separately from an answered SERVFAIL.
+  Engine::subscribe(&[EventKind::NetworkChanged]) reports physical interface
+  name/index. default interface and local dns servers log lines add addresses
+  and discovered source. Capture should not trigger a global network reset.
+  /v1/get-status exposes selected ingress/node health/state and dropped logs;
+  /v1/get-runtime-observation exposes actual runtime identity/registry. Neither
+  supplies a DNS query/error history. No ad-hoc DNS-query/log-level RPC exists.
+  Sail's public Instance.events(Kinds::DNS) carries DnsExchange: member, source,
+  attempt, duration and Answered vs Failed/error. Core already consumes this.
+  TunnelHost Options.log_level accepts debug at host creation; Android's
+  production TunnelService currently passes null options (Info default).
+  Do not promise debug lines from that unchanged binary or edit production
+  lifecycle just to enable them without coordinating its owner.
+
+Android fixture diagnostics
+  dns_baseline.py probes the exact three production IP:853 endpoints with a
+  3s total member budget, preserving TCP errno, TLS verification code/message,
+  framed DNS rcode/answers, local/peer address and duration. Before/connected/
+  stopped baselines and a pre-traffic baseline are retained. System-CA Python
+  TLS differs from Sail/BoringSSL, so this is external-egress evidence only.
+  The real emulator VIP query and SS-node DoT dial remain mandatory. Baseline
+  packets do not travel through the SS node and cannot satisfy its evidence.
+  Node debug stderr records actual SS outbound failures independently. On DNS
+  failure Dart copies bounded native log tails/status/observation before APK
+  uninstall. Native Info logs may lack DNS debug details; absence is not success.
+  If all TCP853 baselines fail, preflight fails with evidence, never skips or
+  upgrades the result. No fake resolver, insecure TLS or port substitution.

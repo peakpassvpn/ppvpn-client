@@ -44,20 +44,8 @@ git -C "$root" rev-parse HEAD >"$out/source-head.txt"
 adb -s "$serial" shell getprop >"$out/emulator-properties.txt"
 # Production fixes these DoT resolvers; do not replace TLS or DNS policy with
 # a permissive test transport. Diagnose runner egress before building fixtures.
-python3 - "$out/dns-egress.json" <<'PY'
-import json, socket, sys
-results = []
-for host in ('1.1.1.1', '8.8.8.8', '9.9.9.9'):
-    try:
-        with socket.create_connection((host, 853), timeout=3):
-            results.append({'server': host, 'tcp_853': True})
-    except OSError as error:
-        results.append({'server': host, 'tcp_853': False, 'error': str(error)})
-with open(sys.argv[1], 'w') as file:
-    json.dump(results, file, indent=2)
-if not any(result['tcp_853'] for result in results):
-    raise SystemExit('Runner cannot reach production DoT/853; forwarding acceptance NOT run/passed')
-PY
+python3 e2e/android_forwarding/dns_baseline.py --require-tcp \
+  --output "$out/dns-egress.json"
 "$PWD/e2e/android_forwarding/build-rival.sh" "$out/rival"
 adb -s "$serial" install -r -t "$out/rival/rival.apk"
 rival_installed=1

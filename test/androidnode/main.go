@@ -78,7 +78,7 @@ func startNode(port uint16) (*box.Box, error) {
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	ctx := box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry())
 	instance, err := box.New(box.Options{Context: ctx, Options: option.Options{
-		Log: &option.LogOptions{Disabled: true},
+		Log: &option.LogOptions{Level: "debug", Output: "stderr", Timestamp: true, DisableColor: true},
 		Inbounds: []option.Inbound{{Type: C.TypeShadowsocks, Tag: "android-acceptance", Options: &option.ShadowsocksInboundOptions{
 			ListenOptions: option.ListenOptions{Listen: &listen, ListenPort: port},
 			Method:        "2022-blake3-aes-128-gcm", Password: "AAAAAAAAAAAAAAAAAAAAAA==",
