@@ -1,13 +1,7 @@
-// Logs (handoff §4 日志): the tool row (the log file menu, client or core
-// × today or yesterday; 「正在跟随末尾」 with a breathing dot while the view
-// sits at the end, else 「实时」 to jump back to it; show the file in the
-// file manager), then the log card: monospace lines, new ones appended and
-// followed, the file's path at its foot. The files are crates/desktop's
-// daily ones (UTC dates) in the client's log directory, tailed here with
-// dart:io: a poll a second reads only the bytes added since the last, and
-// at most [_LogsPageState._maxLines] lines stay in memory, so the UI
-// process stays flat however long the page is open (#387). Not in the
-// prototype: selecting text.
+// Client and desktop core logs are daily UTC files. Mobile core logs come
+// from the actual tunnel host's state directory and use current/previous
+// size archives. Polling is bounded, preserves source identity, and exposes
+// missing, empty and unreadable files separately.
 
 import '../icons.dart';
 
@@ -20,6 +14,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:forui/forui.dart';
 
@@ -32,12 +27,37 @@ import '../widgets.dart';
 /// The names match the string keys (`client`, `core`, `today`, `yesterday`).
 enum LogKind { client, core }
 
-enum LogDay { today, yesterday }
+// Calendar choices remain for client/desktop. Mobile core archives are
+// size-rotated files, so current/previous are deliberately not dates.
+enum LogDay { today, yesterday, current, previous }
+
+enum LogReadState { loading, ready, empty, missing, unreadable, unavailable }
+
+List<LogDay> logChoices(LogKind kind, {required bool mobile}) =>
+    mobile && kind == LogKind.core
+    ? const [LogDay.current, LogDay.previous]
+    : const [LogDay.today, LogDay.yesterday];
+
+String hostCoreLogDirectory(String filesDir) =>
+    '$filesDir${Platform.pathSeparator}tunnel-state${Platform.pathSeparator}logs';
+
+String logDayKey(LogDay day) => switch (day) {
+  LogDay.current => 'logCurrent',
+  LogDay.previous => 'logPrevious',
+  _ => day.name,
+};
 
 /// crates/desktop's daily file, e.g. `ppvpn-client.2026-10-21.log`, dated
 /// in UTC.
 String logFileName(LogKind kind, LogDay day, DateTime nowUtc) {
-  final date = day == LogDay.today ? nowUtc : nowUtc.subtract(const Duration(days: 1));
+  if (day == LogDay.current || day == LogDay.previous) {
+    if (kind != LogKind.core)
+      throw ArgumentError('Only host core logs are size-rotated');
+    return day == LogDay.current ? 'ppvpn-core.log' : 'ppvpn-core.log.1';
+  }
+  final date = day == LogDay.today
+      ? nowUtc
+      : nowUtc.subtract(const Duration(days: 1));
   String two(int n) => n.toString().padLeft(2, '0');
   return 'ppvpn-${kind.name}.${date.year}-${two(date.month)}-${two(date.day)}.log';
 }
@@ -57,35 +77,68 @@ class LogTail {
 
   int _offset = 0;
   Uint8List _carry = Uint8List(0);
+  Uint8List _prefix = Uint8List(0);
+  Uint8List _anchor = Uint8List(0);
 
   /// The lines added since the previous call; [reset] when the file got
   /// shorter (cut or replaced): what was shown before is gone.
-  Future<({List<String> lines, bool reset})> poll() async {
+  Future<({List<String> lines, bool reset, LogReadState state})> poll() async {
     const none = <String>[];
     final file = File(path);
     final Uint8List bytes;
     var reset = false;
     var start = 0;
     try {
-      final length = await file.length();
-      if (length < _offset) {
-        _offset = 0;
-        _carry = Uint8List(0);
-        reset = true;
-      }
-      if (length == _offset) return (lines: none, reset: reset);
-      start = math.max(_offset, length - maxRead);
-      if (start > _offset) _carry = Uint8List(0);
       final raf = await file.open();
       try {
+        final length = await raf.length();
+        final prefix = await raf.read(math.min(length, 128));
+        var replaced =
+            length < _offset ||
+            (_prefix.isNotEmpty &&
+                (prefix.length < _prefix.length ||
+                    !listEquals(_prefix, prefix.sublist(0, _prefix.length))));
+        if (!replaced && _anchor.isNotEmpty) {
+          await raf.setPosition(_offset - _anchor.length);
+          replaced = !listEquals(_anchor, await raf.read(_anchor.length));
+        }
+        if (replaced) {
+          _offset = 0;
+          _carry = Uint8List(0);
+          _anchor = Uint8List(0);
+          reset = true;
+        }
+        _prefix = prefix;
+        if (length == _offset) {
+          return (
+            lines: none,
+            reset: reset,
+            state: length == 0 ? LogReadState.empty : LogReadState.ready,
+          );
+        }
+        start = math.max(_offset, length - maxRead);
+        if (start > _offset) _carry = Uint8List(0);
         await raf.setPosition(start);
         bytes = await raf.read(length - start);
+        final readEnd = start + bytes.length;
+        await raf.setPosition(math.max(0, readEnd - 64));
+        _anchor = await raf.read(math.min(readEnd, 64));
       } finally {
         await raf.close();
       }
-    } on FileSystemException {
-      // Not written yet (no such day), or removed by the log retention.
-      return (lines: none, reset: reset);
+    } on FileSystemException catch (error) {
+      reset = _offset != 0 || _carry.isNotEmpty || _prefix.isNotEmpty;
+      _offset = 0;
+      _carry = Uint8List(0);
+      _prefix = Uint8List(0);
+      _anchor = Uint8List(0);
+      final missing =
+          error.osError?.errorCode == 2 || error.osError?.errorCode == 3;
+      return (
+        lines: none,
+        reset: reset,
+        state: missing ? LogReadState.missing : LogReadState.unreadable,
+      );
     }
     final skipped = start > _offset;
     _offset = start + bytes.length;
@@ -93,7 +146,8 @@ class LogTail {
     if (skipped && start > 0) {
       // Skipped ahead: the first line is a part; drop it.
       final newline = bytes.indexOf(10);
-      if (newline < 0) return (lines: none, reset: reset);
+      if (newline < 0)
+        return (lines: none, reset: reset, state: LogReadState.ready);
       from = newline + 1;
     }
     final lines = <String>[];
@@ -101,19 +155,32 @@ class LogTail {
       final newline = bytes.indexOf(10, from);
       if (newline < 0) break;
       final part = Uint8List.sublistView(bytes, from, newline);
-      lines.add(_decode(_carry.isEmpty ? part : (BytesBuilder(copy: false)..add(_carry)..add(part)).takeBytes()));
+      lines.add(
+        _decode(
+          _carry.isEmpty
+              ? part
+              : (BytesBuilder(copy: false)
+                      ..add(_carry)
+                      ..add(part))
+                    .takeBytes(),
+        ),
+      );
       _carry = Uint8List(0);
       from = newline + 1;
     }
     if (from < bytes.length) {
       // Copied, so that the read buffer can go.
-      _carry = (BytesBuilder()..add(_carry)..add(Uint8List.sublistView(bytes, from))).takeBytes();
+      _carry =
+          (BytesBuilder()
+                ..add(_carry)
+                ..add(Uint8List.sublistView(bytes, from)))
+              .takeBytes();
       if (_carry.length > maxCarry) {
         lines.add(_decode(_carry));
         _carry = Uint8List(0);
       }
     }
-    return (lines: lines, reset: reset);
+    return (lines: lines, reset: reset, state: LogReadState.ready);
   }
 
   static String _decode(Uint8List bytes) {
@@ -139,7 +206,14 @@ class _LogsPageState extends State<LogsPage> {
 
   LogKind _kind = LogKind.client;
   LogDay _day = LogDay.today;
-  String? _dir;
+  String? _clientDir;
+  String? _coreDir;
+  bool _directoriesLoaded = false;
+  LogReadState _readState = LogReadState.loading;
+  bool get _mobile =>
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.android;
+  String? get _dir => _mobile && _kind == LogKind.core ? _coreDir : _clientDir;
   LogTail? _tail;
   final _lines = ListQueue<String>();
   final _scroll = ScrollController();
@@ -155,19 +229,46 @@ class _LogsPageState extends State<LogsPage> {
     super.initState();
     _scroll.addListener(_onScroll);
     if (samplePage != null) {
-      // Screenshot mode: fixed lines, no file is read.
-      _dir = sampleLogDir;
+      _clientDir = _coreDir = sampleLogDir;
+      _directoriesLoaded = true;
+      _readState = LogReadState.ready;
       _lines.addAll(sampleLogLines);
       return;
     }
+    unawaited(_loadDirectories());
+  }
+
+  Future<void> _loadDirectories() async {
+    String? client;
+    String? core;
     try {
-      _dir = rust.logDir();
+      client = rust.logDir();
     } catch (error) {
       debugPrint('log_dir: $error');
-      return;
     }
+    if (_mobile) {
+      try {
+        // The same existing channel main.dart uses: App Group on iOS,
+        // real filesDir on Android. No alternate container or permission bypass.
+        final base = await const MethodChannel('com.peakpassvpn.ppvpn/app')
+            .invokeMethod<String>('filesDir');
+        if (base != null && base.isNotEmpty) core = hostCoreLogDirectory(base);
+      } on PlatformException {
+        core = null;
+      } on MissingPluginException {
+        core = null;
+      }
+    } else {
+      core = client;
+    }
+    if (!mounted) return;
+    setState(() {
+      _clientDir = client;
+      _coreDir = core;
+      _directoriesLoaded = true;
+    });
     _timer = Timer.periodic(_pollEvery, (_) => unawaited(_poll()));
-    unawaited(_poll());
+    await _poll();
   }
 
   @override
@@ -177,16 +278,26 @@ class _LogsPageState extends State<LogsPage> {
     super.dispose();
   }
 
-  DateTime get _nowUtc => samplePage != null ? sampleLogDate : DateTime.now().toUtc();
+  DateTime get _nowUtc =>
+      samplePage != null ? sampleLogDate : DateTime.now().toUtc();
 
   String? get _path {
     final dir = _dir;
-    return dir == null ? null : '$dir${Platform.pathSeparator}${logFileName(_kind, _day, _nowUtc)}';
+    return dir == null
+        ? null
+        : '$dir${Platform.pathSeparator}${logFileName(_kind, _day, _nowUtc)}';
   }
 
   Future<void> _poll() async {
     final path = _path;
-    if (_polling || path == null) return;
+    if (_polling) return;
+    if (path == null) {
+      final state = _directoriesLoaded
+          ? LogReadState.unavailable
+          : LogReadState.loading;
+      if (mounted && _readState != state) setState(() => _readState = state);
+      return;
+    }
     _polling = true;
     try {
       // A new file: another choice, or the UTC day turned.
@@ -195,9 +306,13 @@ class _LogsPageState extends State<LogsPage> {
         if (_lines.isNotEmpty) setState(_lines.clear);
       }
       final tail = _tail!;
-      final (:lines, :reset) = await tail.poll();
-      if (!mounted || !identical(tail, _tail) || (lines.isEmpty && !reset)) return;
+      final (:lines, :reset, :state) = await tail.poll();
+      if (!mounted ||
+          !identical(tail, _tail) ||
+          (lines.isEmpty && !reset && state == _readState))
+        return;
       setState(() {
+        _readState = state;
         if (reset) _lines.clear();
         _lines.addAll(lines.skip(math.max(0, lines.length - _maxLines)));
         while (_lines.length > _maxLines) {
@@ -207,6 +322,7 @@ class _LogsPageState extends State<LogsPage> {
       if (_following) _toEnd();
     } finally {
       _polling = false;
+      if (mounted && _path != null && _tail?.path != _path) unawaited(_poll());
     }
   }
 
@@ -218,6 +334,7 @@ class _LogsPageState extends State<LogsPage> {
       // A poll under way for the old file is dropped (see [_poll]).
       _tail = null;
       _lines.clear();
+      _readState = LogReadState.loading;
       _following = true;
     });
     unawaited(_poll());
@@ -231,8 +348,11 @@ class _LogsPageState extends State<LogsPage> {
     final atEnd = position.pixels >= position.maxScrollExtent - _endSlack;
     if (atEnd == _following) return;
     // A position corrected during layout must not rebuild in that frame.
-    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _onScroll() : null);
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => mounted ? _onScroll() : null,
+      );
     } else {
       setState(() => _following = atEnd);
     }
@@ -293,6 +413,7 @@ class _LogsPageState extends State<LogsPage> {
               inset: inset,
               kind: _kind,
               day: _day,
+              mobile: _mobile,
               nowUtc: _nowUtc,
               onSelect: _select,
               following: _following,
@@ -315,13 +436,35 @@ class _LogsPageState extends State<LogsPage> {
                         child: Semantics(
                           label: S.current('logs'),
                           container: true,
-                          child: ListView.builder(
-                            controller: _scroll,
-                            padding: Tokens.logPadding,
-                            itemCount: _lines.length,
-                            itemBuilder: (context, index) =>
-                                Text(_lines.elementAt(index), style: t.logLine),
-                          ),
+                          child: _lines.isEmpty
+                              ? Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(20),
+                                    child: Text(
+                                      S.current(switch (_readState) {
+                                        LogReadState.loading => 'logLoading',
+                                        LogReadState.missing => 'logMissing',
+                                        LogReadState.unreadable =>
+                                          'logUnreadable',
+                                        LogReadState.unavailable =>
+                                          'logUnavailable',
+                                        LogReadState.empty => 'logEmpty',
+                                        LogReadState.ready => 'logWaitingLine',
+                                      }),
+                                      textAlign: TextAlign.center,
+                                      style: t.body.copyWith(color: t.t3),
+                                    ),
+                                  ),
+                                )
+                              : ListView.builder(
+                                  controller: _scroll,
+                                  padding: Tokens.logPadding,
+                                  itemCount: _lines.length,
+                                  itemBuilder: (context, index) => Text(
+                                    _lines.elementAt(index),
+                                    style: t.logLine,
+                                  ),
+                                ),
                         ),
                       ),
                       Container(
@@ -356,6 +499,7 @@ class _Tools extends StatelessWidget {
     required this.inset,
     required this.kind,
     required this.day,
+    required this.mobile,
     required this.nowUtc,
     required this.onSelect,
     required this.following,
@@ -366,6 +510,7 @@ class _Tools extends StatelessWidget {
   final double inset;
   final LogKind kind;
   final LogDay day;
+  final bool mobile;
   final DateTime nowUtc;
   final void Function(LogKind kind, LogDay day) onSelect;
   final bool following;
@@ -376,7 +521,7 @@ class _Tools extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
     final s = S.current;
-    String label(LogKind k, LogDay d) => '${s(k.name)} · ${s(d.name)}';
+    String label(LogKind k, LogDay d) => '${s(k.name)} · ${s(logDayKey(d))}';
     final reveal = Platform.isMacOS
         ? s('revealMac')
         : Platform.isWindows
@@ -396,7 +541,7 @@ class _Tools extends StatelessWidget {
               FItemGroup(
                 children: [
                   for (final k in LogKind.values)
-                    for (final d in LogDay.values)
+                    for (final d in logChoices(k, mobile: mobile))
                       FItem(
                         selected: k == kind && d == day,
                         title: Text(label(k, d)),
@@ -415,7 +560,9 @@ class _Tools extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(11, 0, 10, 0),
                 decoration: BoxDecoration(
                   color: t.brightness == Brightness.light ? t.card : t.sunk,
-                  borderRadius: BorderRadius.circular(compact ? Tokens.phoneControlRadius : Tokens.controlRadius),
+                  borderRadius: BorderRadius.circular(
+                    compact ? Tokens.phoneControlRadius : Tokens.controlRadius,
+                  ),
                   border: Border.all(color: t.line),
                 ),
                 child: Row(
@@ -509,11 +656,17 @@ class _BreathingDot extends StatefulWidget {
   State<_BreathingDot> createState() => _BreathingDotState();
 }
 
-class _BreathingDotState extends State<_BreathingDot> with SingleTickerProviderStateMixin {
-  late final AnimationController _breath = AnimationController(vsync: this, duration: Tokens.pulseHalf)
-    ..repeat(reverse: true);
+class _BreathingDotState extends State<_BreathingDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _breath = AnimationController(
+    vsync: this,
+    duration: Tokens.pulseHalf,
+  )..repeat(reverse: true);
   late final Animation<double> _opacity = _breath.drive(
-    Tween(begin: 1.0, end: Tokens.pulseLow).chain(CurveTween(curve: Curves.easeInOut)),
+    Tween(
+      begin: 1.0,
+      end: Tokens.pulseLow,
+    ).chain(CurveTween(curve: Curves.easeInOut)),
   );
 
   @override
@@ -530,6 +683,8 @@ class _BreathingDotState extends State<_BreathingDot> with SingleTickerProviderS
       height: Tokens.pulseDotSize,
       decoration: BoxDecoration(color: t.ok, shape: BoxShape.circle),
     );
-    return MediaQuery.disableAnimationsOf(context) ? dot : FadeTransition(opacity: _opacity, child: dot);
+    return MediaQuery.disableAnimationsOf(context)
+        ? dot
+        : FadeTransition(opacity: _opacity, child: dot);
   }
 }
