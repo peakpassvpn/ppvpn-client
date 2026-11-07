@@ -96,3 +96,22 @@ Lightweight local checks (no Android SDK/emulator needed)
   Dart analyze/format against the generated bridge of the integrated candidate.
   The emulator run and the revoke APK build must still be performed by builder;
   these local checks do not claim Android forwarding acceptance.
+
+Control and real revoke audit
+  Only the host evidence HTTP controller uses adb reverse tcp:18090. The
+  script refuses an existing mapping and removes its own mapping on exit.
+  No data probe uses that relay: 192.0.2.10 TCP18081/UDP18082 and DNS VIP53
+  remain ordinary App sockets through the real TUN and selected SS node.
+  Device VM listener identification still requires its own publication,
+  PID lifetime and owned FD; the relay is never a VM-listener exception.
+
+  Revoke first proves the primary off, owner socket absent, held TCP ended,
+  primary TUN/Internet FDs gone, old kernel link indices absent, and native
+  host three-start/three-stop producer logs without shutdown failure while
+  the rival is live. A new rival may reuse tun0 with a different ifindex.
+  Then only the rival is released, and the original global interface-name,
+  route and FD checks must all pass. Same-name allowance is not used in the
+  final cleanup gate. No SocketException is treated as a completed cycle.
+  Direct registry query is unavailable once revoke destroys the owner RPC;
+  that field stays null, with native-stop/RPC/FD evidence recorded instead.
+  Explicit stop cycles continue to require direct empty runtime registries.

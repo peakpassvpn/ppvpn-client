@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host-side evidence and assertions for a disposable, rooted emulator.
 
-The controller is loopback-only (emulator alias 10.0.2.2). Never run against a
+The controller is loopback-only (ADB reverse, independent of the VPN). Never run against a
 physical device. No success is emitted without all three traffic/lifecycle legs.
 """
 import argparse
@@ -129,6 +129,11 @@ def profile():
     }
 
 
+def link_indexes(text):
+    return {match[2]: int(match[1]) for match in re.finditer(
+        r'^(\d+): ([^:@\s]+)(?:[:@])', text, re.M)}
+
+
 def owned_listeners(tables, links):
     """A /proc/net table is namespace-wide: intersect with this PID's FDs."""
     inodes = set(re.findall(r'socket:\[(\d+)\]', links))
@@ -159,11 +164,13 @@ class Evidence:
         self.connected = set()
         self.ended = set()
         self.owned_interfaces = set()
+        self.owned_links = set()
         self.route_offset = 0
         self.complete = False
         self.revoke_armed = False
         self.revoke_receipt = None
         self.revoke_established = False
+        self.revoke_observed = False
         self.vm_identity = None
         self.lock = threading.Lock()
 
@@ -252,6 +259,10 @@ class Evidence:
             interfaces = owners[0]['tun_interfaces']
             assert len(interfaces) == 1, ('Expected one owned TUN', interfaces)
             self.owned_interfaces.update(interfaces)
+            indexes = link_indexes(evidence['links'])
+            for name in interfaces:
+                assert name in indexes, 'Owned TUN missing kernel link identity'
+                self.owned_links.add((name, indexes[name]))
             assert not owners[0]['listeners'], 'VPN owner opened a local TCP proxy'
             observation = body['observation']
             assert observation['backend'] == 'sail' and observation['running']
@@ -288,6 +299,7 @@ class Evidence:
                 assert (stage == 'revoked') == (cycle == 2)
                 if stage == 'revoked':
                     assert self.revoke_established, 'No receipt-ordered rival establish proof'
+                    assert self.revoke_observed, 'No primary exit witness before rival cleanup'
                 self.ended.add(cycle)
         (self.directory / f'{stage}-{cycle}-assertions.json').write_text(
             json.dumps(body, indent=2) + '\n')
@@ -320,12 +332,14 @@ class Evidence:
                 self.revoke_armed = True
                 self.revoke_receipt = uuid.uuid4().hex
                 return {'ok': True, 'takeover_armed': True, 'receipt': self.revoke_receipt}
+            if path == '/revoke-observed':
+                return self.observe_primary_revoke(body)
             if path == '/release-rival':
                 self.adb('shell', 'am', 'force-stop', RIVAL)
                 return {'ok': True}
             if path == '/complete':
                 assert self.connected == self.ended == {0, 1, 2}
-                assert self.revoke_established
+                assert self.revoke_established and self.revoke_observed
                 self.complete = True
                 (self.directory / 'PASS.json').write_text(json.dumps({
                     'run': self.run, 'cycles': 3, 'tcp_udp_dns': True,
@@ -335,6 +349,36 @@ class Evidence:
                 return {'ok': True}
             raise AssertionError('Unknown control operation')
 
+
+    def observe_primary_revoke(self, body):
+        assert self.revoke_established and not self.revoke_observed
+        assert self.connected == {0, 1, 2} and self.ended == {0, 1}
+        assert body['cycle'] == 2 and body['primary_state'] == 'off'
+        assert body['owner_socket_exists'] is False and body['tcp_witness_ended'] is True
+        evidence = self.snapshot('revoke-observed-2')
+        owners = [p for p in evidence['processes'] if p['name'] == PACKAGE + ':tunnel']
+        assert all(not p['tun_interfaces'] for p in owners), 'Revoked primary retained TUN FDs'
+        assert all(not p['listeners'] for p in owners), 'Revoked primary retained listener'
+        assert all(not p['internet_sockets'] for p in owners), 'Revoked primary retained Internet FDs'
+        current = set(link_indexes(evidence['links']).values())
+        assert self.owned_links, 'Missing prior primary link identities'
+        assert all(index not in current for _, index in self.owned_links), 'Old primary kernel link still exists'
+        native_log = self.shell(f'run-as {PACKAGE} cat files/tunnel-state/logs/tunnel-host.log')
+        (self.directory / 'revoke-owner-native.log').write_text(native_log)
+        starts = len(re.findall(r'^\d+ started:', native_log, re.M))
+        stops = len(re.findall(r'^\d+ stopped$', native_log, re.M))
+        assert starts == stops == 3, 'Native host has not completed all three exits'
+        assert 'engine shutdown:' not in native_log, 'Native shutdown reported failure'
+        self.revoke_observed = True
+        (self.directory / 'revoke-observed-assertions.json').write_text(json.dumps({
+            'run': self.run, 'cycle': 2, 'before_rival_cleanup': True,
+            'primary_owner_fd_clear': True, 'old_link_ids_absent': sorted(self.owned_links),
+            'owner_socket_exists': False, 'tcp_witness_ended': True,
+            'native_started': starts, 'native_stopped': stops,
+            'registry_direct_after_revoke': None,
+            'registry_evidence': 'Owner RPC destroyed; native stop completed without shutdown error',
+        }, indent=2) + '\n')
+        return {'ok': True, 'primary_exit_verified': True}
 
     def establish_rival_after_receipt(self):
         with self.lock:

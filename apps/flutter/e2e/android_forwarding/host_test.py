@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from host import after_control_receipt, ControlRequestError, read_control_body, Evidence, PACKAGE, device_vm_identity, owned_internet_sockets, owned_listeners, profile
+from host import link_indexes, after_control_receipt, ControlRequestError, read_control_body, Evidence, PACKAGE, device_vm_identity, owned_internet_sockets, owned_listeners, profile
 
 
 class ControlFramingTests(unittest.TestCase):
@@ -128,6 +128,89 @@ class ControlReceiptTests(unittest.TestCase):
                 self.assertTrue(evidence.revoke_established)
                 self.assertEqual(2, adb.call_count)
                 self.assertTrue(json.loads((Path(work) / 'revoke-establishment.json').read_text())['explicit_reply_receipt_verified'])
+
+
+class RevokeExitTests(unittest.TestCase):
+    def setUp(self):
+        probe = patch('host.baseline', return_value={})
+        probe.start()
+        self.addCleanup(probe.stop)
+
+    def evidence(self, directory):
+        evidence = Evidence('emulator-test', Path(directory), Path(directory) / 'node.jsonl')
+        evidence.connected = {0, 1, 2}
+        evidence.ended = {0, 1}
+        evidence.revoke_established = True
+        evidence.owned_interfaces = {'tun0'}
+        evidence.owned_links = {('tun0', 20)}
+        owner = {'name': PACKAGE + ':tunnel', 'tun_interfaces': [],
+                 'listeners': [], 'internet_sockets': []}
+        state = {'processes': [{'name': PACKAGE, 'listeners': [], 'tun_interfaces': []}, owner],
+                 'links': '21: tun0: <UP> mtu 1500', 'routes': '192.0.2.10 dev tun0 table tun0'}
+        evidence.snapshot = lambda _: state
+        evidence.shell = lambda _: '1 started: native\n2 stopped\n3 started: native\n4 stopped\n5 started: native\n6 stopped\n'
+        body = {'cycle': 2, 'primary_state': 'off', 'owner_socket_exists': False,
+                'tcp_witness_ended': True}
+        return evidence, state, owner, body
+
+    def test_new_rival_same_name_requires_old_identity_exit_then_full_cleanup(self):
+        self.assertEqual({'tun0': 21}, link_indexes('21: tun0: <UP>'))
+        with tempfile.TemporaryDirectory() as work:
+            evidence, state, owner, body = self.evidence(work)
+            self.assertTrue(evidence.action('/revoke-observed', body)['primary_exit_verified'])
+            proof = json.loads((Path(work) / 'revoke-observed-assertions.json').read_text())
+            self.assertTrue(proof['before_rival_cleanup'])
+            self.assertEqual([['tun0', 20]], proof['old_link_ids_absent'])
+            self.assertIsNone(proof['registry_direct_after_revoke'])
+            with self.assertRaisesRegex(AssertionError, 'Old VPN interface remains'):
+                evidence.checkpoint({'stage': 'revoked', 'cycle': 2})
+            # Only the fixture's rival is stopped, then all original global
+            # name/route checks still apply with no same-name exemption.
+            with patch.object(evidence, 'adb') as adb:
+                evidence.action('/release-rival', {})
+                self.assertEqual(1, adb.call_count)
+            state['links'] = ''
+            with self.assertRaisesRegex(AssertionError, 'Old VPN routes remain'):
+                evidence.checkpoint({'stage': 'revoked', 'cycle': 2})
+            state['routes'] = ''
+            evidence.checkpoint({'stage': 'revoked', 'cycle': 2})
+            evidence.action('/complete', {})
+            self.assertTrue((Path(work) / 'PASS.json').exists())
+
+    def test_same_old_ifindex_or_renamed_old_device_cannot_pass(self):
+        for link in ['20: tun0: <UP>', '20: renamed0: <UP>']:
+            with self.subTest(link=link), tempfile.TemporaryDirectory() as work:
+                evidence, state, owner, body = self.evidence(work)
+                state['links'] = link
+                with self.assertRaisesRegex(AssertionError, 'Old primary kernel link still exists'):
+                    evidence.action('/revoke-observed', body)
+                self.assertFalse(evidence.revoke_observed)
+
+    def test_new_link_cannot_hide_retained_primary_fds(self):
+        for key, value in [('tun_interfaces', ['tun0']), ('listeners', [{'port': 99}]),
+                           ('internet_sockets', [{'inode': 'retained'}])]:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as work:
+                evidence, state, owner, body = self.evidence(work)
+                owner[key] = value
+                with self.assertRaises(AssertionError):
+                    evidence.action('/revoke-observed', body)
+                self.assertFalse(evidence.revoke_observed)
+
+    def test_missing_current_native_exit_or_rpc_and_live_tcp_fail_closed(self):
+        for kind in ['missing-stop', 'shutdown-error', 'rpc-live', 'tcp-live', 'state-on']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as work:
+                evidence, state, owner, body = self.evidence(work)
+                if kind == 'missing-stop':
+                    evidence.shell = lambda _: '1 started: native\n'
+                elif kind == 'shutdown-error':
+                    log = evidence.shell('')
+                    evidence.shell = lambda _: log + 'engine shutdown: failed\n'
+                elif kind == 'rpc-live': body['owner_socket_exists'] = True
+                elif kind == 'tcp-live': body['tcp_witness_ended'] = False
+                else: body['primary_state'] = 'on'
+                with self.assertRaises(AssertionError):
+                    evidence.action('/revoke-observed', body)
+                self.assertFalse(evidence.revoke_observed)
 
 
 class DeviceVmTests(unittest.TestCase):

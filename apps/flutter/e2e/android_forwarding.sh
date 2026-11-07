@@ -11,7 +11,7 @@ root=$(cd ../.. && pwd)
 out=$PWD/build/android-forwarding
 [[ ! -e "$out" ]] || { echo "$out already exists; preserve evidence and select a fresh checkout" >&2; exit 2; }
 mkdir -p "$out"
-node= controller= test_started=0 rival_installed=0
+node= controller= test_started=0 rival_installed=0 control_reverse=0
 rival=com.peakpassvpn.ppvpn.acceptance.revoke
 cleanup() {
   if [[ "$test_started" == 1 ]]; then
@@ -24,6 +24,10 @@ cleanup() {
   timeout 20 adb -s "$serial" logcat -d >"$out/logcat.txt" 2>&1 || true
   timeout 20 adb -s "$serial" shell ip addr show >"$out/final-addresses.txt" 2>&1 || true
   timeout 20 adb -s "$serial" shell dumpsys connectivity >"$out/final-connectivity.txt" 2>&1 || true
+  if [[ "$control_reverse" == 1 ]]; then
+    timeout 20 adb -s "$serial" reverse --remove tcp:18090 >"$out/control-reverse-cleanup.txt" 2>&1 || true
+    timeout 20 adb -s "$serial" reverse --list >"$out/control-reverse-after.txt" 2>&1 || true
+  fi
   [[ -z "$controller" ]] || kill "$controller" 2>/dev/null || true
   [[ -z "$node" ]] || kill "$node" 2>/dev/null || true
   wait 2>/dev/null || true
@@ -63,6 +67,15 @@ for _ in $(seq 100); do
 done
 grep -q '"event":"ready"' "$out/node.jsonl"
 grep -q '^ready' "$out/controller.log"
+# Only fixture audit/control uses ADB reverse. TEST-NET TCP/UDP and DNS VIP
+# probes remain normal App sockets through the real product TUN and SS node.
+adb -s "$serial" reverse --list >"$out/control-reverse-before.txt"
+if grep -Eq '(^|[[:space:]])tcp:18090([[:space:]]|$)' "$out/control-reverse-before.txt"; then
+  echo 'Existing audit reverse mapping: use a fresh emulator' >&2; exit 2
+fi
+adb -s "$serial" reverse tcp:18090 tcp:18090
+control_reverse=1
+adb -s "$serial" reverse --list >"$out/control-reverse-active.txt"
 # The controller grants the product VPN app-op once after installation, at
 # the test's request; it never re-grants during system revoke.
 test_started=1

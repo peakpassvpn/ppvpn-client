@@ -207,12 +207,23 @@ void main() {
               tcp.destroy();
               await lines.cancel();
             }
+            if (cycle == 2) {
+              // First prove the old owner has exited while the rival is live.
+              // A new VPN may legitimately reuse the old tun0 name.
+              await _controlCall('revoke-observed', {
+                'cycle': cycle,
+                'primary_state': SystemVpn.state.value.name,
+                'owner_socket_exists': await File(_socket!).exists(),
+                'tcp_witness_ended': true,
+              });
+              await _controlCall('release-rival');
+            }
             await _controlCall('checkpoint', {
               'stage': cycle == 2 ? 'revoked' : 'stopped',
               'cycle': cycle,
               'reported_vm_uri': vmHint,
             });
-            if (cycle == 2) await _controlCall('release-rival');
+
             await _negativeTCP();
             await _negativeUDP();
           }
@@ -474,7 +485,7 @@ Future<Map<String, dynamic>> _controlCall(
   void Function()? beforeReceipt,
 ]) async {
   final socket = await Socket.connect(
-    '10.0.2.2',
+    '127.0.0.1',
     18090,
     timeout: const Duration(seconds: 10),
   );
@@ -487,8 +498,8 @@ Future<Map<String, dynamic>> _controlExchange(
   Map<String, dynamic> body, {
   void Function()? beforeReceipt,
 }) async {
-  // Control shares the captured network. Revoke must wait for a receipt of
-  // its complete reply before tearing down that same network.
+  // ADB reverse keeps only audit control independent of VPN replacement.
+  // The explicit receipt still fences the real disruptive action.
   final chunks = StreamIterator<List<int>>(socket);
   try {
     final payload = utf8.encode(jsonEncode(body));
@@ -496,7 +507,7 @@ Future<Map<String, dynamic>> _controlExchange(
     final written = Future<void>.sync(() {
       socket.add(
         ascii.encode(
-          'POST /$path HTTP/1.0\r\nHost: 10.0.2.2\r\n'
+          'POST /$path HTTP/1.0\r\nHost: 127.0.0.1\r\n'
           'Content-Type: application/json\r\nContent-Length: ${payload.length}\r\n\r\n',
         ),
       );
