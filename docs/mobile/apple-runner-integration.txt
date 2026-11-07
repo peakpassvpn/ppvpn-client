@@ -6,8 +6,10 @@ Contract and rollout
   implementation is pinned to e04eb59435b3be1a4c40fd4311a26e7887490411
   (backend PR1439). All six pinned contract files were independently hashed
   from that commit and match the client snapshot byte-for-byte. SDK4ac1d60c
-  remains unchanged. Managed HTTP integration URL/lease is not yet provided;
-  commit provenance is not deployed-service or real APNs acceptance. No
+  remains unchanged. Managed APNS-HTTP-CAS-e04-r1 passed25 checks/29 HTTP
+  requests against real handlers/JWT verification/PostgreSQL (config stub).
+  The lease is released. It did not run real Apple provider/worker/delivery,
+  two OS pods, or HTTP logout end-to-end; harness is not yet public CI. No
   *_version or semantics_version business fields. Rollout stays OFF.
 
 Native and storage
@@ -49,23 +51,40 @@ Transport and ownership
   fence stale owners/sessions. Foreground pulls bounded /messages/updates and
   reloads authorized inbox; notification body/URL never supplies UI content.
 
-macOS explicit owner hooks (not installed by this candidate)
-  Include runner/apple/ApplePushState.swift + ApplePushInstallation.swift and
-  runner/macos/Runner/ApplePush.swift + ApplePushBridge.swift in the actual
-  generated project (or concatenate into the existing native owner source).
-  In AppDelegate launch: MacApplePushBridge.shared.start().
-  When the main Flutter controller exists:
-    MacApplePushBridge.shared.attach(controller.registrar(forPlugin:
-      "MacApplePushBridge"))
-  Forward AppDelegate didRegisterForRemoteNotificationsWithDeviceToken Data
-  to .receiver.didRegister(token:); failures to .receiver.didFailToRegister;
-  didReceiveRemoteNotification to .receiver.receiveBackground(userInfo).
-  Set .showWindow to the existing window activation hook; it runs only after
-  an opened notice completes an authorized message lookup.
-  Keep the bridge/receiver strong for cold notices before Flutter auth restore.
-  Coordinate UNUserNotificationCenter delegate ownership with the existing
-  agent and local-notification handler. Do not replace its handlers blindly.
-  No AppDelegate/MainFlutterWindow edit or agent retirement occurs here.
+macOS native hooks delivered as an independent build helper
+  The owned MainFlutterWindow prepares the strong singleton before creating
+  Flutter, sets a weak window activation closure, and attaches its registrar
+  after generated plugins. Activation waits for authenticated notice success
+  and matching native clientEpoch, so late old-owner replies cannot show it.
+  tools/apple/macos_push_hooks.py injects AppDelegate initialization, will-
+  finish launch, OS token success/failure and remote notification callbacks
+  into the actual Flutter template. Init prepares UN delegate ownership;
+  launch registers once. Optional absent Flutter super callbacks are guarded.
+  The helper upgrades push_config.py's old source block to all4 Apple native
+  files in the existing MainFlutterWindow build unit, removes identical copied
+  standalone sources, and fails without mutation on unknown hooks/templates,
+  unmanaged duplicates or modified copies. Reapplying it is byte-identical.
+  The receiver preserves the previous weak UN delegate for local notifications.
+  OFF or missing capability never invokes system registration/delegate/permission
+  boundaries. No hook initializes a forwarding Engine; existing Agent unchanged.
+
+  Build-owner minimal call, AFTER runner copy and push_config.py sources:
+    python3 "$root/tools/apple/macos_push_hooks.py" \
+      --app-root "$root/apps/flutter" \
+      --generated-root "$root/apps/flutter/macos"
+  Run this last source inclusion helper before compiling. Do not subsequently
+  replace its source block with the older push_config.py sources command, or
+  separately add the four concatenated files to the Xcode source list.
+  ci-build.sh call entry, profiles, entitlements and signing remain build-owned.
+
+  Targeted checks (no app launch or system registration):
+    python3 tools/apple/macos_push_hooks_test.py --flutter-root "$FLUTTER_ROOT" --sdk
+    python3 tools/apple/macos_push_runtime_test.py --negative-controls
+  First checks12 real-template transformations/negative cases, including full
+  window+AppDelegate SDK object compilation at macOS13 with warnings as errors.
+  Second runs7 production receiver/bridge cases against controlled system,
+  Flutter messenger and store boundaries. Guard-removal negative controls
+  reject OFF side effects and stale click activation by semantic assertions.
 
 Verification and remaining gates
   Mock Dart coordinator/bridge, actual Rust loopback HTTP, shared Swift state,
@@ -76,3 +95,8 @@ Verification and remaining gates
   backend deployment and actual APNs foreground/background/killed/cold-tap/
   rotation/logout/account-switch verification remain necessary. No real
   device registration, keys, pushes, installation or TestFlight upload here.
+
+Native API references
+  https://developer.apple.com/documentation/usernotifications/unusernotificationcenterdelegate
+  https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns
+  https://github.com/flutter/engine/blob/main/shell/platform/darwin/macos/framework/Source/FlutterAppDelegate.mm

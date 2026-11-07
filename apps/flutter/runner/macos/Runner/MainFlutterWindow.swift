@@ -27,12 +27,23 @@ class MainFlutterWindow: NSWindow {
   private var loginItem: LoginItem?
 
   override func awakeFromNib() {
+    // Strong process owner exists before Flutter/auth restoration and keeps
+    // cold taps. No engine or Agent ownership changes belong in this hook.
+    let applePush = MacApplePushBridge.shared
+    applePush.prepareForLaunch()
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    applePush.showWindow = { [weak self] in
+      guard let self else { return }
+      if self.isMiniaturized { self.deminiaturize(nil) }
+      self.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+    }
+    applePush.attach(flutterViewController.registrar(forPlugin: "MacApplePushBridge"))
     activation = Activation(messenger: flutterViewController.engine.binaryMessenger)
     let pushAgent = PushAgentService()
     pushAgent.start()

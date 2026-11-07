@@ -1,20 +1,22 @@
-Apple push receiver and iOS entry integration
+Apple push receiver and native entry integration
 
 Scope
   ApplePushState.swift is shared Foundation-only lifecycle/payload code.
   ios/Runner/ApplePush.swift and macos/Runner/ApplePush.swift are independent
   native adapters. The iOS bridge is explicitly included by ci-build.sh and
-  starts at native launch before Flutter attaches. macOS entry remains with
-  the desktop owner. No existing Agent is removed or changed; no default
-  build enables APNs. Authenticated HTTP effects still require the backend
-  contract implementation.
+  starts at native launch before Flutter attaches. macOS window hooks and
+  tools/apple/macos_push_hooks.py now deliver startup/AppDelegate wiring;
+  the build owner calls that helper after its source-inclusion step. No
+  existing Agent is removed or changed; default rollout remains OFF. The
+  authenticated transport pins backende04eb594 and SDK4ac1d60c.
 
 Integration boundaries
   Include the common state and matching receiver in the App's target, NOT
   PacketTunnel. Keep a strong receiver reference for the App's lifetime.
   Install it by the end of launch and forward native success/failure token
-  callbacks. macOS AppDelegate/window integration and packaging remain with
-  their respective owners; no existing macOS Runner file is replaced here.
+  callbacks. macOS source hooks are mobile/push-owned; script call entry,
+  project inclusion, profiles and packaging remain build-owned. See
+  docs/mobile/apple-runner-integration.txt for exact invocation/checks.
   Attach register/unregister/delivery handlers to receiver.state. Supply the
   authenticated stable account id via setAccount, never a display name.
   A null id means completed anonymous restoration or explicit sign-out.

@@ -7,16 +7,27 @@ import Cocoa
 @MainActor
 final class MacApplePushBridge {
   static let shared = MacApplePushBridge()
-  let receiver = MacApplePushReceiver()
+  let receiver: MacApplePushReceiver
+  private var launchStarted = false
+
+  init(receiver: MacApplePushReceiver) { self.receiver = receiver }
+  convenience init() { self.init(receiver: MacApplePushReceiver()) }
   var showWindow: (() -> Void)?
   private var channel: FlutterMethodChannel?
   private var clientEpoch = "0"
   private var pendingEffects = 0
   private var drains: [FlutterResult] = []
 
-  func start() { receiver.start() }
+  func prepareForLaunch() { receiver.prepareForLaunch() }
+
+  func start() {
+    guard !launchStarted else { return }
+    launchStarted = true
+    receiver.start()
+  }
 
   func attach(_ registrar: FlutterPluginRegistrar) {
+    receiver.prepareForLaunch()
     let channel = FlutterMethodChannel(name: "com.peakpassvpn.ppvpn/apple-push", binaryMessenger: registrar.messenger)
     self.channel = channel
     channel.setMethodCallHandler { [weak self] call, result in
@@ -94,8 +105,9 @@ final class MacApplePushBridge {
     if let id = notice.accountID { args["accountID"] = id }
     // Decimal strings avoid JavaScript/Dart web integer precision surprises.
     if let id = notice.messageID { args["messageID"] = String(id) }
+    let epoch = clientEpoch
     channel.invokeMethod("notice", arguments: args) { [weak self] reply in
-      let accepted = reply as? Bool == true
+      let accepted = reply as? Bool == true && self?.clientEpoch == epoch
       if opened && accepted { self?.showWindow?() }
       completion(accepted)
     }

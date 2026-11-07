@@ -1,42 +1,82 @@
-// Dedicated push file: no service/window/packaging edits, agent cleanup or
-// implicit registration. AppDelegate integration belongs to its owner.
+// AppDelegate installs this receiver before Flutter initialization. System
+// effects stay injectable for controlled tests; the existing Agent is retained.
 import Cocoa
 import Security
 @preconcurrency import UserNotifications
+
+@MainActor
+struct MacApplePushSystem {
+  let installDelegate: (MacApplePushReceiver) -> Void
+  let register: () -> Void
+  let permission: () -> Void
+
+  static var live: Self {
+    Self(installDelegate: { $0.installNativeDelegate() }, register: {
+      NSApplication.shared.registerForRemoteNotifications()
+    }, permission: {
+      UNUserNotificationCenter.current().getNotificationSettings { settings in
+        guard settings.authorizationStatus == .notDetermined else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
+      }
+    })
+  }
+}
 
 @MainActor
 final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   let app: ApplePushApp?
   let state: ApplePushState
   let configured: Bool
+  private let system: MacApplePushSystem
+  private weak var previousDelegate: UNUserNotificationCenterDelegate?
   var registrationFailed: ((String, Int) -> Void)?
 
-  init(bundle: Bundle = .main) {
+  convenience init(bundle: Bundle = .main) {
     var entitlement: String?
     if let task = SecTaskCreateFromSelf(nil) {
       entitlement = SecTaskCopyValueForEntitlement(task,
         "com.apple.developer.aps-environment" as CFString, nil) as? String
     }
     let app = ApplePushApp(platform: "macos", bundleID: bundle.bundleIdentifier, entitlement: entitlement)
+    self.init(app: app, enabled: bundle.object(forInfoDictionaryKey: "PPVPNApplePushEnabled") as? Bool == true,
+              system: .live)
+  }
+
+  init(app: ApplePushApp?, enabled: Bool, system: MacApplePushSystem) {
     self.app = app
-    configured = bundle.object(forInfoDictionaryKey: "PPVPNApplePushEnabled") as? Bool == true && app != nil
+    configured = enabled && app != nil
     state = ApplePushState(app: configured ? app : nil)
+    self.system = system
+    super.init()
+  }
+
+  // May run before the window/Flutter exists. OFF does not even obtain the
+  // notification center. Recheck after plugin registration to retain any local
+  // delegate without allowing it to silently displace remote-push handling.
+  func prepareForLaunch() {
+    guard configured else { return }
+    system.installDelegate(self)
+  }
+
+  fileprivate func installNativeDelegate() {
+    let center = UNUserNotificationCenter.current()
+    if center.delegate !== self {
+      previousDelegate = center.delegate
+      center.delegate = self
+    }
   }
 
   @discardableResult
   func start() -> Bool {
     guard configured else { return false }
-    UNUserNotificationCenter.current().delegate = self
-    NSApplication.shared.registerForRemoteNotifications()
+    prepareForLaunch()
+    system.register()
     return true
   }
 
   func requestPermission() {
     guard configured else { return }
-    UNUserNotificationCenter.current().getNotificationSettings { settings in
-      guard settings.authorizationStatus == .notDetermined else { return }
-      UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
-    }
+    system.permission()
   }
 
   func didRegister(token: Data) { if configured { state.receiveToken(token) } }
@@ -57,9 +97,16 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
 
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-    let notice = ApplePushNotice(userInfo: notification.request.content.userInfo, fallbackID: notification.request.identifier)
     DispatchQueue.main.async { [weak self] in
-      guard let self, self.configured, let notice else { completionHandler([]); return }
+      guard let self else { completionHandler([]); return }
+      if !(notification.request.trigger is UNPushNotificationTrigger) {
+        if let handler = self.previousDelegate?.userNotificationCenter(_:willPresent:withCompletionHandler:) {
+          handler(center, notification, completionHandler)
+        } else { completionHandler([]) }
+        return
+      }
+      guard self.configured, let notice = ApplePushNotice(userInfo: notification.request.content.userInfo,
+        fallbackID: notification.request.identifier) else { completionHandler([]); return }
       let accepted = self.state.receive(notice, opened: false)
       completionHandler(accepted && notice.accountID != nil ? [.banner, .list, .sound] : [])
     }
@@ -67,14 +114,20 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
 
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void) {
-    if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-      let notice = ApplePushNotice(userInfo: response.notification.request.content.userInfo,
-        fallbackID: response.notification.request.identifier)
-      DispatchQueue.main.async { [weak self] in
-        guard let self, self.configured, let notice else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { completionHandler(); return }
+      if !(response.notification.request.trigger is UNPushNotificationTrigger) {
+        if let handler = self.previousDelegate?.userNotificationCenter(_:didReceive:withCompletionHandler:) {
+          handler(center, response, completionHandler)
+        } else { completionHandler() }
+        return
+      }
+      if self.configured, response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+        let notice = ApplePushNotice(userInfo: response.notification.request.content.userInfo,
+          fallbackID: response.notification.request.identifier) {
         self.state.receive(notice, opened: true)
       }
+      completionHandler()
     }
-    completionHandler()
   }
 }
