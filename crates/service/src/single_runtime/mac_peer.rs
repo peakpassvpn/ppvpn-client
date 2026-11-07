@@ -71,6 +71,8 @@ pub fn verify_exact(stream: &UnixStream, uid: u32, identifier: &str, image: &Pat
     if peer.uid != uid {
         return Err(anyhow!("PEER_USER_REJECTED"));
     }
+    // The single-runtime installation layout keeps both the UI and helper
+    // immutable and root-owned. Packaging must not chown the installed App.
     secure_installed_image(image)?;
     let requirement = crate::mac_identity::requirement(identifier, crate::mac_identity::team_id())?;
     let bytes: Vec<u8> = token.iter().flat_map(|word| word.to_ne_bytes()).collect();
