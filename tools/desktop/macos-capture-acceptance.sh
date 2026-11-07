@@ -12,7 +12,7 @@ image=/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle/Conten
 daemon=com.peakpassvpn.ppvpn.service
 agent=com.peakpassvpn.ppvpn.user-runtime
 plist=/Library/LaunchDaemons/com.peakpassvpn.ppvpn.service.plist
-marker=/private/var/db/ppvpn-capture-acceptance
+marker=/private/var/db/ppvpn-capture-acceptance # sensitive-check: allow — canonical macOS isolated acceptance marker
 [[ ! -e "$image" && ! -e "$plist" && ! -e "$marker" && ! -e "/Library/LaunchAgents/$agent.plist" ]] || { echo EXISTING_INSTALLATION_REFUSED >&2; exit 2; }
 uid="$(id -u)"
 [[ "$uid" != 0 ]] || exit 2
