@@ -159,6 +159,18 @@ async fn socks_reply(stream: &mut TcpStream) -> std::net::SocketAddr {
 // Native-only probes originate as ordinary OS sockets: unlike the held mixed
 // streams they must enter the utun before reaching core DNS and physical egress.
 async fn native_ingress_probes(sequence: u16) {
+    let mut tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect("1.1.1.1:80"))
+        .await
+        .unwrap()
+        .unwrap();
+    tcp.write_all(b"GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n")
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(10), header(&mut tcp))
+        .await
+        .unwrap();
+    assert!(response.starts_with(b"HTTP/1."));
+    eprintln!("native-ingress physical-http=passed");
     let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
     let mut query = sequence.to_be_bytes().to_vec();
     query.extend_from_slice(&[1, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
@@ -177,17 +189,7 @@ async fn native_ingress_probes(sequence: u16) {
     assert_eq!(&answer[..2], &sequence.to_be_bytes());
     assert_eq!(answer[3] & 15, 0);
     assert!(u16::from_be_bytes([answer[6], answer[7]]) > 0);
-    let mut tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect("1.1.1.1:80"))
-        .await
-        .unwrap()
-        .unwrap();
-    tcp.write_all(b"GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n")
-        .await
-        .unwrap();
-    let response = tokio::time::timeout(Duration::from_secs(10), header(&mut tcp))
-        .await
-        .unwrap();
-    assert!(response.starts_with(b"HTTP/1."));
+
 }
 async fn echo(stream: &mut TcpStream, sequence: u32) {
     let bytes = sequence.to_be_bytes();
@@ -209,7 +211,15 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         let tcp_task=tokio::spawn(async move {loop {let(mut socket,_)=tcp.accept().await.unwrap();tokio::spawn(async move {let(mut read,mut write)=socket.split();let _=tokio::io::copy(&mut read,&mut write).await;});}});
         let udp=UdpSocket::bind("127.0.0.1:0").await.unwrap();let udp_target=udp.local_addr().unwrap();
         let udp_task=tokio::spawn(async move {let mut packet=[0;2048];loop {let(n,peer)=udp.recv_from(&mut packet).await.unwrap();udp.send_to(&packet[..n],peer).await.unwrap();}});
-        let backend=EngineForwarder::new(ppvpn_core::EngineConfig::new(ppvpn_core::Role::Shared,ppvpn_core::Platform::Macos,dir.clone()).with_capture_host(CaptureHost::new(host)).with_local_proxy(ppvpn_core::LocalProxyConfig::new().with_preferred_port(0))).await.unwrap();
+        let backend=EngineForwarder::new(ppvpn_core::EngineConfig::new(ppvpn_core::Role::Shared,ppvpn_core::Platform::Macos,dir.clone()).with_capture_host(CaptureHost::new(host)).with_local_proxy(ppvpn_core::LocalProxyConfig::new().with_preferred_port(0)).with_log(ppvpn_core::LogConfig::new(ppvpn_core::LogLevel::Debug,ppvpn_core::LogSink::Channel))).await.unwrap();
+        // Only fixed-fixture DNS diagnostics leave the QA process. Never emit
+        // arbitrary core logs, profile credentials, or IPC/session identifiers.
+        let mut lines=backend.logs();
+        let dns_logging=tokio::spawn(async move {
+            while let Some(line)=lines.recv().await {
+                if native && (line.contains("local dns servers") || line.contains("server=dns-local") || line.contains("server=\"dns-local\"")) { eprintln!("native-dns {line}"); }
+            }
+        });
         let mut profile:Value=serde_json::from_str(include_str!("../../../../account/tests/fixtures/proxy-profile.json")).unwrap();
         profile["nodes"].as_array_mut().unwrap().truncate(1);
         profile["nodes"][0]["ingresses"].as_array_mut().unwrap().truncate(1);
@@ -277,7 +287,7 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         if let Some((stream,_))=&mut per_node { echo(stream,9999).await; }
         let per_node_counts=if let Some(node)=&node_fixture { Some(node.counters().await) } else { None };
         drop(per_node);
-        drop((http,socks,association,udp_client));backend.shutdown().await.unwrap();tcp_task.abort();udp_task.abort();let _=std::fs::remove_dir_all(dir);
+        drop((http,socks,association,udp_client));backend.shutdown().await.unwrap();dns_logging.abort();tcp_task.abort();udp_task.abort();let _=std::fs::remove_dir_all(dir);
         if native { assert!(ppvpn_core::capture_host::forwarding_runtime_ids().is_empty()); println!("{}",json!({"probe":"complete","cycles":20,"http_connect":true,"socks_tcp":true,"socks_udp":true,"per_node_tcp":per_node_counts.is_some(),"per_node_upstream_connections":per_node_counts.as_ref().map(|c|c["upstream_connections"].clone()),"per_node_sink_accepts":per_node_counts.as_ref().map(|c|c["sink_accepts"].clone()),"runtime_ids":[]})); }
         if let Some(node)=node_fixture { node.stop().await; }
     }).await.expect("mixed traffic fixture must be bounded");
