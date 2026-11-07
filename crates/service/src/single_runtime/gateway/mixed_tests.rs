@@ -232,7 +232,7 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         let mut lines=backend.logs();
         let dns_logging=tokio::spawn(async move {
             while let Some(line)=lines.recv().await {
-                if native && (line.contains("local dns servers") || line.contains("server=dns-local") || line.contains("server=\"dns-local\"")) { eprintln!("native-dns {line}"); }
+                if native && (line.contains("local dns servers") || (line.contains("outbound failed") && line.contains("outbound=direct")) || line.contains("server=dns-local") || line.contains("server=\"dns-local\"")) { eprintln!("native-dns {line}"); }
             }
         });
         let mut profile:Value=serde_json::from_str(include_str!("../../../../account/tests/fixtures/proxy-profile.json")).unwrap();
