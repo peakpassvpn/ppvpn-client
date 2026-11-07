@@ -5,6 +5,30 @@ use crate::capture::{CaptureLeftover, CaptureSpec, ForwarderIdentity};
 use async_trait::async_trait;
 use std::sync::Arc;
 
+/// Serialize macOS non-atomic descriptor creation/SCM_RIGHTS receive with all
+/// child-process creation in this process. Hold only through FD_CLOEXEC or spawn,
+/// never while waiting for child exit. Hosts must use this same gate for their
+/// own descriptor creation/receive and child spawns. Darwin has no
+/// MSG_CMSG_CLOEXEC; a host-local lock cannot protect core DNS child creation.
+#[cfg(target_os = "macos")]
+pub fn fd_spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GATE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Actual live Sail registry in this process, without constructing an Engine.
+/// Diagnostics only: this does not prove uniqueness in another OS process.
+pub fn forwarding_runtime_ids() -> Vec<u64> {
+    let mut ids: Vec<_> = sail::runtime_managers()
+        .keys()
+        .copied()
+        .map(u64::from)
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
 pub use sail::embed::TunPacketFlow as CapturePacketFlow;
 pub type CaptureHostResult<T> = Result<T, Vec<CaptureLeftover>>;
 
@@ -182,6 +206,75 @@ fn validate_duplicate(fd: &std::os::fd::OwnedFd, name: &str) -> std::io::Result<
 mod tests {
     use super::*;
     use std::os::fd::{AsRawFd, OwnedFd};
+    // Only the explicitly selected child invocation reads the probe variable.
+    #[test]
+    fn descriptor_exec_probe_child() {
+        if let Ok(value) = std::env::var("PPVPN_CAPTURE_FD_EXEC_PROBE") {
+            let (fd, expected) = value.split_once(':').unwrap();
+            let open = unsafe { libc::fcntl(fd.parse().unwrap(), libc::F_GETFD) } >= 0;
+            std::process::exit(if open == (expected == "open") { 0 } else { 9 });
+        }
+    }
+    #[test]
+    fn shared_fd_gate_prevents_child_inheritance_during_cloexec_setup() {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let file = tempfile::tempfile().unwrap();
+        let gate = fd_spawn_guard();
+        // Model Darwin's received descriptor before fcntl: deliberately no
+        // CLOEXEC, with a high number that child stdio cannot reuse.
+        let raw = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, 256) };
+        assert!(raw >= 0);
+        let descriptor = unsafe { OwnedFd::from_raw_fd(raw) };
+        let child = move |expected: &str| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "capture_host::tests::descriptor_exec_probe_child",
+                ])
+                .env("PPVPN_CAPTURE_FD_EXEC_PROBE", format!("{raw}:{expected}"))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        // Positive control: an uncoordinated actual exec inherits this fd.
+        assert!(child("open"));
+        let (ready, started) = mpsc::channel();
+        let (finished, result) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            ready.send(()).unwrap();
+            let child = {
+                let _gate = fd_spawn_guard();
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "capture_host::tests::descriptor_exec_probe_child",
+                    ])
+                    .env("PPVPN_CAPTURE_FD_EXEC_PROBE", format!("{raw}:closed"))
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            };
+            // The gate is released before waiting for the child.
+            finished
+                .send(child.wait_with_output().unwrap().status.success())
+                .unwrap();
+        });
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(result.recv_timeout(Duration::from_millis(30)).is_err());
+        assert_eq!(
+            unsafe { libc::fcntl(raw, libc::F_SETFD, libc::FD_CLOEXEC) },
+            0
+        );
+        drop(gate);
+        assert!(result.recv_timeout(Duration::from_secs(30)).unwrap());
+        thread.join().unwrap();
+        drop(descriptor);
+    }
     #[test]
     fn a_non_utun_descriptor_is_refused_and_the_original_remains_owned() {
         let file = tempfile::tempfile().unwrap();

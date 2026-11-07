@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use std::{path::Path, sync::Arc};
 const INSTALLED_SERVICE:&str="/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle/Contents/MacOS/ppvpn-service";
 const INSTALLED_UI: &str = "/Applications/PPVPN.app/Contents/MacOS/PPVPN";
-pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
+pub fn validate_installation() -> Result<u32> {
     let uid = unsafe { libc::geteuid() };
     if uid == 0 || uid != unsafe { libc::getuid() } {
         return Err(anyhow!("USER_RUNTIME_ROOT_FORBIDDEN"));
@@ -26,6 +26,10 @@ pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
         crate::mac_identity::team_id(),
     )?;
     crate::mac_identity::check_file(image, &requirement)?;
+    Ok(uid)
+}
+pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
+    let uid = validate_installation()?;
     super::endpoint::private_directory(log_dir, uid)?;
     let endpoint = Endpoint::bind(dir, uid)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -34,7 +38,6 @@ pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
         .build()?;
     runtime.block_on(async {
         let physical = super::native::physical().unwrap_or_else(|_|ppvpn_core::NetworkState::offline());
-        let protect = Arc::new(super::native::Protect::new(&physical)?);
         let capture_host = Arc::new(super::host::Host::default());
         let config = ppvpn_core::EngineConfig::new(
             ppvpn_core::Role::Shared,
@@ -42,7 +45,6 @@ pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
             dir.join("state"),
         )
         .with_capture_host(ppvpn_core::capture_host::CaptureHost::new(capture_host.clone()))
-        .with_socket_protect({ let bound = protect.clone(); ppvpn_core::SocketProtect::new(move |fd|bound.protect(fd)) })
         .with_local_proxy(ppvpn_core::LocalProxyConfig::default())
         .with_system_proxy(true)
         .with_log(ppvpn_core::LogConfig::new(ppvpn_core::LogLevel::Info, ppvpn_core::LogSink::Channel));
@@ -55,7 +57,7 @@ pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let current = tokio::task::spawn_blocking(super::native::physical).await
                     .ok().and_then(Result::ok).unwrap_or_else(ppvpn_core::NetworkState::offline);
-                if current != previous && protect.update(&current).is_ok() && monitor_backend.network(current.clone()).is_ok() { previous = current; }
+                if current != previous && monitor_backend.network(current.clone()).is_ok() { previous = current; }
                 if capture_host.lease_lost() || monitor_backend.capture_expired() {
                     let _ = monitor_backend.reconcile_lost_capture().await;
                 }

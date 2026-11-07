@@ -193,13 +193,17 @@ pub fn discover(iface: &Interface) -> Discovered {
 
 /// Runs /usr/sbin/scutil with `stdin`, within [`TIMEOUT`].
 fn run(args: &[&str], stdin: &str) -> Result<String, String> {
-    let mut child = Command::new("/usr/sbin/scutil")
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("scutil: {e}"))?;
+    let mut child = {
+        #[cfg(target_os = "macos")]
+        let _fd_guard = crate::capture_host::fd_spawn_guard();
+        Command::new("/usr/sbin/scutil")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    }
+    .map_err(|e| format!("scutil: {e}"))?;
     if let Some(mut input) = child.stdin.take() {
         let _ = input.write_all(stdin.as_bytes());
     }

@@ -660,12 +660,7 @@ impl Runtime for SailRuntime {
     }
     fn observation(&self) -> crate::capture::RuntimeObservation {
         let id = u64::from(self.instance.id());
-        let mut active: Vec<_> = sail::runtime_managers()
-            .keys()
-            .copied()
-            .map(u64::from)
-            .collect();
-        active.sort_unstable();
+        let active = crate::capture_host::forwarding_runtime_ids();
         crate::capture::RuntimeObservation {
             owner: crate::capture::ForwarderIdentity {
                 instance: self.owner_nonce.clone(),

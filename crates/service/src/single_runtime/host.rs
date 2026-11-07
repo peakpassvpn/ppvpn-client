@@ -115,6 +115,15 @@ impl Client {
             }
             bail!("CAPTURE_BROKER_REJECTED");
         }
+        if response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("root_runtime_ids"))
+            .and_then(|v| v.as_array())
+            .is_none_or(|ids| !ids.is_empty())
+        {
+            bail!("CAPTURE_BROKER_ROLE_VIOLATION");
+        }
         if !descriptor {
             return Ok((None, None));
         }

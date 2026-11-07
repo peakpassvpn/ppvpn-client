@@ -72,6 +72,9 @@ fn service_build_inputs(
 fn service_build_id(service_dir: &std::path::Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
+    if cfg!(feature = "macos-user-runtime") {
+        hasher.update(b"macos-user-runtime-v1\0");
+    }
     for (name, path) in service_build_inputs(service_dir)? {
         let bytes = std::fs::read(&path)?;
         hasher.update(name.as_bytes());

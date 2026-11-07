@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.peakpassvpn.ppvpn.user-runtime</string>
+  <key>ProgramArguments</key><array>
+    <string>/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle/Contents/MacOS/ppvpn-service</string>
+    <string>--user-runtime-login</string>
+  </array>
+  <key>AssociatedBundleIdentifiers</key><array><string>com.peakpassvpn.ppvpn.desktop</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>ExitTimeOut</key><integer>75</integer>
+  <key>Umask</key><integer>63</integer>
+</dict></plist>

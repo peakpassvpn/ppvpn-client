@@ -18,6 +18,10 @@ path = "src/install.rs"
 name = "ppvpn-service-uninstall"
 path = "src/uninstall.rs"
 
+[features]
+# Signed macOS single-owner installation and LaunchAgent activation.
+macos-user-runtime = []
+
 [dependencies]
 async-trait = "0.1"
 tracing-appender = "0.2.5"
