@@ -258,7 +258,7 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         let mut lines=backend.logs();
         let dns_logging=tokio::spawn(async move {
             while let Some(line)=lines.recv().await {
-                if native && (line.contains("socket bind ") || line.contains("tcp dialing ") || line.contains("no default interface") || line.contains("outbound traffic goes through") || line.contains("local dns servers") || (line.contains("outbound failed") && line.contains("outbound=direct")) || line.contains("server=dns-local") || line.contains("server=\"dns-local\"")) { eprintln!("native-dns {line}"); }
+                if native && (line.contains("network changed: generation ") || line.contains("socket bind ") || line.contains("tcp dialing ") || line.contains("no default interface") || line.contains("outbound traffic goes through") || line.contains("local dns servers") || (line.contains("outbound failed") && line.contains("outbound=direct")) || line.contains("server=dns-local") || line.contains("server=\"dns-local\"")) { eprintln!("native-dns {line}"); }
             }
         });
         let mut profile:Value=serde_json::from_str(include_str!("../../../../account/tests/fixtures/proxy-profile.json")).unwrap();
@@ -319,8 +319,11 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
                 assert_eq!(ppvpn_core::capture_host::forwarding_runtime_ids().len(),1);
                 println!("{}",json!({"probe":"attached","cycle":sequence,"owner":identity,"runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids(),"broker_registry_verified_empty":true}));
             }
-            echo(&mut http,sequence).await;echo(&mut socks,sequence).await;
-            if let Some((stream,_))=&mut per_node { echo(stream,sequence+2000).await; }
+            if native {eprintln!("native-held stage=attached-http cycle={sequence}");}
+            echo(&mut http,sequence).await;
+            if native {eprintln!("native-held stage=attached-socks cycle={sequence}");}
+            echo(&mut socks,sequence).await;
+            if let Some((stream,_))=&mut per_node { if native {eprintln!("native-held stage=attached-per-node cycle={sequence}");} echo(stream,sequence+2000).await; }
             let mut packet=vec![0,0,0,1,127,0,0,1];packet.extend_from_slice(&udp_target.port().to_be_bytes());packet.extend_from_slice(&sequence.to_be_bytes());udp_client.send_to(&packet,relay).await.unwrap();let mut reply=[0;2048];let(n,_)=udp_client.recv_from(&mut reply).await.unwrap();assert_eq!(&reply[n-4..n],&sequence.to_be_bytes());
             let detached=backend.call("/v1/detach-capture",json!({"protocol_version":1,"expected_epoch":attached["epoch"],"lease":attached["lease"]})).await.unwrap();
             assert_eq!(detached["phase"],"detached");epoch=detached["epoch"].as_u64().unwrap();
