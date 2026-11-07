@@ -112,6 +112,7 @@ void main() {
                 isTrue,
               );
               expect(lines.current, '$token-tcp');
+              final tcpWitness = _TcpWitness(lines);
               await _udpEcho(
                 '$token-udp',
                 whileOpen: () async {
@@ -138,16 +139,22 @@ void main() {
                     rethrow;
                   }
                   await _until(() async {
+                    tcpWitness.requireOpen();
                     final traffic = await _rpc('/v1/get-traffic');
+                    tcpWitness.requireOpen();
                     return (traffic['upload_bytes'] as int) >
                             (baseline['upload_bytes'] as int) &&
                         (traffic['download_bytes'] as int) >
                             (baseline['download_bytes'] as int);
                   });
-                  final connections = await _witnessConnections(
-                    () async =>
-                        await _rpc('/v1/get-connections') as List<dynamic>,
-                  );
+                  final connections = await _witnessConnections(() async {
+                    tcpWitness.requireOpen();
+                    final value =
+                        await _rpc('/v1/get-connections') as List<dynamic>;
+                    tcpWitness.requireOpen();
+                    return value;
+                  });
+                  tcpWitness.requireOpen();
                   final after = await _rpc('/v1/get-runtime-observation');
                   expect(after['owner'], before['owner']);
                   expect(
@@ -160,17 +167,22 @@ void main() {
                   );
                   expect(rust.start().standardReady, isFalse);
                   expect(await rust.localProxies(), isEmpty);
+                  final sampledTraffic = await _rpc('/v1/get-traffic');
+                  tcpWitness.requireOpen();
                   await _controlCall('checkpoint', {
                     'stage': 'connected',
                     'cycle': cycle,
                     'token': token,
                     'reported_vm_uri': vmHint,
                     'observation': after,
-                    'traffic': await _rpc('/v1/get-traffic'),
+                    'traffic': sampledTraffic,
                     'connections': connections,
+                    'tcp_witness_pending': true,
                   });
+                  tcpWitness.requireOpen();
                 },
               );
+              tcpWitness.requireOpen();
               if (cycle == 2) {
                 // The rival establish() makes Android revoke this provider;
                 // production TunnelService.onRevoke(), not a test method call.
@@ -184,15 +196,8 @@ void main() {
               }
               await _until(() async => SystemVpn.state.value == VpnState.off);
               await _until(() async => !await File(_socket!).exists());
-              // An already open TCP session must terminate on owner teardown.
-              try {
-                expect(
-                  await lines.moveNext().timeout(const Duration(seconds: 15)),
-                  isFalse,
-                );
-              } on SocketException {
-                // Android may reset instead of sending FIN; both end the flow.
-              }
+              // Reuse the one pending read: it must end only after teardown.
+              await tcpWitness.requireEnded();
             } finally {
               tcp.destroy();
               await lines.cancel();
@@ -331,6 +336,45 @@ Future<void> _notProxy(int port) async {
       isFalse,
       reason: 'Device VM exception must not serve HTTP CONNECT/proxy auth',
     );
+  }
+}
+
+class _TcpWitness {
+  _TcpWitness(StreamIterator<String> lines) {
+    // Exactly one read, armed immediately after the exact echo. Errors are
+    // observed here even before teardown awaits the result.
+    _done = lines.moveNext().then<void>(
+      (more) {
+        _more = more;
+        _completed = true;
+      },
+      onError: (Object error, StackTrace stack) {
+        _error = error;
+        _stack = stack;
+        _completed = true;
+      },
+    );
+  }
+  late final Future<void> _done;
+  bool _completed = false;
+  bool? _more;
+  Object? _error;
+  StackTrace? _stack;
+
+  void requireOpen() {
+    if (_completed) {
+      fail(
+        'TCP witness ended before owner teardown: more=$_more error=$_error',
+      );
+    }
+  }
+
+  Future<void> requireEnded() async {
+    await _done.timeout(const Duration(seconds: 15));
+    final error = _error;
+    if (error is SocketException) return; // Teardown may reset instead of FIN.
+    if (error != null) Error.throwWithStackTrace(error, _stack!);
+    expect(_more, isFalse);
   }
 }
 
