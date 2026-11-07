@@ -217,7 +217,7 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         for node in profile["nodes"].as_array_mut().unwrap() {for ingress in node["ingresses"].as_array_mut().unwrap() {ingress["endpoint"]=json!({"domain":"127.0.0.1","port":9});}}
         if let Some(node)=&node_fixture {
             let ingress=&mut profile["nodes"][0]["ingresses"][0];
-            ingress["endpoint"]=json!({"domain":"127.0.0.1","ip":"127.0.0.1","port":node.ss_port});
+            ingress["endpoint"]=json!({"domain":"127.0.0.1","port":node.ss_port});
             ingress["credentials"]=json!({"shadowsocks":{"method":"2022-blake3-aes-128-gcm","user_key":"AAAAAAAAAAAAAAAAAAAAAA=="}});
         }
         let node_id=profile["nodes"][0]["id"].as_str().unwrap().to_owned();
