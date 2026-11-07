@@ -45,7 +45,7 @@ impl Client {
     ) -> Result<(Option<OwnedFd>, Option<String>)> {
         native::trace_phase("host-connect");
         let mut stream = UnixStream::connect(broker::SOCKET)?;
-        stream.set_read_timeout(Some(broker::READ_WINDOW))?;
+        stream.set_read_timeout(Some(Duration::from_millis(2400)))?;
         stream.set_write_timeout(Some(Duration::from_millis(600)))?;
         mac_peer::verify_exact(
             &stream,
