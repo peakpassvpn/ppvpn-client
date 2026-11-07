@@ -1,0 +1,235 @@
+name: Frozen mobile runtime acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact product source commit
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: frozen-mobile-runtime-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  android:
+    # The Flutter app's Android target (#448 step 3): the bridge and the
+    # tunnel host for arm64 and x86_64 (the NDK's clang), the APK (signed
+    # with the debug key until the Play upload key exists: the artifact
+    # installs on a phone as is), and on an emulator the app started and
+    # its VPN brought up (TunnelService, the host serving tunnel.sock).
+    # When the app or the tunnel host changed (tools/ci-changes.sh
+    # `android`).
+    name: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      FRB_CODEGEN_VERSION: 2.13.0
+      # The backend the app is built for (#517): the GitHub variable, as
+      # release.yml's; ci-build.sh fails without it.
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref }}
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          echo android=true >> "$GITHUB_OUTPUT"
+          echo flutter=true >> "$GITHUB_OUTPUT"
+      # Room on the runner's disk: the bridge and the tunnel host for two
+      # ABIs (sail and BoringSSL in each), Gradle's build and the emulator's
+      # image filled it (run 41183704847, "No space left on device"). The
+      # preinstalled toolchains this job never uses go first: .NET, Haskell,
+      # Swift, PowerShell, CodeQL's bundle (not the Android SDK or Java).
+      - name: Free disk space
+        if: steps.scope.outputs.android == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift \
+            /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.android == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.android == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: flutter
+          save-if: false
+      # The host's for the bridge codegen, which reads the crate.
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.android == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android
+      - uses: ./.github/actions/flutter-toolchain
+        if: steps.scope.outputs.android == 'true'
+        with:
+          frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
+      - id: build
+        name: Build
+        if: steps.scope.outputs.android == 'true'
+        env:
+          FLUTTER_TARGET: android
+          PPVPN_SKIP_ANALYZE: '1'
+        run: |
+          # The runner's JDK 17 (for the emulator's step too) and newest NDK.
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          apps/flutter/scripts/ci-build.sh
+          ls -l "${{ github.workspace }}/apps/flutter/build/app/outputs/flutter-apk"
+      - name: Native tunnel lifecycle
+        if: steps.scope.outputs.android == 'true'
+        run: apps/flutter/scripts/test-android-tunnel.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
+        if: steps.scope.outputs.android == 'true'
+        with:
+          name: flutter-apk-android
+          path: ${{ steps.build.outputs.bundle }}
+          if-no-files-found: error
+          retention-days: 14
+      # What the build left, beside what the emulator needs next.
+      - name: Disk after the build
+        if: always() && steps.scope.outputs.android == 'true'
+        run: df -h /
+      # The emulator needs about 7.4 GB for its userdata partition, after
+      # the system image: with the build's 11 GB left it found 5.9 GB and
+      # did not start (job 124572523884). Cargo's target directory is done
+      # with by now (ci-build.sh copied the libraries into jniLibs, which the
+      # smoke test's debug APK packs); Gradle's caches stay for that build.
+      - name: Free the Rust build's disk
+        if: steps.scope.outputs.android == 'true'
+        run: |
+          du -sh target 2>/dev/null || true
+          rm -rf target
+          df -h /
+      # Hardware acceleration for the emulator.
+      - name: KVM
+        if: steps.scope.outputs.android == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # The system image (checksummed) and the rest, installed by
+      # .github/actions/android-sdk, which fails on an incomplete one instead
+      # of booting without it.
+      - uses: ./.github/actions/android-sdk
+        if: steps.scope.outputs.android == 'true'
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+      # A tablet: in landscape (1280 dp across, the desktop layout), then set
+      # to a phone's screen in portrait (the phone layout, #448 step 5).
+      - name: Smoke test (emulator)
+        if: steps.scope.outputs.android == 'true'
+        timeout-minutes: 30
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: apps/flutter/e2e/android_smoke.sh
+      # A failed smoke test's evidence: each leg's flutter test report (JSON
+      # events) and TunnelService's log lines.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && steps.scope.outputs.android == 'true'
+        timeout-minutes: 10
+        with:
+          name: android-smoke
+          path: apps/flutter/build/smoke-*
+          if-no-files-found: ignore
+          retention-days: 14
+
+  ios:
+    # The Flutter app's iOS target (#448): the bridge as a static library
+    # for Apple silicon's simulator (BoringSSL built from source: btls has
+    # no iOS prebuilts), the app (debug, unsigned), and the app started on
+    # an iPhone simulator. No packet tunnel yet (#448 step 2). Its Rust
+    # cache is the macOS jobs' (key macos, release.yml's cache-macos): with
+    # the codegen's cargo expand, BoringSSL and the bridge for the simulator.
+    name: ios
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      FRB_CODEGEN_VERSION: 2.13.0
+      # The backend the app is built for (#517): the GitHub variable, as
+      # release.yml's; ci-build.sh fails without it.
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref }}
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          echo android=true >> "$GITHUB_OUTPUT"
+          echo flutter=true >> "$GITHUB_OUTPUT"
+      - name: Public packet provider lifecycle
+        if: steps.scope.outputs.flutter == 'true'
+        run: python3 apps/flutter/checks/ios_packet_test.py
+      - name: Xcode 26
+        if: steps.scope.outputs.flutter == 'true'
+        run: |
+          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          [[ -d "$xcode" ]] || { echo "error: no Xcode 26 on the image" >&2; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.scope.outputs.flutter == 'true'
+        # A restore that hangs ends as a cache miss (see env).
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: macos
+          save-if: false
+      # The host's for the bridge codegen, which reads the crate.
+      - uses: ./.github/actions/prebuilt-boringssl
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+        if: steps.scope.outputs.flutter == 'true'
+        with:
+          frb-codegen-version: ${{ env.FRB_CODEGEN_VERSION }}
+      - id: build
+        name: Build
+        if: steps.scope.outputs.flutter == 'true'
+        env:
+          FLUTTER_TARGET: ios
+          IOS_SDK: simulator
+          PPVPN_SKIP_ANALYZE: '1'
+        run: apps/flutter/scripts/ci-build.sh
+      - name: Smoke test (simulator)
+        if: steps.scope.outputs.flutter == 'true'
+        timeout-minutes: 30
+        run: apps/flutter/e2e/ios_smoke.sh
+

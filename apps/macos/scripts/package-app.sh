@@ -51,6 +51,15 @@ case "$ARCH" in
 esac
 [[ -f "$APP/Contents/Info.plist" ]] || { echo "error: no app at $APP" >&2; exit 2; }
 APP="$(cd "$APP" && pwd)"
+# Check the built app and both installer roles before signing this package.
+layout=$(/usr/libexec/PlistBuddy -c 'Print :PPVPNMacRuntimeLayout' "$APP/Contents/Info.plist" 2>/dev/null || true)
+expected_layout=legacy
+[[ "${PPVPN_MACOS_SINGLE_RUNTIME:-0}" != 1 ]] || expected_layout=user-core-broker-v1
+[[ "${layout:-legacy}" == "$expected_layout" ]] || { echo "error: app runtime layout mismatch" >&2; exit 2; }
+for installer in ppvpn-service-install ppvpn-service-uninstall; do
+  [[ "$("$APP/Contents/MacOS/$installer" --print-runtime-layout)" == "$expected_layout" ]] \
+    || { echo "error: $installer runtime layout mismatch" >&2; exit 2; }
+done
 SIGN_IDENTITY="${PPVPN_CODESIGN_IDENTITY:--}"
 TEAM="${PPVPN_CODESIGN_TEAM:-}"
 INSTALLER_IDENTITY="${PPVPN_INSTALLER_IDENTITY:-}"

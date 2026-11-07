@@ -68,6 +68,19 @@ mod macdns;
 
 #[cfg(target_os = "macos")]
 fn main() -> Result<(), anyhow::Error> {
+    // Read-only packaging preflight; never touches launchd or privileged paths.
+    if std::env::args_os().skip(1).collect::<Vec<_>>() == ["--print-runtime-layout"] {
+        println!(
+            "{}",
+            if cfg!(feature = "macos-user-runtime") {
+                "user-core-broker-v1"
+            } else {
+                "legacy"
+            }
+        );
+        return Ok(());
+    }
+
     use anyhow::anyhow;
     use std::fs;
     use std::path::Path;
