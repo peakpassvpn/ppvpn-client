@@ -211,11 +211,21 @@ pub fn trace_phase(stage: &'static str) {
 pub fn trace_operation(stage: &'static str, elapsed: Duration, ok: bool) {
     #[cfg(feature = "macos-capture-acceptance")]
     eprintln!(
-        "capture-control stage={stage} elapsed_ms={} ok={ok}",
-        elapsed.as_millis()
+        "capture-control stage={stage} elapsed_ms={} ok={ok} at_ms={}",
+        elapsed.as_millis(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
     );
     #[cfg(not(feature = "macos-capture-acceptance"))]
     let _ = (stage, elapsed, ok);
+}
+pub fn timed<T>(stage: &'static str, work: impl FnOnce() -> Result<T>) -> Result<T> {
+    let started = Instant::now();
+    let result = work();
+    trace_operation(stage, started.elapsed(), result.is_ok());
+    result
 }
 pub fn command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = {

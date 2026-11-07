@@ -76,8 +76,12 @@ pub fn verify_exact(stream: &UnixStream, uid: u32, identifier: &str, image: &Pat
     secure_installed_image(image)?;
     let requirement = crate::mac_identity::requirement(identifier, crate::mac_identity::team_id())?;
     let bytes: Vec<u8> = token.iter().flat_map(|word| word.to_ne_bytes()).collect();
-    crate::mac_identity::check_process(&bytes, &requirement)?;
-    crate::mac_identity::check_file(image, &requirement)?;
+    super::native::timed("peer-process-first", || {
+        crate::mac_identity::check_process(&bytes, &requirement)
+    })?;
+    super::native::timed("peer-static-file", || {
+        crate::mac_identity::check_file(image, &requirement)
+    })?;
     let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let length =
         unsafe { libc::proc_pidpath(peer.pid as _, buffer.as_mut_ptr().cast(), buffer.len() as _) };
@@ -93,7 +97,9 @@ pub fn verify_exact(stream: &UnixStream, uid: u32, identifier: &str, image: &Pat
     }
     // Check the audit-token signature again after the PID path lookup, preventing
     // a recycled PID from substituting its executable during verification.
-    crate::mac_identity::check_process(&bytes, &requirement)?;
+    super::native::timed("peer-process-second", || {
+        crate::mac_identity::check_process(&bytes, &requirement)
+    })?;
     Ok(peer)
 }
 #[cfg(test)]
