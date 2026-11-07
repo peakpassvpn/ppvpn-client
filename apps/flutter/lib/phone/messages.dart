@@ -118,6 +118,10 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
       (candidate) => identical(candidate, inboxRoute),
     );
     route.animation?.addStatusListener(revealInbox);
+    // A zero-duration push may complete synchronously before registration.
+    if (route.animation?.status == AnimationStatus.completed) {
+      revealInbox(AnimationStatus.completed);
+    }
     unawaited(
       pushed.whenComplete(() {
         route.animation?.removeStatusListener(revealInbox);
