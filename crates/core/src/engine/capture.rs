@@ -7,7 +7,7 @@ use crate::capture_host::*;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const STEP_LIMIT: Duration = Duration::from_secs(3);
 pub(super) type Controller = CaptureController<NativeDriver>;
@@ -38,6 +38,38 @@ async fn host_step<T>(
     tokio::time::timeout(STEP_LIMIT, work)
         .await
         .unwrap_or_else(|_| Err(unknown(epoch)))
+}
+// Fixed labels only: these diagnostics must never print grants, tags or errors' messages.
+async fn detach_host_step(
+    stage: &'static str,
+    work: impl std::future::Future<Output = CaptureHostResult<()>>,
+    epoch: u64,
+) -> CaptureHostResult<()> {
+    let started = Instant::now();
+    eprintln!("capture-control stage={stage} event=begin");
+    let result = tokio::time::timeout(STEP_LIMIT, work).await;
+    eprintln!(
+        "capture-control stage={stage} event=end elapsed_ms={} timed_out={} ok={}",
+        started.elapsed().as_millis(),
+        result.is_err(),
+        matches!(&result, Ok(Ok(())))
+    );
+    result.unwrap_or_else(|_| Err(unknown(epoch)))
+}
+fn capture_state_label(
+    state: &Result<sail::embed::TunState, crate::runtime::RuntimeError>,
+) -> &'static str {
+    use sail::embed::TunState;
+    match state {
+        Ok(TunState::Detached) => "detached",
+        Ok(TunState::Prepared { .. }) => "prepared",
+        Ok(TunState::Committing { .. }) => "committing",
+        Ok(TunState::Attached { .. }) => "attached",
+        Ok(TunState::Failed { .. }) => "failed",
+        Ok(TunState::Draining { .. }) => "draining",
+        Ok(_) => "unknown",
+        Err(_) => "query-error",
+    }
 }
 fn live_capabilities() -> CaptureCapabilities {
     CaptureCapabilities {
@@ -374,11 +406,17 @@ impl NativeDriver {
         let Some(active) = active else {
             return CaptureOutcome::RollbackFailed(unknown(epoch));
         };
-        if host_step(active.resource.commit_detach(), epoch)
+        if detach_host_step("detach-host-commit", active.resource.commit_detach(), epoch)
             .await
             .is_err()
         {
-            return match host_step(active.resource.rollback_detach(), epoch).await {
+            return match detach_host_step(
+                "detach-host-rollback",
+                active.resource.rollback_detach(),
+                epoch,
+            )
+            .await
+            {
                 Ok(()) => CaptureOutcome::RolledBack,
                 Err(mut left) => {
                     left.extend(unknown(epoch));
@@ -386,26 +424,57 @@ impl NativeDriver {
                 }
             };
         }
+        let started = Instant::now();
+        eprintln!("capture-control stage=detach-native event=begin");
         let native = tokio::time::timeout(STEP_LIMIT, inner.runtime.detach_native_capture()).await;
+        let code = match &native {
+            Ok(Err(error))
+                if error.code.len() <= 64
+                    && !error.code.is_empty()
+                    && error
+                        .code
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_') =>
+            {
+                error.code.as_str()
+            }
+            Ok(Err(_)) => "NATIVE_CAPTURE_FAILURE",
+            Ok(Ok(_)) => "NONE",
+            Err(_) => "TIMEOUT",
+        };
+        eprintln!(
+            "capture-control stage=detach-native event=end elapsed_ms={} timed_out={} clean={} code={code}",
+            started.elapsed().as_millis(), native.is_err(), matches!(&native, Ok(Ok(r)) if r.clean())
+        );
         if matches!(native,Ok(Ok(ref r)) if r.clean()) {
             let _ = inner.runtime.stage_capture_device(None);
             *self.active.lock().unwrap_or_else(|p| p.into_inner()) = None;
             CaptureOutcome::Committed
-        } else if matches!(
-            inner.runtime.native_capture_state(),
-            Ok(sail::embed::TunState::Attached { .. })
-        ) {
-            match host_step(active.resource.rollback_detach(), epoch).await {
-                Ok(()) => CaptureOutcome::RolledBack,
-                Err(mut left) => {
-                    left.extend(unknown(epoch));
-                    CaptureOutcome::RollbackFailed(left)
-                }
-            }
         } else {
-            // Draining/failed native state cannot honestly restore capture.
-            // Keep the resource/FD ledger alive and OS admission removed.
-            CaptureOutcome::RollbackFailed(unknown(epoch))
+            let state = inner.runtime.native_capture_state();
+            eprintln!(
+                "capture-control stage=detach-native-state state={}",
+                capture_state_label(&state)
+            );
+            if matches!(state, Ok(sail::embed::TunState::Attached { .. })) {
+                match detach_host_step(
+                    "detach-host-rollback",
+                    active.resource.rollback_detach(),
+                    epoch,
+                )
+                .await
+                {
+                    Ok(()) => CaptureOutcome::RolledBack,
+                    Err(mut left) => {
+                        left.extend(unknown(epoch));
+                        CaptureOutcome::RollbackFailed(left)
+                    }
+                }
+            } else {
+                // Draining/failed native state cannot honestly restore capture.
+                // Keep the resource/FD ledger alive and OS admission removed.
+                CaptureOutcome::RollbackFailed(unknown(epoch))
+            }
         }
     }
 }
