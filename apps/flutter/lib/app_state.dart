@@ -241,12 +241,25 @@ class AppState with WidgetsBindingObserver {
   Future<void> _lifecycle = Future.value();
   static const _native = MethodChannel('com.peakpassvpn.ppvpn/app');
 
+  Future<void> _refreshAppleOnResume() async {
+    final push = _applePush;
+    final owner = messages.ownerEpoch;
+    if (push == null || snapshot.value.auth != rust.UiAuth.signedIn) return;
+    if (!await push.resume() ||
+        _stopped ||
+        owner != messages.ownerEpoch ||
+        snapshot.value.auth != rust.UiAuth.signedIn)
+      return;
+    await messages.reload();
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (fixed || !Platform.isIOS) return;
     if (state != AppLifecycleState.paused && state != AppLifecycleState.resumed)
       return;
     final active = state == AppLifecycleState.resumed;
+    if (active) unawaited(_refreshAppleOnResume());
     // Begin the system background assertion immediately, before queuing Rust
     // work; release it only once the engine has dropped its file locks.
     final task = active

@@ -13,6 +13,9 @@ Implemented in source
   Cold notices remain in the bounded native mailbox until the stable account
   is restored. Dart AppState follows account_id, not account_name. Notices
   perform authorized inbox lookup and never use notification body/URL for UI.
+  Enabled packages retry OS registration and refresh the authenticated inbox
+  on foregrounding, with an owner-epoch check after native readiness.
+  Disabled packages add no push-driven foreground network work.
   Explicit sign-out waits for the serialized unregister effect before Rust
   revokes the bearer. Restoring/replacement owners fence prior delivery.
 
