@@ -7,6 +7,10 @@ on:
     paths: [.github/workflows/mobile-build-acceptance.yml]
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: Exact product source commit
+        default: 47b11a36b518a1a01624abae98c94ba521b7a8d9
+        required: true
       baseline_ref:
         description: Exact functional baseline commit
         default: 1ddf0a168610172773fe3f479133ecbe5acf932f
@@ -30,12 +34,14 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: never
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      SOURCE_REF: ${{ inputs.source_ref || '47b11a36b518a1a01624abae98c94ba521b7a8d9' }}
       PPVPN_BUILD_NUMBER: '344'
       PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
       BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
       # This worker is exclusively allocated to this job. Retain Android,
       # Java, Go and all shared build caches; release its unused image tools.
@@ -75,6 +81,9 @@ jobs:
           for side in candidate baseline; do
             checkout="$RUNNER_TEMP/mobile-$side"
             ln -s "$CARGO_TARGET_DIR" "$checkout/target"
+            # The source ignores target directories; the shared output is a
+            # symlink, so exclude that local build link explicitly as well.
+            echo /target >> "$checkout/.git/info/exclude"
             for target in aarch64-linux-android x86_64-linux-android; do
               (cd "$checkout" && tools/release-features-check.sh --target "$target" -p ppvpn-flutter)
               (cd "$checkout" && tools/release-features-check.sh --target "$target" -p ppvpn-tunnel-host)
