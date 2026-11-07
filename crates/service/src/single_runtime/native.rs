@@ -525,6 +525,11 @@ impl Resources {
         routes
     }
     pub fn cleanup(&mut self) -> Result<()> {
+        // Never bring a recycled/externally changed interface down merely
+        // because route/DNS cleanup failed its ownership check.
+        if !marked(&self.journal)? {
+            bail!("CAPTURE_DEVICE_OWNERSHIP_LOST");
+        }
         let routes = self.detach();
         let down = command("/sbin/ifconfig", &[&self.name, "down"]);
         routes?;
@@ -780,7 +785,11 @@ pub fn recover() -> Result<()> {
     let dns = Store::new()?;
     let removed = dns.remove(&j.key);
     let routes = clear_routes(&j.name, &routes, &mut j.published);
-    let down = command("/sbin/ifconfig", &[&j.name, "down"]);
+    let down = if marked(&j)? {
+        command("/sbin/ifconfig", &[&j.name, "down"])
+    } else {
+        Err(anyhow::anyhow!("CAPTURE_RECOVERY_OWNERSHIP_UNVERIFIED"))
+    };
     removed?;
     routes?;
     down?;
