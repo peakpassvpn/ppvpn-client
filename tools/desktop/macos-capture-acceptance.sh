@@ -50,8 +50,8 @@ cleanup() {
   local original_status=$?
   set +e
   if (( installed )); then
-    sudo /usr/bin/tail -c 65536 /Library/Logs/PPVPN/ppvpn-service.err.log > "$out/root-stderr.txt" 2>&1
-    sudo /usr/bin/tail -c 65536 /Library/Logs/PPVPN/ppvpn-service.out.log > "$out/root-stdout.txt" 2>&1
+    sudo /usr/bin/tail -c 262144 /Library/Logs/PPVPN/ppvpn-service.err.log > "$out/root-stderr.txt" 2>&1
+    sudo /usr/bin/tail -c 262144 /Library/Logs/PPVPN/ppvpn-service.out.log > "$out/root-stdout.txt" 2>&1
     sudo /bin/launchctl bootout "gui/$uid/$agent" 2>/dev/null
     sudo "$artifact/ppvpn-service-uninstall" > "$out/uninstall.txt" 2>&1
   fi
