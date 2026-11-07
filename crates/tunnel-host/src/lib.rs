@@ -41,13 +41,7 @@ fn platform(value: i32) -> Option<Platform> {
 }
 
 pub(crate) fn api_error(code: &str, message: impl Into<String>, retryable: bool) -> ApiError {
-    ApiError {
-        code: code.to_string(),
-        field: None,
-        capture_status: None,
-        message: message.into(),
-        retryable,
-    }
+    ApiError::new(code, message).with_retryable(retryable)
 }
 
 pub(crate) fn request_invalid(message: impl Into<String>) -> ApiError {

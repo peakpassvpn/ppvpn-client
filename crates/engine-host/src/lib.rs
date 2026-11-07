@@ -34,7 +34,9 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    /// Builds a legacy error with no capture status. Hosts should use this
+    /// constructor so adding optional response metadata keeps callers valid.
+    pub fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
             field: None,
@@ -42,6 +44,11 @@ impl ApiError {
             retryable: false,
             capture_status: None,
         }
+    }
+
+    pub fn with_retryable(mut self, retryable: bool) -> Self {
+        self.retryable = retryable;
+        self
     }
 
     fn request_invalid(message: impl Into<String>) -> Self {

@@ -87,6 +87,7 @@ impl PartialEq for CaptureHost {
 
 pub(crate) type DeviceSlot = Arc<std::sync::Mutex<Option<Arc<dyn CaptureAttachment>>>>;
 pub(crate) struct DevicePlatform {
+    #[cfg(unix)]
     pub slot: DeviceSlot,
     pub protect: Option<crate::SocketProtect>,
 }
