@@ -96,6 +96,10 @@ fn stop_data_plane_and_exit() -> ! {
 
 /// Stops taking work, tells the watchers and stops the core.
 fn stop_data_plane() {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = ppvpn_service::single_runtime::broker::shutdown() {
+        log::error!("capture broker shutdown: {error}");
+    }
     ipc::begin_stopping();
     let started = std::time::Instant::now();
     let mut core = core::stop_sequence(&core::CORE, &watch::HUB, watch::CLOSE_GRACE);
@@ -110,6 +114,99 @@ fn stop_data_plane() {
 
 #[cfg(not(windows))]
 fn main() {
+    #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+    if std::env::args_os().nth(1).is_none() {
+        eprintln!("service: SERVICE_ROLE_REQUIRED");
+        std::process::exit(1);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(role) = std::env::args_os().nth(1) {
+        if role != "--user-runtime"
+            && role != "--capture-broker"
+            && role != "--user-runtime-login"
+            && role != "--build-info"
+            && !(cfg!(feature = "macos-capture-acceptance") && role == "--capture-acceptance")
+            && role != update::RUNNER_FLAG
+        {
+            eprintln!("service: SERVICE_ROLE_UNSUPPORTED");
+            std::process::exit(1);
+        }
+    }
+    #[cfg(all(target_os = "macos", feature = "macos-capture-acceptance"))]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--capture-acceptance")) {
+        use std::os::unix::fs::MetadataExt;
+        let guard = std::fs::symlink_metadata("/private/var/db/ppvpn-capture-acceptance"); // sensitive-check: allow — canonical macOS isolated acceptance marker
+        if std::env::args_os().count() != 2
+            || std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
+            || std::env::var("RUNNER_ENVIRONMENT").as_deref() != Ok("github-hosted")
+            || !guard.is_ok_and(|m| {
+                m.is_file() && m.uid() == 0 && m.mode() & 0o022 == 0 && m.nlink() == 1
+            })
+        {
+            eprintln!("capture acceptance: ISOLATED_RUNNER_REQUIRED");
+            std::process::exit(1);
+        }
+        if let Err(e) = ppvpn_service::single_runtime::agent::validate_installation() {
+            eprintln!("capture acceptance: {e}");
+            std::process::exit(1);
+        }
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(ppvpn_service::single_runtime::gateway::native_acceptance());
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--build-info")) {
+        println!(
+            "{}",
+            serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build_id":protocol::SERVICE_BUILD_ID,"user_runtime":cfg!(feature="macos-user-runtime"),"capture_acceptance":cfg!(feature="macos-capture-acceptance")})
+        );
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--user-runtime-login")) {
+        let result = if std::env::args_os().count() == 2 {
+            ppvpn_service::single_runtime::login::run()
+        } else {
+            Err(anyhow::anyhow!("USER_RUNTIME_ARGUMENTS_INVALID"))
+        };
+        if let Err(error) = result {
+            eprintln!("user runtime: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--user-runtime")) {
+        let arguments: Vec<_> = std::env::args_os().collect();
+        let result = if arguments.len() == 4 {
+            ppvpn_service::single_runtime::agent::run(
+                std::path::Path::new(&arguments[2]),
+                std::path::Path::new(&arguments[3]),
+            )
+        } else {
+            Err(anyhow::anyhow!("USER_RUNTIME_ARGUMENTS_INVALID"))
+        };
+        if let Err(error) = result {
+            eprintln!("user runtime: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--capture-broker")) {
+        if std::env::args_os().count() != 2 || unsafe { libc::geteuid() } != 0 {
+            eprintln!("capture broker: CAPTURE_BROKER_ROOT_REQUIRED");
+            std::process::exit(1);
+        }
+        ipc::enter_capture_broker_mode();
+        if let Err(error) = ppvpn_service::single_runtime::broker::start() {
+            eprintln!("capture broker: {error}");
+            std::process::exit(1);
+        }
+    }
     run_update_runner_if_asked();
     setup_logger();
     info!(
@@ -118,6 +215,11 @@ fn main() {
         protocol::SERVICE_BUILD_ID,
         logfile::log_dir().display()
     );
+    #[cfg(target_os = "macos")]
+    if !ipc::capture_broker_mode() {
+        start_lease_watchdog();
+    }
+    #[cfg(not(target_os = "macos"))]
     start_lease_watchdog();
     let Ok(rt) = tokio::runtime::Runtime::new() else {
         return;
@@ -144,6 +246,13 @@ fn main() {
     }
     // After the IPC server: a client that installed or restarted the
     // service waits for it to answer.
+    #[cfg(target_os = "macos")]
+    if ipc::capture_broker_mode() {
+        std::thread::spawn(crate::update::settle_at_start);
+    } else {
+        std::thread::spawn(clean_up_after_previous_instance);
+    }
+    #[cfg(not(target_os = "macos"))]
     std::thread::spawn(clean_up_after_previous_instance);
     rt.block_on(async {
         use tokio::signal::unix::{signal, SignalKind};

@@ -83,6 +83,8 @@ fn main() -> Result<(), anyhow::Error> {
         ));
     }
 
+    // User forwarding owners must drain before the shared helper image goes.
+    ppvpn_service::single_runtime::login::uninstall()?;
     // Best-effort: try to stop and bootout even if the plist is missing.
     let _ = Command::new("launchctl")
         .args(["stop", SERVICE_LABEL])

@@ -228,6 +228,18 @@ const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 "#;
 
 #[cfg(target_os = "macos")]
+fn launchd_plist() -> String {
+    if cfg!(feature = "macos-user-runtime") {
+        LAUNCHD_PLIST.replace(
+            "</array>",
+            "<string>--capture-broker</string>\n    </array>",
+        )
+    } else {
+        LAUNCHD_PLIST.to_owned()
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn main() -> Result<(), anyhow::Error> {
     use anyhow::{anyhow, Context};
     use std::env;
@@ -260,7 +272,7 @@ fn main() -> Result<(), anyhow::Error> {
     // one (the user could swap the file in between). A debug build installs
     // the ad-hoc signed debug service.
     let check_service = |path: &Path| -> Result<(), anyhow::Error> {
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && !cfg!(feature = "macos-user-runtime") {
             return Ok(());
         }
         let requirement = macsign::requirement(macsign::SERVICE_IDENTIFIER, macsign::team_id())?;
@@ -273,6 +285,33 @@ fn main() -> Result<(), anyhow::Error> {
     let target_bin = format!("{macos_dir}/ppvpn-service");
     let info_plist = format!("{BUNDLE_PATH}/Contents/Info.plist");
 
+    // Inspect/create each root component before stopping working jobs or writing
+    // any privileged file. Never repair ownership through an existing symlink.
+    for directory in [
+        "/Library/PrivilegedHelperTools",
+        BUNDLE_PATH,
+        &format!("{BUNDLE_PATH}/Contents"),
+        &macos_dir,
+        LOG_DIR,
+        "/Library/LaunchDaemons",
+    ] {
+        ppvpn_service::single_runtime::login::root_directory(Path::new(directory))?;
+    }
+    for file in [&info_plist, LAUNCHD_PLIST_PATH] {
+        match fs::symlink_metadata(file) {
+            Ok(m) => {
+                use std::os::unix::fs::MetadataExt;
+                anyhow::ensure!(
+                    m.is_file() && m.uid() == 0 && m.nlink() == 1,
+                    "INSTALL_PRIVILEGED_FILE_UNSAFE"
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    #[cfg(feature = "macos-user-runtime")]
+    ppvpn_service::single_runtime::login::stop_users()?;
     // Stop the running service first: on SIGTERM it shuts its TUN instance
     // down (routes, DNS) within ~10 s (ExitTimeOut is 30 s).
     stop_launchd_job()?;
@@ -281,8 +320,28 @@ fn main() -> Result<(), anyhow::Error> {
     // fail its code signature check and be SIGKILLed with its routes up. A
     // new inode leaves it untouched.
     fs::create_dir_all(&macos_dir).with_context(|| format!("mkdir {macos_dir}"))?;
-    replace_file(&src_bin, Path::new(&target_bin), 0o544, &check_service)?;
-    fs::write(&info_plist, INFO_PLIST).with_context(|| format!("write {info_plist}"))?;
+    let executable_mode = if cfg!(feature = "macos-user-runtime") {
+        0o555
+    } else {
+        0o544
+    };
+    replace_file(
+        &src_bin,
+        Path::new(&target_bin),
+        executable_mode,
+        &check_service,
+    )?;
+    if cfg!(feature = "macos-user-runtime") {
+        // This is an individually signed Mach-O, not a signed CFBundle. An
+        // unsigned generated Info.plist makes Security reinterpret it as a
+        // bundle whose resource seal is missing. Keep the immutable image's
+        // original standalone signing layout; do not weaken resource checks.
+        if Path::new(&info_plist).exists() {
+            fs::remove_file(&info_plist).context("remove legacy helper bundle metadata")?;
+        }
+    } else {
+        fs::write(&info_plist, INFO_PLIST).with_context(|| format!("write {info_plist}"))?;
+    }
 
     // The service's and the engine's logs (and launchd's stdout / stderr
     // files) live here, outside the helper bundle, so they survive
@@ -294,7 +353,7 @@ fn main() -> Result<(), anyhow::Error> {
     if let Some(parent) = Path::new(LAUNCHD_PLIST_PATH).parent() {
         fs::create_dir_all(parent).ok();
     }
-    fs::write(LAUNCHD_PLIST_PATH, LAUNCHD_PLIST)
+    fs::write(LAUNCHD_PLIST_PATH, launchd_plist())
         .with_context(|| format!("write {LAUNCHD_PLIST_PATH}"))?;
 
     // Permissions: launchd refuses to load plists that aren't root:wheel 0644,
@@ -303,7 +362,17 @@ fn main() -> Result<(), anyhow::Error> {
     run("chown", &["root:wheel", LAUNCHD_PLIST_PATH])?;
     run("chmod", &["-R", "755", BUNDLE_PATH])?;
     run("chown", &["-R", "root:wheel", BUNDLE_PATH])?;
-    run("chmod", &["544", &target_bin])?;
+    run(
+        "chmod",
+        &[
+            if cfg!(feature = "macos-user-runtime") {
+                "555"
+            } else {
+                "544"
+            },
+            &target_bin,
+        ],
+    )?;
 
     // Enable + load + start.
     run("launchctl", &["enable", &format!("system/{SERVICE_LABEL}")])?;
@@ -315,6 +384,8 @@ fn main() -> Result<(), anyhow::Error> {
         &["kickstart", "-k", &format!("system/{SERVICE_LABEL}")],
     )?;
 
+    #[cfg(feature = "macos-user-runtime")]
+    ppvpn_service::single_runtime::login::install()?;
     println!("installed {SERVICE_LABEL}");
     Ok(())
 }

@@ -19,6 +19,7 @@ mod detect;
 mod device;
 #[cfg(all(test, target_os = "linux", feature = "linux-e2e"))]
 mod e2e_linux;
+#[cfg(any(test, not(all(target_os = "macos", feature = "macos-user-runtime"))))]
 mod engine;
 mod enhanced;
 mod errors;
@@ -635,14 +636,34 @@ impl Client {
     ) -> Arc<Self> {
         logging::install(&config.log_dir, &config.app_version);
         tracing::info!(app_version = %config.app_version, api = %config.api_base, "client created");
+        let rule_set_hosts = core_ipc::rule_set_hosts(&config.api_base);
+        #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+        let service = Arc::new(
+            service::ServiceClient::for_user_runtime(
+                std::path::Path::new(&config.data_dir)
+                    .join("runtime.sock")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .with_rule_set_hosts(rule_set_hosts.clone()),
+        );
+        #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+        let launcher: Arc<dyn standard::CoreLauncher> = Arc::new(
+            user_runtime::RemoteLauncher::new(service.clone(), rule_set_hosts.clone()),
+        );
+        #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+        let service = Arc::new(user_runtime::CaptureService::new(service, rule_set_hosts));
+        #[cfg(not(all(target_os = "macos", feature = "macos-user-runtime")))]
+        let service =
+            Arc::new(service::ServiceClient::default().with_rule_set_hosts(rule_set_hosts));
+        #[cfg(not(all(target_os = "macos", feature = "macos-user-runtime")))]
         let launcher: Arc<dyn standard::CoreLauncher> =
             Arc::new(engine::EngineLauncher::new(&config));
-        let rule_set_hosts = core_ipc::rule_set_hosts(&config.api_base);
         Self::with_parts(
             config,
             platform,
             listener,
-            Arc::new(service::ServiceClient::default().with_rule_set_hosts(rule_set_hosts)),
+            service,
             launcher,
             sysproxy::platform_writer(),
         )
@@ -1150,3 +1171,17 @@ mod tests {
         );
     }
 }
+
+// Shared platform identity implementation; no duplicate signing policy.
+#[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+#[path = "../../service/src/mac_identity.rs"]
+mod mac_identity;
+#[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+#[path = "../../service/src/peer_identity.rs"]
+mod peer_identity;
+#[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+#[path = "../../service/src/single_runtime/mac_peer.rs"]
+mod user_runtime_peer;
+
+#[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+mod user_runtime;

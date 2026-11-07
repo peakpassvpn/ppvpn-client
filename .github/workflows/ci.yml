@@ -53,6 +53,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      macos_capture_artifact:
+        description: "Draft runtime-qa tag containing exact-source Developer ID signed native acceptance binaries"
+        type: string
+        default: ""
       runs:
         description: "windows: runs of the runtime's failure tests (twenty on the pull request that adds one)"
         type: number
@@ -63,7 +67,7 @@ permissions:
 
 # A pull request's newer push cancels its older run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name == 'workflow_dispatch' && inputs.macos_capture_artifact != '' && 'native-' || '' }}${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -79,6 +83,7 @@ env:
 
 jobs:
   lint:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -178,6 +183,7 @@ jobs:
   # and is a warning on the others, so that it shows without blocking
   # unrelated work. The binary is cargo-deny's release, checked by hash.
   advisories:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: advisories
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -211,6 +217,7 @@ jobs:
 
   # L1 on Linux.
   unit:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: unit
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -246,6 +253,7 @@ jobs:
   # keyring, in a D-Bus session of its own with an unlocked login keyring
   # (no desktop session).
   integration:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: integration
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -295,6 +303,7 @@ jobs:
   #                   the policy rules and routing table, traffic through the
   #                   node, the cleanup after a disconnect and after kill -9
   linux:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: linux
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -440,6 +449,7 @@ jobs:
   #   - Swift bindings, then the AppLogic tests of the macOS push agent (no
   #     AppKit), with the Swift it is developed with.
   desktop:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: desktop
     # Pinned to the image the Swift toolchain is built for (ubuntu24.04):
     # newer images ship libxml2 with a different soname and swift-test
@@ -549,6 +559,7 @@ jobs:
   # Not the native app's build (#459): the Flutter app replaced it, and the
   # upgrade from it is tested with its last release (0.6.4).
   macos:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: macos
     runs-on: macos-15
     timeout-minutes: 90
@@ -679,6 +690,7 @@ jobs:
   # Not the native app's build (#459, #522): the Flutter app replaced it,
   # and the upgrade from it is tested with its last release (0.6.4).
   windows:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: windows
     runs-on: windows-latest
     timeout-minutes: 90
@@ -800,6 +812,7 @@ jobs:
   # one per runner OS) is release.yml's cache-flutter-*: the codegen's cargo
   # expand, the release library and what the later steps build.
   flutter:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     name: flutter (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -1134,6 +1147,7 @@ jobs:
           if-no-files-found: ignore
 
   android:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     # The Flutter app's Android target (#448 step 3): the bridge and the
     # tunnel host for arm64 and x86_64 (the NDK's clang), the APK (signed
     # with the debug key until the Play upload key exists: the artifact
@@ -1273,6 +1287,7 @@ jobs:
           retention-days: 14
 
   ios:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     # The Flutter app's iOS target (#448): the bridge as a static library
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
@@ -1342,6 +1357,7 @@ jobs:
         run: apps/flutter/e2e/ios_smoke.sh
 
   tunnel:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     # The mobile tunnel host for the iOS packet tunnel extension (#448):
     # crates/tunnel-host/scripts/build-xcframework.sh, the device slice only
     # (a network extension never runs in the simulator; the full
@@ -1393,6 +1409,7 @@ jobs:
           retention-days: 14
 
   tunnel-android:
+    if: github.event_name != 'workflow_dispatch' || inputs.macos_capture_artifact == ''
     # The mobile tunnel host for Android's VpnService (#448):
     # crates/tunnel-host/scripts/build-android.sh, arm64-v8a only (the
     # emulator's x86_64 builds the same code), with clippy for Android: its
@@ -1438,3 +1455,37 @@ jobs:
           path: ${{ runner.temp }}/tunnel
           if-no-files-found: error
           retention-days: 14
+
+  macos-capture-acceptance:
+    # GitHub draft releases require push-level access even for download. This
+    # job only downloads; it contains no release/tag/publication mutation.
+    permissions:
+      contents: write
+    if: github.event_name == 'workflow_dispatch' && inputs.macos_capture_artifact != ''
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate read-only native signing command contract
+        run: python3 tools/desktop/check_macos_capture_script_test.py
+      - name: Download signed exact-source draft artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ARTIFACT_TAG: ${{ inputs.macos_capture_artifact }}
+        run: |
+          [[ "$ARTIFACT_TAG" =~ ^runtime-qa-[0-9a-f]{7,40}$ ]] || exit 2
+          mkdir -p "$RUNNER_TEMP/native-artifact"
+          gh release download "$ARTIFACT_TAG" --pattern native-acceptance.tar.gz --dir "$RUNNER_TEMP/native-artifact"
+          tar -xzf "$RUNNER_TEMP/native-artifact/native-acceptance.tar.gz" -C "$RUNNER_TEMP/native-artifact"
+      - name: Exercise actual broker utun routes DNS and held mixed streams
+        env:
+          PPVPN_CAPTURE_NODE: ${{ runner.temp }}/native-artifact/ppvpn-native-node
+        run: bash tools/desktop/macos-capture-acceptance.sh "$RUNNER_TEMP/native-artifact" "$RUNNER_TEMP/native-evidence"
+      - name: Upload native evidence, including failed probes and rollback
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-capture-acceptance
+          path: ${{ runner.temp }}/native-evidence
+          if-no-files-found: warn

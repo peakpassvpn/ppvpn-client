@@ -98,8 +98,12 @@ pub(crate) struct Launched {
 }
 
 /// Starts one core instance. The production implementation creates the
-/// engine ([`crate::engine::EngineLauncher`]); tests substitute a fake.
+/// engine (`engine::EngineLauncher`); tests substitute a fake.
 pub(crate) trait CoreLauncher: Send + Sync {
+    /// Explicit account/profile end, unlike presentation-client disconnect.
+    fn end_session(&self) -> BoxFuture<'_, Result<(), ClientErrorInfo>> {
+        Box::pin(async { Ok(()) })
+    }
     fn launch(&self) -> BoxFuture<'_, Result<Launched, ClientErrorInfo>>;
     fn network_changed(&self, _state: ppvpn_core::NetworkState) -> Result<(), ClientErrorInfo> {
         Ok(())
@@ -271,6 +275,12 @@ impl StandardCore {
         if was_running || !matches!(self.state(), StandardState::Stopped) {
             self.inner.publish(StandardState::Stopped);
         }
+    }
+
+    pub(crate) async fn end_session(&self) -> Result<(), ClientErrorInfo> {
+        let result = self.inner.launcher.end_session().await;
+        self.stop().await;
+        result
     }
 
     /// Non-blocking stop for app exit: asks the core to shut down. Does not
