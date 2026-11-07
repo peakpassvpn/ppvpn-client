@@ -41,7 +41,7 @@ Installation ownership contract for the packaging owner:
 | Location | Owner and permissions | Lifetime |
 | --- | --- | --- |
 | `/Applications/PPVPN.app` | root or the connecting user's uid; no world/group writable descendants | Existing drag-install/Sparkle ownership policy retained; release signature and exact process path required |
-| `/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle` | root; non-writable to users; executable 0544 | Immutable shared image for broker and per-user role; atomic replacement |
+| `/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle` | root; non-writable to users; executable 0555 (root-owned and executable by user agents) | Immutable shared image for broker and per-user role; atomic replacement |
 | `/Library/LaunchAgents/com.peakpassvpn.ppvpn.user-runtime.plist` | root 0644, root non-writable ancestors | Installer-managed global user job, removed on uninstall |
 | User `Library/Application Support/PPVPN` and `Library/Logs/PPVPN` | connecting uid 0700, canonical path, no symlink ancestors | Created by login role after self-validation; account data survives helper uninstall |
 | Root broker directory/journal/socket | root protected directory; authenticated socket admission | Independent root singleton, lease and crash recovery |
@@ -172,3 +172,29 @@ expiry, root/agent death, partial OS failures and restart journal recovery; DNS 
 rule/global encrypted-node paths; sleep/wake and physical moves; multi-user and
 replay/permission negatives; exact process/runtime count; then reproducible signed
 app/helper/DMG size comparison. The old two-runtime size PoC is not acceptance.
+
+
+## Exact-source isolated native harness
+
+`macos-capture-acceptance` enables an additional `--capture-acceptance` role and
+is rejected by `tools/release-features-check.sh`; shipping artifacts must not
+include it. It reuses EngineForwarder, the actual NativeHost and authenticated
+root broker in the exact installed immutable signed helper image. It refuses
+non-GitHub-hosted execution and requires a root-owned isolated-runner marker.
+The normal login job is stopped before this sole forwarding owner starts.
+
+The manual CI input `macos_capture_artifact` downloads an unpublished draft
+`runtime-qa-<sha>` artifact, verifies its source SHA, file hashes and actual Apple
+Developer ID signatures, and invokes `tools/desktop/macos-capture-acceptance.sh`.
+No signing requirement is weakened for CI. The script verifies the generated
+root/user job roles, then exercises ten real utun attach/detach cycles with held
+authenticated HTTP CONNECT, SOCKS TCP and SOCKS UDP. Ordinary OS UDP DNS requests
+to the tunnel DNS and ordinary OS HTTP requests to a public IP verify native
+capture ingress and physical egress. Signed broker replies report an empty real
+Sail registry; the forwarding process checks exactly one live runtime and stable
+owner/credentials. The script records route/DNS snapshots and uninstalls its own
+fresh installation on exit. It refuses a pre-existing installation.
+
+This harness does not establish GUI, encrypted-node/global policy, sleep/wake,
+physical move, multi-user, root crash or partial-failure acceptance. Its results
+must be reported separately from shipping-binary and full-App acceptance.

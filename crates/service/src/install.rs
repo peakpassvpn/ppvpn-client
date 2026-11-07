@@ -320,7 +320,17 @@ fn main() -> Result<(), anyhow::Error> {
     // fail its code signature check and be SIGKILLed with its routes up. A
     // new inode leaves it untouched.
     fs::create_dir_all(&macos_dir).with_context(|| format!("mkdir {macos_dir}"))?;
-    replace_file(&src_bin, Path::new(&target_bin), 0o544, &check_service)?;
+    let executable_mode = if cfg!(feature = "macos-user-runtime") {
+        0o555
+    } else {
+        0o544
+    };
+    replace_file(
+        &src_bin,
+        Path::new(&target_bin),
+        executable_mode,
+        &check_service,
+    )?;
     fs::write(&info_plist, INFO_PLIST).with_context(|| format!("write {info_plist}"))?;
 
     // The service's and the engine's logs (and launchd's stdout / stderr
@@ -342,7 +352,17 @@ fn main() -> Result<(), anyhow::Error> {
     run("chown", &["root:wheel", LAUNCHD_PLIST_PATH])?;
     run("chmod", &["-R", "755", BUNDLE_PATH])?;
     run("chown", &["-R", "root:wheel", BUNDLE_PATH])?;
-    run("chmod", &["544", &target_bin])?;
+    run(
+        "chmod",
+        &[
+            if cfg!(feature = "macos-user-runtime") {
+                "555"
+            } else {
+                "544"
+            },
+            &target_bin,
+        ],
+    )?;
 
     // Enable + load + start.
     run("launchctl", &["enable", &format!("system/{SERVICE_LABEL}")])?;
