@@ -5,6 +5,9 @@ on:
     paths: [.github/workflows/mobile-runtime-acceptance.yml]
   workflow_dispatch:
     inputs:
+      api_origin:
+        description: Explicit authorized HTTPS origin; empty uses repository configuration
+        required: false
       source_ref:
         description: Exact product source commit
         required: true
@@ -30,7 +33,7 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
     defaults:
       run:
         shell: bash
@@ -176,7 +179,7 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
     defaults:
       run:
         shell: bash

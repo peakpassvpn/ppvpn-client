@@ -4,6 +4,9 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      api_origin:
+        description: Explicit authorized HTTPS origin; empty uses repository configuration
+        required: false
       platform:
         description: Apple platform to build serially
         type: choice
@@ -44,7 +47,7 @@ jobs:
       REUSE_BASELINE_RUN: ${{ inputs.reuse_baseline_run }}
       BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
       PPVPN_BUILD_NUMBER: '344'
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
       PPVPN_APPLE_PUSH_ENABLED: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -172,7 +175,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: never
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
       PPVPN_BUILD_NUMBER: '344'
       PPVPN_APPLE_PUSH_ENABLED: '0'
       PPVPN_APPLE_TARGETS: aarch64-apple-darwin
