@@ -3498,7 +3498,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "sail"
 version = "0.22.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.22.0#7513c15139e3c8cddb59952d93a8f8b59ec934f1"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=593286824540aac651ac2f84c6e751fb0e70a4da#593286824540aac651ac2f84c6e751fb0e70a4da"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3588,7 +3588,7 @@ dependencies = [
 [[package]]
 name = "sail-netstack"
 version = "0.1.0"
-source = "git+https://github.com/peakpassvpn/sail.git?tag=v0.22.0#7513c15139e3c8cddb59952d93a8f8b59ec934f1"
+source = "git+https://github.com/peakpassvpn/sail.git?rev=593286824540aac651ac2f84c6e751fb0e70a4da#593286824540aac651ac2f84c6e751fb0e70a4da"
 dependencies = [
  "foldhash",
 ]

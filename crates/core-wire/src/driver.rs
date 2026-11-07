@@ -53,6 +53,15 @@ impl<D: CaptureDriver + ?Sized> CaptureController<D> {
     pub fn capabilities(&self) -> CaptureCapabilities {
         self.machine().capabilities().clone()
     }
+    /// A native attachment can fail asynchronously. Invalidate only a still
+    /// settled attachment, never a transaction currently preparing/detaching.
+    pub fn invalidate_attached(&self, leftovers: Vec<CaptureLeftover>) -> CaptureStatus {
+        let mut machine = self.machine();
+        if machine.status().phase == CapturePhase::Attached {
+            machine.require_recovery(leftovers);
+        }
+        machine.status().clone()
+    }
     pub async fn attach(
         self: &Arc<Self>,
         request: AttachCapture,
@@ -69,10 +78,43 @@ impl<D: CaptureDriver + ?Sized> CaptureController<D> {
     /// and wait for the accepted transaction to settle. This does not detach,
     /// stop the dispatcher or terminate mixed sessions. The owner shuts down
     /// afterward with its normal complete resource cleanup.
-    pub async fn quiesce(&self) -> CaptureStatus {
+    pub fn close_admission(&self) {
         self.closing.store(true, Ordering::SeqCst);
+    }
+    pub async fn quiesce(&self) -> CaptureStatus {
+        self.close_admission();
         let _operation = self.operation.lock().await;
         self.status()
+    }
+    /// Explicit forwarding shutdown: close admission, settle prior work, then
+    /// detach the exact active lease. Never stop the forwarding runtime here.
+    pub async fn detach_for_shutdown(self: &Arc<Self>) -> Result<CaptureStatus, CaptureError> {
+        self.close_admission();
+        let (reply, result) = tokio::sync::oneshot::channel();
+        let owner = self.clone();
+        tokio::spawn(async move {
+            let _operation = owner.operation.lock().await;
+            let status = owner.status();
+            let settled = if status.phase == CapturePhase::Detached {
+                Ok(status)
+            } else if let Some(lease) = status.lease {
+                std::panic::AssertUnwindSafe(owner.execute(Request::Detach(DetachCapture {
+                    protocol_version: CAPTURE_PROTOCOL_VERSION,
+                    expected_epoch: status.epoch,
+                    lease,
+                })))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| Err(owner.uncertain()))
+            } else {
+                Err(CaptureError {
+                    code: CaptureErrorCode::CaptureRecoveryRequired,
+                    status: Box::new(owner.status()),
+                })
+            };
+            let _ = reply.send(settled);
+        });
+        result.await.unwrap_or_else(|_| Err(self.uncertain()))
     }
     fn stopping(&self) -> CaptureError {
         CaptureError {

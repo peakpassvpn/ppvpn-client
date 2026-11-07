@@ -9,7 +9,7 @@ use crate::error::codes;
 use crate::event::Event;
 use crate::profile::Node;
 use crate::translate::SELECTED_TAG;
-use crate::types::{IngressInfo, NodeInfo};
+use crate::types::NodeInfo;
 
 impl Inner {
     pub(super) async fn select_node(&self, node_id: &str) -> Result<(), Error> {
@@ -131,29 +131,5 @@ fn node_not_found() -> Error {
 
 /// A node as `list-nodes` shows it: no credentials, no addresses.
 pub(super) fn node_info(node: &Node) -> NodeInfo {
-    NodeInfo {
-        id: node.id.clone(),
-        name: node.name.clone(),
-        entry_key: node.entry_key.clone(),
-        entry_label: node.entry_label.clone(),
-        protocol: node
-            .ingresses
-            .first()
-            .map(|i| i.protocol.clone())
-            .unwrap_or_default(),
-        region: node.exit.region.clone(),
-        tcp: node.capabilities.tcp,
-        udp: node.capabilities.udp,
-        ingresses: node
-            .ingresses
-            .iter()
-            .map(|i| IngressInfo {
-                endpoint_key: i.endpoint_key.clone(),
-                label: i.label.clone().unwrap_or_default(),
-                replica_ordinal: i.replica_ordinal,
-                role: i.role.clone(),
-                protocol: i.protocol.clone(),
-            })
-            .collect(),
-    }
+    crate::control::node_info(node)
 }

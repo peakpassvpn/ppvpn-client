@@ -241,3 +241,71 @@ async fn a_tun_instance_does_not_probe_availability() {
     let err = engine.probe_availability(request).await.unwrap_err();
     assert_eq!(err.code, codes::LOCAL_PROXY_DISABLED);
 }
+
+#[tokio::test]
+async fn mobile_vpn_owner_probes_availability_without_a_mixed_listener() {
+    for platform in [Platform::Ios, Platform::Android] {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(FakeRuntime::default());
+        let engine = Engine::with_runtime(
+            EngineConfig::new(Role::Tun, platform, dir.path()),
+            fake.clone(),
+        );
+        let request = ProbeAvailabilityRequest::new(NODE_1, "http://example.com/", 1000);
+        assert_eq!(
+            engine
+                .probe_availability(request.clone())
+                .await
+                .unwrap_err()
+                .code,
+            codes::PROFILE_NOT_APPLIED
+        );
+        engine.apply(ApplyRequest::new(profile(R1))).await.unwrap();
+        assert_eq!(
+            engine
+                .probe_availability(request.clone())
+                .await
+                .unwrap_err()
+                .code,
+            codes::CORE_NOT_RUNNING
+        );
+        engine.start().await.unwrap();
+        fake.route_tcp_to(no_content().await);
+        let observed = engine.runtime_observation();
+        let result = engine.probe_availability(request.clone()).await.unwrap();
+        assert!(result.success, "{platform:?}: {result:?}");
+        assert_eq!(engine.runtime_observation(), observed);
+        assert_eq!(
+            fake.calls()
+                .iter()
+                .filter(|c| matches!(c, Call::Start(_)))
+                .count(),
+            1
+        );
+        let config: serde_json::Value = serde_json::from_str(
+            fake.calls()
+                .iter()
+                .find_map(|c| match c {
+                    Call::Start(json) => Some(json),
+                    _ => None,
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(config["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["type"] != "mixed"));
+        assert_eq!(
+            engine.local_proxy_metadata().unwrap_err().code,
+            codes::LOCAL_PROXY_DISABLED
+        );
+        engine.stop().await.unwrap();
+        assert_eq!(
+            engine.probe_availability(request).await.unwrap_err().code,
+            codes::CORE_NOT_RUNNING
+        );
+        engine.shutdown().await.unwrap();
+    }
+}

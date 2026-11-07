@@ -562,9 +562,12 @@ async fn a_failed_connection_is_told() {
         .await
         .expect("a failure in time")
         .unwrap();
-    assert_eq!(
-        (failed.stage.as_str(), failed.error.as_str()),
-        ("dial", "ConnectionRefused"),
+    assert_eq!(failed.stage, "dial", "{failed:?}");
+    // Darwin can silently drop SYNs to a bound-but-not-listening port.
+    // Keep the failure/event contract without assuming it must emit a RST.
+    assert!(
+        failed.error == "ConnectionRefused"
+            || (cfg!(target_vendor = "apple") && failed.error == "TimedOut"),
         "{failed:?}"
     );
     // The route's outbound, then the member the selector took (2eb3fe47);
@@ -1507,3 +1510,37 @@ async fn a_connection_after_a_download_cut_short_on_a_slow_link_goes_through() {
     client.stop().await.unwrap();
     node.stop().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observation_reads_native_registry_and_successful_start_generation() {
+    let runtime = SailRuntime::new(options("runtime-observation")).unwrap();
+    let idle = runtime.observation();
+    let id = idle.native_runtime_id.unwrap();
+    assert!(!idle.running);
+    assert_eq!(idle.owner.generation, 0);
+    assert!(!idle.active_runtime_ids.unwrap().contains(&id));
+    let cfg = config(free_port(), &[("observe", &password())], false);
+    runtime.start(&cfg).await.unwrap();
+    let first = runtime.observation();
+    assert!(first.running);
+    assert_eq!(first.owner.generation, 1);
+    assert!(first.active_runtime_ids.as_ref().unwrap().contains(&id));
+    runtime.reload(&cfg).await.unwrap();
+    let reloaded = runtime.observation();
+    assert_eq!(reloaded.owner, first.owner);
+    assert_eq!(reloaded.native_runtime_id, first.native_runtime_id);
+    runtime.stop().await.unwrap();
+    let stopped = runtime.observation();
+    assert!(!stopped.running);
+    assert!(!stopped.active_runtime_ids.unwrap().contains(&id));
+    runtime.start(&cfg).await.unwrap();
+    let next = runtime.observation();
+    assert!(next.running);
+    assert_eq!(next.owner.instance, first.owner.instance);
+    assert_eq!(next.owner.generation, 2);
+    assert_eq!(next.native_runtime_id, Some(id));
+    runtime.stop().await.unwrap();
+}
+
+#[path = "sail_capture_tests.rs"]
+mod capture_tests;

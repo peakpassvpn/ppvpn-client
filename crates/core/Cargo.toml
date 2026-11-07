@@ -16,7 +16,7 @@ ppvpn-core-wire = { path = "../core-wire" }
 base64.workspace = true
 chrono.workspace = true
 idna.workspace = true
-sail.workspace = true
+sail = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
@@ -25,18 +25,18 @@ async-trait = "0.1"
 bytes = "1"
 futures-util = "0.3"
 getrandom = "0.4"
-hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
+hickory-proto = { optional = true, version = "0.26.1", default-features = false, features = ["std"] }
 # Rule set downloads (HTTP/1.1 on sail's TLS), the availability probe's
 # HTTP/2 (#342), and reading .srs files. h2 is the version sail builds; the
 # probe reads its errors.
-h2 = "0.4"
-http-body-util = "0.1"
-hyper = { version = "1", default-features = false, features = ["client", "http1", "http2"] }
-hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
-miniz_oxide = "0.8"
+h2 = { version = "0.4", optional = true }
+http-body-util = { version = "0.1", optional = true }
+hyper = { optional = true, version = "1", default-features = false, features = ["client", "http1", "http2"] }
+hyper-util = { optional = true, version = "0.1", default-features = false, features = ["tokio"] }
+miniz_oxide = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+tracing-subscriber = { optional = true, version = "0.3", default-features = false, features = ["registry", "std"] }
 url = "2"
 
 # Unprivileged ICMP for entrance probes (src/probe/icmp.rs).
@@ -59,21 +59,27 @@ windows-sys = { version = "0.61", features = [
 # The TUN routing guard (tunrules): crates sail already builds on Linux
 # (tun-rs's netconfig-rs), at the versions Cargo.lock has.
 [target.'cfg(target_os = "linux")'.dependencies]
-netlink-packet-core = "0.9"
-netlink-packet-route = "0.33"
-netlink-sys = "0.8"
+netlink-packet-core = { version = "0.9", optional = true }
+netlink-packet-route = { version = "0.33", optional = true }
+netlink-sys = { version = "0.8", optional = true }
 
 [features]
+# App-side profile/selection/entrance probes can be built without a forwarding
+# engine. Extension and desktop hosts keep the default feature.
+default = ["forwarder"]
+forwarder = ["ppvpn-core-wire/driver", "dep:sail", "dep:hickory-proto", "dep:h2", "dep:http-body-util",
+    "dep:hyper", "dep:hyper-util", "dep:miniz_oxide", "dep:tracing-subscriber",
+    "dep:netlink-packet-core", "dep:netlink-packet-route", "dep:netlink-sys"]
 # ppvpn-core-lab only: test hooks (dns-local's PPVPN_LOCALDNS_TEST_FILE,
 # ne-mem's PPVPN_LAB_SAIL_SETTINGS).
-lab = []
+lab = ["forwarder"]
 # Test support for tests/ (the in-memory runtime behind internal): turned on
 # by the dev-dependency on this crate below, so never in a host's build.
-testing = []
+testing = ["forwarder"]
 # sail's fault points (sail::fault), for the netns tests that make an
 # instance fail on purpose: only ci.yml's L3 test builds turn it on, never
 # a release (sail's CI refuses a release that names it).
-fault-injection = ["sail/fault-injection"]
+fault-injection = ["forwarder", "sail/fault-injection"]
 
 [dev-dependencies]
 # Exercise the optional capture coordinator in the default unit-test graph.
