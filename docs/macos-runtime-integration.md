@@ -106,7 +106,11 @@ Expired owners cannot revive the lease. Failed cleanup quarantines the slot.
 Root checks the live audit-token process independently. Signed UI lease renewal
 is separate: 45 seconds without UI capture renewal detaches capture in the agent,
 while mixed forwarding remains live. A root lease loss is reconciled through
-native detach, not a forwarding stop.
+native detach, not a forwarding stop. While root is restarting, the monitor
+waits for its authenticated signed readiness response before beginning a core
+detach; root completes journal recovery before accepting this probe. A missing
+channel cannot be treated as OS cleanup success, and readiness never renews a
+lease. Real partial cleanup errors remain quarantined/RecoveryRequired.
 
 The broker configures only the shipped core addresses/MTU, a fresh utun, IPv4 /1
 routes and requested IPv6 /1 routes. It never replaces a real default route or a

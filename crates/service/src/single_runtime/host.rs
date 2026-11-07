@@ -151,6 +151,28 @@ pub struct Host {
     active: parking_lot::Mutex<Vec<Weak<Attachment>>>,
 }
 impl Host {
+    /// A stopped/restarting root broker cannot settle an OS detach yet. Do not
+    /// start a core transaction that is certain to enter RecoveryRequired while
+    /// that channel is absent. Only an authenticated signed response is ready;
+    /// root startup journal recovery runs before accepting this request.
+    pub async fn reconciliation_ready(&self) -> bool {
+        let grants: Vec<_> = self
+            .active
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(|a| a.grant.clone())
+            .collect();
+        for grant in grants {
+            if !matches!(
+                tokio::task::spawn_blocking(move || Client.call("probe", &grant, false)).await,
+                Ok(Ok(_))
+            ) {
+                return false;
+            }
+        }
+        true
+    }
     pub fn lease_lost(&self) -> bool {
         let mut active = self.active.lock();
         active.retain(|w| w.strong_count() > 0);

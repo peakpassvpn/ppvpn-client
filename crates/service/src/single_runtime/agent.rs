@@ -58,7 +58,8 @@ pub fn run(dir: &Path, log_dir: &Path) -> Result<()> {
                 let current = tokio::task::spawn_blocking(super::native::physical).await
                     .ok().and_then(Result::ok).unwrap_or_else(ppvpn_core::NetworkState::offline);
                 if current != previous && monitor_backend.network(current.clone()).is_ok() { previous = current; }
-                if capture_host.lease_lost() || monitor_backend.capture_expired() {
+                if (capture_host.lease_lost() || monitor_backend.capture_expired())
+                    && capture_host.reconciliation_ready().await {
                     let _ = monitor_backend.reconcile_lost_capture().await;
                 }
             }
