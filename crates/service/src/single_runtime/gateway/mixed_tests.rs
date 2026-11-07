@@ -328,8 +328,12 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
             let detached=backend.call("/v1/detach-capture",json!({"protocol_version":1,"expected_epoch":attached["epoch"],"lease":attached["lease"]})).await.unwrap();
             assert_eq!(detached["phase"],"detached");epoch=detached["epoch"].as_u64().unwrap();
             if native { println!("{}",json!({"probe":"detached","cycle":sequence,"owner":identity,"runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids()})); }
-            echo(&mut http,sequence+100).await;echo(&mut socks,sequence+100).await;
+            if native {eprintln!("native-held stage=detached-http cycle={sequence}");}
+            echo(&mut http,sequence+100).await;
+            if native {eprintln!("native-held stage=detached-socks cycle={sequence}");}
+            echo(&mut socks,sequence+100).await;
             if let Some((stream,node_credential))=&mut per_node {
+                if native {eprintln!("native-held stage=detached-per-node cycle={sequence}");}
                 echo(stream,sequence+3000).await;
                 let after=backend.call("/v1/get-local-proxy-credential",json!({"node_id":node_id})).await.unwrap();assert_eq!(*node_credential,after);
                 let counts=node_fixture.as_ref().unwrap().counters().await;assert_eq!(counts["upstream_connections"],1);assert_eq!(counts["sink_accepts"],1);
