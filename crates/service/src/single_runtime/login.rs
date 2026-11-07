@@ -107,16 +107,14 @@ fn users() -> std::collections::BTreeSet<u32> {
             .with_cmd(sysinfo::UpdateKind::Always),
     );
     for process in system.processes().values() {
-        if process.exe() == Some(Path::new(super::broker::IMAGE))
-            && process.cmd().iter().any(|a| a == "--user-runtime-login")
+        // Dormant LaunchAgent jobs still belong to a GUI user with other
+        // processes. Include all process owners, then query exact job labels.
+        if let Some(uid) = process
+            .user_id()
+            .and_then(|u| u.to_string().parse::<u32>().ok())
+            .filter(|u| *u != 0)
         {
-            if let Some(uid) = process
-                .user_id()
-                .and_then(|u| u.to_string().parse::<u32>().ok())
-                .filter(|u| *u != 0)
-            {
-                users.insert(uid);
-            }
+            users.insert(uid);
         }
     }
     users
@@ -133,15 +131,49 @@ fn launchctl(args: &[&str]) -> Result<bool> {
     };
     Ok(child.wait()?.success())
 }
+fn user_helpers_running() -> bool {
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::new()
+            .with_user(sysinfo::UpdateKind::Always)
+            .with_exe(sysinfo::UpdateKind::Always),
+    );
+    system.processes().values().any(|process| {
+        process.exe() == Some(Path::new(super::broker::IMAGE))
+            && process.user_id().is_some_and(|uid| uid.to_string() != "0")
+    })
+}
 pub fn stop_users() -> Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         bail!("USER_RUNTIME_INSTALL_ROOT_REQUIRED");
+    }
+    // Prevent newly created GUI domains from loading the global job while
+    // the helper inode is replaced. Already loaded jobs are booted out below.
+    root_directory(Path::new(PLIST_PATH).parent().unwrap())?;
+    match std::fs::symlink_metadata(PLIST_PATH) {
+        Ok(m) if m.is_file() && m.uid() == 0 && m.nlink() == 1 => {
+            std::fs::remove_file(PLIST_PATH)?;
+        }
+        Ok(_) => bail!("USER_RUNTIME_LAUNCH_PLIST_UNSAFE"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e.into()),
     }
     for uid in users() {
         let job = format!("gui/{uid}/{LABEL}");
         if launchctl(&["print", &job])? && !launchctl(&["bootout", &job])? {
             bail!("USER_RUNTIME_BOOTOUT_FAILED");
         }
+    }
+    // launchctl bootout can return before ordered core/resource shutdown ends.
+    // Preserve the installed image on timeout; never kill an active core.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    while user_helpers_running() {
+        if std::time::Instant::now() >= deadline {
+            bail!("USER_RUNTIME_STILL_RUNNING");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     Ok(())
 }
