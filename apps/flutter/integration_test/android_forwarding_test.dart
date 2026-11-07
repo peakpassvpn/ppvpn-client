@@ -144,27 +144,9 @@ void main() {
                         (traffic['download_bytes'] as int) >
                             (baseline['download_bytes'] as int);
                   });
-                  final connections =
-                      await _rpc('/v1/get-connections') as List<dynamic>;
-                  expect(
-                    connections,
-                    contains(
-                      predicate(
-                        (dynamic value) =>
-                            value['network'] == 'tcp' &&
-                            value['node_id'] == 'android-node',
-                      ),
-                    ),
-                  );
-                  expect(
-                    connections,
-                    contains(
-                      predicate(
-                        (dynamic value) =>
-                            value['network'] == 'udp' &&
-                            value['node_id'] == 'android-node',
-                      ),
-                    ),
+                  final connections = await _witnessConnections(
+                    () async =>
+                        await _rpc('/v1/get-connections') as List<dynamic>,
                   );
                   final after = await _rpc('/v1/get-runtime-observation');
                   expect(after['owner'], before['owner']);
@@ -185,6 +167,7 @@ void main() {
                     'reported_vm_uri': vmHint,
                     'observation': after,
                     'traffic': await _rpc('/v1/get-traffic'),
+                    'connections': connections,
                   });
                 },
               );
@@ -347,6 +330,48 @@ Future<void> _notProxy(int port) async {
       code >= 200 && code < 300 || code == 407,
       isFalse,
       reason: 'Device VM exception must not serve HTTP CONNECT/proxy auth',
+    );
+  }
+}
+
+Future<List<dynamic>> _witnessConnections(
+  Future<List<dynamic>> Function() read,
+) async {
+  // Engine.connections is a once-per-second cached snapshot (engine/reads.rs).
+  // Global counters may already advance on unrelated Android system traffic.
+  // Keep both witness sockets open and wait for their exact routed rows;
+  // polling this read never retransmits data or reconnects a failed flow.
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  bool witness(dynamic value, String network, int port) =>
+      value is Map &&
+      value['network'] == network &&
+      value['node_id'] == 'android-node' &&
+      value['destination'] == '$_target:$port' &&
+      value['upload_bytes'] is num &&
+      value['upload_bytes'] > 0 &&
+      value['download_bytes'] is num &&
+      value['download_bytes'] > 0;
+  List<dynamic> connections = [];
+  Never expired() =>
+      fail('No sampled bidirectional TCP/UDP witness within 5s: $connections');
+  while (true) {
+    final remaining = deadline.difference(DateTime.now());
+    if (remaining <= Duration.zero) expired();
+    try {
+      connections = await read().timeout(remaining);
+    } on TimeoutException {
+      expired();
+    }
+    if (connections.any((c) => witness(c, 'tcp', 18081)) &&
+        connections.any((c) => witness(c, 'udp', 18082))) {
+      return connections;
+    }
+    final pause = deadline.difference(DateTime.now());
+    if (pause <= Duration.zero) expired();
+    await Future<void>.delayed(
+      pause < const Duration(milliseconds: 100)
+          ? pause
+          : const Duration(milliseconds: 100),
     );
   }
 }
