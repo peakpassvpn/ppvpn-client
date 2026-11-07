@@ -286,7 +286,18 @@ impl CaptureHostApi for Host {
 impl Attachment {
     async fn operation(&self, path: &'static str) -> CaptureHostResult<()> {
         let grant = self.grant.clone();
-        match tokio::task::spawn_blocking(move || Client.call(path, &grant, false)).await {
+        let started = std::time::Instant::now();
+        let stage = match path {
+            "attach" => "host-attach",
+            "detach" => "host-detach",
+            "restore" => "host-rollback-detach",
+            "release" => "host-release",
+            _ => "host-other",
+        };
+        native::trace_phase(stage);
+        let outcome = tokio::task::spawn_blocking(move || Client.call(path, &grant, false)).await;
+        native::trace_operation(stage, started.elapsed(), matches!(&outcome, Ok(Ok(_))));
+        match outcome {
             Ok(Ok(_)) => Ok(()),
             outcome => {
                 if let Ok(Err(error)) = outcome {
