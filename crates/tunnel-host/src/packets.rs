@@ -7,13 +7,14 @@ use std::ffi::{c_char, c_void, CString};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
 use tokio::sync::{mpsc, watch};
 
 type Settings = extern "C" fn(*mut c_void, u64, *const c_char) -> i32;
 struct Channels {
     generation: u64,
+    owner: Arc<SettingsCallbacks>,
     input: mpsc::Sender<Vec<u8>>,
     output: std::sync::mpsc::Receiver<Vec<u8>>,
     end: watch::Sender<bool>,
@@ -46,6 +47,52 @@ pub(crate) fn receive(generation: u64, bytes: &mut [u8]) -> usize {
 struct Provider {
     settings: Settings,
     context: usize,
+    callbacks: Arc<SettingsCallbacks>,
+}
+/// A ticket is reserved before spawn_blocking, so stop also drains callbacks
+/// still queued in Tokio. This fences the same C context as the exit callback.
+#[derive(Default)]
+struct SettingsCallbacks {
+    state: Mutex<(bool, usize)>,
+    done: Condvar,
+}
+struct SettingsCall(Arc<SettingsCallbacks>);
+impl SettingsCallbacks {
+    fn enter(self: &Arc<Self>) -> Option<SettingsCall> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.0 {
+            return None;
+        }
+        state.1 += 1;
+        Some(SettingsCall(self.clone()))
+    }
+    fn close_and_wait(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.0 = true;
+        self.done.notify_all();
+        while state.1 != 0 {
+            state = self.done.wait(state).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+}
+impl Drop for SettingsCall {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.1 -= 1;
+        self.0.done.notify_all();
+    }
+}
+
+fn clear_callbacks(callbacks: &Arc<SettingsCallbacks>) {
+    let mut slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
+    if slot
+        .as_ref()
+        .is_some_and(|c| Arc::ptr_eq(&c.owner, callbacks))
+    {
+        if let Some(channels) = slot.take() {
+            let _ = channels.end.send(true);
+        }
+    }
 }
 struct Attachment {
     provider: Provider,
@@ -63,9 +110,15 @@ impl Attachment {
         let provider = self.provider.clone();
         let generation = self.generation;
         let settings = attached.then(|| self.settings.clone());
+        let call = self
+            .provider
+            .callbacks
+            .enter()
+            .ok_or_else(|| dirty(generation))?;
         // Native uses its own serial packet queue. Never block a runtime worker
         // waiting for NetworkExtension's asynchronous settings completion.
         tokio::task::spawn_blocking(move || {
+            let _call = call;
             let json = settings.map(|s| CString::new(s).unwrap());
             let result = (provider.settings)(
                 provider.context as *mut c_void,
@@ -136,16 +189,30 @@ impl CaptureAttachment for Attachment {
         let (output, down) = std::sync::mpsc::sync_channel(64);
         let (end, mut stopped) = watch::channel(false);
         let mut stopped_down = stopped.clone();
+        // Match close -> clear ordering: a timed-out old operation may not
+        // publish its transport after its host/context has been released.
+        let callbacks = self
+            .provider
+            .callbacks
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if callbacks.0 {
+            return Err(dirty(self.generation));
+        }
         let mut slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
         if slot.is_some() {
             return Err(dirty(self.generation));
         }
         *slot = Some(Channels {
             generation: self.generation,
+            owner: self.provider.callbacks.clone(),
             input,
             output: down,
             end,
         });
+        drop(slot);
+        drop(callbacks);
         tokio::spawn(async move {
             loop {
                 tokio::select! { biased;
@@ -199,17 +266,48 @@ pub(crate) fn start(
     exit: Option<extern "C" fn(*mut c_void, *const c_char)>,
     context: *mut c_void,
 ) -> Result<(), ApiError> {
+    start_with_callbacks(
+        socket,
+        state,
+        settings,
+        exit,
+        context,
+        Arc::new(SettingsCallbacks::default()),
+    )
+}
+fn start_with_callbacks(
+    socket: &Path,
+    state: &Path,
+    settings: Settings,
+    exit: Option<extern "C" fn(*mut c_void, *const c_char)>,
+    context: *mut c_void,
+    callbacks: Arc<SettingsCallbacks>,
+) -> Result<(), ApiError> {
     let provider = Provider {
         settings,
         context: context as usize,
+        callbacks,
     };
+    let callbacks = provider.callbacks.clone();
+    let address = context as usize;
+    let callback = crate::host::ExitCallback::from_fn_and_drain(
+        move |reason| {
+            if let Some(exit) = exit {
+                exit(address as *mut c_void, reason.as_ptr());
+            }
+        },
+        move || {
+            callbacks.close_and_wait();
+            clear_callbacks(&callbacks);
+        },
+    );
     crate::host::start_with(
         -1,
         socket,
         state,
         Platform::Ios,
         Default::default(),
-        exit.map(|f| crate::host::ExitCallback::new(f, context)),
+        Some(callback),
         |mut config| {
             config.tun = None;
             config.with_capture_host(CaptureHost::new(Arc::new(provider)))
@@ -251,6 +349,7 @@ mod tests {
         let (end, _) = watch::channel(false);
         *CHANNELS.lock().unwrap() = Some(Channels {
             generation: 123,
+            owner: Arc::new(SettingsCallbacks::default()),
             input,
             output: down,
             end,
@@ -319,6 +418,7 @@ mod tests {
                     .with_capture_host(CaptureHost::new(Arc::new(Provider {
                         settings: accept,
                         context: 0,
+                        callbacks: Arc::new(SettingsCallbacks::default()),
                     }))),
             )
             .await
@@ -404,6 +504,81 @@ mod tests {
             std::fs::remove_dir_all(&dir).unwrap();
         });
     }
+    #[test]
+    fn host_stop_drains_queued_packet_callbacks_even_without_an_exit_notification() {
+        let _serial = crate::host::test_lock();
+        let callbacks = Arc::new(SettingsCallbacks::default());
+        let queued = callbacks.enter().unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("ppvpn-packet-callback-stop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        start_with_callbacks(
+            &dir.join("tunnel.sock"),
+            &dir.join("state"),
+            refuse,
+            None,
+            std::ptr::null_mut(),
+            callbacks.clone(),
+        )
+        .unwrap();
+        let (input, _) = mpsc::channel(1);
+        let (_, output) = std::sync::mpsc::sync_channel(1);
+        let (end, _) = watch::channel(false);
+        *CHANNELS.lock().unwrap() = Some(Channels {
+            generation: 987,
+            owner: callbacks.clone(),
+            input,
+            output,
+            end,
+        });
+        let (done, finished) = std::sync::mpsc::channel();
+        let stop = std::thread::spawn(move || {
+            crate::host::stop();
+            done.send(()).unwrap();
+        });
+        {
+            let mut state = callbacks.state.lock().unwrap();
+            while !state.0 {
+                let (next, timeout) = callbacks
+                    .done
+                    .wait_timeout(state, std::time::Duration::from_secs(5))
+                    .unwrap();
+                assert!(!timeout.timed_out());
+                state = next;
+            }
+        }
+        assert!(
+            callbacks.enter().is_none(),
+            "stop must close callback admission"
+        );
+        assert!(
+            finished.try_recv().is_err(),
+            "queued work still owns the native context"
+        );
+        let refused = start(
+            &dir.join("new.sock"),
+            &dir.join("new-state"),
+            refuse,
+            None,
+            std::ptr::null_mut(),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, "TUNNEL_ALREADY_RUNNING");
+        drop(queued);
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        stop.join().unwrap();
+        assert!(
+            CHANNELS.lock().unwrap().is_none(),
+            "old packet queues must be discarded"
+        );
+        assert!(
+            callbacks.enter().is_none(),
+            "no callback may enter after stop"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     extern "C" fn refuse(_: *mut c_void, _: u64, _: *const c_char) -> i32 {
         0
     }
@@ -413,6 +588,7 @@ mod tests {
             provider: Provider {
                 settings: refuse,
                 context: 0,
+                callbacks: Arc::new(SettingsCallbacks::default()),
             },
             generation: 234,
             settings: "{}".into(),
