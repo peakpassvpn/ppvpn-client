@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,9 +15,11 @@ void main() {
   setUp(() {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     calls.clear();
+    authenticationPresentationActive.value = false;
   });
   tearDown(() {
     debugDefaultTargetPlatformOverride = null;
+    authenticationPresentationActive.value = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
   });
@@ -44,6 +48,30 @@ void main() {
           throw PlatformException(code: 'authentication-unavailable');
         });
     expect(await openAuthenticationUrl(url), isFalse);
+    expect(authenticationPresentationActive.value, false);
     expect(calls.map((call) => call.method), ['openAuthenticationUrl']);
   });
+
+  test(
+    'authentication presentation stays active until native close acknowledges',
+    () async {
+      final closed = Completer<void>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'closeBrowser') {
+              await closed.future;
+              return null;
+            }
+            return true;
+          });
+      expect(await openAuthenticationUrl(url), true);
+      expect(authenticationPresentationActive.value, true);
+      final close = closeBrowser();
+      await Future<void>.delayed(Duration.zero);
+      expect(authenticationPresentationActive.value, true);
+      closed.complete();
+      await close;
+      expect(authenticationPresentationActive.value, false);
+    },
+  );
 }

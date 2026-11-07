@@ -1,6 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
+
+bool _foreground() =>
+    WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
 
 /// The authenticated transport returns true only after the server commits the
 /// exact owner/token registration. The backend contract is supplied separately;
@@ -20,8 +24,10 @@ class ApplePush {
     this.unregister,
     this.ownerChanged,
     this.channel = const MethodChannel('com.peakpassvpn.ppvpn/apple-push'),
+    this.isForeground = _foreground,
   });
   final MethodChannel channel;
+  final bool Function() isForeground;
   final ApplePushNotice notice;
   final ApplePushEffect? register;
   final ApplePushEffect? unregister;
@@ -31,6 +37,8 @@ class ApplePush {
   String? _account;
   String? _lastState;
   bool _disposed = false;
+  int? _permissionReadyEpoch;
+  int? _permissionRequestedEpoch;
 
   void start() => channel.setMethodCallHandler(_handle);
 
@@ -122,11 +130,47 @@ class ApplePush {
                       epoch == _ownerEpoch &&
                       args['accountID'] == _account)),
         );
+        if (committed &&
+            !remove &&
+            !_disposed &&
+            epoch == _ownerEpoch &&
+            args['accountID'] == _account) {
+          _permissionReadyEpoch = epoch;
+          // Do not hold backend ACK or the serialized logout/drain behind an
+          // OS consent request. Every async boundary rechecks the live owner.
+          unawaited(_requestPermission(epoch));
+        }
       } catch (_) {
         result.complete(false);
       }
     });
     return result.future;
+  }
+
+  Future<void> _requestPermission(int epoch, {bool configured = false}) async {
+    bool current() =>
+        !_disposed &&
+        _account != null &&
+        epoch == _ownerEpoch &&
+        _permissionReadyEpoch == epoch &&
+        _permissionRequestedEpoch != epoch &&
+        isForeground();
+    if (!current()) return;
+    try {
+      if (!configured && await channel.invokeMethod<bool>('configured') != true)
+        return;
+      if (!current()) return;
+      _permissionRequestedEpoch = epoch;
+      final handled = await channel.invokeMethod<bool>('permission', {
+        'clientEpoch': epoch.toString(),
+      });
+      if (handled != true && _permissionRequestedEpoch == epoch)
+        _permissionRequestedEpoch = null;
+    } on MissingPluginException {
+      // The scoped backend registration remains committed independently.
+    } on PlatformException {
+      // Native safe diagnostics own error/status readback; never log details.
+    }
   }
 
   Future<void> retry() async {
@@ -143,6 +187,7 @@ class ApplePush {
     try {
       if (await channel.invokeMethod<bool>('configured') != true) return false;
       await retry();
+      unawaited(_requestPermission(_ownerEpoch, configured: true));
       return true;
     } on MissingPluginException {
       return false;

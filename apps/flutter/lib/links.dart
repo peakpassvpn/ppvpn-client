@@ -11,6 +11,9 @@ import 'mobile.dart';
 import 'src/rust/api.dart' as rust;
 
 const _app = MethodChannel('com.peakpassvpn.ppvpn/app');
+// Session presentation can remain on top while UIKit reports the app active.
+// Permission intent must wait for the normal close acknowledgement as well.
+final authenticationPresentationActive = ValueNotifier<bool>(false);
 
 /// Opens [url]; false when nothing could show it.
 Future<bool> openUrl(String url) async {
@@ -28,9 +31,14 @@ Future<bool> openUrl(String url) async {
 /// their normal browsing session. Android keeps its Custom Tab flow.
 Future<bool> openAuthenticationUrl(String url) async {
   if (defaultTargetPlatform != TargetPlatform.iOS) return openUrl(url);
+  authenticationPresentationActive.value = true;
   try {
-    return await _app.invokeMethod<bool>('openAuthenticationUrl', url) ?? false;
+    final opened =
+        await _app.invokeMethod<bool>('openAuthenticationUrl', url) ?? false;
+    if (!opened) authenticationPresentationActive.value = false;
+    return opened;
   } on PlatformException catch (error) {
+    authenticationPresentationActive.value = false;
     debugPrint('openAuthenticationUrl: $error');
     // Never fall back to the cookie-sharing browser for authentication.
     return false;
@@ -41,9 +49,10 @@ Future<bool> openAuthenticationUrl(String url) async {
 /// it was opened for): iOS dismisses the sheet; Android brings the app back
 /// over its Custom Tab, which finishes it.
 Future<void> closeBrowser() async {
-  if (!mobile) return;
+  if (!mobile && defaultTargetPlatform != TargetPlatform.iOS) return;
   try {
     await _app.invokeMethod<void>('closeBrowser');
+    authenticationPresentationActive.value = false;
   } on PlatformException catch (error) {
     debugPrint('closeBrowser: $error');
   }
