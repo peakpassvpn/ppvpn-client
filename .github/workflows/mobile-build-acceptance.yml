@@ -2,14 +2,10 @@ name: Mobile build acceptance
 run-name: Android artifact comparison at ${{ github.sha }}
 
 on:
-  push:
-    branches: [codex/apple-single-core-build-matrix]
-    paths: [.github/workflows/mobile-build-acceptance.yml]
   workflow_dispatch:
     inputs:
       source_ref:
         description: Exact product source commit
-        default: 47b11a36b518a1a01624abae98c94ba521b7a8d9
         required: true
       baseline_ref:
         description: Exact functional baseline commit
@@ -34,7 +30,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: never
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      SOURCE_REF: ${{ inputs.source_ref || '47b11a36b518a1a01624abae98c94ba521b7a8d9' }}
+      SOURCE_REF: ${{ inputs.source_ref }}
       PPVPN_BUILD_NUMBER: '344'
       PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
       BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}

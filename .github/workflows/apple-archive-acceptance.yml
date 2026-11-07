@@ -2,14 +2,10 @@ name: Apple archive acceptance
 run-name: iOS unsigned archives for frozen product source
 
 on:
-  push:
-    branches: [codex/apple-single-core-build-matrix]
-    paths: [.github/workflows/apple-archive-acceptance.yml]
   workflow_dispatch:
     inputs:
       source_ref:
         description: Exact product source commit
-        default: 47b11a36b518a1a01624abae98c94ba521b7a8d9
         required: true
       baseline_ref:
         description: Exact functional baseline commit
@@ -34,7 +30,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: never
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      SOURCE_REF: ${{ inputs.source_ref || '47b11a36b518a1a01624abae98c94ba521b7a8d9' }}
+      SOURCE_REF: ${{ inputs.source_ref }}
       BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
       PPVPN_BUILD_NUMBER: '344'
       PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
@@ -91,11 +87,12 @@ jobs:
               -archivePath "$archive" -derivedDataPath "$RUNNER_TEMP/apple-derived-$side" archive \
               CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
               LD_GENERATE_MAP_FILE=YES COMPILER_INDEX_STORE_ENABLE=NO) >"$output/archive.log" 2>&1
-            python3 apps/flutter/scripts/check-ios-exports.py \
+            contract_status=0
+            python3 "$checkout/apps/flutter/scripts/check-ios-exports.py" \
               "$archive/Products/Applications/Runner.app/Runner" \
-              "$archive/Products/Applications/Runner.app/PlugIns/PacketTunnel.appex/PacketTunnel"
+              "$archive/Products/Applications/Runner.app/PlugIns/PacketTunnel.appex/PacketTunnel" || contract_status=$?
             tar -czf "$output/Runner.xcarchive.tar.gz" -C "$(dirname "$archive")" Runner.xcarchive
-            CHECKOUT="$checkout" OUTPUT="$output" SIDE="$side" python3 - <<'PY'
+            CHECKOUT="$checkout" OUTPUT="$output" SIDE="$side" CONTRACT_STATUS="$contract_status" python3 - <<'PY'
           from pathlib import Path
           import gzip, hashlib, json, os, subprocess
           checkout, output = Path(os.environ['CHECKOUT']), Path(os.environ['OUTPUT'])
@@ -112,10 +109,12 @@ jobs:
                   'rust': subprocess.check_output(['rustc', '--version'], text=True).strip(),
                   'flutter': json.loads(subprocess.check_output(['flutter', '--version', '--machine'], text=True)),
                   'archive_tar_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+                  'export_contract_check_exit': int(os.environ['CONTRACT_STATUS']),
                   'signing': 'unsigned; local provisioning/signing/export verification follows',
                   'apns_enabled': False, 'device_install_or_upload': False}
           (output / 'build-provenance.json').write_text(json.dumps(data, indent=2) + '\n')
           PY
+            [[ "$contract_status" == 0 ]] || exit "$contract_status"
           done
       # No signing environment, credentials, TestFlight or publication step.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
