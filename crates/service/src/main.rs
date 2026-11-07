@@ -110,6 +110,38 @@ fn stop_data_plane() {
 
 #[cfg(not(windows))]
 fn main() {
+    #[cfg(target_os = "macos")]
+    if let Some(role) = std::env::args_os().nth(1) {
+        if role != "--user-runtime" && role != "--capture-broker" && role != update::RUNNER_FLAG {
+            eprintln!("service: SERVICE_ROLE_UNSUPPORTED");
+            std::process::exit(1);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--user-runtime")) {
+        let arguments: Vec<_> = std::env::args_os().collect();
+        let result = if arguments.len() == 4 {
+            ppvpn_service::single_runtime::agent::run(
+                std::path::Path::new(&arguments[2]),
+                std::path::Path::new(&arguments[3]),
+            )
+        } else {
+            Err(anyhow::anyhow!("USER_RUNTIME_ARGUMENTS_INVALID"))
+        };
+        if let Err(error) = result {
+            eprintln!("user runtime: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--capture-broker")) {
+        if std::env::args_os().count() != 2 || unsafe { libc::geteuid() } != 0 {
+            eprintln!("capture broker: CAPTURE_BROKER_ROOT_REQUIRED");
+            std::process::exit(1);
+        }
+        ipc::enter_capture_broker_mode();
+    }
     run_update_runner_if_asked();
     setup_logger();
     info!(
@@ -118,6 +150,11 @@ fn main() {
         protocol::SERVICE_BUILD_ID,
         logfile::log_dir().display()
     );
+    #[cfg(target_os = "macos")]
+    if !ipc::capture_broker_mode() {
+        start_lease_watchdog();
+    }
+    #[cfg(not(target_os = "macos"))]
     start_lease_watchdog();
     let Ok(rt) = tokio::runtime::Runtime::new() else {
         return;
@@ -144,6 +181,13 @@ fn main() {
     }
     // After the IPC server: a client that installed or restarted the
     // service waits for it to answer.
+    #[cfg(target_os = "macos")]
+    if ipc::capture_broker_mode() {
+        std::thread::spawn(crate::update::settle_at_start);
+    } else {
+        std::thread::spawn(clean_up_after_previous_instance);
+    }
+    #[cfg(not(target_os = "macos"))]
     std::thread::spawn(clean_up_after_previous_instance);
     rt.block_on(async {
         use tokio::signal::unix::{signal, SignalKind};

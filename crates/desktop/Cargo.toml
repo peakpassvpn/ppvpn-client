@@ -18,6 +18,8 @@ path = "uniffi-bindgen.rs"
 # Compiles the Linux enhanced-mode end-to-end test (src/e2e_linux.rs; CI job
 # linux). Test-only: no code outside #[cfg(test)].
 linux-e2e = []
+# Opt-in until native capture and signed LaunchAgent acceptance pass. No fallback.
+macos-user-runtime = []
 
 [build-dependencies]
 sha2 = "0.10"
@@ -55,6 +57,12 @@ windows-sys = { version = "0.61", features = [
     # PeekNamedPipe: the service watch polls its pipe instead of blocking.
     "Win32_System_Pipes",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+anyhow = "1"
+libc = "0.2"
+core-foundation = "0.10"
+security-framework = "3"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 libc = "0.2"

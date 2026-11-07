@@ -2853,7 +2853,9 @@ dependencies = [
 name = "ppvpn-desktop"
 version = "0.7.4"
 dependencies = [
+ "anyhow",
  "base64",
+ "core-foundation 0.10.1",
  "hex",
  "hmac",
  "iana-time-zone",
@@ -2862,6 +2864,7 @@ dependencies = [
  "ppvpn-core",
  "ppvpn-engine-host",
  "reqwest",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
@@ -2925,6 +2928,7 @@ name = "ppvpn-service"
 version = "0.7.4"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64",
  "core-foundation 0.10.1",
  "hex",
@@ -2935,6 +2939,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "ppvpn-core",
+ "ppvpn-core-wire",
  "ppvpn-engine-host",
  "ring",
  "security-framework",
@@ -2943,6 +2948,7 @@ dependencies = [
  "sha2",
  "sysinfo",
  "tokio",
+ "tracing-appender",
  "uuid",
  "winapi",
  "windows-service",

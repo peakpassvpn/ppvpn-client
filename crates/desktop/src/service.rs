@@ -744,6 +744,8 @@ struct IpcAuth {
 /// Real client over the OS endpoint in [`SERVICE_ENDPOINT`].
 pub(crate) struct ServiceClient {
     endpoint: String,
+    #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+    user_runtime: bool,
     auth: Mutex<Option<IpcAuth>>,
     /// `allowed_rule_set_hosts` sent with every Connect / UpdateProfile.
     rule_set_hosts: Vec<String>,
@@ -759,9 +761,20 @@ impl ServiceClient {
     pub(crate) fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
+            #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+            user_runtime: false,
             auth: Mutex::new(None),
             rule_set_hosts: Vec::new(),
         }
+    }
+
+    /// User-runtime endpoints require mutual OS/signing/installation identity
+    /// BEFORE the plaintext handshake key can be sent or accepted.
+    #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+    pub(crate) fn for_user_runtime(endpoint: impl Into<String>) -> Self {
+        let mut client = Self::new(endpoint);
+        client.user_runtime = true;
+        client
     }
 
     /// Pins the rule-set downloads of every profile this client hands the
@@ -845,7 +858,13 @@ impl ServiceClient {
         let body = serde_json::to_vec(&request)
             .map_err(|error| ServiceError::Protocol(format!("encode request: {error}")))?;
         let endpoint = self.endpoint.clone();
+        #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+        let user_runtime = self.user_runtime;
         let task = tokio::task::spawn_blocking(move || {
+            #[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+            if user_runtime {
+                return blocking_user_runtime(&endpoint, &body, timeout, handshake);
+            }
             blocking_transact(&endpoint, &body, timeout, handshake)
         });
         let bytes = match tokio::time::timeout(timeout + Duration::from_secs(1), task).await {
@@ -1010,6 +1029,23 @@ fn blocking_transact(
 
     let mut stream = UnixStream::connect(endpoint)
         .map_err(|error| ServiceError::Unavailable(format!("connect {endpoint}: {error}")))?;
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    exchange(&mut stream, body, handshake)
+}
+
+#[cfg(all(target_os = "macos", feature = "macos-user-runtime"))]
+fn blocking_user_runtime(
+    endpoint: &str,
+    body: &[u8],
+    timeout: Duration,
+    handshake: bool,
+) -> Result<Vec<u8>, ServiceError> {
+    let mut stream = std::os::unix::net::UnixStream::connect(endpoint)
+        .map_err(|error| ServiceError::Unavailable(format!("connect user runtime: {error}")))?;
+    crate::user_runtime_peer::verify(&stream, unsafe { libc::geteuid() }, crate::mac_identity::SERVICE_IDENTIFIER,
+        std::path::Path::new("/Library/PrivilegedHelperTools/com.peakpassvpn.ppvpn.service.bundle/Contents/MacOS/ppvpn-service"))
+        .map_err(|_| ServiceError::Protocol("USER_RUNTIME_SERVER_IDENTITY_REJECTED".into()))?;
     stream.set_read_timeout(Some(timeout)).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
     exchange(&mut stream, body, handshake)

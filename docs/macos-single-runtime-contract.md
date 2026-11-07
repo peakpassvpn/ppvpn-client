@@ -110,26 +110,23 @@ system proxy/routes/DNS. Resource acceptance remains pending a dedicated VM.
 
 ## Implemented boundary in this branch
 
-The service library now contains candidate `single_runtime::{capture, auth,
-fdpass}` primitives. They have no production listener/entry-point integration.
-`capture` contains no Engine handle; its lease cannot itself stop forwarding.
-`auth` uses a domain-separated, length-prefixed candidate HMAC canonical form,
-with full OS-peer/generation binding and bounded per-session replay storage.
-This canonical form is NOT a new enabled wire protocol; reconcile it with
-core-wire before use, including reply signing and descriptor tickets. Production
-OS audit-token extraction, code/installed-image verification and CSPRNG handshake
-issuance still need to be connected; passing caller-provided Peer fields is not
-a substitute for those checks.
+Integration now includes shared contract 94ec64d / PR #592, an explicit per-user
+agent entry point, authenticated framed RPC and an opt-in desktop IPC launcher.
+See [macos-runtime-integration.md](macos-runtime-integration.md) for build commands,
+Runner/ApplePush ownership, notification audit and remaining native-system gates.
 
-`fdpass` sends one owned descriptor capability and rejects extras. On Darwin its
-control storage covers XNU's full rights bound, including malformed-peer tests
-with 200 delivered copies. Unexpected ancillary truncation returns the explicit
-ContainmentRequired error: a caller must not continue normally after that error.
-There is no claim that Unix socket transfer tests establish utun adoption or
-route/DNS lifecycle correctness. No system network resources are created by the
-current tests.
+All capture DTOs and transaction epochs are ppvpn-core-wire's. The broker resource
+lease consumes CaptureLease and has no separate transition machine. Authentication
+uses the existing Request/Response JSON HMAC envelope; the earlier candidate
+length-prefixed canonical form has been removed. Full OS-peer binding, bounded
+replay state and CSPRNG session issuance are retained. Release peer verification
+checks audit uid/pid-version/session, hardened signature and installed image.
 
-Run the isolated primitive tests with `cargo test --locked -p ppvpn-service --lib`.
-Whole-product acceptance remains pending the shared capture adapter, signed agent
-and broker integration, a runtime-independent OS resource implementation, and a
-dedicated isolated-system test environment.
+FD transport still reserves the Darwin rights bound and returns explicit
+ContainmentRequired on unexpected truncation. Native utun adoption, root resource
+provider and route/DNS rollback are not claimed from Unix socket tests. The pinned
+adapter explicitly refuses dynamic capture without creating a privileged core.
+
+The installed/default product is not changed by the opt-in entry/feature. No test
+in this branch installs it or changes live network settings. Whole-product
+acceptance requires the signed packaging and accepted native capture adapter.
