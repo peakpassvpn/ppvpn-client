@@ -491,7 +491,8 @@ impl Resources {
         Ok(())
     }
     fn ensure_scoped_uplinks(&mut self) -> Result<()> {
-        let candidates = scoped_candidates(&self.dns, &self.name)?;
+        let candidates =
+            scoped_candidates(&self.dns, &self.name, self.settings.ipv6_address.is_some())?;
         // A transient offline state retains the last owned scopes. The next
         // renewal follows the physical primary again without restarting core.
         if candidates.is_empty() {
@@ -727,12 +728,15 @@ impl ScopedRoute {
             && self.gateway == other.gateway
     }
 }
-fn scoped_candidates(store: &Store, own_interface: &str) -> Result<Vec<ScopedRoute>> {
+fn scoped_candidates(store: &Store, own_interface: &str, ipv6: bool) -> Result<Vec<ScopedRoute>> {
     let mut routes = vec![];
     for (family, key) in [
         ("-inet", "State:/Network/Global/IPv4"),
         ("-inet6", "State:/Network/Global/IPv6"),
     ] {
+        if family == "-inet6" && !ipv6 {
+            continue;
+        }
         let Some(global) = store.dictionary(key) else {
             continue;
         };
