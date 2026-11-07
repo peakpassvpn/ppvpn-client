@@ -230,7 +230,7 @@ open(path, "w").write(text)
 
 delegate = "ios/Runner/AppDelegate.swift"
 code = open(delegate).read()
-plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "../../apple/ApplePushState.swift", "ApplePush.swift", "ApplePushBridge.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
+plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "../../apple/ApplePushState.swift", "../../apple/ApplePushInstallation.swift", "ApplePush.swift", "ApplePushBridge.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
 imports = [line for line in plugin.splitlines() if line.startswith(("import ", "@preconcurrency import "))]
 body = "\n".join(line for line in plugin.splitlines() if not line.startswith(("import ", "@preconcurrency import ")))
 code, registered = re.subn(
@@ -338,7 +338,7 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   # Run once on Linux, after the bridge types have been generated.
   if [ "$os" = linux ]; then
     PPVPN_UI_TEST_CJK_FONT="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}" \
-      flutter test checks/authentication_browser_test.dart checks/mobile_layout_test.dart checks/native_chrome_test.dart checks/logs_layout_test.dart checks/device_feedback_test.dart --no-pub
+      flutter test checks/apple_push_test.dart checks/apple_push_transport_test.dart checks/authentication_browser_test.dart checks/mobile_layout_test.dart checks/native_chrome_test.dart checks/logs_layout_test.dart checks/device_feedback_test.dart --no-pub
   fi
 fi
 

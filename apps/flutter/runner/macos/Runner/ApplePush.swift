@@ -6,6 +6,7 @@ import Security
 
 @MainActor
 final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
+  let app: ApplePushApp?
   let state: ApplePushState
   let configured: Bool
   var registrationFailed: ((String, Int) -> Void)?
@@ -17,6 +18,7 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
         "com.apple.developer.aps-environment" as CFString, nil) as? String
     }
     let app = ApplePushApp(platform: "macos", bundleID: bundle.bundleIdentifier, entitlement: entitlement)
+    self.app = app
     configured = bundle.object(forInfoDictionaryKey: "PPVPNApplePushEnabled") as? Bool == true && app != nil
     state = ApplePushState(app: configured ? app : nil)
   }

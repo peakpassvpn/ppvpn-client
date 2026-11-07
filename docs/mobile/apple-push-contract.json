@@ -1,19 +1,54 @@
 {
-  "status": "backend-implementation-pending; earlier client-only endpoint proposal superseded",
-  "contract_authority": "Exact backend Huma/OpenAPI + generated SDK source commit, not a business version field",
-  "backend_owner": "ppvpn-backend · 凭据与订阅",
-  "handoff_receipt": "ppvpn-backend/.recovery/apns-backend-handoff-20261107.json",
-  "candidate_design": "ppvpn-backend/docs/drafts/apns-installation-binding-design.md",
-  "candidate_is_implemented": false,
-  "required_guards": [
-    "stable authenticated account public id from bearer",
-    "installation proof distinct from installation UUID",
-    "explicit signed topic and per-registration APNs environment",
-    "persistent binding CAS and logout tombstone",
-    "late register/unregister/410 cannot mutate a newer binding",
-    "worker ownership and bounded retry",
-    "authorized inbox lookup, stable delivery dedupe"
+  "status": "client-mock-candidate; backend final commit and deployed service not yet verified",
+  "contract_authority": "Same backend Huma/OpenAPI source snapshot plus generated SDK commit; no business protocol version field",
+  "backend": {
+    "base_commit": "de79cd62639287580c1901b3667aa3fa296d40e2",
+    "implementation_commit": null,
+    "source_snapshot_sha256": {
+      "api/docs/openapi.yaml": "13c3de4d73f11fb6f81e58dea30be722e5b6e0557d7ae372ccfe69a09a70bae1",
+      "api/api/dto/apple_device.go": "a981367426e9e491670f66645197ba71d845b3adaf2b978da21563f0600dc1cd",
+      "api/internal/handler/apple_device_handler.go": "17ecabcd1394ef202247698b6c51ae4f33e079ccb48903c74fe8e6439fe3f5ac",
+      "api/api/dto/message.go": "ee890b154960cdccd073de7fa579ba83d24d62a66534a7bfbdfa476b0a1aecdf",
+      "api/internal/handler/message_handler.go": "eda8847d11fe90a0b36ac09eab4ae249a48d3bf056476d952617d63cfdaf5113",
+      "docs/drafts/apns-installation-binding-design.md": "c6948ca58ef99e727f5b046189b2ec60290f0c7180b19989c4b8a69df41c7b67"
+    }
+  },
+  "sdk": {
+    "repository": "peakpassvpn/ppvpn-web",
+    "commit": "4ac1d60c1ae47f613097ca1d712a3334420beb2f",
+    "pr": "https://github.com/peakpassvpn/ppvpn-web/pull/465",
+    "generated_files_sha256": {
+      "packages/shared/src/api/generated/types.gen.ts": "abe2dd642b034627cfff5aa1856a87b2d4b136cb840cbd9ca675304424e7e0d4",
+      "packages/shared/src/api/generated/sdk.gen.ts": "fe8fc5ff198f33bc57e069d01c398fc9b7b79cb6b0a7b45f55854144de5ecf53"
+    }
+  },
+  "api_prefix": "/api/v1",
+  "operations": {
+    "config": "GET /devices/apple/config",
+    "resolve": "POST /devices/apple/installations",
+    "bind": "POST /devices/apple/installations/{installation_id}/bindings",
+    "register": "POST /devices/apple/installations/{installation_id}/registrations",
+    "unbind": "DELETE /devices/apple/installations/{installation_id}/bindings/{binding_id}",
+    "delivery": "GET /messages/deliveries/{delivery_id}",
+    "message": "GET /messages/{id}",
+    "updates": "GET /messages/updates?after_id=&limit=100"
+  },
+  "client_guards": [
+    "Keychain stable UUID + 32-byte installation proof, scope app/topic/environment; no shared app group or sync",
+    "Resolve only reads; active current-session flag checked independently of current-user flag",
+    "Bind CAS input and request_id stay fixed across at most3 attempts;409 never Resolve/rebinds",
+    "Token rotation updates same binding with expected_registration_id and new request_id",
+    "Logout closes exact old binding before bearer revocation; active JWT sid remains server authority",
+    "Native clientEpoch and accountGeneration fence local stale callbacks; neither is an HTTP business version",
+    "Only allowlisted authenticated Rust operations; no token/bearer export or legacy endpoint fallback",
+    "Stable delivery uses authorized single-message read;404 never falls back to payload text/URL",
+    "Foreground update pages bounded; message UI retains its own owner epoch and authorized inbox state"
   ],
-  "client_state": "Native launch/token/background callbacks, MethodChannel effects, stable account following, inbox lookups and prelogout effect serialization are implemented; authenticated HTTP adapter awaits actual backend contract.",
-  "rollout": "disabled; existing token-only endpoints must not be substituted; macOS self-hosted agent retained"
+  "rollout": "OFF; backend deployment, signed capability/Keychain and actual APNs delivery unverified; existing macOS agent retained",
+  "limits": [
+    "Binding/Register uncertain commit is retried with same input and ID; if token changes before unknown old-token commit is resolved, intent fails closed instead of guessing CAS",
+    "409 or exhausted3 retries require a new explicit account intent; foreground resume does not mint fresh CAS intents",
+    "Offline update reconciliation caps at10 pages of100 and UI reloads separately; not a promise of complete unbounded history",
+    "macOS bridge compiled against SDK but AppDelegate/window/project inclusion belongs to desktop owner"
+  ]
 }

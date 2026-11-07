@@ -39,7 +39,7 @@ struct ApplePushTests {
       let first = requests[0]
       check(state.acknowledge(first, success: true), "current ack")
       state.receiveToken(Data([3]))
-      check(removals == [first] && requests.count == 2, "rotation unregisters previous token")
+      check(removals.isEmpty && requests.count == 2, "rotation retains binding and replaces token")
       check(!state.acknowledge(first, success: true), "stale rotation ack")
       check(state.acknowledge(requests[1], success: true), "new token ack")
       count += 1

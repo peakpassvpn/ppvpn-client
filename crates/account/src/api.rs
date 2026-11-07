@@ -7,6 +7,9 @@
 //! Errors never carry response bodies or credentials: only the HTTP status and
 //! the backend problem `code` travel into [`ApiError`].
 
+#[path = "apple_push_api.rs"]
+mod apple_push;
+
 use std::time::Duration;
 
 use reqwest::{StatusCode, Url};

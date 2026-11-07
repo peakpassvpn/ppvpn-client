@@ -1,47 +1,73 @@
-Apple native entry and transport integration status (2026-11-07)
+Apple native entry and transport candidate — 2026-11-07
 
-Implemented in source
-  ci-build.sh explicitly concatenates ApplePushState.swift, ApplePush.swift,
-  ApplePushBridge.swift into the generated AppDelegate build source, preserving
-  @preconcurrency imports. The native launch hook starts the strong receiver
-  before implicit Flutter initialization. Token/failure/background callbacks
-  forward to that receiver; callbacks complete once and background work has
-  a 25s deadline. Copied standalone Runner sources are removed after inclusion
-  so generated project styles cannot accidentally compile duplicates.
+Contract and rollout
+  docs/mobile/apple-push-contract.json pins exact candidate OpenAPI/DTO/
+  handlers by SHA256 and generated SDK4ac1d60c (web PR465). The backend
+  implementation is still uncommitted at this client snapshot; this is not
+  deployed-service acceptance. Replace the pending commit with the final
+  matching source/OpenAPI/SDK commit after backend owner freezes it. No
+  *_version or semantics_version business fields. Rollout stays OFF.
 
-  IOSApplePushBridge attaches its MethodChannel at PPVPNPlugin registration.
-  Cold notices remain in the bounded native mailbox until the stable account
-  is restored. Dart AppState follows account_id, not account_name. Notices
-  perform authorized inbox lookup and never use notification body/URL for UI.
-  Enabled packages retry OS registration and refresh the authenticated inbox
-  on foregrounding, with an owner-epoch check after native readiness.
-  Disabled packages add no push-driven foreground network work.
-  Explicit sign-out waits for the serialized unregister effect before Rust
-  revokes the bearer. Restoring/replacement owners fence prior delivery.
+Native and storage
+  iOS ci-build concatenates shared ApplePushState + ApplePushInstallation,
+  receiver and bridge into generated AppDelegate. Start the strong receiver
+  at launch, attach at the implicit-engine registrar, forward OS token,
+  registration failure and background callbacks. A native25s one-shot deadline
+  bounds completion. UI still needs the signed actual environment/topic.
+  Installation UUID/proof are separate from auth credential and Apple key.
+  The proof store uses random32 bytes, app-only nonsynchronizing Keychain,
+  app/topic/environment scope, AfterFirstUnlockThisDeviceOnly; macOS uses
+  data-protection Keychain. Locked/denied/corrupt reads fail closed; they
+  never rotate an existing proof. No disk-cached OS token is replayed.
+  These storage calls were SDK-typechecked, not executed on a signed device.
 
-Not completed
-  ApplePush.register/unregister transport hooks intentionally have no default
-  HTTP implementation. They return no successful native acknowledgement until
-  the backend owner delivers actual OpenAPI/SDK and precise source commit.
-  apple-push-contract.json identifies the actual handoff and required guards;
-  the previous speculative endpoints/version fields have been superseded.
-  No token-only legacy endpoint fallback. No rollout flag enabled.
+Transport and ownership
+  AppState supplies stable account_id to ApplePushTransport. Native effects
+  also echo the Dart account transition's local clientEpoch; queued effects
+  and late success cannot become a same-ID relogin's new request. Neither
+  local epoch is sent as an HTTP version or substitute for real JWT sid.
+  Authenticated HTTP stays in Rust; no bearer enters Swift/Dart. The account
+  API allows only these Apple and authorized inbox operations, prevents URL/
+  account injection, and strips backend failure detail/unknown error codes.
+  Resolve gets current opaque binding once. Bind uses exact expected value,
+  stable request_id/input, max3 transient attempts, no409 re-Resolve/rebind.
+  Same current user is insufficient: bound_to_current_session must also be
+  true to reuse a binding. Registration uses exact expected_registration_id.
+  Native token rotation updates the same binding. Explicit logout invalidates
+  local admission, drains serialized old-owner unregister, then Rust revokes
+  auth. If timeout/response loss prevents close, backend session revocation
+  is still the durable anti-revival fence; no success is fabricated.
+  GET delivery (or single message for a legacy hint) uses the current Bearer.
+  A failed delivery never falls back to payload text, URL or another endpoint.
+  Native input carries only delivery/account/message IDs. Typed authorized
+  server messages use the existing category/link mapping. UI and Rust both
+  fence stale owners/sessions. Foreground pulls bounded /messages/updates and
+  reloads authorized inbox; notification body/URL never supplies UI content.
 
-Packaging and acceptance
-  Formal API origin is read from repository PPVPN_API_BASE (the release.md
-  authority), never inferred from its hostname. A diagnostic package built
-  with api.example.invalid is not eligible for network acceptance.
-  check-ios-apple-push.py validates an enabled signed package's actual aps
-  entitlement, embedded provisioning profile, declared environment and topic.
-  TestFlight requires production APNs. Sandbox receipt is not environment.
-  Keep iOS package/App Group identities for a provisioned isolated test device;
-  do not install over a live user VPN. Use build number0 for unsigned compile
-  diagnostics; signed internal candidates require build group's unique number,
-  app+extension profile equality and separate artifact directory/manifest.
-  Do not upload a package before actual signed runtime acceptance.
+macOS explicit owner hooks (not installed by this candidate)
+  Include runner/apple/ApplePushState.swift + ApplePushInstallation.swift and
+  runner/macos/Runner/ApplePush.swift + ApplePushBridge.swift in the actual
+  generated project (or concatenate into the existing native owner source).
+  In AppDelegate launch: MacApplePushBridge.shared.start().
+  When the main Flutter controller exists:
+    MacApplePushBridge.shared.attach(controller.registrar(forPlugin:
+      "MacApplePushBridge"))
+  Forward AppDelegate didRegisterForRemoteNotificationsWithDeviceToken Data
+  to .receiver.didRegister(token:); failures to .receiver.didFailToRegister;
+  didReceiveRemoteNotification to .receiver.receiveBackground(userInfo).
+  Set .showWindow to the existing window activation hook; it runs only after
+  an opened notice completes an authorized message lookup.
+  Keep the bridge/receiver strong for cold notices before Flutter auth restore.
+  Coordinate UNUserNotificationCenter delegate ownership with the existing
+  agent and local-notification handler. Do not replace its handlers blindly.
+  No AppDelegate/MainFlutterWindow edit or agent retirement occurs here.
 
-macOS
-  Existing agent remains. Receiver state is shared, but macOS native entry,
-  authenticated transport, signed capability and actual foreground/background/
-  terminated/cold tap/token rotation/logout/account-switch parity still need
-  desktop-owner integration and verification before agent retirement.
+Verification and remaining gates
+  Mock Dart coordinator/bridge, actual Rust loopback HTTP, shared Swift state,
+  SDK-typechecked iOS/macOS bridges and FRB codegen are separate checks. New
+  desktop session/late-response HTTP tests are committed for normal CI, not
+  locally linked as another large build. See durable handoff exact results.
+  Final signed project builds, AppGroup/aps/profile proof, Keychain runtime,
+  backend deployment and actual APNs foreground/background/killed/cold-tap/
+  rotation/logout/account-switch verification remain necessary. No real
+  device registration, keys, pushes, installation or TestFlight upload here.
