@@ -91,7 +91,10 @@ Readiness observed, not acceptance
 6. Existing log paths, no LLDB
   APP_DIR is the App Group group.com.peakpassvpn.ppvpn.
   App: APP_DIR/logs/ppvpn-client.YYYY-MM-DD.log (UTC), current/yesterday.
-  Forwarding owner: APP_DIR/data/logs/tunnel-host.log and ppvpn-core.log;
+  Forwarding owner: APP_DIR/tunnel-state/logs/tunnel-host.log and ppvpn-core.log;
+  PacketTunnelProvider passes APP_DIR/tunnel-state as stateDir, and host.rs
+  appends logs. A failed data/logs listing probes the wrong directory and
+  cannot establish that the actual owner logs are inaccessible.
   each native file may have a previous generation .1. Those are different
   from the App's daily core log paths. The existing Logs UI tails the App's
   daily client/core paths; a blank App core panel does NOT clear native errors.

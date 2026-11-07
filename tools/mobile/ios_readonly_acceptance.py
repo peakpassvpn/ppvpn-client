@@ -18,6 +18,8 @@ import zipfile
 
 BUNDLE = 'com.peakpassvpn.ppvpn'
 GROUP = 'group.com.peakpassvpn.ppvpn'
+HOST_LOG_DIR = 'tunnel-state/logs'
+HOST_LOG_PATHS = tuple(f'{HOST_LOG_DIR}/{name}' for name in ('tunnel-host.log', 'ppvpn-core.log'))
 
 
 def sha(path):
@@ -116,7 +118,7 @@ def main():
     report['running_api_origin_verified'] = False
     report['lock_state'] = lock
     report['log_listings'] = {}
-    for label, subdir in [('app-logs', 'logs'), ('host-logs', 'data/logs')]:
+    for label, subdir in [('app-logs', 'logs'), ('host-logs', HOST_LOG_DIR)]:
         files = capture(out, label, ['device', 'info', 'files', '--device', args.device,
             '--domain-type', 'appGroupDataContainer', '--domain-identifier', GROUP,
             '--subdirectory', subdir, '--no-recurse'])
@@ -124,7 +126,7 @@ def main():
     report['copied_logs'] = []
     if args.copy_logs:
         today = dt.datetime.now(dt.timezone.utc).date()
-        paths = ['data/logs/tunnel-host.log', 'data/logs/ppvpn-core.log']
+        paths = list(HOST_LOG_PATHS)
         for day in [today, today - dt.timedelta(days=1)]:
             paths += [f'logs/ppvpn-client.{day}.log', f'logs/ppvpn-core.{day}.log']
         logs = out / 'logs'; logs.mkdir(mode=0o700)
