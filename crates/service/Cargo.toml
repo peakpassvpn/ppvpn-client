@@ -19,6 +19,8 @@ name = "ppvpn-service-uninstall"
 path = "src/uninstall.rs"
 
 [dependencies]
+async-trait = "0.1"
+tracing-appender = "0.2.5"
 anyhow = "1"
 log = "0.4"
 # Only what logfile.rs uses: without the defaults, no YAML/config parsing
@@ -35,6 +37,7 @@ parking_lot = "0.12"
 # The TUN instance runs in this process (src/core.rs).
 ppvpn-core = { path = "../core" }
 ppvpn-engine-host = { path = "../engine-host" }
+ppvpn-core-wire = { path = "../core-wire", features = ["driver"] }
 sysinfo = "0.32"
 uuid = { version = "1", features = ["v4"] }
 # Silent updates (src/update.rs): the update feed's Ed25519 signature, as

@@ -317,7 +317,9 @@ impl Client {
         if trigger == Trigger::SessionEnded {
             self.mobile_control.cancel();
             self.disconnect_all("session end").await;
-            self.standard.stop().await;
+            if let Err(error) = self.standard.end_session().await {
+                self.report_background(error);
+            }
             sync.applied_team = None;
         }
         if sync.foreground_suspended || self.shut_down.load(Ordering::SeqCst) {
@@ -328,14 +330,18 @@ impl Client {
             // nothing to route through.
             if trigger == Trigger::ProfileChanged {
                 self.disconnect_all("no usable profile").await;
-                self.standard.stop().await;
+                if let Err(error) = self.standard.end_session().await {
+                    self.report_background(error);
+                }
                 sync.applied_team = None;
             }
             return;
         };
         if sync.applied_team.is_some() && sync.applied_team != current.team_id {
             // New team: start from a clean core rather than hot-applying.
-            self.standard.stop().await;
+            if let Err(error) = self.standard.end_session().await {
+                self.report_background(error);
+            }
         }
         sync.applied_team = current.team_id.clone();
         // Mobile profiles are stored by TunnelMode while disconnected. Only

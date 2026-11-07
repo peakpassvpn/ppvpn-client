@@ -26,6 +26,23 @@ const AUTH_SESSION_SECONDS: u64 = 120;
 /// service Stop / Shutdown control). From then on nothing may start or feed
 /// a core: see [`refused_while_stopping`].
 static STOPPING: AtomicBool = AtomicBool::new(false);
+static CAPTURE_BROKER_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// Startup-only process role. It cannot be selected through an IPC frame.
+#[cfg(target_os = "macos")]
+pub fn enter_capture_broker_mode() {
+    CAPTURE_BROKER_ONLY.store(true, Ordering::SeqCst);
+}
+#[cfg(target_os = "macos")]
+pub fn capture_broker_mode() -> bool {
+    CAPTURE_BROKER_ONLY.load(Ordering::SeqCst)
+}
+fn broker_refuses(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::Handshake | Command::GetVersion | Command::GetStatus | Command::InstallUpdate
+    )
+}
 
 /// Error of every call refused while the service shuts down. Retryable: the
 /// client backs off and reconnects once a service answers again.
@@ -197,6 +214,19 @@ enum Admission {
 /// Freshness, replay, the PID-bound auth session, the signature, and the
 /// stopping state (see [`refused_while_stopping`]).
 fn admit(req: &Request, client_pid: u32, stopping: bool) -> Result<Admission> {
+    admit_for_role(
+        req,
+        client_pid,
+        stopping,
+        CAPTURE_BROKER_ONLY.load(Ordering::SeqCst),
+    )
+}
+fn admit_for_role(
+    req: &Request,
+    client_pid: u32,
+    stopping: bool,
+    broker_only: bool,
+) -> Result<Admission> {
     let refuse = |error: &str| {
         Admission::Refused(Response::unsigned(
             req.id.clone(),
@@ -236,6 +266,13 @@ fn admit(req: &Request, client_pid: u32, stopping: bool) -> Result<Admission> {
             &auth.key,
         )?));
     }
+    if broker_only && broker_refuses(&req.command) {
+        return Ok(Admission::Refused(signed_error(
+            req.id.clone(),
+            "CAPTURE_UNSUPPORTED",
+            &auth.key,
+        )?));
+    }
     if stopping && refused_while_stopping(&req.command) {
         return Ok(Admission::Refused(signed_error(
             req.id.clone(),
@@ -269,7 +306,10 @@ fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response
             signed_ok(req.id, serde_json::to_value(info)?, &auth.key)
         }
         Command::GetStatus => {
-            let status = CORE.lock().status(client_pid);
+            let mut status = CORE.lock().status(client_pid);
+            if CAPTURE_BROKER_ONLY.load(Ordering::SeqCst) {
+                status.mode = "capture-broker".into();
+            }
             signed_ok(req.id, serde_json::to_value(status)?, &auth.key)
         }
         Command::Connect => {
@@ -1508,6 +1548,64 @@ mod tests {
         ReplayWindow, SERVICE_STOPPING,
     };
     use crate::protocol::{Command, HandshakeResponse, Request, VersionInfo};
+
+    #[test]
+    fn capture_broker_admission_refuses_every_forwarding_command_after_auth() {
+        let pid = 4862;
+        let hello = Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: crate::protocol::now_epoch(),
+            command: Command::Handshake,
+            payload: serde_json::json!({"client_nonce":"01234567890123456789012345678901"}),
+            auth_token: None,
+            signature: String::new(),
+        };
+        let response = super::handshake(hello, pid).unwrap();
+        let auth: HandshakeResponse = serde_json::from_value(response.data.unwrap()).unwrap();
+        let key = hex::decode(auth.auth_key).unwrap();
+        for command in [
+            Command::Connect,
+            Command::UpdateProfile,
+            Command::RenewLease,
+            Command::Disconnect,
+            Command::CoreApi,
+            Command::Watch,
+        ] {
+            let req = Request::signed(
+                uuid::Uuid::new_v4().to_string(),
+                command,
+                serde_json::json!({}),
+                Some(auth.auth_token.clone()),
+                &key,
+            )
+            .unwrap();
+            let super::Admission::Refused(reply) =
+                super::admit_for_role(&req, pid, false, true).unwrap()
+            else {
+                panic!("broker must not admit a forwarding command")
+            };
+            assert_eq!(reply.error.as_deref(), Some("CAPTURE_UNSUPPORTED"));
+            assert!(reply.verify_with(&key).unwrap());
+        }
+        for command in [
+            Command::GetStatus,
+            Command::GetVersion,
+            Command::InstallUpdate,
+        ] {
+            let req = Request::signed(
+                uuid::Uuid::new_v4().to_string(),
+                command,
+                serde_json::json!({}),
+                Some(auth.auth_token.clone()),
+                &key,
+            )
+            .unwrap();
+            assert!(matches!(
+                super::admit_for_role(&req, pid, false, true).unwrap(),
+                super::Admission::Authorized(_)
+            ));
+        }
+    }
 
     /// In-memory connection: hands the request out `chunk` bytes per read
     /// (like a byte-mode pipe or socket returning partial data) and records

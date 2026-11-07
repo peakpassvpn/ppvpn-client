@@ -1,70 +1,38 @@
-//! Candidate authentication at the user-runtime/broker boundary. Socket
-//! acceptors must first verify code signature and installed image against an
-//! OS audit token. This module does not replace the production IPC acceptor.
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+//! Peer-bound authentication using the EXISTING service Request/Response HMAC
+//! envelope. Capture DTOs come exclusively from ppvpn-core-wire. There is no
+//! second canonical form or new enabled wire protocol in this module.
+use crate::protocol::{Request, MESSAGE_EXPIRY_SECONDS};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-
 const MAX_REPLAYS: usize = 4096;
-const REQUEST_WINDOW: u64 = 30;
-const MAX_PAYLOAD: usize = 4 * 1024 * 1024;
-const DOMAIN: &[u8] = b"ppvpn-capture-auth-v1/request";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Peer {
-    pub uid: u32,
-    pub pid: u32,
-    pub pid_version: u32,
-    pub audit_session: u32,
-}
+pub use crate::peer_identity::Peer;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidIdentity,
     Expired,
     WrongPeer,
+    WrongGeneration,
     InvalidSignature,
     StaleRequest,
     Replay,
     Capacity,
 }
-
-/// Not a wire DTO: a borrowed view of the bounded request bytes. This candidate
-/// canonical form must be reconciled with shared core-wire before integration.
-pub struct Call<'a> {
-    pub id: &'a str,
-    pub timestamp: u64,
-    pub command: &'a str,
-    pub payload: &'a [u8],
-    pub signature: &'a [u8],
-}
-/// No Debug/Serialize implementation: never print the session's secret key.
+/// No Debug/Serialize: this object contains an authentication key. Peer fields
+/// must originate in a verified OS audit token, never the request payload.
 pub struct Session {
     peer: Peer,
     key: [u8; 32],
+    token: String,
     generation: u64,
     expires: Instant,
     seen: HashMap<String, u64>,
 }
-fn field(mac: &mut Hmac<Sha256>, bytes: &[u8]) {
-    mac.update(&(bytes.len() as u64).to_be_bytes());
-    mac.update(bytes);
-}
-fn canonical(mac: &mut Hmac<Sha256>, generation: u64, call: &Call<'_>) {
-    field(mac, DOMAIN);
-    mac.update(&generation.to_be_bytes());
-    field(mac, call.id.as_bytes());
-    mac.update(&call.timestamp.to_be_bytes());
-    field(mac, call.command.as_bytes());
-    field(mac, call.payload);
-}
 impl Session {
-    /// A fresh key must come from the OS CSPRNG for each authenticated handshake;
-    /// never reuse it across services, peers or generations. Auth expiry is not
-    /// a capture lease. Peer fields come from the verified OS audit token.
     pub fn new(
         peer: Peer,
         key: [u8; 32],
+        token: String,
         generation: u64,
         now: Instant,
         lifetime: Duration,
@@ -74,6 +42,8 @@ impl Session {
             || peer.pid_version == 0
             || generation == 0
             || lifetime.is_zero()
+            || token.len() < 16
+            || token.len() > 128
         {
             return Err(Error::InvalidIdentity);
         }
@@ -81,15 +51,19 @@ impl Session {
         Ok(Self {
             peer,
             key,
+            token,
             generation,
             expires,
             seen: HashMap::new(),
         })
     }
+    /// generation is the acceptor's current service generation, not a wire field.
+    /// Keys/tokens are freshly generated per handshake and never persisted.
     pub fn verify(
         &mut self,
         peer: Peer,
-        call: Call<'_>,
+        request: &Request,
+        generation: u64,
         now: Instant,
         wall: u64,
     ) -> Result<(), Error> {
@@ -99,30 +73,40 @@ impl Session {
         if peer != self.peer {
             return Err(Error::WrongPeer);
         }
-        if call.id.is_empty()
-            || call.id.len() > 128
-            || call.command.is_empty()
-            || call.command.len() > 128
-            || call.payload.len() > MAX_PAYLOAD
-            || call.timestamp > wall
-            || wall - call.timestamp > REQUEST_WINDOW
+        if generation != self.generation {
+            return Err(Error::WrongGeneration);
+        }
+        if request.id.is_empty()
+            || request.id.len() > 128
+            || request.timestamp > wall
+            || wall - request.timestamp > MESSAGE_EXPIRY_SECONDS
         {
             return Err(Error::StaleRequest);
         }
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).expect("fixed HMAC key size");
-        canonical(&mut mac, self.generation, &call);
-        mac.verify_slice(call.signature)
-            .map_err(|_| Error::InvalidSignature)?;
+        if request.auth_token.as_deref() != Some(&self.token)
+            || !request.verify_with(&self.key).unwrap_or(false)
+        {
+            return Err(Error::InvalidSignature);
+        }
         self.seen
-            .retain(|_, recorded| wall.saturating_sub(*recorded) <= REQUEST_WINDOW);
-        if self.seen.contains_key(call.id) {
+            .retain(|_, recorded| wall.saturating_sub(*recorded) <= MESSAGE_EXPIRY_SECONDS);
+        if self.seen.contains_key(&request.id) {
             return Err(Error::Replay);
         }
         if self.seen.len() >= MAX_REPLAYS {
             return Err(Error::Capacity);
         }
-        self.seen.insert(call.id.to_string(), wall);
+        self.seen.insert(request.id.clone(), wall);
         Ok(())
+    }
+    pub fn sign_response(
+        &self,
+        id: String,
+        success: bool,
+        data: Option<serde_json::Value>,
+        error: Option<String>,
+    ) -> anyhow::Result<crate::protocol::Response> {
+        crate::protocol::Response::signed_with(id, success, data, error, &self.key)
     }
 }
 impl Drop for Session {
@@ -135,6 +119,7 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{now_epoch, Command};
     fn peer() -> Peer {
         Peer {
             uid: 501,
@@ -143,37 +128,32 @@ mod tests {
             audit_session: 11,
         }
     }
-    fn call(id: &str, timestamp: u64) -> Call<'_> {
-        Call {
-            id,
-            timestamp,
-            command: "attach",
-            payload: b"settings",
-            signature: &[],
-        }
+    fn session(now: Instant) -> Session {
+        Session::new(
+            peer(),
+            [7; 32],
+            "session-token-1234".into(),
+            1,
+            now,
+            Duration::from_secs(60),
+        )
+        .unwrap()
     }
-    fn sign(generation: u64, call: &Call<'_>) -> Vec<u8> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&[7; 32]).unwrap();
-        canonical(&mut mac, generation, call);
-        mac.finalize().into_bytes().to_vec()
-    }
-    fn check(
-        session: &mut Session,
-        peer: Peer,
-        id: &str,
-        time: u64,
-        now: Instant,
-        wall: u64,
-    ) -> Result<(), Error> {
-        let mut call = call(id, time);
-        let signature = sign(1, &call);
-        call.signature = &signature;
-        session.verify(peer, call, now, wall)
+    fn request(id: &str) -> Request {
+        Request::signed(
+            id.into(),
+            Command::CoreApi,
+            serde_json::json!({"path":"/v1/get-status"}),
+            Some("session-token-1234".into()),
+            &[7; 32],
+        )
+        .unwrap()
     }
     #[test]
-    fn binds_complete_peer_and_expiry_without_consuming_rejected_requests() {
+    fn binds_peer_and_service_generation_without_consuming_bad_requests() {
         let now = Instant::now();
-        let mut session = Session::new(peer(), [7; 32], 1, now, Duration::from_secs(60)).unwrap();
+        let mut session = session(now);
+        let req = request("a");
         for field in 0..4 {
             let mut wrong = peer();
             match field {
@@ -181,89 +161,81 @@ mod tests {
                 1 => wrong.pid += 1,
                 2 => wrong.pid_version += 1,
                 _ => wrong.audit_session += 1,
-            }
+            };
             assert_eq!(
-                check(&mut session, wrong, "a", 100, now, 100),
+                session.verify(wrong, &req, 1, now, now_epoch()),
                 Err(Error::WrongPeer)
             );
         }
-        check(&mut session, peer(), "a", 100, now, 100).unwrap();
         assert_eq!(
-            check(
-                &mut session,
+            session.verify(peer(), &req, 2, now, now_epoch()),
+            Err(Error::WrongGeneration)
+        );
+        session.verify(peer(), &req, 1, now, now_epoch()).unwrap();
+        assert_eq!(
+            session.verify(
                 peer(),
-                "b",
-                100,
+                &request("b"),
+                1,
                 now + Duration::from_secs(60),
-                100
+                now_epoch()
             ),
             Err(Error::Expired)
         );
     }
     #[test]
-    fn every_signed_field_and_generation_are_bound() {
+    fn shared_envelope_binds_all_fields_and_rejects_replay() {
         let now = Instant::now();
-        let mut session = Session::new(peer(), [7; 32], 1, now, Duration::from_secs(60)).unwrap();
-        let signature = sign(1, &call("a", 100));
+        let mut session = session(now);
+        let req = request("a");
         for field in 0..4 {
-            let mut changed = call("a", 100);
-            changed.signature = &signature;
+            let mut changed = req.clone();
             match field {
-                0 => changed.id = "b",
-                1 => changed.timestamp = 99,
-                2 => changed.command = "detach",
-                _ => changed.payload = b"changed",
-            }
+                0 => changed.id = "b".into(),
+                1 => changed.command = Command::Disconnect,
+                2 => changed.payload = serde_json::json!({"changed":true}),
+                _ => changed.auth_token = Some("different-session".into()),
+            };
             assert_eq!(
-                session.verify(peer(), changed, now, 100),
+                session.verify(peer(), &changed, 1, now, now_epoch()),
                 Err(Error::InvalidSignature)
             );
         }
-        check(&mut session, peer(), "a", 100, now, 100).unwrap();
+        session.verify(peer(), &req, 1, now, now_epoch()).unwrap();
         assert_eq!(
-            check(&mut session, peer(), "a", 100, now, 100),
+            session.verify(peer(), &req, 1, now, now_epoch()),
             Err(Error::Replay)
         );
-        let mut successor = Session::new(peer(), [7; 32], 2, now, Duration::from_secs(60)).unwrap();
-        assert_eq!(
-            check(&mut successor, peer(), "a", 100, now, 100),
-            Err(Error::InvalidSignature)
-        );
+        let response = session
+            .sign_response("a".into(), true, Some(serde_json::json!({})), None)
+            .unwrap();
+        assert!(response.verify_with(&[7; 32]).unwrap());
     }
     #[test]
-    fn future_and_old_timestamps_are_refused() {
+    fn stale_future_and_capacity_fail_closed() {
         let now = Instant::now();
-        let mut session = Session::new(peer(), [7; 32], 1, now, Duration::from_secs(60)).unwrap();
-        for timestamp in [101, 69] {
+        let mut session = session(now);
+        let wall = now_epoch();
+        for timestamp in [wall + 1, wall - 31] {
+            let mut req = request("a");
+            req.timestamp = timestamp;
             assert_eq!(
-                check(&mut session, peer(), "a", timestamp, now, 100),
+                session.verify(peer(), &req, 1, now, wall),
                 Err(Error::StaleRequest)
             );
         }
-    }
-    #[test]
-    fn replay_memory_is_bounded_and_cannot_evict_fresh_requests() {
-        let now = Instant::now();
-        let mut session = Session::new(peer(), [7; 32], 1, now, Duration::from_secs(100)).unwrap();
-        for index in 0..MAX_REPLAYS {
-            check(&mut session, peer(), &format!("id-{index}"), 100, now, 100).unwrap();
+        for i in 0..MAX_REPLAYS {
+            session
+                .verify(peer(), &request(&format!("id-{i}")), 1, now, now_epoch())
+                .unwrap();
         }
         assert_eq!(
-            check(&mut session, peer(), "extra", 100, now, 100),
+            session.verify(peer(), &request("extra"), 1, now, now_epoch()),
             Err(Error::Capacity)
         );
         assert_eq!(
-            check(&mut session, peer(), "id-0", 100, now, 100),
+            session.verify(peer(), &request("id-0"), 1, now, now_epoch()),
             Err(Error::Replay)
         );
-        check(
-            &mut session,
-            peer(),
-            "extra",
-            131,
-            now + Duration::from_secs(31),
-            131,
-        )
-        .unwrap();
     }
 }

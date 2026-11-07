@@ -1,3 +1,8 @@
-//! Isolated building blocks for the macOS single-runtime migration.
-//! Not wired into the installed service until the integration contract is met.
+//! Explicit user-runtime and broker boundary for the macOS migration.
+//! New process roles are opt-in; installed/default launch configuration is unchanged.
+pub mod peer_identity;
+pub mod protocol;
 pub mod single_runtime;
+
+#[cfg(target_os = "macos")]
+pub mod mac_identity;
