@@ -1,0 +1,227 @@
+macOS real APNs execution plan — prepared, NOT EXECUTED (2026-11-07)
+
+Decision
+Use one fresh standard GitHub-hosted macOS GUI job as a bounded feasibility
+probe first. A new VM isolates the user's existing PPVPN data and Keychain,
+but neither a GUI domain nor successful signing guarantees APNs service or a
+usable consent UI. Do not promise a hosted runner can complete cold-click.
+If native registration, normal account approval or real consent/click cannot
+be observed, stop that job and report the exact stage NOT OBSERVED. Prefer an
+already available clean, dedicated physical Mac with a freshly logged-in test
+user next. Do not provision a new permanent runner or remote desktop service.
+Do not launch on the current working Mac/user as a fallback automatically.
+
+This plan applies to the Developer ID desktop AppID
+com.peakpassvpn.ppvpn.desktop, production APNs, not the iPhone AppID. Root
+reports AppID, Developer ID Push profile and production-key topic ready;
+the exported candidate must still be independently checked. No key is needed
+by the Mac app or this helper. Backend operator retains the provider key.
+
+Authoritative sources and limits (checked 2026-11-07)
+- https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+  Standard macOS jobs use new VMs; arm64 lacks static UDID, Intel has one.
+  Developer ID distribution does not require converting this into a device-
+  limited development profile. Pin the builder's actual label/image/Xcode;
+  do not use a changing latest label as reproducibility evidence.
+- https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.aps-environment
+  macOS uses com.apple.developer.aps-environment, not iOS aps-environment.
+- https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns
+  Obtain the actual OS token through NSApplication registration callbacks;
+  registration can fail from entitlement/network/APNs conditions.
+- https://developer.apple.com/documentation/usernotifications/unusernotificationcenterdelegate
+  Delegate must be installed before launch completes for notification actions.
+- https://developer.apple.com/documentation/usernotifications/handling-notifications-and-notification-related-actions
+  Foreground arrival and user response are different delegate paths.
+- https://github.com/actions/runner-images/issues/12747
+  Runner-image maintainers investigated missing APNs tokens in a VM-hosted
+  iOS Simulator. This is a risk signal only, NOT proof native macOS APNs is
+  unsupported, and NOT a reason to fake a token or assert all VMs fail.
+
+Before builder dispatches anything
+1. Root supplies the managed device-reachable isolated HTTPS origin and lease
+   lifetime covering build/sign/normal-login/acceptance. Use backend e04eb594
+   real handlers/DB/worker and production APNs endpoint under APP_ENV=test/dev.
+   Keep the nonproduction recipient guard and normal JWT/SID validation.
+   No production API credential, copied DB/token, new public port, guard
+   bypass, APP_ENV=production workaround or shared workflow-variable change.
+2. Builder owns workflow changes, export/signing/notarization and secret
+   handling. Freeze actual PRODUCT checkout separately from workflow SHA,
+   Flutter/Xcode/SDK/image/architecture/build counter/source-module hashes,
+   API origin, rollout flag, package hash, signing identity and profile.
+   Include 6184203 or the QA-verified equivalent in the product tree.
+3. Build one explicitly controlled acceptance App: compiled isolated origin,
+   PPVPNApplePushEnabled=true solely for this artifact, production macOS APS
+   entitlement and matching embedded Developer ID provisioning profile.
+   This differs from rollout-OFF production artifacts; it cannot be promoted
+   as their runtime acceptance or ordinary release. No post-sign plist edit,
+   ad hoc re-signing, get-task-allow or Gatekeeper bypass. Use the normal
+   notarization route if Gatekeeper requires it; never remove quarantine to
+   manufacture a successful launch. Record app executable and package hashes.
+4. Builder's full verifier checks identity/team/topic/production entitlement,
+   profile expiration/certificate membership, nested signatures/entitlements,
+   hardened runtime and applicable Gatekeeper/notarization assessment. The
+   helper below supplements that verifier; it does not replace it.
+5. Root reviews a packet containing those exact hashes, origin/account/lease,
+   machine+OS user, staged path, old-Agent coexistence mode, requested UI
+   permissions, exact event budget, evidence access/retention and stop rules.
+   Existing iPhone send authorization is not authorization for a Mac send.
+
+Credential and service isolation — source-specific facts at 6184203
+The current Flutter Mac AUTH credential is a 0600 file at
+~/Library/Application Support/PPVPN/credentials (credentials.rs); do not assume
+it is Keychain-only. Native APNs installation proof IS a nonsynchronizing,
+data-protection Keychain item scoped to desktop bundle/platform/environment,
+not to API origin (ApplePushInstallation.swift). Both must be clean before
+using an isolated backend. Reinstallation, renamed .app paths, an environment
+HOME change or PPVPN_FLUTTER_HOME alone do not isolate both stores. Do not
+read/copy/delete current credentials/proof or change their production names.
+Fresh VM or actual separate logged-in OS user is the boundary. Confirm a new
+test environment with no migrated PPVPN app data/keychain; use normal login
+to a dedicated owned bootstrap administrator in the leased DB (eligible for
+the existing recipient guard). Never elevate the ordinary review account.
+Browser device approval and token polling must share this origin/DB/audience
+ppvpn. Do not inject refresh/access JWTs. Reuse iphone-isolated-login API
+handoff for endpoints/validation, with platform macos/<actual architecture>.
+
+The current MainFlutterWindow always constructs PushAgentService. In an
+Applications folder with its bundled LaunchAgent plist it may register,
+kickstart or repair the old Agent. Also account startup may restore saved
+VPN settings and updater/login state. Consequently an unchanged packaged App
+must not be started in the current user's production environment under the
+present no-service/no-VPN-change constraint. Separate user does not isolate
+system privileged VPN services: use a dedicated machine for that fallback.
+
+For native-path attribution, prefer a controlled CI App before the legacy
+Agent packaging step, signed/notarized normally. Declare and inventory the
+omission as an acceptance-only package difference; do not remove files after
+signing. Place it in that clean user's Applications directory for normal OS
+registration. No Agent plist/helper should be present and no old Agent process
+or launchd job may exist. Do not uninstall/disable an existing Agent to obtain
+this condition. Absence in a fresh environment is the intended condition.
+Native callbacks must be evidenced independently of polling/local notifiers.
+An Agent-free probe tests the native path; it is NOT final packaged coexistence
+or evidence that the old Agent may now be removed from releases.
+
+Read-only helper (does not install, launch, register, log in or send)
+  python3 tools/apple/macos_apns_preflight.py \
+    --app "$REVIEWED_CANDIDATE_APP" --team "$EXPECTED_TEAM_ID" \
+    --output "$NEW_PRIVATE_PREFLIGHT_JSON"
+The output file must not exist. Report retains only selected booleans/build/
+main-executable hash. Codesign and CMS raw output, certificate bytes, process
+environment and Keychain contents are not saved. Runtime is always NOT RUN,
+even if every static check is true. Console-user and GUI-domain checks do not
+establish screen unlock, user consent, alert delivery or APNs connectivity.
+
+Hosted runner feasibility (builder owns a one-shot workflow; NOT dispatched)
+- Use an existing available standard Mac runner, same arch as the candidate
+  when possible. Run the real .app in the logged-in Aqua session through
+  LaunchServices (open reviewed path), never sudo/raw executable/headless
+  method invocations or a mock notification tool. Record GUI domain, console
+  uid, image version and actual launch outcome. No Apple ID login required
+  by this plan; do not add personal iCloud credentials to CI.
+- First allow at most 120 seconds to observe a fresh real OS registration
+  callback and matching real backend registration after normal sign-in.
+  Token must originate from that invocation of NSApplication, not a fixture,
+  prior VM, iPhone or pasted database row. Keep raw token/proof/JWT private;
+  correlate token hash, app topic/env, registration ID, current owned SID and
+  request IDs in the restricted operator record. Root verifies this mapping
+  before worker/send. Do not print the registration HTTP body to job logs.
+- Registration and user authorization are separate gates. The real app's
+  permission path is called after successful registration. An Allow prompt
+  must be observed and accepted through actual OS UI by an authorized human
+  or narrowly reviewed first-party UI test. Never write notification/TCC DBs,
+  install MDM overrides, disable SIP or use a local notification as APNs proof.
+  This plan does not assert hosted runner interaction is available. If not,
+  report token-only scope if proved, then stop and move to the clean physical
+  environment. No ad hoc remote-desktop tunnel as a workaround.
+- Bound total one-shot feasibility to 10 minutes after launch (including
+  normal login/permission), with no provider sends before root's device gate.
+  Timeout is environment/incomplete evidence, not a product PASS or universal
+  claim that macOS APNs cannot work. Dispose only resources owned by that job.
+
+Real-device execution matrix — proposed budget, NOT authorization to send
+Root may review one batch of THREE generic events, all to this exact owned
+Mac recipient in the isolated DB. Each row needs its own new delivery/message
+ID and event time; do not reuse an ID and accidentally exercise dedup only.
+If root authorizes only one event, run the first row and leave the others NOT
+RUN. Do not expand recipients or send additional retries automatically.
+
+F1 Foreground: normal signed-in app is frontmost. Operator runs the real
+Worker/PushAdapter for one generic alert. Correlate worker/outbox attempt,
+APNs status+apns-id, OS/native foreground arrival, authorized delivery read
+and correct inbox state. Verify UNPushNotificationTrigger path (not a local
+notification), presentation choice, and no window theft from a false reply.
+
+B1 Hidden/background-resident: close the window using normal UI; confirm
+the app PID remains. Send the next approved generic event. Observe actual
+OS banner/list and background remote callback when the OS supplies one.
+Click that OS notification; same app becomes active, reads the authorized
+delivery, and opens the matching inbox message once. No ppvpn:// URL injection,
+polling-only inbox reload or manual open used as a click substitute. Alert
+delivery alone does not prove the AppDelegate background callback; missing
+callback evidence remains NOT OBSERVED even if banner/click succeeds.
+
+C1 Cold click: keep the signed-in session, Quit via normal app UI (not
+logout/kill), confirm PID absent and old Agent absent in this fresh machine.
+Send the third approved generic alert while the app is not running. Observe
+the real OS notification and click it WITHOUT first launching the app. Record
+new PID/start time, early delegate installation, buffered click, normal auth
+restoration, authorized read and matching UI/window activation once. Merely
+reopening from Dock does not pass. No claim that silent/background pushes
+keep a quit app resident, or that macOS guarantees every alert after quit.
+
+Evidence needed for EACH row
+Use a private evidence directory, UTC event timestamps plus local timezone,
+exact candidate/provenance manifest, GUI state/PID-before/after, screenshots
+or reviewed UI-test artifacts, backend scoped request/outbox/delivery IDs and
+APNs response. APNs HTTP200 is provider acceptance, not device delivery.
+Current native receiver has no dedicated callback telemetry. Before claiming
+the callback-specific cells, builder/owner must supply a reviewed diagnostic
+trace for the same source/package or a first-party UI test that directly
+observes the callback path. If unavailable, record only externally observed
+end-to-end UI effects with Agent absence and leave callback cells NOT OBSERVED.
+No LLDB attach, method-channel injection, manually replayed payload or mock
+token can fill those cells. Do not claim this plan/helper already implements
+the UI driver or callback diagnostics. A separately instrumented package must
+be explicitly marked as different from the release candidate.
+Never collect credential files, installation secret, provider key/JWT, full
+HTTP bodies, whole Keychain, unfiltered unified logs or unrelated screenshots
+as CI artifacts. Use generic notification content only.
+
+Owner/quit boundaries without extra provider sends
+After approved deliveries, use normal logout: verify exact Unbind/drain then
+session revoke. Clicking the already delivered old-owner notification must
+not reveal old-account content or open a replacement account's message. Log
+back in normally as another dedicated owned test account only if included in
+the reviewed plan; otherwise that row remains NOT RUN. Dispose-in-flight QA
+6184203 controlled PASS remains supporting evidence, never this real UI result.
+
+Fallback approval packet for root's single human request
+Prepare first: actual signed App/package+SHA, full verifier, controlled origin
+and lease, exact clean Mac+OS user, proof of no imported PPVPN data/Keychain or
+Agent/system-VPN service, normal login path, three-event-or-smaller budget,
+UI permission list and rollback/cleanup. Then root asks for launch, normal
+login, notification Allow and the actual background/cold OS notification
+clicks on THAT clean environment. No launch on the user's current Mac/account
+unless a separately reviewed plan can meet the no-service/no-VPN constraints.
+The packet is not reviewable while artifact/origin/host fields are placeholders;
+do not ask the human to approve an unspecified future app now.
+
+Stop/cleanup and retirement gate
+On wrong origin/topic/environment/current SID, missing signature/permission,
+unexpected old Agent/production credentials, unapproved recipient, service
+prompt or VPN/autoconnect: stop before proceeding; do not mutate existing
+system services/routes/DNS/Surge to fix it. Backend operator stops and awaits
+only the owned worker and releases its lease, closes owned bindings through
+normal sign-out when possible, and records failures without stealing CAS
+ownership. Cleanup only the fresh job's/test user's owned data, not current
+production credentials/notifications/services; secrets remain backend-owned.
+
+Even all F1/B1/C1 passing is one controlled Mac-session acceptance, not stable
+channel/Agent-retirement authorization. Keep old Agent and rollout OFF in
+ordinary artifacts. Final exact packaged Mac coexistence, user-visible dedup,
+logout/account change, normal restart, dedicated-host sleep/wake and network
+recovery under a separately approved budget, supported-OS coverage and a
+reviewed rollback remain required. iPhone delivery cannot satisfy any Mac
+cell. Record remaining cells explicitly and let root decide a separate future
+Agent removal/rollout change after the evidence is reviewed.
