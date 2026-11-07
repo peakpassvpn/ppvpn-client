@@ -19,7 +19,9 @@ target="${1:-windows}"
 build_macos_triple() {
   local triple="$1"
   echo "building ppvpn-service for $triple"
-  (cd "$ROOT_DIR" && cargo build --locked -p ppvpn-service --profile service --target "$triple")
+  local runtime_features=()
+  [[ "${PPVPN_MACOS_SINGLE_RUNTIME:-0}" != 1 ]] || runtime_features=(--features macos-user-runtime)
+  (cd "$ROOT_DIR" && cargo build --locked -p ppvpn-service --profile service ${runtime_features[@]+"${runtime_features[@]}"} --target "$triple")
   local src_dir="$ROOT_DIR/target/$triple/service"
   for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
     cp "$src_dir/$bin" "$OUT_DIR/$bin-$triple"
