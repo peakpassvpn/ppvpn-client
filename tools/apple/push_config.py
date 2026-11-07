@@ -80,6 +80,12 @@ def prepare(info_path, entitlement_paths, platform, enabled, profile_path, topic
             raise ConfigurationError('APNs enabled without an explicit real provisioning profile')
         profile = decode_profile(profile_path)
         contract = profile_contract(profile, platform, topic)
+    if platform == 'ios' and enabled:
+        modes = info.get('UIBackgroundModes', [])
+        if not isinstance(modes, list) or not all(isinstance(value, str) for value in modes):
+            raise ConfigurationError('iOS background modes must be an array of strings')
+        if 'remote-notification' not in modes:
+            info['UIBackgroundModes'] = [*modes, 'remote-notification']
     # Validate every input before writing any generated file.
     entitlements = [(path, plistlib.loads(path.read_bytes())) for path in entitlement_paths]
     if identity_entitlements:
@@ -180,6 +186,10 @@ def check_contract(info, signed, profile, platform, expected_enabled, topic, dis
         raise ConfigurationError('distribution push requires production APNs and a distribution provision')
     if app_store and profile.get('ProvisionedDevices'):
         raise ConfigurationError('App Store export retains a device-limited provision')
+    if platform == 'ios':
+        modes = info.get('UIBackgroundModes', [])
+        if not isinstance(modes, list) or 'remote-notification' not in modes:
+            raise ConfigurationError('enabled iOS push export lacks remote-notification background mode')
     return {'enabled': True, 'topic': topic, 'environment': environment,
             'environment_source': 'matching final signed entitlements, embedded provision and app stamp'}
 

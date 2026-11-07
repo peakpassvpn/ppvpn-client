@@ -18,12 +18,48 @@ class PushContractTests(unittest.TestCase):
 
     def info(self, environment='production'):
         return {'CFBundleIdentifier': 'com.example.app', 'PPVPNApplePushEnabled': True,
-                'PPVPNAPNsEntitlementEnvironment': environment}
+                'PPVPNAPNsEntitlementEnvironment': environment, 'UIBackgroundModes': ['remote-notification']}
 
     def signed(self, platform='ios', environment='production'):
         return {push.ENV_KEYS[platform]: environment,
                 push.APP_KEYS[platform]: 'TESTTEAM00.com.example.app',
                 'com.apple.developer.team-identifier': 'TESTTEAM00'}
+
+    def test_enabled_ios_preserves_existing_background_modes_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            info = Path(temp) / 'Info.plist'; ent = Path(temp) / 'App.entitlements'
+            info.write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.app', 'UIBackgroundModes': ['audio']}))
+            ent.write_bytes(plistlib.dumps({}))
+            with patch.object(push, 'decode_profile', return_value=self.profile()):
+                for _ in range(2): push.prepare(info, [ent], 'ios', True, Path('fixture'), 'com.example.app')
+            self.assertEqual(plistlib.loads(info.read_bytes())['UIBackgroundModes'], ['audio', 'remote-notification'])
+
+    def test_off_and_macos_do_not_add_or_remove_background_modes(self):
+        for platform, enabled in [('ios', False), ('macos', True)]:
+            with tempfile.TemporaryDirectory() as temp:
+                info = Path(temp) / 'Info.plist'; ent = Path(temp) / 'App.entitlements'
+                info.write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.app', 'UIBackgroundModes': ['audio']}))
+                ent.write_bytes(plistlib.dumps({}))
+                with patch.object(push, 'decode_profile', return_value=self.profile(platform=platform)):
+                    push.prepare(info, [ent], platform, enabled, Path('fixture'), 'com.example.app')
+                self.assertEqual(plistlib.loads(info.read_bytes())['UIBackgroundModes'], ['audio'])
+
+    def test_enabled_ios_export_missing_mode_rejected_even_with_valid_aps(self):
+        for modes in [None, [], ['audio']]:
+            info = self.info(); info.pop('UIBackgroundModes')
+            if modes is not None: info['UIBackgroundModes'] = modes
+            with self.assertRaisesRegex(ValueError, 'background mode'):
+                push.check_contract(info, self.signed(), self.profile(), 'ios', True, 'com.example.app', distribution=True)
+
+    def test_malformed_modes_fail_before_generated_files_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            info = Path(temp) / 'Info.plist'; ent = Path(temp) / 'App.entitlements'
+            info.write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.app', 'UIBackgroundModes': 'audio'}))
+            ent.write_bytes(plistlib.dumps({})); before = info.read_bytes(), ent.read_bytes()
+            with patch.object(push, 'decode_profile', return_value=self.profile()):
+                with self.assertRaisesRegex(ValueError, 'background modes'):
+                    push.prepare(info, [ent], 'ios', True, Path('fixture'), 'com.example.app')
+            self.assertEqual(before, (info.read_bytes(), ent.read_bytes()))
 
     def test_production_and_development_come_from_actual_profile(self):
         for platform in ('ios', 'macos'):

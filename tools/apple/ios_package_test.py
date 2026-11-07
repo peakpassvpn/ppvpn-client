@@ -57,7 +57,7 @@ class IOSPackageContractTests(unittest.TestCase):
         info, ent, profile = self.fixture()
         profile['ApplicationIdentifierPrefix'] = ['OLDPREFIX']
         profile['ProvisionedDevices'] = ['fixture-device']
-        info.update(PPVPNApplePushEnabled=True, PPVPNAPNsEntitlementEnvironment='production')
+        info.update(PPVPNApplePushEnabled=True, PPVPNAPNsEntitlementEnvironment='production', UIBackgroundModes=['remote-notification'])
         ent['aps-environment'] = profile['Entitlements']['aps-environment'] = 'production'
         row = profile_contract(info, ent, profile, 'com.peakpassvpn.ppvpn', 'TEAM',
                                'group.product', '344', 'release-testing', True)
@@ -79,7 +79,7 @@ class IOSPackageContractTests(unittest.TestCase):
     def test_push_must_be_explicit_and_authorized_by_profile(self):
         info, ent, profile = self.fixture()
         profile['ApplicationIdentifierPrefix'] = ['OLDPREFIX']
-        info.update(PPVPNApplePushEnabled=True, PPVPNAPNsEntitlementEnvironment='production')
+        info.update(PPVPNApplePushEnabled=True, PPVPNAPNsEntitlementEnvironment='production', UIBackgroundModes=['remote-notification'])
         ent['aps-environment'] = 'production'
         with self.assertRaises(ValueError):
             self.check(info, ent, profile)
