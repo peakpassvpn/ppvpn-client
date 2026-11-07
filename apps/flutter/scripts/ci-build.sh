@@ -421,6 +421,7 @@ elif [ "$os" = ios ]; then
   echo "native-static-libs: $native"
   mkdir -p ios/rust
   cp "$root/target/$triple/release/libppvpn_flutter.a" ios/rust/
+  python3 scripts/check-ios-staticlib.py ios/rust/libppvpn_flutter.a runner/ios/Runner/Bridge.exports
   NATIVE="$native" python3 - <<'PY'
 import json, os
 path = "ios/Runner.xcodeproj/project.pbxproj"
@@ -602,6 +603,7 @@ case $os in
     if [ "${IOS_SDK:-device}" = simulator ]; then
       bundle=build/ios/iphonesimulator/Runner.app
       test -x "$bundle/Runner"
+      runner=$bundle/Runner
     elif [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
       bundle=$(ls build/ios/ipa/*.ipa)
       test -f "$bundle"
