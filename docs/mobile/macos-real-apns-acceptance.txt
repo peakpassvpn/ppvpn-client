@@ -175,15 +175,13 @@ Use a private evidence directory, UTC event timestamps plus local timezone,
 exact candidate/provenance manifest, GUI state/PID-before/after, screenshots
 or reviewed UI-test artifacts, backend scoped request/outbox/delivery IDs and
 APNs response. APNs HTTP200 is provider acceptance, not device delivery.
-Current native receiver has no dedicated callback telemetry. Before claiming
-the callback-specific cells, builder/owner must supply a reviewed diagnostic
-trace for the same source/package or a first-party UI test that directly
-observes the callback path. If unavailable, record only externally observed
-end-to-end UI effects with Agent absence and leave callback cells NOT OBSERVED.
-No LLDB attach, method-channel injection, manually replayed payload or mock
-token can fill those cells. Do not claim this plan/helper already implements
-the UI driver or callback diagnostics. A separately instrumented package must
-be explicitly marked as different from the release candidate.
+Native receivers/bridges now emit the fixed content-free OSLog receipts
+documented in apple-push-trace.txt. Builder must include that source change in
+the same signed package and capture the exact subsystem/category plus reviewed
+candidate process path/PID before the event. Missing receipts leave callback
+cells NOT OBSERVED. No LLDB attach, method-channel injection, manually replayed
+payload or mock token can fill those cells. The preflight helper itself does
+not implement a UI driver, and UI effects cannot replace callback receipts.
 Never collect credential files, installation secret, provider key/JWT, full
 HTTP bodies, whole Keychain, unfiltered unified logs or unrelated screenshots
 as CI artifacts. Use generic notification content only.

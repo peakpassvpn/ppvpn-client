@@ -74,15 +74,26 @@ final class MacApplePushBridge {
       }
     }
     receiver.state.attach(register: { [weak self] request in
-      self?.pendingEffects += 1
-      self?.channel?.invokeMethod("register", arguments: Self.arguments(request, clientEpoch: self?.clientEpoch ?? "")) { [weak self] reply in
-        self?.receiver.state.acknowledge(request, success: reply as? Bool == true)
-        self?.finishEffect()
+      guard let self else { return }
+      self.pendingEffects += 1
+      let epoch = self.clientEpoch
+      self.channel?.invokeMethod("register", arguments: Self.arguments(request, clientEpoch: epoch)) { [weak self] reply in
+        guard let self else { return }
+        let current = self.clientEpoch == epoch
+        let accepted = reply as? Bool == true && current
+        let admitted = self.receiver.state.acknowledge(request, success: accepted)
+        self.receiver.record(.bridgeRegisterReply, accepted: accepted && admitted, current: current)
+        self.finishEffect()
       }
     }, unregister: { [weak self] request in
-      self?.pendingEffects += 1
-      self?.channel?.invokeMethod("unregister", arguments: Self.arguments(request, clientEpoch: self?.clientEpoch ?? "")) { [weak self] _ in
-        self?.finishEffect()
+      guard let self else { return }
+      self.pendingEffects += 1
+      let epoch = self.clientEpoch
+      self.channel?.invokeMethod("unregister", arguments: Self.arguments(request, clientEpoch: epoch)) { [weak self] reply in
+        guard let self else { return }
+        let current = self.clientEpoch == epoch
+        self.receiver.record(.bridgeUnregisterReply, accepted: reply as? Bool == true && current, current: current)
+        self.finishEffect()
       }
     }, deliver: { [weak self] notice, opened in
       guard let self else { return }
@@ -107,7 +118,9 @@ final class MacApplePushBridge {
     if let id = notice.messageID { args["messageID"] = String(id) }
     let epoch = clientEpoch
     channel.invokeMethod("notice", arguments: args) { [weak self] reply in
-      let accepted = reply as? Bool == true && self?.clientEpoch == epoch
+      let current = self?.clientEpoch == epoch
+      let accepted = reply as? Bool == true && current
+      self?.receiver.record(.bridgeNoticeReply, accepted: accepted, current: current, opened: opened)
       if opened && accepted { self?.showWindow?() }
       completion(accepted)
     }

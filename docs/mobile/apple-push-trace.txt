@@ -1,0 +1,114 @@
+Native APNs callback receipts (iOS + macOS)
+
+Implementation is in the existing common ApplePushState.swift compilation unit
+as a separate ApplePushTrace type. The state machine does not emit logs.
+Platform receivers and bridges emit only when their native capability/rollout
+configuration is enabled. No workflow, flag, permission policy, profile, token
+storage, extra runtime/core or business protocol field is added by this change.
+OFF neither initializes the lazy Logger nor calls notification center,
+registration, permission or Keychain operations. Injected trace/system edges
+are for controlled tests; production defaults use OSLog and the real OS calls.
+
+Exact unified-log predicate (Info level):
+  subsystem == "com.peakpassvpn.ppvpn.apple-push" AND category == "lifecycle"
+
+Every public message has this fixed schema; values in braces are typed fixed
+enums, booleans encoded 0/1, or an NSError integer code:
+  apns stage={stage} accepted={0|1} current={0|1} opened={0|1} remote={0|1} domain={none|cocoa|url|os_status|other} code={integer}
+
+Stages and interpretation
+- register_requested: actual enabled receiver is about to call OS registration.
+  It is an attempt, not success. Retry can produce more than one attempt.
+- token_received: actual token callback ran in this process. accepted=1 means
+  nonempty token; no fixed length is assumed. This does NOT mean a new token
+  value, backend registration, provider acceptance or delivered notification.
+- registration_failed: only domain class + integer code. NSCocoaErrorDomain
+  maps cocoa, NSURLErrorDomain maps url, NSOSStatusErrorDomain maps os_status;
+  arbitrary/unknown error domains map other. Description/userInfo is omitted.
+- foreground_received: notification-center foreground delegate path entered.
+- background_received: AppDelegate remote callback forwarded to the receiver.
+  Neither foreground nor background callback proves inbox authorization.
+- tap_received: OS notification-response delegate path entered. opened=1 means
+  the default action, not completion of navigation. macOS can log opened=0 for
+  nondefault actions; iOS's existing handler only processes the default action.
+- bridge_register_reply: current is captured local clientEpoch equality;
+  accepted requires true Dart result, current epoch AND state-machine admission
+  of the exact outstanding registration. A superseded token request can have
+  current=1, accepted=0. No epoch/token/account value itself is recorded.
+- bridge_unregister_reply: true response in the captured current local epoch;
+  a late backend close may still have committed despite local rejection, so
+  this record is not proof that backend Unbind failed or succeeded.
+- bridge_notice_reply: true Dart response AND current local epoch; false/nil
+  or stale response records accepted=0. opened distinguishes hint from click.
+  iOS now also fences late replies before reporting newData to its OS fetch
+  completion, matching the macOS current-epoch guard and existing Dart fence.
+
+remote=1 on foreground/tap means UNPushNotificationTrigger, so local-notification
+callbacks do not count as APNs receipt. Background uses the dedicated forwarded
+remote AppDelegate path. Other stage flags use defaults where not applicable;
+do not infer rejection from accepted=0 on an arrival/attempt stage. Multiple
+OS callback paths may refer to one delivery. These logs intentionally contain
+no token/hash, nonce, account, installation/binding/registration/message/delivery
+ID, content, URL, key, bearer, refresh token or localized failure text. Correlate
+an approved single event by the externally reviewed device/PID/time window and
+separate backend operator evidence, not by adding sensitive IDs to this log.
+
+macOS capture — prepare before the authorized candidate launch/cold tap
+The collector is offline: it never executes log or controls the app/device.
+On the approved clean host, use the reviewed installed executable path from
+the exact signed bundle. Neither a process name nor subsystem alone is enough
+to exclude controlled-test fixtures. Actual OS metadata path must match; if
+App Translocation changes it, resolve that through normal approved installation
+and signing, never disable Gatekeeper or silently loosen the filter.
+
+  /usr/bin/log stream --style ndjson --level info \
+    --predicate 'subsystem == "com.peakpassvpn.ppvpn.apple-push" AND category == "lifecycle"' \
+    | python3 tools/apple/apns_trace_receipts.py \
+        --process-path "$REVIEWED_INSTALLED_EXECUTABLE" \
+        --output "$NEW_PRIVATE_RECEIPTS_NDJSON"
+
+Use --pid "$OBSERVED_CANDIDATE_PID" instead if the PID is already known, and
+repeat --pid for explicitly observed candidate PIDs when filtering an approved
+existing NDJSON source. --process-path allows cold-launch PID changes while
+streaming from before launch. Do not redirect the raw upstream log into an
+artifact. Stop only this owned capture process after the reviewed event window;
+receipts are flushed incrementally. The collector creates output exclusively
+with mode0600, accepts only exact subsystem/category/source/schema and copies
+only fixed receipt fields. It discards unrelated/malformed/oversized events,
+extra metadata, arbitrary domains, URL/body suffixes and embedded newlines.
+Its summary says runtime_acceptance=NOT INFERRED, including for zero receipts.
+OS logging availability/retention/drops can hide Info events; absent logs mean
+NOT OBSERVED, never callback absence, rollout OFF or no-error proof. Start live
+capture before the scenario rather than depending on later Info persistence.
+
+iPhone capture — no LLDB or app relaunch required by the logging change
+Use Apple's Console.app on the already paired Mac, select the specific connected
+iPhone in Devices, enable Info messages, start capture before the approved app
+launch/event, then set these exact search properties and the observed app PID:
+  subsystem:com.peakpassvpn.ppvpn.apple-push category:lifecycle pid:{observedPID}
+After a cold launch, update PID selection to the observed new candidate PID
+and inspect the already captured matching interval, not merely new arrivals.
+Only retain selected fixed-schema receipt messages and the reviewed source/time
+metadata. Do not save an unfiltered device log/archive or other processes' rows.
+If an approved log source supplies real unified-log NDJSON, the same collector
+can filter it with the observed device-app PID(s). Console text exports are NOT
+claimed to be NDJSON and the collector deliberately will not guess their format.
+If this host cannot expose the paired device logs/Info messages, report that
+capture unavailable; do not substitute synthetic records, UI changes or a
+devicectl process list. No devicectl launch command is needed to gather logs.
+Apple source: https://support.apple.com/guide/console/log-messages-cnsl1012/mac
+Property shortcuts: https://support.apple.com/guide/console/cnsl707fe51a/mac
+
+Evidence boundaries
+The selected package must contain this trace change and its actual binary hash
+must be supplied by builder. Rebuild Swift native integration and re-sign; a
+script or copied source file beside an old signed app does not add receipts.
+The common unit is already included by existing iOS source preparation and
+macos_push_hooks.py; no additional source-list or workflow edit is required.
+Controlled runtime tests deliberately inject a receipt sink and do not emit
+production OSLog receipts. Their output cannot satisfy actual APNs acceptance.
+Actual foreground/background/cold-click cells need matching native receipts,
+real provider/worker evidence, authorized read and real UI observations. A tap
+receipt alone does not prove window navigation, correct account or stability.
+The no-Agent-retirement, production credential isolation, exact recipient and
+event-budget gates in macos-real-apns-acceptance.txt still apply.

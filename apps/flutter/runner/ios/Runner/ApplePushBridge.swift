@@ -7,7 +7,9 @@ import UIKit
 @MainActor
 final class IOSApplePushBridge {
   static let shared = IOSApplePushBridge()
-  let receiver = IOSApplePushReceiver()
+  let receiver: IOSApplePushReceiver
+  init(receiver: IOSApplePushReceiver) { self.receiver = receiver }
+  convenience init() { self.init(receiver: IOSApplePushReceiver()) }
   private var channel: FlutterMethodChannel?
   private var clientEpoch = "0"
   private var pendingEffects = 0
@@ -62,15 +64,26 @@ final class IOSApplePushBridge {
       }
     }
     receiver.state.attach(register: { [weak self] request in
-      self?.pendingEffects += 1
-      self?.channel?.invokeMethod("register", arguments: Self.arguments(request, clientEpoch: self?.clientEpoch ?? "")) { [weak self] reply in
-        self?.receiver.state.acknowledge(request, success: reply as? Bool == true)
-        self?.finishEffect()
+      guard let self else { return }
+      self.pendingEffects += 1
+      let epoch = self.clientEpoch
+      self.channel?.invokeMethod("register", arguments: Self.arguments(request, clientEpoch: epoch)) { [weak self] reply in
+        guard let self else { return }
+        let current = self.clientEpoch == epoch
+        let accepted = reply as? Bool == true && current
+        let admitted = self.receiver.state.acknowledge(request, success: accepted)
+        self.receiver.record(.bridgeRegisterReply, accepted: accepted && admitted, current: current)
+        self.finishEffect()
       }
     }, unregister: { [weak self] request in
-      self?.pendingEffects += 1
-      self?.channel?.invokeMethod("unregister", arguments: Self.arguments(request, clientEpoch: self?.clientEpoch ?? "")) { [weak self] _ in
-        self?.finishEffect()
+      guard let self else { return }
+      self.pendingEffects += 1
+      let epoch = self.clientEpoch
+      self.channel?.invokeMethod("unregister", arguments: Self.arguments(request, clientEpoch: epoch)) { [weak self] reply in
+        guard let self else { return }
+        let current = self.clientEpoch == epoch
+        self.receiver.record(.bridgeUnregisterReply, accepted: reply as? Bool == true && current, current: current)
+        self.finishEffect()
       }
     }, deliver: { [weak self] notice, opened in
       guard let self, opened || !self.receiver.receivingBackground else { return }
@@ -96,7 +109,13 @@ final class IOSApplePushBridge {
     if let id = notice.accountID { args["accountID"] = id }
     // Decimal strings avoid JavaScript/Dart web integer precision surprises.
     if let id = notice.messageID { args["messageID"] = String(id) }
-    channel.invokeMethod("notice", arguments: args) { reply in completion(reply as? Bool == true) }
+    let epoch = clientEpoch
+    channel.invokeMethod("notice", arguments: args) { [weak self] reply in
+      let current = self?.clientEpoch == epoch
+      let accepted = reply as? Bool == true && current
+      self?.receiver.record(.bridgeNoticeReply, accepted: accepted, current: current, opened: opened)
+      completion(accepted)
+    }
   }
 
   private static func arguments(_ r: ApplePushRegistration, clientEpoch: String) -> [String: Any] {

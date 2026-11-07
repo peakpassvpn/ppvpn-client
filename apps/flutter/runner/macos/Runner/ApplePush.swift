@@ -29,6 +29,7 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   let configured: Bool
   private let system: MacApplePushSystem
   private weak var previousDelegate: UNUserNotificationCenterDelegate?
+  private let trace: @MainActor (ApplePushTrace.Receipt) -> Void
   var registrationFailed: ((String, Int) -> Void)?
 
   convenience init(bundle: Bundle = .main) {
@@ -42,11 +43,12 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
               system: .live)
   }
 
-  init(app: ApplePushApp?, enabled: Bool, system: MacApplePushSystem) {
+  init(app: ApplePushApp?, enabled: Bool, system: MacApplePushSystem, trace: @escaping @MainActor (ApplePushTrace.Receipt) -> Void = ApplePushTrace.emit) {
     self.app = app
     configured = enabled && app != nil
     state = ApplePushState(app: configured ? app : nil)
     self.system = system
+    self.trace = trace
     super.init()
   }
 
@@ -70,6 +72,7 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   func start() -> Bool {
     guard configured else { return false }
     prepareForLaunch()
+    record(.registerRequested)
     system.register()
     return true
   }
@@ -79,11 +82,23 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
     system.permission()
   }
 
-  func didRegister(token: Data) { if configured { state.receiveToken(token) } }
+  func record(_ stage: ApplePushTrace.Stage, accepted: Bool = false, current: Bool = true,
+    opened: Bool = false, remote: Bool = false, error: NSError? = nil) {
+    guard configured else { return }
+    trace(ApplePushTrace.Receipt(stage, accepted: accepted, current: current,
+      opened: opened, remote: remote, error: error))
+  }
+
+  func didRegister(token: Data) {
+    guard configured else { return }
+    record(.tokenReceived, accepted: !token.isEmpty)
+    state.receiveToken(token)
+  }
 
   func didFailToRegister(_ error: Error) {
     guard configured else { return }
     let failure = error as NSError
+    record(.registrationFailed, error: failure)
     // No token, notification body, localized error text or bearer is logged.
     registrationFailed?(failure.domain, failure.code)
   }
@@ -91,7 +106,9 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   // Forward NSApplicationDelegate's didReceiveRemoteNotification for a
   // refresh hint. This does not claim to keep the application resident.
   func receiveBackground(_ userInfo: [AnyHashable: Any]) {
-    guard configured, let notice = ApplePushNotice(userInfo: userInfo, fallbackID: UUID().uuidString) else { return }
+    guard configured else { return }
+    record(.backgroundReceived, remote: true)
+    guard let notice = ApplePushNotice(userInfo: userInfo, fallbackID: UUID().uuidString) else { return }
     state.receive(notice, opened: false)
   }
 
@@ -105,6 +122,7 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
         } else { completionHandler([]) }
         return
       }
+      self.record(.foregroundReceived, remote: true)
       guard self.configured, let notice = ApplePushNotice(userInfo: notification.request.content.userInfo,
         fallbackID: notification.request.identifier) else { completionHandler([]); return }
       let accepted = self.state.receive(notice, opened: false)
@@ -122,6 +140,7 @@ final class MacApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
         } else { completionHandler() }
         return
       }
+      self.record(.tapReceived, opened: response.actionIdentifier == UNNotificationDefaultActionIdentifier, remote: true)
       if self.configured, response.actionIdentifier == UNNotificationDefaultActionIdentifier,
         let notice = ApplePushNotice(userInfo: response.notification.request.content.userInfo,
           fallbackID: response.notification.request.identifier) {
