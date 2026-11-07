@@ -186,7 +186,11 @@ void main() {
               if (cycle == 2) {
                 // The rival establish() makes Android revoke this provider;
                 // production TunnelService.onRevoke(), not a test method call.
-                final armed = await _controlCall('revoke');
+                final armed = await _controlCall(
+                  'revoke',
+                  const {},
+                  tcpWitness.requireOpen,
+                );
                 expect(armed['takeover_armed'], isTrue);
               } else {
                 await _rpc('/v1/stop');
@@ -467,20 +471,22 @@ Future<dynamic> _rpc(
 Future<Map<String, dynamic>> _controlCall(
   String path, [
   Map<String, dynamic> body = const {},
+  void Function()? beforeReceipt,
 ]) async {
   final socket = await Socket.connect(
     '10.0.2.2',
     18090,
     timeout: const Duration(seconds: 10),
   );
-  return _controlExchange(socket, path, body);
+  return _controlExchange(socket, path, body, beforeReceipt: beforeReceipt);
 }
 
 Future<Map<String, dynamic>> _controlExchange(
   Socket socket,
   String path,
-  Map<String, dynamic> body,
-) async {
+  Map<String, dynamic> body, {
+  void Function()? beforeReceipt,
+}) async {
   // Control shares the captured network. Revoke must wait for a receipt of
   // its complete reply before tearing down that same network.
   final chunks = StreamIterator<List<int>>(socket);
@@ -509,6 +515,9 @@ Future<Map<String, dynamic>> _controlExchange(
         receipt is String && RegExp(r'^[0-9a-f]{32}$').hasMatch(receipt),
         isTrue,
       );
+      // The receipt commits the disruptive action. The held TCP must still
+      // be alive after arming, immediately before authorizing that action.
+      beforeReceipt?.call();
       // Emitted only after parsing the complete successful armed reply.
       socket.add(ascii.encode('$receipt\n'));
       await socket.flush();
