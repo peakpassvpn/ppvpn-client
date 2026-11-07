@@ -152,6 +152,10 @@ case $os in
     sed -i.orig -e '/title=/s/APP_NAME/PPVPN/g' -e '/title=/s/ppvpn_flutter/PPVPN/g' "$xib"
     rm "$xib.orig"
     plist=macos/Runner/Info.plist
+    /usr/libexec/PlistBuddy -c "Delete :PPVPNMacRuntimeLayout" "$plist" 2>/dev/null || true
+    if [ "${PPVPN_MACOS_SINGLE_RUNTIME:-0}" = 1 ]; then
+      /usr/libexec/PlistBuddy -c "Add :PPVPNMacRuntimeLayout string user-core-broker-v1" "$plist"
+    fi
     for key in CFBundleDisplayName LSApplicationCategoryType LSUIElement CFBundleLocalizations; do
       /usr/libexec/PlistBuddy -c "Delete :$key" "$plist" 2>/dev/null || true
     done
@@ -505,6 +509,8 @@ PY
   ruby -e 'require "xcodeproj"' 2>/dev/null || gem install --user-install --no-document xcodeproj -v 1.27.0
   ruby scripts/ios-tunnel-target.rb ios/Runner.xcodeproj "$version" "$build"
 elif [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
+  runtime_features=()
+  [ "${PPVPN_MACOS_SINGLE_RUNTIME:-0}" != 1 ] || runtime_features=(--features ppvpn-desktop/macos-user-runtime)
   # Flutter's release app is universal; package-app.sh thins each DMG's copy.
   slices=()
   for arch in $MACOS_ARCHS; do
@@ -513,7 +519,7 @@ elif [ "$os" = macos ] && [ -n "${MACOS_ARCHS:-}" ]; then
       x86_64) triple=x86_64-apple-darwin ;;
       *) echo "unsupported arch in MACOS_ARCHS: $arch" >&2; exit 1 ;;
     esac
-    (cd "$root" && cargo build --release --locked -p ppvpn-flutter --target "$triple")
+    (cd "$root" && cargo build --release --locked -p ppvpn-flutter ${runtime_features[@]+"${runtime_features[@]}"} --target "$triple")
     slices+=("$root/target/$triple/release/libppvpn_flutter.dylib")
   done
   lib="$root/target/universal-apple-darwin/release"
@@ -529,8 +535,12 @@ else
   # so the dependencies they share compile once, and package-linux.sh's and
   # package-windows.ps1's build, the same command, finds them built.
   agent=()
+  runtime_features=()
+  if [ "$os" = macos ] && [ "${PPVPN_MACOS_SINGLE_RUNTIME:-0}" = 1 ]; then
+    runtime_features=(--features ppvpn-desktop/macos-user-runtime)
+  fi
   case $os in linux | windows) agent=(-p ppvpn-push-agent) ;; esac
-  (cd "$root" && cargo build --release --locked -p ppvpn-flutter ${agent[@]+"${agent[@]}"})
+  (cd "$root" && cargo build --release --locked -p ppvpn-flutter ${agent[@]+"${agent[@]}"} ${runtime_features[@]+"${runtime_features[@]}"})
 fi
 if [ "$os" = android ]; then
   # versionCode must be positive.

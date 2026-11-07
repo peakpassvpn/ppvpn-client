@@ -19,6 +19,7 @@ OUT_DIR="${1:-$REPO_DIR/apps/macos/PPVPNClient}"
 PROFILE=release
 [[ "${2:-}" == "--debug" ]] && PROFILE=debug
 CARGO_FLAGS=(--locked)
+[[ "${PPVPN_MACOS_SINGLE_RUNTIME:-0}" != 1 ]] || CARGO_FLAGS+=(--features macos-user-runtime)
 [[ "$PROFILE" == release ]] && CARGO_FLAGS+=(--release)
 read -r -a TARGETS <<< "${PPVPN_APPLE_TARGETS:-aarch64-apple-darwin x86_64-apple-darwin}"
 LIB=libppvpn_client.dylib
