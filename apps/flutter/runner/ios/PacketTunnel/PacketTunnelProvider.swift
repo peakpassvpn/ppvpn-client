@@ -26,6 +26,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private var lifecycleEpoch: UInt64 = 0
   private var stopping = false
   private var starting = false
+  private var settingsUncertain = false
+  private var initialSettingsPending = false
   private let stopLock = NSLock()
   // All admission and public writes run on queue. A sync barrier fences even
   // an output packet already dequeued from Rust before detach returns.
@@ -35,7 +37,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
     queue.async { [self] in
-      guard !starting, !stopping, host == nil else {
+      guard !starting, !stopping, !settingsUncertain, host == nil else {
         return completionHandler(TunnelError("provider lifecycle is busy"))
       }
       lifecycleEpoch &+= 1
@@ -75,14 +77,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       log.error("tun settings: \(error.localizedDescription, privacy: .public)")
       return completionHandler(error)
     }
+    initialSettingsPending = true
     setTunnelNetworkSettings(network) { [weak self] error in
       guard let self else { return completionHandler(TunnelError("the provider is gone")) }
       self.queue.async {
+      self.initialSettingsPending = false
       guard self.lifecycleEpoch == epoch, !self.stopping else {
         self.setTunnelNetworkSettings(nil) { _ in }
         return completionHandler(TunnelError("tunnel startup cancelled"))
       }
       if let error {
+        self.settingsUncertain = true
         self.log.error("network settings: \(error.localizedDescription, privacy: .public)")
         return completionHandler(error)
       }
@@ -138,6 +143,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     let oldHost: TunnelHost? = queue.sync {
       stopping = true
       starting = false
+      // An outstanding initial settings operation cannot be cancelled/joined
+      // through a public API. Quarantine this provider instead of reusing it.
+      if initialSettingsPending { settingsUncertain = true }
       lifecycleEpoch &+= 1
       stopWatching()
       fencePackets()
@@ -149,7 +157,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     oldHost?.stop()
     let cleared = PacketSettingsCompletion()
     setTunnelNetworkSettings(nil) { error in cleared.finish(error == nil) }
-    if !cleared.wait() { log.error("stop settings did not settle") }
+    if !cleared.wait() {
+      queue.sync { settingsUncertain = true }
+      log.error("stop settings did not settle")
+    }
     queue.sync { stopping = false }
   }
 
@@ -194,7 +205,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   /// Rust calls on its blocking pool, never queue. An uncertain settings
   /// timeout cancels this provider; it never certifies a clean OS rollback.
   private func configurePackets(generation: UInt64, json: String?) -> Bool {
-    let allowed = queue.sync { fencePackets(); return json == nil || !stopping }
+    let allowed = queue.sync { fencePackets(); return json == nil || (!stopping && !settingsUncertain) }
     guard allowed else { return false }
     let settings: NEPacketTunnelNetworkSettings?
     do {
@@ -203,12 +214,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     let completion = PacketSettingsCompletion()
     setTunnelNetworkSettings(settings) { error in completion.finish(error == nil) }
     guard completion.wait() else {
+      queue.sync { settingsUncertain = true }
       cancelTunnelWithError(TunnelError("packet settings did not settle"))
       return false
     }
     if json != nil {
       let admitted = queue.sync { () -> Bool in
-        guard !stopping else { return false }
+        guard !stopping, !settingsUncertain else { return false }
         packetGeneration = generation
         readPackets(generation: generation)
         let timer = DispatchSource.makeTimerSource(queue: queue)
