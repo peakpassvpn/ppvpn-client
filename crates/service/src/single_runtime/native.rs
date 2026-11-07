@@ -378,6 +378,7 @@ impl Resources {
             boot: boot()?,
             key: key.clone(),
             settings: settings.clone(),
+            routes_via_address: true,
             published: vec![false; routes.len()],
         };
         let mut resource = Self {
@@ -454,7 +455,13 @@ impl Resources {
         for i in 0..self.routes.len() {
             if self.published[i] {
                 let (family, prefix) = self.routes[i];
-                if !route_owned(&self.name, family, prefix)? {
+                if !route_owned(
+                    &self.name,
+                    family,
+                    prefix,
+                    &self.settings,
+                    self.journal.routes_via_address,
+                )? {
                     self.published[i] = false;
                 }
             }
@@ -464,17 +471,13 @@ impl Resources {
                 self.published[i] = true;
                 self.save()?;
                 let (family, prefix) = self.routes[i];
-                command(
-                    "/sbin/route",
-                    &[
-                        "-n",
-                        "add",
-                        family,
-                        "-net",
-                        prefix,
-                        "-interface",
-                        &self.name,
-                    ],
+                route_change(
+                    &self.name,
+                    &self.settings,
+                    self.journal.routes_via_address,
+                    "add",
+                    family,
+                    prefix,
                 )?;
             }
         }
@@ -497,7 +500,13 @@ impl Resources {
         if dns.is_ok() {
             self.dns_live = false;
         }
-        let routes = clear_routes(&self.name, &self.routes, &mut self.published);
+        let routes = clear_routes(
+            &self.name,
+            &self.routes,
+            &mut self.published,
+            &self.settings,
+            self.journal.routes_via_address,
+        );
         self.save()?;
         dns?;
         routes
@@ -547,6 +556,10 @@ struct Journal {
     key: String,
     settings: Settings,
     published: Vec<bool>,
+    // Older journals describe link-interface routes. Recovery must retain that
+    // exact deletion form rather than interpreting them as gateway routes.
+    #[serde(default)]
+    routes_via_address: bool,
 }
 fn boot() -> Result<i64> {
     let mut value: libc::timeval = unsafe { std::mem::zeroed() };
@@ -656,9 +669,22 @@ fn command_output(program: &str, args: &[&str]) -> Result<String> {
 }
 /// A longest-prefix result is not necessarily the requested route. Verify the
 /// exact /1 mask and network as well as the unique owned interface before delete.
-fn route_owned(name: &str, family: &str, prefix: &str) -> Result<bool> {
+fn route_owned(
+    name: &str,
+    family: &str,
+    prefix: &str,
+    settings: &Settings,
+    via_address: bool,
+) -> Result<bool> {
     let text = command_output("/sbin/route", &["-n", "get", family, "-net", prefix])?;
-    Ok(route_matches(&text, name, family, prefix))
+    Ok(route_matches_owned(
+        &text,
+        name,
+        family,
+        prefix,
+        settings,
+        via_address,
+    ))
 }
 fn route_matches(text: &str, name: &str, family: &str, prefix: &str) -> bool {
     let field = |key: &str| {
@@ -679,20 +705,93 @@ fn route_matches(text: &str, name: &str, family: &str, prefix: &str) -> bool {
     };
     exact && field("interface:") == Some(name)
 }
-fn clear_routes(name: &str, routes: &[(&str, &str)], published: &mut [bool]) -> Result<()> {
+fn route_gateway<'a>(settings: &'a Settings, family: &str) -> &'a str {
+    let address = if family == "-inet" {
+        settings.ipv4_address.as_str()
+    } else {
+        settings
+            .ipv6_address
+            .as_deref()
+            .expect("validated IPv6 route")
+    };
+    address.split('/').next().unwrap()
+}
+fn route_matches_owned(
+    text: &str,
+    name: &str,
+    family: &str,
+    prefix: &str,
+    settings: &Settings,
+    via_address: bool,
+) -> bool {
+    if !route_matches(text, name, family, prefix) {
+        return false;
+    }
+    if !via_address {
+        return true;
+    }
+    let field = |key: &str| {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix(key).map(str::trim))
+    };
+    field("gateway:") == Some(route_gateway(settings, family))
+        && field("flags:").is_some_and(|flags| {
+            flags
+                .trim_matches(['<', '>'])
+                .split(',')
+                .any(|flag| flag.trim() == "GATEWAY")
+        })
+}
+fn route_arguments<'a>(
+    name: &'a str,
+    settings: &'a Settings,
+    via_address: bool,
+    operation: &'a str,
+    family: &'a str,
+    prefix: &'a str,
+) -> Vec<&'a str> {
+    let mut args = vec!["-n", operation, family, "-net", prefix];
+    if via_address {
+        args.push(route_gateway(settings, family));
+    } else {
+        args.extend(["-interface", name]);
+    }
+    args
+}
+fn route_change(
+    name: &str,
+    settings: &Settings,
+    via_address: bool,
+    operation: &str,
+    family: &str,
+    prefix: &str,
+) -> Result<()> {
+    // As Sail's native macOS backend: an IP gateway at the tunnel's own
+    // address. A link-interface /1 suppresses physical scoped lookups on BSD.
+    command(
+        "/sbin/route",
+        &route_arguments(name, settings, via_address, operation, family, prefix),
+    )
+}
+fn clear_routes(
+    name: &str,
+    routes: &[(&str, &str)],
+    published: &mut [bool],
+    settings: &Settings,
+    via_address: bool,
+) -> Result<()> {
     let mut failed = false;
     for i in (0..routes.len()).rev() {
         if published[i] {
             let (family, prefix) = routes[i];
-            match route_owned(name, family, prefix) {
+            match route_owned(name, family, prefix, settings, via_address) {
                 Ok(false) => published[i] = false,
-                Ok(true) => match command(
-                    "/sbin/route",
-                    &["-n", "delete", family, "-net", prefix, "-interface", name],
-                ) {
-                    Ok(()) => published[i] = false,
-                    Err(_) => failed = true,
-                },
+                Ok(true) => {
+                    match route_change(name, settings, via_address, "delete", family, prefix) {
+                        Ok(()) => published[i] = false,
+                        Err(_) => failed = true,
+                    }
+                }
                 Err(_) => failed = true,
             }
         }
@@ -757,7 +856,13 @@ pub fn recover() -> Result<()> {
     }
     let dns = Store::new()?;
     let removed = dns.remove(&j.key);
-    let routes = clear_routes(&j.name, &routes, &mut j.published);
+    let routes = clear_routes(
+        &j.name,
+        &routes,
+        &mut j.published,
+        &j.settings,
+        j.routes_via_address,
+    );
     let down = if marked(&j)? {
         command("/sbin/ifconfig", &[&j.name, "down"])
     } else {
@@ -788,6 +893,80 @@ mod ownership_tests {
         let mut invalid = settings;
         invalid.dns_servers = vec!["192.0.2.1".into()];
         assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn gateway_routes_preserve_exact_ownership_and_legacy_journal_semantics() {
+        let core = ppvpn_core::tun_settings(ppvpn_core::Platform::Ios).unwrap();
+        let settings = Settings {
+            mtu: core.mtu,
+            ipv4_address: core.ipv4_address,
+            ipv6_address: Some(core.ipv6_address),
+            dns_servers: core.dns_servers,
+        };
+        assert_eq!(
+            route_arguments("utun99", &settings, true, "add", "-inet", "0.0.0.0/1"),
+            vec!["-n", "add", "-inet", "-net", "0.0.0.0/1", "10.60.159.89"]
+        );
+        assert_eq!(
+            route_arguments("utun99", &settings, false, "delete", "-inet", "0.0.0.0/1"),
+            vec![
+                "-n",
+                "delete",
+                "-inet",
+                "-net",
+                "0.0.0.0/1",
+                "-interface",
+                "utun99"
+            ]
+        );
+        assert_eq!(route_gateway(&settings, "-inet6"), "fde2:ec40:9312:c7fd::1");
+        let text="destination: 128.0.0.0\nmask: 128.0.0.0\ninterface: utun99\ngateway: 10.60.159.89\nflags: <UP,GATEWAY,STATIC>\n";
+        assert!(route_matches_owned(
+            text,
+            "utun99",
+            "-inet",
+            "128.0.0.0/1",
+            &settings,
+            true
+        ));
+        assert!(!route_matches_owned(
+            &text.replace("10.60.159.89", "192.0.2.1"),
+            "utun99",
+            "-inet",
+            "128.0.0.0/1",
+            &settings,
+            true
+        ));
+        assert!(!route_matches_owned(
+            &text.replace("GATEWAY,", ""),
+            "utun99",
+            "-inet",
+            "128.0.0.0/1",
+            &settings,
+            true
+        ));
+        let journal = Journal {
+            name: "utun99".into(),
+            index: 99,
+            marker: "fd00::1".parse().unwrap(),
+            boot: 1,
+            key: "fixture".into(),
+            settings,
+            published: vec![true; 4],
+            routes_via_address: true,
+        };
+        let mut old = serde_json::to_value(&journal).unwrap();
+        old.as_object_mut().unwrap().remove("routes_via_address");
+        assert!(
+            !serde_json::from_value::<Journal>(old)
+                .unwrap()
+                .routes_via_address
+        );
+        assert!(
+            serde_json::from_value::<Journal>(serde_json::to_value(journal).unwrap())
+                .unwrap()
+                .routes_via_address
+        );
     }
     #[test]
     fn cleanup_never_accepts_a_default_fallback_or_foreign_interface() {
