@@ -159,18 +159,18 @@ async fn socks_reply(stream: &mut TcpStream) -> std::net::SocketAddr {
 // Native-only probes originate as ordinary OS sockets: unlike the held mixed
 // streams they must enter the utun before reaching core DNS and physical egress.
 async fn native_ingress_probes(sequence: u16) {
-    let mut tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect("1.1.1.1:80"))
-        .await
-        .unwrap()
-        .unwrap();
-    tcp.write_all(b"GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n")
-        .await
-        .unwrap();
-    let response = tokio::time::timeout(Duration::from_secs(10), header(&mut tcp))
-        .await
-        .unwrap();
-    assert!(response.starts_with(b"HTTP/1."));
-    eprintln!("native-ingress physical-http=passed");
+    let http=tokio::time::timeout(Duration::from_secs(10),async {
+        let mut tcp=TcpStream::connect("1.1.1.1:80").await?;
+        tcp.write_all(b"GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n").await?;
+        let mut response=Vec::new();
+        while !response.ends_with(b"\r\n\r\n") {
+            response.push(tcp.read_u8().await?);
+            if response.len()>=8192 { return Err(std::io::Error::other("HTTP_HEADER_LIMIT")); }
+        }
+        Ok::<_,std::io::Error>(response.starts_with(b"HTTP/1."))
+    }).await;
+    let http_ok=matches!(http,Ok(Ok(true)));
+    eprintln!("native-ingress physical-http={http_ok} outcome={:?}",http.as_ref().map(|r|r.as_ref().map(|_|()).map_err(|e|(e.kind(),e.raw_os_error()))));
     let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
     let mut query = sequence.to_be_bytes().to_vec();
     query.extend_from_slice(&[1, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
@@ -187,9 +187,10 @@ async fn native_ingress_probes(sequence: u16) {
         "10.60.159.90:53".parse::<std::net::SocketAddr>().unwrap()
     );
     assert_eq!(&answer[..2], &sequence.to_be_bytes());
+    eprintln!("native-ingress dns-rcode={} answers={}",answer[3]&15,u16::from_be_bytes([answer[6],answer[7]]));
     assert_eq!(answer[3] & 15, 0);
     assert!(u16::from_be_bytes([answer[6], answer[7]]) > 0);
-
+    assert!(http_ok,"native HTTP probe failed");
 }
 async fn echo(stream: &mut TcpStream, sequence: u32) {
     let bytes = sequence.to_be_bytes();
