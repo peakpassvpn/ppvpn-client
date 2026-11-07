@@ -14,8 +14,10 @@ Candidate implementation
   Running-tunnel probes and latency sampling use its existing Core API.
   Tablet layouts hide compatible/system proxy and local proxy copy controls.
   Pins, selection, routing and traffic already use TunnelMode; no new wire.
-  Native VpnService socket protect/network/onRevoke/foreground notification
-  and PacketTunnel lifecycle/packet descriptor code are untouched.
+  Native socket protect stays on the public VpnService path. Native
+  callback ownership, lifecycle barriers and foreground notification are
+  hardened; iOS forwarding now uses public packetFlow rather than a private
+  utun descriptor scan. See android-acceptance.txt for controlled CI checks.
 
 Consumed core-owner commits
   94ec64d and ea59e30 were cherry-picked without authoring changes to public

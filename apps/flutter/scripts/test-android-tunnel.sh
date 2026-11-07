@@ -6,7 +6,9 @@ app=$(cd "$(dirname "$0")/.." && pwd)
 work="$app/build/android-tunnel-tests"
 main="$work/app/src/main"
 tests="$work/app/src/test/kotlin/com/peakpassvpn/ppvpn"
-mkdir -p "$main/kotlin/com/peakpassvpn/ppvpn/tunnel" "$tests"
+mkdir -p "$main/kotlin/com/peakpassvpn/ppvpn/tunnel" "$tests" "$main/res/drawable" "$main/res/values"
+cp "$app/runner/android/app/src/main/res/drawable/ic_vpn_status.xml" "$main/res/drawable/"
+cp "$app/runner/android/app/src/main/res/values/ppvpn_vpn.xml" "$main/res/values/"
 cp "$app/runner/android/app/src/main/kotlin/com/peakpassvpn/ppvpn/TunnelService.kt" \
   "$main/kotlin/com/peakpassvpn/ppvpn/"
 cp "$app/checks/android-tunnel/TunnelHost.kt" "$main/kotlin/com/peakpassvpn/ppvpn/tunnel/"
@@ -44,8 +46,11 @@ dependencies {
 GRADLE
 cat > "$main/AndroidManifest.xml" <<'MANIFEST'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <service android:name=".TunnelService" android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE"/>
+        <service android:name=".TunnelService" android:exported="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE"/>
     </application>
 </manifest>
 MANIFEST

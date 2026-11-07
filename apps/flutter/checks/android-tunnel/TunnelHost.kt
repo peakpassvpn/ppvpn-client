@@ -9,8 +9,10 @@ object TunnelHost {
     }
 
     @Volatile var stops = 0
-    fun settings(): String? = null
+    @Volatile var settingsCalls = 0
+    @Volatile var networkCalls = 0
+    fun settings(): String? { settingsCalls += 1; return null }
     fun start(fd: Int, socket: String, state: String, options: String?, listener: Listener): String? = null
     fun stop() { stops += 1 }
-    fun networkChanged(state: String): String? = null
+    fun networkChanged(state: String): String? { networkCalls += 1; return null }
 }

@@ -192,10 +192,10 @@ case $os in
     # TunnelService follows the best non-VPN network: reading it, and on
     # Android 8 to 11 requestNetwork, which needs the change permission.
     # Both are normal permissions, granted at install.
-    replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>\n    <application'
+    replace "$manifest" '^    <application' '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <application'
     # The system VPN (runner/android TunnelService), in its own process:
     # only the system binds it.
-    replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>'
+    replace "$manifest" '^    </application>' '        <service android:name=".TunnelService" android:process=":tunnel"\n            android:exported="false" android:foregroundServiceType="systemExempted" android:permission="android.permission.BIND_VPN_SERVICE">\n            <intent-filter>\n                <action android:name="android.net.VpnService"/>\n            </intent-filter>\n        </service>\n    </application>'
     # The release build's signature: the upload key when one is given (its
     # path and secrets read by Gradle from the environment, never written
     # into the project), else the template's debug key.

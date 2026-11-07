@@ -7,20 +7,27 @@ Implemented in shared mobile candidate
   Running probes and selected-node latency use the tunnel transport.
   Desktop targets retain EngineLauncher and Standard behavior.
 
-Native paths inventoried; not changed
+Native lifecycle implementation
   runner/android/.../TunnelService.kt:
-    foreground service lifecycle, serialized worker, onRevoke/onDestroy,
-    native exit callback, TUN closure ordering, physical NetworkWatch and
-    setUnderlyingNetworks remain in place.
+    API26+ startForegroundService and immediate ongoing notification; API34+
+    systemExempted foreground type/permission. Startup refusal fails closed.
+    Serialized worker owns teardown without blocking onDestroy on main.
+    Instance ownership prevents duplicate cleanup stopping a newer host;
+    generation fences ignore old native exits. Closing NetworkWatch joins
+    current delivery and blocks all later physical-network publication.
   runner/android/.../tunnel/TunnelHost.kt:
     per-host Listener.protect(fd), onExit and networkChanged contract remains.
   crates/tunnel-host/src/android.rs:
-    JNI protect callback reaches VpnService.protect before core sockets dial;
-    protected Engine configuration and native network updates remain.
+    Per-start owned Listener replaces the process-global listener slot.
+    Rejected startup cannot replace the active listener; callback lifetime
+    is drained by native stop. Protect still reaches VpnService.protect
+    before core sockets dial.
   No replacement of Android FCM/self-hosted push behavior was attempted.
 
 Not yet accepted
-  Full Android Rust/JNI/Gradle compilation has not run. This machine has no
+  This lifecycle freeze has not yet passed Android Rust/JNI/Gradle
+  compilation. Earlier integrated3856269 Android CI passed but does not
+  validate this newer source. This machine has no
   configured ANDROID_HOME/ANDROID_SDK_ROOT/ANDROID_NDK_HOME/JAVA_HOME and no
   Android Rust target installed. The authorized Linux test-host inventory has
   the arm64 Rust target and NDK r27d but no SDK/JDK/Flutter. Build owner uses
@@ -37,3 +44,14 @@ Not yet accepted
   Need login/profile refresh, selected node/pins/routing, traffic/logs and
   foreground/background restoration tests on Android itself.
   No Android device/emulator was installed, booted or modified in this work.
+
+Controlled lifecycle checks
+  apps/flutter/scripts/test-android-tunnel.sh compiles production Kotlin
+  against a fake JNI host under Robolectric SDK26/35. It covers queued old
+  exits, immediate foreground promotion, rejected foreground eligibility,
+  nonblocking destruction, duplicate cleanup and closed network watches.
+  CI runs it after the real APK build. Not executed locally; no real TUN
+  or forwarding acceptance is claimed by these controlled checks.
+  Foreground-service platform references:
+  https://developer.android.com/develop/connectivity/vpn
+  https://developer.android.com/develop/background-work/services/fgs/service-types
