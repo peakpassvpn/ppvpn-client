@@ -191,7 +191,7 @@ jobs:
             echo /target >> "$checkout/.git/info/exclude"
             export PPVPN_MACOS_SINGLE_RUNTIME=0
             [[ "$side" != candidate ]] || export PPVPN_MACOS_SINGLE_RUNTIME=1
-            (cd "$checkout" && FLUTTER_TARGET=macos MACOS_ARCHS=arm64 bash apps/flutter/scripts/ci-build.sh) >"$output/flutter-build.log" 2>&1
+            (cd "$checkout" && env -u FLUTTER_TARGET MACOS_ARCHS=arm64 bash apps/flutter/scripts/ci-build.sh) >"$output/flutter-build.log" 2>&1
             (cd "$checkout" && bash tools/desktop/build-service.sh macos-arm64) >"$output/helper-build.log" 2>&1
             (cd "$checkout" && bash apps/macos/scripts/bootstrap.sh --release) >"$output/ffi-build.log" 2>&1
             app="$checkout/apps/flutter/build/macos/Build/Products/Release/PPVPN.app"
