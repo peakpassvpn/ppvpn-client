@@ -17,6 +17,7 @@ mod android;
 mod health;
 mod host;
 mod log;
+mod packets;
 mod server;
 
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -148,6 +149,66 @@ pub unsafe extern "C" fn ppvpn_tunnel_start(
 #[no_mangle]
 pub extern "C" fn ppvpn_tunnel_stop() {
     let _ = catch_unwind(host::stop);
+}
+
+/// Public NEPacketTunnelFlow host; no OS descriptor is inspected.
+///
+/// # Safety
+/// Strings are valid for this call. The callback/context remain valid until
+/// stop returns. The callback must settle within two seconds; 0 means an
+/// uncertain OS transaction, never a clean rollback.
+#[no_mangle]
+pub unsafe extern "C" fn ppvpn_tunnel_start_packets(
+    socket_path: *const c_char,
+    state_dir: *const c_char,
+    settings: Option<extern "C" fn(*mut c_void, u64, *const c_char) -> i32>,
+    on_exit: Option<extern "C" fn(*mut c_void, *const c_char)>,
+    context: *mut c_void,
+) -> *mut c_char {
+    result(catch_unwind(AssertUnwindSafe(|| {
+        let socket = PathBuf::from(text(socket_path, "socket_path")?);
+        let state = PathBuf::from(text(state_dir, "state_dir")?);
+        let callback = settings.ok_or_else(|| request_invalid("settings callback required"))?;
+        packets::start(&socket, &state, callback, on_exit, context)
+    })))
+}
+
+/// Bounded, nonblocking packet admission. 1 accepted, 0 full/ended/invalid.
+///
+/// # Safety
+/// `bytes` points to `length` readable bytes for this call.
+#[no_mangle]
+pub unsafe extern "C" fn ppvpn_tunnel_packet_send(
+    generation: u64,
+    bytes: *const u8,
+    length: usize,
+) -> i32 {
+    catch_unwind(|| {
+        if bytes.is_null() || !(1..=65535).contains(&length) {
+            return 0;
+        }
+        packets::send(generation, std::slice::from_raw_parts(bytes, length)) as i32
+    })
+    .unwrap_or(0)
+}
+
+/// Copies one whole IP packet; 0 when empty/ended. No address-family header.
+///
+/// # Safety
+/// `bytes` points to at least `capacity` writable bytes for this call.
+#[no_mangle]
+pub unsafe extern "C" fn ppvpn_tunnel_packet_receive(
+    generation: u64,
+    bytes: *mut u8,
+    capacity: usize,
+) -> usize {
+    catch_unwind(|| {
+        if bytes.is_null() || capacity < 65535 {
+            return 0;
+        }
+        packets::receive(generation, std::slice::from_raw_parts_mut(bytes, 65535))
+    })
+    .unwrap_or(0)
 }
 
 /// The device's network (ppvpn_core::NetworkState as JSON).

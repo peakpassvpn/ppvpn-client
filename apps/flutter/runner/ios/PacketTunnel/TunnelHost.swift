@@ -18,9 +18,11 @@ final class TunnelHost {
   /// The host stopped by itself; the reason's message.
   typealias Exit = (String) -> Void
 
+  private let settings: (UInt64, String?) -> Bool
   private let exit: Exit
 
-  private init(exit: @escaping Exit) {
+  private init(settings: @escaping (UInt64, String?) -> Bool, exit: @escaping Exit) {
+    self.settings = settings
     self.exit = exit
   }
 
@@ -34,8 +36,8 @@ final class TunnelHost {
 
     /// Returns once the host serves `socketPath`; the app then applies the
     /// profile and starts the engine over it.
-    static func start(fd: Int32, socketPath: String, stateDir: String, exit: @escaping Exit) throws -> TunnelHost {
-      let host = TunnelHost(exit: exit)
+    static func start(socketPath: String, stateDir: String, settings: @escaping (UInt64, String?) -> Bool, exit: @escaping Exit) throws -> TunnelHost {
+      let host = TunnelHost(settings: settings, exit: exit)
       // Held until stop returns: the host calls back with it until then.
       let context = Unmanaged.passRetained(host).toOpaque()
       let onExit: ppvpn_tunnel_exit_fn = { context, reason in
@@ -43,8 +45,13 @@ final class TunnelHost {
         let host = Unmanaged<TunnelHost>.fromOpaque(context).takeUnretainedValue()
         host.exit(TunnelHost.message(reason.map { String(cString: $0) }))
       }
+      let configure: ppvpn_tunnel_packet_settings_fn = { context, generation, json in
+        guard let context else { return 0 }
+        let host = Unmanaged<TunnelHost>.fromOpaque(context).takeUnretainedValue()
+        return host.settings(generation, json.map { String(cString: $0) }) ? 1 : 0
+      }
       if let error = take(
-        ppvpn_tunnel_start(fd, socketPath, stateDir, PPVPN_TUNNEL_PLATFORM_IOS, nil, onExit, context))
+        ppvpn_tunnel_start_packets(socketPath, stateDir, configure, onExit, context))
       {
         Unmanaged<TunnelHost>.fromOpaque(context).release()
         throw TunnelError(message(error))
@@ -69,6 +76,16 @@ final class TunnelHost {
       }
     }
 
+    static func send(_ packet: Data, generation: UInt64) {
+      packet.withUnsafeBytes { bytes in
+        _ = ppvpn_tunnel_packet_send(generation, bytes.bindMemory(to: UInt8.self).baseAddress, UInt(packet.count))
+      }
+    }
+    static func receive(generation: UInt64, buffer: inout [UInt8]) -> Int {
+      buffer.withUnsafeMutableBufferPointer { bytes in
+        Int(ppvpn_tunnel_packet_receive(generation, bytes.baseAddress, UInt(bytes.count)))
+      }
+    }
     func sleep() { ppvpn_tunnel_sleep() }
     func wake() { ppvpn_tunnel_wake() }
 
@@ -82,12 +99,14 @@ final class TunnelHost {
       throw TunnelError("the tunnel host is not linked into this build")
     }
 
-    static func start(fd: Int32, socketPath: String, stateDir: String, exit: @escaping Exit) throws -> TunnelHost {
+    static func start(socketPath: String, stateDir: String, settings: @escaping (UInt64, String?) -> Bool, exit: @escaping Exit) throws -> TunnelHost {
       throw TunnelError("the tunnel host is not linked into this build")
     }
 
     static func networkChanged(_ state: String) -> String? { nil }
 
+    static func send(_ packet: Data, generation: UInt64) {}
+    static func receive(generation: UInt64, buffer: inout [UInt8]) -> Int { 0 }
     func stop() {}
     func sleep() {}
     func wake() {}

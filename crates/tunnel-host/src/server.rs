@@ -91,7 +91,14 @@ async fn connection(mut stream: UnixStream, shared: Shared) {
         watch(stream, shared).await;
         return;
     }
-    let answer = match ppvpn_engine_host::dispatch(&shared.engine, &path, body).await {
+    let dispatched = ppvpn_engine_host::dispatch(&shared.engine, &path, body).await;
+    let dispatched = match dispatched {
+        Ok(data) if path == "/v1/start" => crate::packets::ensure_capture(&shared.engine)
+            .await
+            .map(|_| data),
+        other => other,
+    };
+    let answer = match dispatched {
         Ok(data) => {
             // A connect from the UI: a new recovery episode.
             if path == "/v1/start" {
