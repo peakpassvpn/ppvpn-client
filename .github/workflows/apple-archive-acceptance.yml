@@ -12,6 +12,9 @@ on:
       source_ref:
         description: Exact product source commit
         required: true
+      reuse_baseline_run:
+        description: Optional successful iOS archive run with matching immutable baseline
+        required: false
       baseline_ref:
         description: Exact functional baseline commit
         default: 1ddf0a168610172773fe3f479133ecbe5acf932f
@@ -19,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}
@@ -37,6 +41,7 @@ jobs:
       CARGO_TERM_COLOR: never
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       SOURCE_REF: ${{ inputs.source_ref }}
+      REUSE_BASELINE_RUN: ${{ inputs.reuse_baseline_run }}
       BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
       PPVPN_BUILD_NUMBER: '344'
       PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
@@ -44,11 +49,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ env.SOURCE_REF }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.reuse_baseline_run != ''
+        with:
+          name: ios-unsigned-archive-comparison
+          run-id: ${{ inputs.reuse_baseline_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/apple-baseline-reuse
       - name: Xcode 26
         run: |
-          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          if [[ -n "$REUSE_BASELINE_RUN" ]]; then
+            expected=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/apple-baseline-reuse/baseline/build-provenance.json"))["xcode"])')
+            xcode=
+            for candidate in /Applications/Xcode_26*.app; do
+              if [[ "$(DEVELOPER_DIR="$candidate/Contents/Developer" xcodebuild -version)" == "$expected" ]]; then xcode="$candidate"; break; fi
+            done
+            [[ -n "$xcode" ]] || { echo 'Exact baseline Xcode is unavailable; reuse refused'; exit 1; }
+          else
+            xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          fi
           [[ -d "$xcode" ]] || { echo 'Xcode 26 is unavailable'; exit 1; }
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
@@ -77,10 +98,19 @@ jobs:
           unset IOS_TEAM_ID IOS_APP_PROFILE IOS_TUNNEL_PROFILE IOS_EXPORT_OPTIONS
           unset PPVPN_API_BASE PPVPN_FLUTTER_HOME PPVPN_FLUTTER_SAMPLE PPVPN_FLUTTER_SYNTHETIC_TRAFFIC
           git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/apple-candidate"
+          git -C "$RUNNER_TEMP/apple-candidate" checkout --detach "$SOURCE_REF"
           git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/apple-baseline"
           git -C "$RUNNER_TEMP/apple-baseline" checkout --detach "$BASELINE_REF"
           mkdir -p "$CARGO_TARGET_DIR" "$RUNNER_TEMP/apple-output"
           for side in candidate baseline; do
+            if [[ "$side" == baseline && -n "$REUSE_BASELINE_RUN" ]]; then
+              origin_hash=$(python3 -c 'import os,hashlib; print(hashlib.sha256(os.environ["PPVPN_API_BASE_DEFAULT"].encode()).hexdigest())')
+              python3 "$GITHUB_WORKSPACE/tools/apple/reuse_ios_baseline.py" \
+                --download "$RUNNER_TEMP/apple-baseline-reuse" --output "$RUNNER_TEMP/apple-output/baseline" \
+                --repo "$GITHUB_WORKSPACE" --source "$BASELINE_REF" --build "$PPVPN_BUILD_NUMBER" \
+                --origin-hash "$origin_hash" --run "$REUSE_BASELINE_RUN"
+              continue
+            fi
             checkout="$RUNNER_TEMP/apple-$side"
             output="$RUNNER_TEMP/apple-output/$side"
             mkdir -p "$output"
