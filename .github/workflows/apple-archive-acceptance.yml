@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_only:
-        description: iOS isolated acceptance archive only; skips the size baseline and never signs or uploads
+        description: Isolated candidate only; skips size baseline, production signing and upload
         type: boolean
         default: false
       api_origin:
@@ -196,6 +196,7 @@ jobs:
       PPVPN_APPLE_PUSH_ENABLED: '0'
       PPVPN_APPLE_TARGETS: aarch64-apple-darwin
       SOURCE_REF: ${{ inputs.source_ref }}
+      CANDIDATE_ONLY: ${{ inputs.candidate_only && '1' || '0' }}
       BASELINE_REF: ${{ inputs.baseline_ref }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -230,7 +231,9 @@ jobs:
           set -euo pipefail
           unset PPVPN_API_BASE PPVPN_FLUTTER_HOME PPVPN_FLUTTER_SAMPLE PPVPN_FLUTTER_SYNTHETIC_TRAFFIC
           mkdir -p "$CARGO_TARGET_DIR" "$RUNNER_TEMP/macos-output"
-          for side in candidate baseline; do
+          sides=(candidate)
+          [[ "$CANDIDATE_ONLY" == 1 ]] || sides+=(baseline)
+          for side in "${sides[@]}"; do
             checkout="$RUNNER_TEMP/macos-$side"
             output="$RUNNER_TEMP/macos-output/$side"
             mkdir -p "$output"
@@ -258,7 +261,8 @@ jobs:
                 'xcode':subprocess.check_output(['xcodebuild','-version'],text=True).strip(),
                 'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
                 'logical_bundle_bytes':sum(v['bytes'] for v in rows.values()),'files':rows,
-                'installed':False,'real_vpn_acceptance':False}
+                'installed':False,'real_vpn_acceptance':False,
+                'build_purpose':'isolated-candidate-only' if os.environ['CANDIDATE_ONLY']=='1' else 'same-conditions-size-comparison'}
           (out/'build-provenance.json').write_text(json.dumps(data,indent=2)+'\n')
           PYCODE
             tar -czf "$output/PPVPN.app.tar.gz" -C "$checkout/apps/flutter/build/macos-package-arm64" PPVPN.app
@@ -267,6 +271,9 @@ jobs:
           import json,os
           from pathlib import Path
           out=Path(os.environ['RUNNER_TEMP'])/'macos-output'
+          if os.environ['CANDIDATE_ONLY']=='1':
+              print('Candidate package only; no baseline comparison or runtime acceptance claimed')
+              raise SystemExit(0)
           a,b=[json.loads((out/side/'build-provenance.json').read_text()) for side in ('candidate','baseline')]
           for field in ('api_origin_sha256','xcode','rust','signing'): assert a[field]==b[field],field
           result={'candidate_bytes':a['logical_bundle_bytes'],'baseline_bytes':b['logical_bundle_bytes'],
@@ -279,7 +286,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: macos-package-comparison
+          name: ${{ inputs.candidate_only && 'macos-candidate-package' || 'macos-package-comparison' }}
           path: ${{ runner.temp }}/macos-output
           if-no-files-found: warn
           retention-days: 3
