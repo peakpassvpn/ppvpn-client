@@ -186,7 +186,8 @@ void main() {
               if (cycle == 2) {
                 // The rival establish() makes Android revoke this provider;
                 // production TunnelService.onRevoke(), not a test method call.
-                await _controlCall('revoke');
+                final armed = await _controlCall('revoke');
+                expect(armed['takeover_armed'], isTrue);
               } else {
                 await _rpc('/v1/stop');
                 final stopped = await _rpc('/v1/get-runtime-observation');
@@ -467,44 +468,96 @@ Future<Map<String, dynamic>> _controlCall(
   String path, [
   Map<String, dynamic> body = const {},
 ]) async {
-  // Raw loopback HTTP keeps fixture control independent of App cleartext
-  // policy; production manifest/security settings are deliberately unchanged.
   final socket = await Socket.connect(
     '10.0.2.2',
     18090,
     timeout: const Duration(seconds: 10),
   );
+  return _controlExchange(socket, path, body);
+}
+
+Future<Map<String, dynamic>> _controlExchange(
+  Socket socket,
+  String path,
+  Map<String, dynamic> body,
+) async {
+  // Control shares the captured network. Revoke must wait for a receipt of
+  // its complete reply before tearing down that same network.
+  final chunks = StreamIterator<List<int>>(socket);
   try {
     final payload = utf8.encode(jsonEncode(body));
-    final bytes = BytesBuilder();
-    // Subscribe before writing: a reset during flush must reach this awaited
-    // response future, rather than an unobserved Socket stream error.
-    final response = socket.timeout(const Duration(seconds: 30)).forEach((
-      chunk,
-    ) {
-      bytes.add(chunk);
-      if (bytes.length > 1024 * 1024) fail('Oversized fixture response');
+    final response = _readControlReply(chunks);
+    final written = Future<void>.sync(() {
+      socket.add(
+        ascii.encode(
+          'POST /$path HTTP/1.0\r\nHost: 10.0.2.2\r\n'
+          'Content-Type: application/json\r\nContent-Length: ${payload.length}\r\n\r\n',
+        ),
+      );
+      socket.add(payload);
+      return socket.flush();
     });
-    socket.add(
-      ascii.encode(
-        'POST /$path HTTP/1.0\r\nHost: 10.0.2.2\r\n'
-        'Content-Type: application/json\r\nContent-Length: ${payload.length}\r\n\r\n',
-      ),
-    );
-    socket.add(payload);
-    await Future.wait<void>([socket.flush(), response], eagerError: true);
-    final text = utf8.decode(bytes.toBytes());
-    final split = text.indexOf('\r\n\r\n');
-    expect(split, greaterThan(0), reason: text);
-    expect(
-      text.split('\r\n').first,
-      matches(r'^HTTP/1\.[01] 200 '),
-      reason: text,
-    );
-    return jsonDecode(text.substring(split + 4)) as Map<String, dynamic>;
+    final result = await Future.wait<dynamic>([
+      written,
+      response,
+    ], eagerError: true);
+    final reply = result[1] as Map<String, dynamic>;
+    if (path == 'revoke') {
+      final receipt = reply['receipt'];
+      expect(reply['takeover_armed'], isTrue);
+      expect(
+        receipt is String && RegExp(r'^[0-9a-f]{32}$').hasMatch(receipt),
+        isTrue,
+      );
+      // Emitted only after parsing the complete successful armed reply.
+      socket.add(ascii.encode('$receipt\n'));
+      await socket.flush();
+      await socket.close(); // The host requires this close before establish().
+    }
+    return reply;
   } finally {
+    await chunks.cancel();
     socket.destroy();
   }
+}
+
+Future<Map<String, dynamic>> _readControlReply(
+  StreamIterator<List<int>> chunks,
+) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 30));
+  final bytes = BytesBuilder();
+  while (await chunks.moveNext().timeout(deadline.difference(DateTime.now()))) {
+    bytes.add(chunks.current);
+    if (bytes.length > 1024 * 1024) fail('Oversized fixture response');
+    final data = bytes.toBytes();
+    final split = ascii.decode(data, allowInvalid: true).indexOf('\r\n\r\n');
+    if (split < 0) continue;
+    final header = ascii.decode(data.sublist(0, split));
+    expect(
+      RegExp(r'^HTTP/1\.[01] 200(?: |$)').hasMatch(header),
+      isTrue,
+      reason: header,
+    );
+    final lengths = RegExp(
+      r'^Content-Length: (\d+)$',
+      multiLine: true,
+      caseSensitive: false,
+    ).allMatches(header.replaceAll('\r', '')).toList();
+    expect(
+      lengths.length,
+      1,
+      reason: 'Fixture requires exact response framing',
+    );
+    final length = int.parse(lengths.single[1]!);
+    if (length > 1024 * 1024) fail('Oversized fixture body');
+    if (data.length < split + 4 + length) continue;
+    final reply = jsonDecode(
+      utf8.decode(data.sublist(split + 4, split + 4 + length)),
+    ) as Map<String, dynamic>;
+    expect(reply.containsKey('error'), isFalse, reason: reply.toString());
+    return reply;
+  }
+  fail('Fixture closed before complete reply');
 }
 
 Future<void> _negativeTCP() async {

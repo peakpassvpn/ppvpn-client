@@ -1,11 +1,14 @@
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
+import json
+import socket
+import threading
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from host import ControlRequestError, read_control_body, Evidence, PACKAGE, device_vm_identity, owned_internet_sockets, owned_listeners, profile
+from host import after_control_receipt, ControlRequestError, read_control_body, Evidence, PACKAGE, device_vm_identity, owned_internet_sockets, owned_listeners, profile
 
 
 class ControlFramingTests(unittest.TestCase):
@@ -41,6 +44,90 @@ class ControlFramingTests(unittest.TestCase):
         for payload in [b'[]', b'xx', b'\xff\xff']:
             with self.assertRaises(ControlRequestError):
                 read_control_body(BytesIO(payload), self.headers(len(payload)))
+
+
+class ControlReceiptTests(unittest.TestCase):
+    def exchange(self, *, receipt_bytes=None, close_client=True, timeout=1):
+        action = threading.Event()
+        errors = []
+        receipt = 'a' * 32
+        data = json.dumps({'takeover_armed': True, 'receipt': receipt}).encode()
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            with socket.create_connection(listener.getsockname()) as client:
+                peer, _ = listener.accept()
+                with peer:
+                    def serve():
+                        try:
+                            peer.sendall(data)
+                            after_control_receipt(peer, lambda: None, action.set,
+                                                  receipt, timeout=timeout)
+                        except Exception as error:
+                            errors.append(error)
+                    worker = threading.Thread(target=serve, daemon=True)
+                    worker.start()
+                    received = bytearray()
+                    while len(received) < len(data):
+                        received.extend(client.recv(len(data) - len(received)))
+                    self.assertTrue(json.loads(received)['takeover_armed'])
+                    self.assertFalse(action.is_set())
+                    if receipt_bytes is not None:
+                        client.sendall(receipt_bytes)
+                    if close_client:
+                        client.shutdown(socket.SHUT_WR)
+                    worker.join(2)
+                    self.assertFalse(worker.is_alive())
+        return action.is_set(), errors
+
+    def test_real_tcp_explicit_receipt_and_client_close_precede_action(self):
+        performed, errors = self.exchange(receipt_bytes=b'a' * 32 + b'\n')
+        self.assertTrue(performed)
+        self.assertEqual([], errors)
+
+    def test_unacknowledged_reply_times_out_without_vpn_mutation(self):
+        performed, errors = self.exchange(close_client=False, timeout=.05)
+        self.assertFalse(performed)
+        self.assertIsInstance(errors[0], TimeoutError)
+
+    def test_close_alone_never_authorizes_revoke(self):
+        performed, errors = self.exchange()
+        self.assertFalse(performed)
+        self.assertIsInstance(errors[0], ControlRequestError)
+
+    def test_wrong_or_extra_receipt_never_authorizes_revoke(self):
+        for value in [b'b' * 32 + b'\n', b'a' * 32 + b'\nextra']:
+            performed, errors = self.exchange(receipt_bytes=value)
+            self.assertFalse(performed)
+            self.assertIsInstance(errors[0], ControlRequestError)
+
+    def test_receipt_without_client_close_does_not_cut_flush_in_flight(self):
+        performed, errors = self.exchange(receipt_bytes=b'a' * 32 + b'\n',
+                                          close_client=False, timeout=.05)
+        self.assertFalse(performed)
+        self.assertIsInstance(errors[0], TimeoutError)
+
+    def test_armed_reply_alone_never_establishes_or_proves_revoke(self):
+        with tempfile.TemporaryDirectory() as work:
+            evidence = Evidence('emulator-test', Path(work), Path(work) / 'node.jsonl')
+            evidence.connected = {0, 1, 2}
+            evidence.ended = {0, 1}
+            with patch.object(evidence, 'adb') as adb, patch.object(evidence, 'shell', return_value='established'):
+                armed = evidence.action('/revoke', {})
+                self.assertTrue(armed['takeover_armed'])
+                self.assertRegex(armed['receipt'], r'^[0-9a-f]{32}$')
+                adb.assert_not_called()
+                self.assertFalse(evidence.revoke_established)
+                snapshot = {'processes': [{'name': PACKAGE, 'listeners': [], 'tun_interfaces': []}],
+                            'links': '', 'routes': ''}
+                with patch.object(evidence, 'snapshot', return_value=snapshot), patch('host.baseline', return_value={}):
+                    with self.assertRaisesRegex(AssertionError, 'No receipt-ordered rival establish proof'):
+                        evidence.checkpoint({'stage': 'revoked', 'cycle': 2})
+                self.assertEqual({0, 1}, evidence.ended)
+                evidence.establish_rival_after_receipt()
+                self.assertTrue(evidence.revoke_established)
+                self.assertEqual(2, adb.call_count)
+                self.assertTrue(json.loads((Path(work) / 'revoke-establishment.json').read_text())['explicit_reply_receipt_verified'])
 
 
 class DeviceVmTests(unittest.TestCase):

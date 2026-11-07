@@ -53,6 +53,25 @@ def read_control_body(stream, headers):
     return body
 
 
+def after_control_receipt(connection, flush, action, receipt, *, timeout=5):
+    """Require the App's explicit receipt and close before cutting its VPN."""
+    assert re.fullmatch(r'[0-9a-f]{32}', receipt)
+    expected = (receipt + '\n').encode('ascii')
+    flush()
+    connection.settimeout(timeout)
+    received = bytearray()
+    try:
+        while chunk := connection.recv(len(expected) + 1 - len(received)):
+            received.extend(chunk)
+            if len(received) > len(expected):
+                raise ControlRequestError('Oversized control receipt')
+    except ConnectionResetError:
+        pass  # A close/reset counts only after the exact explicit receipt.
+    if received != expected:
+        raise ControlRequestError('Missing or invalid armed-reply receipt')
+    action()
+
+
 def device_vm_identity(log, process):
     """Bind a device VM publication to this process lifetime and socket FD.
 
@@ -142,6 +161,9 @@ class Evidence:
         self.owned_interfaces = set()
         self.route_offset = 0
         self.complete = False
+        self.revoke_armed = False
+        self.revoke_receipt = None
+        self.revoke_established = False
         self.vm_identity = None
         self.lock = threading.Lock()
 
@@ -264,6 +286,8 @@ class Evidence:
             if stage != 'initial-off':
                 assert cycle in self.connected and cycle not in self.ended
                 assert (stage == 'revoked') == (cycle == 2)
+                if stage == 'revoked':
+                    assert self.revoke_established, 'No receipt-ordered rival establish proof'
                 self.ended.add(cycle)
         (self.directory / f'{stage}-{cycle}-assertions.json').write_text(
             json.dumps(body, indent=2) + '\n')
@@ -292,19 +316,16 @@ class Evidence:
                 return {'ok': True}
             if path == '/revoke':
                 assert self.connected == {0, 1, 2} and self.ended == {0, 1}
-                self.adb('shell', 'appops', 'set', RIVAL, 'ACTIVATE_VPN', 'allow')
-                self.adb('shell', 'am', 'start', '-W', '-n', RIVAL + '/.RevokeActivity')
-                deadline = time.monotonic() + 15
-                while time.monotonic() < deadline:
-                    if self.shell(f'run-as {RIVAL} cat files/established 2>/dev/null || true').strip() == 'established':
-                        return {'ok': True, 'system_takeover': True}
-                    time.sleep(.1)
-                raise AssertionError('Rival did not establish; onRevoke cannot be claimed')
+                assert not self.revoke_armed, 'Duplicate revoke arm'
+                self.revoke_armed = True
+                self.revoke_receipt = uuid.uuid4().hex
+                return {'ok': True, 'takeover_armed': True, 'receipt': self.revoke_receipt}
             if path == '/release-rival':
                 self.adb('shell', 'am', 'force-stop', RIVAL)
                 return {'ok': True}
             if path == '/complete':
                 assert self.connected == self.ended == {0, 1, 2}
+                assert self.revoke_established
                 self.complete = True
                 (self.directory / 'PASS.json').write_text(json.dumps({
                     'run': self.run, 'cycles': 3, 'tcp_udp_dns': True,
@@ -313,6 +334,26 @@ class Evidence:
                 }, indent=2) + '\n')
                 return {'ok': True}
             raise AssertionError('Unknown control operation')
+
+
+    def establish_rival_after_receipt(self):
+        with self.lock:
+            assert self.revoke_armed and not self.revoke_established
+            assert self.connected == {0, 1, 2} and self.ended == {0, 1}
+            self.adb('shell', 'appops', 'set', RIVAL, 'ACTIVATE_VPN', 'allow')
+            self.adb('shell', 'am', 'start', '-W', '-n', RIVAL + '/.RevokeActivity')
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if self.shell(f'run-as {RIVAL} cat files/established 2>/dev/null || true').strip() == 'established':
+                    self.revoke_established = True
+                    (self.directory / 'revoke-establishment.json').write_text(json.dumps({
+                        'run': self.run, 'control_reply_closed_before_establish': True,
+                        'explicit_reply_receipt_verified': True,
+                        'system_takeover': True, 'rival_established_marker': True,
+                    }, indent=2) + '\n')
+                    return
+                time.sleep(.1)
+            raise AssertionError('Rival did not establish; onRevoke cannot be claimed')
 
 
 def main():
@@ -344,6 +385,16 @@ def main():
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+            if self.path == '/revoke' and status == 200:
+                try:
+                    after_control_receipt(self.connection, self.wfile.flush,
+                                          state.establish_rival_after_receipt, result['receipt'])
+                except Exception as error:
+                    with (args.directory / 'failures.jsonl').open('a') as file:
+                        file.write(json.dumps({'path': self.path,
+                                              'stage': 'after-control-receipt',
+                                              'error': str(error),
+                                              'type': type(error).__name__}) + '\n')
 
     server = ThreadingHTTPServer(('127.0.0.1', 18090), Handler)
     print('ready', flush=True)
