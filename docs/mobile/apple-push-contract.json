@@ -1,5 +1,5 @@
 {
-  "status": "client-mock-candidate; exact backend implementation and six contract hashes verified; merge/deployment/HTTP CAS service and APNs delivery remain unverified",
+  "status": "backend/OpenAPI/SDK pinned; managed handler/JWT/PostgreSQL HTTP CAS passed; signed Apple delivery pending",
   "contract_authority": "Same backend Huma/OpenAPI source snapshot plus generated SDK commit; no business protocol version field",
   "backend": {
     "base_commit": "de79cd62639287580c1901b3667aa3fa296d40e2",
@@ -49,6 +49,15 @@
     "If a fresh OS token follows an uncertain prior registration response, bounded read-only Resolve may refresh expected_registration_id only when the exact binding and current session still match; it never Binds. A changed/closed binding or registration409 permanently stops that intent.",
     "409 or exhausted3 retries require a new explicit account intent; foreground resume does not mint fresh CAS intents",
     "Offline update reconciliation caps at10 pages of100 and UI reloads separately; not a promise of complete unbounded history",
-    "macOS bridge compiled against SDK but AppDelegate/window/project inclusion belongs to desktop owner"
-  ]
+    "macOS hooks implemented in owned window and independent macos_push_hooks.py AppDelegate/source injector; actual build-owner invocation, signing profiles and real delivery still required."
+  ],
+  "managed_http_evidence": {
+    "execution_id": "APNS-HTTP-CAS-e04-r1",
+    "checks": 25,
+    "http_requests": 29,
+    "business_commit": "e04eb59435b3be1a4c40fd4311a26e7887490411",
+    "scope": "real handlers/JWT verification/PostgreSQL; synthetic configuration boundary; two HTTP instances in one Go process, no real Apple provider/worker/delivery or HTTP logout end-to-end",
+    "harness_committed": false,
+    "lease_released": true
+  }
 }
