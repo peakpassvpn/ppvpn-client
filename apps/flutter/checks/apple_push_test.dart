@@ -362,4 +362,89 @@ void main() {
       },
     );
   }
+  for (final missing in [false, true]) {
+    test(
+      'permission channel exception ${missing ? "missing" : "platform"} retries only on a later foreground resume',
+      () async {
+        var attempts = 0;
+        var foreground = true;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'account')
+            epoch = (call.arguments as Map)['clientEpoch'] as String;
+          if (call.method == 'configured') return true;
+          if (call.method == 'permission') {
+            attempts++;
+            if (attempts == 1) {
+              if (missing) throw MissingPluginException();
+              throw PlatformException(code: 'fixture-unavailable');
+            }
+            return true;
+          }
+          return null;
+        });
+        final push = ApplePush(
+          notice: (_, _, _, _) async => false,
+          register: (_) async => true,
+          isForeground: () => foreground,
+        )..start();
+        await push.followAccount(state: 'signedIn', id: 'one');
+        expect(
+          await native('register', {
+            'accountID': 'one',
+          }).timeout(const Duration(seconds: 1)),
+          true,
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(attempts, 1);
+        foreground = false;
+        await push.resume();
+        await Future<void>.delayed(Duration.zero);
+        expect(attempts, 1);
+        foreground = true;
+        await push.resume();
+        await Future<void>.delayed(Duration.zero);
+        expect(attempts, 2);
+        push.dispose();
+      },
+    );
+  }
+  test(
+    'late old permission exception cannot clear a newer owner pending intent',
+    () async {
+      final oldReply = Completer<bool>();
+      final newReply = Completer<bool>();
+      var attempts = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'account')
+          epoch = (call.arguments as Map)['clientEpoch'] as String;
+        if (call.method == 'configured') return true;
+        if (call.method == 'permission') {
+          attempts++;
+          return attempts == 1 ? oldReply.future : newReply.future;
+        }
+        return null;
+      });
+      final push = ApplePush(
+        notice: (_, _, _, _) async => false,
+        register: (_) async => true,
+        isForeground: () => true,
+      )..start();
+      await push.followAccount(state: 'signedIn', id: 'one');
+      expect(await native('register', {'accountID': 'one'}), true);
+      await Future<void>.delayed(Duration.zero);
+      expect(attempts, 1);
+      await push.followAccount(state: 'signedIn', id: 'two');
+      expect(await native('register', {'accountID': 'two'}), true);
+      await Future<void>.delayed(Duration.zero);
+      expect(attempts, 2);
+      oldReply.completeError(PlatformException(code: 'fixture-old-error'));
+      await Future<void>.delayed(Duration.zero);
+      await push.resume();
+      await Future<void>.delayed(Duration.zero);
+      expect(attempts, 2);
+      newReply.complete(true);
+      await Future<void>.delayed(Duration.zero);
+      push.dispose();
+    },
+  );
 }
