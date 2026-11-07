@@ -227,6 +227,26 @@ pub fn timed<T>(stage: &'static str, work: impl FnOnce() -> Result<T>) -> Result
     trace_operation(stage, started.elapsed(), result.is_ok());
     result
 }
+fn checked<T>(stage: &'static str, work: impl FnOnce() -> Result<T>) -> Result<T> {
+    let result = timed(stage, work);
+    if let Err(error) = &result {
+        diagnostic(stage, error);
+    }
+    result
+}
+fn capture_route_stage(family: &str, prefix: &str, deleting: bool) -> &'static str {
+    match (family, prefix, deleting) {
+        ("-inet", "0.0.0.0/1", false) => "route-check-v4-low",
+        ("-inet", "128.0.0.0/1", false) => "route-check-v4-high",
+        ("-inet6", "::/1", false) => "route-check-v6-low",
+        ("-inet6", "8000::/1", false) => "route-check-v6-high",
+        ("-inet", "0.0.0.0/1", true) => "route-delete-v4-low",
+        ("-inet", "128.0.0.0/1", true) => "route-delete-v4-high",
+        ("-inet6", "::/1", true) => "route-delete-v6-low",
+        ("-inet6", "8000::/1", true) => "route-delete-v6-high",
+        _ => "route-control-other",
+    }
+}
 pub fn command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = {
         let _guard = spawn_guard();
@@ -569,13 +589,17 @@ impl Resources {
         if !marked(&self.journal)? {
             bail!("CAPTURE_DEVICE_OWNERSHIP_LOST");
         }
-        let dns = self.dns.remove(&self.key);
+        let dns = checked("detach-dns", || self.dns.remove(&self.key));
         if dns.is_ok() {
             self.dns_live = false;
         }
-        let routes = clear_routes(&self.name, &self.routes, &mut self.published);
-        let scopes = clear_scoped_routes(&mut self.journal.scoped_routes);
-        self.save()?;
+        let routes = checked("detach-routes", || {
+            clear_routes(&self.name, &self.routes, &mut self.published)
+        });
+        let scopes = checked("detach-uplinks", || {
+            clear_scoped_routes(&mut self.journal.scoped_routes)
+        });
+        checked("detach-journal", || self.save())?;
         dns?;
         routes?;
         scopes
@@ -868,7 +892,12 @@ fn clear_scoped_route(route: &mut ScopedRoute) -> Result<()> {
 fn clear_scoped_routes(routes: &mut [ScopedRoute]) -> Result<()> {
     let mut failed = false;
     for route in routes.iter_mut().rev() {
-        if clear_scoped_route(route).is_err() {
+        let stage = if route.family == "-inet" {
+            "uplink-clear-v4"
+        } else {
+            "uplink-clear-v6"
+        };
+        if checked(stage, || clear_scoped_route(route)).is_err() {
             failed = true;
         }
     }
@@ -948,12 +977,16 @@ fn clear_routes(name: &str, routes: &[(&str, &str)], published: &mut [bool]) -> 
     for i in (0..routes.len()).rev() {
         if published[i] {
             let (family, prefix) = routes[i];
-            match route_owned(name, family, prefix) {
+            match checked(capture_route_stage(family, prefix, false), || {
+                route_owned(name, family, prefix)
+            }) {
                 Ok(false) => published[i] = false,
-                Ok(true) => match command(
-                    "/sbin/route",
-                    &["-n", "delete", family, "-net", prefix, "-interface", name],
-                ) {
+                Ok(true) => match checked(capture_route_stage(family, prefix, true), || {
+                    command(
+                        "/sbin/route",
+                        &["-n", "delete", family, "-net", prefix, "-interface", name],
+                    )
+                }) {
                     Ok(()) => published[i] = false,
                     Err(_) => failed = true,
                 },
