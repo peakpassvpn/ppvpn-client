@@ -57,6 +57,10 @@
 #                        architecture's DMG in a job of its own, #459)
 #                        (default: the runner's architecture only)
 #   PPVPN_SKIP_ANALYZE   1: no flutter analyze (ci.yml analyzes on Linux)
+#   PPVPN_ANDROID_RUNNER_PREPARE_ONLY  1: generate Android runner/Dart glue,
+#                        then exit before any Android native or APK build.
+#   PPVPN_PREPARE_APP_ROOT  optional frozen product apps/flutter checkout;
+#                        allowed only with the prepare-only mode above.
 #   and what rust/src/update.rs and bridge.rs bake into the library:
 #   PPVPN_UPDATE_SITE, PPVPN_RELEASE_CHANNEL, PPVPN_SPARKLE_PUBLIC_KEY,
 #   PPVPN_API_BASE_DEFAULT (required: the backend, an https origin; ci.yml
@@ -71,6 +75,10 @@ fi
 export PPVPN_API_BASE_DEFAULT
 
 app=$(cd "$(dirname "$0")/.." && pwd)
+if [ -n "${PPVPN_PREPARE_APP_ROOT:-}" ]; then
+  [ "${PPVPN_ANDROID_RUNNER_PREPARE_ONLY:-0}" = 1 ] || { echo 'App-root override requires Android prepare-only mode' >&2; exit 2; }
+  app=$(cd "$PPVPN_PREPARE_APP_ROOT" && pwd)
+fi
 root=$(cd "$app/../.." && pwd)
 cd "$app"
 
@@ -82,6 +90,10 @@ case "${FLUTTER_TARGET:-}-$(uname -s)" in
   -MINGW* | -MSYS*) os=windows ;;
   *) echo "unsupported: ${FLUTTER_TARGET:-} on $(uname -s)" >&2; exit 1 ;;
 esac
+if [ "${PPVPN_ANDROID_RUNNER_PREPARE_ONLY:-0}" = 1 ] && [ "$os" != android ]; then
+  echo 'Runner prepare-only mode supports Android only' >&2
+  exit 2
+fi
 
 version=${PPVPN_VERSION:-$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml")}
 build=${PPVPN_BUILD_NUMBER:-0}
@@ -366,6 +378,11 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
     PPVPN_UI_TEST_CJK_FONT="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}" \
       flutter test checks/apple_push_test.dart checks/apple_push_transport_test.dart checks/authentication_browser_test.dart checks/mobile_layout_test.dart checks/native_chrome_test.dart checks/logs_layout_test.dart checks/device_feedback_test.dart --no-pub
   fi
+fi
+
+if [ "${PPVPN_ANDROID_RUNNER_PREPARE_ONLY:-0}" = 1 ]; then
+  echo 'Android runner and Dart glue prepared; no Android Rust/JNI library or APK built'
+  exit 0
 fi
 
 lib="$root/target/release"
