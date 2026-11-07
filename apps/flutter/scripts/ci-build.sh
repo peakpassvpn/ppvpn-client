@@ -177,6 +177,7 @@ case $os in
     # This does not start a receiver or enable APNs by default.
     python3 "$root/tools/apple/push_config.py" sources --platform macos \
       --app-root "$app" --entry macos/Runner/MainFlutterWindow.swift
+    python3 "$root/tools/apple/macos_push_hooks.py" --app-root "$app" --generated-root "$app/macos"
     push_profile=()
     [ -z "${PPVPN_APPLE_PUSH_PROFILE:-}" ] || push_profile=(--profile "$PPVPN_APPLE_PUSH_PROFILE")
     python3 "$root/tools/apple/push_config.py" prepare --platform macos \
