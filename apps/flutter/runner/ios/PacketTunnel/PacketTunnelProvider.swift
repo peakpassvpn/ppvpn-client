@@ -110,6 +110,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             // The host gave up by itself: end the tunnel, then the host.
             self?.queue.async { [weak self] in
               guard let self, self.lifecycleEpoch == epoch else { return }
+              self.stopping = true
               self.log.error("host exit: \(reason, privacy: .public)")
               self.cancelTunnelWithError(TunnelError(reason))
               DispatchQueue.global(qos: .utility).async { [weak self] in self?.shutDown(expected: epoch) }
@@ -266,6 +267,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     guard !packets.isEmpty else { return }
     if !packetFlow.writePackets(packets, withProtocols: protocols) {
+      stopping = true
       fencePackets()
       cancelTunnelWithError(TunnelError("packet flow refused output"))
     }

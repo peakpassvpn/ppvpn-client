@@ -116,4 +116,29 @@ void main() {
     expect(await native('notice', {'accountID': 'one'}), false);
     push.dispose();
   });
+  test('disabled package does not retry push registration on resume', () async {
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      return call.method == 'configured' ? false : null;
+    });
+    final push = ApplePush(notice: (_, _, _) async => true)..start();
+    expect(await push.resume(), false);
+    expect(calls, ['configured']);
+    push.dispose();
+  });
+  test(
+    'configured package requests a fresh OS registration on resume',
+    () async {
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        return call.method == 'configured' ? true : null;
+      });
+      final push = ApplePush(notice: (_, _, _) async => true)..start();
+      expect(await push.resume(), true);
+      expect(calls, ['configured', 'retry']);
+      push.dispose();
+    },
+  );
 }

@@ -113,6 +113,20 @@ class ApplePush {
     }
   }
 
+  /// Silent/offline hints are recovered on foregrounding only in an enabled
+  /// signed package. Disabled builds do not add push-driven network work.
+  Future<bool> resume() async {
+    try {
+      if (await channel.invokeMethod<bool>('configured') != true) return false;
+      await retry();
+      return true;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   void dispose() {
     _disposed = true;
     channel.setMethodCallHandler(null);
