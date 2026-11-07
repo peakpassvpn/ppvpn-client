@@ -41,8 +41,8 @@ if args.negative_controls:
              'func prepareForLaunch() {',
              'disabled/missing capability caused system or store side effects'),
             ('epoch', '--bridge', args.bridge,
-             'reply as? Bool == true && self?.clientEpoch == epoch',
-             'reply as? Bool == true',
+             'let current = self?.clientEpoch == epoch',
+             'let current = self?.clientEpoch != nil && !epoch.isEmpty',
              'late old epoch activated replacement account window'),
         ]
         for name, flag, source, old, new, message in variants:

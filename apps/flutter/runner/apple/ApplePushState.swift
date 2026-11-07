@@ -2,6 +2,65 @@
 // networking or notification presentation belongs in this state machine.
 import Foundation
 import CoreFoundation
+import os
+
+// Typed, content-free native callback receipts. Kept in the already included
+// common compilation unit; the state machine itself does not emit logs.
+@MainActor
+enum ApplePushTrace {
+  enum Stage: String, CaseIterable {
+    case registerRequested = "register_requested"
+    case tokenReceived = "token_received"
+    case registrationFailed = "registration_failed"
+    case foregroundReceived = "foreground_received"
+    case backgroundReceived = "background_received"
+    case tapReceived = "tap_received"
+    case bridgeRegisterReply = "bridge_register_reply"
+    case bridgeUnregisterReply = "bridge_unregister_reply"
+    case bridgeNoticeReply = "bridge_notice_reply"
+  }
+
+  enum FailureDomain: String {
+    case none, cocoa, url, osStatus = "os_status", other
+    init(_ error: NSError?) {
+      guard let error else { self = .none; return }
+      switch error.domain {
+      case NSCocoaErrorDomain: self = .cocoa
+      case NSURLErrorDomain: self = .url
+      case NSOSStatusErrorDomain: self = .osStatus
+      default: self = .other // Never log arbitrary domain/description/userInfo.
+      }
+    }
+  }
+
+  struct Receipt {
+    let stage: Stage
+    let accepted: Bool
+    let current: Bool
+    let opened: Bool
+    let remote: Bool
+    let failureDomain: FailureDomain
+    let code: Int
+
+    init(_ stage: Stage, accepted: Bool = false, current: Bool = true,
+      opened: Bool = false, remote: Bool = false, error: NSError? = nil) {
+      self.stage = stage; self.accepted = accepted; self.current = current
+      self.opened = opened; self.remote = remote
+      failureDomain = FailureDomain(error); code = error?.code ?? 0
+    }
+
+    // No string parameter can carry a token, owner, delivery/message id,
+    // nonce, URL, payload or error description into this serialization.
+    var line: String {
+      "apns stage=\(stage.rawValue) accepted=\(accepted ? 1 : 0) current=\(current ? 1 : 0) opened=\(opened ? 1 : 0) remote=\(remote ? 1 : 0) domain=\(failureDomain.rawValue) code=\(code)"
+    }
+  }
+
+  private static let logger = Logger(subsystem: "com.peakpassvpn.ppvpn.apple-push", category: "lifecycle")
+  static func emit(_ receipt: Receipt) {
+    logger.info("\(receipt.line, privacy: .public)")
+  }
+}
 
 enum ApplePushEnvironment: String, Codable, Sendable {
   case sandbox, production

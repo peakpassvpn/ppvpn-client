@@ -13,9 +13,10 @@ struct MacPushHooksTests {
     // boundaries; this also proves no Keychain access through the bridge.
     for validApp in [Optional(app), nil] {
       var effects = 0
+      var offReceipts: [ApplePushTrace.Receipt] = []
       let receiver = MacApplePushReceiver(app: validApp, enabled: validApp == nil,
         system: MacApplePushSystem(installDelegate: { _ in effects += 1 },
-          register: { effects += 1 }, permission: { effects += 1 }))
+          register: { effects += 1 }, permission: { effects += 1 }), trace: { offReceipts.append($0) })
       let bridge = MacApplePushBridge(receiver: receiver)
       bridge.prepareForLaunch(); bridge.start(); bridge.start()
       bridge.attach(FlutterPluginRegistrar())
@@ -25,21 +26,24 @@ struct MacPushHooksTests {
       channel.call("installation", ["platform": "macos", "bundleID": "test.fixture", "environment": "production"]) {
         require(($0 as? FlutterError)?.code == "push-scope", "OFF proof boundary")
       }
+      receiver.record(.registerRequested)
+      receiver.didFailToRegister(NSError(domain: "secret", code: 9))
       receiver.didRegister(token: Data([1, 2, 3]))
       receiver.receiveBackground(["delivery_id": "push:1", "account_id": "A", "message_id": "42"])
       channel.call("account", ["state": "signedIn", "id": "A", "clientEpoch": "1"])
-      require(effects == 0 && channel.sent.isEmpty && ApplePushInstallation.accesses == 0,
+      require(effects == 0 && offReceipts.isEmpty && channel.sent.isEmpty && ApplePushInstallation.accesses == 0,
         "disabled/missing capability caused system or store side effects")
       cases += 1
     }
 
+    var receipts: [ApplePushTrace.Receipt] = []
     var events: [String] = []
     var permissions = 0
     var registrations = 0
     weak var installed: MacApplePushReceiver?
     let receiver = MacApplePushReceiver(app: app, enabled: true,
       system: MacApplePushSystem(installDelegate: { installed = $0; events.append("delegate") },
-        register: { registrations += 1; events.append("register") }, permission: { permissions += 1 }))
+        register: { registrations += 1; events.append("register") }, permission: { permissions += 1 }), trace: { receipts.append($0) })
     let bridge = MacApplePushBridge(receiver: receiver)
     bridge.prepareForLaunch()
     require(installed === receiver && events == ["delegate"], "early strong owner/delegate preparation")
@@ -109,6 +113,25 @@ struct MacPushHooksTests {
     require(registrations == 2 && permissions == 0, "retry must ask OS without implicit permission prompt")
     channel.call("permission")
     require(permissions == 1, "explicit permission hook missing")
+    cases += 1
+
+    receiver.didRegister(token: Data([4]))
+    let oldTokenReply = channel.sent.count - 1
+    receiver.didRegister(token: Data([5]))
+    let currentTokenReply = channel.sent.count - 1
+    channel.reply(oldTokenReply, true)
+    require(receipts.last?.stage == .bridgeRegisterReply && receipts.last?.current == true && receipts.last?.accepted == false,
+      "superseded token reply incorrectly logged as admitted")
+    channel.reply(currentTokenReply, true)
+    require(receipts.last?.accepted == true, "current token reply missing")
+    cases += 1
+    require(receipts.filter { $0.stage == .registerRequested }.count == 2, "OS register receipt missing")
+    require(receipts.contains { $0.stage == .tokenReceived && $0.accepted }, "fresh token receipt missing")
+    require(receipts.contains { $0.stage == .registrationFailed && $0.failureDomain == .other && $0.code == 7 }, "safe failure receipt missing")
+    require(receipts.contains { $0.stage == .backgroundReceived && $0.remote }, "remote callback receipt missing")
+    require(receipts.contains { $0.stage == .bridgeNoticeReply && $0.opened && $0.current && $0.accepted }, "current ack receipt missing")
+    require(receipts.contains { $0.stage == .bridgeNoticeReply && $0.opened && !$0.current && !$0.accepted }, "stale ack receipt missing")
+    require(!receipts.map { $0.line }.joined().contains("fixture.failure"), "arbitrary failure domain leaked")
     cases += 1
     print("\(cases) production macOS receiver/bridge cases passed (controlled system boundaries; no app launch/APNs)")
   }
