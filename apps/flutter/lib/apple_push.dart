@@ -88,12 +88,14 @@ class ApplePush {
       final delivery = args['deliveryID'];
       if (delivery is! String || delivery.isEmpty || delivery.length > 256)
         return false;
-      return notice(
+      final epoch = _ownerEpoch;
+      final accepted = await notice(
         owner as String?,
         id != null && id > 0 ? id : null,
         args['opened'] == true,
         delivery,
       );
+      return accepted && !_disposed && epoch == _ownerEpoch;
     }
     if (call.method != 'register' && call.method != 'unregister') return false;
     final remove = call.method == 'unregister';

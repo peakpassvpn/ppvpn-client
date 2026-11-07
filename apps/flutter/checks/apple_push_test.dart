@@ -35,6 +35,44 @@ void main() {
   });
   tearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
+  test(
+    'dispose rejects an already running notice before native activation',
+    () async {
+      final entered = Completer<void>();
+      final response = Completer<bool>();
+      final push = ApplePush(
+        notice: (_, _, _, _) {
+          entered.complete();
+          return response.future;
+        },
+      )..start();
+      await push.followAccount(state: 'signedIn', id: 'one');
+      final pending = native('notice', {'accountID': 'one', 'opened': true});
+      await entered.future;
+      push.dispose();
+      response.complete(true);
+      expect(await pending, false);
+    },
+  );
+
+  test('owner replacement rejects an already running notice result', () async {
+    final entered = Completer<void>();
+    final response = Completer<bool>();
+    final push = ApplePush(
+      notice: (_, _, _, _) {
+        entered.complete();
+        return response.future;
+      },
+    )..start();
+    await push.followAccount(state: 'signedIn', id: 'one');
+    final pending = native('notice', {'accountID': 'one', 'opened': true});
+    await entered.future;
+    await push.followAccount(state: 'signedIn', id: 'two');
+    response.complete(true);
+    expect(await pending, false);
+    push.dispose();
+  });
+
   test('absent backend adapter never confirms native registration', () async {
     final push = ApplePush(notice: (_, _, _, _) async => true)..start();
     await push.followAccount(state: 'signedIn', id: 'one');

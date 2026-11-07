@@ -140,7 +140,8 @@ class AppState with WidgetsBindingObserver {
     String deliveryID,
   ) async {
     final current = snapshot.value;
-    if (current.auth != rust.UiAuth.signedIn ||
+    if (_stopped ||
+        current.auth != rust.UiAuth.signedIn ||
         current.accountId == null ||
         (accountId != null && accountId != current.accountId))
       return false;
@@ -155,10 +156,10 @@ class AppState with WidgetsBindingObserver {
     } catch (_) {
       return false;
     }
-    if (epoch != messages.ownerEpoch) return false;
+    if (_stopped || epoch != messages.ownerEpoch) return false;
     if (opened) messages.requestOpen((messageId: message.id, push: message));
     await messages.reload();
-    if (epoch != messages.ownerEpoch) return false;
+    if (_stopped || epoch != messages.ownerEpoch) return false;
     if (opened) showPage(WindowPage.messages);
     return !messages.view.value.failed;
   }
