@@ -522,6 +522,7 @@ impl Resources {
             let args = scoped_arguments(current, "get");
             if let Some(text) = route_query("/sbin/route", &args)? {
                 if scoped_matches(&text, current, false) {
+                    trace_phase("scoped-uplink-present");
                     continue;
                 }
             }
@@ -540,6 +541,7 @@ impl Resources {
                 }
                 return Err(error);
             }
+            trace_phase("scoped-uplink-added");
         }
         Ok(())
     }
@@ -814,6 +816,7 @@ fn clear_scoped_route(route: &mut ScopedRoute) -> Result<()> {
         .is_some_and(|text| scoped_matches(&text, route, true))
     {
         command("/sbin/route", &scoped_arguments(route, "delete"))?;
+        trace_phase("scoped-uplink-deleted");
     }
     route.owned = false;
     Ok(())
