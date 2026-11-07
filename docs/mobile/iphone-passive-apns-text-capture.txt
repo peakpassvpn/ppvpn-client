@@ -46,13 +46,36 @@ artifact; keep both outputs private. Native callback receipt text should be
 paired with the exact candidate identity, real provider/backend correlation
 and externally observed UI. No row count or matching text becomes a PASS.
 
-This strict entry cannot capture the earliest cold-launch events before the
-new PID is independently known. Do not silently loosen to a name-only match,
-replay an old PID or relaunch the App to fill that gap. Mark early events NOT
-OBSERVED and use a separately reviewed early-armed/namespace-preserving route
-if that evidence is required. After any restart/cold click, root must verify
-the new actual candidate PID and start a new bounded capture. Missing/zero
-rows are NOT OBSERVED, never proof of no callback, error or OS delivery.
+The strict known-PID entry cannot capture events before the PID is known.
+For the first launch, the prearmed entry below buffers only parsed fixed
+observations in RAM until root binds the new actual PID. Never replay an old
+PID or relaunch the App merely to fill a gap. Missing/zero rows are NOT
+OBSERVED, never proof of no callback, error or OS delivery.
+
+First-launch / cold-launch prearm (no App launch by this helper)
+Use a new private directory and a PID file that does NOT exist yet:
+  python3 tools/apple/ios_apns_syslog_prearm.py \
+    --device-udid "$HARDWARE_DEVICE_UDID" \
+    --pid-file "$NEW_PRIVATE_DIRECTORY/runner.pid" \
+    --bind-timeout 600 --duration 900 \
+    --output "$NEW_PRIVATE_DIRECTORY/trace-text.ndjson"
+The helper starts only the passive relay and prints fixed state markers. A
+DEVICE_RELAY_CONNECTION_TEXT_OBSERVED marker means the real tool's connection
+status was observed, not that any notification or native callback arrived.
+Root may then perform the separately authorized first launch. Once root has
+independently observed the actual candidate PID from its exact installed App
+path, atomically create runner.pid with mode0600 and only that decimal PID.
+Use a private temporary file written/closed0600, then rename it into place;
+never overwrite an earlier binding or briefly expose a partial/0644 file.
+The helper validates the supplied PID against actual device pidlist Runner,
+then flushes only matching-PID fixed observations. Other PIDs are discarded.
+Prebinding memory is capped128 typed observations; no raw message/date/device
+name is buffered beyond immediate line decoding, and nothing is persisted
+before a verified binding. Unbound timeout, malformed/untrusted file, buffer
+overflow or lost identity stops the capture without inferring callback success.
+Do not reuse a binding after a restart/cold click; create a fresh capture and
+bind the new actual PID. The relay still has no namespace/event-framing proof;
+all saved records remain PROCESS_BOUND_FIXED_TRACE_TEXT, NOT OS delivery PASS.
 
 Only helper parsing changed; no App/Swift/FRB/profile/rollout change or new IPA
 is needed. Existing macOS unified NDJSON collector retains its exact namespace
