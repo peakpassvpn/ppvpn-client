@@ -425,6 +425,11 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(any(test, feature = "macos-capture-acceptance"), target_os = "macos"))]
 #[path = "gateway/mixed_tests.rs"]
 mod mixed_tests;
+
+#[cfg(all(feature = "macos-capture-acceptance", target_os = "macos"))]
+pub async fn native_acceptance() {
+    mixed_tests::exercise(Arc::new(super::host::Host::default()), true).await;
+}

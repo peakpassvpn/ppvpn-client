@@ -53,6 +53,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      macos_capture_artifact:
+        description: "Draft runtime-qa tag containing exact-source Developer ID signed native acceptance binaries"
+        type: string
+        default: ""
       runs:
         description: "windows: runs of the runtime's failure tests (twenty on the pull request that adds one)"
         type: number
@@ -1438,3 +1442,29 @@ jobs:
           path: ${{ runner.temp }}/tunnel
           if-no-files-found: error
           retention-days: 14
+
+  macos-capture-acceptance:
+    if: github.event_name == 'workflow_dispatch' && inputs.macos_capture_artifact != ''
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download signed exact-source draft artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ARTIFACT_TAG: ${{ inputs.macos_capture_artifact }}
+        run: |
+          [[ "$ARTIFACT_TAG" =~ ^runtime-qa-[0-9a-f]{7,40}$ ]] || exit 2
+          mkdir -p "$RUNNER_TEMP/native-artifact"
+          gh release download "$ARTIFACT_TAG" --pattern native-acceptance.tar.gz --dir "$RUNNER_TEMP/native-artifact"
+          tar -xzf "$RUNNER_TEMP/native-artifact/native-acceptance.tar.gz" -C "$RUNNER_TEMP/native-artifact"
+      - name: Exercise actual broker utun routes DNS and held mixed streams
+        run: bash tools/desktop/macos-capture-acceptance.sh "$RUNNER_TEMP/native-artifact" "$RUNNER_TEMP/native-evidence"
+      - name: Upload native evidence, including failed probes and rollback
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-capture-acceptance
+          path: ${{ runner.temp }}/native-evidence
+          if-no-files-found: warn

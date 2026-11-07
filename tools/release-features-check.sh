@@ -16,13 +16,13 @@
 #   tools/release-features-check.sh -p ppvpn-core --features fault-injection   # fails
 set -euo pipefail
 
-forbidden='^(sail|ppvpn-core) feature "(fault-injection|testing|lab)"'
+forbidden='^(sail|ppvpn-core|ppvpn-service) feature "(fault-injection|testing|lab|macos-capture-acceptance)"'
 targets=(--target all)
 for arg in "$@"; do
 	case $arg in --target | --target=*) targets=() ;; esac
 done
 found=""
-for crate in sail ppvpn-core; do
+for crate in sail ppvpn-core ppvpn-service; do
 	if ! out=$(cargo tree --locked -e features,no-dev ${targets[@]+"${targets[@]}"} --prefix none -i "$crate" "$@" 2>&1); then
 		# Not in the graph at all: nothing of it is turned on.
 		if grep -q "did not match any packages" <<<"$out"; then

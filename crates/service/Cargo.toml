@@ -21,6 +21,8 @@ path = "src/uninstall.rs"
 [features]
 # Signed macOS single-owner installation and LaunchAgent activation.
 macos-user-runtime = []
+# Isolated signed native acceptance harness; forbidden in shipping artifacts.
+macos-capture-acceptance = ["macos-user-runtime"]
 
 [dependencies]
 async-trait = "0.1"
