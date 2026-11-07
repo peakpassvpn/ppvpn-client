@@ -344,4 +344,31 @@ mod tests {
             ));
         }
     }
+    #[tokio::test]
+    async fn apple_push_resolve_and_single_message_actual_http() {
+        let (api, requests, server) = mock(vec![
+            (
+                200,
+                json!({"installation_id":ID,"binding_id":null,"registration_id":null,"bound_to_current_user":false,"bound_to_current_session":false}),
+            ),
+            (200, json!({"id":7})),
+        ]);
+        let input = json!({"installation_id":ID,"installation_secret":"test-proof-not-a-live-secret","platform":"ios","bundle_id":"test.fixture","environment":"production"});
+        let resolved = api
+            .apple_push("fixture", "resolve", input.clone())
+            .await
+            .unwrap();
+        assert_eq!(resolved["body"]["installation_id"], ID);
+        let message = api
+            .apple_push("fixture", "message", json!({"message_id":7}))
+            .await
+            .unwrap();
+        assert_eq!(message["body"]["id"], 7);
+        server.join().unwrap();
+        let raw = requests.lock().unwrap();
+        assert!(raw[0].starts_with("POST /api/v1/devices/apple/installations "));
+        let body: Value = serde_json::from_str(raw[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body, input);
+        assert!(raw[1].starts_with("GET /api/v1/messages/7 "));
+    }
 }
