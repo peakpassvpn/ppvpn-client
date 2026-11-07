@@ -36,6 +36,8 @@
 #   IOS_SDK              ios: simulator (a debug build for Apple silicon's
 #                        simulator, ci.yml) or device (release; the default)
 #   IOS_TEAM_ID, IOS_APP_PROFILE, IOS_TUNNEL_PROFILE
+#   IOS_CODE_SIGN_IDENTITY (default Apple Distribution), IOS_EXPORT_METHOD
+#   (app-store-connect by default; debugging for a development-profile test IPA)
 #                        ios device: signed for the App Store by this team
 #                        with these provisioning profiles (the app's, the
 #                        packet tunnel's; installed, their certificate in a
@@ -420,6 +422,12 @@ open(path, "w").write(text.replace(bundle, bundle + "\n\t\t\t\t" + setting))
 PY
   if [ -n "${IOS_TEAM_ID:-}" ]; then
     : "${IOS_APP_PROFILE:?IOS_APP_PROFILE is required with IOS_TEAM_ID}"
+    export IOS_CODE_SIGN_IDENTITY=${IOS_CODE_SIGN_IDENTITY:-Apple Distribution}
+    IOS_EXPORT_METHOD=${IOS_EXPORT_METHOD:-app-store-connect}
+    case "$IOS_EXPORT_METHOD" in
+      app-store-connect|debugging|release-testing) ;;
+      *) echo "unsupported IOS_EXPORT_METHOD: $IOS_EXPORT_METHOD" >&2; exit 1 ;;
+    esac
     [ "${IOS_SDK:-device}" = device ] || { echo "IOS_TEAM_ID signs device builds only" >&2; exit 1; }
     [ "$build" -gt 0 ] || { echo "an App Store build needs PPVPN_BUILD_NUMBER" >&2; exit 1; }
     # Manual signing of the Runner target (its three configurations), with
@@ -431,8 +439,8 @@ text = open(path).read()
 settings = {
     "CODE_SIGN_STYLE": "Manual",
     "DEVELOPMENT_TEAM": os.environ["IOS_TEAM_ID"],
-    "CODE_SIGN_IDENTITY": "Apple Distribution",
-    '"CODE_SIGN_IDENTITY[sdk=iphoneos*]"': "Apple Distribution",
+    "CODE_SIGN_IDENTITY": os.environ["IOS_CODE_SIGN_IDENTITY"],
+    '"CODE_SIGN_IDENTITY[sdk=iphoneos*]"': os.environ["IOS_CODE_SIGN_IDENTITY"],
     "PROVISIONING_PROFILE_SPECIFIER": os.environ["IOS_APP_PROFILE"],
     "CODE_SIGN_ENTITLEMENTS": "Runner/Runner.entitlements",
 }
@@ -447,11 +455,11 @@ PY
     IOS_EXPORT_OPTIONS="$app/build/ExportOptions.plist"
     rm -f "$IOS_EXPORT_OPTIONS"
     plist() { /usr/libexec/PlistBuddy -c "$1" "$IOS_EXPORT_OPTIONS" >/dev/null; }
-    plist 'Add :method string app-store-connect'
+    plist "Add :method string $IOS_EXPORT_METHOD"
     plist 'Add :destination string export'
     plist "Add :teamID string $IOS_TEAM_ID"
     plist 'Add :signingStyle string manual'
-    plist 'Add :signingCertificate string Apple Distribution'
+    plist "Add :signingCertificate string $IOS_CODE_SIGN_IDENTITY"
     plist 'Add :provisioningProfiles dict'
     plist "Add :provisioningProfiles:com.peakpassvpn.ppvpn string $IOS_APP_PROFILE"
     : "${IOS_TUNNEL_PROFILE:?IOS_TUNNEL_PROFILE is required with IOS_TEAM_ID}"

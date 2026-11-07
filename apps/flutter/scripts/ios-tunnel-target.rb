@@ -86,8 +86,8 @@ tunnel.build_configurations.each do |config|
   abort "IOS_TUNNEL_PROFILE is required with IOS_TEAM_ID" if profile.empty?
   settings["CODE_SIGN_STYLE"] = "Manual"
   settings["DEVELOPMENT_TEAM"] = team
-  settings["CODE_SIGN_IDENTITY"] = "Apple Distribution"
-  settings["CODE_SIGN_IDENTITY[sdk=iphoneos*]"] = "Apple Distribution"
+  settings["CODE_SIGN_IDENTITY"] = ENV.fetch("IOS_CODE_SIGN_IDENTITY", "Apple Distribution")
+  settings["CODE_SIGN_IDENTITY[sdk=iphoneos*]"] = ENV.fetch("IOS_CODE_SIGN_IDENTITY", "Apple Distribution")
   settings["PROVISIONING_PROFILE_SPECIFIER"] = profile
   settings["CODE_SIGN_ENTITLEMENTS"] = "PacketTunnel/PacketTunnel.entitlements"
 end

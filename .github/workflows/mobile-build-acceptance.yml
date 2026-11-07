@@ -1,0 +1,94 @@
+name: Mobile build acceptance
+run-name: Android artifact comparison at ${{ github.sha }}
+
+on:
+  push:
+    branches: [codex/apple-single-core-build-matrix]
+    paths: [.github/workflows/mobile-build-acceptance.yml]
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Exact functional baseline commit
+        default: 1ddf0a168610172773fe3f479133ecbe5acf932f
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-artifact-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      PPVPN_BUILD_NUMBER: '344'
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      # This worker is exclusively allocated to this job. Retain Android,
+      # Java, Go and all shared build caches; release its unused image tools.
+      - name: Worker disk headroom
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: flutter
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android
+      - uses: ./.github/actions/flutter-toolchain
+      - name: Configure the actual Android toolchain
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+      - name: Serial candidate and baseline APKs and bundles
+        env:
+          PPVPN_SKIP_ANALYZE: '1'
+        run: |
+          set -euo pipefail
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mobile-candidate"
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mobile-baseline"
+          git -C "$RUNNER_TEMP/mobile-baseline" checkout --detach "$BASELINE_REF"
+          mkdir -p "$CARGO_TARGET_DIR"
+          for side in candidate baseline; do
+            checkout="$RUNNER_TEMP/mobile-$side"
+            ln -s "$CARGO_TARGET_DIR" "$checkout/target"
+            for target in aarch64-linux-android x86_64-linux-android; do
+              (cd "$checkout" && tools/release-features-check.sh --target "$target" -p ppvpn-flutter)
+              (cd "$checkout" && tools/release-features-check.sh --target "$target" -p ppvpn-tunnel-host)
+            done
+            bash tools/android/build-size-artifact.sh "$checkout" "$RUNNER_TEMP/mobile-output/$side" all
+          done
+          python3 tools/android/measure_pair.py "$RUNNER_TEMP/mobile-output"
+      # APK/AAB signatures and their certificate digests are verified by the
+      # build wrapper. Both sides use this worker's same measurement debug key.
+      # No Play service account, production upload key or publishing step.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: android-artifact-comparison
+          path: ${{ runner.temp }}/mobile-output
+          if-no-files-found: warn
+          retention-days: 3
