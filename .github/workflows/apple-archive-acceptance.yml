@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: apple-archive-comparison-${{ github.ref }}
+  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}
   cancel-in-progress: false
 
 jobs:
