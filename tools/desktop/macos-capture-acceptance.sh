@@ -43,37 +43,8 @@ netstat -rn > "$out/routes-before.txt"
 scutil --dns > "$out/dns-before.txt"
 route -n get default > "$out/default-before.txt"
 ifconfig -l > "$out/interfaces-before.txt"
-# Record physical resolver reachability before any capture resource exists.
-# This is diagnostic evidence; the native DNS success gate remains unchanged.
-python3 - "$out" <<'PY_DNS_BASELINE'
-import json,pathlib,re,socket,struct,sys
-out=pathlib.Path(sys.argv[1]); text=(out/'dns-before.txt').read_text()
-servers=list(dict.fromkeys(re.findall(r'nameserver\[\d+\]\s*:\s*(\S+)',text)))
-query=b'\x71\x21\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01'
-rows=[]
-for server in servers:
-    for transport in ['udp','tcp']:
-        row=dict(server=server,transport=transport)
-        try:
-            family=socket.AF_INET6 if ':' in server else socket.AF_INET
-            with socket.socket(family,socket.SOCK_DGRAM if transport=='udp' else socket.SOCK_STREAM) as sock:
-                sock.settimeout(2);sock.connect((server,53))
-                if transport=='udp':sock.send(query);answer=sock.recv(65535)
-                else:
-                    sock.sendall(struct.pack('!H',len(query))+query)
-                    def read_exact(n):
-                        data=b''
-                        while len(data)<n:
-                            chunk=sock.recv(n-len(data))
-                            if not chunk:raise EOFError()
-                            data+=chunk
-                        return data
-                    answer=read_exact(struct.unpack('!H',read_exact(2))[0])
-                row.update(matching_id=answer[:2]==query[:2],rcode=answer[3]&15,answers=struct.unpack('!H',answer[6:8])[0])
-        except Exception as exc:row.update(error=type(exc).__name__,errno=getattr(exc,'errno',None))
-        rows.append(row)
-(out/'physical-dns-baseline.json').write_text(json.dumps(rows,indent=2))
-PY_DNS_BASELINE
+# Fixed endpoints are measured before and during capture; no resolver override.
+python3 tools/desktop/macos_capture_network_probe.py "$out" before
 installed=0
 cleanup() {
   set +e
@@ -121,7 +92,7 @@ PY
 if /bin/launchctl print "gui/$uid/$agent" > "$out/user-job-before-probe.txt" 2>&1; then
   sudo /bin/launchctl bootout "gui/$uid/$agent"
 fi
-"$image" --capture-acceptance > "$out/native-probes.jsonl" 2> "$out/native-probes.stderr"
+PPVPN_CAPTURE_EVIDENCE="$out" "$image" --capture-acceptance > "$out/native-probes.jsonl" 2> "$out/native-probes.stderr"
 route -n get default > "$out/default-detached.txt"
 netstat -rn > "$out/routes-detached.txt"
 scutil --dns > "$out/dns-detached.txt"
