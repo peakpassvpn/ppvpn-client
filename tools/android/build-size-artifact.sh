@@ -76,7 +76,8 @@ ndk=pathlib.Path(os.environ['ANDROID_NDK_HOME'])/'source.properties'
 revision=next((line.partition('=')[2].strip() for line in ndk.read_text().splitlines()
                if line.startswith('Pkg.Revision')), None)
 sdk=pathlib.Path(os.environ.get('ANDROID_HOME') or os.environ['ANDROID_SDK_ROOT'])
-jdk=subprocess.run(['java','-version'],capture_output=True,text=True,check=True)
+java = str(pathlib.Path(os.environ['JAVA_HOME']) / 'bin/java') if os.environ.get('JAVA_HOME') else 'java'
+jdk=subprocess.run([java,'-version'],capture_output=True,text=True,check=True)
 certificates={}
 for artifact in sorted(pathlib.Path(output).glob('*.apk')):
     signers=list((sdk/'build-tools').glob('*/apksigner'))
