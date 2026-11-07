@@ -16,14 +16,28 @@ import '../widgets.dart';
 import 'phone.dart';
 
 class PhoneMessagesPage extends StatefulWidget {
-  const PhoneMessagesPage({super.key, required this.app});
+  const PhoneMessagesPage({
+    super.key,
+    required this.app,
+    this.onDetailPresented,
+  });
   final AppState app;
+  final VoidCallback? onDetailPresented;
   @override
   State<PhoneMessagesPage> createState() => _PhoneMessagesPageState();
 }
 
 class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
   MessagesState get messages => widget.app.messages;
+  Route<void>? _detailRoute;
+  final _detail = ValueNotifier<({rust.UiMessage message, bool readOnly})?>(
+    null,
+  );
+  bool get _canPresent =>
+      (widget.onDetailPresented != null &&
+          ModalRoute.of(context)?.isActive == true) ||
+      ModalRoute.of(context)?.isCurrent == true ||
+      _detailRoute?.isCurrent == true;
   @override
   void initState() {
     super.initState();
@@ -40,10 +54,14 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
 
   void _requested() => unawaited(_openRequested());
   Future<void> _openRequested() async {
-    // Covered inboxes must not steal a click intended for the visible route.
-    if (ModalRoute.of(context)?.isCurrent != true) return;
+    // Only the navigator's managed inbox may handle a tap while covered.
+    if (!_canPresent) return;
     final request = messages.takeOpen();
     if (request == null) return;
+    final inbox = ModalRoute.of(context)!;
+    final surface = inbox.isCurrent
+        ? inbox
+        : (_detailRoute?.isCurrent == true ? _detailRoute : null);
     final owner = messages.ownerEpoch;
     final requestNumber = messages.openRequests.value;
     final index = request.messageId == null
@@ -52,8 +70,14 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
     if (!mounted ||
         owner != messages.ownerEpoch ||
         requestNumber != messages.openRequests.value ||
-        ModalRoute.of(context)?.isCurrent != true)
+        !_canPresent)
       return;
+    if (surface != null && !surface.isCurrent) {
+      // The user navigated elsewhere during lookup. Keep the back-stack list
+      // usable, without interrupting that newer navigation.
+      widget.onDetailPresented?.call();
+      return;
+    }
     _open(
       index == null ? request.push : messages.view.value.items[index],
       readOnly: index == null,
@@ -62,15 +86,46 @@ class _PhoneMessagesPageState extends State<PhoneMessagesPage> {
 
   void _open(rust.UiMessage message, {bool readOnly = false}) {
     if (!readOnly) unawaited(messages.setRead(message, true));
-    unawaited(
-      pushPhonePage<void>(
-        context,
-        _MessageDetail(
-          message: message,
+    final next = (message: message, readOnly: readOnly);
+    if (_detailRoute?.isCurrent == true) {
+      // Keep the current native route and gesture state, including repeat taps.
+      _detail.value = next;
+      return;
+    }
+    _detail.value = next;
+    final route = createPhonePageRoute<void>(
+      context,
+      ValueListenableBuilder(
+        valueListenable: _detail,
+        builder: (context, value, _) => _MessageDetail(
+          message: value!.message,
           messages: messages,
-          readOnly: readOnly,
+          readOnly: value.readOnly,
         ),
       ),
+    );
+    _detailRoute = route;
+    void revealInbox(AnimationStatus status) {
+      if (status == AnimationStatus.completed) {
+        route.animation?.removeStatusListener(revealInbox);
+        if (mounted) widget.onDetailPresented?.call();
+      }
+    }
+
+    final inboxRoute = ModalRoute.of(context);
+    final pushed = Navigator.of(context).pushAndRemoveUntil<void>(
+      route,
+      (candidate) => identical(candidate, inboxRoute),
+    );
+    route.animation?.addStatusListener(revealInbox);
+    unawaited(
+      pushed.whenComplete(() {
+        route.animation?.removeStatusListener(revealInbox);
+        if (identical(_detailRoute, route)) {
+          _detailRoute = null;
+          if (mounted) widget.onDetailPresented?.call();
+        }
+      }),
     );
   }
 
