@@ -35,3 +35,6 @@ pub mod image_verification;
 
 #[cfg(all(test, target_os = "macos"))]
 mod handshake_tests;
+
+#[cfg(target_os = "macos")]
+mod route_snapshot;

@@ -906,52 +906,20 @@ fn clear_scoped_routes(routes: &mut [ScopedRoute]) -> Result<()> {
     }
     Ok(())
 }
-fn command_output(program: &str, args: &[&str]) -> Result<String> {
-    route_query(program, args)?.ok_or_else(|| anyhow::anyhow!("ROUTE_QUERY_MISSING"))
+fn route_query(_program: &str, args: &[&str]) -> Result<Option<String>> {
+    super::route_snapshot::query(args)
 }
-fn route_query(program: &str, args: &[&str]) -> Result<Option<String>> {
-    use std::io::Read;
-    let mut child = {
-        let _guard = spawn_guard();
-        Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?
-    };
-    let end = Instant::now() + Duration::from_millis(300);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let mut output = String::new();
-            if let Some(pipe) = child.stdout.take() {
-                pipe.take(8192).read_to_string(&mut output)?;
-            }
-            if status.success() {
-                return Ok(Some(output));
-            }
-            let mut error = String::new();
-            if let Some(pipe) = child.stderr.take() {
-                pipe.take(2048).read_to_string(&mut error)?;
-            }
-            if error.contains("not in table") {
-                return Ok(None);
-            }
-            bail!("ROUTE_QUERY_FAILED");
-        }
-        if Instant::now() >= end {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("ROUTE_QUERY_TIMEOUT");
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+#[cfg(test)]
+pub(super) fn query_test(program: &str, args: &[&str]) -> Result<Option<String>> {
+    route_query(program, args)
 }
 /// A longest-prefix result is not necessarily the requested route. Verify the
 /// exact /1 mask and network as well as the unique owned interface before delete.
 fn route_owned(name: &str, family: &str, prefix: &str) -> Result<bool> {
-    let text = command_output("/sbin/route", &["-n", "get", family, "-net", prefix])?;
-    Ok(route_matches(&text, name, family, prefix))
+    Ok(
+        route_query("/sbin/route", &["-n", "get", family, "-net", prefix])?
+            .is_some_and(|text| route_matches(&text, name, family, prefix)),
+    )
 }
 fn route_matches(text: &str, name: &str, family: &str, prefix: &str) -> bool {
     let field = |key: &str| {
@@ -972,25 +940,36 @@ fn route_matches(text: &str, name: &str, family: &str, prefix: &str) -> bool {
     };
     exact && field("interface:") == Some(name)
 }
+fn settle_route(
+    published: &mut bool,
+    query: Result<bool>,
+    delete: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if query? {
+        delete()?;
+    }
+    *published = false;
+    Ok(())
+}
 fn clear_routes(name: &str, routes: &[(&str, &str)], published: &mut [bool]) -> Result<()> {
     let mut failed = false;
     for i in (0..routes.len()).rev() {
         if published[i] {
             let (family, prefix) = routes[i];
-            match checked(capture_route_stage(family, prefix, false), || {
+            let query = checked(capture_route_stage(family, prefix, false), || {
                 route_owned(name, family, prefix)
-            }) {
-                Ok(false) => published[i] = false,
-                Ok(true) => match checked(capture_route_stage(family, prefix, true), || {
+            });
+            if settle_route(&mut published[i], query, || {
+                checked(capture_route_stage(family, prefix, true), || {
                     command(
                         "/sbin/route",
                         &["-n", "delete", family, "-net", prefix, "-interface", name],
                     )
-                }) {
-                    Ok(()) => published[i] = false,
-                    Err(_) => failed = true,
-                },
-                Err(_) => failed = true,
+                })
+            })
+            .is_err()
+            {
+                failed = true;
             }
         }
     }
@@ -998,6 +977,35 @@ fn clear_routes(name: &str, routes: &[(&str, &str)], published: &mut [bool]) -> 
         bail!("CAPTURE_ROUTES_UNSETTLED");
     }
     Ok(())
+}
+#[cfg(test)]
+mod settlement_tests {
+    use super::*;
+    #[test]
+    fn unknown_query_or_delete_failure_preserves_owned_intent() {
+        for code in [
+            "ROUTE_QUERY_TIMEOUT",
+            "ROUTE_SNAPSHOT_MALFORMED",
+            "ROUTE_QUERY_FAILED",
+        ] {
+            let mut published = true;
+            assert!(
+                settle_route(&mut published, Err(anyhow::anyhow!(code)), || panic!(
+                    "unknown route must not be deleted"
+                ))
+                .is_err()
+            );
+            assert!(published);
+        }
+        let mut published = true;
+        assert!(settle_route(&mut published, Ok(true), || bail!("OS_COMMAND_TIMEOUT")).is_err());
+        assert!(published);
+        settle_route(&mut published, Ok(false), || {
+            panic!("proven absent/foreign route must not be deleted")
+        })
+        .unwrap();
+        assert!(!published);
+    }
 }
 /// Only an idle, root-locked broker invokes recovery. An unpredictable /128
 /// interface marker plus boot identity and interface index fences off recycled
