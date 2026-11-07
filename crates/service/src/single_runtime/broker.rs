@@ -458,3 +458,43 @@ pub fn shutdown() -> Result<()> {
         .join()
         .map_err(|_| anyhow!("CAPTURE_BROKER_PANICKED"))?
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn readiness_probe_cannot_allocate_an_os_grant_or_bypass_grant_validation() {
+        let peer = Peer {
+            uid: 501,
+            pid: 1,
+            pid_version: 1,
+            audit_session: 1,
+        };
+        let mut ledger = Ledger {
+            capture: Capture::default(),
+            peer: None,
+        };
+        let grant = Grant {
+            token: uuid::Uuid::new_v4().to_string(),
+            lease: CaptureLease {
+                owner: ppvpn_core_wire::ForwarderIdentity {
+                    instance: "readiness-owner".into(),
+                    generation: 1,
+                },
+                attachment_epoch: 1,
+            },
+            settings: None,
+        };
+        assert!(ledger
+            .operation(peer, "probe", grant.clone())
+            .unwrap()
+            .is_none());
+        assert!(!ledger.capture.occupied());
+        assert!(ledger.peer.is_none());
+        assert!(ledger.operation(peer, "prepare", grant.clone()).is_err());
+        let mut malformed = grant;
+        malformed.token.clear();
+        assert!(ledger.operation(peer, "probe", malformed).is_err());
+        assert!(!ledger.capture.occupied());
+    }
+}
