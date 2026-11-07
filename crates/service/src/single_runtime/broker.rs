@@ -265,13 +265,15 @@ fn configure_accepted_stream(stream: &UnixStream) -> io::Result<()> {
 }
 fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Result<()> {
     let (untrusted, token) = mac_peer::audit_peer(stream)?;
-    let peer = mac_peer::verify(
-        stream,
-        untrusted.uid,
-        crate::mac_identity::SERVICE_IDENTIFIER,
-        Path::new(IMAGE),
-    )?;
-    let hello: Request = read_frame(stream)?;
+    let peer = native::timed("broker-peer-check", || {
+        mac_peer::verify(
+            stream,
+            untrusted.uid,
+            crate::mac_identity::SERVICE_IDENTIFIER,
+            Path::new(IMAGE),
+        )
+    })?;
+    let hello: Request = native::timed("broker-hello-read", || read_frame(stream))?;
     if hello.command != Command::Handshake
         || !hello.is_fresh()
         || hello.id.is_empty()
@@ -317,11 +319,13 @@ fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Re
     })?;
     handshake["build_id"] = json!(protocol::SERVICE_BUILD_ID);
     handshake["protocol_version"] = json!(1);
-    write_frame(
-        stream,
-        &Response::unsigned(hello.id, true, Some(handshake), None),
-    )?;
-    let request: Request = read_frame(stream)?;
+    native::timed("broker-hello-write", || {
+        write_frame(
+            stream,
+            &Response::unsigned(hello.id, true, Some(handshake), None),
+        )
+    })?;
+    let request: Request = native::timed("broker-request-read", || read_frame(stream))?;
     if mac_peer::audit_peer(stream)?.0 != peer {
         bail!("CAPTURE_PEER_CHANGED");
     }
@@ -348,7 +352,17 @@ fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Re
             .ok_or_else(|| anyhow!("CAPTURE_OPERATION_INVALID"))?;
         let g: Grant =
             serde_json::from_value(request.payload.get("body").cloned().unwrap_or_default())?;
-        let fd = ledger.operation(peer, path, g)?;
+        let stage = match path {
+            "prepare" => "broker-prepare",
+            "attach" => "broker-attach",
+            "detach" => "broker-detach",
+            "release" => "broker-release",
+            "renew" => "broker-renew",
+            "restore" => "broker-restore",
+            "probe" => "broker-probe",
+            _ => "broker-other",
+        };
+        let fd = native::timed(stage, || ledger.operation(peer, path, g))?;
         if path == "prepare" {
             ledger.peer = Some((peer, token));
         }
@@ -415,12 +429,23 @@ pub fn start() -> Result<()> {
                     checked = Instant::now() + Duration::from_secs(1);
                     if let Some((_, token)) = &ledger.peer {
                         let bytes: Vec<_> = token.iter().flat_map(|w| w.to_ne_bytes()).collect();
-                        if crate::mac_identity::check_process(&bytes, &requirement).is_err() {
+                        if native::timed("broker-peer-watch", || {
+                            crate::mac_identity::check_process(&bytes, &requirement)
+                        })
+                        .is_err()
+                        {
                             let _ = ledger.capture.broker_shutdown();
                             ledger.peer = None;
                         }
                     }
-                    if let Err(error) = ledger.capture.expire(Instant::now()) {
+                    let started = Instant::now();
+                    let expired = ledger.capture.expire(Instant::now());
+                    native::trace_operation(
+                        "broker-expire-check",
+                        started.elapsed(),
+                        expired.is_ok(),
+                    );
+                    if let Err(error) = expired {
                         log::error!("capture broker cleanup quarantined: {error:?}");
                         let _ = ledger.capture.retry_cleanup();
                     }
@@ -431,7 +456,9 @@ pub fn start() -> Result<()> {
                             native::diagnostic("broker-accepted-stream", &error.into());
                             continue;
                         }
-                        if let Err(error) = transact(&mut stream, &mut ledger, generation) {
+                        if let Err(error) = native::timed("broker-transaction", || {
+                            transact(&mut stream, &mut ledger, generation)
+                        }) {
                             native::diagnostic("broker-transport", &error);
                         }
                     }

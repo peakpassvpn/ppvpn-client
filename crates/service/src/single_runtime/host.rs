@@ -47,12 +47,14 @@ impl Client {
         let mut stream = UnixStream::connect(broker::SOCKET)?;
         stream.set_read_timeout(Some(Duration::from_millis(2400)))?;
         stream.set_write_timeout(Some(Duration::from_millis(600)))?;
-        mac_peer::verify_exact(
-            &stream,
-            0,
-            crate::mac_identity::SERVICE_IDENTIFIER,
-            Path::new(broker::IMAGE),
-        )?;
+        native::timed("host-peer-check", || {
+            mac_peer::verify_exact(
+                &stream,
+                0,
+                crate::mac_identity::SERVICE_IDENTIFIER,
+                Path::new(broker::IMAGE),
+            )
+        })?;
         native::trace_phase("host-peer-verified");
         let hello = Request {
             id: uuid::Uuid::new_v4().to_string(),
@@ -63,7 +65,8 @@ impl Client {
             signature: String::new(),
         };
         broker::write_frame(&mut stream, &hello)?;
-        let response: Response = broker::read_frame(&mut stream)?;
+        let response: Response =
+            native::timed("host-handshake-read", || broker::read_frame(&mut stream))?;
         if response.id != hello.id || !response.success {
             bail!("CAPTURE_HANDSHAKE_REJECTED");
         }
@@ -343,7 +346,11 @@ impl Drop for Attachment {
         // This is bounded control-plane IPC; a Tokio worker is replaced while
         // waiting, rather than blocking the forwarding executor's worker pool.
         let release = || {
-            let _ = Client.call("release", &self.grant, false);
+            if let Err(error) = native::timed("host-drop-release", || {
+                Client.call("release", &self.grant, false)
+            }) {
+                native::diagnostic("host-drop-release", &error);
+            }
         };
         if tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
