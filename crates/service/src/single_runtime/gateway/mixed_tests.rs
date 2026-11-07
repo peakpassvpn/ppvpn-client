@@ -232,6 +232,13 @@ async fn native_ingress_probes(sequence: u16, node: &NodeFixture) {
     assert!(counts["native_udp_packets"].as_u64().unwrap()>sequence as u64);
     assert!(http_ok,"native HTTP probe failed");
 }
+async fn routed_udp_echo(client:&UdpSocket,target:std::net::SocketAddr,relay:std::net::SocketAddr,sequence:u32) {
+    let std::net::IpAddr::V4(ip)=target.ip() else {panic!("IPv4 fixture target required")};
+    let mut packet=vec![0,0,0,1];packet.extend_from_slice(&ip.octets());packet.extend_from_slice(&target.port().to_be_bytes());packet.extend_from_slice(&sequence.to_be_bytes());
+    client.send_to(&packet,relay).await.unwrap();let mut reply=[0;2048];
+    let(n,_)=tokio::time::timeout(Duration::from_secs(5),client.recv_from(&mut reply)).await.unwrap().unwrap();
+    assert!(n>=4);assert_eq!(&reply[n-4..n],&sequence.to_be_bytes());
+}
 async fn echo(stream: &mut TcpStream, sequence: u32) {
     let bytes = sequence.to_be_bytes();
     stream.write_all(&bytes).await.unwrap();
@@ -251,7 +258,8 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         let tcp=TcpListener::bind("127.0.0.1:0").await.unwrap();let target=tcp.local_addr().unwrap();
         let tcp_task=tokio::spawn(async move {loop {let(mut socket,_)=tcp.accept().await.unwrap();tokio::spawn(async move {let(mut read,mut write)=socket.split();let _=tokio::io::copy(&mut read,&mut write).await;});}});
         let udp=UdpSocket::bind("127.0.0.1:0").await.unwrap();let udp_target=udp.local_addr().unwrap();
-        let udp_task=tokio::spawn(async move {let mut packet=[0;2048];loop {let(n,peer)=udp.recv_from(&mut packet).await.unwrap();udp.send_to(&packet[..n],peer).await.unwrap();}});
+        let udp_peers=Arc::new(Mutex::new(std::collections::BTreeSet::new()));let observed_udp_peers=udp_peers.clone();
+        let udp_task=tokio::spawn(async move {let mut packet=[0;2048];loop {let(n,peer)=udp.recv_from(&mut packet).await.unwrap();observed_udp_peers.lock().insert(peer);udp.send_to(&packet[..n],peer).await.unwrap();}});
         let backend=EngineForwarder::new(ppvpn_core::EngineConfig::new(ppvpn_core::Role::Shared,ppvpn_core::Platform::Macos,dir.clone()).with_capture_host(CaptureHost::new(host)).with_local_proxy(ppvpn_core::LocalProxyConfig::new().with_preferred_port(0)).with_log(ppvpn_core::LogConfig::new(ppvpn_core::LogLevel::Debug,ppvpn_core::LogSink::Channel))).await.unwrap();
         // Only fixed-fixture DNS diagnostics leave the QA process. Never emit
         // arbitrary core logs, profile credentials, or IPC/session identifiers.
@@ -324,7 +332,9 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
             if native {eprintln!("native-held stage=attached-socks cycle={sequence}");}
             echo(&mut socks,sequence).await;
             if let Some((stream,_))=&mut per_node { if native {eprintln!("native-held stage=attached-per-node cycle={sequence}");} echo(stream,sequence+2000).await; }
-            let mut packet=vec![0,0,0,1,127,0,0,1];packet.extend_from_slice(&udp_target.port().to_be_bytes());packet.extend_from_slice(&sequence.to_be_bytes());udp_client.send_to(&packet,relay).await.unwrap();let mut reply=[0;2048];let(n,_)=udp_client.recv_from(&mut reply).await.unwrap();assert_eq!(&reply[n-4..n],&sequence.to_be_bytes());
+            if native {eprintln!("native-held stage=attached-udp cycle={sequence}");}
+            routed_udp_echo(&udp_client,udp_target,relay,sequence).await;
+            assert_eq!(udp_peers.lock().len(),1,"held UDP upstream socket changed");
             let detached=backend.call("/v1/detach-capture",json!({"protocol_version":1,"expected_epoch":attached["epoch"],"lease":attached["lease"]})).await.unwrap();
             assert_eq!(detached["phase"],"detached");epoch=detached["epoch"].as_u64().unwrap();
             if native { println!("{}",json!({"probe":"detached","cycle":sequence,"owner":identity,"runtime_ids":ppvpn_core::capture_host::forwarding_runtime_ids()})); }
@@ -338,6 +348,9 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
                 let after=backend.call("/v1/get-local-proxy-credential",json!({"node_id":node_id})).await.unwrap();assert_eq!(*node_credential,after);
                 let counts=node_fixture.as_ref().unwrap().counters().await;assert_eq!(counts["upstream_connections"],1);assert_eq!(counts["sink_accepts"],1);
             }
+            if native {eprintln!("native-held stage=detached-udp cycle={sequence}");}
+            routed_udp_echo(&udp_client,udp_target,relay,sequence+100).await;
+            assert_eq!(udp_peers.lock().len(),1,"held UDP upstream socket changed");
             let after=backend.call("/v1/get-local-proxy-credential",json!({"kind":"routed"})).await.unwrap();assert!(credential==after);assert_eq!(identity,backend.identity());
         }
         drop(gateway);echo(&mut http,99).await;echo(&mut socks,99).await;
@@ -345,7 +358,7 @@ pub(super) async fn exercise(host: Arc<dyn CaptureHostApi>, native: bool) {
         let per_node_counts=if let Some(node)=&node_fixture { Some(node.counters().await) } else { None };
         drop(per_node);
         drop((http,socks,association,udp_client));backend.shutdown().await.unwrap();dns_logging.abort();tcp_task.abort();udp_task.abort();let _=std::fs::remove_dir_all(dir);
-        if native { assert!(ppvpn_core::capture_host::forwarding_runtime_ids().is_empty()); println!("{}",json!({"probe":"complete","cycles":20,"http_connect":true,"socks_tcp":true,"socks_udp":true,"per_node_tcp":per_node_counts.is_some(),"per_node_upstream_connections":per_node_counts.as_ref().map(|c|c["upstream_connections"].clone()),"per_node_sink_accepts":per_node_counts.as_ref().map(|c|c["sink_accepts"].clone()),"runtime_ids":[]})); }
+        if native { assert!(ppvpn_core::capture_host::forwarding_runtime_ids().is_empty()); println!("{}",json!({"probe":"complete","cycles":20,"http_connect":true,"socks_tcp":true,"socks_udp":true,"routed_udp_upstream_peers":udp_peers.lock().len(),"per_node_tcp":per_node_counts.is_some(),"per_node_upstream_connections":per_node_counts.as_ref().map(|c|c["upstream_connections"].clone()),"per_node_sink_accepts":per_node_counts.as_ref().map(|c|c["sink_accepts"].clone()),"runtime_ids":[]})); }
         if let Some(node)=node_fixture { node.stop().await; }
     }).await.expect("mixed traffic fixture must be bounded");
 }

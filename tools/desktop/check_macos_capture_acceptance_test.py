@@ -52,7 +52,7 @@ class AcceptanceEvidenceTests(unittest.TestCase):
         self.rows.append({"probe": "complete", "cycles": 20, "runtime_ids": [],
                           "http_connect": True, "socks_tcp": True, "socks_udp": True,
                           "per_node_tcp": True, "per_node_upstream_connections": 1,
-                          "per_node_sink_accepts": 1})
+                          "per_node_sink_accepts": 1, "routed_udp_upstream_peers": 1})
         self.write_events()
         for stage in ("before", "detached", "after"):
             for kind, value in (("dns", DNS), ("routes", ROUTES),
@@ -101,6 +101,13 @@ class AcceptanceEvidenceTests(unittest.TestCase):
         self.rows[-1]["per_node_sink_accepts"] = True
         self.write_events()
         self.reject("exactly one established connection")
+
+    def test_udp_reconnection_or_unmeasured_count_is_rejected(self):
+        for value in [None, 0, 2, True]:
+            with self.subTest(value=value):
+                self.rows[-1]["routed_udp_upstream_peers"] = value
+                self.write_events()
+                self.reject("routed UDP upstream")
 
     def test_dns_server_change_is_not_reachability_noise(self):
         (self.directory / "dns-detached.txt").write_text(

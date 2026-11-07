@@ -138,6 +138,9 @@ def validate(directory):
     for key in ("per_node_upstream_connections", "per_node_sink_accepts"):
         require(type(complete.get(key)) is int and complete[key] == 1,
                 f"{key}: exactly one established connection required")
+    udp_peers = complete.get("routed_udp_upstream_peers")
+    require(type(udp_peers) is int and udp_peers == 1,
+            "routed UDP upstream socket changed or measurement missing")
     baseline = {}
     for stage in ("before", "detached", "after"):
         dns_text = (directory / f"dns-{stage}.txt").read_text()
