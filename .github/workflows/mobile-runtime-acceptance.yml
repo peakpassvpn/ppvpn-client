@@ -5,6 +5,12 @@ on:
     paths: [.github/workflows/mobile-runtime-acceptance.yml]
   workflow_dispatch:
     inputs:
+      reuse_runtime_pin_json:
+        description: Optional exact completed native APK pin for an instrumented Android retry
+        required: false
+      acceptance_ref:
+        description: Separate full commit for Android acceptance scripts only
+        required: false
       build_number:
         description: Release counter for both the native libraries and runtime APK
         default: '344'
@@ -23,11 +29,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: frozen-mobile-runtime-${{ github.ref }}
+  group: frozen-mobile-runtime-${{ github.ref }}-${{ inputs.reuse_runtime_pin_json != '' && 'replay' || 'native' }}
   cancel-in-progress: false
 jobs:
   android:
-    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'ios'
+    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'ios' && inputs.reuse_runtime_pin_json == ''
     # The Flutter app's Android target (#448 step 3): the bridge and the
     # tunnel host for arm64 and x86_64 (the NDK's clang), the APK (signed
     # with the debug key until the Play upload key exists: the artifact
@@ -193,7 +199,7 @@ jobs:
           retention-days: 14
 
   ios:
-    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'android'
+    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'android' && inputs.reuse_runtime_pin_json == ''
     # The Flutter app's iOS target (#448): the bridge as a static library
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
@@ -270,3 +276,127 @@ jobs:
         timeout-minutes: 30
         run: apps/flutter/e2e/ios_smoke.sh
 
+
+  android_native_reuse:
+    if: github.event_name == 'workflow_dispatch' && inputs.platform != 'ios' && inputs.reuse_runtime_pin_json != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCT_REF: ${{ inputs.source_ref }}
+      ACCEPTANCE_REF: ${{ inputs.acceptance_ref || github.sha }}
+      RUNTIME_PIN_JSON: ${{ inputs.reuse_runtime_pin_json }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number || '344' }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Freeze product and independent test source
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_PIN'
+          import json,os,re
+          from pathlib import Path
+          pin=json.loads(os.environ['RUNTIME_PIN_JSON'])
+          assert all(re.fullmatch('[0-9a-f]{40}',os.environ[k]) for k in ('PRODUCT_REF','ACCEPTANCE_REF'))
+          assert pin['product_source']==os.environ['PRODUCT_REF']
+          assert pin['manifest']['versionCode']==int(os.environ['PPVPN_BUILD_NUMBER'])
+          Path(os.environ['RUNNER_TEMP'],'runtime-pin.json').write_text(json.dumps(pin))
+          PY_PIN
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/frozen-product"
+          git -C "$RUNNER_TEMP/frozen-product" checkout --detach "$PRODUCT_REF"
+          [[ -z "$(git -C "$RUNNER_TEMP/frozen-product" status --porcelain)" ]]
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: flutter
+          save-if: false
+      # Host expansion for Dart code generation only; no Android target is built.
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/flutter-toolchain
+        with:
+          frb-codegen-version: 2.13.0
+      - name: Generate the frozen Android runner and verify reused native libraries
+        env:
+          FLUTTER_TARGET: android
+          PPVPN_SKIP_ANALYZE: '1'
+          PPVPN_ANDROID_RUNNER_PREPARE_ONLY: '1'
+        run: |
+          set -euo pipefail
+          unset PPVPN_API_BASE PPVPN_FLUTTER_HOME PPVPN_FLUTTER_SAMPLE PPVPN_FLUTTER_SYNTHETIC_TRAFFIC
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          PPVPN_PREPARE_APP_ROOT="$RUNNER_TEMP/frozen-product/apps/flutter" bash apps/flutter/scripts/ci-build.sh
+          python3 tools/android/reuse_runtime_apk.py --pin "$RUNNER_TEMP/runtime-pin.json"             --product-root "$RUNNER_TEMP/frozen-product" --origin "$PPVPN_API_BASE_DEFAULT"             --work "$RUNNER_TEMP/verified-native-apk" --output "$RUNNER_TEMP/runtime-reuse.json"
+          # Overlay only test/fixture sources, never production Dart/Rust/JNI.
+          git archive "$ACCEPTANCE_REF" apps/flutter/e2e/android_forwarding.sh apps/flutter/e2e/android_forwarding apps/flutter/integration_test/android_forwarding_test.dart test/androidnode |
+            tar -x -C "$RUNNER_TEMP/frozen-product"
+          python3 - <<'PY_SOURCE'
+          import json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'frozen-product'
+          for name in ['test/go.mod','test/go.sum']:
+              assert subprocess.check_output(['git','show',os.environ['ACCEPTANCE_REF']+':'+name])==(root/name).read_bytes()
+          data={'product_source':os.environ['PRODUCT_REF'],'acceptance_source':os.environ['ACCEPTANCE_REF'],
+                'controller_source':os.environ['GITHUB_SHA'],'native_artifact_pin':json.loads(os.environ['RUNTIME_PIN_JSON']),
+                'scope':'Native binary identity unchanged; separate instrumented test build and acceptance scripts. No final unified-pin claim unless the original native artifact used that pin.'}
+          Path(os.environ['RUNNER_TEMP'],'retry-sources.json').write_text(json.dumps(data,indent=2)+'\n')
+          PY_SOURCE
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: test/go.mod
+          cache: false
+      - uses: ./.github/actions/go-modules
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: ./.github/actions/android-sdk
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+      - name: Strict three-cycle forwarding and revoke on fresh emulator
+        timeout-minutes: 30
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: ANDROID_SERIAL=emulator-5554 $RUNNER_TEMP/frozen-product/apps/flutter/e2e/android_forwarding.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: android-native-reuse-forwarding
+          path: |
+            ${{ runner.temp }}/runtime-reuse.json
+            ${{ runner.temp }}/retry-sources.json
+            ${{ runner.temp }}/frozen-product/apps/flutter/build/android-forwarding/*.json
+            ${{ runner.temp }}/frozen-product/apps/flutter/build/android-forwarding/*.jsonl
+            ${{ runner.temp }}/frozen-product/apps/flutter/build/android-forwarding/*.txt
+            ${{ runner.temp }}/frozen-product/apps/flutter/build/android-forwarding/*.log
+            ${{ runner.temp }}/frozen-product/apps/flutter/build/android-forwarding/evidence
+            ${{ runner.temp }}/frozen-product/apps/flutter/build/android-forwarding/rival/rival.apk
+          if-no-files-found: warn
+          retention-days: 7
