@@ -379,6 +379,7 @@ impl Resources {
             key: key.clone(),
             settings: settings.clone(),
             published: vec![false; routes.len()],
+            scoped_routes: vec![],
         };
         let mut resource = Self {
             fd,
@@ -451,6 +452,7 @@ impl Resources {
         if !marked(&self.journal)? {
             bail!("CAPTURE_DEVICE_OWNERSHIP_LOST");
         }
+        self.ensure_scoped_uplinks()?;
         for i in 0..self.routes.len() {
             if self.published[i] {
                 let (family, prefix) = self.routes[i];
@@ -488,6 +490,58 @@ impl Resources {
         self.admitted = true;
         Ok(())
     }
+    fn ensure_scoped_uplinks(&mut self) -> Result<()> {
+        let candidates = scoped_candidates(&self.dns, &self.name)?;
+        // A transient offline state retains the last owned scopes. The next
+        // renewal follows the physical primary again without restarting core.
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        for old in &mut self.journal.scoped_routes {
+            if !candidates.iter().any(|new| new.same_route(old)) {
+                clear_scoped_route(old)?;
+            }
+        }
+        self.journal
+            .scoped_routes
+            .retain(|old| candidates.iter().any(|new| new.same_route(old)));
+        for candidate in candidates {
+            if !self
+                .journal
+                .scoped_routes
+                .iter()
+                .any(|old| old.same_route(&candidate))
+            {
+                self.journal.scoped_routes.push(candidate);
+            }
+        }
+        self.save()?;
+        for i in 0..self.journal.scoped_routes.len() {
+            let current = &self.journal.scoped_routes[i];
+            let args = scoped_arguments(current, "get");
+            if let Some(text) = route_query("/sbin/route", &args)? {
+                if scoped_matches(&text, current, false) {
+                    continue;
+                }
+            }
+            // Journal intent before add. Never replace or change a route that
+            // another owner installed; EEXIST rejects this transaction.
+            self.journal.scoped_routes[i].owned = true;
+            self.save()?;
+            let args = scoped_arguments(&self.journal.scoped_routes[i], "add");
+            if let Err(error) = command("/sbin/route", &args) {
+                // A completed failed add (including EEXIST) never transfers
+                // another writer's route to us. A timed-out add is ambiguous
+                // and retains its journal intent for fenced recovery.
+                if error.to_string() == "OS_COMMAND_FAILED" {
+                    self.journal.scoped_routes[i].owned = false;
+                    self.save()?;
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
     pub fn detach(&mut self) -> Result<()> {
         self.admitted = false;
         if !marked(&self.journal)? {
@@ -498,9 +552,11 @@ impl Resources {
             self.dns_live = false;
         }
         let routes = clear_routes(&self.name, &self.routes, &mut self.published);
+        let scopes = clear_scoped_routes(&mut self.journal.scoped_routes);
         self.save()?;
         dns?;
-        routes
+        routes?;
+        scopes
     }
     pub fn cleanup(&mut self) -> Result<()> {
         // Never bring a recycled/externally changed interface down merely
@@ -547,6 +603,8 @@ struct Journal {
     key: String,
     settings: Settings,
     published: Vec<bool>,
+    #[serde(default)]
+    scoped_routes: Vec<ScopedRoute>,
 }
 fn boot() -> Result<i64> {
     let mut value: libc::timeval = unsafe { std::mem::zeroed() };
@@ -623,7 +681,155 @@ fn forget_journal() -> Result<()> {
         Err(e) => Err(e.into()),
     }
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScopedRoute {
+    family: String,
+    interface: String,
+    index: u32,
+    gateway: String,
+    owned: bool,
+}
+impl ScopedRoute {
+    fn validate(&self) -> Result<()> {
+        if self.index == 0
+            || self.interface.is_empty()
+            || self.interface.len() >= libc::IFNAMSIZ
+            || !self.interface.bytes().all(|c| c.is_ascii_alphanumeric())
+            || self.interface.starts_with("utun")
+            || self.interface.starts_with("tun")
+            || self.interface.starts_with("ppp")
+        {
+            bail!("CAPTURE_UPLINK_INVALID");
+        }
+        let (address, zone) = self
+            .gateway
+            .split_once('%')
+            .map_or((self.gateway.as_str(), None), |(ip, zone)| (ip, Some(zone)));
+        let address: std::net::IpAddr = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("CAPTURE_UPLINK_INVALID"))?;
+        if address.is_unspecified()
+            || address.is_loopback()
+            || address.is_multicast()
+            || (self.family != "-inet" && self.family != "-inet6")
+            || (self.family == "-inet") != address.is_ipv4()
+            || zone.is_some_and(|zone| self.family != "-inet6" || zone != self.interface)
+        {
+            bail!("CAPTURE_UPLINK_INVALID");
+        }
+        Ok(())
+    }
+    fn same_route(&self, other: &Self) -> bool {
+        self.family == other.family
+            && self.interface == other.interface
+            && self.index == other.index
+            && self.gateway == other.gateway
+    }
+}
+fn scoped_candidates(store: &Store, own_interface: &str) -> Result<Vec<ScopedRoute>> {
+    let mut routes = vec![];
+    for (family, key) in [
+        ("-inet", "State:/Network/Global/IPv4"),
+        ("-inet6", "State:/Network/Global/IPv6"),
+    ] {
+        let Some(global) = store.dictionary(key) else {
+            continue;
+        };
+        let (Some(interface), Some(mut gateway)) =
+            (field(&global, "PrimaryInterface"), field(&global, "Router"))
+        else {
+            continue;
+        };
+        if interface == own_interface {
+            continue;
+        }
+        if family == "-inet6"
+            && gateway
+                .parse::<std::net::Ipv6Addr>()
+                .is_ok_and(|ip| ip.is_unicast_link_local())
+        {
+            gateway.push('%');
+            gateway.push_str(&interface);
+        }
+        let route = ScopedRoute {
+            family: family.into(),
+            index: index(&interface)?,
+            interface,
+            gateway,
+            owned: false,
+        };
+        route.validate()?;
+        routes.push(route);
+    }
+    Ok(routes)
+}
+fn scoped_arguments<'a>(route: &'a ScopedRoute, operation: &'a str) -> Vec<&'a str> {
+    let mut args = vec![
+        "-n",
+        operation,
+        route.family.as_str(),
+        "-ifscope",
+        route.interface.as_str(),
+        "-net",
+        "default",
+    ];
+    if operation != "get" {
+        args.push(&route.gateway);
+    }
+    args
+}
+fn scoped_matches(text: &str, route: &ScopedRoute, require_gateway: bool) -> bool {
+    let field = |key: &str| {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix(key).map(str::trim))
+    };
+    let default = matches!(field("destination:"), Some("default" | "0.0.0.0" | "::"));
+    let mask = field("mask:").is_none_or(|mask| matches!(mask, "default" | "0.0.0.0" | "::" | "0"));
+    let scoped = field("flags:").is_some_and(|flags| {
+        flags
+            .trim_matches(['<', '>'])
+            .split(',')
+            .any(|flag| flag.trim() == "IFSCOPE")
+    });
+    default
+        && mask
+        && scoped
+        && field("interface:") == Some(route.interface.as_str())
+        && (!require_gateway || field("gateway:") == Some(route.gateway.as_str()))
+}
+fn clear_scoped_route(route: &mut ScopedRoute) -> Result<()> {
+    if !route.owned {
+        return Ok(());
+    }
+    if index(&route.interface)? != route.index {
+        route.owned = false;
+        return Ok(());
+    }
+    if route_query("/sbin/route", &scoped_arguments(route, "get"))?
+        .is_some_and(|text| scoped_matches(&text, route, true))
+    {
+        command("/sbin/route", &scoped_arguments(route, "delete"))?;
+    }
+    route.owned = false;
+    Ok(())
+}
+fn clear_scoped_routes(routes: &mut [ScopedRoute]) -> Result<()> {
+    let mut failed = false;
+    for route in routes.iter_mut().rev() {
+        if clear_scoped_route(route).is_err() {
+            failed = true;
+        }
+    }
+    if failed {
+        bail!("CAPTURE_UPLINK_ROUTES_UNSETTLED");
+    }
+    Ok(())
+}
 fn command_output(program: &str, args: &[&str]) -> Result<String> {
+    route_query(program, args)?.ok_or_else(|| anyhow::anyhow!("ROUTE_QUERY_MISSING"))
+}
+fn route_query(program: &str, args: &[&str]) -> Result<Option<String>> {
     use std::io::Read;
     let mut child = {
         let _guard = spawn_guard();
@@ -631,7 +837,7 @@ fn command_output(program: &str, args: &[&str]) -> Result<String> {
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()?
     };
     let end = Instant::now() + Duration::from_millis(300);
@@ -642,7 +848,14 @@ fn command_output(program: &str, args: &[&str]) -> Result<String> {
                 pipe.take(8192).read_to_string(&mut output)?;
             }
             if status.success() {
-                return Ok(output);
+                return Ok(Some(output));
+            }
+            let mut error = String::new();
+            if let Some(pipe) = child.stderr.take() {
+                pipe.take(2048).read_to_string(&mut error)?;
+            }
+            if error.contains("not in table") {
+                return Ok(None);
             }
             bail!("ROUTE_QUERY_FAILED");
         }
@@ -732,6 +945,12 @@ pub fn recover() -> Result<()> {
     file.take(16 * 1024).read_to_end(&mut bytes)?;
     let mut j: Journal = serde_json::from_slice(&bytes)?;
     j.settings.validate()?;
+    if j.scoped_routes.len() > 2 {
+        bail!("CAPTURE_JOURNAL_INVALID");
+    }
+    for route in &j.scoped_routes {
+        route.validate()?;
+    }
     if !j.name.starts_with("utun")
         || !j.name[4..].bytes().all(|b| b.is_ascii_digit())
         || j.name.len() > 15
@@ -742,7 +961,14 @@ pub fn recover() -> Result<()> {
     {
         bail!("CAPTURE_JOURNAL_INVALID");
     }
-    if j.boot != boot()? || index(&j.name)? == 0 {
+    if j.boot != boot()? {
+        return forget_journal();
+    }
+    if index(&j.name)? == 0 {
+        // Interface routes die with utun, physical scopes do not. They are
+        // independently fenced by the recorded physical index and gateway.
+        clear_scoped_routes(&mut j.scoped_routes)?;
+        Store::new()?.remove(&j.key)?;
         return forget_journal();
     }
     if !marked(&j)? {
@@ -758,6 +984,7 @@ pub fn recover() -> Result<()> {
     let dns = Store::new()?;
     let removed = dns.remove(&j.key);
     let routes = clear_routes(&j.name, &routes, &mut j.published);
+    let scopes = clear_scoped_routes(&mut j.scoped_routes);
     let down = if marked(&j)? {
         command("/sbin/ifconfig", &[&j.name, "down"])
     } else {
@@ -765,6 +992,7 @@ pub fn recover() -> Result<()> {
     };
     removed?;
     routes?;
+    scopes?;
     down?;
     forget_journal()
 }
@@ -788,6 +1016,87 @@ mod ownership_tests {
         let mut invalid = settings;
         invalid.dns_servers = vec!["192.0.2.1".into()];
         assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn scoped_uplink_ownership_never_accepts_global_or_foreign_routes() {
+        let route = ScopedRoute {
+            family: "-inet".into(),
+            interface: "en0".into(),
+            index: 7,
+            gateway: "192.168.64.1".into(),
+            owned: true,
+        };
+        route.validate().unwrap();
+        let exact="destination: default\ngateway: 192.168.64.1\ninterface: en0\nflags: <UP,GATEWAY,STATIC,IFSCOPE>\n";
+        assert!(scoped_matches(exact, &route, true));
+        assert!(!scoped_matches(
+            &exact.replace(",IFSCOPE", ""),
+            &route,
+            true
+        ));
+        assert!(!scoped_matches(&exact.replace("en0", "en1"), &route, true));
+        assert!(!scoped_matches(
+            &exact.replace("192.168.64.1", "192.168.64.2"),
+            &route,
+            true
+        ));
+        assert!(scoped_matches(
+            &exact.replace("192.168.64.1", "192.168.64.2"),
+            &route,
+            false
+        ));
+        assert!(!scoped_matches(
+            &exact.replace(
+                "destination: default",
+                "destination: default\nmask: 128.0.0.0"
+            ),
+            &route,
+            true
+        ));
+        assert_eq!(
+            scoped_arguments(&route, "add"),
+            vec![
+                "-n",
+                "add",
+                "-inet",
+                "-ifscope",
+                "en0",
+                "-net",
+                "default",
+                "192.168.64.1"
+            ]
+        );
+        assert_eq!(
+            scoped_arguments(&route, "delete"),
+            vec![
+                "-n",
+                "delete",
+                "-inet",
+                "-ifscope",
+                "en0",
+                "-net",
+                "default",
+                "192.168.64.1"
+            ]
+        );
+        let mut borrowed = route.clone();
+        borrowed.owned = false;
+        clear_scoped_route(&mut borrowed).unwrap();
+        let mut invalid = route.clone();
+        invalid.gateway = "-delete".into();
+        assert!(invalid.validate().is_err());
+        let mut invalid = route;
+        invalid.interface = "utun7".into();
+        assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn legacy_journal_has_no_owned_physical_scopes() {
+        let core = ppvpn_core::tun_settings(ppvpn_core::Platform::Ios).unwrap();
+        let value = serde_json::json!({"name":"utun99","index":99,"marker":"fd00::1","boot":1,"key":"fixture","settings":{"mtu":core.mtu,"ipv4_address":core.ipv4_address,"ipv6_address":core.ipv6_address,"dns_servers":core.dns_servers},"published":[true,true,true,true]});
+        assert!(serde_json::from_value::<Journal>(value)
+            .unwrap()
+            .scoped_routes
+            .is_empty());
     }
     #[test]
     fn cleanup_never_accepts_a_default_fallback_or_foreign_interface() {
