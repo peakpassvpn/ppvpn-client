@@ -184,10 +184,10 @@ def verify_bundle(app, platform, enabled, topic, distribution=False, allow_unsig
     return result
 
 
-def verify_artifact(path, **kwargs):
+def inspect_artifact(path, platform, inspect_bundle):
     if path.suffix != '.ipa':
-        return verify_bundle(path, **kwargs)
-    if kwargs['platform'] != 'ios':
+        return inspect_bundle(path)
+    if platform != 'ios':
         raise ConfigurationError('IPA validation requires iOS')
     with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory(prefix='ppvpn-ipa-check-') as work:
         names = set()
@@ -207,7 +207,11 @@ def verify_artifact(path, **kwargs):
         apps = list((Path(work) / 'Payload').glob('*.app'))
         if len(apps) != 1:
             raise ConfigurationError('IPA must contain exactly one application')
-        return verify_bundle(apps[0], **kwargs)
+        return inspect_bundle(apps[0])
+
+
+def verify_artifact(path, **kwargs):
+    return inspect_artifact(path, kwargs['platform'], lambda app: verify_bundle(app, **kwargs))
 
 
 def main():
