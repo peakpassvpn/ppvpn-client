@@ -39,7 +39,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}
+  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}
   cancel-in-progress: false
 
 jobs:
