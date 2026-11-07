@@ -93,8 +93,16 @@ impl NodeFixture {
         let info: Value = serde_json::from_str(&line).unwrap();
         Some(Self {
             child,
-            native_tcp_port: info["native_tcp_port"].as_u64().unwrap().try_into().unwrap(),
-            native_udp_port: info["native_udp_port"].as_u64().unwrap().try_into().unwrap(),
+            native_tcp_port: info["native_tcp_port"]
+                .as_u64()
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            native_udp_port: info["native_udp_port"]
+                .as_u64()
+                .unwrap()
+                .try_into()
+                .unwrap(),
             ss_port: info["ss_port"].as_u64().unwrap().try_into().unwrap(),
             sink: info["sink"].as_str().unwrap().parse().unwrap(),
             stats: info["stats"].as_str().unwrap().parse().unwrap(),
@@ -165,47 +173,77 @@ async fn socks_reply(stream: &mut TcpStream) -> std::net::SocketAddr {
 async fn native_ingress_probes(sequence: u16, node: &NodeFixture) {
     // TEST-NET is never assigned on the host. Only the SS upstream maps this
     // narrow destination to its independent native sinks, preserving ports.
-    let controlled=tokio::time::timeout(Duration::from_secs(10),async {
-        let target=std::net::SocketAddr::from(([192,0,2,10],node.native_tcp_port));
-        let mut tcp=TcpStream::connect(target).await?;
-        let bytes=sequence.to_be_bytes();tcp.write_all(&bytes).await?;
-        let mut reply=[0;2];tcp.read_exact(&mut reply).await?;
-        if reply!=bytes { return Err(std::io::Error::other("TCP_ECHO_MISMATCH")); }
-        let udp=UdpSocket::bind("0.0.0.0:0").await?;
-        let target=std::net::SocketAddr::from(([192,0,2,10],node.native_udp_port));
-        udp.send_to(&bytes,target).await?;
-        let mut answer=[0;16];let(n,peer)=udp.recv_from(&mut answer).await?;
-        if peer!=target || answer[..n]!=bytes { return Err(std::io::Error::other("UDP_ECHO_MISMATCH")); }
-        Ok::<_,std::io::Error>(())
-    }).await;
-    let controlled_ok=matches!(controlled,Ok(Ok(())));
-    eprintln!("native-ingress controlled-tcp-udp={controlled_ok} outcome={:?}",controlled.as_ref().map(|r|r.as_ref().map_err(|e|(e.kind(),e.raw_os_error()))));
+    let controlled = tokio::time::timeout(Duration::from_secs(10), async {
+        let target = std::net::SocketAddr::from(([192, 0, 2, 10], node.native_tcp_port));
+        let mut tcp = TcpStream::connect(target).await?;
+        let bytes = sequence.to_be_bytes();
+        tcp.write_all(&bytes).await?;
+        let mut reply = [0; 2];
+        tcp.read_exact(&mut reply).await?;
+        if reply != bytes {
+            return Err(std::io::Error::other("TCP_ECHO_MISMATCH"));
+        }
+        let udp = UdpSocket::bind("0.0.0.0:0").await?;
+        let target = std::net::SocketAddr::from(([192, 0, 2, 10], node.native_udp_port));
+        udp.send_to(&bytes, target).await?;
+        let mut answer = [0; 16];
+        let (n, peer) = udp.recv_from(&mut answer).await?;
+        if peer != target || answer[..n] != bytes {
+            return Err(std::io::Error::other("UDP_ECHO_MISMATCH"));
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await;
+    let controlled_ok = matches!(controlled, Ok(Ok(())));
+    eprintln!(
+        "native-ingress controlled-tcp-udp={controlled_ok} outcome={:?}",
+        controlled
+            .as_ref()
+            .map(|r| r.as_ref().map_err(|e| (e.kind(), e.raw_os_error())))
+    );
     if sequence == 0 {
         if let Some(out) = std::env::var_os("PPVPN_CAPTURE_EVIDENCE") {
             let mut child = {
                 let _guard = ppvpn_core::capture_host::fd_spawn_guard();
                 tokio::process::Command::new("python3")
                     .args(["tools/desktop/macos_capture_network_probe.py"])
-                    .arg(out).arg("attached")
-                    .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-                    .kill_on_drop(true).spawn().unwrap()
+                    .arg(out)
+                    .arg("attached")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap()
             };
-            let status=tokio::time::timeout(Duration::from_secs(30),child.wait()).await;
-            assert!(matches!(status,Ok(Ok(status)) if status.success()),"network diagnostic helper failed");
+            let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await;
+            assert!(
+                matches!(status,Ok(Ok(status)) if status.success()),
+                "network diagnostic helper failed"
+            );
         }
     }
-    let http=tokio::time::timeout(Duration::from_secs(10),async {
-        let mut tcp=TcpStream::connect("1.1.1.1:80").await?;
-        tcp.write_all(b"GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n").await?;
-        let mut response=Vec::new();
+    let http = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut tcp = TcpStream::connect("1.1.1.1:80").await?;
+        tcp.write_all(b"GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n")
+            .await?;
+        let mut response = Vec::new();
         while !response.ends_with(b"\r\n\r\n") {
             response.push(tcp.read_u8().await?);
-            if response.len()>=8192 { return Err(std::io::Error::other("HTTP_HEADER_LIMIT")); }
+            if response.len() >= 8192 {
+                return Err(std::io::Error::other("HTTP_HEADER_LIMIT"));
+            }
         }
-        Ok::<_,std::io::Error>(response.starts_with(b"HTTP/1."))
-    }).await;
-    let http_ok=matches!(http,Ok(Ok(true)));
-    eprintln!("native-ingress physical-http={http_ok} outcome={:?}",http.as_ref().map(|r|r.as_ref().map(|_|()).map_err(|e|(e.kind(),e.raw_os_error()))));
+        Ok::<_, std::io::Error>(response.starts_with(b"HTTP/1."))
+    })
+    .await;
+    let http_ok = matches!(http, Ok(Ok(true)));
+    eprintln!(
+        "native-ingress physical-http={http_ok} outcome={:?}",
+        http.as_ref().map(|r| r
+            .as_ref()
+            .map(|_| ())
+            .map_err(|e| (e.kind(), e.raw_os_error())))
+    );
     let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
     let mut query = sequence.to_be_bytes().to_vec();
     query.extend_from_slice(&[1, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
@@ -222,22 +260,41 @@ async fn native_ingress_probes(sequence: u16, node: &NodeFixture) {
         "10.60.159.90:53".parse::<std::net::SocketAddr>().unwrap()
     );
     assert_eq!(&answer[..2], &sequence.to_be_bytes());
-    eprintln!("native-ingress dns-rcode={} answers={}",answer[3]&15,u16::from_be_bytes([answer[6],answer[7]]));
+    eprintln!(
+        "native-ingress dns-rcode={} answers={}",
+        answer[3] & 15,
+        u16::from_be_bytes([answer[6], answer[7]])
+    );
     assert_eq!(answer[3] & 15, 0);
     assert!(u16::from_be_bytes([answer[6], answer[7]]) > 0);
-    assert!(controlled_ok,"controlled native TCP/UDP probe failed");
-    let counts=node.counters().await;
-    assert_eq!(counts["native_upstream_tcp"],sequence as u64+1);
-    assert_eq!(counts["native_sink_accepts"],sequence as u64+1);
-    assert!(counts["native_udp_packets"].as_u64().unwrap()>sequence as u64);
-    assert!(http_ok,"native HTTP probe failed");
+    assert!(controlled_ok, "controlled native TCP/UDP probe failed");
+    let counts = node.counters().await;
+    assert_eq!(counts["native_upstream_tcp"], sequence as u64 + 1);
+    assert_eq!(counts["native_sink_accepts"], sequence as u64 + 1);
+    assert!(counts["native_udp_packets"].as_u64().unwrap() > sequence as u64);
+    assert!(http_ok, "native HTTP probe failed");
 }
-async fn routed_udp_echo(client:&UdpSocket,target:std::net::SocketAddr,relay:std::net::SocketAddr,sequence:u32) {
-    let std::net::IpAddr::V4(ip)=target.ip() else {panic!("IPv4 fixture target required")};
-    let mut packet=vec![0,0,0,1];packet.extend_from_slice(&ip.octets());packet.extend_from_slice(&target.port().to_be_bytes());packet.extend_from_slice(&sequence.to_be_bytes());
-    client.send_to(&packet,relay).await.unwrap();let mut reply=[0;2048];
-    let(n,_)=tokio::time::timeout(Duration::from_secs(5),client.recv_from(&mut reply)).await.unwrap().unwrap();
-    assert!(n>=4);assert_eq!(&reply[n-4..n],&sequence.to_be_bytes());
+async fn routed_udp_echo(
+    client: &UdpSocket,
+    target: std::net::SocketAddr,
+    relay: std::net::SocketAddr,
+    sequence: u32,
+) {
+    let std::net::IpAddr::V4(ip) = target.ip() else {
+        panic!("IPv4 fixture target required")
+    };
+    let mut packet = vec![0, 0, 0, 1];
+    packet.extend_from_slice(&ip.octets());
+    packet.extend_from_slice(&target.port().to_be_bytes());
+    packet.extend_from_slice(&sequence.to_be_bytes());
+    client.send_to(&packet, relay).await.unwrap();
+    let mut reply = [0; 2048];
+    let (n, _) = tokio::time::timeout(Duration::from_secs(5), client.recv_from(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(n >= 4);
+    assert_eq!(&reply[n - 4..n], &sequence.to_be_bytes());
 }
 async fn echo(stream: &mut TcpStream, sequence: u32) {
     let bytes = sequence.to_be_bytes();
