@@ -43,18 +43,42 @@ impl Client {
         descriptor: bool,
         attempted: &mut bool,
     ) -> Result<(Option<OwnedFd>, Option<String>)> {
+        self.request_using(
+            path,
+            grant,
+            descriptor,
+            attempted,
+            super::image_verification::prevalidate_helper,
+            || Ok(UnixStream::connect(broker::SOCKET)?),
+            |stream| {
+                mac_peer::verify_exact(
+                    stream,
+                    0,
+                    crate::mac_identity::SERVICE_IDENTIFIER,
+                    Path::new(broker::IMAGE),
+                )
+                .map(|_| ())
+            },
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn request_using(
+        &self,
+        path: &str,
+        grant: &Grant,
+        descriptor: bool,
+        attempted: &mut bool,
+        prevalidate: impl FnOnce() -> Result<()>,
+        connect: impl FnOnce() -> Result<UnixStream>,
+        verify: impl FnOnce(&UnixStream) -> Result<()>,
+    ) -> Result<(Option<OwnedFd>, Option<String>)> {
+        // Never connect a cold client to a warm server's 600ms hello reader.
+        prevalidate()?;
         native::trace_phase("host-connect");
-        let mut stream = UnixStream::connect(broker::SOCKET)?;
+        let mut stream = connect()?;
         stream.set_read_timeout(Some(Duration::from_millis(2400)))?;
         stream.set_write_timeout(Some(Duration::from_millis(600)))?;
-        native::timed("host-peer-check", || {
-            mac_peer::verify_exact(
-                &stream,
-                0,
-                crate::mac_identity::SERVICE_IDENTIFIER,
-                Path::new(broker::IMAGE),
-            )
-        })?;
+        native::timed("host-peer-check", || verify(&stream))?;
         native::trace_phase("host-peer-verified");
         let hello = Request {
             id: uuid::Uuid::new_v4().to_string(),
@@ -157,6 +181,26 @@ impl Client {
         }
         Ok((Some(fd), Some(name)))
     }
+}
+#[cfg(test)]
+pub(crate) fn request_test(
+    grant: &Grant,
+    attempted: &mut bool,
+    prevalidate: impl FnOnce() -> Result<()>,
+    connect: impl FnOnce() -> Result<UnixStream>,
+    verify: impl FnOnce(&UnixStream) -> Result<()>,
+) -> Result<()> {
+    Client
+        .request_using(
+            "probe",
+            grant,
+            false,
+            attempted,
+            prevalidate,
+            connect,
+            verify,
+        )
+        .map(|_| ())
 }
 #[derive(Default)]
 pub struct Host {

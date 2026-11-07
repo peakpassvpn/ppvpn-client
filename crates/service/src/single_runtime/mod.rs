@@ -29,3 +29,9 @@ pub mod login;
 
 #[cfg(all(target_os = "macos", feature = "macos-capture-acceptance"))]
 pub mod acceptance_guard;
+
+#[cfg(target_os = "macos")]
+pub mod image_verification;
+
+#[cfg(all(test, target_os = "macos"))]
+mod handshake_tests;

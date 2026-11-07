@@ -264,15 +264,23 @@ fn configure_accepted_stream(stream: &UnixStream) -> io::Result<()> {
     stream.set_write_timeout(Some(Duration::from_millis(600)))
 }
 fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Result<()> {
-    let (untrusted, token) = mac_peer::audit_peer(stream)?;
-    let peer = native::timed("broker-peer-check", || {
+    transact_using(stream, ledger, generation, |stream, untrusted| {
         mac_peer::verify(
             stream,
             untrusted.uid,
             crate::mac_identity::SERVICE_IDENTIFIER,
             Path::new(IMAGE),
         )
-    })?;
+    })
+}
+fn transact_using(
+    stream: &mut UnixStream,
+    ledger: &mut Ledger,
+    generation: u64,
+    verify: impl FnOnce(&UnixStream, Peer) -> Result<Peer>,
+) -> Result<()> {
+    let (untrusted, token) = mac_peer::audit_peer(stream)?;
+    let peer = native::timed("broker-peer-check", || verify(stream, untrusted))?;
     let hello: Request = native::timed("broker-hello-read", || read_frame(stream))?;
     if hello.command != Command::Handshake
         || !hello.is_fresh()
@@ -397,13 +405,26 @@ fn transact(stream: &mut UnixStream, ledger: &mut Ledger, generation: u64) -> Re
     }
     Ok(())
 }
+#[cfg(test)]
+pub(crate) fn transact_test(
+    stream: &mut UnixStream,
+    verify: impl FnOnce(&UnixStream, Peer) -> Result<Peer>,
+) -> (Result<()>, bool) {
+    configure_accepted_stream(stream).unwrap();
+    let mut ledger = Ledger {
+        capture: Capture::default(),
+        peer: None,
+    };
+    let result = transact_using(stream, &mut ledger, 1, verify);
+    (result, ledger.capture.occupied())
+}
 struct Running {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<Result<()>>>,
 }
 static RUNNING: OnceLock<parking_lot::Mutex<Option<Running>>> = OnceLock::new();
 pub fn start() -> Result<()> {
-    let endpoint = Endpoint::bind()?;
+    let endpoint = super::image_verification::before_exposure(Endpoint::bind)?;
     native::recover()?;
     let mut seed = [0; 8];
     SystemRandom::new()
