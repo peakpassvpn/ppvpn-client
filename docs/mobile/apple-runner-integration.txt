@@ -33,7 +33,10 @@ Transport and ownership
   stable request_id/input, max3 transient attempts, no409 re-Resolve/rebind.
   Same current user is insufficient: bound_to_current_session must also be
   true to reuse a binding. Registration uses exact expected_registration_id.
-  Native token rotation updates the same binding. Explicit logout invalidates
+  Native token rotation updates the same binding. If a previous token commit
+  is uncertain, a bounded read-only Resolve can refresh registration CAS only
+  within that exact active session/binding; it never rebinds a changed owner.
+  Explicit logout invalidates
   local admission, drains serialized old-owner unregister, then Rust revokes
   auth. If timeout/response loss prevents close, backend session revocation
   is still the durable anti-revival fence; no success is fabricated.

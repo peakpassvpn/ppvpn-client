@@ -46,7 +46,7 @@
   ],
   "rollout": "OFF; backend deployment, signed capability/Keychain and actual APNs delivery unverified; existing macOS agent retained",
   "limits": [
-    "Binding/Register uncertain commit is retried with same input and ID; if token changes before unknown old-token commit is resolved, intent fails closed instead of guessing CAS",
+    "If a fresh OS token follows an uncertain prior registration response, bounded read-only Resolve may refresh expected_registration_id only when the exact binding and current session still match; it never Binds. A changed/closed binding or registration409 permanently stops that intent.",
     "409 or exhausted3 retries require a new explicit account intent; foreground resume does not mint fresh CAS intents",
     "Offline update reconciliation caps at10 pages of100 and UI reloads separately; not a promise of complete unbounded history",
     "macOS bridge compiled against SDK but AppDelegate/window/project inclusion belongs to desktop owner"

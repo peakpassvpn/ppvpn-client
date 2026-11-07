@@ -342,4 +342,64 @@ void main() {
     for (var n = 0; n < 6; n++) expect(await t.register(request()), false);
     expect(calls, ['config', 'config', 'config']);
   });
+  test('new OS token reconciles lost registration only within the same active binding', () async {
+    var resolves = 0;
+    var binds = 0;
+    final bodies = <Map<String, Object?>>[];
+    final t = ApplePushTransport(
+      proof: (_) async => proof,
+      http: (_, op, body) async {
+        if (op == 'bind') binds++;
+        if (op == 'resolve' && ++resolves > 1)
+          return ApplePushReply(200, {
+            'installation_id': installation,
+            'binding_id': binding,
+            'registration_id': registration,
+            'bound_to_current_user': true,
+            'bound_to_current_session': true,
+          });
+        if (op == 'register') {
+          bodies.add(body);
+          if (bodies.length == 1) throw StateError('committed response lost');
+          return ApplePushReply(200, {'registration_id': nextRegistration});
+        }
+        return response(op);
+      },
+    )..followAccount('A');
+    expect(await t.register(request()), false);
+    expect(await t.register(request(token: 'ccdd')), true);
+    expect(resolves, 2);
+    expect(binds, 1);
+    expect(bodies[1]['expected_registration_id'], registration);
+    expect(bodies[1]['binding_id'], binding);
+    expect(bodies[1]['request_id'], isNot(bodies[0]['request_id']));
+  });
+  test(
+    'token reconciliation cannot replace a changed binding or rebind after409',
+    () async {
+      var resolves = 0;
+      var binds = 0;
+      final t = ApplePushTransport(
+        proof: (_) async => proof,
+        http: (_, op, body) async {
+          if (op == 'bind') binds++;
+          if (op == 'resolve' && ++resolves > 1)
+            return ApplePushReply(200, {
+              'installation_id': installation,
+              'binding_id': nextRegistration,
+              'registration_id': null,
+              'bound_to_current_user': false,
+              'bound_to_current_session': false,
+            });
+          if (op == 'register') return ApplePushReply(503, {});
+          return response(op);
+        },
+      )..followAccount('A');
+      expect(await t.register(request()), false);
+      for (var n = 0; n < 4; n++)
+        expect(await t.register(request(token: 'ccdd')), false);
+      expect(resolves, 2);
+      expect(binds, 1);
+    },
+  );
 }
