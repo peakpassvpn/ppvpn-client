@@ -9,6 +9,7 @@ final class IOSApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   let configured: Bool
   var registrationFailed: ((String, Int) -> Void)?
   var fetchBackground: ((ApplePushNotice, @escaping (ApplePushFetchResult) -> Void) -> Void)?
+  private(set) var receivingBackground = false
 
   init(bundle: Bundle = .main) {
     // There is no supported SecTask entitlement reader in the iOS SDK.
@@ -51,8 +52,11 @@ final class IOSApplePushReceiver: NSObject, UNUserNotificationCenterDelegate {
   // A native/Dart authenticated fetch hook must complete; a deadline is scheduled
   // at 25s, below Apple's 30s budget (not a real-time scheduling guarantee). Missing auth/handler returns noData.
   func receiveBackground(_ userInfo: [AnyHashable: Any], completion: @escaping (UIBackgroundFetchResult) -> Void) {
-    guard configured, let notice = ApplePushNotice(userInfo: userInfo, fallbackID: UUID().uuidString),
-      state.receive(notice, opened: false), let fetchBackground else { completion(.noData); return }
+    guard configured, let notice = ApplePushNotice(userInfo: userInfo, fallbackID: UUID().uuidString) else { completion(.noData); return }
+    receivingBackground = true
+    let accepted = state.receive(notice, opened: false)
+    receivingBackground = false
+    guard accepted, let fetchBackground else { completion(.noData); return }
     let once = ApplePushCompletion { result in
       switch result {
       case .newData: completion(.newData)

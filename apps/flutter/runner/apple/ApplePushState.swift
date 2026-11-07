@@ -105,6 +105,16 @@ final class ApplePushState {
   }
 
   // Call with the stable authenticated account id, never its display name.
+  func beginRestoration() {
+    guard account != .restoring else { return }
+    invalidateRegistration()
+    accountGeneration &+= 1
+    account = .restoring
+    pending.removeAll()
+    opened.removeAll()
+    received.removeAll()
+  }
+
   // Call nil on explicit logout or after restoration finds no signed-in user.
   // The transport must serialize these effects with auth logout, while the
   // old bearer is still usable; this class never possesses that bearer.

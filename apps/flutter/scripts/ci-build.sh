@@ -230,19 +230,41 @@ open(path, "w").write(text)
 
 delegate = "ios/Runner/AppDelegate.swift"
 code = open(delegate).read()
-plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
-imports = [line for line in plugin.splitlines() if line.startswith("import ")]
-body = "\n".join(line for line in plugin.splitlines() if not line.startswith("import "))
+plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "../../apple/ApplePushState.swift", "ApplePush.swift", "ApplePushBridge.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
+imports = [line for line in plugin.splitlines() if line.startswith(("import ", "@preconcurrency import "))]
+body = "\n".join(line for line in plugin.splitlines() if not line.startswith(("import ", "@preconcurrency import ")))
 code, registered = re.subn(
     r"^([ \t]*)GeneratedPluginRegistrant\.register\(with: ([^)]+)\)\n",
-    lambda m: m.group(0) + f'{m.group(1)}PPVPNPlugin.register(with: {m.group(2)}.registrar(forPlugin: "PPVPNPlugin")!)\n',
+    lambda m: m.group(0) + f'{m.group(1)}PPVPNPlugin.register(with: {m.group(2)}.registrar(forPlugin: "PPVPNPlugin")!)\n{m.group(1)}IOSApplePushBridge.shared.attach({m.group(2)}.registrar(forPlugin: "IOSApplePushBridge")!)\n',
     code, count=1, flags=re.M)
 if not registered:
     raise SystemExit(f"{delegate}: no GeneratedPluginRegistrant.register to follow")
+# Launch hook precedes implicit Flutter engine attachment, retaining cold taps.
+launch = "return super.application(application, didFinishLaunchingWithOptions: launchOptions)"
+if code.count(launch) != 1:
+    raise SystemExit(f"{delegate}: missing unique native launch hook")
+code = code.replace(launch, "let launched = super.application(application, didFinishLaunchingWithOptions: launchOptions)\n    IOSApplePushBridge.shared.start()\n    return launched")
+marker = "  func didInitializeImplicitFlutterEngine("
+if code.count(marker) != 1:
+    raise SystemExit(f"{delegate}: missing implicit engine hook")
+callbacks = """  override func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken token: Data) {
+    IOSApplePushBridge.shared.receiver.didRegister(token: token)
+    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: token)
+  }
+  override func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    IOSApplePushBridge.shared.receiver.didFailToRegister(error)
+    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+  }
+  override func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+    IOSApplePushBridge.shared.receiver.receiveBackground(userInfo, completion: completionHandler)
+  }
+
+"""
+code = code.replace(marker, callbacks + marker)
 missing = [line for line in imports if line not in code.splitlines()]
 open(delegate, "w").write("\n".join(missing) + "\n" + code + "\n" + body + "\n")
 PY
-    rm ios/Runner/PPVPNPlugin.swift ios/Runner/NativeChrome.swift
+    rm ios/Runner/PPVPNPlugin.swift ios/Runner/NativeChrome.swift ios/Runner/ApplePush.swift ios/Runner/ApplePushBridge.swift
     plist=ios/Runner/Info.plist
     # The export compliance answer (#470): only the system's and standard
     # encryption, so no question per TestFlight build.

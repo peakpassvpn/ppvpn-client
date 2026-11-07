@@ -1,111 +1,19 @@
 {
-  "status": "proposal-requires-backend-agreement-not-existing-server-support",
-  "version": 2,
-  "transport": "https-authenticated-existing-account-client",
-  "capability": {
-    "endpoint": "GET /api/v1/devices/push-capabilities",
-    "required_response": {
-      "apns_registration_version": 2,
-      "installation_leases": true
-    },
-    "unsupported_or_missing": "keep APNs rollout disabled; never silently send environment to token-only v1"
-  },
-  "lease": {
-    "endpoint": "POST /api/v1/devices/apns/lease",
-    "request": {
-      "installation_id": "persistent-random-installation-uuid",
-      "platform": "ios-or-macos",
-      "bundle_id": "actual-signed-topic"
-    },
-    "response": {
-      "lease_id": "opaque-server-issued-value",
-      "lease_version": 1
-    },
-    "semantics": "server derives owner from bearer; atomically supersedes earlier installation lease, invalidates old registrations and rejects their later writes; installation UUID alone never authorizes reassignment"
-  },
-  "register": {
-    "endpoint": "PUT /api/v1/devices/apns/registrations/current",
-    "request": {
-      "lease_id": "server-issued-installation-lease",
-      "lease_version": 1,
-      "mutation_sequence": 1,
-      "platform": "ios-or-macos",
-      "bundle_id": "actual-signed-topic",
-      "environment": "sandbox-or-production",
-      "token": "fresh-OS-token-hex-variable-length",
-      "app_version": "package-version"
-    },
-    "response": {
-      "registration_id": "opaque",
-      "lease_version": 1,
-      "mutation_sequence": 1
-    },
-    "uniqueness": [
-      "environment",
-      "bundle_id",
-      "token"
-    ],
-    "semantics": "atomic per-lease monotonically increasing mutation; duplicate same sequence and same body is idempotent, same sequence with different body conflicts; rotated token replaces previous token of this lease"
-  },
-  "unregister": {
-    "endpoint": "DELETE /api/v1/devices/apns/registrations/current",
-    "request": {
-      "lease_id": "server-issued-installation-lease",
-      "lease_version": 1,
-      "mutation_sequence": 2
-    },
-    "response_status": 204,
-    "semantics": "persists sequence tombstone, so delayed registration cannot resurrect the token; idempotent on an already absent registration"
-  },
-  "logout_order": [
-    "stop accepting new registration work for old authenticated generation",
-    "cancel and await in-flight work in serialized account transport",
-    "send unregister tombstone while old bearer is usable",
-    "logout or revoke bearer server-side with transactional APNs lease revocation",
-    "clear local auth and pending retries; no old-generation retry may register under a new bearer"
+  "status": "backend-implementation-pending; earlier client-only endpoint proposal superseded",
+  "contract_authority": "Exact backend Huma/OpenAPI + generated SDK source commit, not a business version field",
+  "backend_owner": "ppvpn-backend · 凭据与订阅",
+  "handoff_receipt": "ppvpn-backend/.recovery/apns-backend-handoff-20261107.json",
+  "candidate_design": "ppvpn-backend/docs/drafts/apns-installation-binding-design.md",
+  "candidate_is_implemented": false,
+  "required_guards": [
+    "stable authenticated account public id from bearer",
+    "installation proof distinct from installation UUID",
+    "explicit signed topic and per-registration APNs environment",
+    "persistent binding CAS and logout tombstone",
+    "late register/unregister/410 cannot mutate a newer binding",
+    "worker ownership and bounded retry",
+    "authorized inbox lookup, stable delivery dedupe"
   ],
-  "logout_offline": "server logout/session revocation must revoke associated push lease; if unreachable, local logout cannot claim immediate remote unregistration; suppress old account UI and never retry old registration after logout",
-  "account_switch": "new account obtains new server lease before registration; old lease writes cannot win later; client-local accountGeneration/request values are not server anti-replay credentials",
-  "errors": {
-    "401:AUTH_SESSION_INVALID": "no registration retry until authenticated restoration",
-    "403:DEVICE_REGISTER_SCOPE_REQUIRED": "refresh bearer once then await next valid scope",
-    "409:APNS_LEASE_STALE": "discard old generation; new authenticated generation may acquire lease",
-    "409:APNS_MUTATION_STALE": "discard superseded operation, never increment and replay old intent",
-    "409:APNS_SEQUENCE_CONFLICT": "protocol failure; do not retry changed body with same sequence",
-    "422:APNS_ENVIRONMENT_INVALID": "configuration failure; disable registration",
-    "422:APNS_TOPIC_INVALID": "configuration failure; disable registration",
-    "422:APNS_TOKEN_INVALID": "request new OS registration; no disk-token replay",
-    "429:RATE_LIMITED": "respect Retry-After with bounded jitter and current-generation check",
-    "5xx:SERVER_UNAVAILABLE": "bounded backoff only while lease/account/token generation is current"
-  },
-  "delivery": {
-    "aps": {
-      "alert": {
-        "title": "OS-display-only",
-        "body": "OS-display-only"
-      },
-      "sound": "default"
-    },
-    "extra": {
-      "delivery_id": "stable-id",
-      "account_id": "stable-authenticated-owner-id",
-      "message_id": "positive-signed-64-bit-decimal-string"
-    },
-    "trust": "payload text and URLs are not inbox content; fetch message with current auth; malformed/missing message_id opens inbox; wrong owner drops; stale fetch responses drop",
-    "dedupe": "delivery and tap are separately deduplicated; backend retains stable delivery id across retries"
-  },
-  "provider": {
-    "environment": "actual signed aps-environment/com.apple.developer.aps-environment; TestFlight is production",
-    "invalid_token": "retire only exact environment/topic/token registration; handle APNs invalidation timestamp against registration time",
-    "payload_types": "alert and background use correct apns-push-type, priority, topic and expiration; background delivery is not guaranteed"
-  },
-  "compatibility": {
-    "v1": "existing /api/v1/devices/register and token-only unregister remain for current clients; do not reinterpret desktop-macos as APNs or change Android FCM",
-    "v2": "explicitly negotiated; platform macos plus APNs channel is distinct from v1 desktop-macos self-hosted registration",
-    "agent_retirement": "requires equivalent real signed-package foreground/background/terminated delivery, cold tap, rotation, logout and account-switch acceptance on each Apple platform"
-  },
-  "activation_blockers": [
-    "Backend must define and verify installation ownership proof for replacement leases; installation UUID plus an unrelated bearer is insufficient.",
-    "Native lifecycle, authenticated registration transport, logout synchronization and real signed-package delivery are not integrated or accepted yet."
-  ]
+  "client_state": "Native launch/token/background callbacks, MethodChannel effects, stable account following, inbox lookups and prelogout effect serialization are implemented; authenticated HTTP adapter awaits actual backend contract.",
+  "rollout": "disabled; existing token-only endpoints must not be substituted; macOS self-hosted agent retained"
 }
