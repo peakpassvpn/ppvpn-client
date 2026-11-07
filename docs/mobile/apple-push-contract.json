@@ -1,9 +1,9 @@
 {
-  "status": "client-mock-candidate; backend final commit and deployed service not yet verified",
+  "status": "client-mock-candidate; exact backend implementation and six contract hashes verified; merge/deployment/HTTP CAS service and APNs delivery remain unverified",
   "contract_authority": "Same backend Huma/OpenAPI source snapshot plus generated SDK commit; no business protocol version field",
   "backend": {
     "base_commit": "de79cd62639287580c1901b3667aa3fa296d40e2",
-    "implementation_commit": null,
+    "implementation_commit": "e04eb59435b3be1a4c40fd4311a26e7887490411",
     "source_snapshot_sha256": {
       "api/docs/openapi.yaml": "13c3de4d73f11fb6f81e58dea30be722e5b6e0557d7ae372ccfe69a09a70bae1",
       "api/api/dto/apple_device.go": "a981367426e9e491670f66645197ba71d845b3adaf2b978da21563f0600dc1cd",
