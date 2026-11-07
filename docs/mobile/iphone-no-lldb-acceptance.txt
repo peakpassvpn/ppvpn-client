@@ -1,0 +1,125 @@
+iPhone single-runtime acceptance without LLDB — 2026-11-07
+
+Readiness observed, not acceptance
+  Connected iPhone13 mini, iOS26.6.1, wired/paired, developer mode enabled.
+  Device currently has PPVPN0.7.4 build21. Its PacketTunnel process was
+  observed, so do not install over it or assume the device is isolated.
+  A later snapshot also observed the App process; this task did not launch it.
+  CoreDevice's tunnelState means developer transport, not NEVPN connection.
+  App Group log listings currently return CoreDevice.ActionError3; the app
+  data-container listing also failed. This is not proof of absent logs/errors.
+  No old mechanism archive was installed, no App/VPN was started/stopped,
+  and no current Mac VPN/Surge/network setting was changed.
+
+0. Exact candidate gate, owned by build specialist
+  Obtain the newly approved signed IPA, exact source/provenance, IPA SHA256,
+  Runner and PacketTunnel binary SHA256/UUID, unique build counter, matching
+  signing/profile report and matched single-runtime size results. Retain
+  all prior run/source distinctions; do not use build21 or old mechanism IPA.
+  Formal origin is repository variable PPVPN_API_BASE, currently verified as
+  https://www.peakpass.dev. This host spelling is not the authority; record
+  the variable at build time and confirm actual running-app API separately.
+  Run build-owner tools/apple/verify_ios_package.py using its current
+  approved flags/report against this exact IPA. It verifies app/extension
+  identity, signature/profile/AppGroup and compiled origin independently.
+  Profile regeneration is root-owned; no actual final capability proof is
+  inferred from Portal checkbox state. Push rollout remains OFF, old Agent
+  retained. Single-core/VPN success cannot release the real APNs gate.
+
+1. Passive no-debugger snapshot before ANY install/connection
+  From repository root (no flutter test, LLDB or xcodebuild needed):
+    python3 tools/mobile/ios_readonly_acceptance.py \
+      --device "$DEVICE_UUID" --output "$NEW_PRIVATE_EVIDENCE_DIR" \
+      --expected-origin "$FORMAL_API_ORIGIN" --candidate-ipa "$APPROVED_SIGNED_IPA"
+  This only calls devicectl info and records metadata. Output directory must
+  be new. It never installs/launches/stops an App, changes VPN or clears data.
+  It refuses to call a metadata/process snapshot a runtime PASS. It records
+  old provider/build mismatch/incomplete-query blockers explicitly.
+  Confirm on the designated phone that its current VPN is Off and it is an
+  authorized isolated test device before the build owner replaces/starts it.
+  Do not stop a provider merely to make a process count look right. A cached
+  extension process can outlive Off: record actual Settings/App state and
+  latest host stop/capture evidence, not an assumption from PID alone.
+
+2. Candidate install/launch provenance (build owner, after gate1)
+  Install only the approved current signed candidate by the existing normal
+  deployment path. Record the install action, target device, IPA SHA and
+  build number, then run the passive snapshot again in a NEW output dir.
+  Record app version/build from the phone. Version equality alone is not
+  byte-for-byte installed-image verification. No signing/AppGroup workaround
+  or alternate bundle ID without a separately reviewed matching profile.
+  Launch normally, never through --start-stopped/LLDB. Sign into the already
+  authorized test account normally; do not dump JWT, profile or Keychain.
+
+3. Production control plane, initially VPN Off
+  Record normal account/profile restore with the intended API origin. Verify
+  no placeholder endpoint or debug override. Readiness from a Mac curl does
+  not prove the phone's API/network. Preserve selected node, rules mode,
+  ingress pins and visible logs. Run explicit TCP/ICMP ingress probes Off;
+  provider must stay Off. A Connect probe requires a serving VPN owner.
+  Log the beginning timestamp for each cycle so old build21 log entries
+  cannot be mistaken for this candidate's result.
+
+4. Three real connect/disconnect cycles
+  Use the App's normal controls and OS VPN consent on the isolated phone.
+  For each cycle, record Connecting -> On, HTTPS/DNS success to an explicitly
+  authorized test URL, traffic counters increasing, node/rules/pins retained,
+  and protocol availability/latency using the serving owner. Then disconnect,
+  wait for App AND system state Off and check latest stop/capture settlement.
+  Record owner/native_runtime_id before/after requests: exactly one serving
+  Sail runtime and attached iOS capture; the same owner during an episode.
+  App-local HTTP/SOCKS/proxy entries must be empty, StandardReady false, and
+  no App forwarding Engine/listener. Source cfg/NoAppEngine + existing pure
+  control tests are useful independent evidence, but neither a small IPA,
+  one PacketTunnel PID, empty logs nor a single extension RPC alone proves
+  zero App listeners or zero second runtime. If the signed build lacks an
+  accessible read-only observation export, mark that item NOT_OBSERVED and
+  retain the release gate; do not attach a debugger or rebuild a different
+  Flutter integration-test image and call it the signed IPA's acceptance.
+
+5. Foreground/background and network recovery (phone only)
+  While On, leave/reopen the App and lock/unlock once. App control-plane
+  suspension must not create another forwarding runtime. Reopen, confirm
+  current account/profile/traffic/logs and same owner unless an explicitly
+  logged replacement occurred; no stale callbacks can report a stopped run On.
+  On the designated phone only, exercise authorized Wi-Fi/cellular and brief
+  offline recovery. Record capture reattachment, DNS/IPv4/IPv6 and owner
+  observations before/after; bounded recovery and no duplicate listeners.
+  Never change the Mac's Wi-Fi/VPN/Surge/routes for these tests. Record any
+  need for new operator authorization; do not disrupt unrelated phone use.
+
+6. Existing log paths, no LLDB
+  APP_DIR is the App Group group.com.peakpassvpn.ppvpn.
+  App: APP_DIR/logs/ppvpn-client.YYYY-MM-DD.log (UTC), current/yesterday.
+  Forwarding owner: APP_DIR/data/logs/tunnel-host.log and ppvpn-core.log;
+  each native file may have a previous generation .1. Those are different
+  from the App's daily core log paths. The existing Logs UI tails the App's
+  daily client/core paths; a blank App core panel does NOT clear native errors.
+  The optional --copy-logs flag on the passive script copies only allowlisted
+  log files locally and reports hashes/marker counts, never auth/config data.
+  It may remain unavailable for signed distribution/CoreDevice access. Do not
+  weaken signing, expose an auth/control socket or copy the entire container.
+  Use the existing phone Logs UI for client diagnostics and a separately
+  authorized native log export if CoreDevice cannot read owner files.
+  Mark native log evidence unavailable rather than assuming all clear.
+  Review timestamp-correlated panic/fatal, AppGroup/settings/capture timeout,
+  dirty provider/quarantine, bind/listener conflict, stale callback and core
+  exit errors. Error-word counts alone do not distinguish expected rejection
+  tests from a failure of forwarding; retain exact private context for QA.
+
+7. Completion record
+  Record actual source/IPA/device/build, expected vs running API origin,
+  lifecycle/UI screenshots or video, observed owner/capture/listener fields,
+  HTTPS/DNS/IPv4/IPv6 results and timestamped logs for all three cycles,
+  background and network recovery. Missing fields stay NOT_OBSERVED.
+  Stop only a test connection started in this authorized episode. Leave auth
+  intact and record final Off. Do not uninstall, wipe caches or reset network.
+  TestFlight upload remains gated on three-platform actual package comparison
+  and acceptance; this checklist or passive snapshot alone is not a PASS.
+
+Existing opt-in integration harness
+  integration_test/system_vpn_acceptance_test.dart can run live loops with
+  explicit isolated-device/API/test-URL flags. Flutter tooling can compile,
+  replace or uninstall an integration-test image, so DO NOT invoke it as
+  verification of an already signed distribution IPA. Its output must carry
+  separate build/provenance and cannot replace the above package result.
