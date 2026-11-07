@@ -40,6 +40,9 @@ char *ppvpn_tunnel_settings(int32_t platform);
  * {"code": "...", "message": "..."}, valid during the call only. The native
  * side then ends the tunnel (iOS: cancelTunnelWithError) and calls
  * ppvpn_tunnel_stop. Never called for a stop the native side asked for.
+ * Return promptly; queue work instead of waiting for another thread to
+ * stop the host. A concurrent stop waits for an entered callback. Calling
+ * stop on the callback's own thread is supported and never waits on itself.
  */
 typedef void (*ppvpn_tunnel_exit_fn)(void *context, const char *reason);
 
@@ -85,8 +88,13 @@ uintptr_t ppvpn_tunnel_packet_receive(uint64_t generation, uint8_t *bytes, uintp
 
 /*
  * Stops the engine (routes are the system's: nothing to undo), closes the
- * socket and its watch connections, removes the socket file. Blocks until
- * done (a few seconds at most). Without a running host: nothing.
+ * socket and its watch connections, removes the socket file. Normally waits
+ * for the engine and any entered callback. If a needed shutdown worker cannot
+ * be allocated, runtime cleanup runs in background; callback draining still
+ * completes before return. Without a running host: nothing.
+ * No callback can start after this returns. A callback already entered is
+ * drained before return, except when stop is called from that callback
+ * itself. Keep its context valid through that callback's return as well.
  */
 void ppvpn_tunnel_stop(void);
 
