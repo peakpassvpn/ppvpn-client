@@ -494,7 +494,7 @@ mod tests {
     }
 }
 
-const JOURNAL: &str = "/private/var/run/com.peakpassvpn.capture/grant.json"; // sensitive-check: allow — canonical macOS system runtime location
+const JOURNAL: &str = super::broker::JOURNAL;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Journal {

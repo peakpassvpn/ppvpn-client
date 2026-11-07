@@ -94,6 +94,10 @@ attach from racing a queued release of the old disarmed grant.
 
 ## Authentication and resource ledger
 
+The root socket and journal live under `/Library/Application Support/PPVPN/run/capture`,
+sharing the existing protected system IPC hierarchy. `/private/var/run` is <!-- sensitive-check: allow — canonical macOS system directory -->
+normally group-writable on macOS and is not used or chmodded to fit this policy.
+Every ancestor must remain root-owned, non-symlink and non-writable to group/world.
 The private user socket and fixed root capture socket have independent singleton
 locks. Root's directory is root-owned and unwritable to users; its socket accepts
 connections so non-root agents can authenticate. Every broker connection verifies

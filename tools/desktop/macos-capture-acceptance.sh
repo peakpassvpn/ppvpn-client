@@ -57,7 +57,7 @@ cleanup() {
   scutil --dns > "$out/dns-after.txt"
   route -n get default > "$out/default-after.txt"
   ifconfig -l > "$out/interfaces-after.txt"
-  [[ ! -e /private/var/run/com.peakpassvpn.capture/grant.json ]] || echo BROKER_JOURNAL_LEFTOVER > "$out/cleanup-failed.txt" # sensitive-check: allow — canonical macOS runtime journal
+  [[ ! -e "/Library/Application Support/PPVPN/run/capture/grant.json" ]] || echo BROKER_JOURNAL_LEFTOVER > "$out/cleanup-failed.txt" # sensitive-check: allow — canonical macOS runtime journal
   [[ ! -e "$image" && ! -e "$plist" && ! -e "/Library/LaunchAgents/$agent.plist" ]] || echo INSTALLATION_LEFTOVER >> "$out/cleanup-failed.txt"
 }
 trap cleanup EXIT
@@ -66,6 +66,17 @@ installed=1
 sudo "$artifact/ppvpn-service-install" > "$out/install.txt" 2>&1
 verify_signature "$image" com.peakpassvpn.ppvpn.service "$out/installed-helper-signature-check.txt"
 sudo /bin/launchctl print "system/$daemon" > "$out/root-job.txt"
+python3 - "$out/directory-metadata.json" <<'PY_METADATA'
+import json,os,stat,sys
+paths=['/','/Library','/Library/Application Support','/Library/Application Support/PPVPN','/Library/Application Support/PPVPN/run','/Library/Application Support/PPVPN/run/capture','/private','/private/var','/private/var/run'] # sensitive-check: allow — canonical macOS directory permission evidence
+rows=[]
+for path in paths:
+    try:
+        m=os.lstat(path)
+        rows.append(dict(path=path,uid=m.st_uid,gid=m.st_gid,mode=oct(stat.S_IMODE(m.st_mode)),directory=stat.S_ISDIR(m.st_mode),symlink=stat.S_ISLNK(m.st_mode)))
+    except FileNotFoundError: rows.append(dict(path=path,missing=True))
+with open(sys.argv[1],'w') as f:json.dump(rows,f,indent=2)
+PY_METADATA
 plutil -convert json -o "$out/daemon.json" "$plist"
 plutil -convert json -o "$out/agent.json" "/Library/LaunchAgents/$agent.plist"
 python3 - "$out" "$image" <<'PY'
