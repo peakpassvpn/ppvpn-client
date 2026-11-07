@@ -14,6 +14,56 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
+    #[ignore = "requires PPVPN_CODESIGN_FIXTURE: actual hardened Developer ID helper"]
+    fn actual_standalone_image_preserves_full_static_validation_after_relocation() {
+        let source = std::env::var_os("PPVPN_CODESIGN_FIXTURE").expect("signed fixture path");
+        let directory =
+            std::env::temp_dir().join(format!("ppvpn-static-sign-{}", uuid::Uuid::new_v4()));
+        let contents = directory.join("helper.bundle/Contents");
+        let image = contents.join("MacOS/ppvpn-service");
+        std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+        std::fs::copy(source, &image).unwrap();
+        let info = contents.join("Info.plist");
+        std::fs::write(
+            &info,
+            r#"<?xml version="1.0"?><plist version="1.0"><dict>
+            <key>CFBundleIdentifier</key><string>com.peakpassvpn.ppvpn.service</string>
+            <key>CFBundleExecutable</key><string>ppvpn-service</string>
+            <key>CFBundlePackageType</key><string>BNDL</string>
+            </dict></plist>"#,
+        )
+        .unwrap();
+        let policy = requirement(SERVICE_IDENTIFIER, team_id()).unwrap();
+        assert!(
+            check_file(&image, &policy).is_err(),
+            "unsigned metadata must not be accepted"
+        );
+        std::fs::remove_file(info).unwrap();
+        check_file(&image, &policy)
+            .expect("full Security.framework validation and hardened runtime");
+        // Prove this remains executable validation, not only signer matching.
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&image)
+            .unwrap();
+        file.seek(SeekFrom::Start(4096)).unwrap();
+        let mut byte = [0];
+        file.read_exact(&mut byte).unwrap();
+        byte[0] ^= 1;
+        file.seek(SeekFrom::Start(4096)).unwrap();
+        file.write_all(&byte).unwrap();
+        file.sync_all().unwrap();
+        assert!(
+            check_file(&image, &policy).is_err(),
+            "modified code must still be rejected"
+        );
+        drop(file);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn the_team_id_is_one() {
         assert_eq!(team_id(), "HSVMRQBQJ2");
         assert!(client_requirement(team_id()).is_ok());
