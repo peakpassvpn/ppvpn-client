@@ -9,10 +9,10 @@
 //! error or panic there throws a RuntimeException in Java.
 #![allow(non_snake_case)] // JNI's names
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_void, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JObject, JString};
@@ -26,15 +26,6 @@ use crate::host::{self, ExitCallback, Options};
 use crate::request_invalid;
 
 type Listener = Arc<Global<JObject<'static>>>;
-
-/// The running host's listener, for `on_exit`.
-static LISTENER: Mutex<Option<Listener>> = Mutex::new(None);
-
-fn lock() -> MutexGuard<'static, Option<Listener>> {
-    LISTENER
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 /// Keeps the VM for the host's threads (jni's singleton), which call the
 /// listener.
@@ -136,21 +127,18 @@ fn start(
         let listener = listener.clone();
         SocketProtect::new(move |fd| protect(&listener, fd))
     };
-    let previous = lock().replace(listener);
-    let started = host::start_with(
+    // Each attempt owns its listener. A rejected concurrent start cannot
+    // redirect an older host's exit to the new listener.
+    let exit = ExitCallback::from_fn(move |reason| on_exit(&listener, reason));
+    host::start_with(
         tun_fd,
         &PathBuf::from(socket),
         &PathBuf::from(state),
         Platform::Android,
         options,
-        Some(ExitCallback::new(on_exit, std::ptr::null_mut())),
+        Some(exit),
         |config| config.with_socket_protect(protect),
-    );
-    if started.is_err() {
-        // A host already running keeps its listener.
-        *lock() = previous;
-    }
-    started
+    )
 }
 
 /// `VpnService.protect`, through the listener, on the engine's thread.
@@ -177,22 +165,16 @@ fn protect(listener: &Global<JObject<'static>>, fd: i32) -> std::io::Result<()> 
 }
 
 /// The host gave up: `Listener.onExit(reason)`, on the host's exit thread.
-extern "C" fn on_exit(_context: *mut c_void, reason: *const c_char) {
+fn on_exit(listener: &Global<JObject<'static>>, reason: &CStr) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        let Some(listener) = lock().clone() else {
-            return;
-        };
-        // Safety: the host passes a NUL-terminated string, valid for the call.
-        let reason = unsafe { CStr::from_ptr(reason) }
-            .to_string_lossy()
-            .into_owned();
+        let reason = reason.to_string_lossy().into_owned();
         let Ok(vm) = JavaVM::singleton() else {
             return;
         };
         let _ = vm.attach_current_thread_for_scope(|env| -> jni::errors::Result<()> {
             let reason = JString::from_str(env, reason)?;
             env.call_method(
-                &*listener,
+                listener,
                 jni_str!("onExit"),
                 jni_sig!("(Ljava/lang/String;)V"),
                 &[JValue::Object(&reason)],
@@ -208,10 +190,7 @@ pub extern "system" fn Java_com_peakpassvpn_ppvpn_tunnel_TunnelHost_stop<'local>
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
-    run(&mut env, || {
-        host::stop();
-        *lock() = None;
-    });
+    run(&mut env, host::stop);
 }
 
 /// `String? networkChanged(String networkState)`.

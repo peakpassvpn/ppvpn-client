@@ -163,6 +163,6 @@ fn give_up(shared: &Shared, exit: &mut Option<ExitCallback>, code: &str, detail:
     shared.log.line(&format!("giving up: {code}: {detail}"));
     publish(shared, "failed", Some(format!("{code}: {detail}").as_str()));
     if let Some(exit) = exit.take() {
-        exit.call(code, detail);
+        exit.notify(code, detail);
     }
 }
