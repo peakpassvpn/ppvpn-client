@@ -366,6 +366,21 @@ class _MessageDetail extends StatelessWidget {
             ),
           const SizedBox(height: 8),
           ValueListenableBuilder(
+            valueListenable: messages.writeErrors,
+            builder: (context, errors, _) {
+              final error = errors[message.id];
+              return error == null
+                  ? const SizedBox.shrink()
+                  : Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        s('messageReadFailed'),
+                        style: t.phoneNote.copyWith(color: t.bad),
+                      ),
+                    );
+            },
+          ),
+          ValueListenableBuilder(
             valueListenable: messages.view,
             builder: (context, view, _) {
               final current = view.items

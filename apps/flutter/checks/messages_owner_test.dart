@@ -16,6 +16,11 @@ class _Api extends Fake implements RustLibApi {
   late Future<rust.UiMessagePage> Function(int page) load;
   late Future<void> Function() write;
   final events = <Completer<rust.UiEvents>>[];
+  final writes = <String>[];
+  Future<void> writeKind(String kind) {
+    writes.add(kind);
+    return write();
+  }
 
   @override
   Future<rust.UiEvents> crateApiNextEvents() {
@@ -38,11 +43,13 @@ class _Api extends Fake implements RustLibApi {
     required int pageSize,
   }) => load(page);
   @override
-  Future<void> crateApiMarkNotificationRead({required int id}) => write();
+  Future<void> crateApiMarkNotificationRead({required int id}) =>
+      writeKind('read');
   @override
-  Future<void> crateApiMarkNotificationUnread({required int id}) => write();
+  Future<void> crateApiMarkNotificationUnread({required int id}) =>
+      writeKind('unread');
   @override
-  Future<void> crateApiMarkAllNotificationsRead() => write();
+  Future<void> crateApiMarkAllNotificationsRead() => writeKind('all');
 }
 
 rust.UiMessage message(String title, {bool read = false}) => rust.UiMessage(
@@ -84,11 +91,192 @@ void main() {
   setUp(() {
     expect(api.events, isEmpty);
     errors.clear();
+    api.writes.clear();
     api.load = (_) async => const rust.UiMessagePage(items: [], total: 0);
     api.write = () async {};
   });
   MessagesState state() => MessagesState(fixed: false, onError: errors.add);
 
+  test('read mutation survives an older reload response', () async {
+    final listed = Completer<rust.UiMessagePage>();
+    final written = Completer<void>();
+    api.load = (_) => listed.future;
+    api.write = () => written.future;
+    final m = state()..followOwner(accountId: 'account-a');
+    final item = message('race');
+    m.view.value = inbox(item);
+    final loading = m.reload();
+    final writing = m.setRead(item, true);
+    written.complete();
+    await writing;
+    listed.complete(rust.UiMessagePage(items: [item], total: 1));
+    await loading;
+    expect(m.view.value.items.single.read, true);
+    api.load = (_) async => rust.UiMessagePage(items: [item], total: 1);
+    await m.reload();
+    expect(
+      m.view.value.items.single.read,
+      false,
+      reason: 'A subsequent fresh snapshot remains authoritative',
+    );
+  });
+  test('read pending at reload start survives its late snapshot', () async {
+    final listed = Completer<rust.UiMessagePage>();
+    final written = Completer<void>();
+    api.load = (_) => listed.future;
+    api.write = () => written.future;
+    final m = state()..followOwner(accountId: 'account-a');
+    final item = message('pending');
+    m.view.value = inbox(item);
+    final writing = m.setRead(item, true);
+    final loading = m.reload();
+    written.complete();
+    await writing;
+    listed.complete(rust.UiMessagePage(items: [item], total: 1));
+    await loading;
+    expect(m.view.value.items.single.read, true);
+  });
+  test('read failure rolls back despite a newly started reload', () async {
+    final listed = Completer<rust.UiMessagePage>();
+    final written = Completer<void>();
+    api.load = (_) => listed.future;
+    api.write = () => written.future;
+    final m = state()..followOwner(accountId: 'account-a');
+    final item = message('failure');
+    m.view.value = inbox(item);
+    final writing = m.setRead(item, true);
+    final loading = m.reload();
+    written.completeError(StateError('write refused'));
+    await writing;
+    expect(m.view.value.items.single.read, false);
+    expect(errors, hasLength(1));
+    listed.complete(rust.UiMessagePage(items: [item], total: 1));
+    await loading;
+  });
+  test(
+    'read intent uses current list instead of a stale message object',
+    () async {
+      var writes = 0;
+      api.write = () async {
+        writes++;
+      };
+      final m = state()..followOwner(accountId: 'account-a');
+      m.view.value = inbox(message('current unread'));
+      await m.setRead(message('stale read object', read: true), true);
+      expect(writes, 1);
+      expect(m.view.value.items.single.read, true);
+    },
+  );
+  for (final firstFails in [false, true]) {
+    test('read queue preserves order when first failure=$firstFails', () async {
+      final first = Completer<void>();
+      final second = Completer<void>();
+      var calls = 0;
+      api.write = () => ++calls == 1 ? first.future : second.future;
+      final m = state()..followOwner(accountId: 'account-a');
+      m.view.value = inbox(message('original'));
+      final a = m.setRead(m.view.value.items.single, true);
+      final b = m.setRead(m.view.value.items.single, false);
+      expect(api.writes, ['read']);
+      if (firstFails) {
+        first.completeError(StateError('old failed'));
+      } else {
+        first.complete();
+      }
+      await a;
+      await Future<void>.delayed(Duration.zero);
+      expect(api.writes, ['read', 'unread']);
+      second.complete();
+      await b;
+      expect(m.view.value.items.single.read, false);
+      expect(errors, isEmpty);
+    });
+  }
+  test(
+    'read queue rolls newest failure back to last confirmed value',
+    () async {
+      final first = Completer<void>();
+      final second = Completer<void>();
+      var calls = 0;
+      api.write = () => ++calls == 1 ? first.future : second.future;
+      final m = state()..followOwner(accountId: 'account-a');
+      m.view.value = inbox(message('original'));
+      final a = m.setRead(m.view.value.items.single, true);
+      final b = m.setRead(m.view.value.items.single, false);
+      first.complete();
+      await a;
+      await Future<void>.delayed(Duration.zero);
+      second.completeError(StateError('new failed'));
+      await b;
+      expect(m.view.value.items.single.read, true);
+      expect(errors, hasLength(1));
+      expect(m.writeErrors.value[1], contains('new failed'));
+    },
+  );
+  test('read queue drops old queued writes after an owner switch', () async {
+    final old = Completer<void>();
+    final fresh = Completer<void>();
+    var calls = 0;
+    api.write = () => ++calls == 1 ? old.future : fresh.future;
+    final m = state()..followOwner(accountId: 'account-a');
+    m.view.value = inbox(message('old'));
+    final a = m.setRead(m.view.value.items.single, true);
+    final queued = m.setRead(m.view.value.items.single, false);
+    m.followOwner(accountId: 'account-b');
+    m.view.value = inbox(message('new owner, same id'));
+    final b = m.setRead(m.view.value.items.single, true);
+    old.complete();
+    await a;
+    await queued;
+    expect(api.writes, ['read', 'read']);
+    fresh.complete();
+    await b;
+    expect(m.view.value.items.single.read, true);
+    expect(errors, isEmpty);
+  });
+  for (final bulkFirst in [true, false]) {
+    test(
+      'read queue sequences bulk and single, bulkFirst=$bulkFirst',
+      () async {
+        final first = Completer<void>();
+        final second = Completer<void>();
+        var calls = 0;
+        api.write = () => ++calls == 1 ? first.future : second.future;
+        final m = state()..followOwner(accountId: 'account-a');
+        m.view.value = inbox(message('original'));
+        final a = bulkFirst
+            ? m.markAllRead()
+            : m.setRead(m.view.value.items.single, true);
+        final b = bulkFirst
+            ? m.setRead(m.view.value.items.single, false)
+            : m.markAllRead();
+        expect(api.writes, [bulkFirst ? 'all' : 'read']);
+        first.complete();
+        await a;
+        await Future<void>.delayed(Duration.zero);
+        expect(api.writes, bulkFirst ? ['all', 'unread'] : ['read', 'all']);
+        second.complete();
+        await b;
+        expect(m.view.value.items.single.read, !bulkFirst);
+      },
+    );
+  }
+  test('bulk read survives an old snapshot after ACK', () async {
+    final listed = Completer<rust.UiMessagePage>();
+    final written = Completer<void>();
+    api.load = (_) => listed.future;
+    api.write = () => written.future;
+    final m = state()..followOwner(accountId: 'account-a');
+    final item = message('bulk');
+    m.view.value = inbox(item);
+    final loading = m.reload();
+    final writing = m.markAllRead();
+    written.complete();
+    await writing;
+    listed.complete(rust.UiMessagePage(items: [item], total: 1));
+    await loading;
+    expect(m.view.value.items.single.read, true);
+  });
   test(
     'snapshot pump separates equal-name accounts without a logout',
     () async {

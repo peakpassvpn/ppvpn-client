@@ -125,6 +125,11 @@ class MessagesState {
     _accountId = restoring ? null : accountId;
     _teamId = restoring ? null : teamId;
     _generation++;
+    _readChanges.clear();
+    _confirmedReads.clear();
+    _readEffects = Future.value();
+    _pendingReadWrites = 0;
+    writeErrors.value = const {};
     _pages = 0;
     _failedMore = false;
     _reloading = null;
@@ -177,12 +182,18 @@ class MessagesState {
   Future<void> _reload() async {
     if (fixed) return;
     final generation = ++_generation;
+    final readRevision = _readRevision;
+    final pendingReads = _pendingReads;
     view.value = view.value.copyWith(loading: true, loadingMore: false, failed: false);
     try {
       final page = await rust.notifications(page: 1, pageSize: pageSize);
       if (generation != _generation) return;
       _pages = 1;
-      view.value = MessagesView(items: page.items, total: page.total, loaded: true);
+      view.value = MessagesView(
+        items: _overlayReads(page.items, readRevision, pendingReads),
+        total: page.total,
+        loaded: true,
+      );
     } catch (error) {
       if (generation != _generation) return;
       debugPrint('notifications: $error');
@@ -205,6 +216,8 @@ class MessagesState {
 
   Future<void> _loadMore(MessagesView current) async {
     final generation = _generation;
+    final readRevision = _readRevision;
+    final pendingReads = _pendingReads;
     view.value = current.copyWith(loadingMore: true);
     try {
       final page = await rust.notifications(page: _pages + 1, pageSize: pageSize);
@@ -212,7 +225,14 @@ class MessagesState {
       _pages++;
       // New messages shift the pages: skip what is already shown.
       final shown = {for (final message in view.value.items) message.id};
-      final items = [...view.value.items, ...page.items.where((message) => !shown.contains(message.id))];
+      final items = [
+        ...view.value.items,
+        ..._overlayReads(
+          page.items,
+          readRevision,
+          pendingReads,
+        ).where((message) => !shown.contains(message.id)),
+      ];
       view.value = view.value.copyWith(
         items: items,
         // An empty page: the total was stale, stop asking.
@@ -236,36 +256,121 @@ class MessagesState {
     return reload();
   }
 
-  Future<void> setRead(rust.UiMessage message, bool read) async {
-    if (message.read == read) return;
-    _replace(message.id, read);
-    if (fixed) return;
-    final generation = _generation;
-    try {
-      if (read) {
-        await rust.markNotificationRead(id: message.id);
-      } else {
-        await rust.markNotificationUnread(id: message.id);
-      }
-    } catch (error) {
-      if (generation != _generation) return;
-      _replace(message.id, !read);
-      onError('$error');
+  int _readRevision = 0;
+  int _pendingReadWrites = 0;
+  Future<void> _readEffects = Future.value();
+  final _readChanges = <int, ({int revision, bool read, bool pending})>{};
+  final _confirmedReads = <int, bool>{};
+  final writeErrors = ValueNotifier<Map<int, String>>(const {});
+  Set<int> get _pendingReads => {
+    for (final entry in _readChanges.entries)
+      if (entry.value.pending) entry.key,
+  };
+
+  List<rust.UiMessage> _overlayReads(
+    List<rust.UiMessage> items,
+    int startedRevision,
+    Set<int> pendingAtStart,
+  ) => [
+    for (final item in items)
+      _overlayRead(item, startedRevision, pendingAtStart),
+  ];
+
+  rust.UiMessage _overlayRead(
+    rust.UiMessage item,
+    int startedRevision,
+    Set<int> pendingAtStart,
+  ) {
+    final change = _readChanges[item.id];
+    if (change == null) return item;
+    if (change.pending ||
+        change.revision > startedRevision ||
+        pendingAtStart.contains(item.id)) {
+      return _withRead(item, change.read);
     }
+    // A request begun after the ACK is authoritative, including external edits.
+    _readChanges.remove(item.id);
+    _confirmedReads.remove(item.id);
+    return item;
   }
 
-  Future<void> markAllRead() async {
-    final before = view.value.items;
-    view.value = view.value.copyWith(items: [for (final message in before) _withRead(message, true)]);
-    if (fixed) return;
-    final generation = _generation;
-    try {
-      await rust.markAllNotificationsRead();
-    } catch (error) {
-      if (generation != _generation) return;
-      view.value = view.value.copyWith(items: before);
-      onError('$error');
+  Future<void> setRead(rust.UiMessage message, bool read) {
+    final current = view.value.items
+        .where((m) => m.id == message.id)
+        .firstOrNull;
+    if ((current?.read ?? message.read) == read) return _readEffects;
+    return _writeRead(
+      {message.id: read},
+      () => read
+          ? rust.markNotificationRead(id: message.id)
+          : rust.markNotificationUnread(id: message.id),
+    );
+  }
+
+  Future<void> markAllRead() => _writeRead({
+    for (final item in view.value.items) item.id: true,
+  }, rust.markAllNotificationsRead);
+
+  Future<void> _writeRead(
+    Map<int, bool> values,
+    Future<void> Function() write,
+  ) {
+    final owner = ownerEpoch;
+    final revision = ++_readRevision;
+    for (final entry in values.entries) {
+      final before = view.value.items
+          .where((m) => m.id == entry.key)
+          .firstOrNull;
+      _confirmedReads.putIfAbsent(
+        entry.key,
+        () => before?.read ?? !entry.value,
+      );
+      _readChanges[entry.key] = (
+        revision: revision,
+        read: entry.value,
+        pending: !fixed,
+      );
+      _replace(entry.key, entry.value);
     }
+    writeErrors.value = Map.of(writeErrors.value)
+      ..removeWhere((id, _) => values.containsKey(id));
+    if (fixed) return Future.value();
+    // Preserve write order (including mark-all) so the server cannot finish an
+    // older toggle after a newer one. UI updates remain immediate.
+    Future<void> perform() async {
+      if (owner != ownerEpoch) return;
+      try {
+        await write();
+        if (owner != ownerEpoch) return;
+        for (final entry in values.entries) {
+          _confirmedReads[entry.key] = entry.value;
+          if (_readChanges[entry.key]?.revision == revision) {
+            _readChanges[entry.key] = (
+              revision: revision,
+              read: entry.value,
+              pending: false,
+            );
+          }
+        }
+      } catch (error) {
+        if (owner != ownerEpoch) return;
+        var currentFailure = false;
+        for (final id in values.keys) {
+          if (_readChanges[id]?.revision != revision) continue;
+          currentFailure = true;
+          _readChanges.remove(id);
+          _replace(id, _confirmedReads.remove(id)!);
+          writeErrors.value = {...writeErrors.value, id: '$error'};
+        }
+        if (currentFailure || values.isEmpty) onError('$error');
+      }
+    }
+
+    final idle = _pendingReadWrites++ == 0;
+    final result = idle ? perform() : _readEffects.then((_) => perform());
+    return _readEffects = result.whenComplete(() {
+      if (owner == ownerEpoch) _pendingReadWrites--;
+    });
   }
 
   /// 「查看详情」: opens the link in the browser and marks the message read.
