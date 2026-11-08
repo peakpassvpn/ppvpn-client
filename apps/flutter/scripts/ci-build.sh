@@ -325,6 +325,7 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   flutter test checks/team_cache_test.dart --no-pub
   flutter test checks/probe_batch_test.dart --no-pub
   flutter test checks/phone_region_test.dart --no-pub
+  flutter test checks/messages_read_test.dart --no-pub
   flutter analyze --no-fatal-infos
   # Phone constraints and text scaling need no emulator or system VPN.
   # Run once on Linux, after the bridge types have been generated.
