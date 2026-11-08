@@ -41,6 +41,31 @@ runs:
         fi
         # Verify both download paths before executing; keep artifact attestation below.
         python3 -c 'import hashlib,pathlib,sys; assert hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()=="dc6af85368d3cc6bf40c2b7ea9e025264b99adb4b3aa81cb39c8e36441802bda", "Pinned BoringSSL script checksum mismatch"' "$script"
+        echo 'Pinned BoringSSL script SHA256 verified' >&2
+        # Preserve the pinned script and all its checksum/attestation checks.
+        # Only its exact release-download curl calls get an official API fallback.
+        BTLS_FALLBACK_COMMIT=$(awk '/^name = "btls-sys"$/ { found=1; next } found && /^source = / { sub(/.*#/, ""); sub(/".*/, ""); print; exit }' Cargo.lock)
+        [[ "$BTLS_FALLBACK_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+        export BTLS_FALLBACK_COMMIT
+        curl() {
+          local result=0
+          [[ "$#" != 6 || "$6" != https://github.com/peakpassvpn/btls/releases/download/* ]] || echo "BoringSSL release download: $6" >&2
+          command curl "$@" || result=$?
+          [[ "$result" != 0 ]] || return 0
+          local base="https://github.com/peakpassvpn/btls/releases/download/bssl-$BTLS_FALLBACK_COMMIT"
+          if [[ "$#" == 6 && "$1" == -fsSL && "$2" == --retry && "$3" == 3 && "$4" == -o &&
+                ( "$6" == "$base/boringssl-$BTLS_FALLBACK_TARGET.tar.gz" || "$6" == "$base/SHA256SUMS" ) ]]; then
+            local tag="bssl-$BTLS_FALLBACK_COMMIT" asset="${6##*/}" output="$5"
+            [[ "${output##*/}" == "$asset" ]] || return "$result"
+            echo "BoringSSL release CDN failed; downloading $tag/$asset through GitHub API" >&2
+            gh release download "$tag" --repo peakpassvpn/btls --pattern "$asset" --output "$5" --clobber
+          else
+            return "$result"
+          fi
+        }
+        export -f curl
         for target in $TARGETS; do
+          [[ "$target" =~ ^[a-z0-9_-]+$ ]]
+          export BTLS_FALLBACK_TARGET="$target"
           bash "$script" Cargo.lock "$target" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
         done
