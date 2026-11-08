@@ -2380,7 +2380,9 @@ fn proxied_health_verdict(availability: &Value) -> EndpointResult {
     }
     // Only the core's completed HTTP exchange result can establish a service
     // error. A stale/malformed status beside a TLS/dial failure cannot do so.
-    if availability.get("error_code").and_then(Value::as_str) == Some("HTTP_STATUS") {
+    if availability.get("success").and_then(Value::as_bool) == Some(false)
+        && availability.get("error_code").and_then(Value::as_str) == Some("HTTP_STATUS")
+    {
         if let Some(status @ 500..=599) = availability.get("http_status").and_then(Value::as_u64) {
             return Ok(HealthEndpoint::Unavailable(status as u16));
         }
@@ -4458,8 +4460,11 @@ mod tests {
             only_direct.detail,
             format!("{API_UNREACHABLE}: HEALTH_DIRECT_PATH_FAILED")
         );
-        assert_eq!(official_verdict(direct(), proxied()), direct());
-        assert_eq!(official_verdict(healthy(), proxied()), proxied());
+        assert_eq!(official_verdict(direct(), proxied()), direct().map(|_| ()));
+        assert_eq!(
+            official_verdict(healthy(), proxied()),
+            proxied().map(|_| ())
+        );
         assert!(!is_api_unreachable(&direct().unwrap_err()));
         assert!(is_leak(&service_unreachable(
             "HEALTH_CAPTURE_PATH_FAILED: x"

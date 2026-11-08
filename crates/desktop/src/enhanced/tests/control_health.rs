@@ -97,6 +97,17 @@ fn server_responses_are_not_proxy_transport_failures() {
         }))
         .is_err());
     }
+    assert!(
+        proxied_health_verdict(&serde_json::json!({
+            "http_status":503, "error_code":"HTTP_STATUS"
+        }))
+        .is_err(),
+        "incomplete result is not a completed HTTP exchange"
+    );
+    assert!(proxied_health_verdict(&serde_json::json!({
+        "success":false, "http_status":404, "error_code":"HTTP_STATUS"
+    }))
+    .is_err());
 }
 
 #[tokio::test]
@@ -249,6 +260,22 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
         .timeout(Duration::from_secs(2))
         .build()
         .unwrap();
+    // Ensure localhost/NO_PROXY settings cannot silently bypass the real
+    // listener in this fixture: the same proxy with wrong credentials refuses.
+    let refused = reqwest::Client::builder()
+        .proxy(
+            reqwest::Proxy::http(format!("http://127.0.0.1:{}", credential.port))
+                .unwrap()
+                .basic_auth("invalid-fixture-user", "invalid-fixture-password"),
+        )
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap()
+        .get(direct_url.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status().as_u16(), 407);
     let checks = Arc::new(AtomicUsize::new(0));
     h.enhanced.set_official_steps(Arc::new({let checks=checks.clone();move || {
         let client=proxy_client.clone();let url=direct_url.clone();let checks=checks.clone();
@@ -350,6 +377,7 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
     assert_eq!(engine.runtime_observation().owner, original.owner);
     assert_eq!(accepts.load(Ordering::SeqCst), 1);
     assert_eq!(peers.lock().unwrap().len(), 1);
+    let protected_rounds = checks.load(Ordering::SeqCst) - baseline;
     http.status.store(200, Ordering::SeqCst);
     wait_phase_reason(&h, |s| s.reason.is_none()).await;
     tcp_roundtrip(&mut tcp, b"after").await;
@@ -362,6 +390,8 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
     assert_eq!(&b[..n], packet);
     assert_eq!(peers.lock().unwrap().len(), 1);
     assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+    println!("dual503 continuity: protected_rounds={} tcp_accepts={} udp_peers={} disconnects=0 same_native_runtime=true api_recovered=true",
+        protected_rounds, accepts.load(Ordering::SeqCst), peers.lock().unwrap().len());
     // Positive control: this fake service's explicit disconnect really ends
     // the same real runtime that carried the protected established traffic.
     h.enhanced.disable().await.unwrap();
