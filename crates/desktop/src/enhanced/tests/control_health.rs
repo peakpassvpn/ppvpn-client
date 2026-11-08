@@ -276,18 +276,38 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
         .await
         .unwrap();
     assert_eq!(refused.status().as_u16(), 407);
-    let checks = Arc::new(AtomicUsize::new(0));
-    h.enhanced.set_official_steps(Arc::new({let checks=checks.clone();move || {
-        let client=proxy_client.clone();let url=direct_url.clone();let checks=checks.clone();
-        Box::pin(async move {
-            let direct=direct_health_request(url.clone()).await.map(|r|r.endpoint);
-            let proxy=match client.get(url).send().await {
-                Ok(response)=>{let status=response.status().as_u16();let _=response.bytes().await;proxied_health_verdict(&serde_json::json!({"success":(200..400).contains(&status),"http_status":status,"error_code":if (200..400).contains(&status) {""} else {"HTTP_STATUS"}}))},
-                Err(_)=>Err(health_error("HEALTH_PROXY_PATH_FAILED")),
-            };
-            checks.fetch_add(1,Ordering::SeqCst);(direct,proxy)
-        })
-    }}));
+    let dual_rounds = Arc::new(AtomicUsize::new(0));
+    h.enhanced.set_official_steps(Arc::new({
+        let dual_rounds = dual_rounds.clone();
+        move || {
+            let client = proxy_client.clone();
+            let url = direct_url.clone();
+            let dual_rounds = dual_rounds.clone();
+            Box::pin(async move {
+                let direct = direct_health_request(url.clone()).await.map(|r| r.endpoint);
+                let proxy = match client.get(url).send().await {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        let _ = response.bytes().await;
+                        proxied_health_verdict(&serde_json::json!({
+                            "success": (200..400).contains(&status),
+                            "http_status": status,
+                            "error_code": if (200..400).contains(&status) { "" } else { "HTTP_STATUS" }
+                        }))
+                    }
+                    Err(_) => Err(health_error("HEALTH_PROXY_PATH_FAILED")),
+                };
+                if matches!(direct.as_ref(), Ok(HealthEndpoint::Unavailable(503)))
+                    && matches!(proxy.as_ref(), Ok(HealthEndpoint::Unavailable(503))) {
+                    dual_rounds.fetch_add(1, Ordering::SeqCst);
+                }
+                (direct, proxy)
+            })
+        }
+    }));
+    // Set the interval before the monitor reads its first sleep. Changing it
+    // after network I/O cannot interrupt an already pending 30-second sleep.
+    h.enhanced.set_health_interval(Duration::from_millis(20));
     h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
     h.enhanced.enable().await.unwrap();
     let owner = h.service.owner.lock().unwrap().clone();
@@ -345,12 +365,26 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
         .unwrap()
         .unwrap();
     http.status.store(503, Ordering::SeqCst);
-    let baseline = checks.load(Ordering::SeqCst);
-    h.enhanced.set_health_interval(Duration::from_millis(20));
+    let baseline = dual_rounds.load(Ordering::SeqCst);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while checks.load(Ordering::SeqCst) < baseline + 4 {
+    while dual_rounds.load(Ordering::SeqCst) < baseline + 4
+        && h.service.disconnects.load(Ordering::SeqCst) == 0
+    {
         assert!(Instant::now() < deadline, "four real dual503 rounds");
         tokio::time::sleep(ms(10)).await;
+    }
+    // A regressed policy may stop before it can complete four rounds. Wait
+    // for its real stop, then require the held traffic itself to expose the
+    // disruption (the mutation check must not pass on a setup timeout).
+    if h.service.disconnects.load(Ordering::SeqCst) != 0 {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while engine.runtime_observation().running {
+            assert!(
+                Instant::now() < deadline,
+                "unexpected recovery stop settles"
+            );
+            tokio::time::sleep(ms(10)).await;
+        }
     }
     tcp_roundtrip(&mut tcp, b"during503").await;
     let packet = udp_packet(b"during503");
@@ -377,7 +411,7 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
     assert_eq!(engine.runtime_observation().owner, original.owner);
     assert_eq!(accepts.load(Ordering::SeqCst), 1);
     assert_eq!(peers.lock().unwrap().len(), 1);
-    let protected_rounds = checks.load(Ordering::SeqCst) - baseline;
+    let protected_rounds = dual_rounds.load(Ordering::SeqCst) - baseline;
     http.status.store(200, Ordering::SeqCst);
     wait_phase_reason(&h, |s| s.reason.is_none()).await;
     tcp_roundtrip(&mut tcp, b"after").await;
