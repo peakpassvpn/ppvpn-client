@@ -33,8 +33,14 @@ runs:
           apt-get install -y --no-install-recommends gh
         fi
         script="$RUNNER_TEMP/prebuilt-boringssl.sh"
-        curl -fsSL --retry 3 -o "$script" \
-          https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
+        if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 90 -o "$script" \
+          https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh; then
+          # Same pinned file through GitHub's API when the raw CDN is unavailable.
+          gh api 'repos/peakpassvpn/btls/contents/scripts/prebuilt-boringssl.sh?ref=16f0e320995602930eb11edc2be8d56b7145713f' > "$script.json"
+          python3 -c 'import base64,json,pathlib,sys; j=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert j["encoding"]=="base64" and j["sha"]=="258aaa484798298cf4e59ca0b4757c79cc302786"; pathlib.Path(sys.argv[2]).write_bytes(base64.b64decode(j["content"]))' "$script.json" "$script"
+        fi
+        # Verify both download paths before executing; keep artifact attestation below.
+        python3 -c 'import hashlib,pathlib,sys; assert hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()=="dc6af85368d3cc6bf40c2b7ea9e025264b99adb4b3aa81cb39c8e36441802bda", "Pinned BoringSSL script checksum mismatch"' "$script"
         for target in $TARGETS; do
           bash "$script" Cargo.lock "$target" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
         done
