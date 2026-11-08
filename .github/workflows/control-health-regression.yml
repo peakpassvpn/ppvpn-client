@@ -25,9 +25,16 @@ jobs:
           prefix-key: v1-rust
           shared-key: desktop
           save-if: false
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          targets: x86_64-unknown-linux-gnu
+      - name: Verified prebuilt BoringSSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Same pinned upstream helper as the composite action. Its raw host
+          # returned 504 twice; fetch identical bytes through the GitHub API.
+          script="$RUNNER_TEMP/prebuilt-boringssl.sh"
+          gh api 'repos/peakpassvpn/btls/contents/scripts/prebuilt-boringssl.sh?ref=16f0e320995602930eb11edc2be8d56b7145713f' --jq .content | base64 --decode > "$script"
+          test "$(git hash-object "$script")" = 258aaa484798298cf4e59ca0b4757c79cc302786
+          bash "$script" Cargo.lock x86_64-unknown-linux-gnu | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
       - name: Real held TCP and UDP across dual HTTP503
         run: cargo test --locked -p ppvpn-desktop --lib enhanced::tests::control_health -- --test-threads=1 --nocapture
       - name: Counterfactual must close held traffic
