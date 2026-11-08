@@ -1,0 +1,52 @@
+name: Control health 503 regression
+on:
+  push:
+    branches: [codex/control-health-503]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop-health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: desktop
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Real held TCP and UDP across dual HTTP503
+        run: cargo test --locked -p ppvpn-desktop --lib enhanced::tests::control_health -- --test-threads=1 --nocapture
+      - name: Counterfactual must close held traffic
+        run: |
+          python3 - <<'PY'
+          import pathlib,subprocess
+          p=pathlib.Path('crates/desktop/src/enhanced.rs');original=p.read_text()
+          protected='"{API_UNREACHABLE}: HEALTH_DIRECT_STATUS_FAILED: {status}"'
+          assert original.count(protected)==1
+          try:
+              p.write_text(original.replace(protected,'"HEALTH_DIRECT_STATUS_FAILED: {status}"'))
+              r=subprocess.run(['cargo','test','--locked','-p','ppvpn-desktop','--lib','enhanced::tests::control_health::dual_http503_keeps_established_tcp_udp_and_the_same_runtime','--','--exact','--nocapture','--test-threads=1'],capture_output=True,text=True)
+              print(r.stdout);print(r.stderr)
+              assert r.returncode!=0 and 'FAILED' in r.stdout and ('held TCP remains open' in r.stderr or 'held TCP survives control-health503' in r.stderr), 'Counterfactual must fail from lost established TCP, not compilation or setup'
+          finally:p.write_text(original)
+          PY
+      - name: Existing desktop behavior and lint
+        run: |
+          cargo test --locked -p ppvpn-desktop --lib
+          cargo clippy --locked -p ppvpn-desktop --all-targets -- -D warnings
+          cargo fmt --all -- --check
+          git diff --exit-code
