@@ -238,7 +238,7 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
     let closed = tokio::net::TcpSocket::new_v4().unwrap();
     closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     profile["nodes"].as_array_mut().unwrap().truncate(1);
-    profile["nodes"][0]["ingresses"] = serde_json::json!([{"role":"primary","endpoint_key":"fixture","replica_ordinal":0,"protocol":"shadowsocks","endpoint":{"ip":"127.0.0.1","port":closed.local_addr().unwrap().port()},"credentials":{"shadowsocks":{"method":"2022-blake3-aes-128-gcm","user_key":"AAAAAAAAAAAAAAAAAAAAAA=="}},"capabilities":{"tcp":true,"udp":true}}]);
+    profile["nodes"][0]["ingresses"] = serde_json::json!([{"role":"primary","endpoint_key":"fixture","replica_ordinal":0,"protocol":"shadowsocks","endpoint":{"domain":"127.0.0.1","port":closed.local_addr().unwrap().port()},"credentials":{"shadowsocks":{"method":"2022-blake3-aes-128-gcm","user_key":"AAAAAAAAAAAAAAAAAAAAAA=="}},"capabilities":{"tcp":true,"udp":true}}]);
     profile["routing"] = serde_json::json!({"rules":[],"final":{"type":"direct"}});
     engine
         .apply(ApplyRequest::new(serde_json::to_vec(&profile).unwrap()))

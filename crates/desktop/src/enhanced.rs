@@ -152,9 +152,9 @@ const HEALTH_RECHECK: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(5)
 };
-/// Detail of the health failure where the direct request to the API host
-/// failed and the tunnel's own steps passed (see [`official_verdict`]), and
-/// of the reason `On` carries meanwhile.
+/// The control endpoint is unavailable while the forwarding checks pass
+/// (including completed HTTP5xx exchanges). Also the reason `On` carries.
+/// See [`official_verdict`].
 const API_UNREACHABLE: &str = "HEALTH_API_UNREACHABLE";
 /// Detail of the `Contended` that ends those reconnects.
 const TUN_ROUTING_TAKEN_OVER: &str = "TUN_ROUTING_TAKEN_OVER";
@@ -2031,9 +2031,9 @@ impl Inner {
         proxied_health_verdict(&availability)
     }
 
-    /// While on: `On` carries [`API_UNREACHABLE`] as its reason while only
-    /// the API host is unreachable on the direct path, and none once a
-    /// check passes. Nothing changes for another generation or phase.
+    /// While on: `On` carries [`API_UNREACHABLE`] while the control endpoint
+    /// is unavailable, and none once a check passes. Nothing changes for
+    /// another generation or phase.
     fn note_api_unreachable(&self, generation: u64, unreachable: bool) {
         let reason = unreachable.then(|| service_unreachable(API_UNREACHABLE));
         let applied = self.with_data(|data| {
@@ -2390,8 +2390,8 @@ fn proxied_health_verdict(availability: &Value) -> EndpointResult {
     Err(health_error("HEALTH_PROXY_PATH_FAILED"))
 }
 
-/// Only the API host is unreachable on the direct path (see
-/// [`official_verdict`]).
+/// The control endpoint is unavailable while the forwarding path works
+/// (see [`official_verdict`]).
 fn is_api_unreachable(info: &ClientErrorInfo) -> bool {
     info.code == ErrorCode::ConnectHealthCheckFailed && info.detail.starts_with(API_UNREACHABLE)
 }
@@ -2890,9 +2890,9 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
         }
         awaiting_verdict = false;
         match health.judge(round) {
-            // The tunnel works; only the API host is unreachable on the
-            // direct path. Restarting the core cannot fix that route: stay
-            // on, say so, and check less often (#438).
+            // Forwarding works but the control endpoint is unavailable.
+            // Replacing the core cannot repair that service: stay on, say
+            // so, and check less often (#438).
             Verdict::ApiUnreachable { misses } => {
                 tracing::info!(
                     generation,
