@@ -24,7 +24,8 @@ jobs:
         with:
           prefix-key: v1-rust
           shared-key: desktop
-          save-if: false
+          cache-on-failure: true
+          save-if: true
       # Use the normal Cargo.lock-pinned source build. No prebuilt binary is
       # used while GitHub release downloads return 504; no binary verification
       # or attestation failure is converted into a successful prebuilt step.
