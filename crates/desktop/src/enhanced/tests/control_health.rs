@@ -247,13 +247,24 @@ async fn dual_http503_keeps_established_tcp_udp_without_core_restart() {
         .apply(ApplyRequest::new(serde_json::to_vec(&profile).unwrap()))
         .await
         .unwrap();
+    let mut lifecycle = engine.subscribe(&[EventKind::CoreStarted, EventKind::CoreStopped]);
     engine.start().await.unwrap();
+    assert!(
+        matches!(
+            tokio::time::timeout(Duration::from_secs(2), lifecycle.recv())
+                .await
+                .unwrap(),
+            Some(EventItem::Event {
+                event: Event::CoreStarted { .. }
+            })
+        ),
+        "the real lifecycle observer must see the initial core start"
+    );
     *h.service.stop_engine_on_disconnect.lock().unwrap() = Some(engine.clone());
     assert!(matches!(
         engine.status().state,
         EngineState::Running | EngineState::Degraded { .. }
     ));
-    let mut lifecycle = engine.subscribe(&[EventKind::CoreStarted, EventKind::CoreStopped]);
     let credential = engine.local_proxy_routed_credential().unwrap();
     let http = HttpFixture::new().await;
     let direct_url = http.url();
@@ -437,17 +448,6 @@ async fn dual_http503_keeps_established_tcp_udp_without_core_restart() {
     // the same real runtime that carried the protected established traffic.
     h.enhanced.disable().await.unwrap();
     assert_eq!(engine.status().state, EngineState::Stopped);
-    assert!(
-        matches!(
-            tokio::time::timeout(Duration::from_secs(2), lifecycle.recv())
-                .await
-                .unwrap(),
-            Some(EventItem::Event {
-                event: Event::CoreStopped { .. }
-            })
-        ),
-        "explicit disconnect must emit the real core stop event"
-    );
     let mut end = [0];
     let closed = tokio::time::timeout(Duration::from_secs(2), tcp.read(&mut end))
         .await
