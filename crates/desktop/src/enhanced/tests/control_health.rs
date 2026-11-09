@@ -4,7 +4,10 @@
 //! listener, so a mistaken recovery closes real established flows. No TUN,
 //! system proxy, external network, administrator access or account is used.
 use super::*;
-use ppvpn_core::{ApplyRequest, Engine, EngineConfig, LocalProxyConfig, Platform, Role};
+use ppvpn_core::{
+    ApplyRequest, Engine, EngineConfig, EngineState, Event, EventItem, EventKind, LocalProxyConfig,
+    Platform, Role,
+};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicU16;
@@ -212,7 +215,7 @@ async fn tcp_roundtrip(stream: &mut TcpStream, payload: &[u8]) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
+async fn dual_http503_keeps_established_tcp_udp_without_core_restart() {
     let h = harness(true);
     let platform = if cfg!(target_os = "windows") {
         Platform::Windows
@@ -246,8 +249,11 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
         .unwrap();
     engine.start().await.unwrap();
     *h.service.stop_engine_on_disconnect.lock().unwrap() = Some(engine.clone());
-    let original = engine.runtime_observation();
-    assert!(original.running && original.native_runtime_id.is_some());
+    assert!(matches!(
+        engine.status().state,
+        EngineState::Running | EngineState::Degraded { .. }
+    ));
+    let mut lifecycle = engine.subscribe(&[EventKind::CoreStarted, EventKind::CoreStopped]);
     let credential = engine.local_proxy_routed_credential().unwrap();
     let http = HttpFixture::new().await;
     let direct_url = http.url();
@@ -378,7 +384,7 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
     // disruption (the mutation check must not pass on a setup timeout).
     if h.service.disconnects.load(Ordering::SeqCst) != 0 {
         let deadline = Instant::now() + Duration::from_secs(3);
-        while engine.runtime_observation().running {
+        while engine.status().state != EngineState::Stopped {
             assert!(
                 Instant::now() < deadline,
                 "unexpected recovery stop settles"
@@ -404,11 +410,12 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
     assert!(is_api_unreachable(
         h.enhanced.state().reason.as_ref().unwrap()
     ));
-    assert_eq!(
-        engine.runtime_observation().native_runtime_id,
-        original.native_runtime_id
+    assert!(
+        tokio::time::timeout(ms(20), lifecycle.recv())
+            .await
+            .is_err(),
+        "control503 must not stop or restart the real core"
     );
-    assert_eq!(engine.runtime_observation().owner, original.owner);
     assert_eq!(accepts.load(Ordering::SeqCst), 1);
     assert_eq!(peers.lock().unwrap().len(), 1);
     let protected_rounds = dual_rounds.load(Ordering::SeqCst) - baseline;
@@ -424,12 +431,23 @@ async fn dual_http503_keeps_established_tcp_udp_and_the_same_runtime() {
     assert_eq!(&b[..n], packet);
     assert_eq!(peers.lock().unwrap().len(), 1);
     assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
-    println!("dual503 continuity: protected_rounds={} tcp_accepts={} udp_peers={} disconnects=0 same_native_runtime=true api_recovered=true",
+    println!("dual503 continuity: protected_rounds={} tcp_accepts={} udp_peers={} disconnects=0 core_restarts=0 api_recovered=true",
         protected_rounds, accepts.load(Ordering::SeqCst), peers.lock().unwrap().len());
     // Positive control: this fake service's explicit disconnect really ends
     // the same real runtime that carried the protected established traffic.
     h.enhanced.disable().await.unwrap();
-    assert!(!engine.runtime_observation().running);
+    assert_eq!(engine.status().state, EngineState::Stopped);
+    assert!(
+        matches!(
+            tokio::time::timeout(Duration::from_secs(2), lifecycle.recv())
+                .await
+                .unwrap(),
+            Some(EventItem::Event {
+                event: Event::CoreStopped { .. }
+            })
+        ),
+        "explicit disconnect must emit the real core stop event"
+    );
     let mut end = [0];
     let closed = tokio::time::timeout(Duration::from_secs(2), tcp.read(&mut end))
         .await
