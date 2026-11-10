@@ -338,8 +338,21 @@ class AppState {
   Future<void> setRoutingMode(rust.UiRoutingMode mode) => _run(() => rust.setRoutingMode(mode: mode));
 
   Future<void> testAll(rust.UiProbeMethod method) async {
-    latency.value = {for (final node in nodes.value) node.id: const LatencyTesting()};
-    await _run(() => rust.probeAll(method: method));
+    // Each batch owns only its pending markers; results and later batches
+    // must survive a late failure of this request.
+    final pending = LatencyTesting();
+    latency.value = {for (final node in nodes.value) node.id: pending};
+    await _run(() async {
+      try {
+        await rust.probeAll(method: method);
+      } catch (_) {
+        latency.value = {
+          for (final entry in latency.value.entries)
+            entry.key: identical(entry.value, pending) ? const LatencyFailed() : entry.value,
+        };
+        rethrow;
+      }
+    });
   }
 
   /// Puts the system proxy back and stops the core; before the app quits.
