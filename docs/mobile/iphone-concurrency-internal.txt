@@ -38,6 +38,11 @@ Filesystem (only root device owner stages/launches/copies)
   App Documents/PPVPNConcurrencyDiagnostics/<run_id>/lane-N-KIND/ne-resources.jsonl
   App Documents/PPVPNConcurrencyDiagnostics/<run_id>/summary.json
   App Documents/PPVPNConcurrencyDiagnostics/<run_id>/STOP (empty file cancels test only)
+  On launch and after all lanes finish, copy ONLY sampler ne-resources.jsonl and
+  ne-resources.previous.jsonl (<=2MiB each) into the Documents diagnostics base
+  or run directory, with raw-export-status.json. No Group directory scan occurs.
+  A later fresh Runner launch exports the NE history while Runner was absent;
+  inspect pid/epoch/timestamps and rotation coverage, not an assumed gap-free log.
   Before any load, launch alone mirrors up to120s of idle NE samples into
   Documents/PPVPNConcurrencyDiagnostics/preflight-ne-resources.jsonl, retaining
   one previous file. preflight-status.json reports a missing source, never a PASS.
@@ -127,6 +132,9 @@ Evidence and outstanding integration
   runner stops. Baseline waiting leak is observed, not fixed by instrumentation.
   Counter-window deltas include background app traffic and are NOT per-lane or
   per-operation attribution; retain sampler before/during/after drain separately.
+  Ordinary UDP retains its existing5min idle TTL. Wait beyond that timeout plus
+  sweep when testing natural recovery; do not shorten it or require live=0 while
+  legitimate user streams/UDP mappings remain. Judge TCP/DNS recovery separately.
   DoT carrier metrics stay unmeasured until the upstream interface provides them.
   Never infer them from Engine.connections(), request success, or a warning's
   10s refused counter. Entire acceptance remains incomplete without these gates.

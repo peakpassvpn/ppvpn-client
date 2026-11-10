@@ -77,7 +77,7 @@ final class InternalResourceSampler {
     // One bounded stream plus an atomic latest sample for the load stop guard.
     try? data.write(to: directory.appendingPathComponent("ne-latest.json"), options: .atomic)
     let path = directory.appendingPathComponent("ne-resources.jsonl")
-    if let size = (try? path.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size >= 2 * 1024 * 1024 {
+    if let size = (try? path.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size + data.count + 1 > 2 * 1024 * 1024 {
       let previous = directory.appendingPathComponent("ne-resources.previous.jsonl")
       try? FileManager.default.removeItem(at: previous)
       try? FileManager.default.moveItem(at: path, to: previous)

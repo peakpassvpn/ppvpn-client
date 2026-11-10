@@ -169,6 +169,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     let base = documents.appendingPathComponent("PPVPNConcurrencyDiagnostics")
     try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     try? Data("internal_release_entry_ready\n".utf8).write(to: base.appendingPathComponent("entry-ready.txt"), options: .atomic)
+    exportRawSamples(sourceDirectory: container.appendingPathComponent("data/diagnostics"), destination: base)
     startPreflightMirror(base: base, source: container.appendingPathComponent("data/diagnostics/ne-latest.json"))
     let request = base.appendingPathComponent("request.json")
     guard let size = (try? request.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= 262144,
@@ -204,6 +205,37 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
         resourceSource: container.appendingPathComponent("data/diagnostics/ne-latest.json"), context: context)
     }
     for probe in active { probe.queue.async { probe.start() } }
+  }
+
+  /// Copy ONLY the two bounded sampler streams via the app's real Group URL.
+  /// On a later fresh Runner launch this also retrieves >5min ordinary-UDP
+  /// drain history; it does not require Runner to stay alive during that wait.
+  private static func exportRawSamples(sourceDirectory: URL, destination: URL) {
+    var files: [String: Any] = [:]
+    for name in ["ne-resources.jsonl", "ne-resources.previous.jsonl"] {
+      let output = destination.appendingPathComponent(name)
+      guard let file = try? FileHandle(forReadingFrom: sourceDirectory.appendingPathComponent(name)) else {
+        try? FileManager.default.removeItem(at: output)
+        files[name] = ["status": "missing_or_unreadable"]
+        continue
+      }
+      defer { try? file.close() }
+      do {
+        var data = try file.read(upToCount: 2 * 1024 * 1024) ?? Data()
+        // Concurrent append/rotation is permitted. Preserve complete JSONL
+        // records only and report export time rather than claiming an atomic
+        // cross-file snapshot.
+        if let newline = data.lastIndex(of: 10) { data = data.prefix(through: newline) }
+        else { data = Data() }
+        try data.write(to: output, options: .atomic)
+        files[name] = ["status": "copied_complete_records", "bytes": data.count]
+      } catch { files[name] = ["status": "copy_failed"] }
+    }
+    let value: [String: Any] = ["schema": 1, "unix_seconds": Date().timeIntervalSince1970,
+      "nontransactional_export": true, "files": files]
+    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
+      try? data.write(to: destination.appendingPathComponent("raw-export-status.json"), options: .atomic)
+    }
   }
 
   /// Allows root to obtain idle extension samples BEFORE choosing explicit load
@@ -562,6 +594,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     DispatchQueue.main.async {
       Self.active.removeAll { $0 === self }
       if Self.active.isEmpty {
+        Self.exportRawSamples(sourceDirectory: self.resourceSource.deletingLastPathComponent(), destination: parent)
         let files = (try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)) ?? []
         let results: [[String: Any]] = files.filter { $0.lastPathComponent.hasPrefix("lane-") }.compactMap {
           guard let data = try? Data(contentsOf: $0.appendingPathComponent("result.json")) else { return nil }
