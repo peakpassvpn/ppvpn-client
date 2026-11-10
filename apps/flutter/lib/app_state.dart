@@ -41,6 +41,7 @@ enum WindowPage { messages, settings }
 class AppState {
   AppState(rust.UiSnapshot initial, {bool? useSystemVpn})
       : fixed = false, _useSystemVpn = useSystemVpn ?? mobile, snapshot = ValueNotifier(initial) {
+    _listenForTeamChanges();
     _refreshNodes(initial);
     if (_useSystemVpn) SystemVpn.listen();
     unawaited(_pump());
@@ -51,6 +52,7 @@ class AppState {
   AppState.fixed(rust.UiSnapshot initial, {bool? useSystemVpn})
       : fixed = true, _useSystemVpn = useSystemVpn ?? mobile, snapshot = ValueNotifier(initial) {
     _stopped = true;
+    _listenForTeamChanges();
   }
 
   /// Made by [AppState.fixed]: sample data, no client.
@@ -80,8 +82,31 @@ class AppState {
   /// opens ([refreshTeams]).
   final ValueNotifier<List<rust.UiTeam>> teams = ValueNotifier(const []);
 
+  // Team choices belong to the signed-in account. Invalidate both the cached
+  // list and pending reads before listeners can open another account's picker.
+  int _teamsRequest = 0;
+
+  void _clearTeams() {
+    _teamsRequest++;
+    teams.value = const [];
+  }
+
+  void _listenForTeamChanges() {
+    var previous = snapshot.value;
+    snapshot.addListener(() {
+      final before = previous;
+      final next = snapshot.value;
+      previous = next;
+      // Initial account metadata and switching teams keep the same choices.
+      if (before.auth != next.auth || (before.accountName != null && before.accountName != next.accountName)) {
+        _clearTeams();
+      }
+    });
+  }
+
   /// The message center's list.
   late final MessagesState messages = MessagesState(fixed: fixed, onError: (error) => actionError.value = error);
+
   /// Bumped when the tray turns enhanced mode on before the service is
   /// installed: the window shows the install explanation first (shell.dart).
   final ValueNotifier<int> enhancedRequests = ValueNotifier(0);
@@ -261,7 +286,13 @@ class AppState {
 
   Future<void> signIn() => _run(rust.signIn);
   void cancelSignIn() => rust.cancelSignIn();
-  Future<void> signOut() => _run(rust.signOut);
+  Future<void> signOut() {
+    // The event pump can coalesce logout and a same-name login. Discard the old
+    // account's choices synchronously, before waiting for Rust or the network.
+    _clearTeams();
+    return _run(rust.signOut);
+  }
+
   Future<void> connect() => _run(() => _withVpn(rust.connect));
 
   /// Phone: the client first (it stops the tunnel host), then the system VPN.
@@ -292,7 +323,17 @@ class AppState {
   Future<void> installService() => _run(rust.serviceInstall);
   Future<void> refreshNodes() => _run(rust.refreshNodes);
   Future<void> selectNode(String id) => _run(() => rust.selectNode(nodeId: id));
-  Future<void> refreshTeams() => _run(() async => teams.value = await rust.teams());
+  Future<void> refreshTeams() async {
+    if (fixed || _stopped || snapshot.value.auth != rust.UiAuth.signedIn) return;
+    final request = ++_teamsRequest;
+    try {
+      final list = await rust.teams();
+      if (!_stopped && request == _teamsRequest) teams.value = list;
+    } catch (error) {
+      if (!_stopped && request == _teamsRequest) actionError.value = '$error';
+    }
+  }
+
   Future<void> switchTeam(String id) => _run(() => rust.switchTeam(teamId: id));
   Future<void> setRoutingMode(rust.UiRoutingMode mode) => _run(() => rust.setRoutingMode(mode: mode));
 
