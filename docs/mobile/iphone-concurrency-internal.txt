@@ -53,6 +53,8 @@ Filesystem (only root device owner stages/launches/copies)
 
 Request schema (JSON snake_case, schema1)
   run_id: random UUID for public correlation; unique per run.
+    App normalizes both UUID strings to lowercase and compares UUID values;
+    capability and public identity cannot differ only in case.
   run_token: DIFFERENT random UUID test capability; no account token. Never
     written to result/progress/summary. Consumed request is removed before load.
     Raw TCP/UDP and HTTP fixture auth use it, so keep root input private.
@@ -64,9 +66,21 @@ Request schema (JSON snake_case, schema1)
   count1..2048; concurrency1..256; per_second1..400; duration_seconds1..120.
     These are logical application operations, NOT actual Sail session counts.
   max_application_bytes8192..8388608; reserve maximum payload before offering.
+    Reservations are not the enforcement: every actual socket send is charged
+    BEFORE sending; every incoming callback is charged whole BEFORE matching IDs,
+    including unknown/duplicate/late DNS and callbacks after cancellation.
+    Exceeding the lane budget stops its whole batch, never the user's VPN flows.
     Counts include offered application payload and received body, not wire
     headers/retransmissions. Per-response HTTP limit4096, Range bytes0-1023,
     Content-Length must be known and <=4096 before receiving the body.
+    TCP reads<=4096 and remaining budget; UDP reads retain full65535 capacity so
+    legal60000 datagrams are not clipped into false success. A packet/callback
+    already issued can cross the limit: byte-accounting.json records full actual
+    sent/received/overshoot, outstanding callbacks and incomplete accounting.
+    More than one socket can have one in-flight callback. This is application
+    payload accounting, not an exact wire cap. Root fixture wire bounds remain
+    independent. Re-read the accounting file after callbacks settle; incomplete
+    accounting is not a byte-budget acceptance PASS.
   min_available_bytes: explicit per-run threshold, validation floor8MiB.
   max_footprint_bytes: explicit per-run threshold chosen AFTER idle measurement.
   max_consecutive_failures1..32; operation_timeout_seconds1..30.

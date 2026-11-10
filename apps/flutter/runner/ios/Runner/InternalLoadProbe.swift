@@ -7,10 +7,52 @@ import Network
 /// normal sockets/URLSession, not the NE engine's dial API. No credentials,
 /// account credentials, cookies, backend login, route edits, trust exceptions or public listeners.
 final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+  /// Actual application payload accounting, distinct from offer reservations.
+  /// Receive callbacks are charged in full, including unknown/late packets.
+  struct ByteBudget {
+    let limit: Int
+    private(set) var sent = 0
+    private(set) var received = 0
+    private(set) var tripped = false
+    var total: Int { sent + received }
+    var remaining: Int { max(0, limit - total) }
+    var overshoot: Int { max(0, total - limit) }
+
+    mutating func account(_ count: Int, sending: Bool) -> Bool {
+      precondition(count >= 0)
+      if sending {
+        guard !tripped, count <= remaining else { tripped = true; return false }
+        sent += count
+      } else {
+        // Callbacks are bounded by their transport; never hide a delivered
+        // datagram by clipping it to the remaining budget.
+        received += count
+      }
+      if total > limit { tripped = true }
+      return !tripped
+    }
+  }
+
+  enum SharedDNSPacket: Equatable { case budgetExceeded, unexpected, reply(Int) }
+  static func accountSharedDNS(_ data: Data, pending: Set<Int>, budget: inout ByteBudget) -> SharedDNSPacket {
+    guard budget.account(data.count, sending: false) else { return .budgetExceeded }
+    guard data.count >= 2 else { return .unexpected }
+    let id = Int(data[data.startIndex]) << 8 | Int(data[data.startIndex + 1])
+    return pending.contains(id) ? .reply(id) : .unexpected
+  }
+
+  @propertyWrapper
+  struct CanonicalUUID: Decodable {
+    let wrappedValue: String
+    init(from decoder: Decoder) throws {
+      let text = try decoder.singleValueContainer().decode(String.self)
+      wrappedValue = UUID(uuidString: text)?.uuidString.lowercased() ?? text
+    }
+  }
   struct Spec: Decodable {
     let schema: Int
-    let runToken: String
-    let runId: String // public correlation only; never echo the capability token
+    @CanonicalUUID var runToken: String
+    @CanonicalUUID var runId: String // public correlation only; never echo the capability token
     let expiresUnix: Double
     let kind: String // tcp, udp, dns, http, http3 (observed protocol required)
     let host: String // exact root-frozen manifest endpoint, private or owned public
@@ -40,7 +82,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     let https: Bool?
 
     func validate(now: Double) -> Bool {
-      schema == 1 && UUID(uuidString: runToken) != nil && UUID(uuidString: runId) != nil && runId != runToken
+      schema == 1 && UUID(uuidString: runToken) != nil && UUID(uuidString: runId) != nil
+        && UUID(uuidString: runId) != UUID(uuidString: runToken)
         && expiresUnix > now && expiresUnix <= now + 300
         && ["tcp", "udp", "dns", "http", "http3"].contains(kind)
         && Self.validTargetHost(host) && targetManifestSha256.count == 64
@@ -127,6 +170,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     func stopped() -> String? { lock.lock(); defer { lock.unlock() }; return reason }
   }
   private static var active: [InternalLoadProbe] = [] // main queue only
+  private static var settling: [InternalLoadProbe] = [] // bounded cancelled-callback accounting grace
   private static var preflightTimer: DispatchSourceTimer?
   private let spec: Spec
   private let directory: URL
@@ -146,7 +190,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
   private var completed = 0
   private var failures: [String: Int] = [:]
   private var latencies: [Double] = []
-  private var applicationBytes = 0
+  private var byteBudget: ByteBudget
+  private var applicationBytes: Int { byteBudget.total }
   private var reservedBytes = 0
   private var tick = 0
   private var stopping: String?
@@ -162,6 +207,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
   private var activeRound: [Int: Int] = [:]
   private var initialSail: [String: Any]?
   private var latestSail: [String: Any]?
+  private var pendingReceives = 0
+  private var pendingHTTP: Set<Int> = []
 
   static func consumeOnce() {
     guard active.isEmpty, let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
@@ -294,6 +341,30 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
 
   private init(spec: Spec, directory: URL, resourceSource: URL, context: RunContext) {
     self.spec = spec; self.directory = directory; self.resourceSource = resourceSource; self.context = context
+    self.byteBudget = ByteBudget(limit: spec.maxApplicationBytes)
+  }
+
+  private func accountBytes(_ count: Int, sending: Bool) -> Bool {
+    if sending, let reason = context.stopped() { stop(reason); return false }
+    let accepted = byteBudget.account(count, sending: sending)
+    if !accepted { stop("application_byte_limit") }
+    if let reason = context.stopped() { stop(reason) }
+    if wroteResult { writeByteAccounting() }
+    return accepted && stopping == nil
+  }
+
+  private func writeByteAccounting() {
+    let value: [String: Any] = ["schema": 1, "sent_application_bytes": byteBudget.sent,
+      "received_application_bytes": byteBudget.received, "application_bytes": byteBudget.total,
+      "limit_bytes": byteBudget.limit, "observed_overshoot_bytes": byteBudget.overshoot,
+      "pending_network_receives": pendingReceives, "pending_http_tasks": pendingHTTP.count,
+      "callback_accounting_complete": pendingReceives == 0 && pendingHTTP.isEmpty,
+      "udp_tcp_pending_callback_allowance_bytes": pendingReceives * (spec.kind == "tcp" ? 4096 : 65535),
+      "http_pending_allowance_bytes": pendingHTTP.isEmpty ? 0 : NSNull(),
+      "overshoot_note": "already-issued callbacks may arrive after cancellation; UDP charged whole up to65535 per pending read; TCP read<=4096; HTTP declared body<=4096 but each delivered callback charged whole; incomplete accounting is not a PASS; this is not a wire-byte cap" ]
+    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
+      try? data.write(to: directory.appendingPathComponent("byte-accounting.json"), options: .atomic)
+    }
   }
 
   private func start() {
@@ -306,7 +377,9 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     configuration.timeoutIntervalForRequest = 10
     configuration.timeoutIntervalForResource = 12
     configuration.httpMaximumConnectionsPerHost = min(spec.concurrency, 128)
-    session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    let delegates = OperationQueue()
+    delegates.maxConcurrentOperationCount = 1
+    session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegates)
     let timer = DispatchSource.makeTimerSource(queue: queue)
     timer.schedule(deadline: .now(), repeating: .milliseconds(100))
     timer.setEventHandler { [weak self] in self?.step() }
@@ -339,16 +412,19 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
         let available = sample["available_memory_bytes"] as? NSNumber,
         let footprint = sample["phys_footprint_bytes"] as? NSNumber,
         let pid = sample["pid"] as? Int else { stop("no_fresh_ne_resource_sample"); return }
-      if let previous = extensionPID, previous != pid { stop("ne_process_changed") }
+      if let previous = extensionPID, previous != pid { stop("ne_process_changed"); return }
       extensionPID = pid
-      guard let sail = sample["sail"] as? [String: Any], let epoch = sail["epoch"] as? NSNumber,
+      guard let sail = sample["sail"] as? [String: Any],
+        (sail["schema_version"] as? NSNumber)?.intValue == 1,
+        let epoch = sail["epoch"] as? NSNumber, let instance = sail["instance_id"] as? NSNumber,
         let sessions = sail["sessions"] as? [String: Any],
         (sessions["limit"] as? NSNumber)?.intValue == 128,
         sessions["live"] is NSNumber, sessions["waiting"] is NSNumber,
         sessions["admitted_total"] is NSNumber, sessions["refused_total"] is NSNumber else {
         stop("missing_current_cap128_sail_snapshot"); return
       }
-      if let initialEpoch = initialSail?["epoch"] as? NSNumber, initialEpoch != epoch { stop("sail_dispatcher_changed") }
+      if let initialEpoch = initialSail?["epoch"] as? NSNumber, initialEpoch != epoch { stop("sail_dispatcher_changed"); return }
+      if let initialInstance = initialSail?["instance_id"] as? NSNumber, initialInstance != instance { stop("sail_instance_changed"); return }
       if initialSail == nil { initialSail = sail }
       latestSail = sail
       if let sequence = sample["sequence"] as? Int, lastResourceSequence != sequence {
@@ -394,6 +470,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
       if spec.kind == "http3" { request.assumesHTTP3Capable = true }
       let task = session.dataTask(with: request)
       tasks[id] = task; taskOperations[task.taskIdentifier] = id
+      pendingHTTP.insert(task.taskIdentifier)
       task.resume()
       return
     }
@@ -405,7 +482,6 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
       activeRound[id] = 0
       payload = echoPayload(id, round: 0)
     }
-    if spec.kind == "dns" { applicationBytes += payload.count }
     if spec.kind == "dns" && spec.dnsSharedSocket == true {
       if sharedDNS == nil { startSharedDNS() }
       sendPendingDNS()
@@ -455,7 +531,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     guard starts[id] != nil else { return }
     // The fixture authenticates the first line before echoing any bytes.
     let range = Self.chunkRange(payload: payload, chunks: spec.writeChunks, chunk: chunk)
-    applicationBytes += range.count
+    guard accountBytes(range.count, sending: true) else { return }
     connection.send(content: payload.subdata(in: range), completion: .contentProcessed { [weak self, weak connection] error in
       guard let self, let connection, self.starts[id] != nil else { return }
       if let error { self.finish(id, failure: Self.networkFailure(error, phase: "send")); return }
@@ -490,7 +566,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
 
   private func sendPendingDNS() {
     guard sharedDNSReady, let connection = sharedDNS else { return }
-    for (id, data) in expectedDNS where !sentDNS.contains(id) {
+    for (id, data) in Array(expectedDNS) where !sentDNS.contains(id) {
+      guard accountBytes(data.count, sending: true) else { return }
       sentDNS.insert(id)
       connection.send(content: data, completion: .contentProcessed { [weak self] error in
         if error != nil { self?.finish(id, failure: "dns_shared_send_error") }
@@ -500,14 +577,27 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
 
   private func receiveSharedDNS() {
     guard let connection = sharedDNS, stopping == nil, !wroteResult else { return }
+    if let reason = context.stopped() { stop(reason); return }
+    guard byteBudget.remaining > 0 else { stop("application_byte_limit"); return }
+    pendingReceives += 1
     connection.receiveMessage { [weak self] data, _, _, error in
-      guard let self, !self.wroteResult else { return }
-      if let data, data.count >= 2 {
-        self.applicationBytes += data.count
-        let id = Int(data[data.startIndex]) << 8 | Int(data[data.startIndex + 1])
-        if let expected = self.expectedDNS[id] { self.finish(id, failure: Self.dnsFailure(data, query: expected, expectedRcode: self.spec.dnsExpectedRcode!, expectedIPv4: self.spec.dnsExpectedIpv4 ?? [])) }
-        else { self.unexpectedDNS += 1 }
+      guard let self else { return }
+      self.pendingReceives -= 1
+      defer { if self.wroteResult { self.writeByteAccounting() } }
+      if let data {
+        let packet = Self.accountSharedDNS(data, pending: Set(self.expectedDNS.keys), budget: &self.byteBudget)
+        if let reason = self.context.stopped() { self.stop(reason); return }
+        switch packet {
+        case .budgetExceeded: self.stop("application_byte_limit"); return
+        case .unexpected: self.unexpectedDNS += 1
+        case .reply(let id):
+          if self.stopping == nil, let expected = self.expectedDNS[id] {
+            self.finish(id, failure: Self.dnsFailure(data, query: expected, expectedRcode: self.spec.dnsExpectedRcode!, expectedIPv4: self.spec.dnsExpectedIpv4 ?? []))
+          }
+        }
       }
+      if let reason = self.context.stopped() { self.stop(reason) }
+      guard self.stopping == nil, !self.wroteResult else { return }
       if error != nil {
         for id in Array(self.starts.keys) { self.finish(id, failure: "dns_shared_receive_error") }
       } else { self.receiveSharedDNS() }
@@ -515,9 +605,18 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
   }
 
   private func receive(_ id: Int, connection: NWConnection, expected: Data, accumulated: Data) {
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 65535) { [weak self, weak connection] data, _, done, error in
-      guard let self, let connection, self.starts[id] != nil else { return }
-      self.applicationBytes += data?.count ?? 0
+    guard stopping == nil else { return }
+    if let reason = context.stopped() { stop(reason); return }
+    guard byteBudget.remaining > 0 else { stop("application_byte_limit"); return }
+    // Never truncate a legal60000-byte UDP echo to fit a budget. TCP is a
+    // stream and can safely bound each read to remaining payload/budget.
+    let maximum = spec.kind == "tcp" ? min(4096, byteBudget.remaining, max(1, expected.count - accumulated.count)) : 65535
+    pendingReceives += 1
+    connection.receive(minimumIncompleteLength: 1, maximumLength: maximum) { [weak self, weak connection] data, _, done, error in
+      guard let self else { return }
+      self.pendingReceives -= 1
+      defer { if self.wroteResult { self.writeByteAccounting() } }
+      guard self.accountBytes(data?.count ?? 0, sending: false), let connection, self.starts[id] != nil else { return }
       let answer = accumulated + (data ?? Data())
       if answer.count > max(4096, expected.count) { self.finish(id, failure: "response_limit"); return }
       if self.spec.kind == "dns" { self.finish(id, failure: Self.dnsFailure(answer, query: expected, expectedRcode: self.spec.dnsExpectedRcode!, expectedIPv4: self.spec.dnsExpectedIpv4 ?? [])); return }
@@ -555,6 +654,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     guard stopping == nil else { return }
     stopping = reason
     context.stop(reason)
+    sharedDNS?.cancel()
     for id in Array(starts.keys) { finish(id, failure: "cancelled_\(reason)") }
   }
 
@@ -564,6 +664,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     timer?.cancel(); timer = nil
     session.invalidateAndCancel()
     sharedDNS?.cancel(); sharedDNS = nil
+    writeByteAccounting()
     let sorted = latencies.sorted()
     func percentile(_ q: Double) -> Any { sorted.isEmpty ? NSNull() : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * q))] }
     let firstPool = initialSail?["sessions"] as? [String: Any]
@@ -583,6 +684,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
       "dns_name_mode": spec.dnsNameMode as Any? ?? NSNull(), "rounds_per_echo_connection": spec.rounds,
       "target_manifest_sha256": spec.targetManifestSha256, "path_proof": "UNVERIFIED_requires_server_source_and_NE_route",
       "application_bytes": applicationBytes, "reserved_application_bytes": reservedBytes,
+      "byte_accounting_file": "byte-accounting.json", "observed_overshoot_bytes": byteBudget.overshoot,
       "elapsed_seconds": ProcessInfo.processInfo.systemUptime - started,
       "successful_latency_ms": ["p50": percentile(0.5), "p95": percentile(0.95), "p99": percentile(0.99)],
       "stop_reason": stopping ?? "count_complete", "transport": "Runner_normal_sockets_NE_path_requires_independent_confirmation"]
@@ -591,7 +693,15 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     }
     // Retain the consumed marker; only a NEW random token may run again.
     let parent = context.directory
+    let callbacksPending = pendingReceives > 0 || !pendingHTTP.isEmpty
     DispatchQueue.main.async {
+      if callbacksPending {
+        // Cancelled sockets may still deliver their one already-issued read.
+        // Account those callbacks without keeping any traffic alive. If the OS
+        // never settles them, the accounting file explicitly stays incomplete.
+        Self.settling.append(self)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.settling.removeAll { $0 === self } }
+      }
       Self.active.removeAll { $0 === self }
       if Self.active.isEmpty {
         Self.exportRawSamples(sourceDirectory: self.resourceSource.deletingLastPathComponent(), destination: parent)
@@ -663,8 +773,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
     queue.async {
+      guard self.accountBytes(data.count, sending: false) else { return }
       guard let id = self.taskOperations[dataTask.taskIdentifier] else { return }
-      self.applicationBytes += data.count
       self.responseBytes[dataTask.taskIdentifier, default: 0] += data.count
       if self.responseBytes[dataTask.taskIdentifier, default: 0] > 4096 { self.finish(id, failure: "response_limit") }
     }
@@ -684,6 +794,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
     queue.async {
+      self.pendingHTTP.remove(task.taskIdentifier)
+      defer { if self.wroteResult { self.writeByteAccounting() } }
       guard let id = self.taskOperations[task.taskIdentifier] else { return }
       if let error = error as NSError? { self.finish(id, failure: "url_error_\(error.code)") }
       else if self.spec.kind == "http3" && self.protocols[task.taskIdentifier] != "h3" { self.finish(id, failure: "http3_not_observed") }
