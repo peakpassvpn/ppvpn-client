@@ -346,6 +346,13 @@ pub(crate) struct NetworkChange {
 /// implementation serialises what sail needs serialised.
 #[async_trait]
 pub(crate) trait Runtime: Send + Sync + 'static {
+    #[cfg(feature = "internal-diagnostics")]
+    fn internal_diagnostics(&self) -> Result<serde_json::Value, RuntimeError> {
+        Err(RuntimeError::new(
+            "unsupported",
+            "internal snapshot unavailable",
+        ))
+    }
     fn observation(&self) -> crate::capture::RuntimeObservation;
     fn has_dynamic_capture(&self) -> bool {
         false

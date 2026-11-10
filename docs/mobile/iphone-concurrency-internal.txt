@@ -119,8 +119,14 @@ Evidence and outstanding integration
   diagnostic profile; never silently switch ordinary DNS to an echo fixture.
   DoT slow/out-of-order transport validation remains Sail fixture evidence until
   actually reproduced through the device with an approved controlled upstream.
-  Real Sail live/wait/limit/admitted/refused requires the forthcoming SAME-hook
-  9fd/3d internal snapshot variants. Current nulls are a BLOCKER, not zero/PASS.
+  Real Sail live/wait/limit/admitted/refused uses SAME-hook variants:
+    baseline0e8a821a329b9e4a2786593b2e2bfe3913daa12c (parent9fd)
+    candidate19a78753ee3bc1b4c0c27008b1eb450666f52900 (parent3d)
+  Snapshot is current running Instance/Dispatcher epoch, independent atomic reads.
+  Actual limit/live/waiting/admitted/refused must be present before load; otherwise
+  runner stops. Baseline waiting leak is observed, not fixed by instrumentation.
+  Counter-window deltas include background app traffic and are NOT per-lane or
+  per-operation attribution; retain sampler before/during/after drain separately.
   DoT carrier metrics stay unmeasured until the upstream interface provides them.
   Never infer them from Engine.connections(), request success, or a warning's
   10s refused counter. Entire acceptance remains incomplete without these gates.

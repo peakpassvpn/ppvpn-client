@@ -160,6 +160,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
   private var extensionPID: Int?
   private var lastResourceSequence: Int?
   private var activeRound: [Int: Int] = [:]
+  private var initialSail: [String: Any]?
+  private var latestSail: [String: Any]?
 
   static func consumeOnce() {
     guard active.isEmpty, let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
@@ -307,6 +309,16 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
         let pid = sample["pid"] as? Int else { stop("no_fresh_ne_resource_sample"); return }
       if let previous = extensionPID, previous != pid { stop("ne_process_changed") }
       extensionPID = pid
+      guard let sail = sample["sail"] as? [String: Any], let epoch = sail["epoch"] as? NSNumber,
+        let sessions = sail["sessions"] as? [String: Any],
+        (sessions["limit"] as? NSNumber)?.intValue == 128,
+        sessions["live"] is NSNumber, sessions["waiting"] is NSNumber,
+        sessions["admitted_total"] is NSNumber, sessions["refused_total"] is NSNumber else {
+        stop("missing_current_cap128_sail_snapshot"); return
+      }
+      if let initialEpoch = initialSail?["epoch"] as? NSNumber, initialEpoch != epoch { stop("sail_dispatcher_changed") }
+      if initialSail == nil { initialSail = sail }
+      latestSail = sail
       if let sequence = sample["sequence"] as? Int, lastResourceSequence != sequence {
         lastResourceSequence = sequence
         let mirror = directory.appendingPathComponent("ne-resources.jsonl")
@@ -522,9 +534,19 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     sharedDNS?.cancel(); sharedDNS = nil
     let sorted = latencies.sorted()
     func percentile(_ q: Double) -> Any { sorted.isEmpty ? NSNull() : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * q))] }
+    let firstPool = initialSail?["sessions"] as? [String: Any]
+    let lastPool = latestSail?["sessions"] as? [String: Any]
+    func delta(_ key: String) -> Any {
+      guard let before = firstPool?[key] as? NSNumber, let after = lastPool?[key] as? NSNumber,
+        after.uint64Value >= before.uint64Value else { return NSNull() }
+      return after.uint64Value - before.uint64Value
+    }
     let result: [String: Any] = ["schema": 1, "run_id": spec.runId, "kind": spec.kind,
       "offered": offered, "completed": completed, "failed_by_cause": failures,
-      "outstanding": starts.count, "admitted": NSNull(), "admitted_note": "not_exposed_by_frozen_sail",
+      "outstanding": starts.count, "admitted": NSNull(), "admitted_note": "logical_operations_not_one_to_one_with_Sail_permit_grants",
+      "sail_first_snapshot": initialSail as Any? ?? NSNull(), "sail_last_snapshot": latestSail as Any? ?? NSNull(),
+      "sail_admitted_counter_window_delta": delta("admitted_total"), "sail_refused_counter_window_delta": delta("refused_total"),
+      "sail_counter_note": "periodic_current_pool_samples_nontransactional_includes_other_application_traffic_not_per_lane_attribution",
       "dns_shared_socket": spec.dnsSharedSocket == true, "dns_unexpected_or_late_id": unexpectedDNS,
       "dns_name_mode": spec.dnsNameMode as Any? ?? NSNull(), "rounds_per_echo_connection": spec.rounds,
       "target_manifest_sha256": spec.targetManifestSha256, "path_proof": "UNVERIFIED_requires_server_source_and_NE_route",

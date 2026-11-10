@@ -51,17 +51,22 @@ final class InternalResourceSampler {
       }
     }
     if sequence % 5 == 0 { fd = Self.descriptors() }
+    let native = TunnelHost.packetDiagnostics()
+    let sail = native["sail"] as? [String: Any]
+    let sessions = sail?["sessions"] as? [String: Any]
     var row: [String: Any] = [
       "schema": 1, "kind": "ne_resource", "pid": getpid(), "epoch": epoch,
       "sequence": sequence, "unix_seconds": Date().timeIntervalSince1970,
       "uptime_seconds": started, "final": final,
       "task_info_status": status, "fd": fd,
-      "packet_transport": TunnelHost.packetDiagnostics(),
+      "packet_transport": native,
       "available_memory_bytes": os_proc_available_memory(),
       "sample_elapsed_ms": (ProcessInfo.processInfo.systemUptime - started) * 1000,
-      // Explicit nulls: these are NOT approximated from Engine.connections().
-      "sessions_live": NSNull(), "sessions_waiting": NSNull(),
-      "dns_carriers": NSNull(), "sail_metrics": "not_exposed_by_frozen_sail"
+      "sail": sail as Any? ?? NSNull(),
+      "sessions_live": sessions?["live"] ?? NSNull(),
+      "sessions_waiting": sessions?["waiting"] ?? NSNull(),
+      "dns_carriers": sail?["dot_live_carriers"] ?? NSNull(),
+      "sail_metrics": sail == nil ? "unavailable_current_runtime" : "current_dispatcher_nontransactional_snapshot"
     ]
     if status == KERN_SUCCESS {
       row["phys_footprint_bytes"] = info.phys_footprint
