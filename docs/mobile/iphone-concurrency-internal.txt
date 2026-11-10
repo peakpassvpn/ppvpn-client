@@ -24,6 +24,12 @@ Source
   traffic, NOT extension-internal engine dial. Route proof remains separate.
 
 Filesystem (only root device owner stages/launches/copies)
+  Offline staging helper: tools/apple/prepare_iphone_concurrency_spec.py
+    --draft <load-controls.json> --manifest <reviewed-targets.json> --out <NEW-dir>
+  It stamps fresh run identity/expiry and exact manifest digest, writes mode0600
+  request/manifest and fixture-authorization.json (compatible with root server's
+  --token-file), prints no capability, and never launches/copies/opens sockets.
+  Native validation remains authoritative; helper output is not a run approval.
   App Documents/PPVPNConcurrencyDiagnostics/request.json
   App Documents/PPVPNConcurrencyDiagnostics/approved-targets.json
   App Documents/PPVPNConcurrencyDiagnostics/<run_id>/consumed.txt

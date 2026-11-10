@@ -35,6 +35,11 @@ struct InternalProbeChecks {
     check(try !approved.permits(spec(["port": 54]), now: 1000), "port mismatch refused")
     check(try !approved.permits(spec(["dns_name": "unreviewed.example.com"]), now: 1000), "DNS suffix mismatch refused")
     check(try !approved.permits(spec(), now: 1200), "expired manifest")
+    let observer = InternalLoadProbe.TargetManifest(schema: 1, expiresUnix: 1100, requiredPath: "ne_proxy", endpoints: [
+      .init(kind: "http3", host: "www.peakpass.dev", port: 443, httpPath: "/robots.txt", https: true, dnsSuffix: nil, purpose: "h3_observer")])
+    let h3: [String: Any] = ["kind": "http3", "host": "www.peakpass.dev", "port": 443, "http_path": "/robots.txt", "https": true, "count": 3, "concurrency": 1, "per_second": 1]
+    check(try observer.permits(spec(h3), now: 1000), "owned observer low-rate path")
+    check(try !observer.permits(spec(h3.merging(["count": 4]) { _, new in new }), now: 1000), "production observer never becomes pressure fixture")
     let fixed1 = InternalLoadProbe.makeDNSQuery(1, runId: "abcdef12", name: "example.com", mode: "fixed_cache")
     let fixed2 = InternalLoadProbe.makeDNSQuery(2, runId: "abcdef12", name: "example.com", mode: "fixed_cache")
     let cold1 = InternalLoadProbe.makeDNSQuery(1, runId: "abcdef12", name: "example.com", mode: "per_id")

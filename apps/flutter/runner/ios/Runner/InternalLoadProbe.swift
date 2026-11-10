@@ -345,7 +345,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
       components.host = spec.host; components.port = Int(spec.port); components.path = spec.httpPath ?? "/"
       guard let url = components.url else { finish(id, failure: "invalid_url"); return }
       var request = URLRequest(url: url)
-      if spec.kind == "http" { request.setValue(spec.runToken, forHTTPHeaderField: "X-PPVPN-Run") }
+      if spec.kind == "http" { request.setValue(spec.runToken.lowercased(), forHTTPHeaderField: "X-PPVPN-Run") }
       request.setValue("bytes=0-1023", forHTTPHeaderField: "Range")
       if spec.kind == "http3" { request.assumesHTTP3Capable = true }
       let task = session.dataTask(with: request)
@@ -386,7 +386,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
   }
 
   static func makeEchoPayload(token: String, id: Int, round: Int, count: Int) -> Data {
-    let header = [UInt8]("PPVPN1 \(token) \(id * 8 + round)\n".utf8)
+    let header = [UInt8]("PPVPN1 \(token.lowercased()) \(id * 8 + round)\n".utf8)
     return Data(header + Array(repeating: UInt8(0x5a), count: count - header.count))
   }
 
