@@ -24,6 +24,23 @@ Source
   traffic, NOT extension-internal engine dial. Route proof remains separate.
 
 Filesystem (only root device owner stages/launches/copies)
+  DO NOT terminate/relaunch an existing Runner to trigger a run or export.
+  Internal-only metadata inbox watcher arms on initial plugin registration and
+  ordinary application foreground, runs at1Hz for15min then stops. It stats ONLY
+  request.json/export-request.json; unchanged inputs cause no reads/exports.
+  Documents/PPVPNConcurrencyDiagnostics/trigger-status.json reports watcher PID,
+  active/window expiry and last result. Require same live Runner PID and active
+  unexpired window. A foreground transition can rearm an expired window without
+  restarting Runner/NE. iOS may suspend background Runner; keep it foreground
+  for trigger consumption and first workload. This does not keep it alive.
+  Stage existing request.json while active; format and consumed marker unchanged.
+  For idle/raw export stage export-request.json:
+    {"schema":1,"action":"export","trigger_id":"<fresh UUID>","expires_unix":<future<=300s>}
+  Input<=2048bytes, one-shot recent-nonce rejection, no capability token or URLs.
+  It exports ONLY the existing two sampler files and restarts the120s idle mirror.
+  Match trigger-status export_trigger_id and inspect raw-export-status.json;
+  "processed" is not a claim of fresh/complete data. No request or export path
+  invokes VPN start/stop, node/mode changes, login or backend APIs on its own.
   Offline staging helper: tools/apple/prepare_iphone_concurrency_spec.py
     --draft <load-controls.json> --manifest <reviewed-targets.json> --out <NEW-dir>
   It stamps fresh run identity/expiry and exact manifest digest, writes mode0600
@@ -38,12 +55,12 @@ Filesystem (only root device owner stages/launches/copies)
   App Documents/PPVPNConcurrencyDiagnostics/<run_id>/lane-N-KIND/ne-resources.jsonl
   App Documents/PPVPNConcurrencyDiagnostics/<run_id>/summary.json
   App Documents/PPVPNConcurrencyDiagnostics/<run_id>/STOP (empty file cancels test only)
-  On launch and after all lanes finish, copy ONLY sampler ne-resources.jsonl and
+  On initial launch, explicit in-process export and after all lanes finish, copy ONLY sampler ne-resources.jsonl and
   ne-resources.previous.jsonl (<=2MiB each) into the Documents diagnostics base
   or run directory, with raw-export-status.json. No Group directory scan occurs.
-  A later fresh Runner launch exports the NE history while Runner was absent;
+  A later in-process export retrieves NE history while Runner was absent;
   inspect pid/epoch/timestamps and rotation coverage, not an assumed gap-free log.
-  Before any load, launch alone mirrors up to120s of idle NE samples into
+  Before any load, initial launch or explicit export mirrors up to120s of idle NE samples into
   Documents/PPVPNConcurrencyDiagnostics/preflight-ne-resources.jsonl, retaining
   one previous file. preflight-status.json reports a missing source, never a PASS.
   The bridge resolves the actual AppGroup through Foundation; it reads only

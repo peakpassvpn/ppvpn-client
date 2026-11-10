@@ -172,6 +172,104 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
   private static var active: [InternalLoadProbe] = [] // main queue only
   private static var settling: [InternalLoadProbe] = [] // bounded cancelled-callback accounting grace
   private static var preflightTimer: DispatchSourceTimer?
+  private static var triggerTimer: DispatchSourceTimer?
+  private static var triggerDeadline = 0.0
+  private static var triggerGeneration = 0
+  private static var exportNonces: [UUID] = []
+
+  struct ExportCommand: Decodable {
+    let schema: Int
+    let action: String
+    let triggerId: UUID
+    let expiresUnix: Double
+    func valid(now: Double) -> Bool { schema == 1 && action == "export" && expiresUnix > now && expiresUnix <= now + 300 }
+  }
+
+  static func decodeExportCommand(_ data: Data, now: Double) -> ExportCommand? {
+    guard data.count <= 2048 else { return nil }
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    guard let command = try? decoder.decode(ExportCommand.self, from: data), command.valid(now: now) else { return nil }
+    return command
+  }
+
+  struct TriggerGate {
+    private var observed: [String: String] = [:]
+    private var claimed: [String: String] = [:]
+    private var retryAfter: [String: Double] = [:]
+    mutating func shouldAttempt(_ name: String, fingerprint: String, now: Double) -> Bool {
+      guard claimed[name] != fingerprint else { return false }
+      let changed = observed[name] != fingerprint
+      observed[name] = fingerprint
+      guard changed || now >= retryAfter[name, default: 0] else { return false }
+      retryAfter[name] = now + 2
+      return true
+    }
+    mutating func didClaim(_ name: String, fingerprint: String) { claimed[name] = fingerprint }
+  }
+
+  /// A bounded, metadata-only inbox check in the EXISTING Runner process.
+  /// Startup/foreground can arm it; it never starts/stops/relaunches the VPN.
+  static func armTriggerWindow() {
+    let now = Date().timeIntervalSince1970
+    if triggerTimer != nil && now < triggerDeadline { return }
+    triggerTimer?.setEventHandler {}; triggerTimer?.cancel()
+    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+    let base = documents.appendingPathComponent("PPVPNConcurrencyDiagnostics")
+    try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    triggerDeadline = now + 900
+    triggerGeneration += 1
+    let generation = triggerGeneration
+    var gate = TriggerGate()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now(), repeating: .seconds(1), leeway: .milliseconds(100))
+    func status(_ result: String, nonce: UUID? = nil, active: Bool = true) {
+      var row: [String: Any] = ["schema": 1, "pid": ProcessInfo.processInfo.processIdentifier,
+        "watcher_active": active, "window_expires_unix": triggerDeadline, "result": result,
+        "unix_seconds": Date().timeIntervalSince1970]
+      if let nonce { row["export_trigger_id"] = nonce.uuidString.lowercased() }
+      if let bytes = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) {
+        try? bytes.write(to: base.appendingPathComponent("trigger-status.json"), options: .atomic)
+      }
+    }
+    timer.setEventHandler {
+      guard generation == triggerGeneration else { return }
+      if Date().timeIntervalSince1970 >= triggerDeadline {
+        timer.setEventHandler {}; timer.cancel(); triggerTimer = nil
+        status("window_expired", active: false); return
+      }
+      for name in ["request.json", "export-request.json"] {
+        if name == "request.json" && !Self.active.isEmpty { continue }
+        let path = base.appendingPathComponent(name)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path.path),
+          let size = attributes[.size] as? NSNumber, let modified = attributes[.modificationDate] as? Date else { continue }
+        let fingerprint = "\(size)|\(modified.timeIntervalSince1970)|\(attributes[.systemFileNumber] ?? "")"
+        guard gate.shouldAttempt(name, fingerprint: fingerprint, now: Date().timeIntervalSince1970) else { continue }
+        if name == "request.json" {
+          if consumeOnce(exportIdle: false) {
+            gate.didClaim(name, fingerprint: fingerprint)
+            status("request_claimed")
+          } else { status("request_pending_or_rejected_see_consumed_marker") }
+        } else {
+          guard size.intValue <= 2048, let bytes = try? Data(contentsOf: path),
+            let command = decodeExportCommand(bytes, now: Date().timeIntervalSince1970),
+            !exportNonces.contains(command.triggerId),
+            let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.peakpassvpn.ppvpn") else {
+            status("export_rejected"); continue
+          }
+          do { try FileManager.default.removeItem(at: path) } catch { status("export_claim_failed"); continue }
+          gate.didClaim(name, fingerprint: fingerprint)
+          exportNonces.append(command.triggerId)
+          if exportNonces.count > 32 { exportNonces.removeFirst() }
+          exportRawSamples(sourceDirectory: container.appendingPathComponent("data/diagnostics"), destination: base)
+          startPreflightMirror(base: base, source: container.appendingPathComponent("data/diagnostics/ne-latest.json"), restart: true)
+          status("export_processed_check_raw_export_status", nonce: command.triggerId)
+        }
+      }
+    }
+    triggerTimer = timer
+    status("window_armed")
+    timer.resume()
+  }
   private let spec: Spec
   private let directory: URL
   private let resourceSource: URL
@@ -210,40 +308,43 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
   private var pendingReceives = 0
   private var pendingHTTP: Set<Int> = []
 
-  static func consumeOnce() {
+  @discardableResult
+  static func consumeOnce(exportIdle: Bool = true) -> Bool {
     guard active.isEmpty, let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
-      let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.peakpassvpn.ppvpn") else { return }
+      let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.peakpassvpn.ppvpn") else { return false }
     let base = documents.appendingPathComponent("PPVPNConcurrencyDiagnostics")
     try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     try? Data("internal_release_entry_ready\n".utf8).write(to: base.appendingPathComponent("entry-ready.txt"), options: .atomic)
-    exportRawSamples(sourceDirectory: container.appendingPathComponent("data/diagnostics"), destination: base)
-    startPreflightMirror(base: base, source: container.appendingPathComponent("data/diagnostics/ne-latest.json"))
+    if exportIdle {
+      exportRawSamples(sourceDirectory: container.appendingPathComponent("data/diagnostics"), destination: base)
+      startPreflightMirror(base: base, source: container.appendingPathComponent("data/diagnostics/ne-latest.json"))
+    }
     let request = base.appendingPathComponent("request.json")
     guard let size = (try? request.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= 262144,
-      let data = try? Data(contentsOf: request) else { return }
+      let data = try? Data(contentsOf: request) else { return false }
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     guard let specs = decodeRequest(data, now: Date().timeIntervalSince1970), let spec = specs.first else {
       try? Data("invalid_or_expired_spec\n".utf8).write(to: base.appendingPathComponent("request-rejected.txt"), options: .atomic)
-      return
+      return false
     }
     guard let manifestData = try? Data(contentsOf: base.appendingPathComponent("approved-targets.json")), manifestData.count <= 16384,
       SHA256.hash(data: manifestData).map({ String(format: "%02x", $0) }).joined() == spec.targetManifestSha256,
       let manifest = try? decoder.decode(TargetManifest.self, from: manifestData),
       specs.allSatisfy({ manifest.permits($0, now: Date().timeIntervalSince1970) }) else {
       try? Data("missing_mismatched_or_expired_target_manifest\n".utf8).write(to: base.appendingPathComponent("request-rejected.txt"), options: .atomic)
-      return
+      return false
     }
     let directory = base.appendingPathComponent(spec.runId)
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let consumed = directory.appendingPathComponent("consumed.txt")
-    guard !FileManager.default.fileExists(atPath: consumed.path) else { return }
+    guard !FileManager.default.fileExists(atPath: consumed.path) else { return false }
     let claimed = directory.appendingPathComponent("claimed-request.json")
     do {
       try FileManager.default.moveItem(at: request, to: claimed)
       try Data("consumed\n".utf8).write(to: consumed, options: .atomic)
       try FileManager.default.removeItem(at: claimed)
-    } catch { return }
+    } catch { return false }
     let context = RunContext(directory: directory, expectedLanes: specs.count)
     active = specs.enumerated().map { index, spec in
       let lane = directory.appendingPathComponent("lane-\(index)-\(spec.kind)")
@@ -252,10 +353,11 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
         resourceSource: container.appendingPathComponent("data/diagnostics/ne-latest.json"), context: context)
     }
     for probe in active { probe.queue.async { probe.start() } }
+    return true
   }
 
   /// Copy ONLY the two bounded sampler streams via the app's real Group URL.
-  /// On a later fresh Runner launch this also retrieves >5min ordinary-UDP
+  /// On a later in-process export this also retrieves >5min ordinary-UDP
   /// drain history; it does not require Runner to stay alive during that wait.
   private static func exportRawSamples(sourceDirectory: URL, destination: URL) {
     var files: [String: Any] = [:]
@@ -287,7 +389,8 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
 
   /// Allows root to obtain idle extension samples BEFORE choosing explicit load
   /// stop thresholds. No socket or traffic is opened by this 120-second bridge.
-  private static func startPreflightMirror(base: URL, source: URL) {
+  private static func startPreflightMirror(base: URL, source: URL, restart: Bool = false) {
+    if restart { preflightTimer?.setEventHandler {}; preflightTimer?.cancel(); preflightTimer = nil }
     guard preflightTimer == nil else { return }
     let queue = DispatchQueue(label: "com.peakpassvpn.ppvpn.ne-resource-mirror", qos: .utility)
     let path = base.appendingPathComponent("preflight-ne-resources.jsonl")
@@ -309,7 +412,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
         let value: [String: Any] = ["unix_seconds": Date().timeIntervalSince1970, "ne_sample": "missing_or_unreadable", "app_group_resolved": true]
         if let data = try? JSONSerialization.data(withJSONObject: value) { try? data.write(to: base.appendingPathComponent("preflight-status.json"), options: .atomic) }
       }
-      if ticks >= 120 { timer.cancel() }
+      if ticks >= 120 { timer.setEventHandler {}; timer.cancel() }
     }
     preflightTimer = timer
     timer.resume()
