@@ -21,6 +21,11 @@
 extern "C" {
 #endif
 
+#ifdef PPVPN_INTERNAL_DIAGNOSTICS
+/* Internal builds only; same owned/free_string contract, no writes. */
+char *ppvpn_tunnel_internal_packet_diagnostics(void);
+#endif
+
 #define PPVPN_TUNNEL_PLATFORM_IOS 1
 #define PPVPN_TUNNEL_PLATFORM_ANDROID 2
 

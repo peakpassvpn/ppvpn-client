@@ -1,0 +1,120 @@
+Internal Release iPhone concurrency acceptance (2026-11-11)
+
+Ownership and build
+  Baseline product is 9e8b9a9f201abe2525d2f377a021d4d37effb950 (345).
+  Use identical diagnostic source on baseline and A-D candidate, cap128,
+  udp.session_check_interval=1s, ordinary UDP TTL unchanged. Product build,
+  signing and device mutation have one owner each; this helper does neither.
+  PPVPN_INTERNAL_DIAGNOSTICS=1 must reach both build-xcframework.sh and
+  ci-build.sh/ios-tunnel-target.rb. It enables the Rust internal-diagnostics
+  feature and Swift/C compilation condition on the NE target; Swift on Runner.
+  Retain the normal mobile Rust profile and Xcode Release optimization/signing.
+  With the flag absent, no sampler/load class is emitted, no entry is invoked,
+  and no packet counter hot-path instrumentation is compiled.
+
+Source
+  runner/ios/PacketTunnel/InternalResourceSampler.swift: actual NE task_info
+  phys_footprint, os_proc_available_memory, F_GETFD descriptor scan (5s; limit
+  and truncation reported), packet transport counters; 1Hz samples, 2MiB+one
+  previous log, no connection policy change.
+  crates/tunnel-host/src/packets.rs: internal-only actual send offered/rejected
+  and output drop process totals; queued uplink depth. Rejected includes full,
+  closed and stale generation. These are not admission/session counters.
+  runner/ios/Runner/InternalLoadProbe.swift: Runner normal socket/URLSession
+  traffic, NOT extension-internal engine dial. Route proof remains separate.
+
+Filesystem (only root device owner stages/launches/copies)
+  App Documents/PPVPNConcurrencyDiagnostics/request.json
+  App Documents/PPVPNConcurrencyDiagnostics/approved-targets.json
+  App Documents/PPVPNConcurrencyDiagnostics/<run_id>/consumed.txt
+  App Documents/PPVPNConcurrencyDiagnostics/<run_id>/lane-N-KIND/progress.json
+  App Documents/PPVPNConcurrencyDiagnostics/<run_id>/lane-N-KIND/result.json
+  App Documents/PPVPNConcurrencyDiagnostics/<run_id>/lane-N-KIND/ne-resources.jsonl
+  App Documents/PPVPNConcurrencyDiagnostics/<run_id>/summary.json
+  App Documents/PPVPNConcurrencyDiagnostics/<run_id>/STOP (empty file cancels test only)
+  Before any load, launch alone mirrors up to120s of idle NE samples into
+  Documents/PPVPNConcurrencyDiagnostics/preflight-ne-resources.jsonl, retaining
+  one previous file. preflight-status.json reports a missing source, never a PASS.
+  The bridge resolves the actual AppGroup through Foundation; it reads only
+  group.com.peakpassvpn.ppvpn/data/diagnostics/ne-latest.json.
+  Provider writes there; root need not enumerate/copy the AppGroup container.
+  App Documents old PPVPNLiveDiagnostics20 is historical and unused here.
+
+Request schema (JSON snake_case, schema1)
+  run_id: random UUID for public correlation; unique per run.
+  run_token: DIFFERENT random UUID test capability; no account token. Never
+    written to result/progress/summary. Consumed request is removed before load.
+    Raw TCP/UDP and HTTP fixture auth use it, so keep root input private.
+  expires_unix: future within300s at consumption; expired/replayed/invalid does
+    not run. Each run_id consumed once; copying another request with that ID
+    does not resume it. Rejected requests produce a fixed reason text only.
+  target_manifest_sha256: lowercase SHA256 of exact approved-targets.json bytes.
+  kind: tcp|udp|dns|http|http3; host and port must EXACTLY match reviewed manifest.
+  count1..2048; concurrency1..256; per_second1..400; duration_seconds1..120.
+    These are logical application operations, NOT actual Sail session counts.
+  max_application_bytes8192..8388608; reserve maximum payload before offering.
+    Counts include offered application payload and received body, not wire
+    headers/retransmissions. Per-response HTTP limit4096, Range bytes0-1023,
+    Content-Length must be known and <=4096 before receiving the body.
+  min_available_bytes: explicit per-run threshold, validation floor8MiB.
+  max_footprint_bytes: explicit per-run threshold chosen AFTER idle measurement.
+  max_consecutive_failures1..32; operation_timeout_seconds1..30.
+  payload_bytes64..60000; write_chunks1..64 (TCP only >1; header+one byte per
+    remaining chunk must fit); write_interval_ms0..1000; read_delay_ms0..5000.
+  rounds1..8 and round_interval_ms0..1000 (multiple rounds TCP/UDP only).
+    Total slow write+read+round delays plus1s must fit operation timeout.
+    count/per_second offering time+operation timeout must fit stage duration.
+  dns_name, dns_name_mode=fixed_cache|per_id, dns_expected_rcode=0|3,
+    dns_expected_ipv4 exact A address set for rcode0, dns_shared_socket bool.
+    per_id prepends a run-specific+numericID label (suffix<=230 chars); actual
+    qnames differ, not only IDs. fixed_cache explicitly tests the cache path.
+    Endpoint manifest must approve the exact dns_suffix. Header, question, ID,
+    TC, rcode and A answer set checked. TCP/UDP echo is NOT a DNS/DoT test.
+  http_path optional exact path, no query/fragment; https optional exact bool.
+    HTTPS uses normal trust validation. Never add a trust bypass for fixtures.
+
+Mixed stages
+  Optional workloads:[{... lane overrides ...}, ...] for1..4 simultaneous lanes.
+  Shared top-level fields supply defaults; lane overrides cannot replace schema,
+  run_id/token/expiry, manifest hash, memory thresholds or overall duration.
+  Sum of lane count<=2048, concurrency<=256, pace<=400/s, byte reservations<=8MiB.
+  A guard hit in any lane cancels only this batch's connections across all lanes.
+  Resource stale>5s, NE PID change/final sample/missing sample, low headroom,
+  footprint threshold, repeated failures, duration, bytes or operator STOP
+  cancel the batch. Never stop VPN or another app's healthy long-lived stream.
+
+Target manifest schema
+  {schema:1, expires_unix:..., required_path:"ne_proxy"|"ne_direct",
+   endpoints:[{kind,host,port,purpose,http_path?,https?,dns_suffix?}, ...]}
+  purpose=fixture for reviewed isolated fixture only; root records deployment
+  scope before any public endpoint. No listener is started by this app.
+  purpose=h3_observer permits only http3, HTTPS, <=3 operations, concurrency1,
+  pace1/s. This is a low-rate observation, never production web/API pressure.
+  http3 success requires URLSession metrics networkProtocolName==h3; assumptions,
+  UDP echo and h2 fallback are not QUIC acceptance. Plain root fixture has no QUIC.
+  Do not send an HTTP fixture auth token to an http3 observer.
+  Private/LAN target is not automatically proxy-routed. Result path_proof is
+  UNVERIFIED until root joins server observed source with actual NE route and
+  connection evidence. Connect/echo success alone cannot satisfy this gate.
+
+Root fixture protocol
+  TCP/UDP: PPVPN1 <UUID runToken> <numeric id> followed by newline and0x5a fill;
+  numeric id=operation_index*8+round, preventing round ambiguity. TCP first write
+  covers the complete header. Raw fixture echoes exact bytes.
+  HTTP: X-PPVPN-Run header, Range request, bounded1024-byte fixture response,
+  ephemeral session with no cookies/credentials/cache or redirect following.
+  Large-UDP socket-buffer failure must be separated from core failure. The
+  fixture's explicit per-socket buffer settings are not OS-wide tuning.
+
+Evidence and outstanding integration
+  Root must supply reviewed targets, freeze manifest bytes and authorized server
+  token window, and retain server-side counts/observed source independently.
+  DNS real upstream remains unchanged unless root separately selects an explicit
+  diagnostic profile; never silently switch ordinary DNS to an echo fixture.
+  DoT slow/out-of-order transport validation remains Sail fixture evidence until
+  actually reproduced through the device with an approved controlled upstream.
+  Real Sail live/wait/limit/admitted/refused requires the forthcoming SAME-hook
+  9fd/3d internal snapshot variants. Current nulls are a BLOCKER, not zero/PASS.
+  DoT carrier metrics stay unmeasured until the upstream interface provides them.
+  Never infer them from Engine.connections(), request success, or a warning's
+  10s refused counter. Entire acceptance remains incomplete without these gates.

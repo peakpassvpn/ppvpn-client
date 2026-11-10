@@ -23,11 +23,39 @@ static CHANNELS: Mutex<Option<Channels>> = Mutex::new(None);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 const LEASE: &str = "ios-public-packet-flow";
 
-pub(crate) fn send(generation: u64, bytes: &[u8]) -> bool {
+#[cfg(feature = "internal-diagnostics")]
+static INPUT_OFFERED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "internal-diagnostics")]
+static INPUT_REJECTED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "internal-diagnostics")]
+static OUTPUT_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "internal-diagnostics")]
+pub(crate) fn diagnostics() -> serde_json::Value {
     let slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
-    slot.as_ref()
+    serde_json::json!({
+        "generation": slot.as_ref().map(|c| c.generation),
+        "input_queued": slot.as_ref().map(|c| c.input.max_capacity() - c.input.capacity()),
+        "input_offered_process_total": INPUT_OFFERED.load(Ordering::Relaxed),
+        "input_rejected_process_total": INPUT_REJECTED.load(Ordering::Relaxed),
+        "output_dropped_process_total": OUTPUT_DROPPED.load(Ordering::Relaxed),
+        "note": "process totals; rejected includes full/closed/stale generation; nontransactional counters"
+    })
+}
+
+pub(crate) fn send(generation: u64, bytes: &[u8]) -> bool {
+    #[cfg(feature = "internal-diagnostics")]
+    INPUT_OFFERED.fetch_add(1, Ordering::Relaxed);
+    let slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
+    let accepted = slot
+        .as_ref()
         .filter(|c| c.generation == generation)
-        .is_some_and(|c| c.input.try_send(bytes.to_vec()).is_ok())
+        .is_some_and(|c| c.input.try_send(bytes.to_vec()).is_ok());
+    #[cfg(feature = "internal-diagnostics")]
+    if !accepted {
+        INPUT_REJECTED.fetch_add(1, Ordering::Relaxed);
+    }
+    accepted
 }
 pub(crate) fn receive(generation: u64, bytes: &mut [u8]) -> usize {
     let slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
@@ -232,7 +260,14 @@ impl CaptureAttachment for Attachment {
                 tokio::select! { biased;
                     _ = stopped_down.changed() => return,
                     packet = flow.downlink.recv() => match packet {
-                        Some(packet) => { let _ = output.try_send(packet); },
+                        Some(packet) => {
+                            let sent = output.try_send(packet);
+                            #[cfg(feature = "internal-diagnostics")]
+                            if sent.is_err() {
+                                OUTPUT_DROPPED.fetch_add(1, Ordering::Relaxed);
+                            }
+                            let _ = sent;
+                        },
                         None => return,
                     }
                 }
@@ -354,9 +389,25 @@ mod tests {
             output: down,
             end,
         });
+        #[cfg(feature = "internal-diagnostics")]
+        let before = diagnostics();
         assert!(!send(122, &[0x45, 1]));
         assert!(send(123, &[0x45, 2]));
         assert!(!send(123, &[0x45, 3]));
+        #[cfg(feature = "internal-diagnostics")]
+        {
+            let sample = diagnostics();
+            assert_eq!(sample["generation"], 123);
+            assert_eq!(sample["input_queued"], 1);
+            assert_eq!(
+                sample["input_offered_process_total"].as_u64().unwrap(),
+                before["input_offered_process_total"].as_u64().unwrap() + 3
+            );
+            assert_eq!(
+                sample["input_rejected_process_total"].as_u64().unwrap(),
+                before["input_rejected_process_total"].as_u64().unwrap() + 2
+            );
+        }
         assert_eq!(rx.try_recv().unwrap(), [0x45, 2]);
         output.try_send(vec![0x60, 7]).unwrap();
         let mut buffer = [0; 8];

@@ -22,6 +22,11 @@ abort "usage: ios-tunnel-target.rb <project> <version> <build>" unless build
 
 project = Xcodeproj::Project.open(project_path)
 runner = project.targets.find { |target| target.name == "Runner" } or abort "#{project_path}: no Runner target"
+if ENV["PPVPN_INTERNAL_DIAGNOSTICS"] == "1"
+  runner.build_configurations.each do |config|
+    config.build_settings["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = ["$(inherited)", "PPVPN_INTERNAL_DIAGNOSTICS"]
+  end
+end
 abort "#{project_path}: PacketTunnel exists already" if project.targets.any? { |target| target.name == "PacketTunnel" }
 
 # Generic simulator destinations also select x86_64 on ARM hosts. Both Rust
@@ -45,7 +50,7 @@ arm64_simulator(tunnel)
 group = project.main_group.find_subpath("PacketTunnel", true)
 group.set_source_tree("<group>")
 group.set_path("PacketTunnel")
-sources = %w[PacketTunnelProvider.swift TunnelHost.swift].map { |name| group.new_reference(name) }
+sources = %w[PacketTunnelProvider.swift TunnelHost.swift InternalResourceSampler.swift].map { |name| group.new_reference(name) }
 shared = project.main_group.find_subpath("Shared", true)
 shared.set_source_tree("<group>")
 shared.set_path("Shared")
@@ -79,10 +84,18 @@ tunnel.build_configurations.each do |config|
   settings["IPHONEOS_DEPLOYMENT_TARGET"] = "15.0"
   settings["TARGETED_DEVICE_FAMILY"] = "1,2"
   settings["SWIFT_VERSION"] = "5.0"
+  # Explicit internal Release build only. Never follows Debug/Profile implicitly.
+  if ENV["PPVPN_INTERNAL_DIAGNOSTICS"] == "1"
+    settings["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = ["$(inherited)", "PPVPN_INTERNAL_DIAGNOSTICS"]
+    settings["OTHER_SWIFT_FLAGS"] = ["$(inherited)", "-Xcc", "-DPPVPN_INTERNAL_DIAGNOSTICS"]
+    internal_exports = File.join(File.dirname(project_path), "PacketTunnel", "InternalTunnel.exports")
+    File.write(internal_exports, File.read(File.join(File.dirname(project_path), "PacketTunnel", "Tunnel.exports")) + "\n_ppvpn_tunnel_internal_packet_diagnostics\n")
+    settings["EXPORTED_SYMBOLS_FILE"] = "$(PROJECT_DIR)/PacketTunnel/InternalTunnel.exports"
+  end
   settings["SKIP_INSTALL"] = "YES"
   settings["APPLICATION_EXTENSION_API_ONLY"] = "YES"
   settings["DEAD_CODE_STRIPPING"] = "YES"
-  settings["EXPORTED_SYMBOLS_FILE"] = "$(PROJECT_DIR)/PacketTunnel/Tunnel.exports"
+  settings["EXPORTED_SYMBOLS_FILE"] ||= "$(PROJECT_DIR)/PacketTunnel/Tunnel.exports"
   # The system limits the extension to 50 MiB (#388): no debug dylib.
   settings["ENABLE_DEBUG_DYLIB"] = "NO"
   libs = ENV["PPVPN_TUNNEL_LIBS"].to_s.split

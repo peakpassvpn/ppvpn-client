@@ -46,10 +46,11 @@ for slice in "${slices[@]}"; do
 	esac
 	rustup target add "$triple" >/dev/null
 	log="$out/build-$triple.log"
+    rust_args=(rustc --locked --color never --profile mobile -p ppvpn-tunnel-host --lib --crate-type staticlib --target "$triple")
+    if [[ "${PPVPN_INTERNAL_DIAGNOSTICS:-0}" == "1" ]]; then rust_args+=(--features internal-diagnostics); fi
 	# Without colour: CARGO_TERM_COLOR=always (ci.yml) would end the line
 	# read below with an escape sequence, and the last flag with it.
-	if ! cargo rustc --locked --color never --profile mobile -p ppvpn-tunnel-host --lib --crate-type staticlib \
-		--target "$triple" -- --print native-static-libs 2>"$log"; then
+	if ! cargo "${rust_args[@]}" -- --print native-static-libs 2>"$log"; then
 		tail -50 "$log" >&2
 		exit 1
 	fi
@@ -62,6 +63,7 @@ for slice in "${slices[@]}"; do
 	# from a file: grep -q ending a pipe early fails the pipe (pipefail).
 	nm -gU "$lib" 2>/dev/null >"$headers/symbols" || true
 	for symbol in $(sed -n 's/^[^#/ *].*\(ppvpn_tunnel_[a-z_]*\)(.*/\1/p' crates/tunnel-host/include/ppvpn_tunnel.h); do
+        if [[ "$symbol" == ppvpn_tunnel_internal_packet_diagnostics && "${PPVPN_INTERNAL_DIAGNOSTICS:-0}" != "1" ]]; then continue; fi
 		grep -q " _$symbol\$" "$headers/symbols" || { echo "$lib lacks $symbol; its ppvpn_tunnel symbols:" >&2; grep ppvpn_tunnel "$headers/symbols" >&2 || true; exit 1; }
 	done
 	rm -f "$headers/symbols"

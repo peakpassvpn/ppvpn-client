@@ -48,6 +48,11 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   static func register(with registrar: FlutterPluginRegistrar) {
     PPVPNNativeChrome.register(with: registrar)
     let plugin = PPVPNPlugin()
+    #if PPVPN_INTERNAL_DIAGNOSTICS
+      // Root stages a one-shot AppGroup spec before launch; no UI automation or
+      // debugger needed. Invalid/expired/replayed requests never emit traffic.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { InternalLoadProbe.consumeOnce() }
+    #endif
     let messenger = registrar.messenger()
     #if targetEnvironment(simulator)
       VMServiceAnnouncer.start(registrar)

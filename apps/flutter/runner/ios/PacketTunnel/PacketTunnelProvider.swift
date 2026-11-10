@@ -22,6 +22,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private let queue = DispatchQueue(label: "com.peakpassvpn.ppvpn.tunnel")
   private var monitor: NWPathMonitor?
   private var host: TunnelHost?
+  #if PPVPN_INTERNAL_DIAGNOSTICS
+    private var resourceSampler: InternalResourceSampler?
+  #endif
   private var lifecycleEpoch: UInt64 = 0
   private var stopping = false
   private var starting = false
@@ -129,6 +132,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
           }
           self.log.info("tunnel started")
+          #if PPVPN_INTERNAL_DIAGNOSTICS
+            let sampler = InternalResourceSampler(directory: dataDir.appendingPathComponent("diagnostics"), epoch: epoch)
+            self.resourceSampler = sampler
+            sampler.start()
+          #endif
           completionHandler(nil)
         } catch {
           self.log.error("start: \(error.localizedDescription, privacy: .public)")
@@ -164,6 +172,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       lifecycleEpoch &+= 1
       stopWatching()
       fencePackets()
+      #if PPVPN_INTERNAL_DIAGNOSTICS
+        resourceSampler?.stop()
+        resourceSampler = nil
+      #endif
       let old = host
       host = nil
       return old

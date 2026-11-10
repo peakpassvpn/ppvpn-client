@@ -262,7 +262,7 @@ open(path, "w").write(text)
 
 delegate = "ios/Runner/AppDelegate.swift"
 code = open(delegate).read()
-plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "../../apple/ApplePushState.swift", "../../apple/ApplePushInstallation.swift", "ApplePush.swift", "ApplePushBridge.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
+plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "../../apple/ApplePushState.swift", "../../apple/ApplePushInstallation.swift", "ApplePush.swift", "ApplePushBridge.swift", "InternalLoadProbe.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
 imports = [line for line in plugin.splitlines() if line.startswith(("import ", "@preconcurrency import "))]
 body = "\n".join(line for line in plugin.splitlines() if not line.startswith(("import ", "@preconcurrency import ")))
 code, registered = re.subn(
