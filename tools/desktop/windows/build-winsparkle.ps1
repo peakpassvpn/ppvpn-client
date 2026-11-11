@@ -21,9 +21,9 @@ $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash
 if (Test-Path $patchMark) {
   if ((Get-Content $patchMark -Raw).Trim() -ne $patchHash) { throw 'Use a fresh build work directory for a changed WinSparkle patch' }
 } else {
-  git -C $source apply --check $patch
+  git -C $source apply --unidiff-zero --check $patch
   if ($LASTEXITCODE) { throw 'WinSparkle patch does not apply cleanly' }
-  git -C $source apply $patch
+  git -C $source apply --unidiff-zero $patch
   if ($LASTEXITCODE) { throw 'WinSparkle patch failed' }
   Set-Content $patchMark $patchHash
 }

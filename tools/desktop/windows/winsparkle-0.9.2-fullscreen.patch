@@ -2,10 +2,7 @@ diff --git a/src/dll_api.cpp b/src/dll_api.cpp
 index 6d7aab3..ffde37f 100644
 --- a/src/dll_api.cpp
 +++ b/src/dll_api.cpp
-@@ -73,11 +73,10 @@ WIN_SPARKLE_API void __cdecl win_sparkle_init()
-         bool checkUpdates;
-         if ( Settings::ReadConfigValue("CheckForUpdates", checkUpdates) )
-         {
+@@ -76,5 +76,4 @@ WIN_SPARKLE_API void __cdecl win_sparkle_init()
 -            if ( checkUpdates )
 -            {
 -                UpdateChecker *check = new PeriodicUpdateChecker();
@@ -15,60 +12,24 @@ index 6d7aab3..ffde37f 100644
 +            // supplies its silent/fallback policy after loading the library.
 +            UpdateChecker *check = new PeriodicUpdateChecker();
 +            check->Start();
-         }
-         else // not yet configured
-         {
 diff --git a/src/ui.cpp b/src/ui.cpp
 index d401aca..bc1aeba 100644
 --- a/src/ui.cpp
 +++ b/src/ui.cpp
-@@ -24,6 +24,7 @@
-  */
- 
- #include "ui.h"
+@@ -26,0 +27 @@
 +#include "ppvpn_update_fullscreen.h"
- #include "settings.h"
- #include "error.h"
- #include "updatechecker.h"
-@@ -155,6 +156,7 @@ struct EventPayload
-     size_t       sizeDownloaded, sizeTotal;
-     std::wstring updateFile;
-     bool         installAutomatically;
+@@ -157,0 +159 @@ struct EventPayload
 +    bool         scheduled = false;
-     ErrorCode    error;
- };
- 
-@@ -1162,6 +1164,7 @@ public:
- private:
-     void InitWindow();
-     void ShowWindow();
+@@ -1164,0 +1167 @@ private:
 +    void OnDeferredShow(wxTimerEvent& event);
- 
-     void OnWindowClose(wxCloseEvent& event);
-     void OnTerminate(wxThreadEvent& event);
-@@ -1175,6 +1178,9 @@ private:
- 
- private:
-     UpdateDialog *m_win;
+@@ -1177,0 +1181,3 @@ private:
 +    wxTimer m_showTimer;
 +    bool m_pendingPermission = false;
 +    bool m_scheduled = false;
- };
- 
- IMPLEMENT_APP_NO_MAIN(App)
-@@ -1182,6 +1188,8 @@ IMPLEMENT_APP_NO_MAIN(App)
- App::App()
- {
-     m_win = NULL;
+@@ -1184,0 +1191,2 @@ App::App()
 +    m_showTimer.SetOwner(this);
 +    Bind(wxEVT_TIMER, &App::OnDeferredShow, this, m_showTimer.GetId());
- 
-     // Keep the wx "main" thread running even without windows. This greatly
-     // simplifies threads handling, because we don't have to correctly
-@@ -1277,17 +1285,56 @@ void App::ShowWindow()
- {
-     wxCHECK_RET( m_win, "no window" );
- 
+@@ -1279,0 +1288,17 @@ void App::ShowWindow()
 +    // Recheck on the UI thread after the network response and every deferred
 +    // retry. A later silent-update decision cancels an in-flight fallback.
 +    bool checks = false;
@@ -86,9 +47,7 @@ index d401aca..bc1aeba 100644
 +        return;
 +    }
 +    m_showTimer.Stop();
-     m_win->Freeze();
-     if (!m_win->IsShown())
-         CenterWindowOnHostApplication(m_win);
+@@ -1282,0 +1308,8 @@ void App::ShowWindow()
 +    // Centering/layout must not turn a check-time decision into a show-time
 +    // race. Never Show/Raise then hide an already activated update window.
 +    if (ppvpn_update::foreground_fullscreen())
@@ -97,8 +56,7 @@ index d401aca..bc1aeba 100644
 +        m_showTimer.StartOnce(1000);
 +        return;
 +    }
-     m_win->Show();
-     m_win->Thaw();
+@@ -1285 +1318,14 @@ void App::ShowWindow()
 -    m_win->Raise();
 +    if (!ppvpn_update::foreground_fullscreen())
 +        m_win->Raise();
@@ -114,35 +72,13 @@ index d401aca..bc1aeba 100644
 +    }
 +    else if (m_win)
 +        ShowWindow();
- }
- 
- 
- void App::OnWindowClose(wxCloseEvent& event)
- {
+@@ -1290,0 +1337 @@ void App::OnWindowClose(wxCloseEvent& event)
 +    m_showTimer.Stop();
-     m_win = NULL;
-     event.Skip();
- }
-@@ -1304,6 +1351,7 @@ void App::OnTerminate(wxThreadEvent&)
- 
- void App::OnShowCheckingUpdates(wxThreadEvent&)
- {
+@@ -1306,0 +1354 @@ void App::OnShowCheckingUpdates(wxThreadEvent&)
 +    m_scheduled = false;
-     InitWindow();
-     m_win->StateCheckingUpdates();
-     ShowWindow();
-@@ -1353,6 +1401,7 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
-     InitWindow();
- 
-     EventPayload payload(event.GetPayload<EventPayload>());
+@@ -1355,0 +1404 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
 +    m_scheduled = payload.scheduled;
-     m_win->StateUpdateAvailable(payload.appcast, payload.installAutomatically);
- 
-     ShowWindow();
-@@ -1361,8 +1410,21 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
- 
- void App::OnAskForPermission(wxThreadEvent& event)
- {
+@@ -1363,0 +1413,7 @@ void App::OnAskForPermission(wxThreadEvent& event)
 +    if (ppvpn_update::foreground_fullscreen())
 +    {
 +        m_pendingPermission = true;
@@ -150,86 +86,40 @@ index d401aca..bc1aeba 100644
 +        return;
 +    }
 +    m_pendingPermission = false;
-     AskPermissionDialog dlg;
-     CenterWindowOnHostApplication(&dlg);
+@@ -1365,0 +1422,6 @@ void App::OnAskForPermission(wxThreadEvent& event)
 +    if (ppvpn_update::foreground_fullscreen())
 +    {
 +        m_pendingPermission = true;
 +        m_showTimer.StartOnce(1000);
 +        return;
 +    }
-     dlg.Raise();
-     bool shouldCheck = (dlg.ShowModal() == wxID_OK);
- 
-@@ -1503,7 +1565,7 @@ void UI::NotifyNoUpdates(bool installAutomatically)
- 
- 
- /*static*/
+@@ -1506 +1568 @@ void UI::NotifyNoUpdates(bool installAutomatically)
 -void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
 +void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically, bool scheduled)
- {
-     ApplicationController::NotifyUpdateFound();
- 
-@@ -1511,6 +1573,7 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
-     EventPayload payload;
-     payload.appcast = info;
-     payload.installAutomatically = installAutomatically;
+@@ -1513,0 +1576 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
 +    payload.scheduled = scheduled;
-     uit.App().SendMsg(MSG_UPDATE_AVAILABLE, &payload);
- }
- 
 diff --git a/src/ui.h b/src/ui.h
 index f4d2eda..bf83e8f 100644
 --- a/src/ui.h
 +++ b/src/ui.h
-@@ -82,7 +82,7 @@ public:
- 
-         If the UI thread isn't running yet, it will be launched.
-      */
+@@ -85 +85 @@ public:
 -    static void NotifyUpdateAvailable(const Appcast& info, bool installAutomatically);
 +    static void NotifyUpdateAvailable(const Appcast& info, bool installAutomatically, bool scheduled);
- 
-     /**
-         Notifies the UI about download progress.
 diff --git a/src/updatechecker.cpp b/src/updatechecker.cpp
 index c8d4dac..e09c75a 100644
 --- a/src/updatechecker.cpp
 +++ b/src/updatechecker.cpp
-@@ -273,7 +273,7 @@ void UpdateChecker::PerformUpdateCheck()
-             return;
-         }
- 
+@@ -276 +276 @@ void UpdateChecker::PerformUpdateCheck()
 -        UI::NotifyUpdateAvailable(appcast, ShouldAutomaticallyInstall());
 +        UI::NotifyUpdateAvailable(appcast, ShouldAutomaticallyInstall(), IsScheduled());
-     }
-     catch ( ... )
-     {
-@@ -305,7 +305,7 @@ void PeriodicUpdateChecker::Run()
-     {
-         // time to wait for next iteration: either a reasonable default or
-         // time to next scheduled update check if checks are enabled
+@@ -308 +308 @@ void PeriodicUpdateChecker::Run()
 -        unsigned sleepTimeInSeconds = 60 * 60; // 1 hour
 +        unsigned sleepTimeInSeconds = 1; // recheck a paused fallback policy
- 
-         bool checkUpdates;
-         Settings::ReadConfigValue("CheckForUpdates", checkUpdates, false);
 diff --git a/src/updatechecker.h b/src/updatechecker.h
 index c55ef07..4808356 100644
 --- a/src/updatechecker.h
 +++ b/src/updatechecker.h
-@@ -65,6 +65,7 @@ protected:
- 
-     /// Should we install the update or prompt the user for options first?
-     virtual bool ShouldAutomaticallyInstall() const { return false; }
+@@ -67,0 +68 @@ protected:
 +    virtual bool IsScheduled() const { return false; }
- 
- protected:
-     virtual void PerformUpdateCheck();
-@@ -76,6 +77,7 @@ protected:
- class PeriodicUpdateChecker : public UpdateChecker
- {
- protected:
+@@ -78,0 +80 @@ protected:
 +    virtual bool IsScheduled() const { return true; }
-     virtual void Run();
- };
- 
