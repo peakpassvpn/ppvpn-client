@@ -96,7 +96,7 @@ Future<void> main() async {
 
   // Decide before _readyWindow: its callback itself can Show/Focus.
   final installing = samplePage == null && await Updates.installingNow();
-  final updateRelaunch = samplePage == null && rust.takeUpdateRelaunch();
+  final updateRelaunch = samplePage == null && await Updates.takeUpdateRelaunch();
   final deferUpdateWindow = _updateWindowWasDeferred || ((installing || updateRelaunch) && await Updates.promptDeferred());
   await _readyWindow(background || deferUpdateWindow, updateNotice: installing || updateRelaunch || _updateWindowWasDeferred);
   await windowManager.setPreventClose(true);

@@ -20,7 +20,99 @@ import FlutterMacOS
 import ServiceManagement
 import os
 
+// BEGIN shared update presentation policy (also compiled by native QA).
+@MainActor
+private enum UpdatePromptPolicy {
+  /// Read only the front application's on-screen geometry, not titles/content.
+  /// CG display bounds and CG window bounds share the same coordinate system.
+  static var shouldDeferPrompt: Bool {
+    guard let front = NSWorkspace.shared.frontmostApplication,
+      let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]] else { return true }
+    let displays = NSScreen.screens.compactMap { screen -> CGRect? in
+      guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+      return CGDisplayBounds(number.uint32Value)
+    }
+    guard !displays.isEmpty else { return true }
+    var foundWindow = false
+    for window in windows {
+      guard (window[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
+        (window[kCGWindowLayer as String] as? Int) == 0,
+        let bounds = window[kCGWindowBounds as String] as? [String: Any],
+        let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+      foundWindow = true
+      if displays.contains(where: { rect.contains($0) }) { return true }
+    }
+    // Finder's bare desktop is a known non-fullscreen state.
+    return !foundWindow && front.bundleIdentifier != "com.apple.finder"
+  }
+
+  private static let relaunchKey = "PPVPNUpdateRelaunch"
+
+  static func markRelaunch() {
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    UserDefaults.standard.set(["build": build, "at": Date().timeIntervalSince1970], forKey: relaunchKey)
+    if !UserDefaults.standard.synchronize() {
+      updateLog.warning("update relaunch provenance could not be saved")
+    }
+  }
+
+  static func takeRelaunch() -> Bool {
+    if ProcessInfo.processInfo.arguments.contains("--ppvpn-after-update") {
+      UserDefaults.standard.removeObject(forKey: relaunchKey)
+      return true
+    }
+    guard let saved = UserDefaults.standard.dictionary(forKey: relaunchKey),
+      let from = saved["build"] as? String, let at = saved["at"] as? Double,
+      let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String else { return false }
+    let elapsed = Date().timeIntervalSince1970 - at
+    let fresh = elapsed >= 0 && elapsed < 15 * 60
+    let pending = fresh && build.compare(from, options: .numeric) == .orderedDescending
+    if pending || !fresh {
+      UserDefaults.standard.removeObject(forKey: relaunchKey)
+      if !UserDefaults.standard.synchronize() {
+        updateLog.warning("update relaunch provenance could not be cleared")
+      }
+    }
+    return pending
+  }
+}
+// END shared update presentation policy.
+
 class MainFlutterWindow: NSWindow {
+  // Nib visibility can precede Dart's ready callback. Reject an update-origin
+  // first order before AppKit can display/activate it; Dart resumes it later.
+  private let updateRelaunch = UpdatePromptPolicy.takeRelaunch()
+  private var protectUpdateLaunch: Bool?
+
+  private func mayPresentUpdateLaunch() -> Bool {
+    if protectUpdateLaunch == nil { protectUpdateLaunch = updateRelaunch }
+    guard protectUpdateLaunch == true else { return true }
+    guard !UpdatePromptPolicy.shouldDeferPrompt else { return false }
+    protectUpdateLaunch = false
+    return true
+  }
+
+  override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+    guard place == .out || mayPresentUpdateLaunch() else { return }
+    super.order(place, relativeTo: otherWin)
+  }
+
+  override func orderFront(_ sender: Any?) {
+    guard mayPresentUpdateLaunch() else { return }
+    super.orderFront(sender)
+  }
+
+  override func orderFrontRegardless() {
+    guard mayPresentUpdateLaunch() else { return }
+    super.orderFrontRegardless()
+  }
+
+  override func makeKeyAndOrderFront(_ sender: Any?) {
+    guard mayPresentUpdateLaunch() else { return }
+    super.makeKeyAndOrderFront(sender)
+  }
+
   private var activation: Activation?
   private var pushAgent: PushAgentService?
   private var updater: Updater?
@@ -37,7 +129,7 @@ class MainFlutterWindow: NSWindow {
     let pushAgent = PushAgentService()
     pushAgent.start()
     self.pushAgent = pushAgent
-    updater = Updater(messenger: flutterViewController.engine.binaryMessenger) { [weak pushAgent] in
+    updater = Updater(messenger: flutterViewController.engine.binaryMessenger, updateRelaunch: updateRelaunch) { [weak pushAgent] in
       pushAgent?.prepareForUpdate()
     }
     loginItem = LoginItem(messenger: flutterViewController.engine.binaryMessenger)
@@ -452,29 +544,7 @@ private final class Updater: NSObject {
   private var deferredManual = false
   private var deferredScheduled = false
 
-  /// Read only the front application's on-screen geometry, not titles/content.
-  /// CG display bounds and CG window bounds share the same coordinate system.
-  private static var shouldDeferPrompt: Bool {
-    guard let front = NSWorkspace.shared.frontmostApplication,
-      let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-        as? [[String: Any]] else { return true }
-    let displays = NSScreen.screens.compactMap { screen -> CGRect? in
-      guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
-      return CGDisplayBounds(number.uint32Value)
-    }
-    guard !displays.isEmpty else { return true }
-    var foundWindow = false
-    for window in windows {
-      guard (window[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
-        (window[kCGWindowLayer as String] as? Int) == 0,
-        let bounds = window[kCGWindowBounds as String] as? [String: Any],
-        let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
-      foundWindow = true
-      if displays.contains(where: { rect.contains($0) }) { return true }
-    }
-    // Finder's bare desktop is a known non-fullscreen state.
-    return !foundWindow && front.bundleIdentifier != "com.apple.finder"
-  }
+  private static var shouldDeferPrompt: Bool { UpdatePromptPolicy.shouldDeferPrompt }
 
   private func deferCheck(manual: Bool) {
     deferredManual = deferredManual || manual
@@ -497,7 +567,7 @@ private final class Updater: NSObject {
   }
 
 
-  init(messenger: FlutterBinaryMessenger, beforeInstall: @escaping @MainActor () -> Void) {
+  init(messenger: FlutterBinaryMessenger, updateRelaunch: Bool, beforeInstall: @escaping @MainActor () -> Void) {
     channel = FlutterMethodChannel(name: "ppvpn/update", binaryMessenger: messenger)
     let info = Bundle.main.infoDictionary ?? [:]
     let feed = (info["PPVPNUpdateFeedURL"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -522,6 +592,8 @@ private final class Updater: NSObject {
         result(nil)
       case "promptDeferred":
         result(Self.shouldDeferPrompt)
+      case "takeUpdateRelaunch":
+        result(updateRelaunch)
       case "setAutoCheck":
         if let enabled = call.arguments as? Bool {
           self.controller?.updater.automaticallyChecksForUpdates = enabled
@@ -549,9 +621,11 @@ private final class Updater: NSObject {
     guard let url = Bundle.main.privateFrameworksURL?.appendingPathComponent("Sparkle.framework"),
       let bundle = Bundle(url: url), bundle.load(),
       let controllerClass = NSClassFromString("SPUStandardUpdaterController"),
-      let updaterClass = NSClassFromString("SPUUpdater")
+      let updaterClass = NSClassFromString("SPUUpdater"),
+      let driverClass = NSClassFromString("SPUStandardUserDriver"),
+      class_getClassMethod(driverClass, NSSelectorFromString("ppvpnHasPreShowGate")) != nil
     else {
-      updateLog.info("updates off: no Sparkle.framework in this build")
+      updateLog.info("updates off: no patched Sparkle.framework in this build")
       return nil
     }
     // Sparkle's classes have these methods (SPUStandardUpdaterController.h,
@@ -565,6 +639,12 @@ private final class Updater: NSObject {
   }
 
   // SPUUpdaterDelegate, which Sparkle asks with respondsToSelector:.
+
+  // Pinned standard Sparkle driver's actual pre-show hook covers manual
+  // delayed results as well as permissions, errors and status windows.
+  @objc nonisolated func ppvpnShouldDeferUpdatePrompt() -> Bool {
+    MainActor.assumeIsolated { Self.shouldDeferPrompt }
+  }
 
   // Official SPUStandardUserDriverDelegate hooks. Non-fullscreen returns the
   // native default. No replacement user driver, window or in-app message.
@@ -601,6 +681,7 @@ private final class Updater: NSObject {
   nonisolated func updater(_ updater: AnyObject, willInstallUpdate item: AnyObject) {
     MainActor.assumeIsolated {
       updateLog.info("update: installing")
+      UpdatePromptPolicy.markRelaunch()
       beforeInstall()
     }
   }

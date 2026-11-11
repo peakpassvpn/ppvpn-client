@@ -1,0 +1,104 @@
+diff --git a/Sparkle/InstallerProgress/InstallerProgressAppController.m b/Sparkle/InstallerProgress/InstallerProgressAppController.m
+index ce8dbf8..d479b9a 100644
+--- a/Sparkle/InstallerProgress/InstallerProgressAppController.m
++++ b/Sparkle/InstallerProgress/InstallerProgressAppController.m
+@@ -408 +408,11 @@ - (void)relaunchApplication
+-            if (![[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:pathToRelaunch isDirectory:YES]]) {
++            if ([relaunchBundle.infoDictionary[@"PPVPNDeferUpdatePresentation"] boolValue] &&
++                [relaunchBundle.bundleURL.pathExtension isEqualToString:@"app"]) {
++                // The host performs its first display/activation only when safe.
++                // Launching active here would steal focus before its nib/Dart gate.
++                NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
++                configuration.activates = NO;
++                configuration.arguments = @[@"--ppvpn-after-update"];
++                [[NSWorkspace sharedWorkspace] openApplicationAtURL:relaunchBundle.bundleURL configuration:configuration completionHandler:^(NSRunningApplication *application, NSError *error) {
++                    if (application == nil) SULog(SULogLevelError, @"Error: Failed to relaunch bundle at %@: %@", pathToRelaunch, error);
++                }];
++            } else if (![[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:pathToRelaunch isDirectory:YES]]) {
+diff --git a/Sparkle/SPUStandardUserDriver.m b/Sparkle/SPUStandardUserDriver.m
+index dc9d7ae..08cc228 100644
+--- a/Sparkle/SPUStandardUserDriver.m
++++ b/Sparkle/SPUStandardUserDriver.m
+@@ -43,0 +44,6 @@ - (void)activate;
++// PPVPN's host supplies a read-only, show-time fullscreen decision. The
++// standard user driver, windows, download and installer remain unchanged.
++@protocol PPVPNUpdatePromptDeferral <NSObject>
++- (BOOL)ppvpnShouldDeferUpdatePrompt;
++@end
++
+@@ -84,0 +91,2 @@ @implementation SPUStandardUserDriver
++    NSUInteger _ppvpnPresentationGeneration;
++    NSUInteger _ppvpnCheckingGeneration;
+@@ -111,0 +120,17 @@ - (instancetype)initWithHostBundle:(NSBundle *)hostBundle delegate:(nullable id<
++// A runtime marker lets the host refuse an accidentally unpatched framework.
+++ (BOOL)ppvpnHasPreShowGate { return YES; }
++
++- (BOOL)ppvpnDeferPresentation:(void (^)(SPUStandardUserDriver *))action SPU_OBJC_DIRECT
++{
++    id<PPVPNUpdatePromptDeferral> delegate = (id)_delegate;
++    if (![delegate respondsToSelector:@selector(ppvpnShouldDeferUpdatePrompt)] ||
++        ![delegate ppvpnShouldDeferUpdatePrompt]) return NO;
++    NSUInteger generation = _ppvpnPresentationGeneration;
++    __weak __typeof__(self) weakSelf = self;
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
++        __typeof__(self) strongSelf = weakSelf;
++        if (strongSelf != nil && strongSelf->_ppvpnPresentationGeneration == generation) action(strongSelf);
++    });
++    return YES;
++}
++
+@@ -138,0 +164,3 @@ - (void)showUpdatePermissionRequest:(SPUUpdatePermissionRequest *)request reply:
++    if ([self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        [driver showUpdatePermissionRequest:request reply:reply];
++    }]) return;
+@@ -177,0 +206,5 @@ - (void)setUpActiveUpdateAlertForScheduledUpdate:(SUAppcastItem * _Nullable)upda
++    SUUpdateAlert *expectedAlert = _activeUpdateAlert;
++    if (updateItem == nil && [self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        if (driver->_activeUpdateAlert == expectedAlert && expectedAlert != nil)
++            [driver setUpActiveUpdateAlertForScheduledUpdate:updateItem state:state];
++    }]) return;
+@@ -341,0 +375,3 @@ - (void)applicationDidBecomeActive:(NSNotification *)__unused aNotification
++    if ([self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        if (driver->_activeUpdateAlert != nil) [driver applicationDidBecomeActive:nil];
++    }]) return;
+@@ -467,0 +504,3 @@ - (void)showUpdateInFocus
++    if ([self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        [driver showUpdateInFocus];
++    }]) return;
+@@ -539,0 +579,5 @@ - (void)showUserInitiatedUpdateCheckWithCancellation:(void (^)(void))cancellatio
++    NSUInteger checkingGeneration = _ppvpnCheckingGeneration;
++    if ([self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        if (driver->_ppvpnCheckingGeneration == checkingGeneration)
++            [driver showUserInitiatedUpdateCheckWithCancellation:cancellation];
++    }]) return;
+@@ -562,0 +607 @@ - (void)closeCheckingWindow SPU_OBJC_DIRECT
++    ++_ppvpnCheckingGeneration;
+@@ -583,0 +629,3 @@ - (void)showUpdaterError:(NSError *)error acknowledgement:(void (^)(void))acknow
++    if ([self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        [driver showUpdaterError:error acknowledgement:acknowledgement];
++    }]) return;
+@@ -617,0 +666,3 @@ - (void)showUpdateNotFoundWithError:(NSError *)error acknowledgement:(void (^)(v
++    if ([self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        [driver showUpdateNotFoundWithError:error acknowledgement:acknowledgement];
++    }]) return;
+@@ -741,0 +793,10 @@ - (void)showAlert:(NSAlert *)alert secondaryAction:(void (^ _Nullable)(void))sec
++- (void)ppvpnShowStatusController:(SUStatusController *)controller SPU_OBJC_DIRECT
++{
++    if (controller != _statusController) return;
++    if ([self ppvpnDeferPresentation:^(SPUStandardUserDriver *driver) {
++        [driver ppvpnShowStatusController:controller];
++    }]) return;
++    if (_updateAlertWindowWasInactive) [controller.window orderFront:nil];
++    else [controller showWindow:self];
++}
++
+@@ -769,5 +830 @@ - (void)createAndShowStatusControllerWithClosable:(BOOL)closable SPU_OBJC_DIRECT
+-        if (_updateAlertWindowWasInactive) {
+-            [_statusController.window orderFront:nil];
+-        } else {
+-            [_statusController showWindow:self];
+-        }
++        [self ppvpnShowStatusController:_statusController];
+@@ -928,0 +986,2 @@ - (void)dismissUpdateInstallation
++    ++_ppvpnPresentationGeneration;
++    ++_ppvpnCheckingGeneration;

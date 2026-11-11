@@ -24,7 +24,7 @@ packages:
     path: AppLogic
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    majorVersion: 2.6.0
+    exactVersion: 2.10.1
 targets:
   # Push agent: UI-less helper started by launchd at login (SMAppService.agent),
   # embedded in the Flutter app at Contents/Library/LoginItems/PPVPN Agent.app

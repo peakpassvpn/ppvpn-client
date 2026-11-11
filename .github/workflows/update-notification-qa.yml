@@ -75,6 +75,24 @@ jobs:
           name: windows-update-notification-qa
           path: build/update-qa/
 
+  macos-updater:
+    if: ${{ !inputs.full_client }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Actual standard Sparkle manual result during fullscreen
+        run: tools/desktop/macos/run-update-prompt-qa.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: macos-update-notification-qa
+          retention-days: 7
+          path: |
+            build/macos-update-qa/*.txt
+            build/macos-update-qa/*.png
+            build/macos-update-qa/feed.*
+
   windows-client-upgrade:
     if: inputs.full_client
     runs-on: windows-latest
