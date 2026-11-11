@@ -286,6 +286,7 @@ pub(crate) fn start_hidden() -> bool {
 /// The existing WinSparkle installer will reopen the app. Record its origin
 /// so only that automatic launch delays its first show during another app's
 /// fullscreen session; ordinary user launches retain their behavior.
+#[cfg(windows)]
 pub(crate) fn mark_update_relaunch() {
     update(|saved| {
         saved.update_relaunch_at_ms = now_ms();
