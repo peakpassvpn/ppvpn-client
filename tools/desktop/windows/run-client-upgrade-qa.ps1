@@ -69,6 +69,11 @@ try {
     $clientPid=($roles|Where-Object {$_.stage -eq $stage}|Select-Object -Last 1).pid
     if(-not $clientPid -or @($requests|Where-Object {$_.path -like '*appcast*' -and $_.client_pid -eq $clientPid -and $_.client_stage -eq $stage -and $_.outcome -eq 'written'}).Count -lt 1){throw "No actual appcast response bound to $stage process"}
   }
+  $samples=@(Get-Content "$out/window-samples.csv"|ConvertFrom-Csv -Header phase,tick,foreground_pid,A_pid,B_pid,A_update,B_update,B_window)
+  $initial=@($samples|Where-Object {$_.phase -eq 'A-initial-fullscreen'})
+  if(-not $initial.Count){throw 'Initial fullscreen observation samples missing'}
+  $first=[uint64]$initial[0].tick;$last=[uint64]$initial[-1].tick
+  if(@($requests|Where-Object {$_.client_stage -eq 'A' -and $_.outcome -eq 'written' -and $_.path -like '*appcast*' -and [uint64]$_.finished_tick -ge $first -and [uint64]$_.finished_tick -le $last}).Count -lt 1){throw 'No actual A response completed inside the fullscreen sample interval'}
   if(@($requests|Where-Object {$_.path -like '*setup.exe'}).Count -lt 1){throw 'Real updater never downloaded B installer'}
   @{source=$env:GITHUB_SHA;os=(Get-CimInstance Win32_OperatingSystem|Select-Object Caption,Version,BuildNumber);scope='actual client A-to-B via existing WinSparkle fallback and NSIS; not silent InstallUpdate IPC coverage';service_restarted=$true;installed_B_bridge_sha256=$installedBridge.Hash;feed_responses=$requests;second_monitor='not guaranteed';commercial_game='not exercised'}|ConvertTo-Json -Depth 8|Set-Content "$out/result.json"
 }finally{
@@ -89,5 +94,7 @@ try {
     if(-not $uninstall.WaitForExit(180000)){throw 'Normal test uninstaller timed out'}
     if((Get-OwnedExitCode $uninstallHandle) -ne 0){throw 'Normal test uninstaller failed'}
   }
-  @{app_processes=@(Get-Process ppvpn -ErrorAction SilentlyContinue|Select-Object Id,Path);service_remaining=[bool](Get-Service ppvpn_service -ErrorAction SilentlyContinue);directory_remaining=(Test-Path $dir)}|ConvertTo-Json -Depth 4|Set-Content "$out/cleanup.json"
+  $cleanup=@{app_processes=@(Get-Process ppvpn -ErrorAction SilentlyContinue|Select-Object Id,Path);service_remaining=[bool](Get-Service ppvpn_service -ErrorAction SilentlyContinue);directory_remaining=(Test-Path $dir)}
+  $cleanup|ConvertTo-Json -Depth 4|Set-Content "$out/cleanup.json"
+  if($cleanup.app_processes.Count -or $cleanup.service_remaining){throw 'Owned test client/service remained after normal uninstallation'}
 }

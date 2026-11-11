@@ -27,8 +27,12 @@ static BOOL CALLBACK window_callback(HWND window, LPARAM param) {
     auto& search=*reinterpret_cast<WindowSearch*>(param);
     DWORD pid=0; GetWindowThreadProcessId(window,&pid);
     if(pid!=search.pid || !IsWindowVisible(window)) return TRUE;
+    RECT frame={};
+    if(!GetWindowRect(window,&frame) || frame.right<=frame.left || frame.bottom<=frame.top) return TRUE;
     wchar_t name[256]; GetClassNameW(window,name,256);
-    if(!search.update_only || wcsncmp(name,L"wx",2)==0) search.found=window;
+    // Native wxDialogs use the standard #32770 dialog class on Windows.
+    // Zero-area PseudoConsoleWindow infrastructure is not an application UI.
+    if(!search.update_only || wcsncmp(name,L"wx",2)==0 || wcscmp(name,L"#32770")==0) search.found=window;
     return TRUE;
 }
 static HWND visible(DWORD pid,bool update_only=true) {
@@ -110,7 +114,20 @@ int wmain(int argc,wchar_t** argv) {
         ensure(GetForegroundWindow()==foreground && ppvpn_update::foreground_fullscreen(),"other app actually fullscreen before client scheduled check");
         app=launch(argv[1],L"--background");
         DWORD old_pid=app.dwProcessId;role("A",old_pid);
-        for(int i=0;i<70;++i){Sleep(100);if(visible(old_pid)||GetForegroundWindow()!=foreground)throw std::runtime_error("client A prompted or stole fullscreen focus");}
+        const auto full_start=GetTickCount64();ULONGLONG response_tick=0;
+        while(GetTickCount64()<full_start+30000){
+            sample("A-initial-fullscreen",old_pid,0,foreground);
+            if(visible(old_pid))throw std::runtime_error("client A prompted during fullscreen");
+            FILE* marker=nullptr;fopen_s(&marker,"appcast-A-written.txt","r");
+            if(marker){unsigned long response_pid=0;unsigned long long tick=0;
+                if(fscanf_s(marker,"%lu %llu",&response_pid,&tick)==2 && response_pid==old_pid && tick>=full_start)response_tick=tick;
+                fclose(marker);
+            }
+            if(response_tick && GetTickCount64()>=full_start+7000 && GetTickCount64()>=response_tick+2000)break;
+            Sleep(100);
+        }
+        ensure(response_tick!=0,"actual A appcast response completed during fullscreen observation");
+        sample("A-initial-fullscreen",old_pid,0,foreground);
         snapshot(L"client-A-fullscreen-state.txt");
         SendMessageW(foreground,WM_APP+1,0,0);Sleep(500);
         ensure(!ppvpn_update::foreground_fullscreen(),"other app returned to ordinary maximization");
@@ -153,7 +170,9 @@ int wmain(int argc,wchar_t** argv) {
         snapshot(L"client-B-restart-state.txt");quit_app(app.dwProcessId);CloseHandle(app.hProcess);app.hProcess=nullptr;
         close_other();std::puts("PASS actual existing client A-to-B WinSparkle/NSIS fallback; not silent-service installation coverage");return 0;
     }catch(const std::exception& error){
-        std::fprintf(stderr,"FAIL %s\n",error.what());close_other();
+        std::fprintf(stderr,"FAIL %s\n",error.what());
+        try { if(!capture_helper.empty())snapshot(L"failure-desktop-state.txt"); } catch(...) {}
+        close_other();
         if(app.hProcess)CloseHandle(app.hProcess);
         return 1;
     }
