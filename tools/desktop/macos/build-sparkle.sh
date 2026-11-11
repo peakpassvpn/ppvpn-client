@@ -23,8 +23,9 @@ if [ ! -f "$marker" ]; then
   printf '%s\n' "$expected" > "$marker"
 fi
 [ "$(cat "$marker")" = "$expected" ] || { echo 'Sparkle patch changed; use a fresh owned build directory' >&2; exit 1; }
-git -C "$source" diff --unified=0 -- Sparkle/SPUStandardUserDriver.m Sparkle/InstallerProgress/InstallerProgressAppController.m > "$work/applied.patch"
-cmp "$patch" "$work/applied.patch"
+# Compare materialized source bytes. Diff hunk labels/abbreviations can differ
+# between Git versions without any source difference.
+(cd "$source" && shasum -a 256 -c "$here/sparkle-2.10.1-files.sha256")
 xcodebuild -project "$source/Sparkle.xcodeproj" -scheme Sparkle -configuration Release \
   -derivedDataPath "$work/derived" -destination 'generic/platform=macOS' \
   ARCHS="$arch" ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build

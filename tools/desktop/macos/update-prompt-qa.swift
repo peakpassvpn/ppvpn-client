@@ -9,6 +9,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
   private var controller: SPUStandardUpdaterController?
   private var timer: Timer?
   private var other: NSRunningApplication?
+  private var firstApp: NSRunningApplication?
   private var window: NSWindow?
   private var fullscreen = true
   private var phase = "starting"
@@ -26,7 +27,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
   private func finish(_ code: Int32, _ value: String) -> Never {
     log(value)
     if code != 0 { capture("failure") }
-    if CommandLine.arguments[1] != "other" { other?.terminate() }
+    if CommandLine.arguments[1] != "other" { firstApp?.terminate(); other?.terminate() }
     exit(code)
   }
   @objc var supportsGentleScheduledUpdateReminders: Bool { true }
@@ -61,7 +62,8 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       timer = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in
         MainActor.assumeIsolated {
           guard let self else { return }
-          if self.fullscreen && (try? String(contentsOf:self.modeURL,encoding:.utf8)) == "windowed" { self.setOtherWindow(false) }
+          if let mode = try? String(contentsOf:self.modeURL,encoding:.utf8),
+            (mode == "full") != self.fullscreen { self.setOtherWindow(mode == "full") }
         }
       }
       return
@@ -76,7 +78,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       let config = NSWorkspace.OpenConfiguration()
       config.arguments = ["other",self.dir.path]
       NSWorkspace.shared.openApplication(at:URL(fileURLWithPath:CommandLine.arguments[3]),configuration:config) { app,error in
-        MainActor.assumeIsolated {
+        Task { @MainActor in
           guard let app else { self.finish(1,"FAIL other app launch: \(String(describing:error))") }
           self.other = app
           try! Data(String(app.processIdentifier).utf8).write(to:self.dir.appendingPathComponent("other-pid.txt"))
@@ -85,6 +87,16 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     }
     timer = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in
       MainActor.assumeIsolated { self?.observe() }
+    }
+  }
+  private func clientWindowVisible(_ pid: pid_t) -> Bool {
+    guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements], kCGNullWindowID) as? [[String:Any]] else { finish(1,"FAIL window observation unavailable") }
+    return windows.contains {
+      guard ($0[kCGWindowOwnerPID as String] as? Int32) == pid,
+        ($0[kCGWindowLayer as String] as? Int) == 0,
+        let bounds = $0[kCGWindowBounds as String] as? [String:Any],
+        let frame = CGRect(dictionaryRepresentation:bounds as CFDictionary) else { return false }
+      return frame.width > 1 && frame.height > 1
     }
   }
   private func observe() {
@@ -110,8 +122,47 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         capture("after-fullscreen")
         log("PASS original Sparkle update alert appears after fullscreen exits")
         visibleAlerts.forEach { $0.performClose(nil) }
-        finish(0,"PASS actual standard Sparkle manual delayed-result UI")
+        if CommandLine.arguments.count > 4 {
+          try! Data("full".utf8).write(to:modeURL)
+          phase="first-start";phaseAt=Date()
+        } else { finish(0,"PASS actual standard Sparkle manual delayed-result UI") }
       } else if elapsed > 15 { finish(1,"FAIL deferred native alert never appeared") }
+    case "first-start":
+      if NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier,
+        UpdatePromptPolicy.shouldDeferPrompt {
+        phase="first-launching";phaseAt=Date()
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        config.arguments = ["--ppvpn-after-update"]
+        NSWorkspace.shared.openApplication(at:URL(fileURLWithPath:CommandLine.arguments[4]),configuration:config) { app,error in
+          Task { @MainActor in
+            guard let app else { self.finish(1,"FAIL real client launch: \(String(describing:error))") }
+            self.firstApp=app
+            try! Data(String(app.processIdentifier).utf8).write(to:self.dir.appendingPathComponent("client-pid.txt"))
+            self.phase="first-fullscreen";self.phaseAt=Date()
+            self.log("PHASE actual client first launch pid=\(app.processIdentifier) during other-app fullscreen")
+          }
+        }
+      } else if elapsed > 15 { finish(1,"FAIL other app did not reenter fullscreen") }
+    case "first-launching":
+      if elapsed > 15 { finish(1,"FAIL actual client launch timed out") }
+    case "first-fullscreen":
+      guard let firstApp, !firstApp.isTerminated else { finish(1,"FAIL actual client exited before first-show check") }
+      guard NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier else { finish(1,"FAIL actual client launch stole fullscreen foreground") }
+      guard !clientWindowVisible(firstApp.processIdentifier) else { finish(1,"FAIL actual client nib/first window appeared during fullscreen") }
+      log("SAMPLE actual-client fullscreen pid=\(firstApp.processIdentifier) onScreenWindows=0")
+      if elapsed >= 7 {
+        capture("actual-client-first-show-deferred")
+        log("PASS actual client remains running without first-show/fullscreen interruption")
+        try! Data("windowed".utf8).write(to:modeURL)
+        phase="first-windowed";phaseAt=Date()
+      }
+    case "first-windowed":
+      if let firstApp, clientWindowVisible(firstApp.processIdentifier),
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp.processIdentifier {
+        capture("actual-client-after-fullscreen")
+        finish(0,"PASS actual client native first-show and later original window/focus")
+      } else if elapsed > 20 { finish(1,"FAIL actual client window did not resume after fullscreen") }
     default: break
     }
   }

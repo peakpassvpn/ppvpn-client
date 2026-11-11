@@ -22,7 +22,7 @@ PY
 swiftc "$work/main.swift" -F "$(dirname "$framework")" -framework Sparkle -o "$work/host.app/Contents/MacOS/probe" -Xlinker -rpath -Xlinker "$(dirname "$framework")"
 cp "$work/host.app/Contents/MacOS/probe" "$work/other.app/Contents/MacOS/probe"
 for role in host other; do codesign --force --sign - "$work/$role.app"; done
-python3 "$root/tools/desktop/windows/update-feed-fixture.py" > "$work/feed.stdout" 2> "$work/feed.stderr" &
+python3 "$root/tools/desktop/windows/update-feed-fixture.py" --macos > "$work/feed.stdout" 2> "$work/feed.stderr" &
 server=$!
 probe=''
 cleanup() {
@@ -34,13 +34,27 @@ cleanup() {
       case "$command" in "$work/other.app/Contents/MacOS/probe"*) kill "$other_pid" 2>/dev/null || true;; esac
     ;; esac
   fi
+  if [ -f "$work/client-pid.txt" ]; then
+    client_pid=$(cat "$work/client-pid.txt")
+    case "$client_pid" in *[!0-9]*|'') ;; *)
+      command=$(ps -p "$client_pid" -o command= || true)
+      case "$command" in "$work/first-show/PPVPN.app/Contents/MacOS/PPVPN"*) kill "$client_pid" 2>/dev/null || true;; esac
+    ;; esac
+  fi
   kill "$server" 2>/dev/null || true
 }
 trap cleanup EXIT
 rm -f "$work/mode" "$work/other-ready"
-"$work/host.app/Contents/MacOS/probe" host "$work" "$work/other.app" > "$work/raw.txt" 2> "$work/errors.txt" &
+extra=()
+if [ -n "${1:-}" ]; then
+  mkdir -p "$work/first-show"
+  ditto "$1" "$work/first-show/PPVPN.app"
+  extra+=("$work/first-show/PPVPN.app")
+  shasum -a 256 "$work/first-show/PPVPN.app/Contents/MacOS/PPVPN" > "$work/actual-client-hash.txt"
+fi
+"$work/host.app/Contents/MacOS/probe" host "$work" "$work/other.app" "${extra[@]}" > "$work/raw.txt" 2> "$work/errors.txt" &
 probe=$!
-for _ in $(seq 1 80); do
+for _ in $(seq 1 110); do
   if ! kill -0 "$probe" 2>/dev/null; then break; fi
   sleep 1
 done

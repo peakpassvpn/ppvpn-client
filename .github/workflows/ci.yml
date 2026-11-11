@@ -891,6 +891,19 @@ jobs:
         env:
           PPVPN_SKIP_ANALYZE: ${{ matrix.os != 'ubuntu-latest' && '1' || '' }}
         run: apps/flutter/scripts/ci-build.sh
+      - name: Actual macOS updater manual result and client first-show during fullscreen
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
+        timeout-minutes: 20
+        run: tools/desktop/macos/run-update-prompt-qa.sh "${{ steps.build.outputs.bundle }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always() && matrix.os == 'macos-15'
+        with:
+          name: macos-update-client-first-show-qa
+          retention-days: 7
+          path: |
+            build/macos-update-qa/*.txt
+            build/macos-update-qa/*.png
+            build/macos-update-qa/feed.*
       # The Linux bundle, for the 24 h curve on the test machine (built here,
       # never there: apps/flutter/scripts/longcurve).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
