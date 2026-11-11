@@ -64,6 +64,11 @@ concurrency:
 
 jobs:
   archives:
+    # GitHub requires contents write scope even for GET of a draft release.
+    # This job uses only fixed draft/asset GETs; there is no publish operation.
+    permissions:
+      contents: write
+      actions: read
     if: inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks
     runs-on: macos-15
     timeout-minutes: 240
