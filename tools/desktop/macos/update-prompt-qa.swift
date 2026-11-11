@@ -59,7 +59,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       label.frame = NSRect(x:40,y:40,width:650,height:40)
       window?.contentView?.addSubview(label)
       setOtherWindow(true)
-      timer = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in
+      timer = Timer.scheduledTimer(withTimeInterval:0.05,repeats:true) { [weak self] _ in
         MainActor.assumeIsolated {
           guard let self else { return }
           if let mode = try? String(contentsOf:self.modeURL,encoding:.utf8),
@@ -85,7 +85,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         }
       }
     }
-    timer = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in
+    timer = Timer.scheduledTimer(withTimeInterval:0.05,repeats:true) { [weak self] _ in
       MainActor.assumeIsolated { self?.observe() }
     }
   }
@@ -145,6 +145,15 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         }
       } else if elapsed > 15 { finish(1,"FAIL other app did not reenter fullscreen") }
     case "first-launching":
+      // NSWorkspace's completion can follow nib loading. Observe from the
+      // launch request onward, including that initial native interval.
+      guard NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier else { finish(1,"FAIL client launch request interrupted fullscreen foreground") }
+      let expectedURL = URL(fileURLWithPath:CommandLine.arguments[4]).standardizedFileURL
+      for candidate in NSRunningApplication.runningApplications(withBundleIdentifier:"com.peakpassvpn.ppvpn.desktop")
+      where candidate.bundleURL?.standardizedFileURL == expectedURL {
+        guard !clientWindowVisible(candidate.processIdentifier) else { finish(1,"FAIL native client window appeared before launch completion") }
+        log("SAMPLE launching-client pid=\(candidate.processIdentifier) onScreenWindows=0")
+      }
       if elapsed > 15 { finish(1,"FAIL actual client launch timed out") }
     case "first-fullscreen":
       guard let firstApp, !firstApp.isTerminated else { finish(1,"FAIL actual client exited before first-show check") }
@@ -167,6 +176,10 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     }
   }
 }
-let delegate = UpdateQA()
-NSApplication.shared.delegate = delegate
-NSApplication.shared.run()
+@main private struct UpdateQAMain {
+  @MainActor static func main() {
+    let delegate = UpdateQA()
+    NSApplication.shared.delegate = delegate
+    withExtendedLifetime(delegate) { NSApplication.shared.run() }
+  }
+}

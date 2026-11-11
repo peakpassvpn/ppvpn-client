@@ -13,13 +13,13 @@ import sys,plistlib
 root,work=map(Path,sys.argv[1:]);source=(root/'apps/flutter/runner/macos/Runner/MainFlutterWindow.swift').read_text()
 policy=source.split('// BEGIN shared update presentation policy (also compiled by native QA).',1)[1].split('// END shared update presentation policy.',1)[0]
 qa=(root/'tools/desktop/macos/update-prompt-qa.swift').read_text()
-(work/'main.swift').write_text(qa.replace('import os','import os\n'+policy,1))
+(work/'probe.swift').write_text(qa.replace('import os','import os\n'+policy,1))
 for role in ['host','other']:
  app=work/f'{role}.app/Contents';(app/'MacOS').mkdir(parents=True,exist_ok=True)
  info={'CFBundleIdentifier':f'com.peakpassvpn.update-qa.{role}','CFBundleName':f'PPVPN Update QA {role}','CFBundleExecutable':'probe','CFBundlePackageType':'APPL','CFBundleVersion':'0.7.5.1','CFBundleShortVersionString':'0.7.5','SUEnableAutomaticChecks':False,'SUFeedURL':'http://127.0.0.1:18763/feed.xml','SUPublicEDKey':'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True,'NSAllowsArbitraryLoads':True}}
  (app/'Info.plist').write_bytes(plistlib.dumps(info))
 PY
-swiftc "$work/main.swift" -F "$(dirname "$framework")" -framework Sparkle -o "$work/host.app/Contents/MacOS/probe" -Xlinker -rpath -Xlinker "$(dirname "$framework")"
+swiftc "$work/probe.swift" -F "$(dirname "$framework")" -framework Sparkle -o "$work/host.app/Contents/MacOS/probe" -Xlinker -rpath -Xlinker "$(dirname "$framework")"
 cp "$work/host.app/Contents/MacOS/probe" "$work/other.app/Contents/MacOS/probe"
 for role in host other; do codesign --force --sign - "$work/$role.app"; done
 python3 "$root/tools/desktop/windows/update-feed-fixture.py" --macos > "$work/feed.stdout" 2> "$work/feed.stderr" &
@@ -70,5 +70,7 @@ set -e
 cat "$work/raw.txt" "$work/errors.txt"
 printf '%s\n' "$status" > "$work/exitcode.txt"
 git -C "$root" rev-parse HEAD > "$work/source.txt"
+git -C "$work/sparkle/source" rev-parse HEAD > "$work/sparkle-source.txt"
+(cd "$work/sparkle/source" && shasum -a 256 Sparkle/SPUStandardUserDriver.m Sparkle/InstallerProgress/InstallerProgressAppController.m) > "$work/sparkle-source-hashes.txt"
 shasum -a 256 "$framework/Versions/B/Sparkle" "$work/host.app/Contents/MacOS/probe" > "$work/hashes.txt"
 exit "$status"
