@@ -7,7 +7,7 @@ public static class PpvD3DExitNative {
  [DllImport("kernel32.dll",SetLastError=true)] public static extern bool GetExitCodeProcess(IntPtr process,out uint code);
 }
 '@
-$exe=Join-Path $OutputDir 'd3d-exclusive.exe' 
+$exe=Join-Path $OutputDir 'd3d-exclusive.exe'
 $p=Start-Process -FilePath $exe -ArgumentList ('"'+$OutputDir+'"') -PassThru -RedirectStandardOutput (Join-Path $OutputDir 'd3d.stdout.log') -RedirectStandardError (Join-Path $OutputDir 'd3d.stderr.log')
 $started=$p.StartTime.ToUniversalTime().Ticks
 $ownedHandle=$p.Handle
