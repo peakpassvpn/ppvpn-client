@@ -526,11 +526,15 @@ private final class Updater: NSObject {
         if let enabled = call.arguments as? Bool {
           self.controller?.updater.automaticallyChecksForUpdates = enabled
           if !enabled {
-            self.deferredScheduled = false
+            // Keep the existing Sparkle session pending, but never show it
+            // while automatic checks are off. A later fallback enable can
+            // resume that same alert without creating another update UI.
             if !self.deferredManual {
               self.deferredCheck?.invalidate()
               self.deferredCheck = nil
             }
+          } else if self.deferredScheduled {
+            self.deferCheck(manual: false)
           }
         }
         result(nil)

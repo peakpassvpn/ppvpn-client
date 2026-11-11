@@ -38,7 +38,8 @@ $values=@{
  PPVPN_UPDATE_SITE='https://localhost:18764'
  PPVPN_UPDATE_FEED_URL='https://localhost:18764/desktop/stable/appcast-windows-x64.xml'
  PPVPN_RELEASE_CHANNEL='stable'
- PPVPN_API_BASE='http://127.0.0.1:9'
+ PPVPN_API_BASE='https://127.0.0.1:9'
+ PPVPN_API_BASE_DEFAULT='https://127.0.0.1:9'
  PPVPN_SKIP_ANALYZE='1'
 }
 $values.GetEnumerator() | ForEach-Object { Add-Content -Path $env:GITHUB_ENV -Value "$($_.Key)=$($_.Value)" -Encoding utf8 }
