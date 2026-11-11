@@ -247,7 +247,12 @@ int wmain(int argc, wchar_t** argv) {
         screenshot(L"fullscreen-no-prompt.bmp");
         if (cancel_permission) automatic(0);
         SendMessageW(other, WM_APP+1, 0, 0); pump(300);
-        require(GetForegroundWindow() == other && !ppvpn_update::foreground_fullscreen(), "normal maximized foreground is allowed");
+        MONITORINFO normal_monitor={sizeof(MONITORINFO)};
+        RECT normal_frame={};
+        require(GetMonitorInfoW(MonitorFromWindow(other,MONITOR_DEFAULTTONEAREST),&normal_monitor)!=FALSE && GetWindowRect(other,&normal_frame)!=FALSE && IsZoomed(other)!=FALSE && !ppvpn_update::covers_monitor(normal_frame,normal_monitor.rcMonitor,true,GetWindowLongPtrW(other,GWL_STYLE)), "ordinary maximized other-app geometry is allowed");
+        // The original WinSparkle window may legitimately take foreground
+        // immediately after exiting fullscreen. Do not require the other app
+        // to retain focus here; that would reject the intended native dialog.
         std::puts("PHASE waiting-native-window-after-fullscreen"); std::fflush(stdout);
         for (int i=0;i<100 && !visible_prompt();++i) pump(100);
         bool newer = std::wstring(argv[3]) == L"0.7.5.1" || (permission && !cancel_permission) || d3d;
