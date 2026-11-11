@@ -4,6 +4,10 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      preload_only:
+        description: Verify source preload protocol without Rust or Flutter setup/build
+        type: boolean
+        default: false
       ios256_variant:
         description: Exact reviewed source-input variant for isolated archive
         type: choice
@@ -69,7 +73,7 @@ jobs:
     permissions:
       contents: write
       actions: read
-    if: inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks
+    if: inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only
     runs-on: macos-15
     timeout-minutes: 240
     defaults:
@@ -184,7 +188,7 @@ jobs:
           retention-days: 3
 
   macos:
-    if: inputs.platform == 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks
+    if: inputs.platform == 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only
     runs-on: macos-15
     timeout-minutes: 240
     defaults:
@@ -296,7 +300,7 @@ jobs:
           retention-days: 3
 
   macos_apns_os_probe:
-    if: inputs.macos_apns_probe_json != '' && !inputs.native256_checks
+    if: inputs.macos_apns_probe_json != '' && !inputs.native256_checks && !inputs.preload_only
     runs-on: macos-15
     timeout-minutes: 10
     # Draft asset retrieval needs this scope (same as native acceptance).
@@ -377,4 +381,33 @@ jobs:
         with:
           name: internal256-native-worker-receipts
           path: build/internal256-native-worker
+          retention-days: 7
+
+  ios256_preload_protocol_only:
+    if: inputs.preload_only
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOURCE_REF: ${{ inputs.source_ref }}
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number }}
+      CANDIDATE_ONLY: '1'
+      IOS256_VARIANT: ${{ inputs.ios256_variant }}
+      PPVPN_INTERNAL_DIAGNOSTICS: ${{ inputs.ios256_variant == 'diagnostic' && '1' || '0' }}
+      PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Verify source preload only without native build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/apple/preload_ios256_sources.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: ios256-preload-protocol-receipt
+          path: ${{ runner.temp }}/apple-output/input
           retention-days: 7

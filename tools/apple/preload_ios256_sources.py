@@ -83,6 +83,12 @@ receipt = {
     'restrictions': 'Exact tips and trees, shallow candidate roots; not full history or publicly fetchable candidate refs. No old native libraries reused.',
     'cargo_source': 'Original HTTPS Git URL/revision and lockfile unchanged; no path patch or URL rewrite.',
 }
+proof = temp / 'ios256-canonical-clone-proof'
+subprocess.run(['git', 'clone', '--no-hardlinks', str(source), str(proof)], check=True)
+subprocess.run(['git', '-C', str(proof), 'checkout', '--detach', client['source']], check=True)
+assert git(proof, 'rev-parse', 'HEAD^{tree}') == client['tree']
+assert git(proof, 'status', '--porcelain') == ''
+receipt['canonical_clone_proof'] = {'source': git(proof, 'rev-parse', 'HEAD'), 'tree': git(proof, 'rev-parse', 'HEAD^{tree}'), 'tracked_source_unchanged': True}
 (out / 'source-preload-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
 with open(os.environ['GITHUB_ENV'], 'a') as env:
     env.write('IOS256_CLIENT_GIT=' + str(source) + '\n')
