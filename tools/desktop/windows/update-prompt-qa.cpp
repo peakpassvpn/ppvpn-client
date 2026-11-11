@@ -51,8 +51,16 @@ static BOOL CALLBACK find_prompt(HWND hwnd, LPARAM) {
     // reliable way to attribute a window to the loaded WinSparkle DLL.
     // Count every visible window in this process; the other app is a separate
     // process. This also catches an unexpected native error/permission UI.
-    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd))
-        prompt = hwnd;
+    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd)) {
+        RECT frame={}; wchar_t name[256]={};
+        GetClassNameW(hwnd,name,256);
+        GetWindowRect(hwnd,&frame);
+        std::printf("WINDOW candidate=%p class=%ls frame=%ld,%ld,%ld,%ld style=%llx\n", hwnd,name,frame.left,frame.top,frame.right,frame.bottom,static_cast<unsigned long long>(GetWindowLongPtrW(hwnd,GWL_STYLE)));
+        std::fflush(stdout);
+        // wxWidgets creates zero-area event/owner windows as infrastructure.
+        // They cannot display a prompt; actual native dialogs have a frame.
+        if (frame.right>frame.left && frame.bottom>frame.top) prompt = hwnd;
+    }
     return TRUE;
 }
 static HWND visible_prompt() { prompt = nullptr; EnumWindows(find_prompt, 0); return prompt; }
