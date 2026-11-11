@@ -78,6 +78,10 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
+  update-notification-qa:
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/codex/update-fullscreen-')
+    uses: ./.github/workflows/update-notification-qa.yml
+
   lint:
     name: lint
     runs-on: ubuntu-latest
