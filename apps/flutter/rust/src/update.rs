@@ -172,7 +172,7 @@ mod platform {
     /// WinSparkle's functions (winsparkle.h), as AppUpdater.cs declares them.
     struct WinSparkle {
         init: unsafe extern "C" fn(),
-        foreground_fullscreen: unsafe extern "C" fn() -> c_int,
+        prompt_deferred: unsafe extern "C" fn() -> c_int,
         set_lang: unsafe extern "C" fn(*const c_char),
         set_appcast_url: unsafe extern "C" fn(*const c_char),
         set_eddsa_public_key: unsafe extern "C" fn(*const c_char) -> c_int,
@@ -244,7 +244,7 @@ mod platform {
         }
         Ok(WinSparkle {
             init: symbol!("win_sparkle_init"),
-            foreground_fullscreen: symbol!("win_sparkle_ppvpn_foreground_fullscreen"),
+            prompt_deferred: symbol!("win_sparkle_ppvpn_update_prompt_deferred"),
             set_lang: symbol!("win_sparkle_set_lang"),
             set_appcast_url: symbol!("win_sparkle_set_appcast_url"),
             set_eddsa_public_key: symbol!("win_sparkle_set_eddsa_public_key"),
@@ -267,7 +267,7 @@ mod platform {
         // Missing/incompatible DLL: keep an installation notice in the
         // background rather than bringing it in front of an unknown desktop.
         loaded().map_or(true, |winsparkle| unsafe {
-            (winsparkle.foreground_fullscreen)() != 0
+            (winsparkle.prompt_deferred)() != 0
         })
     }
 

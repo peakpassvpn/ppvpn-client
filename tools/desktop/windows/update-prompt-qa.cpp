@@ -3,6 +3,10 @@
 #include "update_fullscreen.h"
 #include <cstdio>
 #include <cwchar>
+#include <d3d11.h>
+#include <dxgi.h>
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -69,8 +73,52 @@ static void screenshot(const wchar_t* path) {
     fwrite(pixels.data(), pixels.size(), 1, file); fclose(file);
     DeleteObject(bitmap); DeleteDC(memory); ReleaseDC(nullptr, screen);
 }
+// The independent test app can also enter real DXGI exclusive fullscreen.
+// Unsupported adapters/sessions are reported as unavailable, never mocked.
+static IDXGISwapChain* swap_chain = nullptr;
+static ID3D11Device* device = nullptr;
+static ID3D11DeviceContext* context = nullptr;
+static ID3D11RenderTargetView* target = nullptr;
+static void leave_d3d(HWND hwnd) {
+    KillTimer(hwnd, 42);
+    if (swap_chain) { swap_chain->SetFullscreenState(FALSE, nullptr); swap_chain->Release(); swap_chain = nullptr; }
+    if (target) { target->Release(); target = nullptr; }
+    if (context) { context->Release(); context = nullptr; }
+    if (device) { device->Release(); device = nullptr; }
+}
+static bool enter_d3d(HWND hwnd) {
+    leave_d3d(hwnd);
+    DXGI_SWAP_CHAIN_DESC desc = {};
+    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.BufferDesc.RefreshRate.Numerator = 60; desc.BufferDesc.RefreshRate.Denominator = 1;
+    desc.SampleDesc.Count = 1; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.BufferCount = 1; desc.OutputWindow = hwnd; desc.Windowed = TRUE;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    HRESULT result = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE,
+        nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &desc, &swap_chain, &device, nullptr, &context);
+    if (FAILED(result)) result = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP,
+        nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &desc, &swap_chain, &device, nullptr, &context);
+    if (FAILED(result)) { leave_d3d(hwnd); return false; }
+    SetForegroundWindow(hwnd);
+    result = swap_chain->SetFullscreenState(TRUE, nullptr);
+    BOOL exclusive = FALSE; swap_chain->GetFullscreenState(&exclusive, nullptr);
+    if (FAILED(result) || !exclusive) { leave_d3d(hwnd); return false; }
+    ID3D11Texture2D* buffer = nullptr;
+    result = swap_chain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&buffer));
+    if (SUCCEEDED(result)) { result = device->CreateRenderTargetView(buffer, nullptr, &target); buffer->Release(); }
+    if (FAILED(result)) { leave_d3d(hwnd); return false; }
+    SetTimer(hwnd, 42, 33, nullptr);
+    return true;
+}
 static LRESULT CALLBACK other_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    if (msg == WM_APP + 2) return enter_d3d(hwnd) ? 1 : 0;
+    if (msg == WM_TIMER && w == 42 && target) {
+        const float blue[] = {0.05f, 0.15f, 0.55f, 1.0f};
+        context->ClearRenderTargetView(target, blue); swap_chain->Present(1, 0); return 0;
+    }
     if (msg == WM_APP + 1) {
+        leave_d3d(hwnd);
         MONITORINFO monitor = {sizeof(MONITORINFO)};
         GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
         auto rect = w ? monitor.rcMonitor : monitor.rcWork;
@@ -87,7 +135,7 @@ static LRESULT CALLBACK other_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         const wchar_t* text = L"OTHER APP — real fullscreen fixture (not PPVPN)";
         TextOutW(dc, 40, 40, text, static_cast<int>(wcslen(text))); EndPaint(hwnd, &paint); return 0;
     }
-    if (msg == WM_CLOSE) { DestroyWindow(hwnd); PostQuitMessage(0); return 0; }
+    if (msg == WM_CLOSE) { leave_d3d(hwnd); DestroyWindow(hwnd); PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, w, l);
 }
 static int other_app() {
@@ -151,18 +199,34 @@ int wmain(int argc, wchar_t** argv) {
         std::string key = "Software\\PPVPN\\UpdatePromptQA\\" + std::to_string(GetCurrentProcessId());
         bool permission = std::wstring(argv[3]).find(L"permission") == 0;
         bool cancel_permission = std::wstring(argv[3]) == L"permission-cancel";
+        bool d3d = std::wstring(argv[3]) == L"d3d";
         registry(key.c_str());
         if (permission) {
             const char ran[] = "1";
             RegSetKeyValueA(HKEY_CURRENT_USER, key.c_str(), "DidRunOnce", REG_SZ, ran, sizeof(ran));
         } else automatic(0);
-        details(L"PPVPN QA", L"PPVPN Update QA", L"0.7.5"); build(permission ? L"0.7.5.1" : argv[3]);
+        details(L"PPVPN QA", L"PPVPN Update QA", L"0.7.5"); build(permission || d3d ? L"0.7.5.1" : argv[3]);
         std::wstring widefeed(argv[2]); std::string url(widefeed.begin(), widefeed.end()); feed(url.c_str());
         init();
         if (!permission) {
             SendMessageW(other, WM_APP+1, 0, 0); pump(300);
             check(); pump(300);
-            SendMessageW(other, WM_APP+1, 1, 0); pump(300);
+            if (d3d) {
+                if (!SendMessageW(other, WM_APP+2, 0, 0)) {
+                    cleanup(); stop_owned_child();
+                    std::puts("BLOCKED: adapter/session cannot enter DXGI exclusive fullscreen"); return 78;
+                }
+            } else SendMessageW(other, WM_APP+1, 1, 0);
+            pump(1000);
+            if (d3d) {
+                QUERY_USER_NOTIFICATION_STATE notification;
+                auto result = SHQueryUserNotificationState(&notification);
+                std::printf("DXGI exclusive entered; SHQueryUserNotificationState hr=%ld state=%d\n", result, int(notification));
+                if (FAILED(result) || notification != QUNS_RUNNING_D3D_FULL_SCREEN) {
+                    cleanup(); stop_owned_child();
+                    std::puts("BLOCKED: OS did not confirm exclusive D3D fullscreen notification state"); return 78;
+                }
+            }
         }
         require(GetForegroundWindow() == other && ppvpn_update::foreground_fullscreen(), "entered fullscreen while delayed check was in flight");
         // The feed deliberately delays 3 seconds. Fullscreen remains real for
@@ -176,7 +240,7 @@ int wmain(int argc, wchar_t** argv) {
         SendMessageW(other, WM_APP+1, 0, 0); pump(300);
         require(GetForegroundWindow() == other && !ppvpn_update::foreground_fullscreen(), "normal maximized foreground is allowed");
         for (int i=0;i<100 && !visible_prompt();++i) pump(100);
-        bool newer = std::wstring(argv[3]) == L"0.7.5.1" || (permission && !cancel_permission);
+        bool newer = std::wstring(argv[3]) == L"0.7.5.1" || (permission && !cancel_permission) || d3d;
         require(newer ? visible_prompt() != nullptr : visible_prompt() == nullptr, newer ? "original native update dialog appears after fullscreen exits" : "target build does not prompt after relaunch");
         screenshot(L"after-fullscreen.bmp"); close_prompt();
         if (newer && !permission) {

@@ -33,7 +33,13 @@ try {
   nuget restore WinSparkle.sln -NonInteractive
   if ($LASTEXITCODE) { throw 'WinSparkle NuGet restore failed' }
   # Same supported MSBuild path as upstream. Dwmapi supplies physical frame bounds.
-  msbuild WinSparkle.vcxproj /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+  $msbuild = Get-Command MSBuild.exe -ErrorAction SilentlyContinue
+  if ($msbuild) { $msbuildPath = $msbuild.Source } else {
+    $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+    $msbuildPath = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+    if (-not $msbuildPath) { throw 'MSBuild not found in the installed Visual Studio' }
+  }
+  & $msbuildPath WinSparkle.vcxproj /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
   if ($LASTEXITCODE) { throw 'Patched WinSparkle build failed' }
   $dll = Join-Path $source 'x64/Release/WinSparkle.dll'
   if (-not (Test-Path $dll)) { throw 'Patched WinSparkle output missing' }

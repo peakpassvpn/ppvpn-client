@@ -37,6 +37,9 @@ jobs:
             if ($LASTEXITCODE) { throw 'Permission-dialog fullscreen acceptance failed' }
             & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'permission-cancel' 2>&1 | Tee-Object 'permission-cancel.txt'
             if ($LASTEXITCODE) { throw 'Cancelled permission prompt reappeared' }
+            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'd3d' 2>&1 | Tee-Object 'exclusive-d3d.txt'
+            if ($LASTEXITCODE -eq 78) { Write-Host 'Exclusive D3D coverage BLOCKED on this adapter/session; not accepted' }
+            elseif ($LASTEXITCODE) { throw 'Exclusive D3D UI acceptance failed' }
             & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' '0.7.5.2' 2>&1 | Tee-Object 'installed-15min.txt'
             if ($LASTEXITCODE) { throw 'Installed-build observation failed' }
           } finally { Stop-Process -Id $server.Id; Pop-Location }

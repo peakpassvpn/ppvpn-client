@@ -5,7 +5,10 @@ verification and installer handling. The pinned source patch adds a gate to the
 existing UI thread before `Show` / `Raise` and the automatic-check permission
 modal. It delays those windows while the foreground application's frame covers
 its physical monitor. It does not hide an already activated window or substitute
-an in-app message. Ordinary captioned maximized windows are excluded.
+an in-app message. Ordinary captioned maximized windows are excluded. A
+missing/transitioning foreground window or unreadable monitor/frame defers the
+prompt for another check. The explicit `QUNS_RUNNING_D3D_FULL_SCREEN` state
+also defers it; quiet time/DND are not added as new product policy.
 
 The public 0.9.2 API has no cancellable pre-display callback. Checking only when
 starting a request, or using `check_update_without_ui`, leaves a race when another
@@ -36,5 +39,5 @@ persisted completion acknowledgement and force failed saves. Neither replaces
 full-client installation, service restart/relaunch and stale-response acceptance
 listed in `docs/desktop/qa-checklist.md`. Those results must include exact source,
 OS/session, installed versions/builds, raw logs, screenshots and cleanup evidence.
-The shared Rust acknowledgement change also runs in the normal macOS CI job;
+The shared Rust acknowledgement and serialized check-policy changes also run in the normal macOS CI job;
 the Sparkle implementation remains unchanged.

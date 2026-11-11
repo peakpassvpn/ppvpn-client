@@ -1,5 +1,5 @@
 diff --git a/src/dll_api.cpp b/src/dll_api.cpp
-index 6d7aab3..5cd2486 100644
+index 6d7aab3..4aca69b 100644
 --- a/src/dll_api.cpp
 +++ b/src/dll_api.cpp
 @@ -26,0 +27 @@
@@ -7,9 +7,9 @@ index 6d7aab3..5cd2486 100644
 @@ -46,0 +48,7 @@ extern "C"
 +// Reuse the exact detector for the client's installation-in-progress notice.
 +// This query neither initializes the updater nor changes any settings.
-+WIN_SPARKLE_API int __cdecl win_sparkle_ppvpn_foreground_fullscreen()
++WIN_SPARKLE_API int __cdecl win_sparkle_ppvpn_update_prompt_deferred()
 +{
-+    return ppvpn_update::foreground_fullscreen() ? 1 : 0;
++    return ppvpn_update::should_defer_prompt() ? 1 : 0;
 +}
 +
 @@ -76,5 +84,4 @@ WIN_SPARKLE_API void __cdecl win_sparkle_init()
@@ -23,7 +23,7 @@ index 6d7aab3..5cd2486 100644
 +            UpdateChecker *check = new PeriodicUpdateChecker();
 +            check->Start();
 diff --git a/src/ui.cpp b/src/ui.cpp
-index d401aca..b0d53a4 100644
+index d401aca..133e3a0 100644
 --- a/src/ui.cpp
 +++ b/src/ui.cpp
 @@ -26,0 +27 @@
@@ -51,7 +51,7 @@ index d401aca..b0d53a4 100644
 +        m_win = NULL;
 +        return;
 +    }
-+    if (ppvpn_update::foreground_fullscreen())
++    if (ppvpn_update::should_defer_prompt())
 +    {
 +        m_showTimer.StartOnce(1000);
 +        return;
@@ -60,7 +60,7 @@ index d401aca..b0d53a4 100644
 @@ -1282,0 +1308,8 @@ void App::ShowWindow()
 +    // Centering/layout must not turn a check-time decision into a show-time
 +    // race. Never Show/Raise then hide an already activated update window.
-+    if (ppvpn_update::foreground_fullscreen())
++    if (ppvpn_update::should_defer_prompt())
 +    {
 +        m_win->Thaw();
 +        m_showTimer.StartOnce(1000);
@@ -68,7 +68,7 @@ index d401aca..b0d53a4 100644
 +    }
 @@ -1285 +1318,14 @@ void App::ShowWindow()
 -    m_win->Raise();
-+    if (!ppvpn_update::foreground_fullscreen())
++    if (!ppvpn_update::should_defer_prompt())
 +        m_win->Raise();
 +}
 +
@@ -97,7 +97,7 @@ index d401aca..b0d53a4 100644
 +        m_pendingPermission = false;
 +        return;
 +    }
-+    if (ppvpn_update::foreground_fullscreen())
++    if (ppvpn_update::should_defer_prompt())
 +    {
 +        m_pendingPermission = true;
 +        m_showTimer.StartOnce(1000);
@@ -105,7 +105,7 @@ index d401aca..b0d53a4 100644
 +    }
 +    m_pendingPermission = false;
 @@ -1365,0 +1430,6 @@ void App::OnAskForPermission(wxThreadEvent& event)
-+    if (ppvpn_update::foreground_fullscreen())
++    if (ppvpn_update::should_defer_prompt())
 +    {
 +        m_pendingPermission = true;
 +        m_showTimer.StartOnce(1000);
