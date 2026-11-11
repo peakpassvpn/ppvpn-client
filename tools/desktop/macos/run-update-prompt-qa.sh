@@ -7,6 +7,10 @@ mkdir -p "$work"
 arch=$(uname -m)
 "$root/tools/desktop/macos/build-sparkle.sh" "$work/sparkle" "$arch"
 framework=$(cat "$work/sparkle/framework.path")
+# The fixture needs runnable local helpers. Shipping packaging independently
+# applies its existing signing identities and verification inside-out.
+codesign --force --deep --sign - "$framework"
+codesign --verify --deep --strict "$framework"
 python3 - "$root" "$work" <<'PY'
 from pathlib import Path
 import sys,plistlib
@@ -19,7 +23,7 @@ for role in ['host','other']:
  info={'CFBundleIdentifier':f'com.peakpassvpn.update-qa.{role}','CFBundleName':f'PPVPN Update QA {role}','CFBundleExecutable':'probe','CFBundlePackageType':'APPL','CFBundleVersion':'0.7.5.1','CFBundleShortVersionString':'0.7.5','SUEnableAutomaticChecks':False,'SUFeedURL':'http://127.0.0.1:18763/feed.xml','SUPublicEDKey':'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True,'NSAllowsArbitraryLoads':True}}
  (app/'Info.plist').write_bytes(plistlib.dumps(info))
 PY
-swiftc "$work/probe.swift" -F "$(dirname "$framework")" -framework Sparkle -o "$work/host.app/Contents/MacOS/probe" -Xlinker -rpath -Xlinker "$(dirname "$framework")"
+swiftc -parse-as-library "$work/probe.swift" -F "$(dirname "$framework")" -framework Sparkle -o "$work/host.app/Contents/MacOS/probe" -Xlinker -rpath -Xlinker "$(dirname "$framework")"
 cp "$work/host.app/Contents/MacOS/probe" "$work/other.app/Contents/MacOS/probe"
 for role in host other; do codesign --force --sign - "$work/$role.app"; done
 python3 "$root/tools/desktop/windows/update-feed-fixture.py" --macos > "$work/feed.stdout" 2> "$work/feed.stderr" &
