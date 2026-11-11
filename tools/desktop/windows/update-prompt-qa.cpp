@@ -2,6 +2,7 @@
 // installer or installed PPVPN process is opened or changed by this fixture.
 #include "update_fullscreen.h"
 #include <cstdio>
+#include <cwchar>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -26,6 +27,18 @@ static void pump(unsigned ms) {
     } while (GetTickCount64() < end);
 }
 static HMODULE sparkle;
+static PROCESS_INFORMATION owned_child = {};
+static void stop_owned_child() {
+    if (!owned_child.hProcess) return;
+    HWND window = FindWindowW(L"PPVPNOtherAppQA", nullptr);
+    DWORD pid = 0;
+    if (window) GetWindowThreadProcessId(window, &pid);
+    if (pid == owned_child.dwProcessId) PostMessageW(window, WM_CLOSE, 0, 0);
+    if (WaitForSingleObject(owned_child.hProcess, 5000) == WAIT_TIMEOUT)
+        TerminateProcess(owned_child.hProcess, 1); // only our dedicated fixture
+    CloseHandle(owned_child.hProcess);
+    owned_child.hProcess = nullptr;
+}
 static HWND prompt;
 static BOOL CALLBACK find_prompt(HWND hwnd, LPARAM) {
     DWORD pid; GetWindowThreadProcessId(hwnd, &pid);
@@ -97,6 +110,7 @@ template<class T> static T function(const char* name) {
     require(address != nullptr, name); return reinterpret_cast<T>(address);
 }
 int wmain(int argc, wchar_t** argv) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if (argc > 1 && std::wstring(argv[1]) == L"--other-app") return other_app();
     try {
         require(argc == 4, "arguments: DLL feedURL installed-build");
@@ -118,6 +132,7 @@ int wmain(int argc, wchar_t** argv) {
         std::wstring command = L"\"" + std::wstring(executable) + L"\" --other-app";
         STARTUPINFOW startup = {sizeof(startup)}; PROCESS_INFORMATION child = {};
         require(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &child) != FALSE, "separate other-app process started");
+        owned_child = child;
         CloseHandle(child.hThread);
         HWND other = nullptr;
         for (int i=0; i<100 && !other; ++i) { pump(50); other = FindWindowW(L"PPVPNOtherAppQA", nullptr); }
@@ -181,9 +196,19 @@ int wmain(int argc, wchar_t** argv) {
             }
             screenshot(L"installed-after-15min.bmp");
         }
-        cleanup(); PostMessageW(other, WM_CLOSE, 0, 0); WaitForSingleObject(child.hProcess, 5000); CloseHandle(child.hProcess);
+        cleanup(); stop_owned_child();
         RegDeleteTreeA(HKEY_CURRENT_USER, key.c_str());
         std::puts("PASS real Windows updater component UI scenario; no installer or VPN was run");
         return 0;
-    } catch (const std::exception& error) { std::fprintf(stderr,"FAIL %s\n",error.what()); return 1; }
+    } catch (const std::exception& error) {
+        std::fprintf(stderr,"FAIL %s\n",error.what());
+        try { screenshot(L"failure-desktop.bmp"); } catch (...) {}
+        close_prompt();
+        if (sparkle) {
+            auto cleanup = reinterpret_cast<Void>(GetProcAddress(sparkle, "win_sparkle_cleanup"));
+            if (cleanup) cleanup();
+        }
+        stop_owned_child();
+        return 1;
+    }
 }

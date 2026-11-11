@@ -18,7 +18,7 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cl /nologo /std:c++17 /EHsc /W4 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe
+          cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe
       - name: Actual console UI and installed-build observation
         shell: powershell
         run: |
