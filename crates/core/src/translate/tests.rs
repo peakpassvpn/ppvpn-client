@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::*;
 use crate::config::Platform;
@@ -287,7 +287,10 @@ fn a_multi_ingress_node_is_a_selector_over_fallback_and_ingresses() {
     );
 
     // A single ingress is the node itself.
-    let anytls = outbound(&config, &node_tag(NODE_2));
+    let guard = outbound(&config, &node_tag(NODE_2));
+    assert_eq!(guard["type"], "selector");
+    assert_eq!(guard["disable_udp"], true);
+    let anytls = outbound(&config, guard["default"].as_str().unwrap());
     assert_eq!(anytls["type"], "anytls");
     assert_eq!(
         anytls["tls"],
@@ -525,9 +528,11 @@ fn desktop_tun_routes_ipv6_and_keeps_ingresses_out() {
         !excluded.contains(&"10.0.0.0/8"),
         "the TUN's /30 is in 10/8"
     );
-    assert!(excluded
-        .iter()
-        .any(|p| p.contains(':') && p.starts_with("fc")));
+    assert!(
+        excluded
+            .iter()
+            .any(|p| p.contains(':') && p.starts_with("fc"))
+    );
     assert!(tun.get("stack").is_none(), "sail warns on stack");
 
     let no_ipv6 = Options {
@@ -623,9 +628,9 @@ fn dns_mirrors_domain_rules_in_order() {
 #[test]
 fn dns_servers_local_then_remote_in_order() {
     let options = Options {
-        tun: Some(desktop_tun(LocalDns::Servers(vec!["192.168.50.1:53"
-            .parse()
-            .unwrap()]))),
+        tun: Some(desktop_tun(LocalDns::Servers(vec![
+            "192.168.50.1:53".parse().unwrap(),
+        ]))),
         ..Options::default()
     };
     let config = value(&translate(&with_final(contract(), "direct"), &options).unwrap());
@@ -679,7 +684,7 @@ fn d4_rejects_udp_to_a_fixed_udp_less_node() {
     let rules = config["route"]["rules"].as_array().unwrap();
     assert!(rules.iter().all(|r| r["network"] != json!(["udp"])));
 
-    // The selected node is the Engine's: nothing here.
+    // Dynamic selection is enforced by guarded handlers, not a catch-all route rule.
     let mut profile = routing();
     profile.selection.default_node_id = "node-b".into();
     profile.routing.rules.clear();
@@ -833,14 +838,18 @@ fn without_a_host_ipv6_path_direct_hands_global_ipv6_its_domain() {
         let t = translate(&contract(), &options).unwrap();
         assert!(!t.direct_ipv6_hand_off);
         let config = value(&t);
-        assert!(outbound(&config, DIRECT_TAG)
-            .get("domain_resolver")
-            .is_none());
-        assert!(config["route"]["rules"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|r| r["override_destination"] != "proxy_and_direct"));
+        assert!(
+            outbound(&config, DIRECT_TAG)
+                .get("domain_resolver")
+                .is_none()
+        );
+        assert!(
+            config["route"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["override_destination"] != "proxy_and_direct")
+        );
     }
 }
 
@@ -1165,5 +1174,48 @@ fn the_desktop_tun_routes_no_private_network_but_its_own() {
     }
     for public in ["8.8.4.4", "2001:db8::1"] {
         assert!(!covered(public), "{public} is excluded");
+    }
+}
+
+// D4 handler-level regression; independent of the live hostname incident.
+#[test]
+fn d4_contract_selected_global_udp_disabled_node_has_real_handler_guard() {
+    let mut p = contract();
+    p.routing.rules.clear();
+    for mode in [RoutingMode::Rules, RoutingMode::Global] {
+        let t = translate(
+            &p,
+            &Options {
+                mode,
+                selected_node_id: Some(NODE_2.into()),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        let config = value(&t);
+        assert!(!p.nodes[1].capabilities.udp);
+        assert_eq!(config["route"]["final"], SELECTED_TAG);
+        assert!(config["route"].get("rules").is_none());
+        assert_eq!(outbound(&config, &node_tag(NODE_2))["disable_udp"], true);
+    }
+}
+
+#[test]
+fn d4_contract_manual_and_auto_backup_have_real_handler_guard() {
+    let mut p = contract();
+    p.nodes[0].ingresses[1].capabilities.udp = false;
+    for pin in [None, Some("9002")] {
+        let mut options = Options::default();
+        if let Some(pin) = pin {
+            options.pins.insert(NODE_1.into(), pin.into());
+        }
+        let config = value(&translate(&p, &options).unwrap());
+        let leaf = ingress_tag(NODE_1, "9002");
+        assert_eq!(outbound(&config, &leaf)["network"], "tcp");
+        assert_eq!(
+            outbound(&config, &node_tag(NODE_1))["default"],
+            pin.map(|_| leaf)
+                .unwrap_or_else(|| format!("{}{AUTO_SUFFIX}", node_tag(NODE_1)))
+        );
     }
 }

@@ -263,12 +263,14 @@ async fn runs_sail_through_the_local_proxy() {
         ),
         ("pick", "direct", "direct-b", "selected")
     );
-    assert!(runtime
-        .groups()
-        .await
-        .unwrap()
-        .iter()
-        .any(|g| g.tag == "pick" && g.now == "direct-b" && !g.fixed));
+    assert!(
+        runtime
+            .groups()
+            .await
+            .unwrap()
+            .iter()
+            .any(|g| g.tag == "pick" && g.now == "direct-b" && !g.fixed)
+    );
 
     // Users replaced in place: the listener stays, the old user is refused.
     runtime
@@ -357,7 +359,7 @@ async fn mirror(addr: SocketAddr) -> Option<SocketAddr> {
 // server by its scope where the host has one (macOS's lo0 has fe80::1).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dns_local_dials_through_the_direct_outbound() {
-    use crate::localdns::exchange::{exchange, Dial, RuntimeDial};
+    use crate::localdns::exchange::{Dial, RuntimeDial, exchange};
     use hickory_proto::op::{Message, MessageType, OpCode, Query};
     use hickory_proto::rr::{Name, RecordType};
 
@@ -797,19 +799,23 @@ async fn a_reload_takes_the_route_s_interface_options() {
     missing["route"]["default_interface"] = "ppvpn-none0".into();
     let refused = runtime.reload(&missing.to_string()).await.unwrap_err();
     assert_eq!(refused.code, "config", "{refused:?}");
-    assert!(runtime
-        .dial_tcp("direct", Target::Addr(echo), WAIT)
-        .await
-        .is_ok());
+    assert!(
+        runtime
+            .dial_tcp("direct", Target::Addr(echo), WAIT)
+            .await
+            .is_ok()
+    );
 
     let mut bound: serde_json::Value = serde_json::from_str(&plain).unwrap();
     bound["route"]["default_interface"] = "lo".into();
     bound["route"]["auto_detect_interface"] = false.into();
     runtime.reload(&bound.to_string()).await.unwrap();
-    assert!(runtime
-        .dial_tcp("direct", Target::Addr(echo), WAIT)
-        .await
-        .is_ok());
+    assert!(
+        runtime
+            .dial_tcp("direct", Target::Addr(echo), WAIT)
+            .await
+            .is_ok()
+    );
     runtime.reload(&plain).await.unwrap();
     runtime.stop().await.unwrap();
 }
@@ -909,10 +915,12 @@ async fn rules_may_name_an_inbound_that_does_not_run() {
         .start(&base)
         .await
         .expect("a rule naming an inbound that does not run is no error");
-    assert!(runtime
-        .dial_tcp("direct", Target::Addr(echo), WAIT)
-        .await
-        .is_ok());
+    assert!(
+        runtime
+            .dial_tcp("direct", Target::Addr(echo), WAIT)
+            .await
+            .is_ok()
+    );
 
     // free_port releases the port before sail binds it: another test may
     // take it meanwhile. Another port then.
@@ -1330,7 +1338,7 @@ fn self_signed() -> (Vec<String>, Vec<String>) {
     use btls::nid::Nid;
     use btls::pkey::PKey;
     use btls::x509::extension::SubjectAlternativeName;
-    use btls::x509::{X509NameBuilder, X509};
+    use btls::x509::{X509, X509NameBuilder};
     let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
     let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
     let mut name = X509NameBuilder::new().unwrap();
@@ -1544,3 +1552,162 @@ async fn observation_reads_native_registry_and_successful_start_generation() {
 
 #[path = "sail_capture_tests.rs"]
 mod capture_tests;
+
+/// Real352 Sail2a8 AnyTLS roundtrip over loopback. No production profile,
+/// server, DNS, target, account, or payload capture is used.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn d4_contract_real_sail_anytls_selected_manual_and_fallback_network_control() {
+    use crate::request::RoutingMode;
+    use crate::translate::{self, SELECTED_TAG};
+    use serde_json::{Value, json};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let target = socket.local_addr().unwrap();
+    let tcp_target = echo().await;
+    let received = Arc::new(AtomicUsize::new(0));
+    let count = received.clone();
+    let echo_task = tokio::spawn(async move {
+        let mut data = [0u8; 64];
+        while let Ok((n, from)) = socket.recv_from(&mut data).await {
+            count.fetch_add(1, Ordering::SeqCst);
+            socket.send_to(&data[..n], from).await.unwrap();
+        }
+    });
+    let secret = password();
+    let (certificate, key) = self_signed();
+    let server = SailRuntime::new(options("d4-anytls-server")).unwrap();
+    let server_port = start_on_a_free_port(&server, |port| json!({
+        "log":{"level":"error"}, "inbounds":[{"type":"anytls","tag":"local-anytls","listen":"127.0.0.1","listen_port":port,"users":[{"name":"synthetic","password":secret}],"tls":{"enabled":true,"server_name":"localhost","certificate":certificate,"key":key}}],
+        "outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}
+    }).to_string()).await;
+    let closed = closed_port();
+    for case in [
+        "enabled-control",
+        "selected-global",
+        "manual-disabled-backup",
+        "auto-disabled-backup",
+    ] {
+        for enforce_network_control in [true] {
+            // Read the public synthetic contract fixture, never a device profile.
+            let mut profile: Value = serde_json::from_slice(
+                &std::fs::read(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../testdata/golden/contract/profiles/base.json"
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+            let mut node = profile["nodes"][1].clone();
+            let id = node["id"].as_str().unwrap().to_owned();
+            node["capabilities"]["udp"] = (case != "selected-global").into();
+            node["ingresses"][0]["endpoint"] = json!({"domain":"localhost","ip":"127.0.0.1","port": if case == "auto-disabled-backup" {closed} else {server_port}});
+            node["ingresses"][0]["credentials"]["anytls"]["password"] = secret.clone().into();
+            node["ingresses"][0]["capabilities"]["udp"] = (case != "selected-global").into();
+            if case == "manual-disabled-backup" || case == "auto-disabled-backup" {
+                let mut backup = node["ingresses"][0].clone();
+                backup["role"] = "backup".into();
+                backup["endpoint_key"] = "9004".into();
+                backup["replica_ordinal"] = 1.into();
+                backup["capabilities"]["udp"] = false.into();
+                backup["endpoint"]["port"] = server_port.into();
+                node["ingresses"].as_array_mut().unwrap().push(backup);
+            }
+            profile["nodes"] = json!([node]);
+            profile["selection"]["default_node_id"] = id.clone().into();
+            profile["routing"]["rules"] = json!([]);
+            let parsed = crate::profile::parse(&serde_json::to_vec(&profile).unwrap()).unwrap();
+            let mut opts = translate::Options {
+                mode: RoutingMode::Global,
+                ..translate::Options::default()
+            };
+            opts.health_check.urls =
+                vec![format!("http://127.0.0.1:{closed}/owned-closed-control")];
+            if case == "manual-disabled-backup" {
+                opts.pins.insert(id.clone(), "9004".into());
+            }
+            let mut cfg: Value =
+                serde_json::from_str(&translate::translate(&parsed, &opts).unwrap().json).unwrap();
+            assert_eq!(cfg["route"]["final"], SELECTED_TAG);
+            let port = free_port();
+            cfg["log"] = json!({"level":"error"});
+            cfg["inbounds"] = json!([{"type":"mixed","tag":"own-test-in","listen":"127.0.0.1","listen_port":port}]);
+            if case != "enabled-control" {
+                let guard_tag = if case == "selected-global" {
+                    translate::node_tag(&id)
+                } else {
+                    translate::ingress_tag(&id, "9004")
+                };
+                assert_eq!(
+                    cfg["outbounds"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|o| o["tag"] == guard_tag)
+                        .unwrap()["disable_udp"],
+                    true
+                );
+            }
+            for leaf in cfg["outbounds"].as_array_mut().unwrap() {
+                if leaf["type"] == "anytls" {
+                    assert!(
+                        leaf.get("network").is_none(),
+                        "AnyTLS must never get unsupported network option"
+                    );
+                    leaf["tls"] = json!({"enabled":true,"server_name":"localhost","insecure":true});
+                }
+            }
+            let client =
+                SailRuntime::new(options(&format!("d4-{case}-{enforce_network_control}"))).unwrap();
+            client.start(&cfg.to_string()).await.unwrap();
+            let before = received.load(Ordering::SeqCst);
+            let mut control = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            control.write_all(&[5, 1, 0]).await.unwrap();
+            let mut auth = [0; 2];
+            control.read_exact(&mut auth).await.unwrap();
+            assert_eq!(auth, [5, 0]);
+            control
+                .write_all(&[5, 3, 0, 1, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            let mut relay = [0; 10];
+            control.read_exact(&mut relay).await.unwrap();
+            assert_eq!(relay[1], 0);
+            let relay_port = u16::from_be_bytes([relay[8], relay[9]]);
+            let probe = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let mut frame = vec![0, 0, 0, 1, 127, 0, 0, 1];
+            frame.extend_from_slice(&target.port().to_be_bytes());
+            frame.extend_from_slice(b"synthetic-d4");
+            probe
+                .send_to(&frame, ("127.0.0.1", relay_port))
+                .await
+                .unwrap();
+            let mut answer = [0u8; 128];
+            let back = tokio::time::timeout(Duration::from_secs(2), probe.recv(&mut answer)).await;
+            let echoed = matches!(back,Ok(Ok(n)) if &answer[10..n]==b"synthetic-d4");
+            drop(control);
+            let mut tcp = client
+                .dial_tcp(SELECTED_TAG, Target::Addr(tcp_target), WAIT)
+                .await
+                .expect("UDP disabled control must preserveTCP");
+            round_trip(&mut tcp, b"d4-control-tcp").await;
+            drop(tcp);
+            client.stop().await.unwrap();
+            if case != "enabled-control" {
+                assert!(
+                    !echoed && received.load(Ordering::SeqCst) == before,
+                    "real Sail selector.disable_udp must block UDP ({case})"
+                );
+            } else {
+                assert!(
+                    echoed && received.load(Ordering::SeqCst) == before + 1,
+                    "UDP-enabled AnyTLS must retain UDP ({case})"
+                );
+            }
+            println!(
+                "D4_FIXED_CASE case={case} policy_applied={enforce_network_control} echo={echoed} tcp_ok=true"
+            );
+        }
+    }
+    server.stop().await.unwrap();
+    echo_task.abort();
+}

@@ -2,12 +2,12 @@
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use super::lifecycle_tests::{drain, engine, kinds, profile, running, NODE_1, NODE_2, R1};
+use super::lifecycle_tests::{NODE_1, NODE_2, R1, drain, engine, kinds, profile, running};
 use super::*;
 use crate::request::Pin;
 use crate::runtime::fake::{Call, Op};
 use crate::runtime::{RuntimeConnection, RuntimeTraffic};
-use crate::translate::{ingress_tag, node_tag, AUTO_SUFFIX, SELECTED_TAG};
+use crate::translate::{AUTO_SUFFIX, SELECTED_TAG, ingress_tag, node_tag};
 
 #[tokio::test]
 async fn select_node_before_and_after_a_profile() {
@@ -273,4 +273,46 @@ async fn a_pinned_node_keeps_its_group_checked() {
 
     let _ = engine.shutdown().await;
     assert!(!timer(), "shut down");
+}
+
+#[tokio::test]
+async fn d4_contract_engine_manual_selection_and_pin_keep_static_handler_guards() {
+    use super::lifecycle_tests::profile_with;
+    let (engine, fake) = engine();
+    let p = profile_with(R1, |p| {
+        p["nodes"][0]["ingresses"][1]["capabilities"]["udp"] = false.into();
+    });
+    engine
+        .apply(ApplyRequest::new(p).with_routing_mode(RoutingMode::Global))
+        .await
+        .unwrap();
+    engine.start().await.unwrap();
+    assert!(!engine.nodes().iter().find(|n| n.id == NODE_2).unwrap().udp);
+    let before = fake.config().unwrap();
+    engine.select_node(NODE_2).await.unwrap();
+    assert_eq!(
+        fake.calls().last(),
+        Some(&Call::Select(SELECTED_TAG.into(), node_tag(NODE_2)))
+    );
+    assert_eq!(
+        fake.config().unwrap(),
+        before,
+        "selection changes selector only, no network guard reload"
+    );
+    engine.pin_ingress(NODE_1, Some("9002")).await.unwrap();
+    assert_eq!(
+        fake.calls().last(),
+        Some(&Call::Select(node_tag(NODE_1), ingress_tag(NODE_1, "9002")))
+    );
+    let config: serde_json::Value = serde_json::from_str(&fake.config().unwrap()).unwrap();
+    assert_eq!(
+        config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["tag"] == ingress_tag(NODE_1, "9002"))
+            .unwrap()["network"],
+        "tcp"
+    );
+    engine.stop().await.unwrap();
 }

@@ -14,8 +14,8 @@
 //!
 //! D4: a node whose capabilities say no UDP gets its UDP rejected, never
 //! re-routed: before every rule routing to it, the same match on UDP is
-//! rejected. What a rule cannot know (the selected node, an ingress of a
-//! failover group) is the Engine's.
+//! rejected. Dynamic selections and failover also carry the intersection of
+//! node/ingress UDP capabilities in the actual Sail handler, not only tags.
 
 #![allow(dead_code)] // the Engine is wired to it with the runtime
 
@@ -23,21 +23,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::net::IpAddr;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::error::{codes, Error};
+use crate::error::{Error, codes};
 use crate::profile::{
-    normalize_domain, parse_port_range, Ingress, Node, Profile, RoutingAction, RoutingMatch, Tls,
+    Ingress, Node, Profile, RoutingAction, RoutingMatch, Tls, normalize_domain, parse_port_range,
 };
 use crate::request::RoutingMode;
 
 mod tun;
 #[allow(unused_imports)] // the Engine's, once it is wired to the runtime
 pub(crate) use tun::{
-    interface_name, local_dns_servers, LocalDns, Tun, DNS_LOCAL_TAG, IPROUTE2_RULE_INDEX,
-    IPROUTE2_TABLE_INDEX, TUN_DNS_ADDRESS, TUN_INBOUND_TAG, TUN_INET4_ADDRESS, TUN_INET6_ADDRESS,
-    TUN_MTU,
+    DNS_LOCAL_TAG, IPROUTE2_RULE_INDEX, IPROUTE2_TABLE_INDEX, LocalDns, TUN_DNS_ADDRESS,
+    TUN_INBOUND_TAG, TUN_INET4_ADDRESS, TUN_INET6_ADDRESS, TUN_MTU, Tun, interface_name,
+    local_dns_servers,
 };
 
 /// The selector over every node, in profile order.
@@ -531,7 +531,7 @@ impl Builder {
         if let [ingress] = node.ingresses.as_slice() {
             t.ingress_keys
                 .insert(tag.clone(), ingress.endpoint_key.clone());
-            return Ok(vec![outbound(ingress, &tag)?]);
+            return guarded_outbounds(ingress, &tag, node.capabilities.udp);
         }
         let auto = format!("{tag}{AUTO_SUFFIX}");
         let mut members = Vec::with_capacity(node.ingresses.len());
@@ -545,7 +545,10 @@ impl Builder {
             if pin == Some(ingress.endpoint_key.as_str()) {
                 default = member.clone();
             }
-            outbounds.push(outbound(ingress, &member).map_err(|e| format!("ingress {i}: {e}"))?);
+            outbounds.extend(
+                guarded_outbounds(ingress, &member, node.capabilities.udp)
+                    .map_err(|e| format!("ingress {i}: {e}"))?,
+            );
             t.outbound_nodes.insert(member.clone(), node.id.clone());
             t.ingress_keys
                 .insert(member.clone(), ingress.endpoint_key.clone());
@@ -862,6 +865,35 @@ fn masked_prefix(value: &str) -> Option<String> {
         _ => return None,
     };
     Some(format!("{masked}/{bits}"))
+}
+
+/// Carry the product UDP contract into the actual Sail handler, including
+/// dynamic selected/manual/fallback paths. A route-tag reject alone cannot
+/// cover these choices. Keep TCP selection and existing connections intact.
+fn guarded_outbounds(ingress: &Ingress, tag: &str, node_udp: bool) -> Result<Vec<Value>, String> {
+    let mut leaf = outbound(ingress, tag)?;
+    if node_udp && ingress.capabilities.udp {
+        return Ok(vec![leaf]);
+    }
+    match ingress.protocol.as_str() {
+        // Exact Sail2a8 registry ONE_NETWORK supports these protocols.
+        "shadowsocks" | "vless" => {
+            leaf["network"] = "tcp".into();
+            Ok(vec![leaf])
+        }
+        "anytls" => {
+            // AnyTLS rejects `network`. Its existing one-member selector can
+            // suppress datagram support without inventing a new wire policy.
+            let inner = format!("{tag}-udp-carrier");
+            leaf["tag"] = inner.clone().into();
+            Ok(vec![
+                json!({"type":"selector", "tag":tag, "outbounds":[inner.clone()],
+                "default":inner, "disable_udp":true, "interrupt_exist_connections":false}),
+                leaf,
+            ])
+        }
+        other => Err(format!("unsupported UDP capability guard for {other:?}")),
+    }
 }
 
 fn outbound(ingress: &Ingress, tag: &str) -> Result<Value, String> {
