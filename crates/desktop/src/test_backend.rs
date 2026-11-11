@@ -21,6 +21,11 @@ pub(crate) struct AppleConfigGate {
     pub(crate) release: std::sync::mpsc::Receiver<()>,
 }
 
+pub(crate) struct UnreadCountGate {
+    pub(crate) entered: std::sync::mpsc::Sender<u64>,
+    pub(crate) release: std::sync::mpsc::Receiver<()>,
+}
+
 #[derive(Default)]
 pub(crate) struct Backend {
     pub(crate) messages: Mutex<Vec<Value>>,
@@ -28,6 +33,8 @@ pub(crate) struct Backend {
     pub(crate) forbidden: Mutex<bool>,
     pub(crate) requests: Mutex<Vec<String>>,
     pub(crate) unread: Mutex<u64>,
+    pub(crate) unread_count_gate: Mutex<Option<UnreadCountGate>>,
+    pub(crate) unread_count_status: Mutex<Option<&'static str>>,
     /// Push queue: items not yet acked are delivered.
     pub(crate) push_items: Mutex<Vec<Value>>,
     pub(crate) acked: Mutex<Vec<u64>>,
@@ -166,10 +173,16 @@ impl Backend {
                     r#"{"code":"SUBSCRIPTION_NOT_FOUND"}"#.into(),
                 ),
             },
-            ("GET", "/api/v1/messages/unread-count") => (
-                "200 OK",
-                json!({"count": *self.unread.lock().unwrap()}).to_string(),
-            ),
+            ("GET", "/api/v1/messages/unread-count") => {
+                let count = *self.unread.lock().unwrap();
+                let status = self.unread_count_status.lock().unwrap().unwrap_or("200 OK");
+                let gate = self.unread_count_gate.lock().unwrap().take();
+                if let Some(gate) = gate {
+                    gate.entered.send(count).unwrap();
+                    gate.release.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                (status, json!({"count": count}).to_string())
+            }
             ("GET", "/api/v1/messages") => {
                 let mut all = self.messages.lock().unwrap().clone();
                 all.reverse();

@@ -11,9 +11,15 @@ use std::sync::{
 };
 use tokio::sync::{mpsc, watch};
 
+#[cfg(feature = "internal-udp-target-diagnostics")]
+#[path = "udp_target.rs"]
+mod udp_target;
+
 type Settings = extern "C" fn(*mut c_void, u64, *const c_char) -> i32;
 struct Channels {
     generation: u64,
+    #[cfg(feature = "internal-udp-target-diagnostics")]
+    udp_target: udp_target::Counters,
     owner: Arc<SettingsCallbacks>,
     input: mpsc::Sender<Vec<u8>>,
     output: std::sync::mpsc::Receiver<Vec<u8>>,
@@ -23,11 +29,62 @@ static CHANNELS: Mutex<Option<Channels>> = Mutex::new(None);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 const LEASE: &str = "ios-public-packet-flow";
 
-pub(crate) fn send(generation: u64, bytes: &[u8]) -> bool {
+#[cfg(feature = "internal-diagnostics")]
+static INPUT_OFFERED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "internal-diagnostics")]
+static INPUT_REJECTED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "internal-diagnostics")]
+static OUTPUT_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "internal-diagnostics")]
+pub(crate) fn diagnostics() -> serde_json::Value {
     let slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
-    slot.as_ref()
+    let snapshot = serde_json::json!({
+        "generation": slot.as_ref().map(|c| c.generation),
+        "input_queued": slot.as_ref().map(|c| c.input.max_capacity() - c.input.capacity()),
+        "input_offered_process_total": INPUT_OFFERED.load(Ordering::Relaxed),
+        "input_rejected_process_total": INPUT_REJECTED.load(Ordering::Relaxed),
+        "output_dropped_process_total": OUTPUT_DROPPED.load(Ordering::Relaxed),
+        "note": "process totals; rejected includes full/closed/stale generation; nontransactional counters"
+    });
+    #[cfg(feature = "internal-udp-target-diagnostics")]
+    let snapshot = {
+        let mut snapshot = snapshot;
+        snapshot["raw_udp_target"] = slot.as_ref().map_or(serde_json::Value::Null, |c| {
+            serde_json::json!({"schema": 1, "coverage": "ipv4_udp_initial_fragment_header_only",
+                "generation": c.generation,
+                "offered": c.udp_target.offered.load(Ordering::Relaxed),
+                "accepted": c.udp_target.accepted.load(Ordering::Relaxed),
+                "rejected": c.udp_target.rejected.load(Ordering::Relaxed),
+                "note": "fixed fixture destination; no IPv6/extensions/reassembly/checksum validation; nontransactional counters"})
+        });
+        snapshot
+    };
+    snapshot
+}
+
+pub(crate) fn send(generation: u64, bytes: &[u8]) -> bool {
+    #[cfg(feature = "internal-diagnostics")]
+    INPUT_OFFERED.fetch_add(1, Ordering::Relaxed);
+    let slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
+    let accepted = slot
+        .as_ref()
         .filter(|c| c.generation == generation)
-        .is_some_and(|c| c.input.try_send(bytes.to_vec()).is_ok())
+        .is_some_and(|c| {
+            #[cfg(feature = "internal-udp-target-diagnostics")]
+            let observed = c.udp_target.offer(bytes);
+            let accepted = c.input.try_send(bytes.to_vec()).is_ok();
+            #[cfg(feature = "internal-udp-target-diagnostics")]
+            if observed {
+                c.udp_target.settle(accepted);
+            }
+            accepted
+        });
+    #[cfg(feature = "internal-diagnostics")]
+    if !accepted {
+        INPUT_REJECTED.fetch_add(1, Ordering::Relaxed);
+    }
+    accepted
 }
 pub(crate) fn receive(generation: u64, bytes: &mut [u8]) -> usize {
     let slot = CHANNELS.lock().unwrap_or_else(|p| p.into_inner());
@@ -206,6 +263,8 @@ impl CaptureAttachment for Attachment {
         }
         *slot = Some(Channels {
             generation: self.generation,
+            #[cfg(feature = "internal-udp-target-diagnostics")]
+            udp_target: Default::default(),
             owner: self.provider.callbacks.clone(),
             input,
             output: down,
@@ -232,7 +291,14 @@ impl CaptureAttachment for Attachment {
                 tokio::select! { biased;
                     _ = stopped_down.changed() => return,
                     packet = flow.downlink.recv() => match packet {
-                        Some(packet) => { let _ = output.try_send(packet); },
+                        Some(packet) => {
+                            let sent = output.try_send(packet);
+                            #[cfg(feature = "internal-diagnostics")]
+                            if sent.is_err() {
+                                OUTPUT_DROPPED.fetch_add(1, Ordering::Relaxed);
+                            }
+                            let _ = sent;
+                        },
                         None => return,
                     }
                 }
@@ -349,14 +415,32 @@ mod tests {
         let (end, _) = watch::channel(false);
         *CHANNELS.lock().unwrap() = Some(Channels {
             generation: 123,
+            #[cfg(feature = "internal-udp-target-diagnostics")]
+            udp_target: Default::default(),
             owner: Arc::new(SettingsCallbacks::default()),
             input,
             output: down,
             end,
         });
+        #[cfg(feature = "internal-diagnostics")]
+        let before = diagnostics();
         assert!(!send(122, &[0x45, 1]));
         assert!(send(123, &[0x45, 2]));
         assert!(!send(123, &[0x45, 3]));
+        #[cfg(feature = "internal-diagnostics")]
+        {
+            let sample = diagnostics();
+            assert_eq!(sample["generation"], 123);
+            assert_eq!(sample["input_queued"], 1);
+            assert_eq!(
+                sample["input_offered_process_total"].as_u64().unwrap(),
+                before["input_offered_process_total"].as_u64().unwrap() + 3
+            );
+            assert_eq!(
+                sample["input_rejected_process_total"].as_u64().unwrap(),
+                before["input_rejected_process_total"].as_u64().unwrap() + 2
+            );
+        }
         assert_eq!(rx.try_recv().unwrap(), [0x45, 2]);
         output.try_send(vec![0x60, 7]).unwrap();
         let mut buffer = [0; 8];
@@ -366,6 +450,48 @@ mod tests {
         CHANNELS.lock().unwrap().take();
         assert!(!send(123, &[0x45]));
         assert_eq!(receive(123, &mut buffer), 0);
+    }
+    #[cfg(feature = "internal-udp-target-diagnostics")]
+    #[test]
+    fn raw_udp_target_counts_current_queue_admission_only() {
+        let _serial = crate::host::test_lock();
+        let (input, mut rx) = mpsc::channel(1);
+        let (_, output) = std::sync::mpsc::sync_channel(1);
+        let (end, _) = watch::channel(false);
+        *CHANNELS.lock().unwrap() = Some(Channels {
+            generation: 456,
+            udp_target: Default::default(),
+            owner: Arc::new(SettingsCallbacks::default()),
+            input,
+            output,
+            end,
+        });
+        let mut packet = udp_packet(51280);
+        packet[16..20].copy_from_slice(&[47, 115, 203, 193]);
+        assert!(!send(455, &packet));
+        assert!(send(456, &packet));
+        assert!(!send(456, &packet));
+        let sample = diagnostics();
+        assert_eq!(sample["raw_udp_target"]["generation"], 456);
+        assert_eq!(sample["raw_udp_target"]["offered"], 2);
+        assert_eq!(sample["raw_udp_target"]["accepted"], 1);
+        assert_eq!(sample["raw_udp_target"]["rejected"], 1);
+        assert_eq!(rx.try_recv().unwrap(), packet);
+        drop(rx);
+        assert!(!send(456, &packet));
+        assert_eq!(diagnostics()["raw_udp_target"]["rejected"], 2);
+        CHANNELS.lock().unwrap().take();
+        assert!(!send(456, &packet));
+        assert!(diagnostics()["raw_udp_target"].is_null());
+    }
+    #[cfg(all(
+        feature = "internal-diagnostics",
+        not(feature = "internal-udp-target-diagnostics")
+    ))]
+    #[test]
+    fn udp_target_snapshot_absent_without_target_feature() {
+        let _serial = crate::host::test_lock();
+        assert!(diagnostics().get("raw_udp_target").is_none());
     }
     static CURRENT: AtomicU64 = AtomicU64::new(0);
     extern "C" fn accept(_: *mut c_void, generation: u64, settings: *const c_char) -> i32 {
@@ -526,6 +652,8 @@ mod tests {
         let (end, _) = watch::channel(false);
         *CHANNELS.lock().unwrap() = Some(Channels {
             generation: 987,
+            #[cfg(feature = "internal-udp-target-diagnostics")]
+            udp_target: Default::default(),
             owner: callbacks.clone(),
             input,
             output,

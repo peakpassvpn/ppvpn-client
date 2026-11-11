@@ -599,6 +599,12 @@ impl Datagram for SailDatagram {
 
 #[async_trait]
 impl Runtime for SailRuntime {
+    #[cfg(feature = "internal-diagnostics")]
+    fn internal_diagnostics(&self) -> Result<serde_json::Value, RuntimeError> {
+        let snapshot = self.instance.internal_diagnostics().map_err(error)?;
+        serde_json::to_value(snapshot)
+            .map_err(|_| RuntimeError::new("internal", "internal snapshot serialization failed"))
+    }
     fn has_dynamic_capture(&self) -> bool {
         self.dynamic_capture
     }

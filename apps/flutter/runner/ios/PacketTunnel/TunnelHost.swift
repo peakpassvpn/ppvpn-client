@@ -15,6 +15,17 @@ import Foundation
 #endif
 
 final class TunnelHost {
+  #if PPVPN_INTERNAL_DIAGNOSTICS
+    static func packetDiagnostics() -> [String: Any] {
+      #if canImport(PPVPNTunnel)
+        guard let text = take(ppvpn_tunnel_internal_packet_diagnostics()),
+          let value = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return ["error": "packet_stats_unavailable"] }
+        return value
+      #else
+        return ["error": "tunnel_not_linked"]
+      #endif
+    }
+  #endif
   /// The host stopped by itself; the reason's message.
   typealias Exit = (String) -> Void
 

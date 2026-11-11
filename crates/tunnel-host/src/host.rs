@@ -387,6 +387,13 @@ fn engine() -> Option<(tokio::runtime::Handle, Engine)> {
     }
 }
 
+#[cfg(feature = "internal-diagnostics")]
+pub(crate) fn internal_diagnostics() -> Result<serde_json::Value, ApiError> {
+    let (_, engine) =
+        engine().ok_or_else(|| api_error("TUNNEL_NOT_RUNNING", "host is not running", false))?;
+    engine.internal_diagnostics().map_err(ApiError::from)
+}
+
 pub(crate) fn sleep() {
     if let Some((runtime, engine)) = engine() {
         runtime.block_on(engine.sleep());

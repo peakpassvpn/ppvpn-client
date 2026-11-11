@@ -204,8 +204,14 @@ class _PhoneNodesState extends State<PhoneNodes> {
                         : ValueListenableBuilder(
                             valueListenable: app.latency,
                             builder: (context, latency, _) {
-                              Widget rowOf(rust.UiNode node) => _NodeRow(
+                              Widget rowOf(
+                                rust.UiNode node, {
+                                required bool first,
+                                required bool last,
+                              }) => _NodeRow(
                                 node: node,
+                                first: first,
+                                last: last,
                                 current: node.id == snapshot.selectedNodeId,
                                 latency: latency[node.id],
                                 onPress: () =>
@@ -228,7 +234,13 @@ class _PhoneNodesState extends State<PhoneNodes> {
                                     PhoneCard(
                                       inset: 56,
                                       children: [
-                                        for (final node in nodes) rowOf(node),
+                                        for (final (index, node)
+                                            in nodes.indexed)
+                                          rowOf(
+                                            node,
+                                            first: index == 0,
+                                            last: index == nodes.length - 1,
+                                          ),
                                       ],
                                     ),
                                   ],
@@ -510,6 +522,8 @@ class _RegionChips extends StatelessWidget {
 class _NodeRow extends StatelessWidget {
   const _NodeRow({
     required this.node,
+    required this.first,
+    required this.last,
     required this.current,
     required this.latency,
     required this.onPress,
@@ -517,6 +531,8 @@ class _NodeRow extends StatelessWidget {
   });
 
   final rust.UiNode node;
+  final bool first;
+  final bool last;
   final bool current;
   final Latency? latency;
   final VoidCallback onPress;
@@ -525,6 +541,21 @@ class _NodeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
+    // PhoneCard pads its children inside its outline. Match that inner curve
+    // so the selected row's stroke follows the card instead of being clipped.
+    final cardInset =
+        t
+            .phoneCardDecoration()
+            .border
+            ?.dimensions
+            .resolve(Directionality.of(context))
+            .top ??
+        0;
+    final corner = Radius.circular(
+      (Tokens.phoneCardRadius - cardInset)
+          .clamp(0, Tokens.phoneCardRadius)
+          .toDouble(),
+    );
     return Pressable(
       key: ValueKey('node-${node.id}'),
       radius: 0,
@@ -538,6 +569,10 @@ class _NodeRow extends StatelessWidget {
           pressed ? Duration.zero : Tokens.motionFast,
         ),
         decoration: BoxDecoration(
+          borderRadius: BorderRadius.vertical(
+            top: first ? corner : Radius.zero,
+            bottom: last ? corner : Radius.zero,
+          ),
           color: pressed
               ? t.phonePress
               : current

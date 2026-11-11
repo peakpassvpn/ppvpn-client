@@ -25,10 +25,12 @@ const POLL_INTERVAL: Duration = if cfg!(test) {
 #[derive(Default)]
 pub(crate) struct NotificationState {
     pub(crate) task: Option<tokio::task::JoinHandle<()>>,
+    refresh_revision: u64,
 }
 
 impl NotificationState {
     pub(crate) fn reset(&mut self) {
+        self.refresh_revision = self.refresh_revision.wrapping_add(1);
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -143,6 +145,15 @@ impl Client {
     }
 
     async fn refresh_unread(&self, session: u64) -> Result<(), ClientError> {
+        let revision = {
+            let mut state = self.session_state();
+            if !state.is_session(session) {
+                return Err(ClientError::Cancelled);
+            }
+            state.notifications.refresh_revision =
+                state.notifications.refresh_revision.wrapping_add(1);
+            state.notifications.refresh_revision
+        };
         let count = self
             .bearer(
                 session,
@@ -151,7 +162,12 @@ impl Client {
             )
             .await?;
         let count = u32::try_from(count).unwrap_or(u32::MAX);
-        self.update_session(session, |_, snapshot| {
+        self.update_session(session, |state, snapshot| {
+            // A poll/list count started before a newer post-write refresh
+            // cannot publish its stale value after that newer request.
+            if state.notifications.refresh_revision != revision {
+                return false;
+            }
             snapshot.unread_notifications = count;
             true
         });
@@ -285,6 +301,61 @@ mod tests {
             .build()
             .unwrap()
             .block_on(future)
+    }
+
+    #[test]
+    fn unread_count_race_after_read_ack_and_refresh_failures() {
+        for status in ["200 OK", "403 Forbidden", "500 InternalServerError"] {
+            let backend = Backend::new();
+            backend.add_message(1);
+            *backend.unread.lock().unwrap() = 3;
+            let dir = temp_dir("ppvpn-unread-count-order");
+            let client = client(&serve(backend.clone()), &dir);
+            wait_until(|| client.snapshot().unread_notifications == 3);
+            // Finish cancelling the periodic poll before installing the HTTP gate.
+            wait_until(|| client.session_state().notifications.task.is_some());
+            let poll = client.session_state().notifications.task.take().unwrap();
+            poll.abort();
+            let _ = block_on(poll);
+            client.session_state().notifications.reset();
+            let held_count = if status == "200 OK" { 3 } else { 0 };
+            *backend.unread.lock().unwrap() = held_count;
+            let session = client.current_session().unwrap();
+            let (entered, waiting) = std::sync::mpsc::channel();
+            let (release, blocked) = std::sync::mpsc::channel();
+            *backend.unread_count_gate.lock().unwrap() =
+                Some(crate::test_backend::UnreadCountGate {
+                    entered,
+                    release: blocked,
+                });
+            let old_client = client.clone();
+            let old = std::thread::spawn(move || block_on(old_client.refresh_unread(session)));
+            assert_eq!(
+                waiting.recv_timeout(Duration::from_secs(5)).unwrap(),
+                held_count
+            );
+            *backend.unread.lock().unwrap() = 2;
+            *backend.unread_count_status.lock().unwrap() = Some(status);
+            // Real Client mutation, PUT200 root JSON, then GET2 (or real403/500).
+            block_on(client.mark_notification_read(1)).unwrap();
+            let expected = if status == "200 OK" { 2 } else { 3 };
+            assert_eq!(client.snapshot().unread_notifications, expected);
+            release.send(()).unwrap();
+            old.join().unwrap().unwrap();
+            assert_eq!(
+                client.snapshot().unread_notifications,
+                expected,
+                "old HTTP count response must not overwrite post-write count or clear on failure"
+            );
+            assert!(
+                backend
+                    .requests_matching("PUT /api/v1/messages/1/read")
+                    .len()
+                    == 1
+            );
+            client.shutdown();
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

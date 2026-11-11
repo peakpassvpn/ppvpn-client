@@ -496,6 +496,16 @@ impl Engine {
         }
     }
 
+    /// Internal-only observation of the current runtime/dispatcher epoch.
+    /// Never substitutes the cached application connection list for admission.
+    #[cfg(feature = "internal-diagnostics")]
+    pub fn internal_diagnostics(&self) -> Result<serde_json::Value, Error> {
+        self.inner
+            .runtime
+            .internal_diagnostics()
+            .map_err(|e| e.to_error())
+    }
+
     /// The open connections as last read from the runtime (every second
     /// while running), each with the node its outbound chain goes through
     /// (empty: direct).

@@ -44,10 +44,26 @@ final class PPVPNPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var authenticationID: UUID?
   private let network = PPVPNAppNetworkMonitor()
   private var backgroundTasks: [Int: UIBackgroundTaskIdentifier] = [:]
+  #if PPVPN_INTERNAL_DIAGNOSTICS
+    private static var diagnosticActivation: NSObjectProtocol?
+  #endif
 
   static func register(with registrar: FlutterPluginRegistrar) {
     PPVPNNativeChrome.register(with: registrar)
     let plugin = PPVPNPlugin()
+    #if PPVPN_INTERNAL_DIAGNOSTICS
+      // Root stages files into the live Runner's Documents inbox. No process
+      // restart/debugger/VPN lifecycle action is needed to trigger a run/export.
+      if diagnosticActivation == nil {
+        diagnosticActivation = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+          InternalLoadProbe.armTriggerWindow()
+        }
+      }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        InternalLoadProbe.armTriggerWindow()
+        InternalLoadProbe.consumeOnce()
+      }
+    #endif
     let messenger = registrar.messenger()
     #if targetEnvironment(simulator)
       VMServiceAnnouncer.start(registrar)

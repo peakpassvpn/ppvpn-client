@@ -34,6 +34,25 @@ use serde_json::Value;
 
 pub use host::{ExitCallback, Options};
 
+/// Internal-only, read-only instrumentation. Uses the ordinary owned/free-string
+/// contract; deliberately absent from the public header and ordinary binaries.
+#[cfg(feature = "internal-diagnostics")]
+#[no_mangle]
+pub extern "C" fn ppvpn_tunnel_internal_packet_diagnostics() -> *mut c_char {
+    catch_unwind(|| {
+        let mut snapshot = packets::diagnostics();
+        match host::internal_diagnostics() {
+            Ok(sail) => snapshot["sail"] = sail,
+            Err(error) => {
+                snapshot["sail"] = Value::Null;
+                snapshot["sail_error"] = Value::String(error.code);
+            }
+        }
+        owned(snapshot.to_string())
+    })
+    .unwrap_or(std::ptr::null_mut())
+}
+
 pub const PLATFORM_IOS: i32 = 1;
 pub const PLATFORM_ANDROID: i32 = 2;
 
