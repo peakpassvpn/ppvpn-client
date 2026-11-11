@@ -261,6 +261,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
           exportNonces.append(command.triggerId)
           if exportNonces.count > 32 { exportNonces.removeFirst() }
           exportRawSamples(sourceDirectory: container.appendingPathComponent("data/diagnostics"), destination: base)
+          exportSelectionHint(container: container, destination: base)
           startPreflightMirror(base: base, source: container.appendingPathComponent("data/diagnostics/ne-latest.json"), restart: true)
           status("export_processed_check_raw_export_status", nonce: command.triggerId)
         }
@@ -317,6 +318,7 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     try? Data("internal_release_entry_ready\n".utf8).write(to: base.appendingPathComponent("entry-ready.txt"), options: .atomic)
     if exportIdle {
       exportRawSamples(sourceDirectory: container.appendingPathComponent("data/diagnostics"), destination: base)
+      exportSelectionHint(container: container, destination: base)
       startPreflightMirror(base: base, source: container.appendingPathComponent("data/diagnostics/ne-latest.json"))
     }
     let request = base.appendingPathComponent("request.json")
@@ -354,6 +356,39 @@ final class InternalLoadProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     }
     for probe in active { probe.queue.async { probe.start() } }
     return true
+  }
+
+  /// A whitelist of ONE persisted identifier, never an account/profile export.
+  /// This is a saved UI selection hint, not proof of the running NE route.
+  static func selectionHint(_ bytes: Data) -> String? {
+    guard bytes.count <= 4096,
+      let value = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+      Set(value.keys) == Set(["node_id"]), let identifier = value["node_id"] as? String,
+      (1...256).contains(identifier.utf8.count),
+      identifier.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0)
+        || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else { return nil }
+    return identifier
+  }
+
+  private static func exportSelectionHint(container: URL, destination: URL) {
+    let source = container.appendingPathComponent("data/selection.json")
+    var result: [String: Any] = ["schema": 1, "unix_seconds": Date().timeIntervalSince1970,
+      "runner_pid": ProcessInfo.processInfo.processIdentifier,
+      "app_build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+      "source": "persisted_selection_not_runtime_route_proof", "status": "missing_or_unreadable"]
+    if let metadata = try? source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+      metadata.isRegularFile == true, metadata.isSymbolicLink == false,
+      let size = metadata.fileSize, size <= 4096,
+      let file = try? FileHandle(forReadingFrom: source) {
+      defer { try? file.close() }
+      if let bytes = try? file.read(upToCount: 4097), let identifier = selectionHint(bytes) {
+        result["status"] = "copied_identifier_only"
+        result["selected_node_id"] = identifier
+      } else { result["status"] = "invalid_identifier_schema" }
+    }
+    if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
+      try? data.write(to: destination.appendingPathComponent("node-selection-hint.json"), options: .atomic)
+    }
   }
 
   /// Copy ONLY the two bounded sampler streams via the app's real Group URL.

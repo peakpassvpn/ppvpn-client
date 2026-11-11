@@ -35,6 +35,13 @@ struct InternalProbeChecks {
     check(InternalLoadProbe.decodeExportCommand(exportData, now: 1200) == nil, "expired export rejected")
     check(InternalLoadProbe.decodeExportCommand(Data(repeating: 32, count: 2049), now: 1000) == nil, "oversize export rejected before decode")
     check(InternalLoadProbe.decodeExportCommand(try JSONSerialization.data(withJSONObject: exportCommand.merging(["action": "stop-vpn"]) { _, new in new }), now: 1000) == nil, "trigger cannot request VPN lifecycle action")
+    check(InternalLoadProbe.selectionHint(Data(#"{"node_id":"node_123-abc"}"#.utf8)) == "node_123-abc", "selection exports only an opaque identifier")
+    for input in [#"{"node_id":""}"#, #"{"node_id":null}"#, #"{"node_id":123}"#,
+      #"{"node_id":"../profile"}"#, #"{"node_id":"node-a","token":"secret"}"#,
+      #"{"account":"user","password":"secret"}"#, #"{"node_id":"node\nother"}"#] {
+      check(InternalLoadProbe.selectionHint(Data(input.utf8)) == nil, "selection whitelist rejects extra fields, paths and non-identifiers")
+    }
+    check(InternalLoadProbe.selectionHint(Data(repeating: 32, count: 4097)) == nil, "selection input has an independent small read bound")
     var inbox = InternalLoadProbe.TriggerGate()
     check(inbox.shouldAttempt("request", fingerprint: "partial", now: 1000), "partial inbox first check")
     check(!inbox.shouldAttempt("request", fingerprint: "partial", now: 1001), "unchanged partial uses small retry backoff")

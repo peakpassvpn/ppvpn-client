@@ -41,6 +41,13 @@ Filesystem (only root device owner stages/launches/copies)
   Match trigger-status export_trigger_id and inspect raw-export-status.json;
   "processed" is not a claim of fresh/complete data. No request or export path
   invokes VPN start/stop, node/mode changes, login or backend APIs on its own.
+  Initial internal startup and explicit export also write node-selection-hint.json.
+  Only data/selection.json is read (regular, non-symlink, <=4096 bytes). Its exact
+  sole node_id field must be a bounded ASCII opaque identifier. Extra keys,
+  account/profile shapes and path-like values are rejected; raw input is never
+  copied. Output includes the identifier, Runner PID, app build and export time.
+  This is a persisted selection HINT, not proof that NE applied that route or
+  that a configured node IP equals its actual public UDP egress address.
   Offline staging helper: tools/apple/prepare_iphone_concurrency_spec.py
     --draft <load-controls.json> --manifest <reviewed-targets.json> --out <NEW-dir>
   It stamps fresh run identity/expiry and exact manifest digest, writes mode0600
