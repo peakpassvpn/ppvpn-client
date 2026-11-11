@@ -1,5 +1,5 @@
 name: ci
-run-name: Windows actual desktop capability - ${{ github.sha }}
+run-name: Windows actual DXGI exclusive capability - ${{ github.sha }}
 on:
   workflow_dispatch:
 permissions:
@@ -15,9 +15,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Observe actual desktop and independent fullscreen window
+      - name: Observe actual desktop
         shell: powershell
-        run: tools/windows-ui-probe/run.ps1 -OutputDir "$env:RUNNER_TEMP/windows-desktop-capability"
+        run: tools/windows-ui-probe/observe.ps1 -OutputDir "$env:RUNNER_TEMP/windows-desktop-capability/baseline"
+      - name: Compile actual D3D11 DXGI capability window
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DUNICODE /D_UNICODE tools\windows-ui-probe\d3d-exclusive.cpp /Fo:"%RUNNER_TEMP%\windows-desktop-capability\d3d-exclusive.obj" /Fe:"%RUNNER_TEMP%\windows-desktop-capability\d3d-exclusive.exe"
+      - name: Exercise exclusive fullscreen and restored maximized control
+        shell: powershell
+        run: tools/windows-ui-probe/run-d3d.ps1 -OutputDir "$env:RUNNER_TEMP/windows-desktop-capability"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
