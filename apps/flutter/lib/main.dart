@@ -109,8 +109,11 @@ Future<void> main() async {
     // Its close button quits too, as does the Windows installer's quit.
     windowManager.addListener(_QuitOnClose(done));
     listenForActivations(onShow: () {}, onPush: (_) {}, onQuit: done, onUserQuit: done, onUpdate: () {});
-    await windowManager.show();
-    await windowManager.focus();
+    if (!rust.updatePromptDeferred()) {
+      await windowManager.show();
+      // Recheck after the asynchronous native show request before focus.
+      if (!rust.updatePromptDeferred()) await windowManager.focus();
+    }
     return;
   }
   if (samplePage == null) {

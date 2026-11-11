@@ -689,11 +689,18 @@ pub struct UiUpdater {
     pub upgrade_command: String,
 }
 
-/// Starts the updater (Windows: WinSparkle, with its scheduled check) and
+/// Loads the updater (Windows: WinSparkle; checks wait for the initial policy) and
 /// says what this build can do. Call once the window exists.
 #[frb(sync)]
 pub fn start_updater() -> UiUpdater {
     crate::update::start()
+}
+
+/// Defer Windows installation notices while another foreground app is
+/// fullscreen. Uses the same native display detector, without starting checks.
+#[frb(sync)]
+pub fn update_prompt_deferred() -> bool {
+    crate::update::prompt_deferred()
 }
 
 /// A check the user asked for, with WinSparkle's own progress and result

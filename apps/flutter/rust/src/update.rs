@@ -30,6 +30,70 @@
 
 use crate::api::UiUpdater;
 
+/// Windows installation notices use the same foreground detector as the
+/// existing WinSparkle display gate. Loading it does not start an update check.
+pub(crate) fn prompt_deferred() -> bool {
+    #[cfg(windows)]
+    {
+        platform::prompt_deferred()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct CheckPolicy {
+    state: std::sync::Mutex<CheckPolicyState>,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct CheckPolicyState {
+    initialised: bool,
+    installing: bool,
+}
+
+#[cfg(any(windows, test))]
+impl CheckPolicy {
+    const fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(CheckPolicyState {
+                initialised: false,
+                installing: false,
+            }),
+        }
+    }
+
+    // The native DLL write belongs INSIDE the lock, not after an atomic read.
+    fn configure(&self, enabled: Option<bool>, apply: impl FnOnce(bool, bool)) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if enabled.is_none() && state.initialised {
+            return;
+        }
+        apply(
+            enabled.unwrap_or(false) && !state.installing,
+            !state.initialised,
+        );
+        state.initialised = true;
+    }
+
+    fn installation_started(&self, disable: impl FnOnce()) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.installing = true;
+        disable();
+    }
+
+    fn installing(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .installing
+    }
+}
+
 /// A baked-in value, None when unset or blank.
 pub(crate) fn baked(value: Option<&'static str>) -> Option<&'static str> {
     value.map(str::trim).filter(|value| !value.is_empty())
@@ -87,8 +151,7 @@ pub(crate) fn set_auto_check(enabled: bool) -> Result<(), String> {
 #[cfg(windows)]
 mod platform {
     use std::ffi::{c_char, c_int, CString};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
     use std::time::Duration;
 
     use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
@@ -109,6 +172,7 @@ mod platform {
     /// WinSparkle's functions (winsparkle.h), as AppUpdater.cs declares them.
     struct WinSparkle {
         init: unsafe extern "C" fn(),
+        foreground_fullscreen: unsafe extern "C" fn() -> c_int,
         set_lang: unsafe extern "C" fn(*const c_char),
         set_appcast_url: unsafe extern "C" fn(*const c_char),
         set_eddsa_public_key: unsafe extern "C" fn(*const c_char) -> c_int,
@@ -123,9 +187,9 @@ mod platform {
     }
 
     /// Set once WinSparkle runs.
-    static STARTED: OnceLock<WinSparkle> = OnceLock::new();
-    static INITIALIZED: Mutex<bool> = Mutex::new(false);
-    static INSTALLING: AtomicBool = AtomicBool::new(false);
+    static LOADED: OnceLock<Result<WinSparkle, String>> = OnceLock::new();
+    static STARTED: OnceLock<&'static WinSparkle> = OnceLock::new();
+    static POLICY: super::CheckPolicy = super::CheckPolicy::new();
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(Some(0)).collect()
@@ -180,6 +244,7 @@ mod platform {
         }
         Ok(WinSparkle {
             init: symbol!("win_sparkle_init"),
+            foreground_fullscreen: symbol!("win_sparkle_ppvpn_foreground_fullscreen"),
             set_lang: symbol!("win_sparkle_set_lang"),
             set_appcast_url: symbol!("win_sparkle_set_appcast_url"),
             set_eddsa_public_key: symbol!("win_sparkle_set_eddsa_public_key"),
@@ -191,6 +256,18 @@ mod platform {
             set_shutdown_request_callback: symbol!("win_sparkle_set_shutdown_request_callback"),
             set_error_callback: symbol!("win_sparkle_set_error_callback"),
             check_update_with_ui: symbol!("win_sparkle_check_update_with_ui"),
+        })
+    }
+
+    fn loaded() -> Result<&'static WinSparkle, String> {
+        LOADED.get_or_init(load).as_ref().map_err(Clone::clone)
+    }
+
+    pub(super) fn prompt_deferred() -> bool {
+        // Missing/incompatible DLL: keep an installation notice in the
+        // background rather than bringing it in front of an unknown desktop.
+        loaded().map_or(true, |winsparkle| unsafe {
+            (winsparkle.foreground_fullscreen)() != 0
         })
     }
 
@@ -211,12 +288,12 @@ mod platform {
     /// (Dart), and quits after [`QUIT_FALLBACK`] if the installer has not
     /// asked it to by then.
     extern "C" fn shutdown_requested() {
-        INSTALLING.store(true, Ordering::SeqCst);
-        if let Some(winsparkle) = STARTED.get() {
-            // Stop scheduled checks before hiding; a service restart during
-            // installation must not re-enable the fallback prompt.
-            unsafe { (winsparkle.set_automatic_check_for_updates)(0) };
-        }
+        POLICY.installation_started(|| {
+            if let Some(winsparkle) = STARTED.get() {
+                // Serialised with every enabling DLL write.
+                unsafe { (winsparkle.set_automatic_check_for_updates)(0) };
+            }
+        });
         tracing::info!("update: installer launched; hiding until it asks the app to quit");
         crate::instance::deliver(UiActivation {
             push_id: None,
@@ -262,7 +339,7 @@ mod platform {
             tracing::info!("updates off: no feed or no public key in this build");
             return off;
         };
-        let winsparkle = match load() {
+        let winsparkle = match loaded() {
             Ok(winsparkle) => winsparkle,
             Err(error) => {
                 tracing::warn!("updates off: {error}");
@@ -322,7 +399,7 @@ mod platform {
     }
 
     pub(super) fn check() {
-        if INSTALLING.load(Ordering::SeqCst) {
+        if POLICY.installing() {
             return;
         }
         if let Some(winsparkle) = STARTED.get() {
@@ -334,21 +411,12 @@ mod platform {
     }
 
     fn initialise_checks(winsparkle: &WinSparkle, enabled: Option<bool>) {
-        let mut initialised = INITIALIZED
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if enabled.is_none() && *initialised {
-            return;
-        }
-        // The scheduled preference is configured BEFORE init starts a worker.
-        let enabled = enabled.unwrap_or(false) && !INSTALLING.load(Ordering::SeqCst);
-        unsafe {
+        POLICY.configure(enabled, |enabled, initialise| unsafe {
             (winsparkle.set_automatic_check_for_updates)(enabled.into());
-            if !*initialised {
+            if initialise {
                 (winsparkle.init)();
-                *initialised = true;
             }
-        }
+        });
     }
 
     pub(super) fn set_auto_check(enabled: bool) {
@@ -443,5 +511,65 @@ mod tests {
             super::site_feed(Some("https://pkg.example"), None, "{channel}"),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::CheckPolicy;
+    use std::sync::{mpsc, Arc, Mutex};
+
+    #[test]
+    fn installation_cannot_be_overtaken_by_a_precomputed_enable_write() {
+        let policy = Arc::new(CheckPolicy::new());
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let (computed, ready) = mpsc::channel();
+        let (resume, release) = mpsc::channel();
+        let setter = {
+            let (policy, writes) = (policy.clone(), writes.clone());
+            std::thread::spawn(move || {
+                policy.configure(Some(true), |enabled, initialise| {
+                    assert!(initialise);
+                    computed.send(()).unwrap();
+                    release
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    writes.lock().unwrap().push(enabled);
+                })
+            })
+        };
+        ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (attempting, attempted) = mpsc::channel();
+        let installer = {
+            let (policy, writes) = (policy.clone(), writes.clone());
+            std::thread::spawn(move || {
+                attempting.send(()).unwrap();
+                policy.installation_started(|| writes.lock().unwrap().push(false));
+            })
+        };
+        attempted
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        resume.send(()).unwrap();
+        setter.join().unwrap();
+        installer.join().unwrap();
+        assert_eq!(*writes.lock().unwrap(), vec![true, false]);
+        assert!(policy.installing());
+        policy.configure(Some(true), |enabled, initialise| {
+            assert!(!enabled);
+            assert!(!initialise);
+        });
+    }
+
+    #[test]
+    fn manual_check_preserves_the_already_configured_automatic_policy() {
+        let policy = CheckPolicy::new();
+        policy.configure(Some(true), |enabled, initialise| {
+            assert!(enabled);
+            assert!(initialise);
+        });
+        policy.configure(None, |_, _| panic!("manual check changed scheduled policy"));
     }
 }

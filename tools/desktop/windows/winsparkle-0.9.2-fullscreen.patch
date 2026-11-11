@@ -1,8 +1,18 @@
 diff --git a/src/dll_api.cpp b/src/dll_api.cpp
-index 6d7aab3..ffde37f 100644
+index 6d7aab3..5cd2486 100644
 --- a/src/dll_api.cpp
 +++ b/src/dll_api.cpp
-@@ -76,5 +76,4 @@ WIN_SPARKLE_API void __cdecl win_sparkle_init()
+@@ -26,0 +27 @@
++#include "ppvpn_update_fullscreen.h"
+@@ -46,0 +48,7 @@ extern "C"
++// Reuse the exact detector for the client's installation-in-progress notice.
++// This query neither initializes the updater nor changes any settings.
++WIN_SPARKLE_API int __cdecl win_sparkle_ppvpn_foreground_fullscreen()
++{
++    return ppvpn_update::foreground_fullscreen() ? 1 : 0;
++}
++
+@@ -76,5 +84,4 @@ WIN_SPARKLE_API void __cdecl win_sparkle_init()
 -            if ( checkUpdates )
 -            {
 -                UpdateChecker *check = new PeriodicUpdateChecker();
@@ -13,7 +23,7 @@ index 6d7aab3..ffde37f 100644
 +            UpdateChecker *check = new PeriodicUpdateChecker();
 +            check->Start();
 diff --git a/src/ui.cpp b/src/ui.cpp
-index d401aca..bc1aeba 100644
+index d401aca..b0d53a4 100644
 --- a/src/ui.cpp
 +++ b/src/ui.cpp
 @@ -26,0 +27 @@
@@ -78,7 +88,15 @@ index d401aca..bc1aeba 100644
 +    m_scheduled = false;
 @@ -1355,0 +1404 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
 +    m_scheduled = payload.scheduled;
-@@ -1363,0 +1413,7 @@ void App::OnAskForPermission(wxThreadEvent& event)
+@@ -1363,0 +1413,15 @@ void App::OnAskForPermission(wxThreadEvent& event)
++    bool configured = false;
++    if (m_pendingPermission && Settings::ReadConfigValue("CheckForUpdates", configured))
++    {
++        // The application/user made a decision while fullscreen. The old
++        // permission request is obsolete; do not ask again on exit.
++        m_pendingPermission = false;
++        return;
++    }
 +    if (ppvpn_update::foreground_fullscreen())
 +    {
 +        m_pendingPermission = true;
@@ -86,17 +104,17 @@ index d401aca..bc1aeba 100644
 +        return;
 +    }
 +    m_pendingPermission = false;
-@@ -1365,0 +1422,6 @@ void App::OnAskForPermission(wxThreadEvent& event)
+@@ -1365,0 +1430,6 @@ void App::OnAskForPermission(wxThreadEvent& event)
 +    if (ppvpn_update::foreground_fullscreen())
 +    {
 +        m_pendingPermission = true;
 +        m_showTimer.StartOnce(1000);
 +        return;
 +    }
-@@ -1506 +1568 @@ void UI::NotifyNoUpdates(bool installAutomatically)
+@@ -1506 +1576 @@ void UI::NotifyNoUpdates(bool installAutomatically)
 -void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
 +void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically, bool scheduled)
-@@ -1513,0 +1576 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
+@@ -1513,0 +1584 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
 +    payload.scheduled = scheduled;
 diff --git a/src/ui.h b/src/ui.h
 index f4d2eda..bf83e8f 100644
