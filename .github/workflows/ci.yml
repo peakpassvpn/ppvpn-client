@@ -489,6 +489,7 @@ jobs:
         run: |
           cargo test --locked -p ppvpn-push-agent
           cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets -- -D warnings
+          cargo test --locked -p ppvpn-flutter --lib -- silent::tests --nocapture
       # The mobile tunnel host (#448) on Linux: its C functions, socket and
       # host with an engine that is never started. Its iOS build is the
       # tunnel job's.
@@ -734,6 +735,7 @@ jobs:
           cargo test -p ppvpn-desktop --lib --locked --target x86_64-pc-windows-msvc -- enhanced::tests::control_health --test-threads=1 --nocapture
           cargo test -p ppvpn-push-agent --locked --target x86_64-pc-windows-msvc
           cargo test -p ppvpn-service --bin ppvpn-service --locked --target x86_64-pc-windows-msvc -- update::
+          cargo test -p ppvpn-flutter --lib --locked --target x86_64-pc-windows-msvc -- silent::tests --nocapture
       # The release's Windows signing scripts (#489), which sign only in a
       # release environment: they parse, the signing client downloads and
       # checks out (no signing: that needs Azure), and the signer check

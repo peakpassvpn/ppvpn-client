@@ -1,0 +1,38 @@
+name: Desktop update notification QA
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-updater:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+      - name: Build pinned WinSparkle with native pre-show gate
+        shell: powershell
+        run: tools/desktop/windows/build-winsparkle.ps1 -Work "$env:RUNNER_TEMP/update-qa" -Output "$env:GITHUB_WORKSPACE/build/update-qa/WinSparkle.dll"
+      - name: Build actual UI fixture
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c++17 /EHsc /W4 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe
+      - name: Actual console UI and installed-build observation
+        shell: powershell
+        run: |
+          $server = Start-Process python -ArgumentList 'tools/desktop/windows/update-feed-fixture.py' -PassThru -RedirectStandardOutput 'build/update-qa/feed.stdout.txt' -RedirectStandardError 'build/update-qa/feed.stderr.txt'
+          try {
+            Push-Location build/update-qa
+            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' '0.7.5.1' 2>&1 | Tee-Object 'fullscreen.txt'
+            $code = $LASTEXITCODE
+            if ($code -eq 77) { throw 'BLOCKED: runner has no usable interactive desktop. UI acceptance remains pending.' }
+            if ($code) { throw 'Fullscreen UI acceptance failed' }
+            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' '0.7.5.2' 2>&1 | Tee-Object 'installed-15min.txt'
+            if ($LASTEXITCODE) { throw 'Installed-build observation failed' }
+          } finally { Stop-Process -Id $server.Id; Pop-Location }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: windows-update-notification-qa
+          path: build/update-qa/

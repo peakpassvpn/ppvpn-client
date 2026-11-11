@@ -1,0 +1,170 @@
+// Actual WinSparkle DLL + a separate foreground Win32 application. No VPN,
+// installer or installed PPVPN process is opened or changed by this fixture.
+#include "update_fullscreen.h"
+#include <cstdio>
+#include <string>
+#include <vector>
+#include <stdexcept>
+#include <thread>
+#include <chrono>
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "advapi32.lib")
+
+static void require(bool ok, const char* message) {
+    if (!ok) throw std::runtime_error(message);
+    std::printf("PASS %s\n", message); std::fflush(stdout);
+}
+static void pump(unsigned ms) {
+    auto end = GetTickCount64() + ms;
+    do {
+        MSG message;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message); DispatchMessageW(&message);
+        }
+        Sleep(20);
+    } while (GetTickCount64() < end);
+}
+static HMODULE sparkle;
+static HWND prompt;
+static BOOL CALLBACK find_prompt(HWND hwnd, LPARAM) {
+    DWORD pid; GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd) &&
+        reinterpret_cast<HMODULE>(GetClassLongPtrW(hwnd, GCLP_HMODULE)) == sparkle)
+        prompt = hwnd;
+    return TRUE;
+}
+static HWND visible_prompt() { prompt = nullptr; EnumWindows(find_prompt, 0); return prompt; }
+static void screenshot(const wchar_t* path) {
+    int x = GetSystemMetrics(SM_XVIRTUALSCREEN), y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int w = GetSystemMetrics(SM_CXVIRTUALSCREEN), h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    HDC screen = GetDC(nullptr), memory = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, w, h);
+    auto previous = SelectObject(memory, bitmap);
+    require(BitBlt(memory, 0, 0, w, h, screen, x, y, SRCCOPY | CAPTUREBLT) != FALSE, "desktop screenshot captured");
+    BITMAPINFO info = {}; info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = w; info.bmiHeader.biHeight = -h;
+    info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32; info.bmiHeader.biCompression = BI_RGB;
+    std::vector<unsigned char> pixels(static_cast<size_t>(w) * h * 4);
+    SelectObject(memory, previous);
+    require(GetDIBits(memory, bitmap, 0, h, pixels.data(), &info, DIB_RGB_COLORS) != 0, "desktop screenshot readable");
+    BITMAPFILEHEADER header = {}; header.bfType = 0x4d42;
+    header.bfOffBits = sizeof(header) + sizeof(BITMAPINFOHEADER);
+    header.bfSize = header.bfOffBits + static_cast<DWORD>(pixels.size());
+    FILE* file; _wfopen_s(&file, path, L"wb"); require(file != nullptr, "screenshot output opened");
+    fwrite(&header, sizeof(header), 1, file); fwrite(&info.bmiHeader, sizeof(info.bmiHeader), 1, file);
+    fwrite(pixels.data(), pixels.size(), 1, file); fclose(file);
+    DeleteObject(bitmap); DeleteDC(memory); ReleaseDC(nullptr, screen);
+}
+static LRESULT CALLBACK other_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    if (msg == WM_APP + 1) {
+        MONITORINFO monitor = {sizeof(MONITORINFO)};
+        GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
+        auto rect = w ? monitor.rcMonitor : monitor.rcWork;
+        SetWindowLongPtrW(hwnd, GWL_STYLE, w ? WS_POPUP : WS_OVERLAPPEDWINDOW);
+        ShowWindow(hwnd, SW_RESTORE);
+        SetWindowPos(hwnd, HWND_TOP, rect.left, rect.top, rect.right - rect.left,
+                     rect.bottom - rect.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        if (!w) ShowWindow(hwnd, SW_MAXIMIZE);
+        SetForegroundWindow(hwnd);
+        return 0;
+    }
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT paint; auto dc = BeginPaint(hwnd, &paint);
+        const wchar_t* text = L"OTHER APP — real fullscreen fixture (not PPVPN)";
+        TextOutW(dc, 40, 40, text, static_cast<int>(wcslen(text))); EndPaint(hwnd, &paint); return 0;
+    }
+    if (msg == WM_CLOSE) { DestroyWindow(hwnd); PostQuitMessage(0); return 0; }
+    return DefWindowProcW(hwnd, msg, w, l);
+}
+static int other_app() {
+    WNDCLASSW wc = {}; wc.lpfnWndProc = other_proc; wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"PPVPNOtherAppQA"; wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    RegisterClassW(&wc);
+    HWND hwnd = CreateWindowW(wc.lpszClassName, L"PPVPN QA Other App", WS_OVERLAPPEDWINDOW,
+        100, 100, 600, 400, nullptr, nullptr, wc.hInstance, nullptr);
+    ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd);
+    MSG msg; while (GetMessageW(&msg, nullptr, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    return 0;
+}
+static void close_prompt() {
+    if (auto hwnd = visible_prompt()) PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    pump(500);
+}
+using Void = void(__cdecl*)();
+template<class T> static T function(const char* name) {
+    auto address = GetProcAddress(sparkle, name);
+    require(address != nullptr, name); return reinterpret_cast<T>(address);
+}
+int wmain(int argc, wchar_t** argv) {
+    if (argc > 1 && std::wstring(argv[1]) == L"--other-app") return other_app();
+    try {
+        require(argc == 4, "arguments: DLL feedURL installed-build");
+        DWORD session = 0; ProcessIdToSessionId(GetCurrentProcessId(), &session);
+        auto desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP);
+        std::printf("SESSION process=%lu console=%lu inputDesktop=%d\n", session, WTSGetActiveConsoleSessionId(), desktop != nullptr);
+        if (!desktop || session == 0 || session != WTSGetActiveConsoleSessionId()) {
+            if (desktop) CloseDesktop(desktop);
+            std::puts("BLOCKED: no active interactive console; component UI acceptance not run"); return 77;
+        }
+        CloseDesktop(desktop);
+        // Geometry regression cases use the production detector predicate.
+        RECT monitor = {-1920,0,0,1080};
+        require(ppvpn_update::covers_monitor(monitor, monitor, false, WS_POPUP), "negative-coordinate secondary monitor");
+        require(!ppvpn_update::covers_monitor(monitor, monitor, true, WS_OVERLAPPEDWINDOW), "ordinary maximized is not fullscreen");
+        RECT spanning = {-1920,0,1920,1080};
+        require(ppvpn_update::covers_monitor(spanning, monitor, false, WS_POPUP), "borderless spanning multiple monitors");
+        wchar_t executable[MAX_PATH]; GetModuleFileNameW(nullptr, executable, MAX_PATH);
+        std::wstring command = L"\"" + std::wstring(executable) + L"\" --other-app";
+        STARTUPINFOW startup = {sizeof(startup)}; PROCESS_INFORMATION child = {};
+        require(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &child) != FALSE, "separate other-app process started");
+        CloseHandle(child.hThread);
+        HWND other = nullptr;
+        for (int i=0; i<100 && !other; ++i) { pump(50); other = FindWindowW(L"PPVPNOtherAppQA", nullptr); }
+        require(other != nullptr, "other-app window created");
+        AllowSetForegroundWindow(child.dwProcessId);
+        SendMessageW(other, WM_APP + 1, 1, 0); pump(300);
+        require(GetForegroundWindow() == other && ppvpn_update::foreground_fullscreen(), "real other-app foreground fullscreen verified");
+        sparkle = LoadLibraryW(argv[1]); require(sparkle != nullptr, "built WinSparkle DLL loaded");
+        auto init = function<Void>("win_sparkle_init"); auto cleanup = function<Void>("win_sparkle_cleanup");
+        auto check = function<Void>("win_sparkle_check_update_without_ui");
+        auto feed = function<void(__cdecl*)(const char*)>("win_sparkle_set_appcast_url");
+        auto automatic = function<void(__cdecl*)(int)>("win_sparkle_set_automatic_check_for_updates");
+        auto registry = function<void(__cdecl*)(const char*)>("win_sparkle_set_registry_path");
+        auto details = function<void(__cdecl*)(const wchar_t*,const wchar_t*,const wchar_t*)>("win_sparkle_set_app_details");
+        auto build = function<void(__cdecl*)(const wchar_t*)>("win_sparkle_set_app_build_version");
+        std::string key = "Software\\PPVPN\\UpdatePromptQA\\" + std::to_string(GetCurrentProcessId());
+        registry(key.c_str()); automatic(0); details(L"PPVPN QA", L"PPVPN Update QA", L"0.7.5"); build(argv[3]);
+        std::wstring widefeed(argv[2]); std::string url(widefeed.begin(), widefeed.end()); feed(url.c_str());
+        init();
+        SendMessageW(other, WM_APP+1, 0, 0); pump(300);
+        check(); pump(300);
+        SendMessageW(other, WM_APP+1, 1, 0); pump(300);
+        require(GetForegroundWindow() == other && ppvpn_update::foreground_fullscreen(), "entered fullscreen while delayed check was in flight");
+        // The feed deliberately delays 3 seconds. Fullscreen remains real for
+        // the response AND the eventual native Show/Raise call.
+        for (int i=0;i<70;++i) {
+            pump(100); require(!visible_prompt(), "no update window shown while fullscreen");
+            require(GetForegroundWindow() == other, "fullscreen foreground retained");
+        }
+        screenshot(L"fullscreen-no-prompt.bmp");
+        SendMessageW(other, WM_APP+1, 0, 0); pump(300);
+        require(GetForegroundWindow() == other && !ppvpn_update::foreground_fullscreen(), "normal maximized foreground is allowed");
+        for (int i=0;i<100 && !visible_prompt();++i) pump(100);
+        bool newer = std::wstring(argv[3]) == L"0.7.5.1";
+        require(newer ? visible_prompt() != nullptr : visible_prompt() == nullptr, newer ? "original native update dialog appears after fullscreen exits" : "target build does not prompt after relaunch");
+        screenshot(L"after-fullscreen.bmp"); close_prompt();
+        if (!newer) {
+            for (int i=0;i<15;++i) {
+                check();
+                for (int j=0;j<600;++j) { pump(100); if (visible_prompt()) throw std::runtime_error("installed target build prompted again"); }
+                std::printf("MINUTE %d no repeated update prompt\n", i+1); std::fflush(stdout);
+            }
+            screenshot(L"installed-after-15min.bmp");
+        }
+        cleanup(); PostMessageW(other, WM_CLOSE, 0, 0); WaitForSingleObject(child.hProcess, 5000); CloseHandle(child.hProcess);
+        RegDeleteTreeA(HKEY_CURRENT_USER, key.c_str());
+        std::puts("PASS real Windows updater component UI scenario; no installer or VPN was run");
+        return 0;
+    } catch (const std::exception& error) { std::fprintf(stderr,"FAIL %s\n",error.what()); return 1; }
+}

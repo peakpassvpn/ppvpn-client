@@ -87,7 +87,8 @@ pub(crate) fn set_auto_check(enabled: bool) -> Result<(), String> {
 #[cfg(windows)]
 mod platform {
     use std::ffi::{c_char, c_int, CString};
-    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
@@ -123,6 +124,8 @@ mod platform {
 
     /// Set once WinSparkle runs.
     static STARTED: OnceLock<WinSparkle> = OnceLock::new();
+    static INITIALIZED: Mutex<bool> = Mutex::new(false);
+    static INSTALLING: AtomicBool = AtomicBool::new(false);
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(Some(0)).collect()
@@ -208,6 +211,12 @@ mod platform {
     /// (Dart), and quits after [`QUIT_FALLBACK`] if the installer has not
     /// asked it to by then.
     extern "C" fn shutdown_requested() {
+        INSTALLING.store(true, Ordering::SeqCst);
+        if let Some(winsparkle) = STARTED.get() {
+            // Stop scheduled checks before hiding; a service restart during
+            // installation must not re-enable the fallback prompt.
+            unsafe { (winsparkle.set_automatic_check_for_updates)(0) };
+        }
         tracing::info!("update: installer launched; hiding until it asks the app to quit");
         crate::instance::deliver(UiActivation {
             push_id: None,
@@ -296,13 +305,15 @@ mod platform {
             );
             (winsparkle.set_app_build_version)(wide(&build).as_ptr());
             (winsparkle.set_registry_path)(registry.as_ptr());
-            (winsparkle.set_automatic_check_for_updates)(auto_check.into());
             (winsparkle.set_can_shutdown_callback)(can_shutdown);
             (winsparkle.set_shutdown_request_callback)(shutdown_requested);
             (winsparkle.set_error_callback)(failed);
-            (winsparkle.init)();
         }
-        tracing::info!(%feed, %build, english, "updates on");
+        // Do not start WinSparkle here. Dart first chooses between silent
+        // updates and the native fallback. Initialising with the old saved
+        // true value can start an irreversible in-flight check before that
+        // decision arrives. Keep returning the original preference to Dart.
+        tracing::info!(%feed, %build, english, "updater loaded; awaiting initial check policy");
         let _ = STARTED.set(winsparkle);
         UiUpdater {
             installs: true,
@@ -311,17 +322,38 @@ mod platform {
     }
 
     pub(super) fn check() {
+        if INSTALLING.load(Ordering::SeqCst) {
+            return;
+        }
         if let Some(winsparkle) = STARTED.get() {
+            initialise_checks(winsparkle, None);
             tracing::info!("update: manual check");
             // SAFETY: WinSparkle runs (init above).
             unsafe { (winsparkle.check_update_with_ui)() };
         }
     }
 
+    fn initialise_checks(winsparkle: &WinSparkle, enabled: Option<bool>) {
+        let mut initialised = INITIALIZED
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if enabled.is_none() && *initialised {
+            return;
+        }
+        // The scheduled preference is configured BEFORE init starts a worker.
+        let enabled = enabled.unwrap_or(false) && !INSTALLING.load(Ordering::SeqCst);
+        unsafe {
+            (winsparkle.set_automatic_check_for_updates)(enabled.into());
+            if !*initialised {
+                (winsparkle.init)();
+                *initialised = true;
+            }
+        }
+    }
+
     pub(super) fn set_auto_check(enabled: bool) {
         if let Some(winsparkle) = STARTED.get() {
-            // SAFETY: as above.
-            unsafe { (winsparkle.set_automatic_check_for_updates)(enabled.into()) };
+            initialise_checks(winsparkle, Some(enabled));
             tracing::info!(enabled, "update: automatic checks");
         }
     }

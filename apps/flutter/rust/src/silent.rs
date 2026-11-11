@@ -66,6 +66,10 @@ struct Saved {
     auto_update: Option<bool>,
     #[serde(default)]
     seen_finished_at_ms: u64,
+    /// A successful build is announced once, even if the service replays it
+    /// with a different completion timestamp.
+    #[serde(default)]
+    notified_build: u64,
     #[serde(default)]
     failures: BTreeMap<u64, u32>,
     #[serde(default)]
@@ -127,7 +131,11 @@ fn read() -> Loaded {
     let Ok(path) = path() else {
         return Loaded::Unreadable;
     };
-    match std::fs::read(&path) {
+    read_at(&path)
+}
+
+fn read_at(path: &std::path::Path) -> Loaded {
+    match std::fs::read(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Loaded::Missing,
         Err(_) => Loaded::Unreadable,
         Ok(bytes) => match serde_json::from_slice(&bytes) {
@@ -153,15 +161,19 @@ fn load() -> Saved {
 
 /// A file whole: a temporary file, then a rename. False when not saved.
 fn store(saved: &Saved) -> bool {
+    let Ok(path) = path() else { return false };
+    store_at(&path, saved)
+}
+
+fn store_at(path: &std::path::Path, saved: &Saved) -> bool {
     let result = (|| {
-        let path = path()?;
         if let Some(directory) = path.parent() {
             std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
         }
         let staging = path.with_extension("json.new");
         let bytes = serde_json::to_vec_pretty(saved).map_err(|error| error.to_string())?;
         std::fs::write(&staging, bytes).map_err(|error| error.to_string())?;
-        std::fs::rename(&staging, &path).map_err(|error| error.to_string())
+        std::fs::rename(&staging, path).map_err(|error| error.to_string())
     })();
     if let Err(error) = &result {
         tracing::warn!(%error, "silent update: state not saved");
@@ -338,31 +350,58 @@ pub(crate) async fn state() -> UiSilentUpdate {
     else {
         return none;
     };
-    let mut updated_to = None;
-    // An unreadable file has lost which result was handled: the last one
-    // is taken as handled, not counted or shown again.
-    let unreadable = matches!(read(), Loaded::Unreadable);
-    if let Some(last) = last_update.filter(|last| last.finished_at_ms > load().seen_finished_at_ms)
-    {
-        update(|saved| {
-            saved.seen_finished_at_ms = last.finished_at_ms;
-            if unreadable {
-                return;
-            }
-            if last.outcome == "installed" {
-                if last.build == build() {
-                    updated_to = Some(last.version.clone());
-                }
-            } else {
-                count_failure(saved, &last);
-            }
-        });
-    }
+    let updated_to = last_update.and_then(|last| {
+        let path = path().ok()?;
+        consume_completed_at(&path, &last, build())
+    });
     UiSilentUpdate {
         available: true,
         installing: progress.is_some(),
         updated_to,
     }
+}
+
+/// Compare, acknowledge and persist under the same lock. Previously the seen
+/// comparison happened before `update` acquired it, so overlapping service
+/// reads could both announce the same result. Never announce a result whose
+/// acknowledgement could not be saved: a restart must not replay that notice.
+fn consume_completed_at(
+    path: &std::path::Path,
+    last: &UpdateResult,
+    current_build: u64,
+) -> Option<String> {
+    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (mut saved, unreadable) = match read_at(path) {
+        Loaded::Read(saved) => (*saved, false),
+        Loaded::Missing => (Saved::default(), false),
+        Loaded::Unreadable => (
+            Saved {
+                auto_update: Some(true),
+                ..Saved::default()
+            },
+            true,
+        ),
+    };
+    if last.finished_at_ms <= saved.seen_finished_at_ms {
+        return None;
+    }
+    saved.seen_finished_at_ms = last.finished_at_ms;
+    let announce = !unreadable
+        && last.outcome == "installed"
+        && current_build > 0
+        && last.build == current_build
+        && saved.notified_build != current_build;
+    if last.outcome == "installed" {
+        // Consume the build even with unreadable old state; do not resurrect
+        // its previous successful notice on the next poll.
+        if last.build == current_build {
+            saved.notified_build = current_build;
+        }
+    } else if !unreadable {
+        count_failure(&mut saved, last);
+    }
+    let persisted = store_at(path, &saved);
+    (announce && persisted).then(|| last.version.clone())
 }
 
 /// See [`crate::api::silent_update_prepare`].
@@ -654,6 +693,7 @@ mod tests {
         let mut saved = Saved {
             auto_update: Some(false),
             seen_finished_at_ms: 7,
+            notified_build: 412,
             start_hidden_at_ms: 9,
             ready: Some(package(420)),
             launch_tried: 419,
@@ -663,5 +703,113 @@ mod tests {
         saved.fail(420, "UPDATE_BUSY");
         let text = serde_json::to_string(&saved).unwrap();
         assert_eq!(serde_json::from_str::<Saved>(&text).unwrap(), saved);
+    }
+    fn completion(build: u64, finished_at_ms: u64) -> UpdateResult {
+        UpdateResult {
+            version: "0.7.5".into(),
+            build,
+            outcome: "installed".into(),
+            error: None,
+            finished_at_ms,
+        }
+    }
+
+    fn temporary_state() -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "ppvpn-update-result-{}-{}-{}.json",
+            std::process::id(),
+            now_ms(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn completion_is_durable_once_across_polls_reopen_and_replayed_timestamp() {
+        let path = temporary_state();
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 100), 420),
+            Some("0.7.5".into())
+        );
+        // Every call reopens the actual file, as a new process would.
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 100), 420),
+            None
+        );
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 101), 420),
+            None
+        );
+        assert_eq!(
+            consume_completed_at(&path, &completion(419, 102), 420),
+            None
+        );
+        assert_eq!(consume_completed_at(&path, &completion(420, 99), 420), None);
+        assert_eq!(
+            consume_completed_at(&path, &completion(421, 103), 421),
+            Some("0.7.5".into())
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn concurrent_service_responses_announce_only_once() {
+        let path = temporary_state();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let (path, barrier) = (path.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    consume_completed_at(&path, &completion(420, 100), 420).is_some()
+                })
+            })
+            .collect();
+        assert_eq!(
+            threads
+                .into_iter()
+                .map(|thread| usize::from(thread.join().unwrap()))
+                .sum::<usize>(),
+            1
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn no_success_notice_without_durable_ack_or_from_unreadable_state() {
+        let path = temporary_state();
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 100), 420),
+            None
+        );
+        std::fs::remove_file(path.with_extension("json.new")).unwrap();
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, b"invalid").unwrap();
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 101), 420),
+            None
+        );
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 102), 420),
+            None
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn old_process_cannot_announce_target_build_before_restart() {
+        let path = temporary_state();
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 100), 419),
+            None
+        );
+        // The last result was acknowledged by the older process; no repeated
+        // update-required dialog is inferred from a completion response.
+        assert_eq!(
+            consume_completed_at(&path, &completion(420, 100), 420),
+            None
+        );
+        std::fs::remove_file(path).unwrap();
     }
 }
