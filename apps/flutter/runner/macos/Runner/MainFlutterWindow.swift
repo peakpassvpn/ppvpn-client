@@ -84,13 +84,46 @@ class MainFlutterWindow: NSWindow {
   // first order before AppKit can display/activate it; Dart resumes it later.
   private let updateRelaunch = UpdatePromptPolicy.takeRelaunch()
   private var protectUpdateLaunch: Bool?
+  private var deferredFirstOrder: Timer?
+  private var deferredFirstKeyOrder = false
 
-  private func mayPresentUpdateLaunch() -> Bool {
+  private func mayPresentUpdateLaunch(key: Bool = false) -> Bool {
     if protectUpdateLaunch == nil { protectUpdateLaunch = updateRelaunch }
     guard protectUpdateLaunch == true else { return true }
-    guard !UpdatePromptPolicy.shouldDeferPrompt else { return false }
+    if UpdatePromptPolicy.shouldDeferPrompt {
+      deferredFirstKeyOrder = deferredFirstKeyOrder || key
+      // Flutter/window_manager can await the native first frame. Remember
+      // the rejected nib order and resume it natively when safe, so that
+      // recovering the window does not depend on that Dart callback.
+      if deferredFirstOrder == nil && !ProcessInfo.processInfo.arguments.contains("--background") {
+        updateLog.info("update launch: native first order deferred")
+        deferredFirstOrder = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+          MainActor.assumeIsolated {
+            guard let self else { timer.invalidate(); return }
+            self.resumeDeferredFirstOrder()
+          }
+        }
+      }
+      return false
+    }
     protectUpdateLaunch = false
+    deferredFirstOrder?.invalidate()
+    deferredFirstOrder = nil
     return true
+  }
+
+  private func resumeDeferredFirstOrder() {
+    guard protectUpdateLaunch == true, !UpdatePromptPolicy.shouldDeferPrompt else { return }
+    protectUpdateLaunch = false
+    deferredFirstOrder?.invalidate()
+    deferredFirstOrder = nil
+    // This is the original update-origin startup request, before any
+    // Flutter first frame. No shown window is hidden to suppress a prompt.
+    super.orderFront(nil)
+    if deferredFirstKeyOrder && !UpdatePromptPolicy.shouldDeferPrompt {
+      super.makeKeyAndOrderFront(nil)
+    }
+    updateLog.info("update launch: native first order resumed")
   }
 
   override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
@@ -109,7 +142,7 @@ class MainFlutterWindow: NSWindow {
   }
 
   override func makeKeyAndOrderFront(_ sender: Any?) {
-    guard mayPresentUpdateLaunch() else { return }
+    guard mayPresentUpdateLaunch(key: true) else { return }
     super.makeKeyAndOrderFront(sender)
   }
 
