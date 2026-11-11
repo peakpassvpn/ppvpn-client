@@ -16,12 +16,16 @@ if ((git -C $source rev-parse HEAD).Trim() -ne $revision) { throw 'WinSparkle re
 git -C $source submodule update --init --recursive --depth 1
 if ($LASTEXITCODE) { throw 'WinSparkle pinned submodules failed' }
 $patch = Join-Path $PSScriptRoot 'winsparkle-0.9.2-fullscreen.patch'
-git -C $source apply --reverse --check $patch 2>$null
-if ($LASTEXITCODE -ne 0) {
+$patchMark = Join-Path $source '.ppvpn-fullscreen-patch.sha256'
+$patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash
+if (Test-Path $patchMark) {
+  if ((Get-Content $patchMark -Raw).Trim() -ne $patchHash) { throw 'Use a fresh build work directory for a changed WinSparkle patch' }
+} else {
   git -C $source apply --check $patch
   if ($LASTEXITCODE) { throw 'WinSparkle patch does not apply cleanly' }
   git -C $source apply $patch
   if ($LASTEXITCODE) { throw 'WinSparkle patch failed' }
+  Set-Content $patchMark $patchHash
 }
 Copy-Item (Join-Path $PSScriptRoot 'update_fullscreen.h') (Join-Path $source 'src/ppvpn_update_fullscreen.h')
 Push-Location $source
