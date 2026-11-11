@@ -120,7 +120,20 @@ class MainFlutterWindow: NSWindow {
     super.orderFront(nil)
     if !UpdatePromptPolicy.shouldDeferPrompt {
       super.makeKeyAndOrderFront(nil)
-      if !UpdatePromptPolicy.shouldDeferPrompt { NSApp.activate(ignoringOtherApps: true) }
+      if !NSApp.isActive && !UpdatePromptPolicy.shouldDeferPrompt {
+        // A process launched explicitly without activation may have its own
+        // activation request declined on macOS 14+. Reopen this running bundle
+        // through the original workspace activation path, only once and when
+        // safe, instead of relying on the deprecated ignoringOtherApps flag.
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = false
+        configuration.promptsUserIfNeeded = false
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+          if error != nil { updateLog.error("update launch: workspace activation failed") }
+        }
+      }
     }
     updateLog.info("update launch: native first order resumed")
   }
