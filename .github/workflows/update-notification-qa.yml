@@ -10,6 +10,7 @@ permissions:
   contents: read
 jobs:
   windows-updater:
+    if: ${{ !inputs.full_client }}
     runs-on: windows-latest
     timeout-minutes: 55
     steps:
