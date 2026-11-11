@@ -29,6 +29,8 @@ jobs:
             $code = $LASTEXITCODE
             if ($code -eq 77) { throw 'BLOCKED: runner has no usable interactive desktop. UI acceptance remains pending.' }
             if ($code) { throw 'Fullscreen UI acceptance failed' }
+            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'permission' 2>&1 | Tee-Object 'permission.txt'
+            if ($LASTEXITCODE) { throw 'Permission-dialog fullscreen acceptance failed' }
             & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' '0.7.5.2' 2>&1 | Tee-Object 'installed-15min.txt'
             if ($LASTEXITCODE) { throw 'Installed-build observation failed' }
           } finally { Stop-Process -Id $server.Id; Pop-Location }

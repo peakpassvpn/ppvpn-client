@@ -134,12 +134,20 @@ int wmain(int argc, wchar_t** argv) {
         auto details = function<void(__cdecl*)(const wchar_t*,const wchar_t*,const wchar_t*)>("win_sparkle_set_app_details");
         auto build = function<void(__cdecl*)(const wchar_t*)>("win_sparkle_set_app_build_version");
         std::string key = "Software\\PPVPN\\UpdatePromptQA\\" + std::to_string(GetCurrentProcessId());
-        registry(key.c_str()); automatic(0); details(L"PPVPN QA", L"PPVPN Update QA", L"0.7.5"); build(argv[3]);
+        bool permission = std::wstring(argv[3]) == L"permission";
+        registry(key.c_str());
+        if (permission) {
+            const char ran[] = "1";
+            RegSetKeyValueA(HKEY_CURRENT_USER, key.c_str(), "DidRunOnce", REG_SZ, ran, sizeof(ran));
+        } else automatic(0);
+        details(L"PPVPN QA", L"PPVPN Update QA", L"0.7.5"); build(permission ? L"0.7.5.1" : argv[3]);
         std::wstring widefeed(argv[2]); std::string url(widefeed.begin(), widefeed.end()); feed(url.c_str());
         init();
-        SendMessageW(other, WM_APP+1, 0, 0); pump(300);
-        check(); pump(300);
-        SendMessageW(other, WM_APP+1, 1, 0); pump(300);
+        if (!permission) {
+            SendMessageW(other, WM_APP+1, 0, 0); pump(300);
+            check(); pump(300);
+            SendMessageW(other, WM_APP+1, 1, 0); pump(300);
+        }
         require(GetForegroundWindow() == other && ppvpn_update::foreground_fullscreen(), "entered fullscreen while delayed check was in flight");
         // The feed deliberately delays 3 seconds. Fullscreen remains real for
         // the response AND the eventual native Show/Raise call.
@@ -151,9 +159,20 @@ int wmain(int argc, wchar_t** argv) {
         SendMessageW(other, WM_APP+1, 0, 0); pump(300);
         require(GetForegroundWindow() == other && !ppvpn_update::foreground_fullscreen(), "normal maximized foreground is allowed");
         for (int i=0;i<100 && !visible_prompt();++i) pump(100);
-        bool newer = std::wstring(argv[3]) == L"0.7.5.1";
+        bool newer = std::wstring(argv[3]) == L"0.7.5.1" || permission;
         require(newer ? visible_prompt() != nullptr : visible_prompt() == nullptr, newer ? "original native update dialog appears after fullscreen exits" : "target build does not prompt after relaunch");
         screenshot(L"after-fullscreen.bmp"); close_prompt();
+        if (newer && !permission) {
+            SendMessageW(other, WM_APP+1, 1, 0); pump(300);
+            const char zero[] = "0";
+            RegSetKeyValueA(HKEY_CURRENT_USER, key.c_str(), "LastCheckTime", REG_SZ, zero, sizeof(zero));
+            automatic(1); pump(5500);
+            require(!visible_prompt(), "scheduled fallback result remains deferred during fullscreen");
+            automatic(0); // app chose silent updates / installation started
+            SendMessageW(other, WM_APP+1, 0, 0);
+            for (int i=0;i<50;++i) { pump(100); if (visible_prompt()) throw std::runtime_error("cancelled scheduled response displayed"); }
+            require(!visible_prompt(), "disabled fallback discards in-flight scheduled UI after fullscreen exits");
+        }
         if (!newer) {
             for (int i=0;i<15;++i) {
                 check();
