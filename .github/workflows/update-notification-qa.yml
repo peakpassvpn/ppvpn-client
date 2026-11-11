@@ -31,6 +31,7 @@ jobs:
       - name: Actual console UI and installed-build observation
         shell: powershell
         run: |
+          Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class PpvpnQaExitCode{[DllImport("kernel32.dll",SetLastError=true)]public static extern bool GetExitCodeProcess(IntPtr process,out uint code);}'
           $server = Start-Process python -ArgumentList 'tools/desktop/windows/update-feed-fixture.py' -PassThru -RedirectStandardOutput 'build/update-qa/feed.stdout.txt' -RedirectStandardError 'build/update-qa/feed.stderr.txt'
           $root=(Resolve-Path build/update-qa).Path
           $binary=Join-Path $root 'update-prompt-qa.exe'
@@ -44,6 +45,7 @@ jobs:
               try {
                 $started=[DateTime]::UtcNow.ToString('o')
                 $test=Start-Process $binary -ArgumentList ('"'+$library+'" http://127.0.0.1:18763/feed.xml '+$case.arg) -PassThru -RedirectStandardOutput 'raw.txt' -RedirectStandardError 'errors.txt'
+                $processHandle=$test.Handle
                 $seconds=if($case.name -eq 'installed-15min'){20*60}else{120}
                 if(-not $test.WaitForExit($seconds*1000)){
                   $capture=Start-Process $binary -ArgumentList '--capture timeout-desktop.bmp' -PassThru
@@ -53,7 +55,8 @@ jobs:
                   $results+=@{case=$case.name;status='TIMEOUT_UNKNOWN_FAIL';pid=$test.Id;started_utc=$started;finished_utc=[DateTime]::UtcNow.ToString('o')}
                   throw 'Owned UI fixture timed out; not acceptance'
                 }
-                $code=$test.ExitCode
+                [uint32]$code=259
+                if(-not [PpvpnQaExitCode]::GetExitCodeProcess($processHandle,[ref]$code) -or $code -eq 259){throw 'Fixture exit status is unknown/still active; not accepted'}
                 Get-Content 'raw.txt'
                 if(Test-Path 'errors.txt'){Get-Content 'errors.txt'}
                 $results+=@{case=$case.name;exitcode=$code;started_utc=$started;finished_utc=[DateTime]::UtcNow.ToString('o')}
@@ -157,3 +160,4 @@ jobs:
           path: |
             build/client-upgrade-qa/
             build/update-installers/
+            build/update-qa/

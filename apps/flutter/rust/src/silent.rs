@@ -288,10 +288,14 @@ pub(crate) fn start_hidden() -> bool {
 /// fullscreen session; ordinary user launches retain their behavior.
 #[cfg(windows)]
 pub(crate) fn mark_update_relaunch() {
-    update(|saved| {
+    if !update(|saved| {
         saved.update_relaunch_at_ms = now_ms();
         saved.update_relaunch_from_build = build();
-    });
+    }) {
+        tracing::warn!(
+            "update relaunch provenance could not be saved; next-launch attribution unavailable"
+        );
+    }
 }
 
 pub(crate) fn take_update_relaunch() -> bool {
@@ -308,7 +312,11 @@ pub(crate) fn take_update_relaunch() -> bool {
     if pending || !fresh {
         saved.update_relaunch_at_ms = 0;
         saved.update_relaunch_from_build = 0;
-        store(&saved);
+        if !store(&saved) {
+            tracing::warn!(
+                "update relaunch provenance could not be cleared; fresh mark may be observed again"
+            );
+        }
     }
     pending
 }
