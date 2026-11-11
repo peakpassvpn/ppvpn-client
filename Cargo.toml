@@ -30,7 +30,7 @@ repository = "https://github.com/peakpassvpn/ppvpn-client"
 # runtime does not follow certificate files that change on disk.
 # Frozen dynamic-TUN candidate on the existing v0.22.0 base. This draft must
 # not ship until the candidate CI/platform acceptance and release pin settle.
-sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "19a78753ee3bc1b4c0c27008b1eb450666f52900", features = ["auto-reload"] }
+sail = { git = "https://github.com/peakpassvpn/sail.git", rev = "2a8d7e10e12a1f68a23ffe3bc1dc0f3878aefb07", features = ["auto-reload"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 idna = "1"

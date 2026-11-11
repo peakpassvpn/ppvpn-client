@@ -16,6 +16,8 @@ crate-type = ["staticlib", "rlib"]
 [features]
 # Read-only counters; no traffic policy, timers or probe in ordinary builds.
 internal-diagnostics = ["ppvpn-core/internal-diagnostics"]
+# Uses the existing read-only JSON snapshot/FFI, without new exported symbols.
+internal-udp-target-diagnostics = ["internal-diagnostics", "ppvpn-core/internal-udp-target-diagnostics"]
 
 [dependencies]
 async-trait = "0.1"
