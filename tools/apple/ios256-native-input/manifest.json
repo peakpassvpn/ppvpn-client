@@ -1,0 +1,35 @@
+{
+  "source": "fe01164124e11abf85d66bf2f6d14bb72bc4c960",
+  "tree": "cd9ba03df7f7ccb5089694a5e90038ee2b90ce35",
+  "scope": "Exact small Swift/header check input only; not full source or archive",
+  "files": {
+    "InternalLoadProbe.swift": {
+      "original_path": "apps/flutter/runner/ios/Runner/InternalLoadProbe.swift",
+      "sha256": "295c4dc7e0996a64ec4d14c77faa7025d354d86ee047e631b5f6b9f7f36195c9"
+    },
+    "main.swift": {
+      "original_path": "apps/flutter/checks/ios-concurrency/main.swift",
+      "sha256": "685dc07c9acd336bd2caea17766c3b0bc1653bd4508b1500ac681319227b1624"
+    },
+    "PacketTunnelProvider.swift": {
+      "original_path": "apps/flutter/runner/ios/PacketTunnel/PacketTunnelProvider.swift",
+      "sha256": "86d145a817eee5693853078835895a37b26e0b8483c817275c55d71d237a44c8"
+    },
+    "TunnelHost.swift": {
+      "original_path": "apps/flutter/runner/ios/PacketTunnel/TunnelHost.swift",
+      "sha256": "5d5e54a68f143940bf5c2384d377cc9942ed24beb8a44bd638e272931bc6a199"
+    },
+    "NetworkState.swift": {
+      "original_path": "apps/flutter/runner/ios/Shared/NetworkState.swift",
+      "sha256": "9833d57d26de668e3ed562fd666c99a9a2ea35f887688d6d11903c55c709f67a"
+    },
+    "InternalResourceSampler.swift": {
+      "original_path": "apps/flutter/runner/ios/PacketTunnel/InternalResourceSampler.swift",
+      "sha256": "9e57208901b37171e0b4385c0622a59614ee2a23d683b1cad888fc4c7ab5e773"
+    },
+    "ppvpn_tunnel.h": {
+      "original_path": "crates/tunnel-host/include/ppvpn_tunnel.h",
+      "sha256": "e9afa1b4d4066b2a9a0eb535389940b051566793cb234d14620b45eebd31c3c4"
+    }
+  }
+}

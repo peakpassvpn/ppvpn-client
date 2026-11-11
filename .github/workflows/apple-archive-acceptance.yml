@@ -1,0 +1,362 @@
+name: Apple archive acceptance
+run-name: iOS unsigned archives for frozen product source
+
+on:
+  workflow_dispatch:
+    inputs:
+      native256_checks:
+        description: Run only exact reviewed internal256 native and SDK checks
+        type: boolean
+        default: false
+      paired_candidate_json:
+        description: Optional second origin and per-origin expiry for same-source canonical builds using this job's warm caches
+        required: false
+      candidate_lane:
+        description: Independent candidate scheduling; measurements retain their own serial lane
+        type: choice
+        options: [measurement, isolated, production]
+        default: measurement
+      build_number:
+        description: Actual native and Flutter release counter for newly compiled archives
+        default: '345'
+        required: true
+      macos_apns_probe_json:
+        description: Explicit reviewed draft and hashes for bounded hosted Mac OS registration only
+        required: false
+      candidate_only:
+        description: Isolated candidate only; skips size baseline, production signing and upload
+        type: boolean
+        default: false
+      api_origin:
+        description: Explicit authorized HTTPS origin; empty uses repository configuration
+        required: false
+      platform:
+        description: Apple platform to build serially
+        type: choice
+        options: [ios, macos]
+        default: ios
+      source_ref:
+        description: Exact product source commit
+        required: true
+      reuse_baseline_run:
+        description: Optional successful iOS archive run with matching immutable baseline
+        required: false
+      baseline_ref:
+        description: Exact functional baseline commit
+        default: 1ddf0a168610172773fe3f479133ecbe5acf932f
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PAIRED_CANDIDATE_JSON: ${{ inputs.paired_candidate_json }}
+
+concurrency:
+  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}-${{ inputs.candidate_lane || 'measurement' }}
+  cancel-in-progress: false
+
+jobs:
+  archives:
+    if: inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks
+    runs-on: macos-15
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      SOURCE_REF: ${{ inputs.source_ref }}
+      CANDIDATE_ONLY: ${{ inputs.candidate_only && '1' || '0' }}
+      REUSE_BASELINE_RUN: ${{ inputs.reuse_baseline_run }}
+      BASELINE_REF: ${{ inputs.baseline_ref || '1ddf0a168610172773fe3f479133ecbe5acf932f' }}
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number || '345' }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
+      PPVPN_APPLE_PUSH_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate archive mode
+        run: |
+          if [[ "${{ inputs.candidate_lane || 'measurement' }}" != measurement && "$CANDIDATE_ONLY" != 1 ]]; then
+            echo 'Independent candidate lanes require candidate-only mode' >&2
+            exit 2
+          fi
+          if [[ "$CANDIDATE_ONLY" == 1 && -n "$REUSE_BASELINE_RUN" ]]; then
+            echo 'Candidate-only mode cannot claim a reused comparison baseline' >&2
+            exit 2
+          fi
+          if [[ -n "$PAIRED_CANDIDATE_JSON" ]]; then
+            python3 tools/apple/candidate_variants.py prepare --json "$PAIRED_CANDIDATE_JSON" \
+              --primary "$PPVPN_API_BASE_DEFAULT" --candidate-only "$CANDIDATE_ONLY" \
+              --platform "${{ inputs.platform || 'ios' }}" --reuse-baseline "$REUSE_BASELINE_RUN" \
+              --output "$RUNNER_TEMP/apple-pair.json"
+          fi
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.reuse_baseline_run != ''
+        with:
+          name: ios-unsigned-archive-comparison
+          run-id: ${{ inputs.reuse_baseline_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/apple-baseline-reuse
+      - name: Xcode 26
+        run: |
+          if [[ -n "$REUSE_BASELINE_RUN" ]]; then
+            expected=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/apple-baseline-reuse/baseline/build-provenance.json"))["xcode"])')
+            xcode=
+            for candidate in /Applications/Xcode_26*.app; do
+              if [[ "$(DEVELOPER_DIR="$candidate/Contents/Developer" xcodebuild -version)" == "$expected" ]]; then xcode="$candidate"; break; fi
+            done
+            [[ -n "$xcode" ]] || { echo 'Exact baseline Xcode is unavailable; reuse refused'; exit 1; }
+          else
+            xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          fi
+          [[ -d "$xcode" ]] || { echo 'Xcode 26 is unavailable'; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          df -h /
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: macos
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: ${{ runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
+      - uses: ./.github/actions/flutter-toolchain
+      - name: Serial Release archives on one compiler and SDK
+        env:
+          PPVPN_SKIP_ANALYZE: '1'
+        run: bash tools/apple/archive_ios_variants.sh primary
+      # No signing environment, credentials, TestFlight or publication step.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: ${{ inputs.candidate_only && 'ios-unsigned-candidate-archive' || 'ios-unsigned-archive-comparison' }}
+          path: ${{ runner.temp }}/apple-output
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Second canonical origin using warm caches
+        if: inputs.paired_candidate_json != '' && success()
+        env:
+          PPVPN_SKIP_ANALYZE: '1'
+        run: |
+          set -euo pipefail
+          bash tools/apple/archive_ios_variants.sh secondary
+          mkdir -p "$RUNNER_TEMP/apple-secondary-output"
+          cp -R "$RUNNER_TEMP/apple-output/secondary" "$RUNNER_TEMP/apple-secondary-output/secondary"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: inputs.paired_candidate_json != '' && always()
+        with:
+          name: ios-unsigned-secondary-archive
+          path: ${{ runner.temp }}/apple-secondary-output
+          if-no-files-found: warn
+          retention-days: 3
+
+  macos:
+    if: inputs.platform == 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks
+    runs-on: macos-15
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number || '345' }}
+      PPVPN_APPLE_PUSH_ENABLED: '0'
+      PPVPN_APPLE_TARGETS: aarch64-apple-darwin
+      SOURCE_REF: ${{ inputs.source_ref }}
+      CANDIDATE_ONLY: ${{ inputs.candidate_only && '1' || '0' }}
+      BASELINE_REF: ${{ inputs.baseline_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
+      - name: Xcode and generator
+        run: |
+          [[ -z "$PAIRED_CANDIDATE_JSON" ]] || { echo 'Paired origins require candidate-only iOS' >&2; exit 2; }
+          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodebuild -version
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: macos
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/flutter-toolchain
+      - name: Serial full macOS packages
+        env:
+          PPVPN_SKIP_ANALYZE: '1'
+        run: |
+          set -euo pipefail
+          unset PPVPN_API_BASE PPVPN_FLUTTER_HOME PPVPN_FLUTTER_SAMPLE PPVPN_FLUTTER_SYNTHETIC_TRAFFIC
+          mkdir -p "$CARGO_TARGET_DIR" "$RUNNER_TEMP/macos-output"
+          sides=(candidate)
+          [[ "$CANDIDATE_ONLY" == 1 ]] || sides+=(baseline)
+          for side in "${sides[@]}"; do
+            checkout="$RUNNER_TEMP/macos-$side"
+            output="$RUNNER_TEMP/macos-output/$side"
+            mkdir -p "$output"
+            git clone --no-hardlinks "$GITHUB_WORKSPACE" "$checkout"
+            if [[ "$side" == baseline ]]; then git -C "$checkout" checkout --detach "$BASELINE_REF"; fi
+            ln -s "$CARGO_TARGET_DIR" "$checkout/target"
+            echo /target >> "$checkout/.git/info/exclude"
+            export PPVPN_MACOS_SINGLE_RUNTIME=0
+            [[ "$side" != candidate ]] || export PPVPN_MACOS_SINGLE_RUNTIME=1
+            (cd "$checkout" && env -u FLUTTER_TARGET MACOS_ARCHS=arm64 bash apps/flutter/scripts/ci-build.sh) >"$output/flutter-build.log" 2>&1
+            (cd "$checkout" && bash tools/desktop/build-service.sh macos-arm64) >"$output/helper-build.log" 2>&1
+            (cd "$checkout" && bash apps/macos/scripts/bootstrap.sh --release) >"$output/ffi-build.log" 2>&1
+            app="$checkout/apps/flutter/build/macos/Build/Products/Release/PPVPN.app"
+            (cd "$checkout" && SKIP_BOOTSTRAP=1 bash apps/flutter/scripts/package-macos.sh "$app" arm64) >"$output/package.log" 2>&1
+            cp "$checkout"/dist/macos/* "$output/"
+            CHECKOUT="$checkout" OUTPUT="$output" python3 - <<'PYCODE'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root,out=Path(os.environ['CHECKOUT']),Path(os.environ['OUTPUT'])
+          app=root/'apps/flutter/build/macos-package-arm64/PPVPN.app'
+          rows={str(p.relative_to(app)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in app.rglob('*') if p.is_file() and not p.is_symlink()}
+          data={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
+                'layout':os.environ['PPVPN_MACOS_SINGLE_RUNTIME'],'signing':'ad-hoc measurement only; no production peer acceptance',
+                'api_origin_sha256':hashlib.sha256(os.environ['PPVPN_API_BASE_DEFAULT'].encode()).hexdigest(),
+                'xcode':subprocess.check_output(['xcodebuild','-version'],text=True).strip(),
+                'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
+                'logical_bundle_bytes':sum(v['bytes'] for v in rows.values()),'files':rows,
+                'installed':False,'real_vpn_acceptance':False,
+                'build_purpose':'isolated-candidate-only' if os.environ['CANDIDATE_ONLY']=='1' else 'same-conditions-size-comparison'}
+          (out/'build-provenance.json').write_text(json.dumps(data,indent=2)+'\n')
+          PYCODE
+            tar -czf "$output/PPVPN.app.tar.gz" -C "$checkout/apps/flutter/build/macos-package-arm64" PPVPN.app
+          done
+          python3 - <<'PYCODE'
+          import json,os
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'macos-output'
+          if os.environ['CANDIDATE_ONLY']=='1':
+              print('Candidate package only; no baseline comparison or runtime acceptance claimed')
+              raise SystemExit(0)
+          a,b=[json.loads((out/side/'build-provenance.json').read_text()) for side in ('candidate','baseline')]
+          for field in ('api_origin_sha256','xcode','rust','signing'): assert a[field]==b[field],field
+          result={'candidate_bytes':a['logical_bundle_bytes'],'baseline_bytes':b['logical_bundle_bytes'],
+                  'saved_bytes':b['logical_bundle_bytes']-a['logical_bundle_bytes'],
+                  'saved_percent':100*(1-a['logical_bundle_bytes']/b['logical_bundle_bytes']),
+                  'scope':'arm64 Release fully packaged app; ad-hoc measurement signatures; same compiler/SDK/API; no runtime acceptance'}
+          (out/'comparison.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result))
+          PYCODE
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: ${{ inputs.candidate_only && 'macos-candidate-package' || 'macos-package-comparison' }}
+          path: ${{ runner.temp }}/macos-output
+          if-no-files-found: warn
+          retention-days: 3
+
+  macos_apns_os_probe:
+    if: inputs.macos_apns_probe_json != '' && !inputs.native256_checks
+    runs-on: macos-15
+    timeout-minutes: 10
+    # Draft asset retrieval needs this scope (same as native acceptance).
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ fromJSON(inputs.macos_apns_probe_json || '{}').release_tag }}
+      ZIP_SHA256: ${{ fromJSON(inputs.macos_apns_probe_json || '{}').zip_sha256 }}
+      EXECUTABLE_SHA256: ${{ fromJSON(inputs.macos_apns_probe_json || '{}').executable_sha256 }}
+      PROFILE_SHA256: ${{ fromJSON(inputs.macos_apns_probe_json || '{}').profile_sha256 }}
+      VERIFIER_SHA256: ${{ fromJSON(inputs.macos_apns_probe_json || '{}').verifier_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+      - name: Stage the reviewed signed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -z "$PAIRED_CANDIDATE_JSON" ]] || { echo 'Paired origins require candidate-only iOS' >&2; exit 2; }
+          [[ "$RELEASE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+          [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == true ]]
+          mkdir -p "$RUNNER_TEMP/probe-download" "$RUNNER_TEMP/native-apns-probe"
+          gh release download "$RELEASE_TAG" --pattern ppvpn-macos-apns-capability-arm64-344.zip --dir "$RUNNER_TEMP/probe-download"
+          python3 - <<'PY'
+          import hashlib,json,os,stat,subprocess,zipfile
+          from pathlib import Path,PurePosixPath
+          work=Path(os.environ['RUNNER_TEMP'])
+          archive=work/'probe-download/ppvpn-macos-apns-capability-arm64-344.zip'
+          assert hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()==os.environ['ZIP_SHA256']
+          with zipfile.ZipFile(archive) as source:
+              names=set()
+              for item in source.infolist():
+                  path=PurePosixPath(item.filename)
+                  assert not path.is_absolute() and '..' not in path.parts and item.filename not in names
+                  assert not stat.S_ISLNK(item.external_attr >> 16)
+                  names.add(item.filename)
+          arch=subprocess.check_output(['uname','-m'],text=True).strip()
+          record={'scope':'OS registration feasibility only; no login, proof store, worker, send or delivery',
+                  'controller_source':os.environ['GITHUB_SHA'],'runner_architecture':arch,
+                  'runner_image':os.environ.get('ImageVersion'),
+                  'macos':subprocess.check_output(['sw_vers','-productVersion'],text=True).strip(),
+                  'xcode':subprocess.check_output(['xcodebuild','-version'],text=True).strip(),
+                  'signed_zip_sha256_verified':True,'private_key_transferred':False,'raw_logs_retained':False}
+          (work/'probe-infrastructure.json').write_text(json.dumps(record,indent=2)+'\n')
+          assert arch=='arm64','Reviewed diagnostic requires an arm64 hosted Mac'
+          PY
+          ditto -x -k "$RUNNER_TEMP/probe-download/ppvpn-macos-apns-capability-arm64-344.zip" "$RUNNER_TEMP/native-apns-probe"
+      - name: Observe actual OS callbacks for at most 120 seconds
+        shell: bash
+        run: |
+          python3 tools/apple/macos_apns_runner_probe.py \
+            --app "$RUNNER_TEMP/native-apns-probe/PPVPN APNs Capability Probe.app" \
+            --executable-sha256 "$EXECUTABLE_SHA256" --profile-sha256 "$PROFILE_SHA256" \
+            --verifier tools/apple/push_config.py --verifier-sha256 "$VERIFIER_SHA256" \
+            --timeout 120 --output "$RUNNER_TEMP/native-apns-os-result.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: macos-apns-os-probe-redacted-receipts
+          path: |
+            ${{ runner.temp }}/native-apns-os-result.json
+            ${{ runner.temp }}/probe-infrastructure.json
+          if-no-files-found: warn
+          retention-days: 3
+
+  internal256_native_checks:
+    if: inputs.native256_checks
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Reviewed small-input native and iPhoneOS SDK checks
+        run: python3 tools/apple/check_internal256_worker.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: internal256-native-worker-receipts
+          path: build/internal256-native-worker
+          retention-days: 7
