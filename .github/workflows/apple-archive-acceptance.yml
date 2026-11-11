@@ -4,6 +4,11 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      ios256_variant:
+        description: Exact reviewed source-input variant for isolated archive
+        type: choice
+        options: [normal, diagnostic]
+        default: normal
       native256_checks:
         description: Run only exact reviewed internal256 native and SDK checks
         type: boolean
@@ -76,6 +81,10 @@ jobs:
       PPVPN_BUILD_NUMBER: ${{ inputs.build_number || '345' }}
       PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
       PPVPN_APPLE_PUSH_ENABLED: '0'
+      PPVPN_INTERNAL_DIAGNOSTICS: ${{ inputs.ios256_variant == 'diagnostic' && '1' || '0' }}
+      PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS: '0'
+      IOS256_VARIANT: ${{ inputs.ios256_variant || 'normal' }}
+      GOTOOLCHAIN: go1.25.8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -136,10 +145,14 @@ jobs:
         with:
           targets: ${{ runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
       - uses: ./.github/actions/flutter-toolchain
+      - name: Verify draft source payloads and preload exact Git objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/apple/preload_ios256_sources.py
       - name: Serial Release archives on one compiler and SDK
         env:
           PPVPN_SKIP_ANALYZE: '1'
-        run: bash tools/apple/archive_ios_variants.sh primary
+        run: GITHUB_WORKSPACE="$IOS256_CLIENT_GIT" bash tools/apple/archive_ios_variants.sh primary
       # No signing environment, credentials, TestFlight or publication step.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
