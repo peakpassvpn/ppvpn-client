@@ -86,6 +86,14 @@ impl CheckPolicy {
         disable();
     }
 
+    fn manual_check(&self, check: impl FnOnce()) {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.installing {
+            check();
+        }
+    }
+
+    #[cfg(test)]
     fn installing(&self) -> bool {
         self.state
             .lock()
@@ -173,6 +181,7 @@ mod platform {
     struct WinSparkle {
         init: unsafe extern "C" fn(),
         prompt_deferred: unsafe extern "C" fn() -> c_int,
+        cancel_pending_ui: unsafe extern "C" fn(),
         set_lang: unsafe extern "C" fn(*const c_char),
         set_appcast_url: unsafe extern "C" fn(*const c_char),
         set_eddsa_public_key: unsafe extern "C" fn(*const c_char) -> c_int,
@@ -245,6 +254,7 @@ mod platform {
         Ok(WinSparkle {
             init: symbol!("win_sparkle_init"),
             prompt_deferred: symbol!("win_sparkle_ppvpn_update_prompt_deferred"),
+            cancel_pending_ui: symbol!("win_sparkle_ppvpn_cancel_pending_ui"),
             set_lang: symbol!("win_sparkle_set_lang"),
             set_appcast_url: symbol!("win_sparkle_set_appcast_url"),
             set_eddsa_public_key: symbol!("win_sparkle_set_eddsa_public_key"),
@@ -291,9 +301,13 @@ mod platform {
         POLICY.installation_started(|| {
             if let Some(winsparkle) = STARTED.get() {
                 // Serialised with every enabling DLL write.
-                unsafe { (winsparkle.set_automatic_check_for_updates)(0) };
+                unsafe {
+                    (winsparkle.set_automatic_check_for_updates)(0);
+                    (winsparkle.cancel_pending_ui)();
+                };
             }
         });
+        crate::silent::mark_update_relaunch();
         tracing::info!("update: installer launched; hiding until it asks the app to quit");
         crate::instance::deliver(UiActivation {
             push_id: None,
@@ -399,14 +413,14 @@ mod platform {
     }
 
     pub(super) fn check() {
-        if POLICY.installing() {
-            return;
-        }
         if let Some(winsparkle) = STARTED.get() {
             initialise_checks(winsparkle, None);
-            tracing::info!("update: manual check");
-            // SAFETY: WinSparkle runs (init above).
-            unsafe { (winsparkle.check_update_with_ui)() };
+            POLICY.manual_check(|| {
+                tracing::info!("update: manual check");
+                // The native call is serialized with installation_started,
+                // not just preceded by an unlocked installing() observation.
+                unsafe { (winsparkle.check_update_with_ui)() };
+            });
         }
     }
 
@@ -571,5 +585,11 @@ mod policy_tests {
             assert!(initialise);
         });
         policy.configure(None, |_, _| panic!("manual check changed scheduled policy"));
+    }
+    #[test]
+    fn manual_check_is_rejected_after_installation_starts() {
+        let policy = CheckPolicy::new();
+        policy.installation_started(|| {});
+        policy.manual_check(|| panic!("manual DLL call after installation started"));
     }
 }

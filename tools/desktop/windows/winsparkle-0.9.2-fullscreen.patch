@@ -1,10 +1,10 @@
 diff --git a/src/dll_api.cpp b/src/dll_api.cpp
-index 6d7aab3..4aca69b 100644
+index 6d7aab3..b652df3 100644
 --- a/src/dll_api.cpp
 +++ b/src/dll_api.cpp
 @@ -26,0 +27 @@
 +#include "ppvpn_update_fullscreen.h"
-@@ -46,0 +48,7 @@ extern "C"
+@@ -46,0 +48,12 @@ extern "C"
 +// Reuse the exact detector for the client's installation-in-progress notice.
 +// This query neither initializes the updater nor changes any settings.
 +WIN_SPARKLE_API int __cdecl win_sparkle_ppvpn_update_prompt_deferred()
@@ -12,7 +12,12 @@ index 6d7aab3..4aca69b 100644
 +    return ppvpn_update::should_defer_prompt() ? 1 : 0;
 +}
 +
-@@ -76,5 +84,4 @@ WIN_SPARKLE_API void __cdecl win_sparkle_init()
++WIN_SPARKLE_API void __cdecl win_sparkle_ppvpn_cancel_pending_ui()
++{
++    UI::CancelPendingUpdateUI();
++}
++
+@@ -76,5 +89,4 @@ WIN_SPARKLE_API void __cdecl win_sparkle_init()
 -            if ( checkUpdates )
 -            {
 -                UpdateChecker *check = new PeriodicUpdateChecker();
@@ -23,28 +28,31 @@ index 6d7aab3..4aca69b 100644
 +            UpdateChecker *check = new PeriodicUpdateChecker();
 +            check->Start();
 diff --git a/src/ui.cpp b/src/ui.cpp
-index d401aca..133e3a0 100644
+index d401aca..d1263d9 100644
 --- a/src/ui.cpp
 +++ b/src/ui.cpp
-@@ -26,0 +27 @@
+@@ -26,0 +27,2 @@
++#include <atomic>
 +#include "ppvpn_update_fullscreen.h"
-@@ -157,0 +159 @@ struct EventPayload
+@@ -74,0 +77 @@ namespace winsparkle
++static std::atomic<bool> ppvpnInstalling(false);
+@@ -157,0 +161 @@ struct EventPayload
 +    bool         scheduled = false;
-@@ -1164,0 +1167 @@ private:
+@@ -1164,0 +1169 @@ private:
 +    void OnDeferredShow(wxTimerEvent& event);
-@@ -1177,0 +1181,3 @@ private:
+@@ -1177,0 +1183,3 @@ private:
 +    wxTimer m_showTimer;
 +    bool m_pendingPermission = false;
 +    bool m_scheduled = false;
-@@ -1184,0 +1191,2 @@ App::App()
+@@ -1184,0 +1193,2 @@ App::App()
 +    m_showTimer.SetOwner(this);
 +    Bind(wxEVT_TIMER, &App::OnDeferredShow, this, m_showTimer.GetId());
-@@ -1279,0 +1288,17 @@ void App::ShowWindow()
+@@ -1279,0 +1290,17 @@ void App::ShowWindow()
 +    // Recheck on the UI thread after the network response and every deferred
 +    // retry. A later silent-update decision cancels an in-flight fallback.
 +    bool checks = false;
 +    Settings::ReadConfigValue("CheckForUpdates", checks, false);
-+    if (m_scheduled && !checks)
++    if (ppvpnInstalling.load() || (m_scheduled && !checks))
 +    {
 +        m_showTimer.Stop();
 +        m_win->Destroy();
@@ -57,7 +65,7 @@ index d401aca..133e3a0 100644
 +        return;
 +    }
 +    m_showTimer.Stop();
-@@ -1282,0 +1308,8 @@ void App::ShowWindow()
+@@ -1282,0 +1310,8 @@ void App::ShowWindow()
 +    // Centering/layout must not turn a check-time decision into a show-time
 +    // race. Never Show/Raise then hide an already activated update window.
 +    if (ppvpn_update::should_defer_prompt())
@@ -66,7 +74,7 @@ index d401aca..133e3a0 100644
 +        m_showTimer.StartOnce(1000);
 +        return;
 +    }
-@@ -1285 +1318,14 @@ void App::ShowWindow()
+@@ -1285 +1320,14 @@ void App::ShowWindow()
 -    m_win->Raise();
 +    if (!ppvpn_update::should_defer_prompt())
 +        m_win->Raise();
@@ -82,13 +90,14 @@ index d401aca..133e3a0 100644
 +    }
 +    else if (m_win)
 +        ShowWindow();
-@@ -1290,0 +1337 @@ void App::OnWindowClose(wxCloseEvent& event)
+@@ -1290,0 +1339 @@ void App::OnWindowClose(wxCloseEvent& event)
 +    m_showTimer.Stop();
-@@ -1306,0 +1354 @@ void App::OnShowCheckingUpdates(wxThreadEvent&)
+@@ -1306,0 +1356 @@ void App::OnShowCheckingUpdates(wxThreadEvent&)
 +    m_scheduled = false;
-@@ -1355,0 +1404 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
+@@ -1355,0 +1406 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
 +    m_scheduled = payload.scheduled;
-@@ -1363,0 +1413,15 @@ void App::OnAskForPermission(wxThreadEvent& event)
+@@ -1363,0 +1415,16 @@ void App::OnAskForPermission(wxThreadEvent& event)
++    if (ppvpnInstalling.load()) { m_pendingPermission = false; return; }
 +    bool configured = false;
 +    if (m_pendingPermission && Settings::ReadConfigValue("CheckForUpdates", configured))
 +    {
@@ -104,23 +113,32 @@ index d401aca..133e3a0 100644
 +        return;
 +    }
 +    m_pendingPermission = false;
-@@ -1365,0 +1430,6 @@ void App::OnAskForPermission(wxThreadEvent& event)
+@@ -1365,0 +1433,6 @@ void App::OnAskForPermission(wxThreadEvent& event)
 +    if (ppvpn_update::should_defer_prompt())
 +    {
 +        m_pendingPermission = true;
 +        m_showTimer.StartOnce(1000);
 +        return;
 +    }
-@@ -1506 +1576 @@ void UI::NotifyNoUpdates(bool installAutomatically)
+@@ -1489,0 +1563,6 @@ void UI::ShutDown()
++void UI::CancelPendingUpdateUI()
++{
++    ppvpnInstalling.store(true);
++}
++
++
+@@ -1506 +1585 @@ void UI::NotifyNoUpdates(bool installAutomatically)
 -void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
 +void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically, bool scheduled)
-@@ -1513,0 +1584 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
+@@ -1513,0 +1593 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
 +    payload.scheduled = scheduled;
 diff --git a/src/ui.h b/src/ui.h
-index f4d2eda..bf83e8f 100644
+index f4d2eda..145d136 100644
 --- a/src/ui.h
 +++ b/src/ui.h
-@@ -85 +85 @@ public:
+@@ -60,0 +61 @@ public:
++    static void CancelPendingUpdateUI();
+@@ -85 +86 @@ public:
 -    static void NotifyUpdateAvailable(const Appcast& info, bool installAutomatically);
 +    static void NotifyUpdateAvailable(const Appcast& info, bool installAutomatically, bool scheduled);
 diff --git a/src/updatechecker.cpp b/src/updatechecker.cpp

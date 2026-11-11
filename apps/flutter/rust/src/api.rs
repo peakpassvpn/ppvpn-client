@@ -703,6 +703,13 @@ pub fn update_prompt_deferred() -> bool {
     crate::update::prompt_deferred()
 }
 
+/// Consumes the provenance of the existing installer's automatic relaunch.
+/// It is separate from a user's request to open the app in the background.
+#[frb(sync)]
+pub fn take_update_relaunch() -> bool {
+    crate::silent::take_update_relaunch()
+}
+
 /// A check the user asked for, with WinSparkle's own progress and result
 /// windows (Windows; nothing elsewhere).
 #[frb(sync)]

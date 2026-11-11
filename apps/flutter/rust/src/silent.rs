@@ -70,6 +70,11 @@ struct Saved {
     /// with a different completion timestamp.
     #[serde(default)]
     notified_build: u64,
+    /// Notification provenance only; does not change the user's background preference.
+    #[serde(default)]
+    update_relaunch_at_ms: u64,
+    #[serde(default)]
+    update_relaunch_from_build: u64,
     #[serde(default)]
     failures: BTreeMap<u64, u32>,
     #[serde(default)]
@@ -276,6 +281,35 @@ pub(crate) fn set_auto_update(enabled: bool) -> bool {
 pub(crate) fn start_hidden() -> bool {
     let at = load().start_hidden_at_ms;
     at > 0 && now_ms().saturating_sub(at) < HIDDEN_FOR.as_millis() as u64
+}
+
+/// The existing WinSparkle installer will reopen the app. Record its origin
+/// so only that automatic launch delays its first show during another app's
+/// fullscreen session; ordinary user launches retain their behavior.
+pub(crate) fn mark_update_relaunch() {
+    update(|saved| {
+        saved.update_relaunch_at_ms = now_ms();
+        saved.update_relaunch_from_build = build();
+    });
+}
+
+pub(crate) fn take_update_relaunch() -> bool {
+    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut saved = load();
+    let at = saved.update_relaunch_at_ms;
+    if at == 0 {
+        return false;
+    }
+    let fresh = now_ms().saturating_sub(at) < HIDDEN_FOR.as_millis() as u64;
+    let pending = fresh && build() > saved.update_relaunch_from_build;
+    // An unsuccessful installer may reopen the old build. Do not classify
+    // a user's subsequent same-build launch as an automatic updated launch.
+    if pending || !fresh {
+        saved.update_relaunch_at_ms = 0;
+        saved.update_relaunch_from_build = 0;
+        store(&saved);
+    }
+    pending
 }
 
 /// See [`crate::api::mark_user_quit`].
@@ -694,6 +728,8 @@ mod tests {
             auto_update: Some(false),
             seen_finished_at_ms: 7,
             notified_build: 412,
+            update_relaunch_at_ms: 0,
+            update_relaunch_from_build: 0,
             start_hidden_at_ms: 9,
             ready: Some(package(420)),
             launch_tried: 419,
