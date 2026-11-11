@@ -812,4 +812,57 @@ mod tests {
         );
         std::fs::remove_file(path).unwrap();
     }
+    #[test]
+    fn completion_child_process() {
+        let Some(path) = std::env::var_os("PPVPN_QA_COMPLETION_PATH") else {
+            return;
+        };
+        let result = consume_completed_at(std::path::Path::new(&path), &completion(420, 100), 420);
+        assert_eq!(
+            result.is_some(),
+            std::env::var("PPVPN_QA_COMPLETION_NOTICE").unwrap() == "yes"
+        );
+        println!(
+            "completion child durable result: notice={}",
+            result.is_some()
+        );
+    }
+
+    #[test]
+    fn actual_second_process_does_not_repeat_a_durable_completion() {
+        fn child(path: &std::path::Path, expect_notice: bool) {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "silent::tests::completion_child_process",
+                    "--nocapture",
+                ])
+                .env("PPVPN_QA_COMPLETION_PATH", path)
+                .env(
+                    "PPVPN_QA_COMPLETION_NOTICE",
+                    if expect_notice { "yes" } else { "no" },
+                )
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "child failed: {} {}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&result.stdout).contains("completion child durable result")
+            );
+            print!("{}", String::from_utf8_lossy(&result.stdout));
+        }
+        let path = temporary_state();
+        child(&path, true);
+        child(&path, false); // new OS process, not just reopening a file
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap(); // force durable save failure
+        child(&path, false);
+        child(&path, false); // failed-save notification never emitted/replayed
+        std::fs::remove_file(path.with_extension("json.new")).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
 }

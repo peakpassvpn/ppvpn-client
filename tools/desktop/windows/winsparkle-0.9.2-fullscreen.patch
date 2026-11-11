@@ -19,7 +19,7 @@ index 6d7aab3..ffde37f 100644
          else // not yet configured
          {
 diff --git a/src/ui.cpp b/src/ui.cpp
-index d401aca..12de081 100644
+index d401aca..bc1aeba 100644
 --- a/src/ui.cpp
 +++ b/src/ui.cpp
 @@ -24,6 +24,7 @@
@@ -38,33 +38,7 @@ index d401aca..12de081 100644
      ErrorCode    error;
  };
  
-@@ -267,7 +269,24 @@ struct LayoutChangesGuard
- {
-     LayoutChangesGuard(wxTopLevelWindow *win) : m_win(win)
-     {
--        m_win->Freeze();
-+        bool checks = false;
-+    Settings::ReadConfigValue("CheckForUpdates", checks, false);
-+    if (m_scheduled && !checks)
-+    {
-+        m_showTimer.Stop();
-+        m_win->Destroy();
-+        m_win = NULL;
-+        return;
-+    }
-+    // This runs on the UI thread after the network response, not at check
-+    // scheduling time. No Show/Raise/activation occurs during fullscreen.
-+    if (ppvpn_update::foreground_fullscreen())
-+    {
-+        m_showTimer.StartOnce(1000);
-+        return;
-+    }
-+    m_showTimer.Stop();
-+    m_win->Freeze();
-     }
- 
-     ~LayoutChangesGuard()
-@@ -1162,6 +1181,7 @@ public:
+@@ -1162,6 +1164,7 @@ public:
  private:
      void InitWindow();
      void ShowWindow();
@@ -72,7 +46,7 @@ index d401aca..12de081 100644
  
      void OnWindowClose(wxCloseEvent& event);
      void OnTerminate(wxThreadEvent& event);
-@@ -1175,6 +1195,9 @@ private:
+@@ -1175,6 +1178,9 @@ private:
  
  private:
      UpdateDialog *m_win;
@@ -82,7 +56,7 @@ index d401aca..12de081 100644
  };
  
  IMPLEMENT_APP_NO_MAIN(App)
-@@ -1182,6 +1205,8 @@ IMPLEMENT_APP_NO_MAIN(App)
+@@ -1182,6 +1188,8 @@ IMPLEMENT_APP_NO_MAIN(App)
  App::App()
  {
      m_win = NULL;
@@ -91,10 +65,32 @@ index d401aca..12de081 100644
  
      // Keep the wx "main" thread running even without windows. This greatly
      // simplifies threads handling, because we don't have to correctly
-@@ -1280,14 +1305,34 @@ void App::ShowWindow()
+@@ -1277,17 +1285,56 @@ void App::ShowWindow()
+ {
+     wxCHECK_RET( m_win, "no window" );
+ 
++    // Recheck on the UI thread after the network response and every deferred
++    // retry. A later silent-update decision cancels an in-flight fallback.
++    bool checks = false;
++    Settings::ReadConfigValue("CheckForUpdates", checks, false);
++    if (m_scheduled && !checks)
++    {
++        m_showTimer.Stop();
++        m_win->Destroy();
++        m_win = NULL;
++        return;
++    }
++    if (ppvpn_update::foreground_fullscreen())
++    {
++        m_showTimer.StartOnce(1000);
++        return;
++    }
++    m_showTimer.Stop();
      m_win->Freeze();
      if (!m_win->IsShown())
          CenterWindowOnHostApplication(m_win);
++    // Centering/layout must not turn a check-time decision into a show-time
++    // race. Never Show/Raise then hide an already activated update window.
 +    if (ppvpn_update::foreground_fullscreen())
 +    {
 +        m_win->Thaw();
@@ -127,7 +123,7 @@ index d401aca..12de081 100644
      m_win = NULL;
      event.Skip();
  }
-@@ -1304,6 +1349,7 @@ void App::OnTerminate(wxThreadEvent&)
+@@ -1304,6 +1351,7 @@ void App::OnTerminate(wxThreadEvent&)
  
  void App::OnShowCheckingUpdates(wxThreadEvent&)
  {
@@ -135,7 +131,7 @@ index d401aca..12de081 100644
      InitWindow();
      m_win->StateCheckingUpdates();
      ShowWindow();
-@@ -1353,6 +1399,7 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
+@@ -1353,6 +1401,7 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
      InitWindow();
  
      EventPayload payload(event.GetPayload<EventPayload>());
@@ -143,7 +139,7 @@ index d401aca..12de081 100644
      m_win->StateUpdateAvailable(payload.appcast, payload.installAutomatically);
  
      ShowWindow();
-@@ -1361,8 +1408,21 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
+@@ -1361,8 +1410,21 @@ void App::OnUpdateAvailable(wxThreadEvent& event)
  
  void App::OnAskForPermission(wxThreadEvent& event)
  {
@@ -165,7 +161,7 @@ index d401aca..12de081 100644
      dlg.Raise();
      bool shouldCheck = (dlg.ShowModal() == wxID_OK);
  
-@@ -1503,7 +1563,7 @@ void UI::NotifyNoUpdates(bool installAutomatically)
+@@ -1503,7 +1565,7 @@ void UI::NotifyNoUpdates(bool installAutomatically)
  
  
  /*static*/
@@ -174,7 +170,7 @@ index d401aca..12de081 100644
  {
      ApplicationController::NotifyUpdateFound();
  
-@@ -1511,6 +1571,7 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
+@@ -1511,6 +1573,7 @@ void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
      EventPayload payload;
      payload.appcast = info;
      payload.installAutomatically = installAutomatically;
