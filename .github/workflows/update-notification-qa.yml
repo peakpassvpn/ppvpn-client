@@ -15,10 +15,14 @@ jobs:
         shell: powershell
         run: tools/desktop/windows/build-winsparkle.ps1 -Work "$env:RUNNER_TEMP/update-qa" -Output "$env:GITHUB_WORKSPACE/build/update-qa/WinSparkle.dll"
       - name: Build actual UI fixture
-        shell: cmd
+        shell: powershell
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC tool installation not found' }
+          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe"
+          if ($LASTEXITCODE) { throw 'UI fixture compilation failed' }
       - name: Actual console UI and installed-build observation
         shell: powershell
         run: |
@@ -31,6 +35,8 @@ jobs:
             if ($code) { throw 'Fullscreen UI acceptance failed' }
             & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'permission' 2>&1 | Tee-Object 'permission.txt'
             if ($LASTEXITCODE) { throw 'Permission-dialog fullscreen acceptance failed' }
+            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'permission-cancel' 2>&1 | Tee-Object 'permission-cancel.txt'
+            if ($LASTEXITCODE) { throw 'Cancelled permission prompt reappeared' }
             & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' '0.7.5.2' 2>&1 | Tee-Object 'installed-15min.txt'
             if ($LASTEXITCODE) { throw 'Installed-build observation failed' }
           } finally { Stop-Process -Id $server.Id; Pop-Location }

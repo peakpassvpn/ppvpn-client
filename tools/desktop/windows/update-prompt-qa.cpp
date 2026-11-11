@@ -149,7 +149,8 @@ int wmain(int argc, wchar_t** argv) {
         auto details = function<void(__cdecl*)(const wchar_t*,const wchar_t*,const wchar_t*)>("win_sparkle_set_app_details");
         auto build = function<void(__cdecl*)(const wchar_t*)>("win_sparkle_set_app_build_version");
         std::string key = "Software\\PPVPN\\UpdatePromptQA\\" + std::to_string(GetCurrentProcessId());
-        bool permission = std::wstring(argv[3]) == L"permission";
+        bool permission = std::wstring(argv[3]).find(L"permission") == 0;
+        bool cancel_permission = std::wstring(argv[3]) == L"permission-cancel";
         registry(key.c_str());
         if (permission) {
             const char ran[] = "1";
@@ -171,10 +172,11 @@ int wmain(int argc, wchar_t** argv) {
             require(GetForegroundWindow() == other, "fullscreen foreground retained");
         }
         screenshot(L"fullscreen-no-prompt.bmp");
+        if (cancel_permission) automatic(0);
         SendMessageW(other, WM_APP+1, 0, 0); pump(300);
         require(GetForegroundWindow() == other && !ppvpn_update::foreground_fullscreen(), "normal maximized foreground is allowed");
         for (int i=0;i<100 && !visible_prompt();++i) pump(100);
-        bool newer = std::wstring(argv[3]) == L"0.7.5.1" || permission;
+        bool newer = std::wstring(argv[3]) == L"0.7.5.1" || (permission && !cancel_permission);
         require(newer ? visible_prompt() != nullptr : visible_prompt() == nullptr, newer ? "original native update dialog appears after fullscreen exits" : "target build does not prompt after relaunch");
         screenshot(L"after-fullscreen.bmp"); close_prompt();
         if (newer && !permission) {
@@ -188,7 +190,7 @@ int wmain(int argc, wchar_t** argv) {
             for (int i=0;i<50;++i) { pump(100); if (visible_prompt()) throw std::runtime_error("cancelled scheduled response displayed"); }
             require(!visible_prompt(), "disabled fallback discards in-flight scheduled UI after fullscreen exits");
         }
-        if (!newer) {
+        if (!newer && !permission) {
             for (int i=0;i<15;++i) {
                 check();
                 for (int j=0;j<600;++j) { pump(100); if (visible_prompt()) throw std::runtime_error("installed target build prompted again"); }
