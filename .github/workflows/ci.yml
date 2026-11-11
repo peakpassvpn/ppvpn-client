@@ -53,6 +53,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      update_client_upgrade:
+        description: "Disposable Windows: actual existing client A-to-B update acceptance"
+        type: boolean
+        default: false
       runs:
         description: "windows: runs of the runtime's failure tests (twenty on the pull request that adds one)"
         type: number
@@ -81,6 +85,8 @@ jobs:
   update-notification-qa:
     if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/codex/update-fullscreen-')
     uses: ./.github/workflows/update-notification-qa.yml
+    with:
+      full_client: ${{ inputs.update_client_upgrade || false }}
 
   lint:
     name: lint

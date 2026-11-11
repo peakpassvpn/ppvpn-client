@@ -160,6 +160,7 @@ template<class T> static T function(const char* name) {
 int wmain(int argc, wchar_t** argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if (argc > 1 && std::wstring(argv[1]) == L"--other-app") return other_app();
+    if (argc == 3 && std::wstring(argv[1]) == L"--capture") { screenshot(argv[2]); return 0; }
     try {
         require(argc == 4, "arguments: DLL feedURL installed-build");
         DWORD session = 0; ProcessIdToSessionId(GetCurrentProcessId(), &session);

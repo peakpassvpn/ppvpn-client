@@ -1,0 +1,140 @@
+// Drives the installed client's EXISTING WinSparkle UI, never an alternative updater.
+#include "update_fullscreen.h"
+#include <tlhelp32.h>
+#include <cstdio>
+#include <cwchar>
+#include <string>
+#include <vector>
+#include <stdexcept>
+#pragma comment(lib,"user32.lib")
+#pragma comment(lib,"advapi32.lib")
+#pragma comment(lib,"version.lib")
+
+static PROCESS_INFORMATION other = {}, app = {};
+static std::wstring capture_helper;
+static void ensure(bool value, const char* text) {
+    if(!value) throw std::runtime_error(text);
+    std::printf("PASS %s\n", text); std::fflush(stdout);
+}
+static PROCESS_INFORMATION launch(const std::wstring& path, const std::wstring& args) {
+    STARTUPINFOW startup={sizeof(startup)}; PROCESS_INFORMATION process={};
+    std::wstring command=L"\""+path+L"\" "+args;
+    ensure(CreateProcessW(path.c_str(), command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&process)!=FALSE,"real process launched");
+    CloseHandle(process.hThread); return process;
+}
+struct WindowSearch { DWORD pid; bool update_only; HWND found; };
+static BOOL CALLBACK window_callback(HWND window, LPARAM param) {
+    auto& search=*reinterpret_cast<WindowSearch*>(param);
+    DWORD pid=0; GetWindowThreadProcessId(window,&pid);
+    if(pid!=search.pid || !IsWindowVisible(window)) return TRUE;
+    wchar_t name[256]; GetClassNameW(window,name,256);
+    if(!search.update_only || wcsncmp(name,L"wx",2)==0) search.found=window;
+    return TRUE;
+}
+static HWND visible(DWORD pid,bool update_only=true) {
+    WindowSearch search={pid,update_only,nullptr}; EnumWindows(window_callback,reinterpret_cast<LPARAM>(&search));return search.found;
+}
+static HWND install_button=nullptr;
+static BOOL CALLBACK button_callback(HWND window,LPARAM) {
+    wchar_t text[256],name[256];GetWindowTextW(window,text,256);GetClassNameW(window,name,256);
+    if(_wcsicmp(name,L"Button")==0 && wcsstr(text,L"Install update") && IsWindowEnabled(window) && IsWindowVisible(window)) install_button=window;
+    return TRUE;
+}
+static DWORD find_app(const std::wstring& path,DWORD exclude=0) {
+    auto snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);PROCESSENTRY32W entry={sizeof(entry)};DWORD found=0;
+    if(Process32FirstW(snapshot,&entry)) do {
+        if(entry.th32ProcessID==exclude || _wcsicmp(entry.szExeFile,L"ppvpn.exe")) continue;
+        auto process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,entry.th32ProcessID);
+        if(process) {wchar_t name[32768];DWORD size=32768;
+            if(QueryFullProcessImageNameW(process,0,name,&size) && _wcsicmp(name,path.c_str())==0) found=entry.th32ProcessID;
+            CloseHandle(process);
+        }
+    }while(Process32NextW(snapshot,&entry));
+    CloseHandle(snapshot);return found;
+}
+static std::wstring file_version(const wchar_t* path) {
+    DWORD ignored=0,size=GetFileVersionInfoSizeW(path,&ignored);std::vector<unsigned char> data(size);
+    ensure(size && GetFileVersionInfoW(path,0,size,data.data()),"installed PE version readable");
+    VS_FIXEDFILEINFO* value=nullptr;UINT length=0;
+    ensure(VerQueryValueW(data.data(),L"\\",reinterpret_cast<void**>(&value),&length)!=FALSE,"installed PE fixed version readable");
+    return std::to_wstring(HIWORD(value->dwFileVersionMS))+L"."+std::to_wstring(LOWORD(value->dwFileVersionMS))+L"."+std::to_wstring(HIWORD(value->dwFileVersionLS))+L"."+std::to_wstring(LOWORD(value->dwFileVersionLS));
+}
+static void quit_app(DWORD pid) {
+    auto event=OpenEventW(EVENT_MODIFY_STATE,FALSE,L"Local\\PPVPN.Desktop.Quit");ensure(event!=nullptr,"existing installer quit event available");
+    SetEvent(event);CloseHandle(event);
+    auto process=OpenProcess(SYNCHRONIZE,FALSE,pid);ensure(process!=nullptr,"client exit handle opened");
+    bool exited=WaitForSingleObject(process,15000)==WAIT_OBJECT_0;CloseHandle(process);ensure(exited,"client exited through existing quit event");
+}
+static void close_other() {
+    if(!other.hProcess)return;
+    if(auto window=FindWindowW(L"PPVPNOtherAppQA",nullptr)) PostMessageW(window,WM_CLOSE,0,0);
+    if(WaitForSingleObject(other.hProcess,5000)==WAIT_TIMEOUT)TerminateProcess(other.hProcess,1);
+    CloseHandle(other.hProcess);other.hProcess=nullptr;
+}
+static void snapshot(const wchar_t* file) {
+    std::wstring image(file);
+    auto at=image.rfind(L".txt");if(at!=std::wstring::npos)image.replace(at,4,L".bmp");
+    auto capture=launch(capture_helper,L"--capture \""+image+L"\"");
+    ensure(WaitForSingleObject(capture.hProcess,10000)==WAIT_OBJECT_0,"actual desktop capture finished");
+    DWORD code=1;GetExitCodeProcess(capture.hProcess,&code);CloseHandle(capture.hProcess);
+    ensure(code==0,"actual desktop capture succeeded");
+    FILE* output;_wfopen_s(&output,file,L"w");
+    if(output){std::fwprintf(output,L"foreground=%p installed_pid=%lu utc_tick=%llu\n",GetForegroundWindow(),app.dwProcessId,GetTickCount64());fclose(output);}
+}
+int wmain(int argc,wchar_t** argv) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    try {
+        ensure(argc==5,"arguments: installed client, existing helper, A version, B version");
+        capture_helper=argv[2];
+        DWORD session=0;ProcessIdToSessionId(GetCurrentProcessId(),&session);
+        ensure(session>0 && session==WTSGetActiveConsoleSessionId(),"actual active console session");
+        ensure(file_version(argv[1])==argv[3],"installed A build matches fixture");
+        ensure(!find_app(argv[1]),"no client already running on disposable test host");
+        other=launch(argv[2],L"--other-app");
+        HWND foreground=nullptr;for(int i=0;i<100 && !foreground;++i){Sleep(50);foreground=FindWindowW(L"PPVPNOtherAppQA",nullptr);}
+        ensure(foreground!=nullptr,"independent foreground app created");AllowSetForegroundWindow(other.dwProcessId);
+        SendMessageW(foreground,WM_APP+1,1,0);Sleep(500);
+        ensure(GetForegroundWindow()==foreground && ppvpn_update::foreground_fullscreen(),"other app actually fullscreen before client scheduled check");
+        app=launch(argv[1],L"--background");
+        DWORD old_pid=app.dwProcessId;
+        for(int i=0;i<70;++i){Sleep(100);if(visible(old_pid)||GetForegroundWindow()!=foreground)throw std::runtime_error("client A prompted or stole fullscreen focus");}
+        snapshot(L"client-A-fullscreen-state.txt");
+        SendMessageW(foreground,WM_APP+1,0,0);Sleep(500);
+        ensure(!ppvpn_update::foreground_fullscreen(),"other app returned to ordinary maximization");
+        HWND update=nullptr;for(int i=0;i<150 && !update;++i){Sleep(100);update=visible(old_pid);}
+        ensure(update!=nullptr,"existing client WinSparkle update dialog shown after fullscreen");
+        EnumChildWindows(update,button_callback,0);ensure(install_button!=nullptr,"original Install update button found");
+        PostMessageW(install_button,BM_CLICK,0,0);
+        Sleep(200);SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
+        ensure(GetForegroundWindow()==foreground,"other app foreground during real download and installation");
+        ensure(WaitForSingleObject(app.hProcess,180000)==WAIT_OBJECT_0,"A exited for the real installer");
+        CloseHandle(app.hProcess);app.hProcess=nullptr;
+        DWORD next=0;for(int i=0;i<1800 && !next;++i){Sleep(100);next=find_app(argv[1],old_pid);}
+        ensure(next && next!=old_pid,"installer actually reopened a distinct B client process");
+        ensure(file_version(argv[1])==argv[4],"installed file actually replaced by target B build");
+        app.dwProcessId=next;
+        std::printf("TRANSITION old_pid=%lu new_pid=%lu\n",old_pid,next);std::fflush(stdout);
+        for(int i=0;i<50;++i){Sleep(100);if(visible(next,false)||GetForegroundWindow()!=foreground)throw std::runtime_error("automatic B relaunch showed over fullscreen");}
+        snapshot(L"client-B-fullscreen-state.txt");
+        SendMessageW(foreground,WM_APP+1,0,0);Sleep(500);
+        for(int i=0;i<100 && !visible(next,false);++i)Sleep(100);
+        ensure(visible(next,false)!=nullptr,"original client window resumes after fullscreen exits");
+        const ULONGLONG started=GetTickCount64();
+        for(int minute=1;minute<=15;++minute){
+            auto until=started+static_cast<ULONGLONG>(minute)*60000;
+            while(GetTickCount64()<until){if(visible(next))throw std::runtime_error("B repeated an update-available dialog");Sleep(100);}
+            std::printf("REAL_MINUTE %d B PID=%lu no update-available dialog\n",minute,next);std::fflush(stdout);
+        }
+        snapshot(L"client-B-after-15min-state.txt");quit_app(next);
+        const char zero[]="0";RegSetKeyValueA(HKEY_CURRENT_USER,"Software\\PPVPN\\WinSparkle","LastCheckTime",REG_SZ,zero,sizeof(zero));
+        app=launch(argv[1],L"--background");ensure(app.dwProcessId!=next,"actual B process restarted");
+        for(int i=0;i<150;++i){Sleep(100);if(visible(app.dwProcessId))throw std::runtime_error("B repeated update prompt after real process restart");}
+        ensure(file_version(argv[1])==argv[4],"B remains installed after next startup check");
+        snapshot(L"client-B-restart-state.txt");quit_app(app.dwProcessId);CloseHandle(app.hProcess);app.hProcess=nullptr;
+        close_other();std::puts("PASS actual existing client A-to-B WinSparkle/NSIS fallback; not silent-service installation coverage");return 0;
+    }catch(const std::exception& error){
+        std::fprintf(stderr,"FAIL %s\n",error.what());close_other();
+        if(app.hProcess)CloseHandle(app.hProcess);
+        return 1;
+    }
+}

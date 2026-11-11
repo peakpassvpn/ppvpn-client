@@ -2,6 +2,10 @@ name: Desktop update notification QA
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      full_client:
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -27,24 +31,116 @@ jobs:
         shell: powershell
         run: |
           $server = Start-Process python -ArgumentList 'tools/desktop/windows/update-feed-fixture.py' -PassThru -RedirectStandardOutput 'build/update-qa/feed.stdout.txt' -RedirectStandardError 'build/update-qa/feed.stderr.txt'
+          $root=(Resolve-Path build/update-qa).Path
+          $binary=Join-Path $root 'update-prompt-qa.exe'
+          $library=Join-Path $root 'WinSparkle.dll'
+          $results=@()
           try {
-            Push-Location build/update-qa
-            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' '0.7.5.1' 2>&1 | Tee-Object 'fullscreen.txt'
-            $code = $LASTEXITCODE
-            if ($code -eq 77) { throw 'BLOCKED: runner has no usable interactive desktop. UI acceptance remains pending.' }
-            if ($code) { throw 'Fullscreen UI acceptance failed' }
-            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'permission' 2>&1 | Tee-Object 'permission.txt'
-            if ($LASTEXITCODE) { throw 'Permission-dialog fullscreen acceptance failed' }
-            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'permission-cancel' 2>&1 | Tee-Object 'permission-cancel.txt'
-            if ($LASTEXITCODE) { throw 'Cancelled permission prompt reappeared' }
-            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' 'd3d' 2>&1 | Tee-Object 'exclusive-d3d.txt'
-            if ($LASTEXITCODE -eq 78) { Write-Host 'Exclusive D3D coverage BLOCKED on this adapter/session; not accepted' }
-            elseif ($LASTEXITCODE) { throw 'Exclusive D3D UI acceptance failed' }
-            & .\update-prompt-qa.exe "$PWD/WinSparkle.dll" 'http://127.0.0.1:18763/feed.xml' '0.7.5.2' 2>&1 | Tee-Object 'installed-15min.txt'
-            if ($LASTEXITCODE) { throw 'Installed-build observation failed' }
-          } finally { Stop-Process -Id $server.Id; Pop-Location }
+            foreach($case in @(@{name='fullscreen-and-fallback';arg='0.7.5.1'},@{name='permission';arg='permission'},@{name='permission-cancel';arg='permission-cancel'},@{name='exclusive-d3d';arg='d3d'},@{name='installed-15min';arg='0.7.5.2'})){
+              $dir=Join-Path $root $case.name
+              New-Item -ItemType Directory -Force $dir | Out-Null
+              Push-Location $dir
+              try {
+                $started=[DateTime]::UtcNow.ToString('o')
+                & $binary $library 'http://127.0.0.1:18763/feed.xml' $case.arg 2>&1 | Tee-Object 'raw.txt'
+                $code=$LASTEXITCODE
+                $results+=@{case=$case.name;exitcode=$code;started_utc=$started;finished_utc=[DateTime]::UtcNow.ToString('o')}
+                if($code -eq 77){throw 'BLOCKED: no usable interactive desktop; not accepted'}
+                if($code -eq 78 -and $case.name -eq 'exclusive-d3d'){Write-Host 'Exclusive D3D coverage BLOCKED on this adapter/session; not accepted'}
+                elseif($code){throw 'Actual existing updater UI case failed'}
+              }finally{Pop-Location}
+            }
+          } finally {
+            Stop-Process -Id $server.Id
+            @{source=$env:GITHUB_SHA;os=(Get-CimInstance Win32_OperatingSystem|Select-Object Caption,Version,BuildNumber);dll_sha256=(Get-FileHash $library -Algorithm SHA256).Hash;binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash;cases=$results;scope='existing updater component UI; not a client A-to-B installation'}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $root 'result.json')
+          }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: windows-update-notification-qa
           path: build/update-qa/
+
+  windows-client-upgrade:
+    if: inputs.full_client
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_SERVICE_LTO: 'false'
+      CARGO_PROFILE_SERVICE_CODEGEN_UNITS: '16'
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: windows
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/flutter-toolchain
+      - uses: ./.github/actions/nsis
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce
+      - name: Ephemeral test feed identities
+        shell: powershell
+        run: tools/desktop/windows/prepare-client-upgrade-qa.ps1
+      - name: Normal A and B client and installer builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in A:60000 B:60001; do
+            name=${pair%:*}
+            export PPVPN_BUILD_NUMBER=${pair#*:}
+            if [ "$name" = B ]; then
+              [ -z "$(git ls-files apps/flutter/windows)" ] || { echo 'Refusing to replace tracked platform sources'; exit 1; }
+              rm -rf apps/flutter/windows
+            fi
+            apps/flutter/scripts/ci-build.sh
+            mkdir -p "build/update-bundles/$name"
+            cp -a apps/flutter/build/windows/x64/runner/Release/. "build/update-bundles/$name/"
+            powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/package-windows.ps1 -OutDir "build/update-installers/$name" -FastCompression
+          done
+      - name: Build observers for the actual existing client
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build/update-qa | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\update-qa\client-upgrade-qa.exe"
+          if ($LASTEXITCODE) { throw 'Client upgrade observers failed to compile' }
+      - name: Actual A-to-B fallback install, fifteen minutes and process restart
+        shell: powershell
+        run: tools/desktop/windows/run-client-upgrade-qa.ps1
+      - name: Remove only the ephemeral CI identities
+        if: always()
+        shell: powershell
+        run: |
+          $private=Join-Path $env:RUNNER_TEMP 'update-client-private'
+          $mark=Join-Path $private 'tls-thumb.txt'
+          if(Test-Path $mark){
+            $thumb=(Get-Content $mark -Raw).Trim()
+            if($thumb -match '^[A-Fa-f0-9]{40}$'){
+              foreach($store in @('My','Root')){
+                $path="Cert:/CurrentUser/$store/$thumb"
+                if(Test-Path $path){Remove-Item $path -Force}
+              }
+            }
+          }
+          if(Test-Path $private){Remove-Item $private -Recurse -Force}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: actual-client-update-fallback-qa
+          retention-days: 7
+          path: |
+            build/client-upgrade-qa/
+            build/update-installers/
