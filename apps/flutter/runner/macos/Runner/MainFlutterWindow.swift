@@ -85,13 +85,11 @@ class MainFlutterWindow: NSWindow {
   private let updateRelaunch = UpdatePromptPolicy.takeRelaunch()
   private var protectUpdateLaunch: Bool?
   private var deferredFirstOrder: Timer?
-  private var deferredFirstKeyOrder = false
 
-  private func mayPresentUpdateLaunch(key: Bool = false) -> Bool {
+  private func mayPresentUpdateLaunch() -> Bool {
     if protectUpdateLaunch == nil { protectUpdateLaunch = updateRelaunch }
     guard protectUpdateLaunch == true else { return true }
     if UpdatePromptPolicy.shouldDeferPrompt {
-      deferredFirstKeyOrder = deferredFirstKeyOrder || key
       // Flutter/window_manager can await the native first frame. Remember
       // the rejected nib order and resume it natively when safe, so that
       // recovering the window does not depend on that Dart callback.
@@ -120,8 +118,9 @@ class MainFlutterWindow: NSWindow {
     // This is the original update-origin startup request, before any
     // Flutter first frame. No shown window is hidden to suppress a prompt.
     super.orderFront(nil)
-    if deferredFirstKeyOrder && !UpdatePromptPolicy.shouldDeferPrompt {
+    if !UpdatePromptPolicy.shouldDeferPrompt {
       super.makeKeyAndOrderFront(nil)
+      if !UpdatePromptPolicy.shouldDeferPrompt { NSApp.activate(ignoringOtherApps: true) }
     }
     updateLog.info("update launch: native first order resumed")
   }
@@ -142,7 +141,7 @@ class MainFlutterWindow: NSWindow {
   }
 
   override func makeKeyAndOrderFront(_ sender: Any?) {
-    guard mayPresentUpdateLaunch(key: true) else { return }
+    guard mayPresentUpdateLaunch() else { return }
     super.makeKeyAndOrderFront(sender)
   }
 

@@ -30,6 +30,9 @@ python3 "$root/tools/desktop/windows/update-feed-fixture.py" --macos > "$work/fe
 server=$!
 probe=''
 cleanup() {
+  # Only the two fixed native presentation events from this fixture's client.
+  # Do not collect account, connection, backend or general application logs.
+  /usr/bin/log show --info --style compact --last 3m --predicate '(process == "PPVPN") AND (eventMessage BEGINSWITH "update launch:")' > "$work/native-presentation.txt" 2>/dev/null || true
   if [ -n "$probe" ] && kill -0 "$probe" 2>/dev/null; then kill "$probe"; fi
   if [ -f "$work/other-pid.txt" ]; then
     other_pid=$(cat "$work/other-pid.txt")
