@@ -97,7 +97,7 @@ Future<void> main() async {
   // Decide before _readyWindow: its callback itself can Show/Focus.
   final installing = samplePage == null && await Updates.installingNow();
   final updateRelaunch = samplePage == null && rust.takeUpdateRelaunch();
-  final deferUpdateWindow = _updateWindowWasDeferred || ((installing || updateRelaunch) && rust.updatePromptDeferred());
+  final deferUpdateWindow = _updateWindowWasDeferred || ((installing || updateRelaunch) && await Updates.promptDeferred());
   await _readyWindow(background || deferUpdateWindow, updateNotice: installing || updateRelaunch || _updateWindowWasDeferred);
   await windowManager.setPreventClose(true);
 
@@ -113,10 +113,10 @@ Future<void> main() async {
     // Its close button quits too, as does the Windows installer's quit.
     windowManager.addListener(_QuitOnClose(done));
     listenForActivations(onShow: () {}, onPush: (_) {}, onQuit: done, onUserQuit: done, onUpdate: () {});
-    if (!rust.updatePromptDeferred()) {
+    if (!await Updates.promptDeferred()) {
       await windowManager.show(inactive: true);
       // Recheck after the asynchronous native show request before focus.
-      if (!rust.updatePromptDeferred()) await windowManager.focus();
+      if (!await Updates.promptDeferred()) await windowManager.focus();
     }
     return;
   }
@@ -224,13 +224,13 @@ Future<void> _setUpWindow(bool background, {required bool updateNotice}) async {
       mark('ready_to_show');
       // The runners leave the window hidden (ci-build.sh); macOS shows its
       // own at launch.
-      if (background || (updateNotice && rust.updatePromptDeferred())) {
+      if (background || (updateNotice && await Updates.promptDeferred())) {
         if (!background && updateNotice) _updateWindowWasDeferred = true;
         await windowManager.hide();
         return;
       }
       await windowManager.show(inactive: updateNotice);
-      if (!updateNotice || !rust.updatePromptDeferred()) await windowManager.focus();
+      if (!updateNotice || !await Updates.promptDeferred()) await windowManager.focus();
       mark('window_shown');
     },
   );
@@ -243,7 +243,7 @@ Future<void> _setUpWindow(bool background, {required bool updateNotice}) async {
 bool _updateWindowWasDeferred = false;
 
 Future<bool> _installAtLaunch(bool background) async {
-  final defer = rust.updatePromptDeferred();
+  final defer = await Updates.promptDeferred();
   if (!background && defer) _updateWindowWasDeferred = true;
   await _readyWindow(background || defer, updateNotice: true);
   final close = _HideOnClose();
@@ -260,13 +260,13 @@ Future<bool> _installAtLaunch(bool background) async {
 /// Only for an update-origin relaunch whose initial window was deferred.
 /// Ordinary user opens continue through the existing activation handlers.
 Future<void> _showDeferredUpdateWindow() async {
-  while (rust.updatePromptDeferred()) {
+  while (await Updates.promptDeferred()) {
     await Future<void>.delayed(const Duration(seconds: 1));
     if (await windowManager.isVisible()) return;
   }
-  if (!await windowManager.isVisible() && !rust.updatePromptDeferred()) {
+  if (!await windowManager.isVisible() && !await Updates.promptDeferred()) {
     await windowManager.show(inactive: true);
-    if (!rust.updatePromptDeferred()) await windowManager.focus();
+    if (!await Updates.promptDeferred()) await windowManager.focus();
   }
 }
 

@@ -40,4 +40,6 @@ full-client installation, service restart/relaunch and stale-response acceptance
 listed in `docs/desktop/qa-checklist.md`. Those results must include exact source,
 OS/session, installed versions/builds, raw logs, screenshots and cleanup evidence.
 The shared Rust acknowledgement and serialized check-policy changes also run in the normal macOS CI job;
-the Sparkle implementation remains unchanged.
+macOS uses the existing Sparkle standard-driver delegate to defer scheduled
+alerts while the front application is fullscreen, and retains its original
+alert UI. Its actual macOS fullscreen acceptance is separate from Windows.

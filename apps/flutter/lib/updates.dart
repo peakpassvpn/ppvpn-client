@@ -118,6 +118,16 @@ class Updates {
     if (_service?.updatedTo case final version?) updatedTo.value = version;
   }
 
+  /// The existing native updater owns the foreground-window query on macOS;
+  /// Windows shares its detector with WinSparkle through the Rust bridge.
+  static Future<bool> promptDeferred() async {
+    if (Platform.isMacOS) {
+      try { return await _channel.invokeMethod<bool>('promptDeferred') ?? true; }
+      catch (error) { debugPrint('update prompt state: $error'); return true; }
+    }
+    return rust.updatePromptDeferred();
+  }
+
   /// Starts the platform's updater, once the window exists. [idle] tells
   /// whether the app is idle; [quit] quits it for an idle install.
   static Future<void> start({required Future<bool> Function() idle, required Future<void> Function() quit}) async {

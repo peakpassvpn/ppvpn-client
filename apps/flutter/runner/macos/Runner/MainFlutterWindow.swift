@@ -448,6 +448,54 @@ private final class Updater: NSObject {
   private let feedURL: String?
   private let beforeInstall: @MainActor () -> Void
   private var controller: SparkleUpdaterController?
+  private var deferredCheck: Timer?
+  private var deferredManual = false
+  private var deferredScheduled = false
+
+  /// Read only the front application's on-screen geometry, not titles/content.
+  /// CG display bounds and CG window bounds share the same coordinate system.
+  private static var shouldDeferPrompt: Bool {
+    guard let front = NSWorkspace.shared.frontmostApplication,
+      let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]] else { return true }
+    let displays = NSScreen.screens.compactMap { screen -> CGRect? in
+      guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+      return CGDisplayBounds(number.uint32Value)
+    }
+    guard !displays.isEmpty else { return true }
+    var foundWindow = false
+    for window in windows {
+      guard (window[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
+        (window[kCGWindowLayer as String] as? Int) == 0,
+        let bounds = window[kCGWindowBounds as String] as? [String: Any],
+        let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+      foundWindow = true
+      if displays.contains(where: { rect.contains($0) }) { return true }
+    }
+    // Finder's bare desktop is a known non-fullscreen state.
+    return !foundWindow && front.bundleIdentifier != "com.apple.finder"
+  }
+
+  private func deferCheck(manual: Bool) {
+    deferredManual = deferredManual || manual
+    deferredScheduled = deferredScheduled || !manual
+    guard deferredCheck == nil else { return }
+    deferredCheck = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated { self?.resumeDeferredCheck() }
+    }
+  }
+
+  private func resumeDeferredCheck() {
+    guard !Self.shouldDeferPrompt else { return }
+    let show = deferredManual || (deferredScheduled && controller?.updater.automaticallyChecksForUpdates == true)
+    deferredCheck?.invalidate()
+    deferredCheck = nil
+    deferredManual = false
+    deferredScheduled = false
+    // Sparkle's documented way to reveal its already prepared update alert.
+    if show { controller?.checkForUpdates(nil) }
+  }
+
 
   init(messenger: FlutterBinaryMessenger, beforeInstall: @escaping @MainActor () -> Void) {
     channel = FlutterMethodChannel(name: "ppvpn/update", binaryMessenger: messenger)
@@ -469,11 +517,21 @@ private final class Updater: NSObject {
         result(["available": self.controller != nil,
                 "autoCheck": self.controller?.updater.automaticallyChecksForUpdates ?? false])
       case "check":
-        self.controller?.checkForUpdates(nil)
+        if Self.shouldDeferPrompt { self.deferCheck(manual: true) }
+        else { self.controller?.checkForUpdates(nil) }
         result(nil)
+      case "promptDeferred":
+        result(Self.shouldDeferPrompt)
       case "setAutoCheck":
         if let enabled = call.arguments as? Bool {
           self.controller?.updater.automaticallyChecksForUpdates = enabled
+          if !enabled {
+            self.deferredScheduled = false
+            if !self.deferredManual {
+              self.deferredCheck?.invalidate()
+              self.deferredCheck = nil
+            }
+          }
         }
         result(nil)
       default:
@@ -497,12 +555,38 @@ private final class Updater: NSObject {
     class_addProtocol(controllerClass, SparkleUpdaterController.self)
     class_addProtocol(updaterClass, SparkleUpdater.self)
     guard let type = controllerClass as? SparkleUpdaterController.Type else { return nil }
-    let controller = type.init(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: nil)
+    let controller = type.init(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: delegate)
     updateLog.info("updates on")
     return controller
   }
 
   // SPUUpdaterDelegate, which Sparkle asks with respondsToSelector:.
+
+  // Official SPUStandardUserDriverDelegate hooks. Non-fullscreen returns the
+  // native default. No replacement user driver, window or in-app message.
+  @objc nonisolated var supportsGentleScheduledUpdateReminders: Bool { true }
+
+  @objc(standardUserDriverShouldHandleShowingScheduledUpdate:andInImmediateFocus:)
+  nonisolated func shouldShowScheduledUpdate(_ update: AnyObject, immediateFocus: Bool) -> Bool {
+    MainActor.assumeIsolated { !Self.shouldDeferPrompt }
+  }
+
+  @objc(standardUserDriverWillHandleShowingUpdate:forUpdate:state:)
+  nonisolated func willShowUpdate(_ handleShowingUpdate: Bool, update: AnyObject, state: AnyObject) {
+    MainActor.assumeIsolated {
+      if !handleShowingUpdate { deferCheck(manual: false) }
+    }
+  }
+
+  @objc(standardUserDriverWillFinishUpdateSession)
+  nonisolated func finishUpdateSession() {
+    MainActor.assumeIsolated {
+      deferredCheck?.invalidate()
+      deferredCheck = nil
+      deferredScheduled = false
+      deferredManual = false
+    }
+  }
 
   @objc(feedURLStringForUpdater:)
   nonisolated func feedURLString(for updater: AnyObject) -> String? {

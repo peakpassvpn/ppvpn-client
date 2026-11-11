@@ -90,6 +90,7 @@ jobs:
       - uses: ./.github/actions/nsis
       - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce
       - name: Ephemeral test feed identities
+        timeout-minutes: 3
         shell: powershell
         run: tools/desktop/windows/prepare-client-upgrade-qa.ps1
       - name: Normal A and B client and installer builds
@@ -129,8 +130,8 @@ jobs:
           if(Test-Path $mark){
             $thumb=(Get-Content $mark -Raw).Trim()
             if($thumb -match '^[A-Fa-f0-9]{40}$'){
-              foreach($store in @('My','Root')){
-                $path="Cert:/CurrentUser/$store/$thumb"
+              foreach($store in @('CurrentUser/My','CurrentUser/Root','LocalMachine/Root')){
+                $path="Cert:/$store/$thumb"
                 if(Test-Path $path){Remove-Item $path -Force}
               }
             }

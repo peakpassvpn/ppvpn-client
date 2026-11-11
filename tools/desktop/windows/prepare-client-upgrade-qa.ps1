@@ -12,10 +12,13 @@ if($LASTEXITCODE){throw 'Test update identity generation failed'}
 if($LASTEXITCODE){throw 'Test update public key extraction failed'}
 $der=[IO.File]::ReadAllBytes((Join-Path $private 'update-public.der'))
 $public=[Convert]::ToBase64String($der[($der.Length-32)..($der.Length-1)])
+Write-Host "QA identity: EdDSA key ready; creating loopback TLS certificate"
 $cert=New-SelfSignedCertificate -DnsName localhost -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1) -KeyExportPolicy Exportable
 [IO.File]::WriteAllText((Join-Path $private 'tls-thumb.txt'),$cert.Thumbprint)
 Export-Certificate -Cert $cert -FilePath (Join-Path $private 'tls.cer') | Out-Null
-Import-Certificate -FilePath (Join-Path $private 'tls.cer') -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+Write-Host "QA identity: trusting only the new loopback TLS certificate on this disposable CI machine"
+Import-Certificate -FilePath (Join-Path $private 'tls.cer') -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+Write-Host "QA identity: loopback TLS trust established"
 $password=[Guid]::NewGuid().ToString('N')
 Write-Host "::add-mask::$password"
 Export-PfxCertificate -Cert $cert -FilePath (Join-Path $private 'tls.pfx') -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
