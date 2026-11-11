@@ -27,8 +27,13 @@ try {
   if($server.HasExited){throw 'Controlled TLS feed did not start'}
   Push-Location $out
   try {
-    & "$repo/build/update-qa/client-upgrade-qa.exe" "$dir/ppvpn.exe" "$repo/build/update-qa/update-prompt-qa.exe" '0.7.5.60000' '0.7.5.60001' 2>&1 | Tee-Object 'actual-client-upgrade.txt'
-    if($LASTEXITCODE){throw 'Actual client upgrade fixture failed'}
+    $observer=Start-Process "$repo/build/update-qa/client-upgrade-qa.exe" -ArgumentList ('"'+$dir+'/ppvpn.exe" "'+$repo+'/build/update-qa/update-prompt-qa.exe" 0.7.5.60000 0.7.5.60001') -PassThru -RedirectStandardOutput 'actual-client-upgrade.txt' -RedirectStandardError 'actual-client-upgrade-errors.txt'
+    if(-not $observer.WaitForExit(30*60*1000)){
+      Stop-Process -Id $observer.Id -Force
+      throw 'Actual client observer timed out; acceptance is UNKNOWN/FAIL'
+    }
+    Get-Content 'actual-client-upgrade.txt'
+    if($observer.ExitCode){Get-Content 'actual-client-upgrade-errors.txt';throw 'Actual client upgrade fixture failed'}
   }finally{Pop-Location}
   $serviceAfter=Get-CimInstance Win32_Service -Filter "Name='ppvpn_service'"
   $serviceAfter | Select-Object Name,State,ProcessId,PathName | ConvertTo-Json | Set-Content "$out/service-B.json"
@@ -37,7 +42,11 @@ try {
   $builtBridge=Get-FileHash "$repo/build/update-bundles/B/ppvpn_flutter.dll" -Algorithm SHA256
   if($installedBridge.Hash -ne $builtBridge.Hash){throw 'Installed B bridge differs from normal B build'}
   $requests=@(Get-Content "$out/feed.jsonl" | ForEach-Object {$_|ConvertFrom-Json})
-  if(@($requests|Where-Object {$_.path -like '*appcast*'}).Count -lt 3){throw 'Did not observe A, B and restarted-B actual feed responses'}
+  $roles=@(Get-Content "$out/client-processes.jsonl"|ForEach-Object{$_|ConvertFrom-Json})
+  foreach($stage in @('A','B','restarted-B')){
+    $clientPid=($roles|Where-Object {$_.stage -eq $stage}|Select-Object -Last 1).pid
+    if(-not $clientPid -or @($requests|Where-Object {$_.path -like '*appcast*' -and $_.client_pid -eq $clientPid -and $_.client_stage -eq $stage -and $_.outcome -eq 'written'}).Count -lt 1){throw "No actual appcast response bound to $stage process"}
+  }
   if(@($requests|Where-Object {$_.path -like '*setup.exe'}).Count -lt 1){throw 'Real updater never downloaded B installer'}
   @{source=$env:GITHUB_SHA;os=(Get-CimInstance Win32_OperatingSystem|Select-Object Caption,Version,BuildNumber);scope='actual client A-to-B via existing WinSparkle fallback and NSIS; not silent InstallUpdate IPC coverage';service_restarted=$true;installed_B_bridge_sha256=$installedBridge.Hash;feed_responses=$requests;second_monitor='not guaranteed';commercial_game='not exercised'}|ConvertTo-Json -Depth 8|Set-Content "$out/result.json"
 }finally{

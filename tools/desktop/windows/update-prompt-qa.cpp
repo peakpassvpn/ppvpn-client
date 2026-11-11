@@ -208,13 +208,18 @@ int wmain(int argc, wchar_t** argv) {
         } else automatic(0);
         details(L"PPVPN QA", L"PPVPN Update QA", L"0.7.5"); build(permission || d3d ? L"0.7.5.1" : argv[3]);
         std::wstring widefeed(argv[2]); std::string url(widefeed.begin(), widefeed.end()); feed(url.c_str());
+        std::puts("PHASE native-init"); std::fflush(stdout);
         init();
+        std::puts("PHASE native-init-complete"); std::fflush(stdout);
         if (!permission) {
             SendMessageW(other, WM_APP+1, 0, 0); pump(300);
             check(); pump(300);
             if (d3d) {
                 if (!SendMessageW(other, WM_APP+2, 0, 0)) {
-                    cleanup(); stop_owned_child();
+                    std::puts("PHASE native-cleanup"); std::fflush(stdout);
+        cleanup();
+        std::puts("PHASE native-cleanup-complete"); std::fflush(stdout);
+        stop_owned_child();
                     std::puts("BLOCKED: adapter/session cannot enter DXGI exclusive fullscreen"); return 78;
                 }
             } else SendMessageW(other, WM_APP+1, 1, 0);
@@ -224,7 +229,10 @@ int wmain(int argc, wchar_t** argv) {
                 auto result = SHQueryUserNotificationState(&notification);
                 std::printf("DXGI exclusive entered; SHQueryUserNotificationState hr=%ld state=%d\n", result, int(notification));
                 if (FAILED(result) || notification != QUNS_RUNNING_D3D_FULL_SCREEN) {
-                    cleanup(); stop_owned_child();
+                    std::puts("PHASE native-cleanup"); std::fflush(stdout);
+        cleanup();
+        std::puts("PHASE native-cleanup-complete"); std::fflush(stdout);
+        stop_owned_child();
                     std::puts("BLOCKED: OS did not confirm exclusive D3D fullscreen notification state"); return 78;
                 }
             }
@@ -240,6 +248,7 @@ int wmain(int argc, wchar_t** argv) {
         if (cancel_permission) automatic(0);
         SendMessageW(other, WM_APP+1, 0, 0); pump(300);
         require(GetForegroundWindow() == other && !ppvpn_update::foreground_fullscreen(), "normal maximized foreground is allowed");
+        std::puts("PHASE waiting-native-window-after-fullscreen"); std::fflush(stdout);
         for (int i=0;i<100 && !visible_prompt();++i) pump(100);
         bool newer = std::wstring(argv[3]) == L"0.7.5.1" || (permission && !cancel_permission) || d3d;
         require(newer ? visible_prompt() != nullptr : visible_prompt() == nullptr, newer ? "original native update dialog appears after fullscreen exits" : "target build does not prompt after relaunch");
@@ -263,7 +272,10 @@ int wmain(int argc, wchar_t** argv) {
             }
             screenshot(L"installed-after-15min.bmp");
         }
-        cleanup(); stop_owned_child();
+        std::puts("PHASE native-cleanup"); std::fflush(stdout);
+        cleanup();
+        std::puts("PHASE native-cleanup-complete"); std::fflush(stdout);
+        stop_owned_child();
         RegDeleteTreeA(HKEY_CURRENT_USER, key.c_str());
         std::puts("PASS real Windows updater component UI scenario; no installer or VPN was run");
         return 0;

@@ -43,8 +43,19 @@ jobs:
               Push-Location $dir
               try {
                 $started=[DateTime]::UtcNow.ToString('o')
-                & $binary $library 'http://127.0.0.1:18763/feed.xml' $case.arg 2>&1 | Tee-Object 'raw.txt'
-                $code=$LASTEXITCODE
+                $test=Start-Process $binary -ArgumentList ('"'+$library+'" http://127.0.0.1:18763/feed.xml '+$case.arg) -PassThru -RedirectStandardOutput 'raw.txt' -RedirectStandardError 'errors.txt'
+                $seconds=if($case.name -eq 'installed-15min'){20*60}else{120}
+                if(-not $test.WaitForExit($seconds*1000)){
+                  $capture=Start-Process $binary -ArgumentList '--capture timeout-desktop.bmp' -PassThru
+                  if(-not $capture.WaitForExit(10000)){Stop-Process -Id $capture.Id -Force}
+                  Get-CimInstance Win32_Process -Filter "ParentProcessId=$($test.Id)"|Where-Object {$_.ExecutablePath -eq $binary}|ForEach-Object {Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue}
+                  Stop-Process -Id $test.Id -Force
+                  $results+=@{case=$case.name;status='TIMEOUT_UNKNOWN_FAIL';pid=$test.Id;started_utc=$started;finished_utc=[DateTime]::UtcNow.ToString('o')}
+                  throw 'Owned UI fixture timed out; not acceptance'
+                }
+                $code=$test.ExitCode
+                Get-Content 'raw.txt'
+                if(Test-Path 'errors.txt'){Get-Content 'errors.txt'}
                 $results+=@{case=$case.name;exitcode=$code;started_utc=$started;finished_utc=[DateTime]::UtcNow.ToString('o')}
                 if($code -eq 77){throw 'BLOCKED: no usable interactive desktop; not accepted'}
                 if($code -eq 78 -and $case.name -eq 'exclusive-d3d'){Write-Host 'Exclusive D3D coverage BLOCKED on this adapter/session; not accepted'}
@@ -94,6 +105,15 @@ jobs:
         timeout-minutes: 3
         shell: powershell
         run: tools/desktop/windows/prepare-client-upgrade-qa.ps1
+      - name: Build observers for the actual existing client
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build/update-qa | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\update-qa\client-upgrade-qa.exe"
+          if ($LASTEXITCODE) { throw 'Client upgrade observers failed to compile' }
       - name: Normal A and B client and installer builds
         shell: bash
         run: |
@@ -110,15 +130,6 @@ jobs:
             cp -a apps/flutter/build/windows/x64/runner/Release/. "build/update-bundles/$name/"
             powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/package-windows.ps1 -OutDir "build/update-installers/$name" -FastCompression
           done
-      - name: Build observers for the actual existing client
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force build/update-qa | Out-Null
-          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
-          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
-          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\update-qa\client-upgrade-qa.exe"
-          if ($LASTEXITCODE) { throw 'Client upgrade observers failed to compile' }
       - name: Actual A-to-B fallback install, fifteen minutes and process restart
         shell: powershell
         run: tools/desktop/windows/run-client-upgrade-qa.ps1

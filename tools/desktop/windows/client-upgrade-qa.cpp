@@ -34,6 +34,19 @@ static BOOL CALLBACK window_callback(HWND window, LPARAM param) {
 static HWND visible(DWORD pid,bool update_only=true) {
     WindowSearch search={pid,update_only,nullptr}; EnumWindows(window_callback,reinterpret_cast<LPARAM>(&search));return search.found;
 }
+static void role(const char* name, DWORD pid) {
+    FILE* file=nullptr;fopen_s(&file,"client-processes.jsonl","a");
+    if(file){std::fprintf(file,"{\"stage\":\"%s\",\"pid\":%lu,\"tick\":%llu}\n",name,pid,GetTickCount64());fclose(file);}
+}
+static void sample(const char* phase,DWORD old_pid,DWORD new_pid,HWND expected_fullscreen=nullptr) {
+    DWORD foreground_pid=0;auto foreground=GetForegroundWindow();GetWindowThreadProcessId(foreground,&foreground_pid);
+    auto old_update=visible(old_pid),new_update=new_pid?visible(new_pid):nullptr;
+    auto new_window=new_pid?visible(new_pid,false):nullptr;
+    FILE* file=nullptr;fopen_s(&file,"window-samples.csv","a");
+    if(file){std::fprintf(file,"%s,%llu,%lu,%lu,%lu,%p,%p,%p\n",phase,GetTickCount64(),foreground_pid,old_pid,new_pid,old_update,new_update,new_window);fclose(file);}
+    if(expected_fullscreen && foreground!=expected_fullscreen) throw std::runtime_error("foreground changed during fullscreen installation transition");
+    if(expected_fullscreen && new_window) throw std::runtime_error("new B window appeared during fullscreen installation transition");
+}
 static HWND install_button=nullptr;
 static BOOL CALLBACK button_callback(HWND window,LPARAM) {
     wchar_t text[256],name[256];GetWindowTextW(window,text,256);GetClassNameW(window,name,256);
@@ -96,7 +109,7 @@ int wmain(int argc,wchar_t** argv) {
         SendMessageW(foreground,WM_APP+1,1,0);Sleep(500);
         ensure(GetForegroundWindow()==foreground && ppvpn_update::foreground_fullscreen(),"other app actually fullscreen before client scheduled check");
         app=launch(argv[1],L"--background");
-        DWORD old_pid=app.dwProcessId;
+        DWORD old_pid=app.dwProcessId;role("A",old_pid);
         for(int i=0;i<70;++i){Sleep(100);if(visible(old_pid)||GetForegroundWindow()!=foreground)throw std::runtime_error("client A prompted or stole fullscreen focus");}
         snapshot(L"client-A-fullscreen-state.txt");
         SendMessageW(foreground,WM_APP+1,0,0);Sleep(500);
@@ -107,14 +120,21 @@ int wmain(int argc,wchar_t** argv) {
         PostMessageW(install_button,BM_CLICK,0,0);
         Sleep(200);SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
         ensure(GetForegroundWindow()==foreground,"other app foreground during real download and installation");
-        ensure(WaitForSingleObject(app.hProcess,180000)==WAIT_OBJECT_0,"A exited for the real installer");
+        const auto exit_deadline=GetTickCount64()+180000;
+        while(WaitForSingleObject(app.hProcess,0)==WAIT_TIMEOUT && GetTickCount64()<exit_deadline){
+            sample("A-installing",old_pid,0,foreground);Sleep(50);
+        }
+        ensure(WaitForSingleObject(app.hProcess,0)==WAIT_OBJECT_0,"A exited for the real installer");
         CloseHandle(app.hProcess);app.hProcess=nullptr;
-        DWORD next=0;for(int i=0;i<1800 && !next;++i){Sleep(100);next=find_app(argv[1],old_pid);}
+        DWORD next=0;
+        for(int i=0;i<3600 && !next;++i){
+            next=find_app(argv[1],old_pid);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
+        }
         ensure(next && next!=old_pid,"installer actually reopened a distinct B client process");
         ensure(file_version(argv[1])==argv[4],"installed file actually replaced by target B build");
-        app.dwProcessId=next;
+        app.dwProcessId=next;role("B",next);
         std::printf("TRANSITION old_pid=%lu new_pid=%lu\n",old_pid,next);std::fflush(stdout);
-        for(int i=0;i<50;++i){Sleep(100);if(visible(next,false)||GetForegroundWindow()!=foreground)throw std::runtime_error("automatic B relaunch showed over fullscreen");}
+        for(int i=0;i<50;++i){sample("B-fullscreen",old_pid,next,foreground);Sleep(100);}
         snapshot(L"client-B-fullscreen-state.txt");
         SendMessageW(foreground,WM_APP+1,0,0);Sleep(500);
         for(int i=0;i<100 && !visible(next,false);++i)Sleep(100);
@@ -122,13 +142,13 @@ int wmain(int argc,wchar_t** argv) {
         const ULONGLONG started=GetTickCount64();
         for(int minute=1;minute<=15;++minute){
             auto until=started+static_cast<ULONGLONG>(minute)*60000;
-            while(GetTickCount64()<until){if(visible(next))throw std::runtime_error("B repeated an update-available dialog");Sleep(100);}
+            while(GetTickCount64()<until){sample("B-15min",old_pid,next);if(visible(next))throw std::runtime_error("B repeated an update-available dialog");Sleep(100);}
             std::printf("REAL_MINUTE %d B PID=%lu no update-available dialog\n",minute,next);std::fflush(stdout);
         }
         snapshot(L"client-B-after-15min-state.txt");quit_app(next);
         const char zero[]="0";RegSetKeyValueA(HKEY_CURRENT_USER,"Software\\PPVPN\\WinSparkle","LastCheckTime",REG_SZ,zero,sizeof(zero));
-        app=launch(argv[1],L"--background");ensure(app.dwProcessId!=next,"actual B process restarted");
-        for(int i=0;i<150;++i){Sleep(100);if(visible(app.dwProcessId))throw std::runtime_error("B repeated update prompt after real process restart");}
+        app=launch(argv[1],L"--background");role("restarted-B",app.dwProcessId);ensure(app.dwProcessId!=next,"actual B process restarted");
+        for(int i=0;i<150;++i){sample("B-restarted",0,app.dwProcessId);Sleep(100);if(visible(app.dwProcessId))throw std::runtime_error("B repeated update prompt after real process restart");}
         ensure(file_version(argv[1])==argv[4],"B remains installed after next startup check");
         snapshot(L"client-B-restart-state.txt");quit_app(app.dwProcessId);CloseHandle(app.hProcess);app.hProcess=nullptr;
         close_other();std::puts("PASS actual existing client A-to-B WinSparkle/NSIS fallback; not silent-service installation coverage");return 0;
