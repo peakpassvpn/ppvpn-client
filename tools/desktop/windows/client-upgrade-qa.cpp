@@ -134,9 +134,24 @@ int wmain(int argc,wchar_t** argv) {
         HWND update=nullptr;for(int i=0;i<150 && !update;++i){Sleep(100);update=visible(old_pid);}
         ensure(update!=nullptr,"existing client WinSparkle update dialog shown after fullscreen");
         EnumChildWindows(update,button_callback,0);ensure(install_button!=nullptr,"original Install update button found");
-        PostMessageW(install_button,BM_CLICK,0,0);
-        Sleep(200);SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
-        ensure(GetForegroundWindow()==foreground,"other app foreground during real download and installation");
+        const auto download_button=install_button;
+        PostMessageW(download_button,BM_CLICK,0,0);
+        // The standard scheduled-update UI has two original user actions:
+        // download, then the distinct Ready-to-install button. Do not bypass
+        // either by launching the installer directly or changing updater mode.
+        const auto download_deadline=GetTickCount64()+180000;
+        HWND ready_button=nullptr;
+        while(GetTickCount64()<download_deadline && !ready_button){
+            sample("A-downloading",old_pid,0);
+            install_button=nullptr;
+            if(auto dialog=visible(old_pid))EnumChildWindows(dialog,button_callback,0);
+            if(install_button && install_button!=download_button)ready_button=install_button;
+            Sleep(50);
+        }
+        ensure(ready_button!=nullptr,"original Ready-to-install button found after actual download");
+        PostMessageW(ready_button,BM_CLICK,0,0);
+        SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
+        ensure(GetForegroundWindow()==foreground,"other app foreground during real installation");
         const auto exit_deadline=GetTickCount64()+180000;
         while(WaitForSingleObject(app.hProcess,0)==WAIT_TIMEOUT && GetTickCount64()<exit_deadline){
             sample("A-installing",old_pid,0,foreground);Sleep(50);
