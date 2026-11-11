@@ -29,6 +29,7 @@ for role in host other; do codesign --force --sign - "$work/$role.app"; done
 python3 "$root/tools/desktop/windows/update-feed-fixture.py" --macos > "$work/feed.stdout" 2> "$work/feed.stderr" &
 server=$!
 probe=''
+native_stream=''
 cleanup() {
   # Only the two fixed native presentation events from this fixture's client.
   # Do not collect account, connection, backend or general application logs.
@@ -48,6 +49,7 @@ cleanup() {
       case "$command" in "$work/first-show/PPVPN.app/Contents/MacOS/PPVPN"*) kill "$client_pid" 2>/dev/null || true;; esac
     ;; esac
   fi
+  if [ -n "$native_stream" ]; then kill "$native_stream" 2>/dev/null || true; fi
   kill "$server" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -59,6 +61,8 @@ if [ -n "${1:-}" ]; then
   extra+=("$work/first-show/PPVPN.app")
   shasum -a 256 "$work/first-show/PPVPN.app/Contents/MacOS/PPVPN" > "$work/actual-client-hash.txt"
 fi
+/usr/bin/log stream --level info --style compact --predicate '(process == "PPVPN") AND (eventMessage BEGINSWITH "update launch:")' > "$work/native-live.txt" 2>/dev/null &
+native_stream=$!
 "$work/host.app/Contents/MacOS/probe" host "$work" "$work/other.app" "${extra[@]}" > "$work/raw.txt" 2> "$work/errors.txt" &
 probe=$!
 for _ in $(seq 1 110); do

@@ -133,6 +133,7 @@ class MainFlutterWindow: NSWindow {
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
           if error != nil { updateLog.error("update launch: workspace activation failed") }
         }
+        updateLog.info("update launch: workspace activation requested")
       }
     }
     updateLog.info("update launch: native first order resumed")

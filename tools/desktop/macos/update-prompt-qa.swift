@@ -14,6 +14,8 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
   private var fullscreen = true
   private var phase = "starting"
   private var phaseAt = Date()
+  private var originalClientWindows = Set<UInt32>()
+  private var finalStableAt: Date?
   private let dir = URL(fileURLWithPath: CommandLine.arguments[2])
   private var modeURL: URL { dir.appendingPathComponent("mode") }
   private func log(_ value: String) { print("\(Date().timeIntervalSince1970) \(value)"); fflush(stdout) }
@@ -88,6 +90,16 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     timer = Timer.scheduledTimer(withTimeInterval:0.05,repeats:true) { [weak self] _ in
       MainActor.assumeIsolated { self?.observe() }
     }
+  }
+  private func clientWindowIDs(_ pid: pid_t) -> Set<UInt32> {
+    guard let windows = CGWindowListCopyWindowInfo([.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]] else { finish(1,"FAIL original window identity observation unavailable") }
+    return Set(windows.compactMap {
+      guard ($0[kCGWindowOwnerPID as String] as? Int32) == pid,
+        ($0[kCGWindowLayer as String] as? Int) == 0,
+        let bounds = $0[kCGWindowBounds as String] as? [String:Any],
+        let frame = CGRect(dictionaryRepresentation:bounds as CFDictionary),frame.width>1,frame.height>1 else { return nil }
+      return $0[kCGWindowNumber as String] as? UInt32
+    })
   }
   private func clientWindowVisible(_ pid: pid_t) -> Bool {
     guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements], kCGNullWindowID) as? [[String:Any]] else { finish(1,"FAIL window observation unavailable") }
@@ -167,11 +179,45 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         phase="first-windowed";phaseAt=Date()
       }
     case "first-windowed":
-      if let firstApp, clientWindowVisible(firstApp.processIdentifier),
-        NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp.processIdentifier {
-        capture("actual-client-after-fullscreen")
-        finish(0,"PASS actual client native first-show and later original window/focus")
-      } else if elapsed > 20 { finish(1,"FAIL actual client window did not resume after fullscreen") }
+      guard let firstApp, !firstApp.isTerminated else { finish(1,"FAIL original client exited before reopen transition") }
+      let events = (try? String(contentsOf:dir.appendingPathComponent("native-live.txt"),encoding:.utf8)) ?? ""
+      let request = events.split(separator:"\n").first { $0.contains("PPVPN[\(firstApp.processIdentifier):") && $0.contains("update launch: workspace activation requested") }
+      if let request {
+        originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
+        guard !originalClientWindows.isEmpty else { finish(1,"FAIL no original native window identity at workspace request") }
+        log("TRANSITION observed actual request: \(request)")
+        log("TRANSITION immediately reenter fullscreen pid=\(firstApp.processIdentifier) originalWindows=\(originalClientWindows.sorted())")
+        try! Data("full".utf8).write(to:modeURL)
+        phase="reentering-fullscreen";phaseAt=Date()
+      } else if elapsed > 20 { finish(1,"FAIL actual workspace activation request not observed; transition not exercised") }
+    case "reentering-fullscreen":
+      if NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier,
+        UpdatePromptPolicy.shouldDeferPrompt {
+        phase="second-fullscreen";phaseAt=Date()
+        log("PASS actual other-app fullscreen reentered after workspace request")
+      } else if elapsed > 5 { finish(1,"FAIL other-app fullscreen reentry not reached after request") }
+    case "second-fullscreen":
+      guard let firstApp, !firstApp.isTerminated else { finish(1,"FAIL original client exited during reopen transition") }
+      guard NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier else { finish(1,"FAIL late activation/reopen stole repeated fullscreen foreground") }
+      let ids=clientWindowIDs(firstApp.processIdentifier)
+      guard ids==originalClientWindows else { finish(1,"FAIL native original-window identity changed during reopen transition") }
+      log("SAMPLE reopen-transition fullscreen pid=\(firstApp.processIdentifier) foreground=\(other!.processIdentifier) originalWindows=\(ids.sorted())")
+      if elapsed >= 8 {
+        capture("actual-client-reopen-transition-fullscreen")
+        log("PASS no late activation or Dart reopen focus during second fullscreen")
+        try! Data("windowed".utf8).write(to:modeURL)
+        phase="final-windowed";phaseAt=Date()
+      }
+    case "final-windowed":
+      if let firstApp, !firstApp.isTerminated,clientWindowIDs(firstApp.processIdentifier)==originalClientWindows,
+        clientWindowVisible(firstApp.processIdentifier),NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp.processIdentifier {
+        if finalStableAt == nil { finalStableAt=Date() }
+        if Date().timeIntervalSince(finalStableAt!) >= 2 {
+          capture("actual-client-after-fullscreen")
+          finish(0,"PASS same client/original window restores after reopen transition without late fullscreen focus")
+        }
+      } else { finalStableAt=nil }
+      if elapsed > 20 { finish(1,"FAIL same original client window/focus did not recover after second fullscreen") }
     default: break
     }
   }
