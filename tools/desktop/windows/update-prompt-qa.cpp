@@ -46,8 +46,12 @@ static void stop_owned_child() {
 static HWND prompt;
 static BOOL CALLBACK find_prompt(HWND hwnd, LPARAM) {
     DWORD pid; GetWindowThreadProcessId(hwnd, &pid);
-    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd) &&
-        reinterpret_cast<HMODULE>(GetClassLongPtrW(hwnd, GCLP_HMODULE)) == sparkle)
+    // The fixture main process has no UI of its own. wxWidgets may register
+    // its window class with the host EXE instance, so GCLP_HMODULE is not a
+    // reliable way to attribute a window to the loaded WinSparkle DLL.
+    // Count every visible window in this process; the other app is a separate
+    // process. This also catches an unexpected native error/permission UI.
+    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd))
         prompt = hwnd;
     return TRUE;
 }
