@@ -9,6 +9,16 @@ def run(name,args,where=root,extra=None):
  e=env.copy();e.update(extra or {})
  with (out/(name+'.log')).open('wb') as log:r=subprocess.run(args,cwd=where,env=e,stdout=log,stderr=subprocess.STDOUT)
  if r.returncode:raise SystemExit(r.returncode)
+triples={'ios':['aarch64-apple-ios'],'macos':['aarch64-apple-darwin'],'android':['aarch64-linux-android','x86_64-linux-android']}[platform]
+packages=['ppvpn-flutter','ppvpn-tunnel-host'] if platform!='macos' else ['ppvpn-flutter','ppvpn-desktop','ppvpn-service']
+for triple in triples:
+ args=['cargo','tree','--locked','--target',triple,'-e','features,no-dev']
+ for package in packages: args+=['-p',package]
+ if platform=='macos':args+=['--features','ppvpn-desktop/macos-user-runtime']
+ run('ordinary-features-'+triple,args)
+ graph=(out/('ordinary-features-'+triple+'.log')).read_text()
+ for feature in ['internal-diagnostics','internal-udp-target-diagnostics','fault-injection','testing','lab','macos-capture-acceptance']:
+  assert 'feature "'+feature+'"' not in graph, 'unexpected ordinary feature'
 if platform=='ios':
  run('ios-archive',['bash',str(pathlib.Path(os.environ['GITHUB_WORKSPACE'])/'tools/apple/archive_ios_variants.sh'),'primary'],extra={'GITHUB_WORKSPACE':env['SDK2A9_GIT']})
  shutil.copytree(temp/'apple-output'/'candidate',out/'candidate')
