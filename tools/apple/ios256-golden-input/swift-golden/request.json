@@ -2,7 +2,7 @@
   "concurrency": 64,
   "count": 64,
   "duration_seconds": 25,
-  "expires_unix": 1794441846.8538117,
+  "expires_unix": 1794442120.657523,
   "host": "fixture.example.invalid",
   "kind": "tcp",
   "max_application_bytes": 1048576,
@@ -16,10 +16,10 @@
   "read_delay_ms": 1000,
   "round_interval_ms": 1000,
   "rounds": 4,
-  "run_id": "1621a6fd-0bf7-4257-b1e9-da4347e0365e",
-  "run_token": "6559dbdd-65ac-4ee1-b13c-a40af9ba68d7",
+  "run_id": "9fc7e806-e099-4eee-929f-1e75d64f9d4e",
+  "run_token": "46fdc8c2-5f5f-4f40-be14-44d1728d3920",
   "schema": 1,
-  "target_manifest_sha256": "492d883f4060b1a2446edd22296466b436707b166e9e67b0c13d8e50af4b61bd",
+  "target_manifest_sha256": "0867c6e3dbf88b47116d7e9ae5093edefcb0f534409ba55d765b47acb78c0d0a",
   "write_chunks": 1,
   "write_interval_ms": 0
 }

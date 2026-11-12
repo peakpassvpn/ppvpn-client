@@ -3,11 +3,14 @@
   "probe_sha256": "295c4dc7e0996a64ec4d14c77faa7025d354d86ee047e631b5f6b9f7f36195c9",
   "files": {
     "native256-linked-contract.swift": "cdc839f779a21b223e9d577c9a8882bb28346a53db73366c0a626f54d1ab65fb",
-    "swift-golden/request.json": "7638f22d7ffa1bd56db81552d554586effe38039a7e5551e77634051f1e0b5b7",
-    "swift-golden/approved-targets.json": "492d883f4060b1a2446edd22296466b436707b166e9e67b0c13d8e50af4b61bd",
-    "swift-golden/contract.json": "4cd74dcae2961285f30e123d28d8d2ac1ee6ecb000ef32b35c414cbab5ad1e49"
+    "swift-golden/request.json": "07208af132d5c1ccf7c35302c6a325bd91ba120ad176176eb22de6ccacacdaa7",
+    "swift-golden/approved-targets.json": "0867c6e3dbf88b47116d7e9ae5093edefcb0f534409ba55d765b47acb78c0d0a",
+    "swift-golden/contract.json": "bd9278ed3ec19ae808c9ef53792cbf0d2557364031008ade95bd00c9e2c9dbb2"
   },
   "test_only": true,
   "expected_checks": 15,
-  "generation": "Mobile final17 linked suite with actual preflight and84b9/c870 service identities; no post-generation JSON edits"
+  "producer_fingerprint": "7ca494ee6f40bf908d4f1cfe85c89d045b93a7279b45758e00a1d403319343ea",
+  "producer_python17_log_sha256": "4b8d1eee8590656297121d39025d099cf3d7e61e6926885820ea7c11deff1988",
+  "golden_archive_sha256": "cb6d21d1b5404ee27df9039a2fb364663a47aeb0a88e2ffb34aa7bb1c3d3126f",
+  "generation": "Frozen v2 final17 TCP64 offline oneShot; no post-generation JSON edits; historical15 does not attest these bytes"
 }
