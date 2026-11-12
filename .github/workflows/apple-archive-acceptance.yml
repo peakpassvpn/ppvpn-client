@@ -630,19 +630,8 @@ jobs:
           (out/'runtime-test-observer-overlay.json').write_text(json.dumps(dict(file='apps/flutter/e2e/android_smoke.sh',before_sha256=hashlib.sha256(before.encode()).hexdigest(),after_sha256=hashlib.sha256(after.encode()).hexdigest(),scope='Adds packaged JNI readback after each unchanged smoke leg; test observer only, no product Dart/Rust/JNI changes'),indent=2)+'\n')
           (out/'runtime-test-observer-overlay.patch').write_text(''.join(difflib.unified_diff(before.splitlines(True),after.splitlines(True),fromfile='original',tofile='observed')))
           PY_GO
-      - name: Production service lifecycle with non-native host
-        run: |
-          bash "$SDK2A9_CLIENT/apps/flutter/scripts/test-android-tunnel.sh" > "$RUNNER_TEMP/sdk2a9-output/android-lifecycle.log" 2>&1
-          python3 - <<'PY_XML'
-          import os,pathlib,json,xml.etree.ElementTree as ET
-          root=pathlib.Path(os.environ['SDK2A9_CLIENT'])/'apps/flutter/build/android-tunnel-tests/app/build/test-results/testDebugUnitTest'
-          files=list(root.glob('*.xml'));assert files
-          rows=[dict(name=f.name,**ET.parse(f).getroot().attrib) for f in files]
-          total=sum(int(r['tests']) for r in rows);assert total>0
-          assert all(int(r.get(k,0))==0 for r in rows for k in ['failures','errors','skipped'])
-          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'sdk2a9-output'
-          (out/'android-lifecycle-receipt.json').write_text(json.dumps(dict(tests=total,failures=0,errors=0,skipped=0,suites=rows,scope='Robolectric production TunnelService with non-native TunnelHost; not JNI or phone evidence'),indent=2)+'\n')
-          PY_XML
+      - name: Revalidate prior actual non-native lifecycle XML
+        run: python3 tools/apple/reuse_sdkf997_lifecycle_xml.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: test/go.mod
