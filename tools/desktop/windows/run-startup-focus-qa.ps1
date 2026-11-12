@@ -30,6 +30,14 @@ try {
   $actualExeHash=(Get-FileHash "$dir/ppvpn.exe" -Algorithm SHA256).Hash
   if($actualExeHash -cne $originalManifest.hashes.A_exe){throw 'Installed A differs from original normal built executable'}
   @{actual_exe_sha256=$actualExeHash;expected_exe_sha256=$originalManifest.hashes.A_exe;original_source=$originalManifest.source;artifact_run=$env:PPVPN_SOURCE_RUN}|ConvertTo-Json|Set-Content "$out/installed-A-identity.json"
+  if($env:PPVPN_QA_LAYOUT_PLUGIN){
+    $stockHash=(Get-FileHash "$dir/window_manager_plugin.dll" -Algorithm SHA256).Hash
+    $candidateHash=(Get-FileHash $env:PPVPN_QA_LAYOUT_PLUGIN -Algorithm SHA256).Hash
+    Copy-Item $env:PPVPN_QA_LAYOUT_PLUGIN "$dir/window_manager_plugin.dll" -Force
+    $installedHash=(Get-FileHash "$dir/window_manager_plugin.dll" -Algorithm SHA256).Hash
+    if($installedHash -cne $candidateHash){throw 'Candidate native plugin copy/hash mismatch'}
+    @{original_A_source=$originalManifest.source;candidate_source=(git rev-parse HEAD);original_plugin_sha256=$stockHash;candidate_plugin_sha256=$candidateHash;installed_plugin_sha256=$installedHash;scope='original normal A executable/AOT/bridge with candidate native plugin only; NOT normal A-to-B acceptance'}|ConvertTo-Json|Set-Content "$out/candidate-plugin-identity.json"
+  }
   $data=Join-Path $env:LOCALAPPDATA 'PPVPN'
   New-Item -ItemType Directory -Force $data|Out-Null
   [IO.File]::WriteAllText((Join-Path $data 'silent-update.json'),'{"auto_update":false}')

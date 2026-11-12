@@ -19,7 +19,7 @@ try {
   $source=(git -C $repo rev-parse HEAD).Trim()
   if($source -cne $env:GITHUB_SHA){throw 'Checkout HEAD differs from dispatched source'}
   $manifest=@{source=$source;dispatch_sha=$env:GITHUB_SHA;hashes=@{}}
-  $files=@{observer='build/update-qa/client-upgrade-qa.exe';helper='build/update-qa/update-prompt-qa.exe';A_exe='build/update-bundles/A/ppvpn.exe';B_exe='build/update-bundles/B/ppvpn.exe';A_bridge='build/update-bundles/A/ppvpn_flutter.dll';B_bridge='build/update-bundles/B/ppvpn_flutter.dll'}
+  $files=@{observer='build/update-qa/client-upgrade-qa.exe';helper='build/update-qa/update-prompt-qa.exe';A_exe='build/update-bundles/A/ppvpn.exe';B_exe='build/update-bundles/B/ppvpn.exe';A_bridge='build/update-bundles/A/ppvpn_flutter.dll';B_bridge='build/update-bundles/B/ppvpn_flutter.dll';A_window_manager='build/update-bundles/A/window_manager_plugin.dll';B_window_manager='build/update-bundles/B/window_manager_plugin.dll'}
   foreach($entry in $files.GetEnumerator()){$manifest.hashes[$entry.Key]=(Get-FileHash (Join-Path $repo $entry.Value) -Algorithm SHA256).Hash}
   $manifest|ConvertTo-Json -Depth 8|Set-Content "$out/artifact-manifest.json"
   $install=Start-Process $a -ArgumentList '/S' -PassThru
@@ -27,7 +27,8 @@ try {
   if(-not $install.WaitForExit(180000)){throw 'Normal A installer timed out'}
   if((Get-OwnedExitCode $installHandle) -ne 0){throw 'Normal A installer failed'}
   $manifest.installed_A=@{}
-  foreach($file in @('ppvpn.exe','ppvpn_flutter.dll','WinSparkle.dll','ppvpn-service.exe')){$manifest.installed_A[$file]=(Get-FileHash (Join-Path $dir $file) -Algorithm SHA256).Hash}
+  foreach($file in @('ppvpn.exe','ppvpn_flutter.dll','WinSparkle.dll','ppvpn-service.exe','window_manager_plugin.dll')){$manifest.installed_A[$file]=(Get-FileHash (Join-Path $dir $file) -Algorithm SHA256).Hash}
+  $manifest|ConvertTo-Json -Depth 8|Set-Content "$out/artifact-manifest.json"
   $serviceBefore=Get-CimInstance Win32_Service -Filter "Name='ppvpn_service'"
   $serviceBefore | Select-Object Name,State,ProcessId,PathName | ConvertTo-Json | Set-Content "$out/service-A.json"
   New-Item -ItemType Directory -Force $data | Out-Null
@@ -57,9 +58,10 @@ try {
   $serviceAfter | Select-Object Name,State,ProcessId,PathName | ConvertTo-Json | Set-Content "$out/service-B.json"
   if($serviceAfter.State -ne 'Running' -or $serviceAfter.ProcessId -eq $serviceBefore.ProcessId){throw 'Service did not actually restart during normal installation'}
   $manifest.installed_B=@{}
-  foreach($file in @('ppvpn.exe','ppvpn_flutter.dll','WinSparkle.dll','ppvpn-service.exe')){$manifest.installed_B[$file]=(Get-FileHash (Join-Path $dir $file) -Algorithm SHA256).Hash}
+  foreach($file in @('ppvpn.exe','ppvpn_flutter.dll','WinSparkle.dll','ppvpn-service.exe','window_manager_plugin.dll')){$manifest.installed_B[$file]=(Get-FileHash (Join-Path $dir $file) -Algorithm SHA256).Hash}
   $manifest|ConvertTo-Json -Depth 8|Set-Content "$out/artifact-manifest.json"
   if($manifest.installed_B['ppvpn.exe'] -ne $manifest.hashes.B_exe){throw 'Installed B executable differs from the normal B build'}
+  if($manifest.installed_B['window_manager_plugin.dll'] -ne $manifest.hashes.B_window_manager){throw 'Installed B native layout plugin differs from the normal B build'}
   $installedBridge=Get-FileHash "$dir/ppvpn_flutter.dll" -Algorithm SHA256
   $builtBridge=Get-FileHash "$repo/build/update-bundles/B/ppvpn_flutter.dll" -Algorithm SHA256
   if($installedBridge.Hash -ne $builtBridge.Hash){throw 'Installed B bridge differs from normal B build'}

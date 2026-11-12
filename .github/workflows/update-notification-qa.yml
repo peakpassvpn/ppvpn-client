@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      layout_probe:
+        type: boolean
+        default: false
       macos_client_run:
         type: string
         default: ""
@@ -199,6 +202,7 @@ jobs:
             (cd "build/client-upgrade-qa/generated-runner/$name" && sha256sum *.cpp *.h > sha256.txt)
             git rev-parse HEAD > "build/client-upgrade-qa/generated-runner/$name/source.txt"
             mkdir -p "build/update-bundles/$name"
+            cp -a apps/flutter/build/windows/x64/ppvpn_window_manager "build/client-upgrade-qa/generated-runner/$name/"
             cp -a apps/flutter/build/windows/x64/runner/Release/. "build/update-bundles/$name/"
             powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/package-windows.ps1 -OutDir "build/update-installers/$name" -FastCompression
           done
@@ -253,12 +257,40 @@ jobs:
           $vars=Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
           cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\startup-focus-qa\client-upgrade-qa.exe"
           if($LASTEXITCODE){throw 'Observer compile failed'}
+      - name: Compile only the candidate native plugin with the pinned Flutter toolchain
+        if: inputs.layout_probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/layout-flutter-sdk"
+          export PATH="$RUNNER_TEMP/layout-flutter-sdk/bin:$PATH"
+          compile_dir="$RUNNER_TEMP/window-manager-native-compile"
+          flutter create --platforms=windows --project-name ppvpn_native_compile --no-pub "$compile_dir"
+          python3 - "$compile_dir/pubspec.yaml" <<'PYCODE'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]);s=p.read_text()
+          assert '\ndependencies:\n' in s
+          p.write_text(s.replace('\ndependencies:\n','\ndependencies:\n  window_manager: 0.5.2\n',1))
+          PYCODE
+          cp tools/desktop/windows/window-manager-hidden-layout.cmake "$compile_dir/windows/ppvpn-hidden-layout.cmake"
+          printf '\n%s\n' 'include("${CMAKE_CURRENT_LIST_DIR}/ppvpn-hidden-layout.cmake")' >> "$compile_dir/windows/CMakeLists.txt"
+          (cd "$compile_dir" && flutter pub get && flutter build windows --release)
+          out="$GITHUB_WORKSPACE/build/startup-focus-qa/candidate-plugin"
+          mkdir -p "$out"
+          cp "$compile_dir/build/windows/x64/runner/Release/window_manager_plugin.dll" "$out/"
+          cp -a "$compile_dir/build/windows/x64/ppvpn_window_manager/." "$out/"
+          cp "$compile_dir/build/windows/x64/plugins/window_manager/window_manager_plugin.vcxproj" "$out/"
+          git rev-parse HEAD > "$out/candidate-source.txt"
+          (cd "$out" && sha256sum window_manager_plugin.dll > dll-sha256.txt)
       - name: Actual hidden startup and foreground diagnosis
         shell: powershell
         env:
           PPVPN_SOURCE_RUN: ${{ inputs.startup_run }}
           PPVPN_QA_RESTORE_GAME_ONCE: '1'
-        run: tools/desktop/windows/run-startup-focus-qa.ps1
+        run: |
+          if('${{ inputs.layout_probe }}' -eq 'true'){$env:PPVPN_QA_LAYOUT_PLUGIN=Join-Path $env:GITHUB_WORKSPACE 'build/startup-focus-qa/candidate-plugin/window_manager_plugin.dll'}
+          tools/desktop/windows/run-startup-focus-qa.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

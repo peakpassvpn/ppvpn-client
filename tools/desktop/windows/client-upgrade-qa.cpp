@@ -148,7 +148,20 @@ int wmain(int argc,wchar_t** argv) {
                 }
                 Sleep(20);
             }
-            snapshot(L"startup-final.txt");quit_app(old_pid);close_other();
+            snapshot(L"startup-final.txt");
+            SendMessageW(foreground,WM_APP+1,0,0);Sleep(300);
+            auto explicit_open=launch(argv[1],L"");
+            ensure(WaitForSingleObject(explicit_open.hProcess,15000)==WAIT_OBJECT_0,"explicit user open reused existing app process");
+            CloseHandle(explicit_open.hProcess);
+            bool user_front=false;
+            for(int i=0;i<150 && !user_front;++i){
+                DWORD front_pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&front_pid);
+                user_front=front_pid==old_pid && visible(old_pid,false)!=nullptr;
+                sample("A-explicit-user-open",old_pid,0);Sleep(100);
+            }
+            snapshot(L"explicit-user-open.txt");
+            ensure(user_front,"original client visible and foreground after explicit user open");
+            quit_app(old_pid);close_other();
             ensure(!interrupted,"background startup preserved independent fullscreen foreground throughout twelve seconds");
             return 0;
         }

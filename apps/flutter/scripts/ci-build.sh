@@ -301,7 +301,13 @@ case $os in
     replace windows/runner/flutter_window.cpp 'this->Show();' ''
     # The template focuses its child before Dart decides whether startup is
     # hidden. SetFocus can activate even an invisible parent window.
-    replace windows/runner/win32_window.cpp 'SetFocus(child_content_);' 'if (IsWindowVisible(window_handle_)) { SetFocus(child_content_); }' ;;
+    replace windows/runner/win32_window.cpp 'SetFocus(child_content_);' 'if (IsWindowVisible(window_handle_)) { SetFocus(child_content_); }'
+    # Keep the normal plugin target; its copied native layout source adds
+    # NOACTIVATE while the parent is hidden. Never edit the package cache.
+    grep -qF 'include(flutter/generated_plugins.cmake)' windows/CMakeLists.txt ||
+      { echo 'Windows plugin template changed' >&2; exit 1; }
+    layout_hook='include("${CMAKE_CURRENT_LIST_DIR}/../../../tools/desktop/windows/window-manager-hidden-layout.cmake")'
+    grep -qF "$layout_hook" windows/CMakeLists.txt || printf '\n%s\n' "$layout_hook" >> windows/CMakeLists.txt ;;
   linux)
     if grep -qF 'first_frame_cb' "$cc"; then
       replace "$cc" 'gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));' ''
