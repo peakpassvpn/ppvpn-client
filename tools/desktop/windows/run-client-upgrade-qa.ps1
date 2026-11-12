@@ -56,7 +56,23 @@ try {
     $observer=Start-Process "$repo/build/update-qa/client-upgrade-qa.exe" -ArgumentList ('"'+$dir+'/ppvpn.exe" "'+$repo+'/build/update-qa/update-prompt-qa.exe" 0.7.5.60000 0.7.5.60001') -PassThru -RedirectStandardOutput 'actual-client-upgrade.txt' -RedirectStandardError 'actual-client-upgrade-errors.txt'
     $observerHandle=$observer.Handle
     $observerStarted=$observer.StartTime
-    if(-not $observer.WaitForExit(30*60*1000)){
+    $elapsed=[Diagnostics.Stopwatch]::StartNew()
+    $seen=@{}
+    while(-not $observer.WaitForExit(250) -and $elapsed.Elapsed.TotalMinutes -lt 30){
+      # Initial owned-process facts distinguish NSIS shortcut utilities from
+      # the real primary client. No process is activated, killed or replaced.
+      if($elapsed.Elapsed.TotalSeconds -le 60){
+        foreach($row in Get-CimInstance Win32_Process -Filter "Name='ppvpn.exe'" -ErrorAction SilentlyContinue){
+          if($row.ExecutablePath -ine "$dir\ppvpn.exe"){continue}
+          $key="$($row.ProcessId)|$($row.CreationDate)"
+          if(-not $seen.ContainsKey($key)){
+            $row|Select-Object ProcessId,ParentProcessId,CreationDate,ExecutablePath,CommandLine|ConvertTo-Json -Compress|Add-Content client-native-processes.jsonl
+            $seen[$key]=$true
+          }
+        }
+      }
+    }
+    if(-not $observer.HasExited){
       Stop-Process -Id $observer.Id -Force
       throw 'Actual client observer timed out; acceptance is UNKNOWN/FAIL'
     }

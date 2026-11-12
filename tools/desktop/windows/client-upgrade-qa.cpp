@@ -86,17 +86,39 @@ static BOOL CALLBACK button_callback(HWND window,LPARAM) {
     if(_wcsicmp(name,L"Button")==0 && wcsstr(text,L"Install update") && IsWindowEnabled(window) && IsWindowVisible(window)) install_button=window;
     return TRUE;
 }
-static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0) {
+// Query the EXISTING primary-instance pipe. Close without sending any bytes:
+// instance.rs ignores an empty message, so this does not activate/show/quit.
+static DWORD primary_instance_pid() {
+    wchar_t unexpected[2]={};
+    if(GetEnvironmentVariableW(L"PPVPN_FLUTTER_HOME",unexpected,2))return 0;
+    DWORD size=GetEnvironmentVariableW(L"LOCALAPPDATA",nullptr,0);
+    if(!size || size>32768)return 0;
+    std::vector<wchar_t> base(size);
+    DWORD length=GetEnvironmentVariableW(L"LOCALAPPDATA",base.data(),size);
+    if(!length || length>=size)return 0;
+    std::wstring data(base.data(),length);data+=L"\\PPVPN";
+    for(auto& character:data)if(character==L'\\')character=L'/';
+    const auto name=std::wstring(L"\\\\.\\pipe\\ppvpn-")+data;
+    auto pipe=CreateFileW(name.c_str(),GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);
+    if(pipe==INVALID_HANDLE_VALUE)return 0;
+    ULONG owner=0;bool queried=GetNamedPipeServerProcessId(pipe,&owner)!=FALSE;
+    CloseHandle(pipe);return queried?owner:0;
+}
+static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0,ULONGLONG* created_out=nullptr) {
+    const DWORD primary=created_after?primary_instance_pid():0;
+    if(created_after && !primary)return 0;
     auto expected=normalized_image_path(path);
     if(expected.empty())return 0;
     auto snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);PROCESSENTRY32W entry={sizeof(entry)};DWORD found=0;
     if(Process32FirstW(snapshot,&entry)) do {
-        if(entry.th32ProcessID==exclude || _wcsicmp(entry.szExeFile,L"ppvpn.exe")) continue;
+        if(entry.th32ProcessID==exclude || (created_after && entry.th32ProcessID!=primary) || _wcsicmp(entry.szExeFile,L"ppvpn.exe")) continue;
         auto process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,entry.th32ProcessID);
         if(process) {wchar_t name[32768];DWORD size=32768;
             if(QueryFullProcessImageNameW(process,0,name,&size)){
                 auto actual=normalized_image_path(name);auto created=process_creation(process);
-                if(!actual.empty() && _wcsicmp(actual.c_str(),expected.c_str())==0 && created && created>=created_after)found=entry.th32ProcessID;
+                if(!actual.empty() && _wcsicmp(actual.c_str(),expected.c_str())==0 && created && created>=created_after){
+                    found=entry.th32ProcessID;if(created_out)*created_out=created;
+                }
             }
             CloseHandle(process);
         }
@@ -246,16 +268,18 @@ int wmain(int argc,wchar_t** argv) {
         }
         ensure(WaitForSingleObject(app.hProcess,0)==WAIT_OBJECT_0,"A exited for the real installer");
         CloseHandle(app.hProcess);app.hProcess=nullptr;
-        DWORD next=0;
+        DWORD next=0;ULONGLONG next_created=0;
         for(int i=0;i<3600 && !next;++i){
-            next=find_app(argv[1],old_pid,install_requested);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
+            next=find_app(argv[1],old_pid,install_requested,&next_created);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
         }
         ensure(next && next!=old_pid,"installer actually reopened a distinct B client process");
         ensure(file_version(argv[1])==argv[4],"installed file actually replaced by target B build");
         app.hProcess=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,next);
-        ensure(app.hProcess!=nullptr && process_creation(app.hProcess)>=install_requested,
-               "original B process handle and new start identity retained");
+        ensure(app.hProcess!=nullptr && next_created!=0 && process_creation(app.hProcess)==next_created,
+               "primary-instance B process handle and exact creation identity retained");
         app.dwProcessId=next;role("B",next);
+        FILE* primary_record=nullptr;fopen_s(&primary_record,"B-primary-instance.txt","w");
+        if(primary_record){std::fprintf(primary_record,"pid=%lu start_filetime=%llu source=existing_primary_pipe_no_payload\n",next,next_created);fclose(primary_record);}
         std::printf("TRANSITION old_pid=%lu new_pid=%lu\n",old_pid,next);std::fflush(stdout);
         for(int i=0;i<50;++i){sample("B-fullscreen",old_pid,next,foreground);Sleep(100);}
         snapshot(L"client-B-fullscreen-state.txt");
