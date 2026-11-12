@@ -297,7 +297,11 @@ esac
 # start (launch at login) keeps to the tray. A template without the line
 # fails the build rather than showing the window after all.
 case $os in
-  windows) replace windows/runner/flutter_window.cpp 'this->Show();' '' ;;
+  windows)
+    replace windows/runner/flutter_window.cpp 'this->Show();' ''
+    # The template focuses its child before Dart decides whether startup is
+    # hidden. SetFocus can activate even an invisible parent window.
+    replace windows/runner/win32_window.cpp 'SetFocus(child_content_);' 'if (IsWindowVisible(window_handle_)) { SetFocus(child_content_); }' ;;
   linux)
     if grep -qF 'first_frame_cb' "$cc"; then
       replace "$cc" 'gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));' ''
