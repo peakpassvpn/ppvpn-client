@@ -285,7 +285,44 @@ jobs:
             cat > "$compile_dir/windows/ppvpn-layout-trace.h" <<'CPPTRACE'
           #include <Windows.h>
           #include <cstdio>
+          #include <cstring>
+          #include <dbghelp.h>
+          #include <new>
+          #pragma comment(lib,"dbghelp.lib")
+          struct PpvpnUiStack { void* frames[16];USHORT count;ULONGLONG tick;DWORD thread;HWND target; };
+          [[maybe_unused]] static DWORD WINAPI PpvpnSymbolize(void* context) {
+            auto* stack=static_cast<PpvpnUiStack*>(context);
+            static LONG busy=0;
+            while(InterlockedCompareExchange(&busy,1,0)!=0)Sleep(1);
+            char symbols_path[2048]={};GetEnvironmentVariableA("PPVPN_QA_NATIVE_SYMBOL_PATH",symbols_path,2048);
+            SymSetOptions(SYMOPT_DEFERRED_LOADS|SYMOPT_UNDNAME|SYMOPT_FAIL_CRITICAL_ERRORS|SYMOPT_NO_PROMPTS);
+            static const bool symbols=SymInitialize(GetCurrentProcess(),symbols_path,TRUE)!=FALSE;
+            wchar_t path[1024]={};GetEnvironmentVariableW(L"PPVPN_QA_LAYOUT_TRACE",path,1024);
+            FILE* file=nullptr;
+            if(_wfopen_s(&file,path,L"a")==0 && file){
+              std::fprintf(file,"FOREGROUND_STACK tick=%llu pid=%lu thread=%lu target=%p frames=%u\n",stack->tick,GetCurrentProcessId(),stack->thread,static_cast<void*>(stack->target),static_cast<unsigned>(stack->count));
+              for(USHORT i=0;i<stack->count;++i){
+                MEMORY_BASIC_INFORMATION memory={};VirtualQuery(stack->frames[i],&memory,sizeof(memory));
+                char module[1024]={};GetModuleFileNameA(static_cast<HMODULE>(memory.AllocationBase),module,1023);
+                const char* name=std::strrchr(module,'\\');name=name?name+1:module;
+                alignas(SYMBOL_INFO) char storage[sizeof(SYMBOL_INFO)+256]={};auto* symbol=reinterpret_cast<SYMBOL_INFO*>(storage);
+                symbol->SizeOfStruct=static_cast<ULONG>(sizeof(SYMBOL_INFO));symbol->MaxNameLen=255;DWORD64 displacement=0;
+                const bool named=symbols && SymFromAddr(GetCurrentProcess(),reinterpret_cast<DWORD64>(stack->frames[i]),&displacement,symbol)!=FALSE;
+                auto offset=reinterpret_cast<ULONG_PTR>(stack->frames[i])-reinterpret_cast<ULONG_PTR>(memory.AllocationBase);
+                std::fprintf(file,"UI_NATIVE_STACK index=%u module=%s module_offset=%llx symbol=%s displacement=%llu address=%p\n",static_cast<unsigned>(i),name,static_cast<unsigned long long>(offset),named?symbol->Name:"unresolved",static_cast<unsigned long long>(displacement),stack->frames[i]);
+              }
+              fclose(file);
+            }
+            InterlockedExchange(&busy,0);delete stack;return 0;
+          }
+          [[maybe_unused]] static void CALLBACK PpvpnForegroundEvent(HWINEVENTHOOK,DWORD,HWND target,LONG,LONG,DWORD thread,DWORD) {
+            auto* stack=new(std::nothrow) PpvpnUiStack{};if(!stack)return;
+            stack->tick=GetTickCount64();stack->thread=thread;stack->target=target;stack->count=CaptureStackBackTrace(0,16,stack->frames,nullptr);
+            if(!QueueUserWorkItem(PpvpnSymbolize,stack,WT_EXECUTEDEFAULT))delete stack;
+          }
           [[maybe_unused]] static void PpvpnLayoutLog(const char* site,int line,const char* operation,HWND target,UINT flags) {
+            static HWINEVENTHOOK hook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_FOREGROUND,GetModuleHandleW(L"window_manager_plugin.dll"),PpvpnForegroundEvent,GetCurrentProcessId(),0,WINEVENT_INCONTEXT);
+            (void)hook;
             wchar_t path[1024]={};
             if(!GetEnvironmentVariableW(L"PPVPN_QA_LAYOUT_TRACE",path,1024))return;
             auto foreground=GetForegroundWindow();DWORD pid=0;GetWindowThreadProcessId(foreground,&pid);
@@ -342,6 +379,7 @@ jobs:
         run: |
           if('${{ inputs.layout_probe }}' -eq 'true'){$env:PPVPN_QA_LAYOUT_PLUGIN=Join-Path $env:GITHUB_WORKSPACE 'build/startup-focus-qa/candidate-plugin/window_manager_plugin.dll'}
           if('${{ inputs.layout_trace }}' -eq 'true'){$env:PPVPN_QA_LAYOUT_TRACE=Join-Path $env:GITHUB_WORKSPACE 'build/startup-focus-qa/native-layout-trace.txt'}
+          if('${{ inputs.layout_trace }}' -eq 'true'){$env:PPVPN_QA_NATIVE_SYMBOL_PATH=Join-Path $env:RUNNER_TEMP 'layout-flutter-sdk/flutter/bin/cache/artifacts/engine/windows-x64-release'}
           tools/desktop/windows/run-startup-focus-qa.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
