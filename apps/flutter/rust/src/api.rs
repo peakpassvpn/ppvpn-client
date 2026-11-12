@@ -313,13 +313,22 @@ pub fn open_url(url: String) -> bool {
     crate::hooks::open_url(&url)
 }
 
-/// Phones: hands over the APNs device token (iOS) or FCM registration
+/// Hands over the APNs device token (iOS/macOS) or FCM registration
 /// token (Android) and the app's bundle id / package name. Call it whenever
 /// the OS gives one (every launch and on rotation); the core registers the
 /// device while signed in and unregisters it at sign-out (#539).
 #[frb(sync)]
 pub fn set_push_token(token: String, bundle_id: Option<String>) -> Result<(), String> {
     bridge::get()?.client.set_push_token(token, bundle_id);
+    Ok(())
+}
+
+/// Official-push hosts: poll the unread badge only while the app is in the foreground.
+#[frb(sync)]
+pub fn set_notification_foreground(foreground: bool) -> Result<(), String> {
+    bridge::get()?
+        .client
+        .set_notification_foreground(foreground);
     Ok(())
 }
 
