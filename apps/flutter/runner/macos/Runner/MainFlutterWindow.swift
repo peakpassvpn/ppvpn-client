@@ -130,6 +130,7 @@ class MainFlutterWindow: NSWindow {
         configuration.createsNewApplicationInstance = false
         configuration.allowsRunningApplicationSubstitution = false
         configuration.promptsUserIfNeeded = false
+        configuration.appleEvent = Activation.updateResumeEvent()
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
           if error != nil { updateLog.error("update launch: workspace activation failed") }
         }
@@ -258,7 +259,24 @@ private final class Activation: NSObject {
     }
   }
 
+  // The one native update recovery already ordered the original window and
+  // requested activation. Its own reopen must not become a second Dart show.
+  private static let updateResumeKeyword = AEKeyword(0x70707675) // 'ppvu'
+
+  static func updateResumeEvent() -> NSAppleEventDescriptor {
+    let event = NSAppleEventDescriptor(
+      eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEReopenApplication),
+      targetDescriptor: NSAppleEventDescriptor(processIdentifier: ProcessInfo.processInfo.processIdentifier),
+      returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+    event.setParam(NSAppleEventDescriptor(boolean: true), forKeyword: updateResumeKeyword)
+    return event
+  }
+
   @objc private func reopen(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+    if event.paramDescriptor(forKeyword: Self.updateResumeKeyword)?.booleanValue == true {
+      updateLog.info("update launch: internal reopen consumed without a second show")
+      return
+    }
     send("show")
   }
 
