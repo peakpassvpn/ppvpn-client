@@ -109,22 +109,29 @@ static DWORD primary_instance_pid() {
 }
 static void scheduler_snapshot(const char* stage,const char* expected_last=nullptr) {
     const char* key="Software\\PPVPN\\WinSparkle";
-    char last[64]={},interval[64]={},enabled[64]={};
-    DWORD last_size=sizeof(last),interval_size=sizeof(interval),enabled_size=sizeof(enabled);
+    char last[64]={},interval[64]={},machine_interval[64]={},enabled[64]={};
+    DWORD last_size=sizeof(last),interval_size=sizeof(interval),machine_interval_size=sizeof(machine_interval),enabled_size=sizeof(enabled);
     const auto last_status=RegGetValueA(HKEY_CURRENT_USER,key,"LastCheckTime",RRF_RT_REG_SZ,nullptr,last,&last_size);
     const auto interval_status=RegGetValueA(HKEY_CURRENT_USER,key,"UpdateInterval",RRF_RT_REG_SZ,nullptr,interval,&interval_size);
+    const auto machine_interval_status=RegGetValueA(HKEY_LOCAL_MACHINE,key,"UpdateInterval",RRF_RT_REG_SZ,nullptr,machine_interval,&machine_interval_size);
     const auto enabled_status=RegGetValueA(HKEY_CURRENT_USER,key,"CheckForUpdates",RRF_RT_REG_SZ,nullptr,enabled,&enabled_size);
     ensure(last_status==ERROR_SUCCESS && enabled_status==ERROR_SUCCESS,"owned scheduler last-check and automatic-check registry state captured");
-    long effective_interval=86400;const char* interval_source="pinned_0.9.2_default_missing_registry_value";
-    if(interval_status==ERROR_SUCCESS){
-        char* end=nullptr;errno=0;effective_interval=std::strtol(interval,&end,10);
-        ensure(errno==0 && effective_interval>0 && end && *end==0 && std::to_string(effective_interval)==interval,"configured effective scheduler interval is known");
-        interval_source="actual_registry_value";
-    }else{ensure(interval_status==ERROR_FILE_NOT_FOUND,"missing interval uses exact pinned native default");}
+    long effective_interval=86400;const char* interval_source="pinned_0.9.2_default_both_registry_values_missing";
+    const char* selected_interval=nullptr;
+    if(interval_status==ERROR_SUCCESS){selected_interval=interval;interval_source="actual_HKCU_registry_value";}
+    else{
+        ensure(interval_status==ERROR_FILE_NOT_FOUND,"user interval lookup is known missing");
+        if(machine_interval_status==ERROR_SUCCESS){selected_interval=machine_interval;interval_source="actual_HKLM_registry_value";}
+        else{ensure(machine_interval_status==ERROR_FILE_NOT_FOUND || machine_interval_status==ERROR_PATH_NOT_FOUND,"machine interval lookup is known missing; exact pinned default applies");}
+    }
+    if(selected_interval){
+        char* end=nullptr;errno=0;effective_interval=std::strtol(selected_interval,&end,10);
+        ensure(errno==0 && effective_interval>0 && end && *end==0 && std::to_string(effective_interval)==selected_interval,"configured effective scheduler interval is known");
+    }
     if(expected_last)ensure(std::string(last)==expected_last,"B scheduled-check reset read back as zero");
     FILE* file=nullptr;const auto path=std::string(stage)+"-scheduler-state.txt";fopen_s(&file,path.c_str(),"w");
     ensure(file!=nullptr,"owned scheduler evidence file opened");
-    std::fprintf(file,"last_status=%ld\nLastCheckTime=%s\ninterval_status=%ld\nconfigured_UpdateInterval=%s\neffective_interval=%ld\ninterval_source=%s\nautomatic_status=%ld\nCheckForUpdates=%s\nobserved_app_pid=%lu\nobserver_pid=%lu\nobserved_unix_seconds=%lld\nobserved_tick=%llu\n",last_status,last,interval_status,interval,effective_interval,interval_source,enabled_status,enabled,app.dwProcessId,GetCurrentProcessId(),static_cast<long long>(std::time(nullptr)),GetTickCount64());fclose(file);
+    std::fprintf(file,"last_status=%ld\nLastCheckTime=%s\ninterval_status=%ld\nconfigured_HKCU_UpdateInterval=%s\nmachine_interval_status=%ld\nconfigured_HKLM_UpdateInterval=%s\neffective_interval=%ld\ninterval_source=%s\nautomatic_status=%ld\nCheckForUpdates=%s\nobserved_app_pid=%lu\nobserver_pid=%lu\nobserved_unix_seconds=%lld\nobserved_tick=%llu\n",last_status,last,interval_status,interval,machine_interval_status,machine_interval,effective_interval,interval_source,enabled_status,enabled,app.dwProcessId,GetCurrentProcessId(),static_cast<long long>(std::time(nullptr)),GetTickCount64());fclose(file);
 }
 static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0,ULONGLONG* created_out=nullptr) {
     const DWORD primary=created_after?primary_instance_pid():0;
