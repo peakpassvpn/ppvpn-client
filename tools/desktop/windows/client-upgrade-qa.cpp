@@ -124,7 +124,7 @@ static void scheduler_snapshot(const char* stage,const char* expected_last=nullp
     if(expected_last)ensure(std::string(last)==expected_last,"B scheduled-check reset read back as zero");
     FILE* file=nullptr;const auto path=std::string(stage)+"-scheduler-state.txt";fopen_s(&file,path.c_str(),"w");
     ensure(file!=nullptr,"owned scheduler evidence file opened");
-    std::fprintf(file,"last_status=%ld\nLastCheckTime=%s\ninterval_status=%ld\nconfigured_UpdateInterval=%s\neffective_interval=%ld\ninterval_source=%s\nautomatic_status=%ld\nCheckForUpdates=%s\nobserved_unix_seconds=%lld\nobserved_tick=%llu\n",last_status,last,interval_status,interval,effective_interval,interval_source,enabled_status,enabled,static_cast<long long>(std::time(nullptr)),GetTickCount64());fclose(file);
+    std::fprintf(file,"last_status=%ld\nLastCheckTime=%s\ninterval_status=%ld\nconfigured_UpdateInterval=%s\neffective_interval=%ld\ninterval_source=%s\nautomatic_status=%ld\nCheckForUpdates=%s\nobserved_app_pid=%lu\nobserver_pid=%lu\nobserved_unix_seconds=%lld\nobserved_tick=%llu\n",last_status,last,interval_status,interval,effective_interval,interval_source,enabled_status,enabled,app.dwProcessId,GetCurrentProcessId(),static_cast<long long>(std::time(nullptr)),GetTickCount64());fclose(file);
 }
 static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0,ULONGLONG* created_out=nullptr) {
     const DWORD primary=created_after?primary_instance_pid():0;
@@ -279,16 +279,8 @@ int wmain(int argc,wchar_t** argv) {
             Sleep(50);
         }
         ensure(ready_button!=nullptr,"original Ready-to-install button found after actual download");
-        FILETIME requested={};GetSystemTimeAsFileTime(&requested);
-        const auto install_requested=filetime_value(requested);
-        PostMessageW(ready_button,BM_CLICK,0,0);
-        SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
-        ensure(GetForegroundWindow()==foreground,"other app foreground during real installation");
-        const auto exit_deadline=GetTickCount64()+180000;
-        while(WaitForSingleObject(app.hProcess,0)==WAIT_TIMEOUT && GetTickCount64()<exit_deadline){
-            sample("A-installing",old_pid,0,foreground);Sleep(50);
-        }
-        ensure(WaitForSingleObject(app.hProcess,0)==WAIT_OBJECT_0,"A exited for the real installer");
+        // The actual A appcast and signed download are complete, but the
+        // original final Install action has NOT run: B cannot launch yet.
         // Exercise B's existing automatic checker as actually due. A just
         // wrote the shared LastCheckTime; keep the required B feed assertion.
         const char* check_key="Software\\PPVPN\\WinSparkle";
@@ -301,6 +293,18 @@ int wmain(int argc,wchar_t** argv) {
         scheduler_snapshot("B-after-due-reset","0");
         FILE* schedule=nullptr;fopen_s(&schedule,"B-check-reset-order.txt","w");
         if(schedule){std::fprintf(schedule,"reset_filetime=%llu\nreset_tick=%llu\n",b_check_reset,GetTickCount64());fclose(schedule);}
+        FILETIME requested={};GetSystemTimeAsFileTime(&requested);
+        const auto install_requested=filetime_value(requested);
+        FILE* install_order=nullptr;fopen_s(&install_order,"B-check-reset-order.txt","a");
+        if(install_order){std::fprintf(install_order,"install_request_filetime=%llu\nA_pid=%lu\n",install_requested,old_pid);fclose(install_order);}
+        PostMessageW(ready_button,BM_CLICK,0,0);
+        SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
+        ensure(GetForegroundWindow()==foreground,"other app foreground during real installation");
+        const auto exit_deadline=GetTickCount64()+180000;
+        while(WaitForSingleObject(app.hProcess,0)==WAIT_TIMEOUT && GetTickCount64()<exit_deadline){
+            sample("A-installing",old_pid,0,foreground);Sleep(50);
+        }
+        ensure(WaitForSingleObject(app.hProcess,0)==WAIT_OBJECT_0,"A exited for the real installer");
         CloseHandle(app.hProcess);app.hProcess=nullptr;
         DWORD next=0;ULONGLONG next_created=0;
         for(int i=0;i<3600 && !next;++i){
