@@ -15,10 +15,21 @@ New-Item -ItemType Directory -Force $out|Out-Null
 $installer=Join-Path $repo 'build/reused/update-installers/A/PPVPN-0.7.5-windows-x64-setup.exe'
 if(-not (Test-Path $installer)){throw 'Original A installer missing'}
 @{observer_source=(git rev-parse HEAD);artifact_run=$env:PPVPN_SOURCE_RUN;installer_sha256=(Get-FileHash $installer).Hash;scope='startup diagnostic only; no A-to-B/15-minute acceptance'}|ConvertTo-Json|Set-Content "$out/source.json"
+$original=Join-Path $repo 'build/reused/client-upgrade-qa'
+$previous=Join-Path $out 'original-full-run'
+New-Item -ItemType Directory -Force $previous|Out-Null
+foreach($name in @('artifact-manifest.json','actual-client-upgrade.txt','actual-client-upgrade-errors.txt','window-samples.csv','client-processes.jsonl','cleanup.json')){
+  if(Test-Path (Join-Path $original $name)){Copy-Item (Join-Path $original $name) $previous}
+}
+if(Test-Path "$original/generated-runner"){Copy-Item "$original/generated-runner" "$out/generated-runner" -Recurse}
 try {
   $install=Start-Process $installer -ArgumentList '/S' -PassThru
   $installHandle=$install.Handle
   if(-not $install.WaitForExit(180000) -or (Get-OwnedExitCode $installHandle) -ne 0){throw 'Original A installation failed'}
+  $originalManifest=Get-Content "$original/artifact-manifest.json" -Raw|ConvertFrom-Json
+  $actualExeHash=(Get-FileHash "$dir/ppvpn.exe" -Algorithm SHA256).Hash
+  if($actualExeHash -cne $originalManifest.hashes.A_exe){throw 'Installed A differs from original normal built executable'}
+  @{actual_exe_sha256=$actualExeHash;expected_exe_sha256=$originalManifest.hashes.A_exe;original_source=$originalManifest.source;artifact_run=$env:PPVPN_SOURCE_RUN}|ConvertTo-Json|Set-Content "$out/installed-A-identity.json"
   $data=Join-Path $env:LOCALAPPDATA 'PPVPN'
   New-Item -ItemType Directory -Force $data|Out-Null
   [IO.File]::WriteAllText((Join-Path $data 'silent-update.json'),'{"auto_update":false}')
