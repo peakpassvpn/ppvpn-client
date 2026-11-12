@@ -18,6 +18,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
   private var finalStableAt: Date?
   private var clientScenario = "transition"
   private var transitionClientWasActive = false
+  private var otherReentryConfirmed = false
   private var userRestoreRequested = false
   private var userRestoreConfirmed = false
   private let dir = URL(fileURLWithPath: CommandLine.arguments[2])
@@ -51,7 +52,13 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     guard let screen = NSScreen.main else { finish(77, "BLOCKED no main display") }
     window.setFrame(full ? screen.frame : NSRect(x: 100,y: 100,width: 700,height: 450), display: true)
     window.makeKeyAndOrderFront(nil)
+    let before=NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
     NSApp.activate(ignoringOtherApps: true)
+    let event="\(Date().timeIntervalSince1970) mode=\(full ? "full" : "windowed") pid=\(ProcessInfo.processInfo.processIdentifier) frame=\(window.frame) screen=\(screen.frame) active=\(NSApp.isActive) beforeFront=\(before) afterFront=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)\n"
+    let eventURL=dir.appendingPathComponent("other-activation.txt")
+    if FileManager.default.fileExists(atPath:eventURL.path) {
+      let file=try! FileHandle(forWritingTo:eventURL);file.seekToEndOfFile();file.write(Data(event.utf8));try! file.close()
+    } else { try! Data(event.utf8).write(to:eventURL) }
     try! Data((full ? "full" : "windowed").utf8).write(to: dir.appendingPathComponent("other-ready"))
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -104,6 +111,34 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         let frame = CGRect(dictionaryRepresentation:bounds as CFDictionary),frame.width>1,frame.height>1 else { return nil }
       return $0[kCGWindowNumber as String] as? UInt32
     })
+  }
+  private struct FixtureSnapshot {
+    let details: String
+    // nil is unavailable/unknown; it must never establish fullscreen.
+    let isFullscreen: Bool?
+  }
+  private func fixtureWindowSnapshot(_ pid: pid_t) -> FixtureSnapshot {
+    guard let windows=CGWindowListCopyWindowInfo([.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]],!windows.isEmpty else { return FixtureSnapshot(details:"window snapshot unavailable/empty",isFullscreen:nil) }
+    var count:UInt32=0
+    guard CGGetActiveDisplayList(0,nil,&count) == .success,count>0 else { return FixtureSnapshot(details:"display list unavailable/empty",isFullscreen:nil) }
+    var displays=[CGDirectDisplayID](repeating:0,count:Int(count))
+    guard CGGetActiveDisplayList(count,&displays,&count) == .success,count>0 else { return FixtureSnapshot(details:"display list unavailable/empty",isFullscreen:nil) }
+    let monitors=displays.prefix(Int(count)).map { CGDisplayBounds($0) }
+    guard monitors.allSatisfy({ !$0.isNull && !$0.isInfinite && $0.width>1 && $0.height>1 }) else { return FixtureSnapshot(details:"display bounds invalid",isFullscreen:nil) }
+    var visibleFrames=[CGRect]()
+    var details=[String]()
+    for item in windows where (item[kCGWindowOwnerPID as String] as? Int32)==pid && (item[kCGWindowLayer as String] as? Int)==0 {
+      let onScreen=item[kCGWindowIsOnscreen as String] as? Bool
+      guard let bounds=item[kCGWindowBounds as String] as? [String:Any],let frame=CGRect(dictionaryRepresentation:bounds as CFDictionary),!frame.isNull,!frame.isInfinite,frame.width>1,frame.height>1 else { continue }
+      details.append("id=\(item[kCGWindowNumber as String] as? UInt32 ?? 0) onScreen=\(String(describing:onScreen)) frame=\(frame)")
+      if onScreen == true { visibleFrames.append(frame) }
+    }
+    let text="\(details.joined(separator:";")) displays=\(monitors)"
+    guard !visibleFrames.isEmpty else { return FixtureSnapshot(details:text+"; no valid on-screen fixture frame",isFullscreen:nil) }
+    let full=visibleFrames.contains { frame in monitors.contains { monitor in
+      frame.minX<=monitor.minX && frame.minY<=monitor.minY && frame.maxX>=monitor.maxX && frame.maxY>=monitor.maxY
+    } }
+    return FixtureSnapshot(details:text,isFullscreen:full)
   }
   private func clientWindowVisible(_ pid: pid_t) -> Bool {
     guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements], kCGNullWindowID) as? [[String:Any]] else { finish(1,"FAIL window observation unavailable") }
@@ -202,21 +237,47 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         transitionClientWasActive = NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp.processIdentifier
         log("TRANSITION immediately reenter fullscreen pid=\(firstApp.processIdentifier) originalWindows=\(originalClientWindows.sorted()) activeAlready=\(transitionClientWasActive); log timing is not proof of pending intent")
         try! Data("full".utf8).write(to:modeURL)
+        // This is the fixture user's new fullscreen intention. Its deprecated
+        // ignoringOtherApps call alone may not activate an already-running app.
+        // Request that existing fixture explicitly, once; never touch the client.
+        let configuration=NSWorkspace.OpenConfiguration()
+        configuration.activates=true
+        configuration.createsNewApplicationInstance=false
+        configuration.allowsRunningApplicationSubstitution=false
+        configuration.promptsUserIfNeeded=false
+        let activationLag=Date().timeIntervalSince(emitted)
+        guard activationLag >= 0 && activationLag <= 0.25 else { finish(1,"FAIL fixture activation request outside immediate transition bound") }
+        log("OTHER_REENTRY requesting explicit fixture activation originalOtherPID=\(other?.processIdentifier ?? -1) requestLag=\(activationLag)")
+        NSWorkspace.shared.openApplication(at:URL(fileURLWithPath:CommandLine.arguments[3]),configuration:configuration) { app,error in
+          Task { @MainActor in
+            guard error == nil, let app,app.processIdentifier==self.other?.processIdentifier else { self.finish(1,"FAIL fullscreen fixture activation did not confirm original other-app PID") }
+            self.otherReentryConfirmed=true
+            self.log("OTHER_REENTRY completion sameOtherPID=\(app.processIdentifier) foreground=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)")
+          }
+        }
         phase="reentering-fullscreen";phaseAt=Date()
       } else if elapsed > 20 { finish(1,"FAIL actual workspace activation request not observed; transition not exercised") }
     case "reentering-fullscreen":
+      let ready=(try? String(contentsOf:dir.appendingPathComponent("other-ready"),encoding:.utf8)) ?? "missing"
+      let snapshot=fixtureWindowSnapshot(other?.processIdentifier ?? -1)
+      log("SAMPLE reentry foreground=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1) otherPID=\(other?.processIdentifier ?? -1) otherReady=\(ready) shouldDefer=\(UpdatePromptPolicy.shouldDeferPrompt) actualFull=\(String(describing:snapshot.isFullscreen)) frames=\(snapshot.details)")
       if NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp?.processIdentifier { transitionClientWasActive=true }
-      if NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier,
-        UpdatePromptPolicy.shouldDeferPrompt {
+      if otherReentryConfirmed,ready == "full",snapshot.isFullscreen == true,NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier {
         phase="second-fullscreen";phaseAt=Date()
         log("PASS actual other-app fullscreen reentered after workspace request; activation consumption evidence=\(transitionClientWasActive ? "client was active" : "unproven, not asserted pending")")
-      } else if elapsed > 5 { finish(1,"FAIL other-app fullscreen reentry not reached after request") }
+      } else if elapsed > 5 {
+        if snapshot.isFullscreen == nil { finish(77,"BLOCKED fullscreen fixture CG evidence unavailable; transition not exercised") }
+        finish(1,"FAIL other-app fullscreen reentry not reached after request")
+      }
     case "second-fullscreen":
       guard let firstApp, !firstApp.isTerminated else { finish(1,"FAIL original client exited during reopen transition") }
       guard NSWorkspace.shared.frontmostApplication?.processIdentifier == other?.processIdentifier else { finish(1,"FAIL late activation/reopen stole repeated fullscreen foreground") }
+      let snapshot=fixtureWindowSnapshot(other?.processIdentifier ?? -1)
+      guard let actualFull=snapshot.isFullscreen else { finish(77,"BLOCKED fullscreen fixture CG evidence lost during strict interval") }
+      guard actualFull else { finish(1,"FAIL actual fullscreen fixture geometry lost during strict interval") }
       let ids=clientWindowIDs(firstApp.processIdentifier)
       guard ids==originalClientWindows else { finish(1,"FAIL native original-window identity changed during reopen transition") }
-      log("SAMPLE reopen-transition fullscreen pid=\(firstApp.processIdentifier) foreground=\(other!.processIdentifier) originalWindows=\(ids.sorted())")
+      log("SAMPLE reopen-transition fullscreen pid=\(firstApp.processIdentifier) foreground=\(other!.processIdentifier) originalWindows=\(ids.sorted()) frames=\(snapshot.details)")
       if elapsed >= 8 {
         capture("actual-client-reopen-transition-fullscreen")
         log("PASS no late activation or Dart reopen focus during second fullscreen")
