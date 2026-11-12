@@ -1,0 +1,13 @@
+{
+  "source": "970b5d35343e4dfdb7b914464ca714cbdc65bd3d",
+  "probe_sha256": "295c4dc7e0996a64ec4d14c77faa7025d354d86ee047e631b5f6b9f7f36195c9",
+  "files": {
+    "native256-linked-contract.swift": "cdc839f779a21b223e9d577c9a8882bb28346a53db73366c0a626f54d1ab65fb",
+    "swift-golden/request.json": "7638f22d7ffa1bd56db81552d554586effe38039a7e5551e77634051f1e0b5b7",
+    "swift-golden/approved-targets.json": "492d883f4060b1a2446edd22296466b436707b166e9e67b0c13d8e50af4b61bd",
+    "swift-golden/contract.json": "4cd74dcae2961285f30e123d28d8d2ac1ee6ecb000ef32b35c414cbab5ad1e49"
+  },
+  "test_only": true,
+  "expected_checks": 15,
+  "generation": "Mobile final17 linked suite with actual preflight and84b9/c870 service identities; no post-generation JSON edits"
+}

@@ -1,0 +1,13 @@
+{
+  "endpoints": [
+    {
+      "host": "fixture.example.invalid",
+      "kind": "tcp",
+      "port": 51280,
+      "purpose": "fixture"
+    }
+  ],
+  "expires_unix": 1794442209.0135584,
+  "required_path": "ne_proxy",
+  "schema": 1
+}

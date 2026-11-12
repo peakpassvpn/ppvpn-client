@@ -4,6 +4,10 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      native256_golden:
+        description: Only Python-produced golden to actual Swift contract checks
+        type: boolean
+        default: false
       preload_only:
         description: Verify source preload protocol without Rust or Flutter setup/build
         type: boolean
@@ -369,7 +373,7 @@ jobs:
           retention-days: 3
 
   internal256_native_checks:
-    if: inputs.native256_checks
+    if: inputs.native256_checks && !inputs.native256_golden
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -410,4 +414,19 @@ jobs:
         with:
           name: ios256-preload-protocol-receipt
           path: ${{ runner.temp }}/apple-output/input
+          retention-days: 7
+
+  internal256_golden_contract:
+    if: inputs.native256_golden
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Python golden to exact native Swift contract
+        run: python3 tools/apple/check_internal256_golden_worker.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: internal256-golden-worker-receipts
+          path: build/internal256-golden-worker
           retention-days: 7
