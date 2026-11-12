@@ -7,6 +7,10 @@ description: >-
   be set up in one job. Installs gh first where the job has none (the swift
   container); gh verifies the attestation.
 inputs:
+  lockfile:
+    description: Exact source Cargo lockfile
+    required: false
+    default: Cargo.lock
   targets:
     description: Rust target triples, separated by spaces
     required: true
@@ -36,5 +40,5 @@ runs:
         curl -fsSL --retry 3 -o "$script" \
           https://raw.githubusercontent.com/peakpassvpn/btls/16f0e320995602930eb11edc2be8d56b7145713f/scripts/prebuilt-boringssl.sh
         for target in $TARGETS; do
-          bash "$script" Cargo.lock "$target" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
+          bash "$script" "${{ inputs.lockfile }}" "$target" | sed -E "s/^export //; s/'//g" | tee -a "$GITHUB_ENV"
         done

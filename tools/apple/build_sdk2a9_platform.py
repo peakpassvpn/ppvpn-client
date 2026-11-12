@@ -1,0 +1,40 @@
+"""Build normal exact source with existing platform recipes, preserving logs."""
+import hashlib,json,os,pathlib,subprocess,tarfile,time,shutil
+root=pathlib.Path(os.environ['SDK2A9_CLIENT']);temp=pathlib.Path(os.environ['RUNNER_TEMP']);out=temp/'sdk2a9-output';platform=os.environ['SDK2A9_PLATFORM'];env=dict(os.environ)
+assert env['PPVPN_INTERNAL_DIAGNOSTICS']==env['PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS']=='0'
+assert not env.get('PPVPN_PRIVATE_UDP_POLICY_FILE') and not env.get('PPVPN_PRIVATE_UDP_POLICY_SHA256')
+for key in ['IOS_TEAM_ID','IOS_APP_PROFILE','IOS_TUNNEL_PROFILE','IOS_EXPORT_OPTIONS','PPVPN_API_BASE','PPVPN_FLUTTER_HOME','PPVPN_FLUTTER_SAMPLE','PPVPN_FLUTTER_SYNTHETIC_TRAFFIC']:env.pop(key,None)
+start=time.monotonic()
+def run(name,args,where=root,extra=None):
+ e=env.copy();e.update(extra or {})
+ with (out/(name+'.log')).open('wb') as log:r=subprocess.run(args,cwd=where,env=e,stdout=log,stderr=subprocess.STDOUT)
+ if r.returncode:raise SystemExit(r.returncode)
+if platform=='ios':
+ run('ios-archive',['bash',str(pathlib.Path(os.environ['GITHUB_WORKSPACE'])/'tools/apple/archive_ios_variants.sh'),'primary'],extra={'GITHUB_WORKSPACE':env['SDK2A9_GIT']})
+ shutil.copytree(temp/'apple-output'/'candidate',out/'candidate')
+else:
+ target=pathlib.Path(env['CARGO_TARGET_DIR']);target.mkdir(exist_ok=True)
+ (root/'target').symlink_to(target,target_is_directory=True)
+ with (root/'.git/info/exclude').open('a') as f:f.write('\n/target\n')
+ if platform=='android':
+  run('android-package',['bash','tools/android/build-size-artifact.sh',str(root),str(out/'candidate'),'all'])
+ else:
+  env.update(PPVPN_MACOS_SINGLE_RUNTIME='1',MACOS_ARCHS='arm64',PPVPN_APPLE_TARGETS='aarch64-apple-darwin')
+  run('flutter-build',['bash','apps/flutter/scripts/ci-build.sh'])
+  run('helper-build',['bash','tools/desktop/build-service.sh','macos-arm64'])
+  run('ffi-build',['bash','apps/macos/scripts/bootstrap.sh','--release'])
+  app=root/'apps/flutter/build/macos/Build/Products/Release/PPVPN.app'
+  run('macos-package',['bash','apps/flutter/scripts/package-macos.sh',str(app),'arm64'],extra={'SKIP_BOOTSTRAP':'1'})
+  app=root/'apps/flutter/build/macos-package-arm64/PPVPN.app'
+  with tarfile.open(out/'PPVPN.app.tar.gz','w:gz') as tf:tf.add(app,arcname='PPVPN.app')
+  if (root/'dist/macos').is_dir():shutil.copytree(root/'dist/macos',out/'dist')
+def version(args):
+ try:return subprocess.check_output(args,text=True,stderr=subprocess.STDOUT).strip()
+ except (OSError,subprocess.CalledProcessError):return None
+files={}
+for p in root.rglob('*'):
+ if p.is_file() and not p.is_symlink() and (platform=='macos' and 'macos-package-arm64/PPVPN.app/' in p.as_posix()):
+  files[str(p.relative_to(root))]={'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+receipt=dict(source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],cwd=root,text=True).strip(),cargo_lock_sha256=hashlib.sha256((root/'Cargo.lock').read_bytes()).hexdigest(),platform=platform,build=env['PPVPN_BUILD_NUMBER'],internal_diagnostics=False,udp_target_diagnostics=False,private_policy_present=False,backend_origin_sha256=hashlib.sha256(env['PPVPN_API_BASE_DEFAULT'].encode()).hexdigest(),rust=version(['rustc','--version']),flutter=version(['flutter','--version','--machine']),xcode=version(['xcodebuild','-version']),sdk=version(['xcrun','--sdk','iphoneos' if platform=='ios' else 'macosx','--show-sdk-version']) if platform!='android' else None,seconds=time.monotonic()-start,files=files,logical_bundle_bytes=sum(v['bytes'] for v in files.values()) if files else None,scope='Actual ordinary build; ad-hoc/debug measurement signatures; no install/device/VPN/publication/runtime acceptance')
+(out/'build-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+print('Built ordinary',platform,receipt['source'],flush=True)

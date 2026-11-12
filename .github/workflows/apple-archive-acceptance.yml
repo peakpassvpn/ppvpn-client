@@ -4,6 +4,10 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      sdk2a9_build:
+        description: Exact reviewed SDK2a9 ordinary builds on all three platforms
+        type: boolean
+        default: false
       native256_golden:
         description: Only Python-produced golden to actual Swift contract checks
         type: boolean
@@ -77,7 +81,7 @@ jobs:
     permissions:
       contents: write
       actions: read
-    if: inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only
+    if: ${{ !inputs.sdk2a9_build && inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only }}
     runs-on: macos-15
     timeout-minutes: 240
     defaults:
@@ -192,7 +196,7 @@ jobs:
           retention-days: 3
 
   macos:
-    if: inputs.platform == 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only
+    if: ${{ !inputs.sdk2a9_build && inputs.platform == 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only }}
     runs-on: macos-15
     timeout-minutes: 240
     defaults:
@@ -429,4 +433,86 @@ jobs:
         with:
           name: internal256-golden-worker-receipts
           path: build/internal256-golden-worker
+          retention-days: 7
+
+  sdk2a9_platforms:
+    if: inputs.sdk2a9_build
+    permissions:
+      contents: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ios
+            os: macos-15
+            targets: aarch64-apple-ios
+          - platform: macos
+            os: macos-15
+            targets: aarch64-apple-darwin
+          - platform: android
+            os: ubuntu-latest
+            targets: aarch64-linux-android,x86_64-linux-android
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      SOURCE_REF: ${{ inputs.source_ref }}
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
+      PPVPN_INTERNAL_DIAGNOSTICS: '0'
+      PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS: '0'
+      PPVPN_APPLE_PUSH_ENABLED: '0'
+      CANDIDATE_ONLY: '1'
+      GOTOOLCHAIN: go1.25.8
+      SDK2A9_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Preload reviewed ordinary source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/apple/preload_sdk2a9_source.py
+      - name: Select platform tools
+        run: |
+          df -h /
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
+            sudo xcode-select -s "$xcode/Contents/Developer"
+            command -v xcodegen >/dev/null || brew install xcodegen
+            xcodebuild -version
+          else
+            echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+            echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+          fi
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: ${{ matrix.platform == 'android' && 'flutter' || 'macos' }}
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          lockfile: ${{ env.SDK2A9_CLIENT }}/Cargo.lock
+          targets: ${{ matrix.platform == 'android' && 'x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android' || matrix.platform == 'ios' && 'aarch64-apple-ios aarch64-apple-darwin x86_64-apple-darwin' || 'aarch64-apple-darwin x86_64-apple-darwin' }}
+      - uses: ./.github/actions/flutter-toolchain
+      - name: Build exact ordinary package
+        env:
+          PPVPN_SKIP_ANALYZE: '1'
+        run: python3 tools/apple/build_sdk2a9_platform.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: sdk2a9-${{ matrix.platform }}-ordinary
+          path: ${{ runner.temp }}/sdk2a9-output
+          if-no-files-found: warn
           retention-days: 7
