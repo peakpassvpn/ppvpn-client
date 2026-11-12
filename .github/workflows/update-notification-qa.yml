@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      macos_activation_trace:
+        type: boolean
+        default: false
       layout_trace:
         type: boolean
         default: false
@@ -130,6 +133,7 @@ jobs:
       - name: Actual standard Sparkle manual result during fullscreen
         env:
           REUSED_CLIENT_BUNDLE: ${{ steps.reused.outputs.bundle }}
+          PPVPN_QA_TRACE_ACTIVATION: ${{ inputs.macos_activation_trace && '1' || '' }}
         run: |
           if [ -n "$REUSED_CLIENT_BUNDLE" ]; then
             tools/desktop/macos/run-update-prompt-qa.sh "$REUSED_CLIENT_BUNDLE"

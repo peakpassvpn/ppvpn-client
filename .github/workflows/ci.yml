@@ -53,6 +53,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      update_macos_activation_trace:
+        description: "Trace native reopen/show/activation stacks on the unchanged reused Mac app"
+        type: boolean
+        default: false
       update_macos_reuse_run:
         description: "Reuse a verified normal macOS client artifact for observer-only QA"
         type: string
@@ -112,6 +116,7 @@ jobs:
       macos_client_run: ${{ inputs.update_macos_reuse_run || '' }}
       layout_probe: ${{ inputs.update_layout_probe || false }}
       layout_trace: ${{ inputs.update_layout_trace || false }}
+      macos_activation_trace: ${{ inputs.update_macos_activation_trace || false }}
 
   lint:
     if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
