@@ -87,9 +87,12 @@ Future<void> main() async {
     mark('client_created');
   }
 
-  // A phone or tablet: the app is its one screen, with no window to
-  // manage, tray or updater (#448).
+  // A phone or tablet: no window manager or tray. Website Android builds
+  // still initialize their updater before the settings page reads it.
   if (mobile) {
+    if (samplePage == null && Platform.isAndroid) {
+      await Updates.start(idle: () async => false, quit: () async {});
+    }
     runApp(PrototypeApp(app: app));
     return;
   }
