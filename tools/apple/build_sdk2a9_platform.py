@@ -4,6 +4,8 @@ from product_version_checks import workspace_version,apple_versions,android_vers
 root=pathlib.Path(os.environ['SDK2A9_CLIENT']);temp=pathlib.Path(os.environ['RUNNER_TEMP']);out=temp/'sdk2a9-output';platform=os.environ['SDK2A9_PLATFORM'];env=dict(os.environ)
 assert env['PPVPN_INTERNAL_DIAGNOSTICS']==env['PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS']=='0'
 assert env.get('PPVPN_INTERNAL_IOS_CAP256_CANDIDATE','0')=='0'
+assert env.get('PPVPN_INTERNAL_CAPACITY_CAMPAIGN','0')=='0'
+assert env.get('PPVPN_INTERNAL_CAPACITY_UDP_CANCEL','0')=='0'
 assert not env.get('PPVPN_PRIVATE_UDP_POLICY_FILE') and not env.get('PPVPN_PRIVATE_UDP_POLICY_SHA256')
 for key in ['IOS_TEAM_ID','IOS_APP_PROFILE','IOS_TUNNEL_PROFILE','IOS_EXPORT_OPTIONS','PPVPN_API_BASE','PPVPN_FLUTTER_HOME','PPVPN_FLUTTER_SAMPLE','PPVPN_FLUTTER_SYNTHETIC_TRAFFIC']:env.pop(key,None)
 source_manifest=json.loads((out/'source-provenance.json').read_text())['manifest']
