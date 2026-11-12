@@ -453,6 +453,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: tools/ci-changes.sh >> "$GITHUB_OUTPUT"
+      # This job never builds Android. Leave room for the Rust target,
+      # the verified Swift toolchain and the generated client library.
+      - name: Free unused Android SDK space
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          df -h / "$RUNNER_TEMP"
+          sudo du -sh /usr/local/lib/android || true
+          sudo rm -rf -- /usr/local/lib/android
+          df -h / "$RUNNER_TEMP"
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         if: steps.scope.outputs.code == 'true'
         with:
@@ -809,7 +818,9 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      # Fork PR smoke tests use mock backends and may lack this variable.
+      # Release builds still require their configured backend.
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE || 'https://api.example.invalid' }}
     defaults:
       run:
         shell: bash
@@ -911,7 +922,7 @@ jobs:
       # The macOS packaging (#401 step 5, scripts/package-macos.sh), as the
       # native release's: the Swift push agent, its client framework, the
       # LaunchAgent and the service helpers in the bundle, inside-out
-      # signing (ad-hoc here), the DMG, the .pkg and release-meta. The
+      # signing (ad-hoc here), the ZIP, the .pkg and release-meta. The
       # runner's slice only (arm64), with the client and the helpers in
       # debug: the packaging is what is checked, and debug builds the
       # quickest. Then the shipped app as the .pkg holds it. Nothing uploaded.
@@ -958,6 +969,7 @@ jobs:
           security list-keychains -d user -s "${keychains[@]}"
           PPVPN_CODESIGN_IDENTITY="PPVPN CI Signing" \
             SKIP_BOOTSTRAP=1 apps/flutter/scripts/package-macos.sh "${{ steps.build.outputs.bundle }}" arm64
+          python3 -m unittest discover -s tools/desktop/ci -p macos_package_test.py
           ls -l dist/macos
           python3 - dist/macos/release-meta-macos-arm64.json <<'PY'
           import hashlib, json, os, sys
@@ -968,6 +980,7 @@ jobs:
                   "published_at"}
           assert set(meta) == keys, sorted(set(meta) ^ keys)
           assert meta["platform"] == "macos-arm64" and meta["min_os"] == "13.0", meta
+          assert meta["file"].endswith(".zip") and meta["install_file"].endswith(".pkg"), meta
           base = os.path.dirname(sys.argv[1])
           for file, length, sha in (("file", "length", "sha256"),
                                     ("install_file", "install_length", "install_sha256")):
@@ -975,7 +988,13 @@ jobs:
               assert len(data) == meta[length] and hashlib.sha256(data).hexdigest() == meta[sha], file
           print(json.dumps(meta, indent=2))
           PY
-          hdiutil verify dist/macos/PPVPN-*-macos-arm64.dmg
+          zip="$RUNNER_TEMP/flutter-zip"
+          ditto -x -k dist/macos/PPVPN-*-macos-arm64.zip "$zip"
+          codesign --verify --deep --strict --verbose=2 "$zip/PPVPN.app"
+          codesign -dvv "$zip/PPVPN.app" 2>&1 | grep -qx 'Authority=PPVPN CI Signing'
+          # Packaging adds the Sparkle settings to its private app copy.
+          # The archive must preserve that final signed plist, not the raw build.
+          cmp apps/flutter/build/macos-package-arm64/PPVPN.app/Contents/Info.plist "$zip/PPVPN.app/Contents/Info.plist"
           pkg="$RUNNER_TEMP/flutter-pkg"
           pkgutil --expand-full dist/macos/PPVPN-*-macos-arm64.pkg "$pkg"
           grep -q 'identifier="com.peakpassvpn.ppvpn.desktop.pkg"' "$pkg/PackageInfo"
@@ -1146,7 +1165,7 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE || 'https://api.example.invalid' }}
     defaults:
       run:
         shell: bash
@@ -1284,7 +1303,7 @@ jobs:
       FRB_CODEGEN_VERSION: 2.13.0
       # The backend the app is built for (#517): the GitHub variable, as
       # release.yml's; ci-build.sh fails without it.
-      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE }}
+      PPVPN_API_BASE_DEFAULT: ${{ vars.PPVPN_API_BASE || 'https://api.example.invalid' }}
     defaults:
       run:
         shell: bash
