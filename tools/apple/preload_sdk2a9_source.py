@@ -1,23 +1,24 @@
 """Fixed reviewed exact-tip source transport; no history/URL rewrite/path patch."""
-import hashlib,json,os,pathlib,subprocess
+import hashlib,json,os,pathlib,subprocess,tomllib
 assert os.environ['GITHUB_ACTIONS']=='true' and os.environ['RUNNER_ENVIRONMENT']=='github-hosted'
 temp=pathlib.Path(os.environ['RUNNER_TEMP']);out=temp/'sdk2a9-output';out.mkdir(exist_ok=True)
 slug=os.environ['GITHUB_REPOSITORY'];release=json.loads(subprocess.check_output(['gh','api',f'repos/{slug}/releases/442941010']))
 assert release['draft'] is True
 assets={a['name']:a for a in release['assets']}
-expected={'transport-f1d7b7d0.json':'4918d3c32133bc721666f1fb8c40cd4c06cf69624edf2de33e509ab9531443ef','client-f1d7b7d0.pack':'b8f667ca1213187ef6ba687c6b7f410bbf6e08b14db0b9965b22e02dcdc88ce1'}
+expected={'transport-ff7929db.json':'64e0d51c45450a54c3d01fba1512239871be5f894239c35b2613aca4ebabce61','client-ff7929db.pack':'9c6fa3d388a972cf894b52e5825d5ef2e12e38d2ad8a729d02bba342a1ade862'}
 def download(name):
  a=assets[name];assert a['digest']=='sha256:'+expected[name]
  raw=subprocess.check_output(['gh','api','-H','Accept: application/octet-stream',f"repos/{slug}/releases/assets/{a['id']}"])
  assert len(raw)==a['size'] and hashlib.sha256(raw).hexdigest()==expected[name];return raw
-manifest=json.loads(download('transport-f1d7b7d0.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
+manifest=json.loads(download('transport-ff7929db.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
 # This controller must never dispatch a superseded SDK/Client lock by accident.
 assert manifest['sail']=='f99761138b23f267ebc7621057afe02018ab7c18'
-assert manifest['cargo_lock_sha256']=='364b3b2be036cb8805eadd898446c3ad5a8cb25a4c6e6b0fca7eea7ec5f16ca7'
+assert manifest['cargo_lock_sha256']=='a74cb9ffccd98f7365cc8531da73d627e4a57af28c3a8d957bec29a404863cc9'
+assert os.environ['SDK2A9_PLATFORM'] in manifest['allowed_platforms']
 assert manifest['internal_diagnostics'] is False and manifest['private_policy_present'] is False
 assert manifest['ios_default_cap']==128 and manifest['mobile_local_proxy'] is False
 bare=temp/'sdk2a9-source.git';subprocess.run(['git','init','--bare',str(bare)],check=True)
-subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-f1d7b7d0.pack'),check=True)
+subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-ff7929db.pack'),check=True)
 (bare/'shallow').write_text(manifest['source']+'\n')
 subprocess.run(['git','-C',str(bare),'update-ref','refs/heads/frozen',manifest['source']],check=True)
 subprocess.run(['git','-C',str(bare),'symbolic-ref','HEAD','refs/heads/frozen'],check=True)
@@ -27,6 +28,7 @@ assert git('rev-parse','HEAD^{tree}')==manifest['tree']
 assert git('status','--porcelain')==''
 assert 'const IOS_MAX_CONNECTIONS: u32 = 128;' in (checkout/'crates/tunnel-host/src/host.rs').read_text()
 assert hashlib.sha256((checkout/'Cargo.lock').read_bytes()).hexdigest()==manifest['cargo_lock_sha256']
+assert tomllib.loads((checkout/'Cargo.toml').read_text())['workspace']['package']['version']==manifest['product_version']
 assert manifest['sail'] in (checkout/'Cargo.toml').read_text()
 assert '#'+manifest['sail'] in (checkout/'Cargo.lock').read_text()
 assert not os.environ.get('PPVPN_PRIVATE_UDP_POLICY_FILE') and not os.environ.get('PPVPN_PRIVATE_UDP_POLICY_SHA256')

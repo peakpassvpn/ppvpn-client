@@ -1,6 +1,7 @@
 """Same-source internal iOS archive, encrypted before any artifact upload."""
 import base64,contextlib,hashlib,json,os,pathlib,re,shutil,signal,subprocess,sys,tarfile,time
 from pinned_age import install
+from product_version_checks import workspace_version,apple_versions
 from private_build_isolation import clone_target,child_environment
 
 def execute():
@@ -8,6 +9,8 @@ def execute():
     env=dict(os.environ);temp=pathlib.Path(env['RUNNER_TEMP']);source=pathlib.Path(env['SDK2A9_CLIENT']);controller=pathlib.Path(env['GITHUB_WORKSPACE'])
     assert env['GITHUB_ACTIONS']=='true' and env['RUNNER_ENVIRONMENT']=='github-hosted'
     assert env['GITHUB_REPOSITORY']=='peakpassvpn/ppvpn-client' and env['GITHUB_EVENT_NAME']=='workflow_dispatch' and not env.get('GITHUB_HEAD_REF')
+    frozen_manifest=json.loads((temp/'sdk2a9-output/source-provenance.json').read_text())['manifest']
+    assert frozen_manifest['ios256_native_inputs_frozen'] is True,'iOS Native inputs are not frozen'
     bundle=json.loads(env['PPVPN_IOS256_PRIVATE_BUNDLE'])
     assert set(bundle)=={'schema','source','controller','dispatch_nonce','build','policy_base64','policy_sha256','recipient','expires_unix'}
     assert bundle['schema']==2 and bundle['source']==env['SOURCE_REF'] and bundle['controller']==env['GITHUB_SHA']
@@ -31,6 +34,7 @@ def execute():
     policy_path=private/'udp-policy.txt'
     result=private/'private-build-manifest.json';records=[];failure=None;archive=None
     child=child_environment(env)
+    product_version=workspace_version(source,child)
     for k in ['PPVPN_IOS256_PRIVATE_BUNDLE','GH_TOKEN','GITHUB_TOKEN','IOS_TEAM_ID','IOS_APP_PROFILE','IOS_TUNNEL_PROFILE','IOS_EXPORT_OPTIONS','PPVPN_API_BASE','PPVPN_FLUTTER_HOME','PPVPN_FLUTTER_SAMPLE','PPVPN_FLUTTER_SYNTHETIC_TRAFFIC']:
         child.pop(k,None)
     child.update(CARGO_TARGET_DIR=str(private/'target'),RUNNER_TEMP=str(private),GITHUB_WORKSPACE=env['SDK2A9_GIT'],PPVPN_BUILD_NUMBER=str(bundle['build']),CANDIDATE_ONLY='1',REUSE_BASELINE_RUN='',PAIRED_CANDIDATE_JSON='',PPVPN_INTERNAL_DIAGNOSTICS='1',PPVPN_INTERNAL_IOS_CAP256_CANDIDATE='1',PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS='1',PPVPN_PRIVATE_UDP_POLICY_FILE=str(policy_path),PPVPN_PRIVATE_UDP_POLICY_SHA256=bundle['policy_sha256'],PPVPN_SKIP_ANALYZE='1')
@@ -85,7 +89,10 @@ def execute():
         run('canonical-diag-archive',['bash',str(controller/'tools/apple/archive_ios_variants.sh'),'primary'])
         candidate=output/'candidate';proof=json.loads((candidate/'build-provenance.json').read_text())
         assert proof['source_commit']==bundle['source'] and proof['build_number']==str(bundle['build']) and proof['export_contract_check_exit']==0
+        assert proof['cargo_lock_sha256']==hashlib.sha256((source/'Cargo.lock').read_bytes()).hexdigest(),'Private archive lock differs from frozen source'
         project=private/'apple-candidate/apps/flutter'
+        actual_versions=apple_versions(project/'build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app',product_version,bundle['build'],ios=True)
+        (private/'actual-product-versions.json').write_text(json.dumps(actual_versions,indent=2)+'\n')
         checked=[]
         for name in ['Runner','PacketTunnel']:
             stage='actual-private-settings-'+name
@@ -110,7 +117,7 @@ def execute():
         failure=type(error).__name__
     finally:
         # No raw exception/input text reaches the public console or upload path.
-        context=dict(schema=1,source=bundle['source'],controller=bundle['controller'],run_id=int(env['GITHUB_RUN_ID']),dispatch_nonce=bundle['dispatch_nonce'],build=bundle['build'],sdk='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=hashlib.sha256((source/'Cargo.lock').read_bytes()).hexdigest(),base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,policy_input_sha256=bundle['policy_sha256'],policy_after_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest() if policy_path.exists() else None,main_app_engine=False,steps=records,failure_class=failure,age=age_proof,scope='Unsigned internal build only; no install, network workload, capacity acceptance, signing credentials or release')
+        context=dict(schema=1,source=bundle['source'],controller=bundle['controller'],run_id=int(env['GITHUB_RUN_ID']),dispatch_nonce=bundle['dispatch_nonce'],build=bundle['build'],product_version=product_version,sdk='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=hashlib.sha256((source/'Cargo.lock').read_bytes()).hexdigest(),base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,policy_input_sha256=bundle['policy_sha256'],policy_after_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest() if policy_path.exists() else None,main_app_engine=False,steps=records,failure_class=failure,age=age_proof,scope='Unsigned internal build only; no install, network workload, capacity acceptance, signing credentials or release')
         payload=private/'private-ios256-payload.tar.gz'
         try:
             result.write_text(json.dumps(context,indent=2)+'\n');result.chmod(0o600)

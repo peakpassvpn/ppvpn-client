@@ -1,5 +1,5 @@
 """Exact integrated Mac peer and BrokerWorker checks inside the full App job."""
-import hashlib,json,os,pathlib,re,subprocess,time
+import hashlib,json,os,pathlib,re,signal,subprocess,time
 
 def execute(root,out,env):
     out=out/'macos-peer-worker-checks';out.mkdir(exist_ok=True)
@@ -15,12 +15,28 @@ def execute(root,out,env):
     for name,args in [('rustc',['rustc','-vV']),('os',['sw_vers']),('arch',['uname','-m']),('xcode',['xcodebuild','-version'])]:host[name]=subprocess.check_output(args,text=True).strip()
     (out/'host-info.json').write_text(json.dumps(host,indent=2)+'\n')
     env=dict(env,PPVPN_BROKER_SOURCE_HEAD=head);results=[]
-    def run(name,args):
+    def run(name,args,timeout_seconds=None):
         start=time.monotonic()
         print(json.dumps(dict(stage=name,event="begin")),flush=True)
+        timed_out=False
         with (out/(name+'.stdout.raw')).open('wb') as stdout,(out/(name+'.stderr.raw')).open('wb') as stderr:
-            code=subprocess.run(args,cwd=root,env=env,stdout=stdout,stderr=stderr).returncode
-        item=dict(name=name,command=args,exit=code,seconds=time.monotonic()-start)
+            process=subprocess.Popen(args,cwd=root,env=env,stdout=stdout,stderr=stderr,start_new_session=True)
+            def stop_owned_group():
+                try:os.killpg(process.pid,signal.SIGTERM)
+                except ProcessLookupError:pass
+                try:process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:os.killpg(process.pid,signal.SIGKILL)
+                    except ProcessLookupError:pass
+                    process.wait()
+                try:os.killpg(process.pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+            try:code=process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out=True;stop_owned_group();code=124
+            except BaseException:
+                stop_owned_group();raise
+        item=dict(name=name,command=args,exit=code,seconds=time.monotonic()-start,process_deadline_seconds=timeout_seconds,process_deadline_exceeded=timed_out)
         print(json.dumps(dict(stage=name,event='end',exit=code,seconds=item['seconds'])),flush=True)
         results.append(item);(out/'results.json').write_text(json.dumps(results,indent=2)+'\n')
         if code:raise RuntimeError('Mac check failed: '+name)
@@ -40,14 +56,30 @@ def execute(root,out,env):
                 artifacts.append(pathlib.Path(item['executable']))
         assert len(artifacts)==1,artifacts
         binary=artifacts[0];binary_sha=hashlib.sha256(binary.read_bytes()).hexdigest()
+        early_selector='single_runtime::handshake_tests::worker_accepted_configuration_failure_recovers'
+        early_text=run('broker-config-early-return',[str(binary),early_selector,'--exact','--ignored','--test-threads=1','--nocapture','--color','never'],timeout_seconds=120)
+        early_match=re.search(r'test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;',early_text)
+        assert early_match and early_match.groups()==('1','0','0'),early_selector
+        early_rows=[]
+        for line in (out/'broker-config-early-return.stderr.raw').read_text(errors='replace').splitlines():
+            try:row=json.loads(line)
+            except json.JSONDecodeError:continue
+            assert row['head']==head and row['association']=='controlled-out-of-band-not-production-pid-inference'
+            early_rows.append(row)
+        assert early_rows and any(r['role']=='closed-peer-syscalls' for r in early_rows)
+        assert any(r['role']=='worker-config-rejection-and-recovery' for r in early_rows)
+        assert any(r['connection']==1 and r['stage']=='broker-accepted-config' and r['event']=='end' and r['ok'] is False for r in early_rows)
+        assert any(r['connection']==2 and r['stage']=='host-response-verified' for r in early_rows)
+        assert any(r['connection']==2 and r['stage']=='broker-response-written' for r in early_rows)
+        (out/'early-return-events.json').write_text(json.dumps(early_rows,indent=2)+'\n')
         selectors=['single_runtime::handshake_tests::worker_regression_mac_maintenance_blocks_accept','single_runtime::handshake_tests::worker_regression_mac_pretransaction_blocks_identity_and_grant','single_runtime::handshake_tests::worker_regression_mac_prior_transaction_queues_second_connection']
-        listing=run('broker-ignored-selector-list',[str(binary),'worker_regression_mac','--ignored','--list'])
+        listing=run('broker-ignored-selector-list',[str(binary),'worker_regression_mac','--ignored','--list'],timeout_seconds=30)
         actual=[line.removesuffix(': test') for line in listing.splitlines() if line.endswith(': test')]
         assert sorted(actual)==sorted(selectors),(actual,selectors)
         records=[];traces=[]
         for index,selector in enumerate(selectors,1):
             label='broker-ignored-'+str(index)
-            text=run(label,[str(binary),selector,'--exact','--ignored','--test-threads=1','--nocapture','--color','never'])
+            text=run(label,[str(binary),selector,'--exact','--ignored','--test-threads=1','--nocapture','--color','never'],timeout_seconds=120)
             match=re.search(r'test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;',text)
             assert match and match.groups()==('1','0','0'),selector
             rows=[]
@@ -63,7 +95,7 @@ def execute(root,out,env):
             traces.extend(rows)
         assert hashlib.sha256(binary.read_bytes()).hexdigest()==binary_sha
         (out/'worker-events.json').write_text(json.dumps(traces,indent=2)+'\n')
-        (out/'worker3-receipt.json').write_text(json.dumps(dict(head=head,tree=tree,binary=str(binary),binary_sha256=binary_sha,selectors=records,passed=3,failed=0,ignored=0,source_association='Controlled test CID/one fixture monotonic origin; not production PID inference',scope='Actual BrokerWorker/host/protocol/HMAC/audit-token/ledger; OS signing/path controlled. Portable model, historical75f and production root-cause closure are not substituted.',coverage_boundaries=['Maintenance entry barrier does not cover every internal maintenance substep','cfg(test) CID is not production observability','No historical75f root-cause closure or new intermittent-failure claim']),indent=2)+'\n')
+        (out/'worker3-receipt.json').write_text(json.dumps(dict(head=head,tree=tree,binary=str(binary),binary_sha256=binary_sha,early_return_regression=dict(selector=early_selector,passed=1,failed=0,ignored=0,actual_closed_peer_and_injection_separately_labeled=True,config_rejection_then_authenticated_recovery=True),selectors=records,passed=3,failed=0,ignored=0,source_association='Controlled test CID/one fixture monotonic origin; not production PID inference',scope='Actual BrokerWorker/host/protocol/HMAC/audit-token/ledger; OS signing/path controlled. Portable model, historical75f and production root-cause closure are not substituted.',coverage_boundaries=['Maintenance entry barrier does not cover every internal maintenance substep','cfg(test) CID is not production observability','No historical75f root-cause closure or new intermittent-failure claim']),indent=2)+'\n')
     finally:
         after=manifest();(out/'source-post.json').write_text(json.dumps(after,indent=2)+'\n');assert before==after,'Source drift during Mac checks'
 
