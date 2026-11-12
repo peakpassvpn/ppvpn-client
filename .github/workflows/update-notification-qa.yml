@@ -317,7 +317,7 @@ jobs:
           p=Path(sys.argv[1]);s=p.read_text()
           needle='  file(WRITE "${output_dir}/window_manager.cpp" "${code}")'
           if needle not in s:raise SystemExit('Diagnostic materializer insertion mismatch')
-          prefix='  file(READ "${CMAKE_CURRENT_LIST_DIR}/ppvpn-layout-trace.h" trace)\n  string(PREPEND code "${trace}\n")\n'
+          prefix='  file(READ "${CMAKE_CURRENT_LIST_DIR}/ppvpn-layout-trace.h" trace)\n  string(FIND "${code}" "\nnamespace {\n" trace_at)\n  if(trace_at LESS 0)\n    message(FATAL_ERROR "Diagnostic native namespace insertion mismatch")\n  endif()\n  string(REPLACE "\nnamespace {\n" "\n${trace}\nnamespace {\n" code "${code}")\n'
           p.write_text(s.replace(needle,prefix+needle,1))
           PYTRACE
           fi
