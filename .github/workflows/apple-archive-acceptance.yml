@@ -573,6 +573,7 @@ jobs:
       SDK2A9_RUNTIME_PIN: ${{ inputs.sdk2a9_runtime_pin }}
       SDK2A9_RUNTIME_APK_VERIFIER: ${{ github.workspace }}/tools/apple/check_sdk2a9_runtime_apk.py
       SDK2A9_BUILD_MODE: ${{ inputs.sdk2a9_build }}
+      SDK2A9_PLATFORM: android
       PPVPN_INTERNAL_DIAGNOSTICS: '0'
       PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS: '0'
       PPVPN_APPLE_PUSH_ENABLED: '0'

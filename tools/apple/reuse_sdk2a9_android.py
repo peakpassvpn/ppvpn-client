@@ -4,8 +4,8 @@ root=pathlib.Path(os.environ['SDK2A9_CLIENT']);out=pathlib.Path(os.environ['RUNN
 pin=json.loads(os.environ['SDK2A9_RUNTIME_PIN']);slug=os.environ['GITHUB_REPOSITORY']
 assert slug=='peakpassvpn/ppvpn-client'
 assert pin['source']==os.environ['SOURCE_REF'] and pin['build']==os.environ['PPVPN_BUILD_NUMBER']
-assert pin['controller']=='2500368b207431d75fcd121de0aecd7fe3a5e265'
-assert pin['run']==43239778900 and pin['job']==131256751923
+assert pin['controller']=='eb013c73146424822d31570acb304eee4d32d4a9'
+assert pin['run']==43298583088 and pin['job']==131463365379
 assert len(pin['artifact_sha256'])==64 and all(c in '0123456789abcdef' for c in pin['artifact_sha256'])
 def api(path):return json.loads(subprocess.check_output(['gh','api',f'repos/{slug}/actions/'+path]))
 run=api('runs/'+str(pin['run']));assert run['head_sha']==pin['controller']
@@ -29,7 +29,7 @@ with zipfile.ZipFile(container) as z:
  receipt=json.loads(z.read('build-receipt.json'));provenance=json.loads(z.read('candidate/build-provenance.json'))
  for triple in ['aarch64-linux-android','x86_64-linux-android']:
   graph=z.read('ordinary-features-'+triple+'.log').decode()
-  for feature in ['internal-diagnostics','internal-udp-target-diagnostics','fault-injection','testing','lab','macos-capture-acceptance']:
+  for feature in ['internal-diagnostics','internal-udp-target-diagnostics','internal-ios-cap256-candidate','fault-injection','testing','lab','macos-capture-acceptance']:
    assert 'feature \"'+feature+'\"' not in graph
  assert receipt['source']==pin['source'] and receipt['tree']==current['manifest']['tree']
  assert receipt['platform']=='android' and receipt['build']==pin['build']
@@ -54,7 +54,7 @@ with zipfile.ZipFile(apk) as z:
  assert z.testzip() is None
  native=[dict(path=n,bytes=len(data),sha256=hashlib.sha256(data).hexdigest()) for n in paths for data in [z.read(n)]]
  observed=module.manifest(z.read('AndroidManifest.xml'))
-assert observed==dict(package='com.peakpassvpn.ppvpn',versionCode=int(pin['build']),versionName='0.7.4')
+assert observed==dict(package='com.peakpassvpn.ppvpn',versionCode=int(pin['build']),versionName=current['manifest']['product_version'])
 apk_sha=hashlib.sha256(apk.read_bytes()).hexdigest()
 info,payloads=module.validate_apk(apk,dict(apk_sha256=apk_sha,apk_bytes=apk.stat().st_size,native_libraries=native,manifest=observed),origin)
 dest=root/'apps/flutter/android/app/src/main/jniLibs'
