@@ -503,7 +503,7 @@ jobs:
       - uses: ./.github/actions/prebuilt-boringssl
         with:
           lockfile: ${{ env.SDK2A9_CLIENT }}/Cargo.lock
-          targets: ${{ matrix.platform == 'android' && 'x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android' || matrix.platform == 'ios' && 'aarch64-apple-ios aarch64-apple-darwin x86_64-apple-darwin' || 'aarch64-apple-darwin x86_64-apple-darwin' }}
+          targets: ${{ matrix.platform == 'android' && 'x86_64-unknown-linux-gnu aarch64-linux-android x86_64-linux-android' || matrix.platform == 'ios' && (runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin') || 'aarch64-apple-darwin x86_64-apple-darwin' }}
       - uses: ./.github/actions/flutter-toolchain
       - name: Build exact ordinary package
         env:
