@@ -2,6 +2,9 @@
 #include "update_fullscreen.h"
 #include <tlhelp32.h>
 #include <cstdio>
+#include <cstdlib>
+#include <cerrno>
+#include <ctime>
 #include <cwchar>
 #include <string>
 #include <vector>
@@ -103,6 +106,25 @@ static DWORD primary_instance_pid() {
     if(pipe==INVALID_HANDLE_VALUE)return 0;
     ULONG owner=0;bool queried=GetNamedPipeServerProcessId(pipe,&owner)!=FALSE;
     CloseHandle(pipe);return queried?owner:0;
+}
+static void scheduler_snapshot(const char* stage,const char* expected_last=nullptr) {
+    const char* key="Software\\PPVPN\\WinSparkle";
+    char last[64]={},interval[64]={},enabled[64]={};
+    DWORD last_size=sizeof(last),interval_size=sizeof(interval),enabled_size=sizeof(enabled);
+    const auto last_status=RegGetValueA(HKEY_CURRENT_USER,key,"LastCheckTime",RRF_RT_REG_SZ,nullptr,last,&last_size);
+    const auto interval_status=RegGetValueA(HKEY_CURRENT_USER,key,"UpdateInterval",RRF_RT_REG_SZ,nullptr,interval,&interval_size);
+    const auto enabled_status=RegGetValueA(HKEY_CURRENT_USER,key,"CheckForUpdates",RRF_RT_REG_SZ,nullptr,enabled,&enabled_size);
+    ensure(last_status==ERROR_SUCCESS && enabled_status==ERROR_SUCCESS,"owned scheduler last-check and automatic-check registry state captured");
+    long effective_interval=86400;const char* interval_source="pinned_0.9.2_default_missing_registry_value";
+    if(interval_status==ERROR_SUCCESS){
+        char* end=nullptr;errno=0;effective_interval=std::strtol(interval,&end,10);
+        ensure(errno==0 && effective_interval>0 && end && *end==0 && std::to_string(effective_interval)==interval,"configured effective scheduler interval is known");
+        interval_source="actual_registry_value";
+    }else{ensure(interval_status==ERROR_FILE_NOT_FOUND,"missing interval uses exact pinned native default");}
+    if(expected_last)ensure(std::string(last)==expected_last,"B scheduled-check reset read back as zero");
+    FILE* file=nullptr;const auto path=std::string(stage)+"-scheduler-state.txt";fopen_s(&file,path.c_str(),"w");
+    ensure(file!=nullptr,"owned scheduler evidence file opened");
+    std::fprintf(file,"last_status=%ld\nLastCheckTime=%s\ninterval_status=%ld\nconfigured_UpdateInterval=%s\neffective_interval=%ld\ninterval_source=%s\nautomatic_status=%ld\nCheckForUpdates=%s\nobserved_unix_seconds=%lld\nobserved_tick=%llu\n",last_status,last,interval_status,interval,effective_interval,interval_source,enabled_status,enabled,static_cast<long long>(std::time(nullptr)),GetTickCount64());fclose(file);
 }
 static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0,ULONGLONG* created_out=nullptr) {
     const DWORD primary=created_after?primary_instance_pid():0;
@@ -270,19 +292,15 @@ int wmain(int argc,wchar_t** argv) {
         // Exercise B's existing automatic checker as actually due. A just
         // wrote the shared LastCheckTime; keep the required B feed assertion.
         const char* check_key="Software\\PPVPN\\WinSparkle";
-        char previous_check[64]={},configured_interval[64]={},after_check[64]={};
-        DWORD previous_size=sizeof(previous_check),interval_size=sizeof(configured_interval),after_size=sizeof(after_check);
-        const auto previous_status=RegGetValueA(HKEY_CURRENT_USER,check_key,"LastCheckTime",RRF_RT_REG_SZ,nullptr,previous_check,&previous_size);
-        const auto interval_status=RegGetValueA(HKEY_CURRENT_USER,check_key,"UpdateInterval",RRF_RT_REG_SZ,nullptr,configured_interval,&interval_size);
+        scheduler_snapshot("B-before-due-reset");
         const char due_check[]="0";
         ensure(RegSetKeyValueA(HKEY_CURRENT_USER,check_key,"LastCheckTime",REG_SZ,due_check,sizeof(due_check))==ERROR_SUCCESS,
                "original B automatic check scheduled due before normal installer relaunch");
         FILETIME reset_at={};GetSystemTimeAsFileTime(&reset_at);
         const auto b_check_reset=filetime_value(reset_at);
-        const auto after_status=RegGetValueA(HKEY_CURRENT_USER,check_key,"LastCheckTime",RRF_RT_REG_SZ,nullptr,after_check,&after_size);
-        ensure(after_status==ERROR_SUCCESS && after_check[0]=='0' && after_check[1]==0,"B scheduled-check reset read back as zero");
-        FILE* schedule=nullptr;fopen_s(&schedule,"B-check-schedule.txt","w");
-        if(schedule){std::fprintf(schedule,"previous_status=%ld\nprevious_LastCheckTime=%s\ninterval_status=%ld\nconfigured_UpdateInterval=%s\nafter_status=%ld\nafter_LastCheckTime=%s\nreset_filetime=%llu\nreset_tick=%llu\n",previous_status,previous_check,interval_status,configured_interval,after_status,after_check,b_check_reset,GetTickCount64());fclose(schedule);}
+        scheduler_snapshot("B-after-due-reset","0");
+        FILE* schedule=nullptr;fopen_s(&schedule,"B-check-reset-order.txt","w");
+        if(schedule){std::fprintf(schedule,"reset_filetime=%llu\nreset_tick=%llu\n",b_check_reset,GetTickCount64());fclose(schedule);}
         CloseHandle(app.hProcess);app.hProcess=nullptr;
         DWORD next=0;ULONGLONG next_created=0;
         for(int i=0;i<3600 && !next;++i){
@@ -300,6 +318,7 @@ int wmain(int argc,wchar_t** argv) {
         std::printf("TRANSITION old_pid=%lu new_pid=%lu\n",old_pid,next);std::fflush(stdout);
         for(int i=0;i<50;++i){sample("B-fullscreen",old_pid,next,foreground);Sleep(100);}
         snapshot(L"client-B-fullscreen-state.txt");
+        scheduler_snapshot("B-after-native-startup");
         SendMessageW(foreground,WM_APP+1,0,0);Sleep(500);
         for(int i=0;i<100 && !visible(next,false);++i)Sleep(100);
         ensure(visible(next,false)!=nullptr,"original client window resumes after fullscreen exits");
