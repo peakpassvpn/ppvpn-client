@@ -67,7 +67,7 @@ env:
   PAIRED_CANDIDATE_JSON: ${{ inputs.paired_candidate_json }}
 
 concurrency:
-  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}-${{ inputs.candidate_lane || 'measurement' }}
+  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}-${{ inputs.candidate_lane || 'measurement' }}-${{ inputs.native256_golden && 'golden' || inputs.native256_checks && 'native' || inputs.preload_only && 'preload' || 'archive' }}
   cancel-in-progress: false
 
 jobs:
