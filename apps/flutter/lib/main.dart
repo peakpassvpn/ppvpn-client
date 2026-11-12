@@ -94,12 +94,16 @@ Future<void> main() async {
     return;
   }
 
-  await _readyWindow(background);
+  // Decide before _readyWindow: its callback itself can Show/Focus.
+  final installing = samplePage == null && await Updates.installingNow();
+  final updateRelaunch = samplePage == null && await Updates.takeUpdateRelaunch();
+  final deferUpdateWindow = _updateWindowWasDeferred || ((installing || updateRelaunch) && await Updates.promptDeferred());
+  await _readyWindow(background || deferUpdateWindow, updateNotice: installing || updateRelaunch || _updateWindowWasDeferred);
   await windowManager.setPreventClose(true);
 
   // An update is being installed (#548): the app says so, connects
   // nothing and quits.
-  if (samplePage == null && await Updates.installingNow()) {
+  if (installing) {
     void done() {
       app.stop();
       exit(0);
@@ -109,8 +113,11 @@ Future<void> main() async {
     // Its close button quits too, as does the Windows installer's quit.
     windowManager.addListener(_QuitOnClose(done));
     listenForActivations(onShow: () {}, onPush: (_) {}, onQuit: done, onUserQuit: done, onUpdate: () {});
-    await windowManager.show();
-    await windowManager.focus();
+    if (!await Updates.promptDeferred()) {
+      await windowManager.show(inactive: true);
+      // Recheck after the asynchronous native show request before focus.
+      if (!await Updates.promptDeferred()) await windowManager.focus();
+    }
     return;
   }
   if (samplePage == null) {
@@ -170,6 +177,7 @@ Future<void> main() async {
   // Off unless PPVPN_FLUTTER_E2E is set (e2e/linux_enhanced.sh).
   if (samplePage == null) startE2e(app, quit);
   runApp(PrototypeApp(app: app, tray: shown));
+  if ((deferUpdateWindow || _updateWindowWasDeferred) && !background) unawaited(_showDeferredUpdateWindow());
   if (samplePage == null) {
     listenForActivations(
       // Not while the service may be opening the app again (#548).
@@ -197,9 +205,10 @@ Future<void>? _window;
 
 /// The window, on screen or (a launch into the tray) hidden; set up once,
 /// by the launch's install or after the client starts.
-Future<void> _readyWindow(bool background) => _window ??= _setUpWindow(background);
+Future<void> _readyWindow(bool background, {bool updateNotice = false}) =>
+    _window ??= _setUpWindow(background, updateNotice: updateNotice);
 
-Future<void> _setUpWindow(bool background) async {
+Future<void> _setUpWindow(bool background, {required bool updateNotice}) async {
   await windowManager.ensureInitialized();
   mark('window_manager_ready');
   await windowManager.waitUntilReadyToShow(
@@ -215,12 +224,13 @@ Future<void> _setUpWindow(bool background) async {
       mark('ready_to_show');
       // The runners leave the window hidden (ci-build.sh); macOS shows its
       // own at launch.
-      if (background) {
+      if (background || (updateNotice && await Updates.promptDeferred())) {
+        if (!background && updateNotice) _updateWindowWasDeferred = true;
         await windowManager.hide();
         return;
       }
-      await windowManager.show();
-      await windowManager.focus();
+      await windowManager.show(inactive: updateNotice);
+      if (!updateNotice || !await Updates.promptDeferred()) await windowManager.focus();
       mark('window_shown');
     },
   );
@@ -230,8 +240,12 @@ Future<void> _setUpWindow(bool background) async {
 /// UpdatingNotice meanwhile unless the launch is into the tray; true when
 /// the service accepted it. Otherwise the launch carries on (closing the
 /// window meanwhile hides it, as later).
+bool _updateWindowWasDeferred = false;
+
 Future<bool> _installAtLaunch(bool background) async {
-  await _readyWindow(background);
+  final defer = await Updates.promptDeferred();
+  if (!background && defer) _updateWindowWasDeferred = true;
+  await _readyWindow(background || defer, updateNotice: true);
   final close = _HideOnClose();
   if (!background) {
     await windowManager.setPreventClose(true);
@@ -241,6 +255,19 @@ Future<bool> _installAtLaunch(bool background) async {
   final accepted = await rust.silentUpdateInstallAtLaunch(hidden: background);
   windowManager.removeListener(close);
   return accepted;
+}
+
+/// Only for an update-origin relaunch whose initial window was deferred.
+/// Ordinary user opens continue through the existing activation handlers.
+Future<void> _showDeferredUpdateWindow() async {
+  while (await Updates.promptDeferred()) {
+    await Future<void>.delayed(const Duration(seconds: 1));
+    if (await windowManager.isVisible()) return;
+  }
+  if (!await windowManager.isVisible() && !await Updates.promptDeferred()) {
+    await windowManager.show(inactive: true);
+    if (!await Updates.promptDeferred()) await windowManager.focus();
+  }
 }
 
 class _HideOnClose with WindowListener {

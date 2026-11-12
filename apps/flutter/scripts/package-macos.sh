@@ -76,6 +76,10 @@ ffi=("$macos"/PPVPNClient/PPVPNClientFFI.xcframework/macos-*/PPVPNClientFFI.fram
 sparkle=$(find "$build/xcode/SourcePackages/artifacts" -type d -path '*/Sparkle.xcframework/macos-*/Sparkle.framework' -prune)
 [ -n "$sparkle" ] && [ "$(printf '%s\n' "$sparkle" | wc -l | tr -d ' ')" = 1 ] ||
   { echo "expected one macOS Sparkle.framework in the agent build's packages, found: ${sparkle:-none}" >&2; exit 1; }
+# Preserve the standard framework and installer; use the pinned source with
+# its small pre-show deferral hook for manual results as well as scheduled UI.
+"$root/tools/desktop/macos/build-sparkle.sh" "$build/sparkle-patched" "$arch"
+sparkle=$(cat "$build/sparkle-patched/framework.path")
 feed=${PPVPN_UPDATE_FEED_URL:-}
 if [ -z "$feed" ] && [ -n "${PPVPN_UPDATE_SITE:-}" ] && [ -n "${PPVPN_RELEASE_CHANNEL:-}" ]; then
   feed="${PPVPN_UPDATE_SITE%/}/desktop/$PPVPN_RELEASE_CHANNEL/appcast-$platform.xml"
@@ -103,6 +107,7 @@ plist_set() {
 plist_set PPVPNUpdateFeedURL string "$feed"
 plist_set SUPublicEDKey string "${PPVPN_SPARKLE_PUBLIC_KEY:-}"
 plist_set SUEnableAutomaticChecks bool true
+plist_set PPVPNDeferUpdatePresentation bool true
 for bin in ppvpn-service ppvpn-service-install ppvpn-service-uninstall; do
   file="$bins/$bin-universal-apple-darwin"
   [ -f "$file" ] || file="$bins/$bin-$triple"

@@ -1,0 +1,44 @@
+name: Update engine stack symbolization
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  symbolize:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Resolve captured offsets against pinned release engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'engine-symbols'
+          New-Item -ItemType Directory -Path $out | Out-Null
+          $revision = 'deb287481e3ce9468f3434937ced4240a70539ca'
+          $url = "https://storage.googleapis.com/flutter_infra_release/flutter/$revision/windows-x64-release/windows-x64-flutter.zip"
+          $zip = Join-Path $env:RUNNER_TEMP 'ppvpn-pinned-engine.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $engine = Join-Path $env:RUNNER_TEMP 'ppvpn-pinned-engine'
+          Expand-Archive $zip $engine
+          $symbolizer = 'C:\Program Files\LLVM\bin\llvm-symbolizer.exe'
+          $readobj = 'C:\Program Files\LLVM\bin\llvm-readobj.exe'
+          $dll = Join-Path $engine 'flutter_windows.dll'
+          $pdb = Join-Path $engine 'flutter_windows.dll.pdb'
+          if (!(Test-Path $symbolizer) -or !(Test-Path $pdb)) { throw 'Required pinned engine PDB or LLVM symbolizer absent' }
+          "pinned_engine=$revision`nsource_run=43144971747`nsource=e724c7a50a6a0d382643a7fb695eb44fc5d9c392`nmode=OFFLINE_SYMBOLS_ONLY_NO_PRODUCT_RUNTIME" | Set-Content "$out/identity.txt"
+          Get-FileHash $zip,$dll,$pdb | Format-List | Out-File "$out/hashes.txt"
+          & $readobj --coff-debug-directory $dll | Out-File "$out/pe-debug.txt"
+          if ($LASTEXITCODE) { throw 'PE debug identity read failed' }
+          $offsets = '0x12ee2','0x19643','0xdb372','0x7212db','0x765cfd'
+          foreach ($offset in $offsets) {
+            "RETURN_ADDRESS_MINUS_ONE=$offset" | Add-Content "$out/stack-symbols.txt"
+            & $symbolizer --obj=$dll --relative-address --demangle --inlines $offset | Add-Content "$out/stack-symbols.txt"
+            if ($LASTEXITCODE) { throw 'Engine symbolization failed' }
+          }
+          Get-Content "$out/stack-symbols.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: engine-stack-symbols
+          path: engine-symbols/
