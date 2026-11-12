@@ -50,7 +50,9 @@ else:
   assert hashlib.sha256(pathlib.Path(receipt['binary']).read_bytes()).hexdigest()==receipt['binary_sha256']
   run('flutter-build',['bash','apps/flutter/scripts/ci-build.sh'])
   run('helper-build',['bash','tools/desktop/build-service.sh','macos-arm64'])
-  run('ffi-build',['bash','apps/macos/scripts/bootstrap.sh','--release'])
+  push_mode=subprocess.check_output(['python3','tools/apple/macos_push_package.py','plan','--enabled',env.get('PPVPN_APPLE_PUSH_ENABLED','0'),'--migration-ready',env.get('PPVPN_MACOS_APNS_MIGRATION_READY','0')],cwd=root,env=env,text=True).strip()
+  assert push_mode in ['polling','apns']
+  if push_mode=='polling':run('ffi-build',['bash','apps/macos/scripts/bootstrap.sh','--release'])
   app=root/'apps/flutter/build/macos/Build/Products/Release/PPVPN.app'
   run('macos-package',['bash','apps/flutter/scripts/package-macos.sh',str(app),'arm64'],extra={'SKIP_BOOTSTRAP':'1'})
   app=root/'apps/flutter/build/macos-package-arm64/PPVPN.app'
