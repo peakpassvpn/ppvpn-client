@@ -263,7 +263,7 @@ jobs:
         run: |
           set -euo pipefail
           apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/layout-flutter-sdk"
-          export PATH="$RUNNER_TEMP/layout-flutter-sdk/bin:$PATH"
+          export PATH="$RUNNER_TEMP/layout-flutter-sdk/flutter/bin:$PATH"
           compile_dir="$RUNNER_TEMP/window-manager-native-compile"
           flutter create --platforms=windows --project-name ppvpn_native_compile --no-pub "$compile_dir"
           python3 - "$compile_dir/pubspec.yaml" <<'PYCODE'
