@@ -235,6 +235,13 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       if elapsed >= 7 {
         capture("actual-client-\(clientScenario)-first-show-deferred")
         log("PASS actual client remains running without first-show/fullscreen interruption")
+        if clientScenario == "transition" {
+          // Snapshot before releasing fullscreen. A CG enumeration can take
+          // most of the 250ms request budget on a loaded runner.
+          originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
+          guard !originalClientWindows.isEmpty else { finish(1,"FAIL no original native window identity before workspace request") }
+          log("TRANSITION original windows before fullscreen release=\(originalClientWindows.sorted())")
+        }
         try! Data("windowed".utf8).write(to:modeURL)
         phase=clientScenario == "transition" ? "first-windowed" : "baseline-windowed";phaseAt=Date()
         finalStableAt=nil
@@ -247,14 +254,9 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         let readAt=Date()
         guard let emitted=nativeTimestampFormatter.date(from:String(request.prefix(23))) else { finish(1,"FAIL live request timestamp unparseable; transition not exercised") }
         let lag=Date().timeIntervalSince(emitted)
-        log("DIAGNOSTIC request read lag=\(readAt.timeIntervalSince(emitted)) parse-and-observation=\(Date().timeIntervalSince(readAt)) seconds")
-        log("TRANSITION live request observation lag=\(lag) seconds")
         guard lag >= 0 && lag <= 0.25 else { finish(1,"FAIL request observation too late; immediate transition not exercised") }
-        originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
         guard !originalClientWindows.isEmpty else { finish(1,"FAIL no original native window identity at workspace request") }
-        log("TRANSITION observed actual request: \(request)")
         transitionClientWasActive = NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp.processIdentifier
-        log("TRANSITION immediately reenter fullscreen pid=\(firstApp.processIdentifier) originalWindows=\(originalClientWindows.sorted()) activeAlready=\(transitionClientWasActive); log timing is not proof of pending intent")
         try! Data("full".utf8).write(to:modeURL)
         // This is the fixture user's new fullscreen intention. Its deprecated
         // ignoringOtherApps call alone may not activate an already-running app.
@@ -266,7 +268,6 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         configuration.promptsUserIfNeeded=false
         let activationLag=Date().timeIntervalSince(emitted)
         guard activationLag >= 0 && activationLag <= 0.25 else { finish(1,"FAIL fixture activation request outside immediate transition bound") }
-        log("OTHER_REENTRY requesting explicit fixture activation originalOtherPID=\(other?.processIdentifier ?? -1) requestLag=\(activationLag)")
         NSWorkspace.shared.openApplication(at:URL(fileURLWithPath:CommandLine.arguments[3]),configuration:configuration) { app,error in
           Task { @MainActor in
             guard error == nil, let app,app.processIdentifier==self.other?.processIdentifier else { self.finish(1,"FAIL fullscreen fixture activation did not confirm original other-app PID") }
@@ -280,6 +281,12 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
             }
           }
         }
+        // Keep CG enumeration and stdout I/O outside the measured request path.
+        log("DIAGNOSTIC request read lag=\(readAt.timeIntervalSince(emitted)) parse-and-request=\(activationLag-readAt.timeIntervalSince(emitted)) seconds")
+        log("TRANSITION live request observation lag=\(lag) seconds")
+        log("TRANSITION observed actual request: \(request)")
+        log("TRANSITION immediately reenter fullscreen pid=\(firstApp.processIdentifier) originalWindows=\(originalClientWindows.sorted()) activeAlready=\(transitionClientWasActive); log timing is not proof of pending intent")
+        log("OTHER_REENTRY requesting explicit fixture activation originalOtherPID=\(other?.processIdentifier ?? -1) requestLag=\(activationLag)")
         phase="reentering-fullscreen";phaseAt=Date()
       } else if elapsed > 20 { finish(1,"FAIL actual workspace activation request not observed; transition not exercised") }
     case "reentering-fullscreen":
