@@ -7,13 +7,13 @@ class AgeTransportTests(unittest.TestCase):
    root=pathlib.Path(work);identity=root/'identity';subprocess.run(['age-keygen','-o',str(identity)],check=True,capture_output=True)
    recipient=subprocess.check_output(['age-keygen','-y',str(identity)],text=True).strip()
    sha=hashlib.sha256(b'127.0.0.1:9001\n').hexdigest()
-   manifest=dict(source='a'*40,controller='b'*40,run_id=123,dispatch_nonce='c'*64,build=356,policy_input_sha256=sha,policy_after_sha256=sha,sdk='f99761138b23f267ebc7621057afe02018ab7c18',base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,main_app_engine=False,failure_class=None)
+   manifest=dict(source='a'*40,controller='b'*40,run_id=123,dispatch_nonce='c'*64,build=356,domain_capability_input_sha256='d'*64,policy_input_sha256=sha,policy_after_sha256=sha,sdk='f99761138b23f267ebc7621057afe02018ab7c18',base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,main_app_engine=False,failure_class=None)
    payload=root/'payload.tar.gz'
    with tarfile.open(payload,'w:gz') as tf:
     for name,data in [('private-build-manifest.json',json.dumps(manifest).encode()),('fixture.txt',b'fixture-only')]:
      info=tarfile.TarInfo(name);info.size=len(data);tf.addfile(info,io.BytesIO(data))
    cipher=root/'payload.age';subprocess.run(['age','-r',recipient,'-o',str(cipher),str(payload)],check=True,capture_output=True)
-   expected=dict(source='a'*40,controller='b'*40,run_id=123,dispatch_nonce='c'*64,build=356,policy_sha256=sha,encrypted_sha256=hashlib.sha256(cipher.read_bytes()).hexdigest())
+   expected=dict(source='a'*40,controller='b'*40,run_id=123,dispatch_nonce='c'*64,build=356,policy_sha256=sha,domain_capability_sha256='d'*64,encrypted_sha256=hashlib.sha256(cipher.read_bytes()).hexdigest())
    decrypt(cipher,identity,root/'valid',expected);self.assertEqual((root/'valid/verified/fixture.txt').read_bytes(),b'fixture-only')
    raw=cipher.read_bytes()
    for name,data in [('bitflip',raw[:-1]+bytes([raw[-1]^1])),('truncated',raw[:-20])]:
@@ -24,6 +24,8 @@ class AgeTransportTests(unittest.TestCase):
    self.assertFalse((root/'wrong-context/verified').exists())
    with self.assertRaises(AssertionError):decrypt(cipher,identity,root/'wrong-nonce',dict(expected,dispatch_nonce='d'*64))
    self.assertFalse((root/'wrong-nonce/verified').exists())
+   with self.assertRaises(AssertionError):decrypt(cipher,identity,root/'wrong-domain',dict(expected,domain_capability_sha256='e'*64))
+   self.assertFalse((root/'wrong-domain/verified').exists())
    with self.assertRaises(AssertionError):decrypt(cipher,identity,root/'wrong-policy',dict(expected,policy_sha256='0'*64))
    self.assertFalse((root/'wrong-policy/verified').exists())
 if __name__=='__main__':unittest.main()

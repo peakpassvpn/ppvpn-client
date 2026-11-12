@@ -1,5 +1,5 @@
 """Build normal exact source with existing platform recipes, preserving logs."""
-import hashlib,json,os,pathlib,subprocess,tarfile,time,shutil
+import hashlib,json,os,pathlib,subprocess,tarfile,time,shutil,plistlib
 from product_version_checks import workspace_version,apple_versions,android_versions
 root=pathlib.Path(os.environ['SDK2A9_CLIENT']);temp=pathlib.Path(os.environ['RUNNER_TEMP']);out=temp/'sdk2a9-output';platform=os.environ['SDK2A9_PLATFORM'];env=dict(os.environ)
 assert env['PPVPN_INTERNAL_DIAGNOSTICS']==env['PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS']=='0'
@@ -70,6 +70,12 @@ else:
   if (root/'dist/macos').is_dir():shutil.copytree(root/'dist/macos',out/'dist')
 assert hashlib.sha256((root/'Cargo.lock').read_bytes()).hexdigest()==expected_lock,'Client lock changed during actual package build'
 if platform=='ios':actual_versions=apple_versions(temp/'apple-candidate/apps/flutter/build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app',product_version,env['PPVPN_BUILD_NUMBER'],ios=True)
+if platform=='ios':
+ ordinary_app=temp/'apple-candidate/apps/flutter/build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app'
+ for plist in [ordinary_app/'Info.plist',ordinary_app/'PlugIns/PacketTunnel.appex/Info.plist']:
+  info=plistlib.loads(plist.read_bytes())
+  assert not any(key.startswith('PPVPNCapacity') or key.startswith('PPVPNInternalCapacity') for key in info),'Ordinary App contains private capacity binding'
+  assert info.get('PPVPNInternalDiagnosticsEnabled',False) is False
 elif platform=='macos':actual_versions=apple_versions(app,product_version,env['PPVPN_BUILD_NUMBER'])
 else:actual_versions=android_versions(out/'candidate',product_version,env['PPVPN_BUILD_NUMBER'],env)
 def version(args):

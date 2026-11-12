@@ -1,6 +1,7 @@
 """Same-source internal iOS archive, encrypted before any artifact upload."""
 import base64,contextlib,hashlib,json,os,pathlib,plistlib,re,shutil,signal,subprocess,sys,tarfile,time
 from pinned_age import install
+from private_domain_capability import validate_domain_capability
 from product_version_checks import workspace_version,apple_versions
 from private_build_isolation import clone_target,child_environment
 
@@ -12,8 +13,8 @@ def execute():
     frozen_manifest=json.loads((temp/'sdk2a9-output/source-provenance.json').read_text())['manifest']
     assert frozen_manifest['ios256_native_inputs_frozen'] is True,'iOS Native inputs are not frozen'
     bundle=json.loads(env['PPVPN_IOS256_PRIVATE_BUNDLE'])
-    assert set(bundle)=={'schema','source','controller','dispatch_nonce','build','policy_base64','policy_sha256','recipient','expires_unix'}
-    assert bundle['schema']==2 and bundle['source']==env['SOURCE_REF'] and bundle['controller']==env['GITHUB_SHA']
+    assert set(bundle)=={'schema','source','controller','dispatch_nonce','build','policy_base64','policy_sha256','domain_capability_base64','domain_capability_sha256','recipient','expires_unix'}
+    assert bundle['schema']==3 and bundle['source']==env['SOURCE_REF'] and bundle['controller']==env['GITHUB_SHA']
     assert re.fullmatch(r'[0-9a-f]{64}',bundle['dispatch_nonce']) and bundle['dispatch_nonce']==env['PPVPN_PRIVATE_DISPATCH_NONCE']
     assert env['GITHUB_RUN_ATTEMPT']=='1' and bundle['build']==int(env['PPVPN_BUILD_NUMBER'])+1
     assert time.time()<bundle['expires_unix']<time.time()+8*3600
@@ -21,6 +22,9 @@ def execute():
     policy=base64.b64decode(bundle['policy_base64'],validate=True)
     assert 0<len(policy)<=128 and hashlib.sha256(policy).hexdigest()==bundle['policy_sha256']
     assert re.fullmatch(r'[0-9a-f]{64}',bundle['policy_sha256'])
+    domain_raw=base64.b64decode(bundle['domain_capability_base64'],validate=True)
+    assert hashlib.sha256(domain_raw).hexdigest()==bundle['domain_capability_sha256']
+    domain_capability=validate_domain_capability(domain_raw,policy,bundle['policy_sha256'])
     assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=source,text=True).strip()==bundle['source']
     assert 'f99761138b23f267ebc7621057afe02018ab7c18' in (source/'Cargo.toml').read_text()
     # Pin/validate the encryptor before materializing private build input.
@@ -75,8 +79,17 @@ def execute():
         output.mkdir()
         policy_path.write_bytes(policy);policy_path.chmod(0o600)
         tracked=subprocess.check_output(['git','ls-files'],cwd=source,text=True).splitlines()
-        capacity_manifest=dict(kind='CAPACITY_V3_SOURCE_MANIFEST',campaign_contract='CAPACITY_V3_TCP_UDP_CANCEL',reservation_total_bytes=4169728,client_commit=bundle['source'],client_tree=frozen_manifest['tree'],sdk_commit='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=frozen_manifest['cargo_lock_sha256'],same_private_policy_sha256=bundle['policy_sha256'],ordinary_default_cap=128,private_capacity_cap=256,policy_consumers={key:bundle['policy_sha256'] for key in ['SDK','NE_observer','Main_probe']},source_files_sha256={name:hashlib.sha256((source/name).read_bytes()).hexdigest() for name in tracked},capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),scope='Unsigned compiler/control evidence; complete256/UDP/cancel acceptance is not implied')
+        inventory={name:hashlib.sha256((source/name).read_bytes()).hexdigest() for name in tracked}
+        inventory_raw=(json.dumps(inventory,sort_keys=True,indent=2)+'\n').encode()
+        (private/'source-files-inventory.json').write_bytes(inventory_raw)
+        inventory_sha=hashlib.sha256(inventory_raw).hexdigest()
+        capacity_manifest=dict(kind='CAPACITY_V3_SOURCE_MANIFEST',campaign_contract='CAPACITY_V3_TCP_UDP_CANCEL',reservation_total_bytes=4169728,client_commit=bundle['source'],client_tree=frozen_manifest['tree'],sdk_commit='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=frozen_manifest['cargo_lock_sha256'],same_private_policy_sha256=bundle['policy_sha256'],ordinary_default_cap=128,private_capacity_cap=256,policy_consumers={key:bundle['policy_sha256'] for key in ['SDK','NE_observer','Main_probe']},source_files_inventory_sha256=inventory_sha,capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),scope='Unsigned compiler/control evidence; complete256/UDP/cancel acceptance is not implied')
+        (private/'main-domain-build-input.json').write_bytes(domain_raw)
         capacity_manifest_path.write_text(json.dumps(capacity_manifest,sort_keys=True,indent=2)+'\n');capacity_manifest_path.chmod(0o600)
+        run('map-main-domain-capability',[sys.executable,str(source/'tools/apple/prepare_main_domain_capability.py'),'--build-input',str(private/'main-domain-build-input.json'),'--build-input-sha256',bundle['domain_capability_sha256'],'--source-manifest',str(capacity_manifest_path)])
+        capacity_manifest=json.loads(capacity_manifest_path.read_text())
+        assert set(capacity_manifest['main_udp_domain_capability'])=={'schema','contract','domain','ipv4','port','tuple_policy_sha256'}
+        assert capacity_manifest['main_udp_domain_build_input_sha256']==bundle['domain_capability_sha256']
         # Copy-on-write seed: separate inodes, never hard links or writable aliases.
         normal_target=pathlib.Path(env['CARGO_TARGET_DIR']).resolve()
         assert normal_target==controller.resolve()/'target'
@@ -105,6 +118,12 @@ def execute():
             info=plistlib.loads(plist.read_bytes())
             assert info['PPVPNCapacitySourceManifestSHA256']==hashlib.sha256(capacity_manifest_path.read_bytes()).hexdigest()
             assert info['PPVPNInternalDiagnosticsEnabled'] is True and info['PPVPNInternalCapacityCampaignEnabled'] is True and info['PPVPNInternalCapacityUDPCancelEnabled'] is True
+            if info['CFBundleIdentifier']=='com.peakpassvpn.ppvpn':
+                assert info['PPVPNCapacitySourceManifestData']==capacity_manifest_path.read_bytes()
+                assert info['PPVPNCapacityMainUDPDomainCapability']==capacity_manifest['main_udp_domain_capability']
+                assert info['PPVPNCapacityMainUDPDomainCapabilitySHA256']==capacity_manifest['main_udp_domain_capability_sha256']
+            else:
+                assert not any(key in info for key in ['PPVPNCapacitySourceManifestData','PPVPNCapacityMainUDPDomainCapability','PPVPNCapacityMainUDPDomainCapabilitySHA256'])
             actual_capacity.append(dict(bundle=info['CFBundleIdentifier'],source_manifest_sha256=info['PPVPNCapacitySourceManifestSHA256'],base_diagnostics=True,capacity_campaign=True))
         (private/'actual-capacity-source-binding.json').write_text(json.dumps(actual_capacity,indent=2)+'\n')
         (private/'actual-product-versions.json').write_text(json.dumps(actual_versions,indent=2)+'\n')
@@ -152,7 +171,7 @@ def execute():
         failure=type(error).__name__
     finally:
         # No raw exception/input text reaches the public console or upload path.
-        context=dict(schema=1,source=bundle['source'],controller=bundle['controller'],run_id=int(env['GITHUB_RUN_ID']),dispatch_nonce=bundle['dispatch_nonce'],build=bundle['build'],product_version=product_version,sdk='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=hashlib.sha256((source/'Cargo.lock').read_bytes()).hexdigest(),base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,capacity_campaign=True,capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),capacity_source_manifest_sha256=hashlib.sha256(capacity_manifest_path.read_bytes()).hexdigest() if capacity_manifest_path.exists() else None,policy_input_sha256=bundle['policy_sha256'],policy_after_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest() if policy_path.exists() else None,main_app_engine=False,steps=records,failure_class=failure,age=age_proof,scope='Unsigned internal build only; no install, network workload, capacity acceptance, signing credentials or release')
+        context=dict(schema=1,source=bundle['source'],controller=bundle['controller'],run_id=int(env['GITHUB_RUN_ID']),dispatch_nonce=bundle['dispatch_nonce'],build=bundle['build'],product_version=product_version,sdk='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=hashlib.sha256((source/'Cargo.lock').read_bytes()).hexdigest(),base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,capacity_campaign=True,capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),capacity_source_manifest_sha256=hashlib.sha256(capacity_manifest_path.read_bytes()).hexdigest() if capacity_manifest_path.exists() else None,domain_capability_input_sha256=bundle['domain_capability_sha256'],policy_input_sha256=bundle['policy_sha256'],policy_after_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest() if policy_path.exists() else None,main_app_engine=False,steps=records,failure_class=failure,age=age_proof,scope='Unsigned internal build only; no install, network workload, capacity acceptance, signing credentials or release')
         payload=private/'private-ios256-payload.tar.gz'
         try:
             result.write_text(json.dumps(context,indent=2)+'\n');result.chmod(0o600)

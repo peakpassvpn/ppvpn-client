@@ -5,12 +5,12 @@ temp=pathlib.Path(os.environ['RUNNER_TEMP']);out=temp/'sdk2a9-output';out.mkdir(
 slug=os.environ['GITHUB_REPOSITORY'];release=json.loads(subprocess.check_output(['gh','api',f'repos/{slug}/releases/442941010']))
 assert release['draft'] is True
 assets={a['name']:a for a in release['assets']}
-expected={'transport-40674d18.json':'f8123160b5664225e0e1e5cd27a9792b05b46e2764b3da37bc8dd54a33d999fe','client-40674d18.pack':'a699566bf460c2fa550a84f5bbcdd7c20bedf49ae67c8bef2f07164f57ed5a15'}
+expected={'transport-c71684ac.json':'f10ff299bb723124806bd20eaed925c371b38d0a36cff553f136936b0e3abc38','client-c71684ac.pack':'98e3eeece330707e2dff7573e1d3a7d448c84e51c31ab00f46db329b8c9765a2'}
 def download(name):
  a=assets[name];assert a['digest']=='sha256:'+expected[name]
  raw=subprocess.check_output(['gh','api','-H','Accept: application/octet-stream',f"repos/{slug}/releases/assets/{a['id']}"])
  assert len(raw)==a['size'] and hashlib.sha256(raw).hexdigest()==expected[name];return raw
-manifest=json.loads(download('transport-40674d18.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
+manifest=json.loads(download('transport-c71684ac.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
 # This controller must never dispatch a superseded SDK/Client lock by accident.
 assert manifest['sail']=='f99761138b23f267ebc7621057afe02018ab7c18'
 assert manifest['cargo_lock_sha256']=='a74cb9ffccd98f7365cc8531da73d627e4a57af28c3a8d957bec29a404863cc9'
@@ -18,7 +18,7 @@ assert os.environ['SDK2A9_PLATFORM'] in manifest['allowed_platforms']
 assert manifest['internal_diagnostics'] is False and manifest['private_policy_present'] is False
 assert manifest['ios_default_cap']==128 and manifest['mobile_local_proxy'] is False
 bare=temp/'sdk2a9-source.git';subprocess.run(['git','init','--bare',str(bare)],check=True)
-subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-40674d18.pack'),check=True)
+subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-c71684ac.pack'),check=True)
 (bare/'shallow').write_text(manifest['source']+'\n')
 subprocess.run(['git','-C',str(bare),'update-ref','refs/heads/frozen',manifest['source']],check=True)
 subprocess.run(['git','-C',str(bare),'symbolic-ref','HEAD','refs/heads/frozen'],check=True)
