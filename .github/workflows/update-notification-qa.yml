@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      full_client_run:
+        type: string
+        default: ""
       macos_activation_trace:
         type: boolean
         default: false
@@ -26,7 +29,7 @@ permissions:
   actions: read
 jobs:
   windows-updater:
-    if: ${{ !inputs.full_client && !inputs.startup_run && !inputs.macos_client_run }}
+    if: ${{ !inputs.full_client_run && !inputs.full_client && !inputs.startup_run && !inputs.macos_client_run }}
     runs-on: windows-latest
     timeout-minutes: 55
     steps:
@@ -92,7 +95,7 @@ jobs:
           path: build/update-qa/
 
   macos-updater:
-    if: ${{ !inputs.full_client && !inputs.startup_run }}
+    if: ${{ !inputs.full_client_run && !inputs.full_client && !inputs.startup_run }}
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -215,6 +218,68 @@ jobs:
           done
       - name: Actual A-to-B fallback install, fifteen minutes and process restart
         shell: powershell
+        run: tools/desktop/windows/run-client-upgrade-qa.ps1
+      - name: Remove only the ephemeral CI identities
+        if: always()
+        shell: powershell
+        run: |
+          $private=Join-Path $env:RUNNER_TEMP 'update-client-private'
+          $mark=Join-Path $private 'tls-thumb.txt'
+          if(Test-Path $mark){
+            $thumb=(Get-Content $mark -Raw).Trim()
+            if($thumb -match '^[A-Fa-f0-9]{40}$'){
+              foreach($store in @('CurrentUser/My','CurrentUser/Root','LocalMachine/Root')){
+                $path="Cert:/$store/$thumb"
+                if(Test-Path $path){Remove-Item $path -Force}
+              }
+            }
+          }
+          if(Test-Path $private){Remove-Item $private -Recurse -Force}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: actual-client-update-fallback-qa
+          retention-days: 7
+          path: |
+            build/client-upgrade-qa/
+            build/update-installers/
+            build/update-qa/
+
+  windows-client-upgrade-reuse:
+    if: inputs.full_client_run != '' && !inputs.full_client && !inputs.startup_run && !inputs.macos_client_run
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: actual-client-update-fallback-qa
+          run-id: ${{ inputs.full_client_run }}
+          github-token: ${{ github.token }}
+          path: build/reused
+      - name: Verify unchanged normal clients and original signed packages
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PPVPN_QA_REUSE_CLIENT_RUN: ${{ inputs.full_client_run }}
+        run: tools/desktop/windows/validate-client-upgrade-reuse.ps1
+      - name: Ephemeral loopback TLS identity (original update signatures retained)
+        timeout-minutes: 3
+        shell: powershell
+        run: tools/desktop/windows/prepare-client-upgrade-qa.ps1
+      - name: Compile only observers with normalized native image path comparison
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build/update-qa | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\update-qa\client-upgrade-qa.exe"
+          if ($LASTEXITCODE) { throw 'Client upgrade observers failed to compile' }
+      - name: Actual unchanged A-to-B fallback install, fifteen minutes and process restart
+        shell: powershell
+        env:
+          PPVPN_QA_REUSE_CLIENT_RUN: ${{ inputs.full_client_run }}
         run: tools/desktop/windows/run-client-upgrade-qa.ps1
       - name: Remove only the ephemeral CI identities
         if: always()

@@ -18,9 +18,18 @@ try {
   $a=Join-Path $repo 'build/update-installers/A/PPVPN-0.7.5-windows-x64-setup.exe'
   $source=(git -C $repo rev-parse HEAD).Trim()
   if($source -cne $env:GITHUB_SHA){throw 'Checkout HEAD differs from dispatched source'}
-  $manifest=@{source=$source;dispatch_sha=$env:GITHUB_SHA;hashes=@{}}
+  $manifest=@{source=$source;dispatch_sha=$env:GITHUB_SHA;observer_source=$source;hashes=@{}}
+  if($env:PPVPN_QA_REUSE_CLIENT_RUN){
+    $original=Get-Content 'build/reused/client-upgrade-qa/artifact-manifest.json' -Raw|ConvertFrom-Json
+    $manifest.source=$original.source
+    $manifest.reused_from_run=$env:PPVPN_QA_REUSE_CLIENT_RUN
+    foreach($property in $original.hashes.PSObject.Properties){$manifest.hashes[$property.Name]=$property.Value}
+  }
   $files=@{observer='build/update-qa/client-upgrade-qa.exe';helper='build/update-qa/update-prompt-qa.exe';A_exe='build/update-bundles/A/ppvpn.exe';B_exe='build/update-bundles/B/ppvpn.exe';A_bridge='build/update-bundles/A/ppvpn_flutter.dll';B_bridge='build/update-bundles/B/ppvpn_flutter.dll';A_window_manager='build/update-bundles/A/window_manager_plugin.dll';B_window_manager='build/update-bundles/B/window_manager_plugin.dll'}
-  foreach($entry in $files.GetEnumerator()){$manifest.hashes[$entry.Key]=(Get-FileHash (Join-Path $repo $entry.Value) -Algorithm SHA256).Hash}
+  foreach($entry in $files.GetEnumerator()){
+    if($env:PPVPN_QA_REUSE_CLIENT_RUN -and $entry.Key -notin @('observer','helper')){continue}
+    $manifest.hashes[$entry.Key]=(Get-FileHash (Join-Path $repo $entry.Value) -Algorithm SHA256).Hash
+  }
   $manifest|ConvertTo-Json -Depth 8|Set-Content "$out/artifact-manifest.json"
   $install=Start-Process $a -ArgumentList '/S' -PassThru
   $installHandle=$install.Handle
@@ -63,8 +72,7 @@ try {
   if($manifest.installed_B['ppvpn.exe'] -ne $manifest.hashes.B_exe){throw 'Installed B executable differs from the normal B build'}
   if($manifest.installed_B['window_manager_plugin.dll'] -ne $manifest.hashes.B_window_manager){throw 'Installed B native layout plugin differs from the normal B build'}
   $installedBridge=Get-FileHash "$dir/ppvpn_flutter.dll" -Algorithm SHA256
-  $builtBridge=Get-FileHash "$repo/build/update-bundles/B/ppvpn_flutter.dll" -Algorithm SHA256
-  if($installedBridge.Hash -ne $builtBridge.Hash){throw 'Installed B bridge differs from normal B build'}
+  if($installedBridge.Hash -ne $manifest.hashes.B_bridge){throw 'Installed B bridge differs from normal B build'}
   $requests=@(Get-Content "$out/feed.jsonl" | ForEach-Object {$_|ConvertFrom-Json})
   $roles=@(Get-Content "$out/client-processes.jsonl"|ForEach-Object{$_|ConvertFrom-Json})
   foreach($stage in @('A','B','restarted-B')){
@@ -77,7 +85,7 @@ try {
   $first=[uint64]$initial[0].tick;$last=[uint64]$initial[-1].tick
   if(@($requests|Where-Object {$_.client_stage -eq 'A' -and $_.outcome -eq 'written' -and $_.path -like '*appcast*' -and [uint64]$_.finished_tick -ge $first -and [uint64]$_.finished_tick -le $last}).Count -lt 1){throw 'No actual A response completed inside the fullscreen sample interval'}
   if(@($requests|Where-Object {$_.path -like '*setup.exe'}).Count -lt 1){throw 'Real updater never downloaded B installer'}
-  @{source=$env:GITHUB_SHA;os=(Get-CimInstance Win32_OperatingSystem|Select-Object Caption,Version,BuildNumber);scope='actual client A-to-B via existing WinSparkle fallback and NSIS; not silent InstallUpdate IPC coverage';service_restarted=$true;installed_B_bridge_sha256=$installedBridge.Hash;feed_responses=$requests;second_monitor='not guaranteed';commercial_game='not exercised'}|ConvertTo-Json -Depth 8|Set-Content "$out/result.json"
+  @{source=$manifest.source;observer_source=$source;reused_from_run=$env:PPVPN_QA_REUSE_CLIENT_RUN;os=(Get-CimInstance Win32_OperatingSystem|Select-Object Caption,Version,BuildNumber);scope='actual client A-to-B via existing WinSparkle fallback and NSIS; not silent InstallUpdate IPC coverage';service_restarted=$true;installed_B_bridge_sha256=$installedBridge.Hash;feed_responses=$requests;second_monitor='not guaranteed';commercial_game='not exercised'}|ConvertTo-Json -Depth 8|Set-Content "$out/result.json"
 }finally{
   if($observer){
     $helper=Join-Path $repo 'build/update-qa/update-prompt-qa.exe'

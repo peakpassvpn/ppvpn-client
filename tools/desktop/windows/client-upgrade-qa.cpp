@@ -38,9 +38,35 @@ static BOOL CALLBACK window_callback(HWND window, LPARAM param) {
 static HWND visible(DWORD pid,bool update_only=true) {
     WindowSearch search={pid,update_only,nullptr}; EnumWindows(window_callback,reinterpret_cast<LPARAM>(&search));return search.found;
 }
+static ULONGLONG filetime_value(FILETIME value) {
+    return (static_cast<ULONGLONG>(value.dwHighDateTime)<<32)|value.dwLowDateTime;
+}
+static ULONGLONG process_creation(HANDLE process) {
+    FILETIME created={},exited={},kernel={},user={};
+    return GetProcessTimes(process,&created,&exited,&kernel,&user)?filetime_value(created):0;
+}
+static std::wstring normalized_image_path(const std::wstring& path) {
+    std::wstring native=path;
+    for(auto& character:native)if(character==L'/')character=L'\\';
+    DWORD size=GetFullPathNameW(native.c_str(),0,nullptr,nullptr);
+    if(!size || size>32768)return {};
+    std::vector<wchar_t> full(size);
+    DWORD written=GetFullPathNameW(native.c_str(),size,full.data(),nullptr);
+    if(!written || written>=size)return {};
+    return std::wstring(full.data(),written);
+}
 static void role(const char* name, DWORD pid) {
+    auto process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
+    ensure(process!=nullptr,"original client process identity handle opened");
+    auto created=process_creation(process);wchar_t image[32768]={};DWORD size=32768;
+    bool queried=QueryFullProcessImageNameW(process,0,image,&size)!=FALSE;
+    CloseHandle(process);
+    auto full=queried?normalized_image_path(image):std::wstring{};
+    ensure(created!=0 && !full.empty(),"original client start time and absolute image path captured");
+    FILE* identity=nullptr;fopen_s(&identity,"client-image-identities.txt","a");
+    if(identity){std::fwprintf(identity,L"pid=%lu start_filetime=%llu image=%ls\n",pid,created,full.c_str());fclose(identity);}
     FILE* file=nullptr;fopen_s(&file,"client-processes.jsonl","a");
-    if(file){std::fprintf(file,"{\"stage\":\"%s\",\"pid\":%lu,\"tick\":%llu}\n",name,pid,GetTickCount64());fclose(file);}
+    if(file){std::fprintf(file,"{\"stage\":\"%s\",\"pid\":%lu,\"tick\":%llu,\"start_filetime\":%llu}\n",name,pid,GetTickCount64(),created);fclose(file);}
 }
 static void sample(const char* phase,DWORD old_pid,DWORD new_pid,HWND expected_fullscreen=nullptr) {
     DWORD foreground_pid=0;auto foreground=GetForegroundWindow();GetWindowThreadProcessId(foreground,&foreground_pid);
@@ -60,13 +86,18 @@ static BOOL CALLBACK button_callback(HWND window,LPARAM) {
     if(_wcsicmp(name,L"Button")==0 && wcsstr(text,L"Install update") && IsWindowEnabled(window) && IsWindowVisible(window)) install_button=window;
     return TRUE;
 }
-static DWORD find_app(const std::wstring& path,DWORD exclude=0) {
+static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0) {
+    auto expected=normalized_image_path(path);
+    if(expected.empty())return 0;
     auto snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);PROCESSENTRY32W entry={sizeof(entry)};DWORD found=0;
     if(Process32FirstW(snapshot,&entry)) do {
         if(entry.th32ProcessID==exclude || _wcsicmp(entry.szExeFile,L"ppvpn.exe")) continue;
         auto process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,entry.th32ProcessID);
         if(process) {wchar_t name[32768];DWORD size=32768;
-            if(QueryFullProcessImageNameW(process,0,name,&size) && _wcsicmp(name,path.c_str())==0) found=entry.th32ProcessID;
+            if(QueryFullProcessImageNameW(process,0,name,&size)){
+                auto actual=normalized_image_path(name);auto created=process_creation(process);
+                if(!actual.empty() && _wcsicmp(actual.c_str(),expected.c_str())==0 && created && created>=created_after)found=entry.th32ProcessID;
+            }
             CloseHandle(process);
         }
     }while(Process32NextW(snapshot,&entry));
@@ -204,6 +235,8 @@ int wmain(int argc,wchar_t** argv) {
             Sleep(50);
         }
         ensure(ready_button!=nullptr,"original Ready-to-install button found after actual download");
+        FILETIME requested={};GetSystemTimeAsFileTime(&requested);
+        const auto install_requested=filetime_value(requested);
         PostMessageW(ready_button,BM_CLICK,0,0);
         SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
         ensure(GetForegroundWindow()==foreground,"other app foreground during real installation");
@@ -215,10 +248,13 @@ int wmain(int argc,wchar_t** argv) {
         CloseHandle(app.hProcess);app.hProcess=nullptr;
         DWORD next=0;
         for(int i=0;i<3600 && !next;++i){
-            next=find_app(argv[1],old_pid);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
+            next=find_app(argv[1],old_pid,install_requested);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
         }
         ensure(next && next!=old_pid,"installer actually reopened a distinct B client process");
         ensure(file_version(argv[1])==argv[4],"installed file actually replaced by target B build");
+        app.hProcess=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,next);
+        ensure(app.hProcess!=nullptr && process_creation(app.hProcess)>=install_requested,
+               "original B process handle and new start identity retained");
         app.dwProcessId=next;role("B",next);
         std::printf("TRANSITION old_pid=%lu new_pid=%lu\n",old_pid,next);std::fflush(stdout);
         for(int i=0;i<50;++i){sample("B-fullscreen",old_pid,next,foreground);Sleep(100);}
@@ -229,10 +265,10 @@ int wmain(int argc,wchar_t** argv) {
         const ULONGLONG started=GetTickCount64();
         for(int minute=1;minute<=15;++minute){
             auto until=started+static_cast<ULONGLONG>(minute)*60000;
-            while(GetTickCount64()<until){sample("B-15min",old_pid,next);if(visible(next))throw std::runtime_error("B repeated an update-available dialog");Sleep(100);}
+            while(GetTickCount64()<until){if(WaitForSingleObject(app.hProcess,0)!=WAIT_TIMEOUT)throw std::runtime_error("original B process exited during observation");sample("B-15min",old_pid,next);if(visible(next))throw std::runtime_error("B repeated an update-available dialog");Sleep(100);}
             std::printf("REAL_MINUTE %d B PID=%lu no update-available dialog\n",minute,next);std::fflush(stdout);
         }
-        snapshot(L"client-B-after-15min-state.txt");quit_app(next);
+        snapshot(L"client-B-after-15min-state.txt");quit_app(next);CloseHandle(app.hProcess);app.hProcess=nullptr;
         const char zero[]="0";RegSetKeyValueA(HKEY_CURRENT_USER,"Software\\PPVPN\\WinSparkle","LastCheckTime",REG_SZ,zero,sizeof(zero));
         app=launch(argv[1],L"--background");role("restarted-B",app.dwProcessId);ensure(app.dwProcessId!=next,"actual B process restarted");
         for(int i=0;i<150;++i){sample("B-restarted",0,app.dwProcessId);Sleep(100);if(visible(app.dwProcessId))throw std::runtime_error("B repeated update prompt after real process restart");}
