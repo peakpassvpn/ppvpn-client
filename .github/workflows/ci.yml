@@ -76,7 +76,7 @@ permissions:
 
 # A pull request's newer push cancels its older run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}${{ inputs.update_client_upgrade && format('-update-client-{0}', github.sha) || '' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}${{ inputs.update_client_upgrade && format('-update-client-{0}', github.sha) || '' }}${{ inputs.update_startup_run && format('-startup-{0}', github.sha) || '' }}${{ inputs.update_macos_client_qa && '-macos-client' || '' }}
   cancel-in-progress: true
 
 env:
