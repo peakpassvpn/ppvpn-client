@@ -129,9 +129,23 @@ int wmain(int argc,wchar_t** argv) {
         if(startup_only){
             std::printf("DIAGNOSTIC startup-only actual client pid=%lu launch_argument=--background tick=%llu; no appcast/install acceptance\n",old_pid,full_start);std::fflush(stdout);
             bool interrupted=false,captured=false;
+            const bool restore_once=GetEnvironmentVariableW(L"PPVPN_QA_RESTORE_GAME_ONCE",nullptr,0)>0;
             while(GetTickCount64()<full_start+12000){
                 sample("A-startup-diagnostic",old_pid,0);
-                if(GetForegroundWindow()!=foreground){interrupted=true;if(!captured){snapshot(L"startup-focus-change.txt");captured=true;}}
+                if(GetForegroundWindow()!=foreground){
+                    interrupted=true;
+                    if(!captured){
+                        captured=true;
+                        if(restore_once){
+                            // Diagnostic only: one NEW fixture user intention,
+                            // to distinguish later layout activation from the initial native focus.
+                            std::printf("DIAGNOSTIC restoring actual other-app fullscreen once tick=%llu\n",GetTickCount64());std::fflush(stdout);
+                            SendMessageW(foreground,WM_APP+1,1,0);
+                            sample("A-startup-after-one-game-restore",old_pid,0);
+                            ensure(GetForegroundWindow()==foreground,"one actual fixture game restore completed");
+                        }else snapshot(L"startup-focus-change.txt");
+                    }
+                }
                 Sleep(20);
             }
             snapshot(L"startup-final.txt");quit_app(old_pid);close_other();
