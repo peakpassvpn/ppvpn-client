@@ -253,7 +253,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
             guard error == nil, let app,app.processIdentifier==self.other?.processIdentifier else { self.finish(1,"FAIL fullscreen fixture activation did not confirm original other-app PID") }
             self.otherReentryConfirmed=true
             self.log("OTHER_REENTRY completion sameOtherPID=\(app.processIdentifier) foreground=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)")
-            if ProcessInfo.processInfo.environment["PPVPN_QA_TRACE_ACTIVATION"] == "1" {
+            if ProcessInfo.processInfo.environment["PPVPN_QA_TRACE_ACTIVATION"] == "1" || ProcessInfo.processInfo.environment["PPVPN_QA_CAPTURE_CALLBACK_GEOMETRY"] == "1" {
               let before=NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
               let snapshot=self.fixtureWindowSnapshot(app.processIdentifier)
               let after=NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1

@@ -137,6 +137,7 @@ jobs:
         env:
           REUSED_CLIENT_BUNDLE: ${{ steps.reused.outputs.bundle }}
           PPVPN_QA_TRACE_ACTIVATION: ${{ inputs.macos_activation_trace && '1' || '' }}
+          PPVPN_QA_CAPTURE_CALLBACK_GEOMETRY: '1'
         run: |
           if [ -n "$REUSED_CLIENT_BUNDLE" ]; then
             tools/desktop/macos/run-update-prompt-qa.sh "$REUSED_CLIENT_BUNDLE"
