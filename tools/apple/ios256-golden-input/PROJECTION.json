@@ -1,0 +1,29 @@
+{
+  "kind": "fixture host projection",
+  "producer_sha256": "4cf3520b6c822bf39d8da15b579ca91ef7f56f619b9de36d7a2521d1b6369daa",
+  "private_original_archive_sha256": "202761769d0a81bb376847d07158bf36e844771d3e467119872dad2f4effcb25",
+  "private_original_files_sha256": {
+    "approved-targets.json": "316660c5f824da7fe14bb3993f470bec12f41a8d80f2aefb088b05e7ba586c29",
+    "contract.json": "e75588f38ed33659879f91ecb5de43032d592aa2986da8ee1753ad0dc72bac01",
+    "request.json": "0402f0c5f852095cc8b911e224dc4ee9580ee390ced393d35f72b7c5784fe3d8"
+  },
+  "projection_files_sha256": {
+    "request.json": "ea64db28e7ed302108998077b8e6a96e30e70273d3a8961d594bb20ae830444c",
+    "approved-targets.json": "f7e102ae8265d76e8af6cc8c1eb19257f0ad990fa28da46d65533054200e88ad",
+    "contract.json": "e75588f38ed33659879f91ecb5de43032d592aa2986da8ee1753ad0dc72bac01"
+  },
+  "allowed_diff": {
+    "request.json": [
+      "/host",
+      "/target_manifest_sha256"
+    ],
+    "approved-targets.json": [
+      "/endpoints/0/host"
+    ],
+    "contract.json": []
+  },
+  "replacement_host": "fixture.example.invalid",
+  "all_other_JSON_fields_identical": true,
+  "contract_bytes_identical": true,
+  "native_conclusion_scope": "Projection Swift compatibility plus independent structural-equivalence review; not actual private bytes executed on Apple."
+}
