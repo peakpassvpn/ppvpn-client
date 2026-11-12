@@ -267,12 +267,29 @@ int wmain(int argc,wchar_t** argv) {
             sample("A-installing",old_pid,0,foreground);Sleep(50);
         }
         ensure(WaitForSingleObject(app.hProcess,0)==WAIT_OBJECT_0,"A exited for the real installer");
+        // Exercise B's existing automatic checker as actually due. A just
+        // wrote the shared LastCheckTime; keep the required B feed assertion.
+        const char* check_key="Software\\PPVPN\\WinSparkle";
+        char previous_check[64]={},configured_interval[64]={},after_check[64]={};
+        DWORD previous_size=sizeof(previous_check),interval_size=sizeof(configured_interval),after_size=sizeof(after_check);
+        const auto previous_status=RegGetValueA(HKEY_CURRENT_USER,check_key,"LastCheckTime",RRF_RT_REG_SZ,nullptr,previous_check,&previous_size);
+        const auto interval_status=RegGetValueA(HKEY_CURRENT_USER,check_key,"UpdateInterval",RRF_RT_REG_SZ,nullptr,configured_interval,&interval_size);
+        const char due_check[]="0";
+        ensure(RegSetKeyValueA(HKEY_CURRENT_USER,check_key,"LastCheckTime",REG_SZ,due_check,sizeof(due_check))==ERROR_SUCCESS,
+               "original B automatic check scheduled due before normal installer relaunch");
+        FILETIME reset_at={};GetSystemTimeAsFileTime(&reset_at);
+        const auto b_check_reset=filetime_value(reset_at);
+        const auto after_status=RegGetValueA(HKEY_CURRENT_USER,check_key,"LastCheckTime",RRF_RT_REG_SZ,nullptr,after_check,&after_size);
+        ensure(after_status==ERROR_SUCCESS && after_check[0]=='0' && after_check[1]==0,"B scheduled-check reset read back as zero");
+        FILE* schedule=nullptr;fopen_s(&schedule,"B-check-schedule.txt","w");
+        if(schedule){std::fprintf(schedule,"previous_status=%ld\nprevious_LastCheckTime=%s\ninterval_status=%ld\nconfigured_UpdateInterval=%s\nafter_status=%ld\nafter_LastCheckTime=%s\nreset_filetime=%llu\nreset_tick=%llu\n",previous_status,previous_check,interval_status,configured_interval,after_status,after_check,b_check_reset,GetTickCount64());fclose(schedule);}
         CloseHandle(app.hProcess);app.hProcess=nullptr;
         DWORD next=0;ULONGLONG next_created=0;
         for(int i=0;i<3600 && !next;++i){
             next=find_app(argv[1],old_pid,install_requested,&next_created);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
         }
         ensure(next && next!=old_pid,"installer actually reopened a distinct B client process");
+        ensure(next_created>=b_check_reset,"actual B process created after its scheduled-check reset");
         ensure(file_version(argv[1])==argv[4],"installed file actually replaced by target B build");
         app.hProcess=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,next);
         ensure(app.hProcess!=nullptr && next_created!=0 && process_creation(app.hProcess)==next_created,
