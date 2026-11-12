@@ -17,9 +17,11 @@ def execute(root,out,env):
     env=dict(env,PPVPN_BROKER_SOURCE_HEAD=head);results=[]
     def run(name,args):
         start=time.monotonic()
+        print(json.dumps(dict(stage=name,event="begin")),flush=True)
         with (out/(name+'.stdout.raw')).open('wb') as stdout,(out/(name+'.stderr.raw')).open('wb') as stderr:
             code=subprocess.run(args,cwd=root,env=env,stdout=stdout,stderr=stderr).returncode
         item=dict(name=name,command=args,exit=code,seconds=time.monotonic()-start)
+        print(json.dumps(dict(stage=name,event='end',exit=code,seconds=item['seconds'])),flush=True)
         results.append(item);(out/'results.json').write_text(json.dumps(results,indent=2)+'\n')
         if code:raise RuntimeError('Mac check failed: '+name)
         return (out/(name+'.stdout.raw')).read_text(errors='replace')
@@ -64,3 +66,11 @@ def execute(root,out,env):
         (out/'worker3-receipt.json').write_text(json.dumps(dict(head=head,tree=tree,binary=str(binary),binary_sha256=binary_sha,selectors=records,passed=3,failed=0,ignored=0,source_association='Controlled test CID/one fixture monotonic origin; not production PID inference',scope='Actual BrokerWorker/host/protocol/HMAC/audit-token/ledger; OS signing/path controlled. Portable model, historical75f and production root-cause closure are not substituted.',coverage_boundaries=['Maintenance entry barrier does not cover every internal maintenance substep','cfg(test) CID is not production observability','No historical75f root-cause closure or new intermittent-failure claim']),indent=2)+'\n')
     finally:
         after=manifest();(out/'source-post.json').write_text(json.dumps(after,indent=2)+'\n');assert before==after,'Source drift during Mac checks'
+
+if __name__ == '__main__':
+    import sys
+    assert sys.platform == 'darwin' and os.environ['SDK2A9_PLATFORM'] == 'macos'
+    assert os.environ['PPVPN_INTERNAL_DIAGNOSTICS'] == os.environ['PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS'] == '0'
+    assert os.environ.get('PPVPN_INTERNAL_IOS_CAP256_CANDIDATE', '0') == '0'
+    assert not os.environ.get('PPVPN_PRIVATE_UDP_POLICY_FILE') and not os.environ.get('PPVPN_PRIVATE_UDP_POLICY_SHA256')
+    execute(pathlib.Path(os.environ['SDK2A9_CLIENT']),pathlib.Path(os.environ['RUNNER_TEMP'])/'sdk2a9-output',dict(os.environ))
