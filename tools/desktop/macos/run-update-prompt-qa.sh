@@ -52,7 +52,10 @@ cleanup() {
   fi
   if [ -n "$activation_watcher" ]; then
     command=$(ps -p "$activation_watcher" -o command= || true)
-    case "$command" in *lldb*|*sudo*) sudo -n kill "$activation_watcher" 2>/dev/null || true;; *) kill "$activation_watcher" 2>/dev/null || true;; esac
+    case "$command" in
+      *lldb*"$work/activation-trace.lldb"*|*sudo*"$work/activation-trace.lldb"*) sudo -n kill "$activation_watcher" 2>/dev/null || true;;
+      *run-update-prompt-qa.sh*) kill "$activation_watcher" 2>/dev/null || true;;
+    esac
   fi
   if [ -n "$native_stream" ]; then kill "$native_stream" 2>/dev/null || true; fi
   kill "$server" 2>/dev/null || true
@@ -70,6 +73,7 @@ fi
 native_stream=$!
 if [ "${PPVPN_QA_TRACE_ACTIVATION:-}" = 1 ]; then
   [ "${#extra[@]}" -gt 0 ] || { echo 'Native activation trace requires the verified normal client' >&2; exit 1; }
+  printf '%s\n' 'Diagnostic debugger trace only; timing can change under LLDB, not final product acceptance' > "$work/native-activation-trace-mode.txt"
   cat > "$work/ppvpn_activation_trace.py" <<'PYTRACE'
 import time
 
