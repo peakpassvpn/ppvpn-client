@@ -5,12 +5,12 @@ temp=pathlib.Path(os.environ['RUNNER_TEMP']);out=temp/'sdk2a9-output';out.mkdir(
 slug=os.environ['GITHUB_REPOSITORY'];release=json.loads(subprocess.check_output(['gh','api',f'repos/{slug}/releases/442941010']))
 assert release['draft'] is True
 assets={a['name']:a for a in release['assets']}
-expected={'transport-89fe2df8.json':'c57936136e14456cfb6991f083747dc698f74f4412d0380de0d473d79d2fcc77','client-89fe2df8.pack':'f1745b2b98cad9515e7368b1c9793f763aef8d6420fdb766e0deb488a6fcd200'}
+expected={'transport-ddaef5de.json':'575707d285180b260a263d38687efa374280bdfc5aa8ef09d359419f2f994070','client-ddaef5de.pack':'6882fbdd85a765969008d8441743d58cbb00968e45540a2ff82d81c043b8f924'}
 def download(name):
  a=assets[name];assert a['digest']=='sha256:'+expected[name]
  raw=subprocess.check_output(['gh','api','-H','Accept: application/octet-stream',f"repos/{slug}/releases/assets/{a['id']}"])
  assert len(raw)==a['size'] and hashlib.sha256(raw).hexdigest()==expected[name];return raw
-manifest=json.loads(download('transport-89fe2df8.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
+manifest=json.loads(download('transport-ddaef5de.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
 # This controller must never dispatch a superseded SDK/Client lock by accident.
 assert manifest['sail']=='f99761138b23f267ebc7621057afe02018ab7c18'
 assert manifest['cargo_lock_sha256']=='a74cb9ffccd98f7365cc8531da73d627e4a57af28c3a8d957bec29a404863cc9'
@@ -18,7 +18,7 @@ assert os.environ['SDK2A9_PLATFORM'] in manifest['allowed_platforms']
 assert manifest['internal_diagnostics'] is False and manifest['private_policy_present'] is False
 assert manifest['ios_default_cap']==128 and manifest['mobile_local_proxy'] is False
 bare=temp/'sdk2a9-source.git';subprocess.run(['git','init','--bare',str(bare)],check=True)
-subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-89fe2df8.pack'),check=True)
+subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-ddaef5de.pack'),check=True)
 (bare/'shallow').write_text(manifest['source']+'\n')
 subprocess.run(['git','-C',str(bare),'update-ref','refs/heads/frozen',manifest['source']],check=True)
 subprocess.run(['git','-C',str(bare),'symbolic-ref','HEAD','refs/heads/frozen'],check=True)

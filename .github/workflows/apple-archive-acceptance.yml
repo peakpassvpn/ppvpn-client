@@ -4,6 +4,10 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      memory357_sdk_settings_only:
+        description: Only revalidate unchanged production settings after test Duration qualification
+        type: boolean
+        default: false
       private_build_number:
         description: Explicit new private diagnostic build counter, separate from verified ordinary control
         required: false
@@ -458,7 +462,7 @@ jobs:
           retention-days: 7
 
   sdk2a9_platforms:
-    if: inputs.sdk2a9_build && !inputs.sdk2a9_runtime
+    if: inputs.sdk2a9_build && !inputs.sdk2a9_runtime && !inputs.memory357_sdk_settings_only
     permissions:
       contents: write
       actions: read
@@ -696,4 +700,47 @@ jobs:
             ${{ env.SDK2A9_CLIENT }}/apps/flutter/build/smoke-*
             ${{ env.SDK2A9_CLIENT }}/apps/flutter/build/android-tunnel-tests/app/build/test-results/testDebugUnitTest
           if-no-files-found: warn
+          retention-days: 7
+
+  memory357_sdk_settings:
+    if: inputs.memory357_sdk_settings_only
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+      PPVPN_BUILD_NUMBER: '355'
+      SDK2A9_PLATFORM: ios
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Preload exact test-only settings successor
+        run: python3 tools/apple/preload_sdk2a9_source.py
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          prefix-key: v1-rust
+          shared-key: macos
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          lockfile: ${{ env.SDK2A9_CLIENT }}/Cargo.lock
+          targets: ${{ runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
+      - name: Actual SDK105settings and running256snapshot
+        run: python3 tools/apple/validate_memory357_core_only.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: memory357-sdk-settings-validation
+          path: ${{ runner.temp }}/sdk2a9-output
           retention-days: 7
