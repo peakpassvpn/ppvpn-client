@@ -15,12 +15,24 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
   private var phase = "starting"
   private var phaseAt = Date()
   private var originalClientWindows = Set<UInt32>()
+  private var preRecoveryClientWindows = Set<UInt32>()
   private var finalStableAt: Date?
   private var clientScenario = "transition"
   private var transitionClientWasActive = false
   private var otherReentryConfirmed = false
   private var userRestoreRequested = false
   private var userRestoreConfirmed = false
+  private var observationActivity: NSObjectProtocol?
+  private var previousObservation: Date?
+  private let nativeTimestampFormatter: DateFormatter = {
+    let formatter=DateFormatter()
+    formatter.locale=Locale(identifier:"en_US_POSIX")
+    formatter.timeZone=TimeZone.current
+    formatter.dateFormat="yyyy-MM-dd HH:mm:ss.SSS"
+    // Prepare ICU parsing before the measured native request arrives.
+    _ = formatter.date(from:"2000-01-01 00:00:00.000")
+    return formatter
+  }()
   private let dir = URL(fileURLWithPath: CommandLine.arguments[2])
   private var modeURL: URL { dir.appendingPathComponent("mode") }
   private func log(_ value: String) { print("\(Date().timeIntervalSince1970) \(value)"); fflush(stdout) }
@@ -35,6 +47,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     log(value)
     if code != 0 { capture("failure") }
     if CommandLine.arguments[1] != "other" { firstApp?.terminate(); other?.terminate() }
+    if let observationActivity { ProcessInfo.processInfo.endActivity(observationActivity) }
     exit(code)
   }
   @objc var supportsGentleScheduledUpdateReminders: Bool { true }
@@ -81,6 +94,10 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       }
       return
     }
+    // This background observer must meet a 250ms deadline while another app
+    // is frontmost. Keep only the observer out of App Nap; never activate it
+    // or alter the product's scheduling or lifecycle policy.
+    observationActivity=ProcessInfo.processInfo.beginActivity(options:.userInitiatedAllowingIdleSystemSleep,reason:"Observe the native update transition within its existing deadline")
     guard let driver = NSClassFromString("SPUStandardUserDriver"), class_getClassMethod(driver, NSSelectorFromString("ppvpnHasPreShowGate")) != nil else { finish(1,"FAIL unpatched Sparkle") }
     controller = SPUStandardUpdaterController(startingUpdater:true,updaterDelegate:nil,userDriverDelegate:self)
     controller?.updater.automaticallyChecksForUpdates = false
@@ -151,6 +168,11 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     }
   }
   private func observe() {
+    let observationAt=Date()
+    if phase == "first-windowed", let previousObservation {
+      log("DIAGNOSTIC observer poll gap=\(observationAt.timeIntervalSince(previousObservation)) seconds")
+    }
+    previousObservation=observationAt
     let elapsed = Date().timeIntervalSince(phaseAt)
     switch phase {
     case "starting":
@@ -214,6 +236,13 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       if elapsed >= 7 {
         capture("actual-client-\(clientScenario)-first-show-deferred")
         log("PASS actual client remains running without first-show/fullscreen interruption")
+        if clientScenario == "transition" {
+          // Snapshot before releasing fullscreen. A CG enumeration can take
+          // most of the 250ms request budget on a loaded runner.
+          preRecoveryClientWindows=clientWindowIDs(firstApp.processIdentifier)
+          guard !preRecoveryClientWindows.isEmpty else { finish(1,"FAIL no original native window identity before workspace request") }
+          log("TRANSITION original windows before fullscreen release=\(preRecoveryClientWindows.sorted())")
+        }
         try! Data("windowed".utf8).write(to:modeURL)
         phase=clientScenario == "transition" ? "first-windowed" : "baseline-windowed";phaseAt=Date()
         finalStableAt=nil
@@ -223,19 +252,12 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       let events = (try? String(contentsOf:dir.appendingPathComponent("native-live.txt"),encoding:.utf8)) ?? ""
       let request = events.components(separatedBy:.newlines).first { $0.contains("PPVPN[\(firstApp.processIdentifier):") && $0.contains("update launch: workspace activation requested") }
       if let request {
-        let formatter=DateFormatter()
-        formatter.locale=Locale(identifier:"en_US_POSIX")
-        formatter.timeZone=TimeZone.current
-        formatter.dateFormat="yyyy-MM-dd HH:mm:ss.SSS"
-        guard let emitted=formatter.date(from:String(request.prefix(23))) else { finish(1,"FAIL live request timestamp unparseable; transition not exercised") }
+        let readAt=Date()
+        guard let emitted=nativeTimestampFormatter.date(from:String(request.prefix(23))) else { finish(1,"FAIL live request timestamp unparseable; transition not exercised") }
         let lag=Date().timeIntervalSince(emitted)
-        log("TRANSITION live request observation lag=\(lag) seconds")
         guard lag >= 0 && lag <= 0.25 else { finish(1,"FAIL request observation too late; immediate transition not exercised") }
-        originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
-        guard !originalClientWindows.isEmpty else { finish(1,"FAIL no original native window identity at workspace request") }
-        log("TRANSITION observed actual request: \(request)")
+        guard !preRecoveryClientWindows.isEmpty else { finish(1,"FAIL no original native window identity before workspace request") }
         transitionClientWasActive = NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp.processIdentifier
-        log("TRANSITION immediately reenter fullscreen pid=\(firstApp.processIdentifier) originalWindows=\(originalClientWindows.sorted()) activeAlready=\(transitionClientWasActive); log timing is not proof of pending intent")
         try! Data("full".utf8).write(to:modeURL)
         // This is the fixture user's new fullscreen intention. Its deprecated
         // ignoringOtherApps call alone may not activate an already-running app.
@@ -247,7 +269,6 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         configuration.promptsUserIfNeeded=false
         let activationLag=Date().timeIntervalSince(emitted)
         guard activationLag >= 0 && activationLag <= 0.25 else { finish(1,"FAIL fixture activation request outside immediate transition bound") }
-        log("OTHER_REENTRY requesting explicit fixture activation originalOtherPID=\(other?.processIdentifier ?? -1) requestLag=\(activationLag)")
         NSWorkspace.shared.openApplication(at:URL(fileURLWithPath:CommandLine.arguments[3]),configuration:configuration) { app,error in
           Task { @MainActor in
             guard error == nil, let app,app.processIdentifier==self.other?.processIdentifier else { self.finish(1,"FAIL fullscreen fixture activation did not confirm original other-app PID") }
@@ -261,6 +282,17 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
             }
           }
         }
+        // The deferred main window can receive its server ID only when its
+        // original order resumes. Read it after issuing the bounded request,
+        // then retain that exact set throughout the strict interval.
+        originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
+        guard !originalClientWindows.isEmpty, preRecoveryClientWindows.isSubset(of:originalClientWindows) else { finish(1,"FAIL original native window identity lost during workspace request") }
+        // Keep CG enumeration and stdout I/O outside the measured request path.
+        log("DIAGNOSTIC request read lag=\(readAt.timeIntervalSince(emitted)) parse-and-request=\(activationLag-readAt.timeIntervalSince(emitted)) seconds")
+        log("TRANSITION live request observation lag=\(lag) seconds")
+        log("TRANSITION observed actual request: \(request)")
+        log("TRANSITION immediately reenter fullscreen pid=\(firstApp.processIdentifier) originalWindows=\(originalClientWindows.sorted()) activeAlready=\(transitionClientWasActive); log timing is not proof of pending intent")
+        log("OTHER_REENTRY requesting explicit fixture activation originalOtherPID=\(other?.processIdentifier ?? -1) requestLag=\(activationLag)")
         phase="reentering-fullscreen";phaseAt=Date()
       } else if elapsed > 20 { finish(1,"FAIL actual workspace activation request not observed; transition not exercised") }
     case "reentering-fullscreen":

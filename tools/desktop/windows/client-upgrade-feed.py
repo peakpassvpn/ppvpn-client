@@ -59,6 +59,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             temporary.replace(marker)
 server=http.server.ThreadingHTTPServer(('127.0.0.1',18764),Handler)
 context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.minimum_version=ssl.TLSVersion.TLSv1_2
 context.load_cert_chain(str(pathlib.Path(a.private_dir)/'tls.crt'),str(pathlib.Path(a.private_dir)/'tls.key'))
 server.socket=context.wrap_socket(server.socket,server_side=True)
 server.serve_forever()
