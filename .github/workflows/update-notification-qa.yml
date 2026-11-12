@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      layout_trace:
+        type: boolean
+        default: false
       layout_probe:
         type: boolean
         default: false
@@ -274,6 +277,50 @@ jobs:
           p.write_text(s.replace('\ndependencies:\n','\ndependencies:\n  window_manager: 0.5.2\n',1))
           PYCODE
           cp tools/desktop/windows/window-manager-hidden-layout.cmake "$compile_dir/windows/ppvpn-hidden-layout.cmake"
+          if [ '${{ inputs.layout_trace }}' = true ]; then
+            cat > "$compile_dir/windows/ppvpn-layout-trace.h" <<'CPPTRACE'
+          #include <Windows.h>
+          #include <cstdio>
+          static void PpvpnLayoutLog(const char* site,int line,const char* operation,HWND target,UINT flags) {
+            wchar_t path[1024]={};
+            if(!GetEnvironmentVariableW(L"PPVPN_QA_LAYOUT_TRACE",path,1024))return;
+            auto foreground=GetForegroundWindow();DWORD pid=0;GetWindowThreadProcessId(foreground,&pid);
+            char name[256]={};GetClassNameA(target,name,256);RECT frame={};GetWindowRect(target,&frame);
+            FILE* file=nullptr;if(_wfopen_s(&file,path,L"a") || !file)return;
+            std::fprintf(file,"tick=%llu site=%s:%d operation=%s target=%p class=%s visible=%d root=%p flags=%u foreground=%p foreground_pid=%lu frame=%ld,%ld,%ld,%ld\n",GetTickCount64(),site,line,operation,target,name,IsWindowVisible(target),GetAncestor(target,GA_ROOT),flags,foreground,pid,frame.left,frame.top,frame.right,frame.bottom);
+            fclose(file);
+          }
+          static BOOL PpvpnSetPos(const char* site,int line,HWND h,HWND after,int x,int y,int w,int height,UINT flags) {
+            PpvpnLayoutLog(site,line,"SetWindowPos-before",h,flags);auto result=::SetWindowPos(h,after,x,y,w,height,flags);PpvpnLayoutLog(site,line,"SetWindowPos-after",h,flags);return result;
+          }
+          static HWND PpvpnSetFocus(const char* site,int line,HWND h) {
+            PpvpnLayoutLog(site,line,"SetFocus-before",h,0);auto result=::SetFocus(h);PpvpnLayoutLog(site,line,"SetFocus-after",h,0);return result;
+          }
+          static BOOL PpvpnSetForeground(const char* site,int line,HWND h) {
+            PpvpnLayoutLog(site,line,"SetForegroundWindow-before",h,0);auto result=::SetForegroundWindow(h);PpvpnLayoutLog(site,line,"SetForegroundWindow-after",h,0);return result;
+          }
+          static BOOL PpvpnShow(const char* site,int line,HWND h,int command) {
+            PpvpnLayoutLog(site,line,"ShowWindow-before",h,command);auto result=::ShowWindow(h,command);PpvpnLayoutLog(site,line,"ShowWindow-after",h,command);return result;
+          }
+          static BOOL PpvpnShowAsync(const char* site,int line,HWND h,int command) {
+            PpvpnLayoutLog(site,line,"ShowWindowAsync-before",h,command);auto result=::ShowWindowAsync(h,command);PpvpnLayoutLog(site,line,"ShowWindowAsync-after",h,command);return result;
+          }
+          #define SetWindowPos(...) PpvpnSetPos(__func__,__LINE__,__VA_ARGS__)
+          #define SetFocus(...) PpvpnSetFocus(__func__,__LINE__,__VA_ARGS__)
+          #define SetForegroundWindow(...) PpvpnSetForeground(__func__,__LINE__,__VA_ARGS__)
+          #define ShowWindow(...) PpvpnShow(__func__,__LINE__,__VA_ARGS__)
+          #define ShowWindowAsync(...) PpvpnShowAsync(__func__,__LINE__,__VA_ARGS__)
+          CPPTRACE
+            python3 - "$compile_dir/windows/ppvpn-hidden-layout.cmake" <<'PYTRACE'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]);s=p.read_text()
+          needle='  file(WRITE "${output_dir}/window_manager.cpp" "${code}")'
+          if needle not in s:raise SystemExit('Diagnostic materializer insertion mismatch')
+          prefix='  file(READ "${CMAKE_CURRENT_LIST_DIR}/ppvpn-layout-trace.h" trace)\n  string(PREPEND code "${trace}\n")\n'
+          p.write_text(s.replace(needle,prefix+needle,1))
+          PYTRACE
+          fi
           printf '\n%s\n' 'include("${CMAKE_CURRENT_LIST_DIR}/ppvpn-hidden-layout.cmake")' >> "$compile_dir/windows/CMakeLists.txt"
           (cd "$compile_dir" && "$flutter_cli" pub get && "$flutter_cli" build windows --release)
           out="$GITHUB_WORKSPACE/build/startup-focus-qa/candidate-plugin"
@@ -290,6 +337,7 @@ jobs:
           PPVPN_QA_RESTORE_GAME_ONCE: '1'
         run: |
           if('${{ inputs.layout_probe }}' -eq 'true'){$env:PPVPN_QA_LAYOUT_PLUGIN=Join-Path $env:GITHUB_WORKSPACE 'build/startup-focus-qa/candidate-plugin/window_manager_plugin.dll'}
+          if('${{ inputs.layout_trace }}' -eq 'true'){$env:PPVPN_QA_LAYOUT_TRACE=Join-Path $env:GITHUB_WORKSPACE 'build/startup-focus-qa/native-layout-trace.txt'}
           tools/desktop/windows/run-startup-focus-qa.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()

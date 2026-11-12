@@ -61,6 +61,10 @@ on:
         description: "Run the normal macOS client build and fullscreen QA only"
         type: boolean
         default: false
+      update_layout_trace:
+        description: "Record fixed native window calls in the diagnostic plugin only"
+        type: boolean
+        default: false
       update_layout_probe:
         description: "Compile the pinned native layout fix and diagnose it with an existing A installer"
         type: boolean
@@ -107,6 +111,7 @@ jobs:
       startup_run: ${{ inputs.update_startup_run || '' }}
       macos_client_run: ${{ inputs.update_macos_reuse_run || '' }}
       layout_probe: ${{ inputs.update_layout_probe || false }}
+      layout_trace: ${{ inputs.update_layout_trace || false }}
 
   lint:
     if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
