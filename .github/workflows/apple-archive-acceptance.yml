@@ -4,6 +4,13 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      sdk2a9_runtime:
+        description: Reuse authenticated ordinary Android JNI for isolated runtime acceptance
+        type: boolean
+        default: false
+      sdk2a9_runtime_pin:
+        description: Exact completed Android build job and artifact digest
+        required: false
       sdk2a9_build:
         description: Exact reviewed SDK2a9 ordinary builds on all three platforms
         type: boolean
@@ -81,7 +88,7 @@ jobs:
     permissions:
       contents: write
       actions: read
-    if: ${{ !inputs.sdk2a9_build && inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only }}
+    if: ${{ !inputs.sdk2a9_runtime && (!inputs.sdk2a9_build && inputs.platform != 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only) }}
     runs-on: macos-15
     timeout-minutes: 240
     defaults:
@@ -196,7 +203,7 @@ jobs:
           retention-days: 3
 
   macos:
-    if: ${{ !inputs.sdk2a9_build && inputs.platform == 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only }}
+    if: ${{ !inputs.sdk2a9_runtime && (!inputs.sdk2a9_build && inputs.platform == 'macos' && inputs.macos_apns_probe_json == '' && !inputs.native256_checks && !inputs.preload_only) }}
     runs-on: macos-15
     timeout-minutes: 240
     defaults:
@@ -308,7 +315,7 @@ jobs:
           retention-days: 3
 
   macos_apns_os_probe:
-    if: inputs.macos_apns_probe_json != '' && !inputs.native256_checks && !inputs.preload_only
+    if: ${{ !inputs.sdk2a9_runtime && (inputs.macos_apns_probe_json != '' && !inputs.native256_checks && !inputs.preload_only) }}
     runs-on: macos-15
     timeout-minutes: 10
     # Draft asset retrieval needs this scope (same as native acceptance).
@@ -377,7 +384,7 @@ jobs:
           retention-days: 3
 
   internal256_native_checks:
-    if: inputs.native256_checks && !inputs.native256_golden
+    if: ${{ !inputs.sdk2a9_runtime && (inputs.native256_checks && !inputs.native256_golden) }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -392,7 +399,7 @@ jobs:
           retention-days: 7
 
   ios256_preload_protocol_only:
-    if: inputs.preload_only
+    if: ${{ !inputs.sdk2a9_runtime && (inputs.preload_only) }}
     runs-on: macos-15
     timeout-minutes: 10
     permissions:
@@ -421,7 +428,7 @@ jobs:
           retention-days: 7
 
   internal256_golden_contract:
-    if: inputs.native256_golden
+    if: ${{ !inputs.sdk2a9_runtime && (inputs.native256_golden) }}
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -436,7 +443,7 @@ jobs:
           retention-days: 7
 
   sdk2a9_platforms:
-    if: inputs.sdk2a9_build
+    if: inputs.sdk2a9_build && !inputs.sdk2a9_runtime
     permissions:
       contents: write
       actions: read
@@ -514,5 +521,133 @@ jobs:
         with:
           name: sdk2a9-${{ matrix.platform }}-ordinary
           path: ${{ runner.temp }}/sdk2a9-output
+          if-no-files-found: warn
+          retention-days: 7
+
+  sdk2a9_android_runtime:
+    if: inputs.sdk2a9_runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+      PPVPN_BUILD_NUMBER: ${{ inputs.build_number }}
+      PPVPN_API_BASE_DEFAULT: ${{ inputs.api_origin || vars.PPVPN_API_BASE }}
+      SDK2A9_RUNTIME_PIN: ${{ inputs.sdk2a9_runtime_pin }}
+      SDK2A9_RUNTIME_APK_VERIFIER: ${{ github.workspace }}/tools/apple/check_sdk2a9_runtime_apk.py
+      SDK2A9_BUILD_MODE: ${{ inputs.sdk2a9_build }}
+      PPVPN_INTERNAL_DIAGNOSTICS: '0'
+      PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS: '0'
+      PPVPN_APPLE_PUSH_ENABLED: '0'
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Preload exact ordinary runtime source
+        run: |
+          test "$SDK2A9_BUILD_MODE" = true
+          python3 tools/apple/preload_sdk2a9_source.py
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          df -h /
+      - name: Room for isolated emulator
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: flutter
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          lockfile: ${{ env.SDK2A9_CLIENT }}/Cargo.lock
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/flutter-toolchain
+      - name: Prepare frozen runner and authenticate shipping JNI
+        env:
+          FLUTTER_TARGET: android
+          PPVPN_SKIP_ANALYZE: '1'
+          PPVPN_ANDROID_RUNNER_PREPARE_ONLY: '1'
+        run: |
+          unset PPVPN_API_BASE PPVPN_FLUTTER_HOME PPVPN_FLUTTER_SAMPLE PPVPN_FLUTTER_SYNTHETIC_TRAFFIC
+          bash "$SDK2A9_CLIENT/apps/flutter/scripts/ci-build.sh" > "$RUNNER_TEMP/sdk2a9-output/android-runner-prepare.log" 2>&1
+          python3 tools/apple/reuse_sdk2a9_android.py
+          python3 - <<'PY_GO'
+          import os,pathlib,hashlib,json,difflib
+          root=pathlib.Path(os.environ['SDK2A9_CLIENT'])
+          for name in ['test/go.mod','test/go.sum']:
+              assert pathlib.Path(name).read_bytes()==(root/name).read_bytes(),name
+          script=root/'apps/flutter/e2e/android_smoke.sh';before=script.read_text();after=before
+          for phase in ['tablet','phone']:
+              needle='\nleg '+phase+'\n';assert after.count(needle)==1
+              after=after.replace(needle,needle+'python3 "$SDK2A9_RUNTIME_APK_VERIFIER" smoke-'+phase+'\n')
+          script.write_text(after)
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'sdk2a9-output'
+          (out/'runtime-test-observer-overlay.json').write_text(json.dumps(dict(file='apps/flutter/e2e/android_smoke.sh',before_sha256=hashlib.sha256(before.encode()).hexdigest(),after_sha256=hashlib.sha256(after.encode()).hexdigest(),scope='Adds packaged JNI readback after each unchanged smoke leg; test observer only, no product Dart/Rust/JNI changes'),indent=2)+'\n')
+          (out/'runtime-test-observer-overlay.patch').write_text(''.join(difflib.unified_diff(before.splitlines(True),after.splitlines(True),fromfile='original',tofile='observed')))
+          PY_GO
+      - name: Production service lifecycle with non-native host
+        run: |
+          bash "$SDK2A9_CLIENT/apps/flutter/scripts/test-android-tunnel.sh" > "$RUNNER_TEMP/sdk2a9-output/android-lifecycle.log" 2>&1
+          python3 - <<'PY_XML'
+          import os,pathlib,json,xml.etree.ElementTree as ET
+          root=pathlib.Path(os.environ['SDK2A9_CLIENT'])/'apps/flutter/build/android-tunnel-tests/app/build/test-results/testDebugUnitTest'
+          files=list(root.glob('*.xml'));assert files
+          rows=[dict(name=f.name,**ET.parse(f).getroot().attrib) for f in files]
+          total=sum(int(r['tests']) for r in rows);assert total>0
+          assert all(int(r.get(k,0))==0 for r in rows for k in ['failures','errors','skipped'])
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'sdk2a9-output'
+          (out/'android-lifecycle-receipt.json').write_text(json.dumps(dict(tests=total,failures=0,errors=0,skipped=0,suites=rows,scope='Robolectric production TunnelService with non-native TunnelHost; not JNI or phone evidence'),indent=2)+'\n')
+          PY_XML
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: test/go.mod
+          cache: false
+      - uses: ./.github/actions/go-modules
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: ./.github/actions/android-sdk
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+      - name: Three-cycle forwarding and revoke plus phone/tablet smoke
+        timeout-minutes: 45
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: |
+            ANDROID_SERIAL=emulator-5554 $SDK2A9_CLIENT/apps/flutter/e2e/android_forwarding.sh
+            python3 "$SDK2A9_RUNTIME_APK_VERIFIER" forwarding
+            $SDK2A9_CLIENT/apps/flutter/e2e/android_smoke.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: sdk2a9-android-runtime
+          path: |
+            ${{ runner.temp }}/sdk2a9-output
+            ${{ env.SDK2A9_CLIENT }}/apps/flutter/build/android-forwarding
+            ${{ env.SDK2A9_CLIENT }}/apps/flutter/build/smoke-*
+            ${{ env.SDK2A9_CLIENT }}/apps/flutter/build/android-tunnel-tests/app/build/test-results/testDebugUnitTest
           if-no-files-found: warn
           retention-days: 7
