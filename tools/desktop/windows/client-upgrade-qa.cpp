@@ -2,6 +2,9 @@
 #include "update_fullscreen.h"
 #include <tlhelp32.h>
 #include <cstdio>
+#include <cstdlib>
+#include <cerrno>
+#include <ctime>
 #include <cwchar>
 #include <string>
 #include <vector>
@@ -86,17 +89,65 @@ static BOOL CALLBACK button_callback(HWND window,LPARAM) {
     if(_wcsicmp(name,L"Button")==0 && wcsstr(text,L"Install update") && IsWindowEnabled(window) && IsWindowVisible(window)) install_button=window;
     return TRUE;
 }
-static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0) {
+// Query the EXISTING primary-instance pipe. Close without sending any bytes:
+// instance.rs ignores an empty message, so this does not activate/show/quit.
+static DWORD primary_instance_pid() {
+    wchar_t unexpected[2]={};
+    if(GetEnvironmentVariableW(L"PPVPN_FLUTTER_HOME",unexpected,2))return 0;
+    DWORD size=GetEnvironmentVariableW(L"LOCALAPPDATA",nullptr,0);
+    if(!size || size>32768)return 0;
+    std::vector<wchar_t> base(size);
+    DWORD length=GetEnvironmentVariableW(L"LOCALAPPDATA",base.data(),size);
+    if(!length || length>=size)return 0;
+    std::wstring data(base.data(),length);data+=L"\\PPVPN";
+    for(auto& character:data)if(character==L'\\')character=L'/';
+    const auto name=std::wstring(L"\\\\.\\pipe\\ppvpn-")+data;
+    auto pipe=CreateFileW(name.c_str(),GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);
+    if(pipe==INVALID_HANDLE_VALUE)return 0;
+    ULONG owner=0;bool queried=GetNamedPipeServerProcessId(pipe,&owner)!=FALSE;
+    CloseHandle(pipe);return queried?owner:0;
+}
+static void scheduler_snapshot(const char* stage,const char* expected_last=nullptr) {
+    const char* key="Software\\PPVPN\\WinSparkle";
+    char last[64]={},interval[64]={},machine_interval[64]={},enabled[64]={};
+    DWORD last_size=sizeof(last),interval_size=sizeof(interval),machine_interval_size=sizeof(machine_interval),enabled_size=sizeof(enabled);
+    const auto last_status=RegGetValueA(HKEY_CURRENT_USER,key,"LastCheckTime",RRF_RT_REG_SZ,nullptr,last,&last_size);
+    const auto interval_status=RegGetValueA(HKEY_CURRENT_USER,key,"UpdateInterval",RRF_RT_REG_SZ,nullptr,interval,&interval_size);
+    const auto machine_interval_status=RegGetValueA(HKEY_LOCAL_MACHINE,key,"UpdateInterval",RRF_RT_REG_SZ,nullptr,machine_interval,&machine_interval_size);
+    const auto enabled_status=RegGetValueA(HKEY_CURRENT_USER,key,"CheckForUpdates",RRF_RT_REG_SZ,nullptr,enabled,&enabled_size);
+    ensure(last_status==ERROR_SUCCESS && enabled_status==ERROR_SUCCESS,"owned scheduler last-check and automatic-check registry state captured");
+    long effective_interval=86400;const char* interval_source="pinned_0.9.2_default_both_registry_values_missing";
+    const char* selected_interval=nullptr;
+    if(interval_status==ERROR_SUCCESS){selected_interval=interval;interval_source="actual_HKCU_registry_value";}
+    else{
+        ensure(interval_status==ERROR_FILE_NOT_FOUND,"user interval lookup is known missing");
+        if(machine_interval_status==ERROR_SUCCESS){selected_interval=machine_interval;interval_source="actual_HKLM_registry_value";}
+        else{ensure(machine_interval_status==ERROR_FILE_NOT_FOUND || machine_interval_status==ERROR_PATH_NOT_FOUND,"machine interval lookup is known missing; exact pinned default applies");}
+    }
+    if(selected_interval){
+        char* end=nullptr;errno=0;effective_interval=std::strtol(selected_interval,&end,10);
+        ensure(errno==0 && effective_interval>0 && end && *end==0 && std::to_string(effective_interval)==selected_interval,"configured effective scheduler interval is known");
+    }
+    if(expected_last)ensure(std::string(last)==expected_last,"B scheduled-check reset read back as zero");
+    FILE* file=nullptr;const auto path=std::string(stage)+"-scheduler-state.txt";fopen_s(&file,path.c_str(),"w");
+    ensure(file!=nullptr,"owned scheduler evidence file opened");
+    std::fprintf(file,"last_status=%ld\nLastCheckTime=%s\ninterval_status=%ld\nconfigured_HKCU_UpdateInterval=%s\nmachine_interval_status=%ld\nconfigured_HKLM_UpdateInterval=%s\neffective_interval=%ld\ninterval_source=%s\nautomatic_status=%ld\nCheckForUpdates=%s\nobserved_app_pid=%lu\nobserver_pid=%lu\nobserved_unix_seconds=%lld\nobserved_tick=%llu\n",last_status,last,interval_status,interval,machine_interval_status,machine_interval,effective_interval,interval_source,enabled_status,enabled,app.dwProcessId,GetCurrentProcessId(),static_cast<long long>(std::time(nullptr)),GetTickCount64());fclose(file);
+}
+static DWORD find_app(const std::wstring& path,DWORD exclude=0,ULONGLONG created_after=0,ULONGLONG* created_out=nullptr) {
+    const DWORD primary=created_after?primary_instance_pid():0;
+    if(created_after && !primary)return 0;
     auto expected=normalized_image_path(path);
     if(expected.empty())return 0;
     auto snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);PROCESSENTRY32W entry={sizeof(entry)};DWORD found=0;
     if(Process32FirstW(snapshot,&entry)) do {
-        if(entry.th32ProcessID==exclude || _wcsicmp(entry.szExeFile,L"ppvpn.exe")) continue;
+        if(entry.th32ProcessID==exclude || (created_after && entry.th32ProcessID!=primary) || _wcsicmp(entry.szExeFile,L"ppvpn.exe")) continue;
         auto process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,entry.th32ProcessID);
         if(process) {wchar_t name[32768];DWORD size=32768;
             if(QueryFullProcessImageNameW(process,0,name,&size)){
                 auto actual=normalized_image_path(name);auto created=process_creation(process);
-                if(!actual.empty() && _wcsicmp(actual.c_str(),expected.c_str())==0 && created && created>=created_after)found=entry.th32ProcessID;
+                if(!actual.empty() && _wcsicmp(actual.c_str(),expected.c_str())==0 && created && created>=created_after){
+                    found=entry.th32ProcessID;if(created_out)*created_out=created;
+                }
             }
             CloseHandle(process);
         }
@@ -235,8 +286,24 @@ int wmain(int argc,wchar_t** argv) {
             Sleep(50);
         }
         ensure(ready_button!=nullptr,"original Ready-to-install button found after actual download");
+        // The actual A appcast and signed download are complete, but the
+        // original final Install action has NOT run: B cannot launch yet.
+        // Exercise B's existing automatic checker as actually due. A just
+        // wrote the shared LastCheckTime; keep the required B feed assertion.
+        const char* check_key="Software\\PPVPN\\WinSparkle";
+        scheduler_snapshot("B-before-due-reset");
+        const char due_check[]="0";
+        ensure(RegSetKeyValueA(HKEY_CURRENT_USER,check_key,"LastCheckTime",REG_SZ,due_check,sizeof(due_check))==ERROR_SUCCESS,
+               "original B automatic check scheduled due before normal installer relaunch");
+        FILETIME reset_at={};GetSystemTimeAsFileTime(&reset_at);
+        const auto b_check_reset=filetime_value(reset_at);
+        scheduler_snapshot("B-after-due-reset","0");
+        FILE* schedule=nullptr;fopen_s(&schedule,"B-check-reset-order.txt","w");
+        if(schedule){std::fprintf(schedule,"reset_filetime=%llu\nreset_tick=%llu\n",b_check_reset,GetTickCount64());fclose(schedule);}
         FILETIME requested={};GetSystemTimeAsFileTime(&requested);
         const auto install_requested=filetime_value(requested);
+        FILE* install_order=nullptr;fopen_s(&install_order,"B-check-reset-order.txt","a");
+        if(install_order){std::fprintf(install_order,"install_request_filetime=%llu\nA_pid=%lu\n",install_requested,old_pid);fclose(install_order);}
         PostMessageW(ready_button,BM_CLICK,0,0);
         SendMessageW(foreground,WM_APP+1,1,0);Sleep(300);
         ensure(GetForegroundWindow()==foreground,"other app foreground during real installation");
@@ -246,19 +313,23 @@ int wmain(int argc,wchar_t** argv) {
         }
         ensure(WaitForSingleObject(app.hProcess,0)==WAIT_OBJECT_0,"A exited for the real installer");
         CloseHandle(app.hProcess);app.hProcess=nullptr;
-        DWORD next=0;
+        DWORD next=0;ULONGLONG next_created=0;
         for(int i=0;i<3600 && !next;++i){
-            next=find_app(argv[1],old_pid,install_requested);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
+            next=find_app(argv[1],old_pid,install_requested,&next_created);sample("A-to-B-relaunch",old_pid,next,foreground);Sleep(50);
         }
         ensure(next && next!=old_pid,"installer actually reopened a distinct B client process");
+        ensure(next_created>=b_check_reset,"actual B process created after its scheduled-check reset");
         ensure(file_version(argv[1])==argv[4],"installed file actually replaced by target B build");
         app.hProcess=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,next);
-        ensure(app.hProcess!=nullptr && process_creation(app.hProcess)>=install_requested,
-               "original B process handle and new start identity retained");
+        ensure(app.hProcess!=nullptr && next_created!=0 && process_creation(app.hProcess)==next_created,
+               "primary-instance B process handle and exact creation identity retained");
         app.dwProcessId=next;role("B",next);
+        FILE* primary_record=nullptr;fopen_s(&primary_record,"B-primary-instance.txt","w");
+        if(primary_record){std::fprintf(primary_record,"pid=%lu start_filetime=%llu source=existing_primary_pipe_no_payload\n",next,next_created);fclose(primary_record);}
         std::printf("TRANSITION old_pid=%lu new_pid=%lu\n",old_pid,next);std::fflush(stdout);
         for(int i=0;i<50;++i){sample("B-fullscreen",old_pid,next,foreground);Sleep(100);}
         snapshot(L"client-B-fullscreen-state.txt");
+        scheduler_snapshot("B-after-native-startup");
         SendMessageW(foreground,WM_APP+1,0,0);Sleep(500);
         for(int i=0;i<100 && !visible(next,false);++i)Sleep(100);
         ensure(visible(next,false)!=nullptr,"original client window resumes after fullscreen exits");
