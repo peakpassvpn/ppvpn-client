@@ -263,9 +263,9 @@ jobs:
         run: |
           set -euo pipefail
           apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/layout-flutter-sdk"
-          export PATH="$RUNNER_TEMP/layout-flutter-sdk/flutter/bin:$PATH"
+          flutter_cli="$RUNNER_TEMP/layout-flutter-sdk/flutter/bin/flutter"
           compile_dir="$RUNNER_TEMP/window-manager-native-compile"
-          flutter create --platforms=windows --project-name ppvpn_native_compile --no-pub "$compile_dir"
+          "$flutter_cli" create --platforms=windows --project-name ppvpn_native_compile --no-pub "$compile_dir"
           python3 - "$compile_dir/pubspec.yaml" <<'PYCODE'
           from pathlib import Path
           import sys
@@ -275,7 +275,7 @@ jobs:
           PYCODE
           cp tools/desktop/windows/window-manager-hidden-layout.cmake "$compile_dir/windows/ppvpn-hidden-layout.cmake"
           printf '\n%s\n' 'include("${CMAKE_CURRENT_LIST_DIR}/ppvpn-hidden-layout.cmake")' >> "$compile_dir/windows/CMakeLists.txt"
-          (cd "$compile_dir" && flutter pub get && flutter build windows --release)
+          (cd "$compile_dir" && "$flutter_cli" pub get && "$flutter_cli" build windows --release)
           out="$GITHUB_WORKSPACE/build/startup-focus-qa/candidate-plugin"
           mkdir -p "$out"
           cp "$compile_dir/build/windows/x64/runner/Release/window_manager_plugin.dll" "$out/"
