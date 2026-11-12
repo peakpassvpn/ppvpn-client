@@ -901,6 +901,20 @@ jobs:
         env:
           PPVPN_SKIP_ANALYZE: ${{ matrix.os != 'ubuntu-latest' && '1' || '' }}
         run: apps/flutter/scripts/ci-build.sh
+      - name: Preserve the normal macOS client for observer-only reruns
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
+        run: |
+          mkdir -p build/macos-update-client-bundle
+          ditto -c -k --sequesterRsrc --keepParent "${{ steps.build.outputs.bundle }}" build/macos-update-client-bundle/normal-client.zip
+          git rev-parse HEAD > build/macos-update-client-bundle/source.txt
+          shasum -a 256 "${{ steps.build.outputs.bundle }}/Contents/MacOS/PPVPN" > build/macos-update-client-bundle/client-exe-sha256.txt
+          (cd build/macos-update-client-bundle && shasum -a 256 normal-client.zip > archive-sha256.txt)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
+        with:
+          name: normal-macos-client-for-update-qa
+          retention-days: 7
+          path: build/macos-update-client-bundle/
       - name: Actual macOS updater manual result and client first-show during fullscreen
         if: steps.scope.outputs.flutter == 'true' && matrix.os == 'macos-15'
         timeout-minutes: 20
