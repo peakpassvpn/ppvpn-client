@@ -151,6 +151,10 @@ jobs:
               rm -rf apps/flutter/windows
             fi
             apps/flutter/scripts/ci-build.sh
+            mkdir -p "build/client-upgrade-qa/generated-runner/$name"
+            cp apps/flutter/windows/runner/{main.cpp,win32_window.cpp,win32_window.h,flutter_window.cpp,flutter_window.h} "build/client-upgrade-qa/generated-runner/$name/"
+            (cd "build/client-upgrade-qa/generated-runner/$name" && sha256sum *.cpp *.h > sha256.txt)
+            git rev-parse HEAD > "build/client-upgrade-qa/generated-runner/$name/source.txt"
             mkdir -p "build/update-bundles/$name"
             cp -a apps/flutter/build/windows/x64/runner/Release/. "build/update-bundles/$name/"
             powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/package-windows.ps1 -OutDir "build/update-installers/$name" -FastCompression
