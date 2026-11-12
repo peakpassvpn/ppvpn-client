@@ -21,6 +21,17 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
   private var otherReentryConfirmed = false
   private var userRestoreRequested = false
   private var userRestoreConfirmed = false
+  private var observationActivity: NSObjectProtocol?
+  private var previousObservation: Date?
+  private let nativeTimestampFormatter: DateFormatter = {
+    let formatter=DateFormatter()
+    formatter.locale=Locale(identifier:"en_US_POSIX")
+    formatter.timeZone=TimeZone.current
+    formatter.dateFormat="yyyy-MM-dd HH:mm:ss.SSS"
+    // Prepare ICU parsing before the measured native request arrives.
+    _ = formatter.date(from:"2000-01-01 00:00:00.000")
+    return formatter
+  }()
   private let dir = URL(fileURLWithPath: CommandLine.arguments[2])
   private var modeURL: URL { dir.appendingPathComponent("mode") }
   private func log(_ value: String) { print("\(Date().timeIntervalSince1970) \(value)"); fflush(stdout) }
@@ -35,6 +46,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     log(value)
     if code != 0 { capture("failure") }
     if CommandLine.arguments[1] != "other" { firstApp?.terminate(); other?.terminate() }
+    if let observationActivity { ProcessInfo.processInfo.endActivity(observationActivity) }
     exit(code)
   }
   @objc var supportsGentleScheduledUpdateReminders: Bool { true }
@@ -81,6 +93,10 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       }
       return
     }
+    // This background observer must meet a 250ms deadline while another app
+    // is frontmost. Keep only the observer out of App Nap; never activate it
+    // or alter the product's scheduling or lifecycle policy.
+    observationActivity=ProcessInfo.processInfo.beginActivity(options:.userInitiatedAllowingIdleSystemSleep,reason:"Observe the native update transition within its existing deadline")
     guard let driver = NSClassFromString("SPUStandardUserDriver"), class_getClassMethod(driver, NSSelectorFromString("ppvpnHasPreShowGate")) != nil else { finish(1,"FAIL unpatched Sparkle") }
     controller = SPUStandardUpdaterController(startingUpdater:true,updaterDelegate:nil,userDriverDelegate:self)
     controller?.updater.automaticallyChecksForUpdates = false
@@ -151,6 +167,11 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
     }
   }
   private func observe() {
+    let observationAt=Date()
+    if phase == "first-windowed", let previousObservation {
+      log("DIAGNOSTIC observer poll gap=\(observationAt.timeIntervalSince(previousObservation)) seconds")
+    }
+    previousObservation=observationAt
     let elapsed = Date().timeIntervalSince(phaseAt)
     switch phase {
     case "starting":
@@ -223,12 +244,10 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       let events = (try? String(contentsOf:dir.appendingPathComponent("native-live.txt"),encoding:.utf8)) ?? ""
       let request = events.components(separatedBy:.newlines).first { $0.contains("PPVPN[\(firstApp.processIdentifier):") && $0.contains("update launch: workspace activation requested") }
       if let request {
-        let formatter=DateFormatter()
-        formatter.locale=Locale(identifier:"en_US_POSIX")
-        formatter.timeZone=TimeZone.current
-        formatter.dateFormat="yyyy-MM-dd HH:mm:ss.SSS"
-        guard let emitted=formatter.date(from:String(request.prefix(23))) else { finish(1,"FAIL live request timestamp unparseable; transition not exercised") }
+        let readAt=Date()
+        guard let emitted=nativeTimestampFormatter.date(from:String(request.prefix(23))) else { finish(1,"FAIL live request timestamp unparseable; transition not exercised") }
         let lag=Date().timeIntervalSince(emitted)
+        log("DIAGNOSTIC request read lag=\(readAt.timeIntervalSince(emitted)) parse-and-observation=\(Date().timeIntervalSince(readAt)) seconds")
         log("TRANSITION live request observation lag=\(lag) seconds")
         guard lag >= 0 && lag <= 0.25 else { finish(1,"FAIL request observation too late; immediate transition not exercised") }
         originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
