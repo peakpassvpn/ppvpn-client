@@ -86,7 +86,7 @@ env:
   PAIRED_CANDIDATE_JSON: ${{ inputs.paired_candidate_json }}
 
 concurrency:
-  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}-${{ inputs.candidate_lane || 'measurement' }}-${{ inputs.native256_golden && 'golden' || inputs.native256_checks && 'native' || inputs.preload_only && 'preload' || 'archive' }}
+  group: apple-archive-comparison-${{ github.ref }}-${{ inputs.platform || 'ios' }}-${{ inputs.build_number || '345' }}-${{ inputs.candidate_lane || 'measurement' }}-${{ inputs.native256_golden && 'golden' || inputs.native256_checks && 'native' || inputs.preload_only && 'preload' || 'archive' }}-${{ inputs.sdk2a9_build && format('sdk-{0}-{1}-{2}', inputs.sdk2a9_platforms || 'all', inputs.source_ref, inputs.ios256_variant || 'normal') || inputs.sdk2a9_runtime && 'sdk-android-runtime' || 'base' }}
   cancel-in-progress: false
 
 jobs:
