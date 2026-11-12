@@ -281,29 +281,29 @@ jobs:
             cat > "$compile_dir/windows/ppvpn-layout-trace.h" <<'CPPTRACE'
           #include <Windows.h>
           #include <cstdio>
-          static void PpvpnLayoutLog(const char* site,int line,const char* operation,HWND target,UINT flags) {
+          [[maybe_unused]] static void PpvpnLayoutLog(const char* site,int line,const char* operation,HWND target,UINT flags) {
             wchar_t path[1024]={};
             if(!GetEnvironmentVariableW(L"PPVPN_QA_LAYOUT_TRACE",path,1024))return;
             auto foreground=GetForegroundWindow();DWORD pid=0;GetWindowThreadProcessId(foreground,&pid);
             char name[256]={};GetClassNameA(target,name,256);RECT frame={};GetWindowRect(target,&frame);
             FILE* file=nullptr;if(_wfopen_s(&file,path,L"a") || !file)return;
-            std::fprintf(file,"tick=%llu site=%s:%d operation=%s target=%p class=%s visible=%d root=%p flags=%u foreground=%p foreground_pid=%lu frame=%ld,%ld,%ld,%ld\n",GetTickCount64(),site,line,operation,target,name,IsWindowVisible(target),GetAncestor(target,GA_ROOT),flags,foreground,pid,frame.left,frame.top,frame.right,frame.bottom);
+            std::fprintf(file,"tick=%llu site=%s:%d operation=%s target=%p class=%s visible=%d root=%p flags=%u foreground=%p foreground_pid=%lu frame=%ld,%ld,%ld,%ld\n",GetTickCount64(),site,line,operation,static_cast<void*>(target),name,IsWindowVisible(target),static_cast<void*>(GetAncestor(target,GA_ROOT)),flags,static_cast<void*>(foreground),pid,frame.left,frame.top,frame.right,frame.bottom);
             fclose(file);
           }
-          static BOOL PpvpnSetPos(const char* site,int line,HWND h,HWND after,int x,int y,int w,int height,UINT flags) {
+          [[maybe_unused]] static BOOL PpvpnSetPos(const char* site,int line,HWND h,HWND after,int x,int y,int w,int height,UINT flags) {
             PpvpnLayoutLog(site,line,"SetWindowPos-before",h,flags);auto result=::SetWindowPos(h,after,x,y,w,height,flags);PpvpnLayoutLog(site,line,"SetWindowPos-after",h,flags);return result;
           }
-          static HWND PpvpnSetFocus(const char* site,int line,HWND h) {
+          [[maybe_unused]] static HWND PpvpnSetFocus(const char* site,int line,HWND h) {
             PpvpnLayoutLog(site,line,"SetFocus-before",h,0);auto result=::SetFocus(h);PpvpnLayoutLog(site,line,"SetFocus-after",h,0);return result;
           }
-          static BOOL PpvpnSetForeground(const char* site,int line,HWND h) {
+          [[maybe_unused]] static BOOL PpvpnSetForeground(const char* site,int line,HWND h) {
             PpvpnLayoutLog(site,line,"SetForegroundWindow-before",h,0);auto result=::SetForegroundWindow(h);PpvpnLayoutLog(site,line,"SetForegroundWindow-after",h,0);return result;
           }
-          static BOOL PpvpnShow(const char* site,int line,HWND h,int command) {
-            PpvpnLayoutLog(site,line,"ShowWindow-before",h,command);auto result=::ShowWindow(h,command);PpvpnLayoutLog(site,line,"ShowWindow-after",h,command);return result;
+          [[maybe_unused]] static BOOL PpvpnShow(const char* site,int line,HWND h,int command) {
+            PpvpnLayoutLog(site,line,"ShowWindow-before",h,static_cast<UINT>(command));auto result=::ShowWindow(h,command);PpvpnLayoutLog(site,line,"ShowWindow-after",h,static_cast<UINT>(command));return result;
           }
-          static BOOL PpvpnShowAsync(const char* site,int line,HWND h,int command) {
-            PpvpnLayoutLog(site,line,"ShowWindowAsync-before",h,command);auto result=::ShowWindowAsync(h,command);PpvpnLayoutLog(site,line,"ShowWindowAsync-after",h,command);return result;
+          [[maybe_unused]] static BOOL PpvpnShowAsync(const char* site,int line,HWND h,int command) {
+            PpvpnLayoutLog(site,line,"ShowWindowAsync-before",h,static_cast<UINT>(command));auto result=::ShowWindowAsync(h,command);PpvpnLayoutLog(site,line,"ShowWindowAsync-after",h,static_cast<UINT>(command));return result;
           }
           #define SetWindowPos(...) PpvpnSetPos(__func__,__LINE__,__VA_ARGS__)
           #define SetFocus(...) PpvpnSetFocus(__func__,__LINE__,__VA_ARGS__)
