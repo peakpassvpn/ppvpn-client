@@ -47,7 +47,7 @@ function(ppvpn_materialize_window_manager source_dir output_dir)
                    ::IsWindowVisible(window_manager->native_window));]=])
   set(old_show "  } else if (message == WM_SHOWWINDOW) {")
   set(new_show [=[  } else if (message == WM_SHOWWINDOW) {
-    if (hWnd == window_manager->native_window) {
+    if (hWnd == ::GetAncestor(registrar->GetView()->GetNativeWindow(), GA_ROOT)) {
       ::EnableWindow(registrar->GetView()->GetNativeWindow(), wParam == TRUE);
     }]=])
   foreach(site IN ITEMS init show)
