@@ -94,7 +94,14 @@ try {
     if(-not $uninstall.WaitForExit(180000)){throw 'Normal test uninstaller timed out'}
     if((Get-OwnedExitCode $uninstallHandle) -ne 0){throw 'Normal test uninstaller failed'}
   }
-  $cleanup=@{app_processes=@(Get-Process ppvpn -ErrorAction SilentlyContinue|Select-Object Id,Path);service_remaining=[bool](Get-Service ppvpn_service -ErrorAction SilentlyContinue);directory_remaining=(Test-Path $dir)}
+  # NSIS uninstallation executes from a temporary child. Parent exit alone
+  # is not completion; the startup diagnostic confirmed this bounded wait.
+  $cleanupDeadline=[DateTime]::UtcNow.AddSeconds(60)
+  do {
+    $cleanup=@{app_processes=@(Get-Process ppvpn -ErrorAction SilentlyContinue|Select-Object Id,Path);service_remaining=[bool](Get-Service ppvpn_service -ErrorAction SilentlyContinue);directory_remaining=(Test-Path $dir)}
+    if(-not $cleanup.app_processes.Count -and -not $cleanup.service_remaining){break}
+    Start-Sleep -Milliseconds 250
+  }while([DateTime]::UtcNow -lt $cleanupDeadline)
   $cleanup|ConvertTo-Json -Depth 4|Set-Content "$out/cleanup.json"
   if($cleanup.app_processes.Count -or $cleanup.service_remaining){throw 'Owned test client/service remained after normal uninstallation'}
 }
