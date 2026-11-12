@@ -183,6 +183,14 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
       let events = (try? String(contentsOf:dir.appendingPathComponent("native-live.txt"),encoding:.utf8)) ?? ""
       let request = events.split(separator:"\n").first { $0.contains("PPVPN[\(firstApp.processIdentifier):") && $0.contains("update launch: workspace activation requested") }
       if let request {
+        let formatter=DateFormatter()
+        formatter.locale=Locale(identifier:"en_US_POSIX")
+        formatter.timeZone=TimeZone.current
+        formatter.dateFormat="yyyy-MM-dd HH:mm:ss.SSS"
+        guard let emitted=formatter.date(from:String(request.prefix(23))) else { finish(1,"FAIL live request timestamp unparseable; transition not exercised") }
+        let lag=Date().timeIntervalSince(emitted)
+        log("TRANSITION live request observation lag=\(lag) seconds")
+        guard lag >= 0 && lag <= 0.25 else { finish(1,"FAIL request observation too late; immediate transition not exercised") }
         originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
         guard !originalClientWindows.isEmpty else { finish(1,"FAIL no original native window identity at workspace request") }
         log("TRANSITION observed actual request: \(request)")

@@ -61,7 +61,7 @@ if [ -n "${1:-}" ]; then
   extra+=("$work/first-show/PPVPN.app")
   shasum -a 256 "$work/first-show/PPVPN.app/Contents/MacOS/PPVPN" > "$work/actual-client-hash.txt"
 fi
-/usr/bin/log stream --level info --style compact --predicate '(process == "PPVPN") AND (eventMessage BEGINSWITH "update launch:")' > "$work/native-live.txt" 2>/dev/null &
+/usr/bin/script -q -F /dev/null /usr/bin/log stream --level info --style compact --predicate '(process == "PPVPN") AND (eventMessage BEGINSWITH "update launch:")' > "$work/native-live.txt" 2>/dev/null &
 native_stream=$!
 "$work/host.app/Contents/MacOS/probe" host "$work" "$work/other.app" "${extra[@]}" > "$work/raw.txt" 2> "$work/errors.txt" &
 probe=$!
