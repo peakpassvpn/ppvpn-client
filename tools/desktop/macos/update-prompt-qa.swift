@@ -15,6 +15,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
   private var phase = "starting"
   private var phaseAt = Date()
   private var originalClientWindows = Set<UInt32>()
+  private var preRecoveryClientWindows = Set<UInt32>()
   private var finalStableAt: Date?
   private var clientScenario = "transition"
   private var transitionClientWasActive = false
@@ -238,9 +239,9 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         if clientScenario == "transition" {
           // Snapshot before releasing fullscreen. A CG enumeration can take
           // most of the 250ms request budget on a loaded runner.
-          originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
-          guard !originalClientWindows.isEmpty else { finish(1,"FAIL no original native window identity before workspace request") }
-          log("TRANSITION original windows before fullscreen release=\(originalClientWindows.sorted())")
+          preRecoveryClientWindows=clientWindowIDs(firstApp.processIdentifier)
+          guard !preRecoveryClientWindows.isEmpty else { finish(1,"FAIL no original native window identity before workspace request") }
+          log("TRANSITION original windows before fullscreen release=\(preRecoveryClientWindows.sorted())")
         }
         try! Data("windowed".utf8).write(to:modeURL)
         phase=clientScenario == "transition" ? "first-windowed" : "baseline-windowed";phaseAt=Date()
@@ -255,7 +256,7 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
         guard let emitted=nativeTimestampFormatter.date(from:String(request.prefix(23))) else { finish(1,"FAIL live request timestamp unparseable; transition not exercised") }
         let lag=Date().timeIntervalSince(emitted)
         guard lag >= 0 && lag <= 0.25 else { finish(1,"FAIL request observation too late; immediate transition not exercised") }
-        guard !originalClientWindows.isEmpty else { finish(1,"FAIL no original native window identity at workspace request") }
+        guard !preRecoveryClientWindows.isEmpty else { finish(1,"FAIL no original native window identity before workspace request") }
         transitionClientWasActive = NSWorkspace.shared.frontmostApplication?.processIdentifier == firstApp.processIdentifier
         try! Data("full".utf8).write(to:modeURL)
         // This is the fixture user's new fullscreen intention. Its deprecated
@@ -281,6 +282,11 @@ private let updateLog = Logger(subsystem: "PPVPN.UpdateQA", category: "updates")
             }
           }
         }
+        // The deferred main window can receive its server ID only when its
+        // original order resumes. Read it after issuing the bounded request,
+        // then retain that exact set throughout the strict interval.
+        originalClientWindows=clientWindowIDs(firstApp.processIdentifier)
+        guard !originalClientWindows.isEmpty, preRecoveryClientWindows.isSubset(of:originalClientWindows) else { finish(1,"FAIL original native window identity lost during workspace request") }
         // Keep CG enumeration and stdout I/O outside the measured request path.
         log("DIAGNOSTIC request read lag=\(readAt.timeIntervalSince(emitted)) parse-and-request=\(activationLag-readAt.timeIntervalSince(emitted)) seconds")
         log("TRANSITION live request observation lag=\(lag) seconds")
