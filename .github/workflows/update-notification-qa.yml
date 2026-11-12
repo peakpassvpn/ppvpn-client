@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      macos_client_run:
+        type: string
+        default: ""
       startup_run:
         type: string
         default: ""
@@ -14,7 +17,7 @@ permissions:
   actions: read
 jobs:
   windows-updater:
-    if: ${{ !inputs.full_client && !inputs.startup_run }}
+    if: ${{ !inputs.full_client && !inputs.startup_run && !inputs.macos_client_run }}
     runs-on: windows-latest
     timeout-minutes: 55
     steps:
@@ -85,8 +88,48 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.macos_client_run != ''
+        with:
+          name: normal-macos-client-for-update-qa
+          run-id: ${{ inputs.macos_client_run }}
+          github-token: ${{ github.token }}
+          path: build/reused-macos-client
+      - id: reused
+        name: Verify the original normal client and unchanged product inputs
+        if: inputs.macos_client_run != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/desktop/macos/client-qa-inputs.py > build/current-client-inputs.txt
+          cmp build/reused-macos-client/product-inputs.txt build/current-client-inputs.txt
+          (cd build/reused-macos-client && shasum -a 256 -c archive-sha256.txt)
+          ditto -x -k build/reused-macos-client/normal-client.zip build/reused-macos-client/unpacked
+          python3 - <<'PYCODE'
+          import hashlib,os,re
+          from pathlib import Path
+          root=Path('build/reused-macos-client')
+          source=(root/'source.txt').read_text().strip()
+          if not re.fullmatch(r'[0-9a-f]{40}',source):raise SystemExit('Original source identity missing')
+          apps=list((root/'unpacked').glob('*.app'))
+          if len(apps)!=1:raise SystemExit('Expected exactly one original application bundle')
+          exe=apps[0]/'Contents/MacOS/PPVPN'
+          expected=(root/'client-exe-sha256.txt').read_text().split()[0]
+          if hashlib.sha256(exe.read_bytes()).hexdigest()!=expected:raise SystemExit('Original executable hash mismatch')
+          out=Path('build/macos-update-qa');out.mkdir(parents=True,exist_ok=True)
+          (out/'reused-client-source.txt').write_text(source+'\n')
+          (out/'reused-client-inputs.txt').write_bytes((root/'product-inputs.txt').read_bytes())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('bundle='+str(apps[0].resolve())+'\n')
+          PYCODE
       - name: Actual standard Sparkle manual result during fullscreen
-        run: tools/desktop/macos/run-update-prompt-qa.sh
+        env:
+          REUSED_CLIENT_BUNDLE: ${{ steps.reused.outputs.bundle }}
+        run: |
+          if [ -n "$REUSED_CLIENT_BUNDLE" ]; then
+            tools/desktop/macos/run-update-prompt-qa.sh "$REUSED_CLIENT_BUNDLE"
+          else
+            tools/desktop/macos/run-update-prompt-qa.sh
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
@@ -98,7 +141,7 @@ jobs:
             build/macos-update-qa/feed.*
 
   windows-client-upgrade:
-    if: inputs.full_client && !inputs.startup_run
+    if: inputs.full_client && !inputs.startup_run && !inputs.macos_client_run
     runs-on: windows-latest
     timeout-minutes: 120
     env:
@@ -189,7 +232,7 @@ jobs:
             build/update-qa/
 
   windows-startup-diagnostic:
-    if: inputs.startup_run != ''
+    if: inputs.startup_run != '' && !inputs.macos_client_run
     runs-on: windows-latest
     timeout-minutes: 12
     steps:

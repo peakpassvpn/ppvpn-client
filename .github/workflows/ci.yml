@@ -53,6 +53,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      update_macos_reuse_run:
+        description: "Reuse a verified normal macOS client artifact for observer-only QA"
+        type: string
+        default: ""
       update_macos_client_qa:
         description: "Run the normal macOS client build and fullscreen QA only"
         type: boolean
@@ -76,7 +80,7 @@ permissions:
 
 # A pull request's newer push cancels its older run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}${{ inputs.update_client_upgrade && format('-update-client-{0}', github.sha) || '' }}${{ inputs.update_startup_run && format('-startup-{0}', github.sha) || '' }}${{ inputs.update_macos_client_qa && '-macos-client' || '' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}${{ inputs.update_client_upgrade && format('-update-client-{0}', github.sha) || '' }}${{ inputs.update_startup_run && format('-startup-{0}', github.sha) || '' }}${{ inputs.update_macos_client_qa && '-macos-client' || '' }}${{ inputs.update_macos_reuse_run && format('-macos-reuse-{0}', github.sha) || '' }}
   cancel-in-progress: true
 
 env:
@@ -97,9 +101,10 @@ jobs:
     with:
       full_client: ${{ inputs.update_client_upgrade || false }}
       startup_run: ${{ inputs.update_startup_run || '' }}
+      macos_client_run: ${{ inputs.update_macos_reuse_run || '' }}
 
   lint:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -196,7 +201,7 @@ jobs:
   # and is a warning on the others, so that it shows without blocking
   # unrelated work. The binary is cargo-deny's release, checked by hash.
   advisories:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: advisories
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -230,7 +235,7 @@ jobs:
 
   # L1 on Linux.
   unit:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: unit
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -266,7 +271,7 @@ jobs:
   # keyring, in a D-Bus session of its own with an unlocked login keyring
   # (no desktop session).
   integration:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: integration
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -316,7 +321,7 @@ jobs:
   #                   the policy rules and routing table, traffic through the
   #                   node, the cleanup after a disconnect and after kill -9
   linux:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: linux
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -462,7 +467,7 @@ jobs:
   #   - Swift bindings, then the AppLogic tests of the macOS push agent (no
   #     AppKit), with the Swift it is developed with.
   desktop:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: desktop
     # Pinned to the image the Swift toolchain is built for (ubuntu24.04):
     # newer images ship libxml2 with a different soname and swift-test
@@ -573,7 +578,7 @@ jobs:
   # Not the native app's build (#459): the Flutter app replaced it, and the
   # upgrade from it is tested with its last release (0.6.4).
   macos:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: macos
     runs-on: macos-15
     timeout-minutes: 90
@@ -704,7 +709,7 @@ jobs:
   # Not the native app's build (#459, #522): the Flutter app replaced it,
   # and the upgrade from it is tested with its last release (0.6.4).
   windows:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     name: windows
     runs-on: windows-latest
     timeout-minutes: 90
@@ -828,7 +833,7 @@ jobs:
   # one per runner OS) is release.yml's cache-flutter-*: the codegen's cargo
   # expand, the release library and what the later steps build.
   flutter:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_reuse_run }}
     name: flutter (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -907,6 +912,7 @@ jobs:
           mkdir -p build/macos-update-client-bundle
           ditto -c -k --sequesterRsrc --keepParent "${{ steps.build.outputs.bundle }}" build/macos-update-client-bundle/normal-client.zip
           git rev-parse HEAD > build/macos-update-client-bundle/source.txt
+          python3 tools/desktop/macos/client-qa-inputs.py > build/macos-update-client-bundle/product-inputs.txt
           shasum -a 256 "${{ steps.build.outputs.bundle }}/Contents/MacOS/PPVPN" > build/macos-update-client-bundle/client-exe-sha256.txt
           (cd build/macos-update-client-bundle && shasum -a 256 normal-client.zip > archive-sha256.txt)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -1190,7 +1196,7 @@ jobs:
           if-no-files-found: ignore
 
   android:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     # The Flutter app's Android target (#448 step 3): the bridge and the
     # tunnel host for arm64 and x86_64 (the NDK's clang), the APK (signed
     # with the debug key until the Play upload key exists: the artifact
@@ -1330,7 +1336,7 @@ jobs:
           retention-days: 14
 
   ios:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     # The Flutter app's iOS target (#448): the bridge as a static library
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
@@ -1392,7 +1398,7 @@ jobs:
         run: apps/flutter/e2e/ios_smoke.sh
 
   tunnel:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     # The mobile tunnel host for the iOS packet tunnel extension (#448):
     # crates/tunnel-host/scripts/build-xcframework.sh, the device slice only
     # (a network extension never runs in the simulator; the full
@@ -1444,7 +1450,7 @@ jobs:
           retention-days: 14
 
   tunnel-android:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa && !inputs.update_macos_reuse_run }}
     # The mobile tunnel host for Android's VpnService (#448):
     # crates/tunnel-host/scripts/build-android.sh, arm64-v8a only (the
     # emulator's x86_64 builds the same code), with clippy for Android: its
