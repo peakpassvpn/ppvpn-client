@@ -94,7 +94,14 @@ breakpoint set --selector makeKeyAndOrderFront:
 breakpoint command add -F ppvpn_activation_trace.hit 2
 breakpoint set --func-regex 'Activation.*reopen'
 breakpoint command add -F ppvpn_activation_trace.hit 3
-process handle -p true -s false -n false SIGTERM SIGPIPE SIGCHLD
+breakpoint set --selector terminate:
+breakpoint command add -F ppvpn_activation_trace.hit 4
+breakpoint set --name exit
+breakpoint command add -F ppvpn_activation_trace.hit 5
+breakpoint set --name _exit
+breakpoint command add -F ppvpn_activation_trace.hit 6
+process handle -p true -s false -n true SIGTERM SIGHUP SIGINT SIGQUIT
+process handle -p true -s false -n false SIGPIPE SIGCHLD
 process continue
 LLDB
   (
