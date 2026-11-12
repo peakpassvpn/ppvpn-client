@@ -2,15 +2,19 @@
   "source": "970b5d35343e4dfdb7b914464ca714cbdc65bd3d",
   "probe_sha256": "295c4dc7e0996a64ec4d14c77faa7025d354d86ee047e631b5f6b9f7f36195c9",
   "files": {
-    "native256-linked-contract.swift": "cdc839f779a21b223e9d577c9a8882bb28346a53db73366c0a626f54d1ab65fb",
-    "swift-golden/request.json": "07208af132d5c1ccf7c35302c6a325bd91ba120ad176176eb22de6ccacacdaa7",
-    "swift-golden/approved-targets.json": "0867c6e3dbf88b47116d7e9ae5093edefcb0f534409ba55d765b47acb78c0d0a",
-    "swift-golden/contract.json": "bd9278ed3ec19ae808c9ef53792cbf0d2557364031008ade95bd00c9e2c9dbb2"
+    "swift-golden/request.json": "5d8c62cd98680c9d6c29ab14ecd8cbc22e4242aa58bd647b3e3e8ba626e106f5",
+    "swift-golden/approved-targets.json": "6c1ba6c7ccefc5b42bfbab5e0bdf088527e9438d0addf2f890db2945c64ce239",
+    "swift-golden/contract.json": "f250a2826d1f28c589f486a49e379c0d6fb0ea75d85b2f88f280617f4acc70cc",
+    "native256-linked-contract.swift": "cdc839f779a21b223e9d577c9a8882bb28346a53db73366c0a626f54d1ab65fb"
   },
   "test_only": true,
   "expected_checks": 15,
-  "producer_fingerprint": "7ca494ee6f40bf908d4f1cfe85c89d045b93a7279b45758e00a1d403319343ea",
-  "producer_python17_log_sha256": "4b8d1eee8590656297121d39025d099cf3d7e61e6926885820ea7c11deff1988",
-  "golden_archive_sha256": "cb6d21d1b5404ee27df9039a2fb364663a47aeb0a88e2ffb34aa7bb1c3d3126f",
-  "generation": "Frozen v2 final17 TCP64 offline oneShot; no post-generation JSON edits; historical15 does not attest these bytes"
+  "producer_fingerprint": "1d0457307298229125ed65ab12b2ab218913197824361c0479a2aeb77daabdbc",
+  "producer_file_count": 27,
+  "producer_core_chain_unique": 19,
+  "producer_core_chain_receipt_sha256": "084ffd4dc1adec86717343031a196b7712998f9d2d915ad808bb142a6b7e5287",
+  "core_delivery_sha256": "4a06b117bedac81867cf0c66d2c14e47e1aeef8e2821f7bfd5abb56c5c05b8ec",
+  "golden_archive_sha256": "c896d52b5a1dcf24df44075344a01c20e870a53d4304155cc594b69cfb1ac0fa",
+  "acceptance_scope": "CLOCK_CORE_NEW_ACTUAL_REQUEST_GOLDEN_ONLY; TYPED_DERIVER_PENDING",
+  "generation": "Exact frozen core27/actual19 clock-child request and targets; no post-generation JSON mutation; no product rebuild or phone operation"
 }

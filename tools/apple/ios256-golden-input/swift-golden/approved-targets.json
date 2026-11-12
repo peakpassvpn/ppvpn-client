@@ -7,7 +7,8 @@
       "purpose": "fixture"
     }
   ],
-  "expires_unix": 1794442483.0227935,
+  "expires_unix": 1794474493.0367858,
+  "host_expires_unix": 1794474493.0367858,
   "required_path": "ne_proxy",
   "schema": 1
 }
