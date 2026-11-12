@@ -9,6 +9,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 
+mod android_push;
 mod api;
 mod auth;
 mod compat;
@@ -617,6 +618,10 @@ pub struct Client {
     cores: tokio::sync::Mutex<cores::CoreSync>,
     /// Set by `shutdown`; no core is started afterwards.
     shut_down: AtomicBool,
+    /// Mobile hosts pause the unread poll while their UI is in the background.
+    notification_foreground: AtomicBool,
+    android_push_fallback: AtomicBool,
+    android_push_lock: tokio::sync::Mutex<()>,
     /// Background re-read of a credential store that failed at launch.
     credential_retry: session::CredentialRetry,
 }
@@ -1029,6 +1034,13 @@ impl Client {
         };
         let routing = routing::RoutingModeCell::new(snapshot.routing_mode);
         let ingress_pins = ingress::PinsCell::new(ingress::load(&config.data_dir));
+        // A delayed Android token worker may recreate the UI process while
+        // :tunnel is still delivering fallback pushes. Restore that choice
+        // before any session task can register or clean up device files.
+        let android_push_fallback = config.platform == "android"
+            && std::path::Path::new(&config.data_dir)
+                .join(android_push::LEASE_FILE)
+                .is_file();
         let client = Arc::new_cyclic(|this| {
             let (standard, enhanced, compat) = cores::build_cores(
                 &config,
@@ -1061,6 +1073,9 @@ impl Client {
                 mode_switch: tokio::sync::Mutex::new(()),
                 cores: tokio::sync::Mutex::new(cores::CoreSync::default()),
                 shut_down: AtomicBool::new(false),
+                notification_foreground: AtomicBool::new(true),
+                android_push_fallback: AtomicBool::new(android_push_fallback),
+                android_push_lock: tokio::sync::Mutex::new(()),
                 credential_retry: session::CredentialRetry::default(),
             }
         });

@@ -43,6 +43,7 @@ pub(crate) struct Bridge {
 }
 
 static BRIDGE: OnceLock<Bridge> = OnceLock::new();
+static START_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Default)]
 pub(crate) struct Events {
@@ -97,6 +98,34 @@ pub(crate) fn running() -> Option<&'static Bridge> {
 /// Creates the client once. The connection mode is the client's persisted
 /// one: the overview's two switches choose it (`api::set_connection_mode`).
 pub(crate) fn start() -> Result<&'static Bridge, String> {
+    start_with_foreground(true)
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn start_for_push() -> Result<&'static Bridge, String> {
+    start_with_foreground(false)
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn push_recovered(files_dir: &str) {
+    // Serialize with a worker creating a client from the persisted lease.
+    // This is called only for a fresh FCM token, never for a retry job.
+    let _start = START_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(bridge) = BRIDGE.get() {
+        bridge.client.set_android_push_fallback(false);
+    } else {
+        let _ = std::fs::remove_file(
+            std::path::Path::new(files_dir)
+                .join("data")
+                .join("android-push-fallback"),
+        );
+    }
+}
+
+fn start_with_foreground(foreground: bool) -> Result<&'static Bridge, String> {
+    // An Android background token worker and the UI may initialize together.
+    // Construct one client so refresh credentials are never raced by two Auths.
+    let _start = START_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(bridge) = BRIDGE.get() {
         return Ok(bridge);
     }
@@ -133,6 +162,7 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
         Arc::new(Hooks::new(&data_dir)),
         Arc::new(Listener(events.clone())),
     );
+    client.set_notification_foreground(foreground);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("ppvpn-flutter")
@@ -142,7 +172,7 @@ pub(crate) fn start() -> Result<&'static Bridge, String> {
     if std::env::var("PPVPN_FLUTTER_SYNTHETIC_TRAFFIC").is_ok_and(|value| value == "1") {
         runtime.spawn(synthetic_traffic(events.clone()));
     }
-    // Two first calls at once: the loser's client is dropped unused.
+    // START_LOCK serializes publication with background token registration.
     let agent_client = client.clone();
     if BRIDGE
         .set(Bridge {
