@@ -29,7 +29,7 @@ try {
   $originalManifest=Get-Content "$original/artifact-manifest.json" -Raw|ConvertFrom-Json
   $actualExeHash=(Get-FileHash "$dir/ppvpn.exe" -Algorithm SHA256).Hash
   if($actualExeHash -cne $originalManifest.hashes.A_exe){throw 'Installed A differs from original normal built executable'}
-  @{actual_exe_sha256=$actualExeHash;expected_exe_sha256=$originalManifest.hashes.A_exe;original_source=$originalManifest.source;artifact_run=$env:PPVPN_SOURCE_RUN}|ConvertTo-Json|Set-Content "$out/installed-A-identity.json"
+  @{actual_engine_sha256=(Get-FileHash "$dir/flutter_windows.dll" -Algorithm SHA256).Hash;actual_exe_sha256=$actualExeHash;expected_exe_sha256=$originalManifest.hashes.A_exe;original_source=$originalManifest.source;artifact_run=$env:PPVPN_SOURCE_RUN}|ConvertTo-Json|Set-Content "$out/installed-A-identity.json"
   if($env:PPVPN_QA_LAYOUT_PLUGIN){
     $stockHash=(Get-FileHash "$dir/window_manager_plugin.dll" -Algorithm SHA256).Hash
     $candidateHash=(Get-FileHash $env:PPVPN_QA_LAYOUT_PLUGIN -Algorithm SHA256).Hash

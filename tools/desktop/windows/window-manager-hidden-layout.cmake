@@ -35,11 +35,34 @@ function(ppvpn_materialize_window_manager source_dir output_dir)
   file(WRITE "${output_dir}/window_manager.cpp" "${code}")
   # plugin.cpp includes window_manager.cpp, so both original translation
   # units must come from this copy or the used implementation stays unpatched.
-  file(COPY "${source_dir}/window_manager_plugin.cpp" DESTINATION "${output_dir}")
+  # The engine's framework-origin Focus() calls SetFocus even for a hidden
+  # view. Windows rejects focus to a disabled child; restore input before the
+  # real parent show so explicit opens keep the original view and keyboard.
+  file(READ "${source_dir}/window_manager_plugin.cpp" plugin_code)
+  set(old_init [=[    window_manager->native_window =
+        ::GetAncestor(registrar->GetView()->GetNativeWindow(), GA_ROOT);]=])
+  set(new_init [=[    window_manager->native_window =
+        ::GetAncestor(registrar->GetView()->GetNativeWindow(), GA_ROOT);
+    ::EnableWindow(registrar->GetView()->GetNativeWindow(),
+                   ::IsWindowVisible(window_manager->native_window));]=])
+  set(old_show "  } else if (message == WM_SHOWWINDOW) {")
+  set(new_show [=[  } else if (message == WM_SHOWWINDOW) {
+    if (hWnd == window_manager->native_window) {
+      ::EnableWindow(registrar->GetView()->GetNativeWindow(), wParam == TRUE);
+    }]=])
+  foreach(site IN ITEMS init show)
+    string(FIND "${plugin_code}" "${old_${site}}" site_at)
+    if(site_at LESS 0)
+      message(FATAL_ERROR "window_manager hidden view input patch does not match ${site}")
+    endif()
+    string(REPLACE "${old_${site}}" "${new_${site}}" plugin_code "${plugin_code}")
+  endforeach()
+  file(WRITE "${output_dir}/window_manager_plugin.cpp" "${plugin_code}")
   # The original source uses a quoted include/window_manager/... header.
   file(COPY "${source_dir}/include" DESTINATION "${output_dir}")
   file(SHA256 "${output_dir}/window_manager.cpp" patched_sha)
-  file(WRITE "${output_dir}/source-identity.txt" "package=window_manager 0.5.2\noriginal_sha256=${original_sha}\npatched_sha256=${patched_sha}\nplugin_source_sha256=${plugin_sha}\n")
+  file(SHA256 "${output_dir}/window_manager_plugin.cpp" patched_plugin_sha)
+  file(WRITE "${output_dir}/source-identity.txt" "package=window_manager 0.5.2\noriginal_sha256=${original_sha}\npatched_sha256=${patched_sha}\nplugin_source_sha256=${plugin_sha}\npatched_plugin_sha256=${patched_plugin_sha}\n")
 endfunction()
 
 # Source materialization can be checked without configuring or compiling an app.

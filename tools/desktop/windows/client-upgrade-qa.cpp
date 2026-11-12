@@ -161,6 +161,11 @@ int wmain(int argc,wchar_t** argv) {
             }
             snapshot(L"explicit-user-open.txt");
             ensure(user_front,"original client visible and foreground after explicit user open");
+            auto front=GetForegroundWindow();DWORD thread=GetWindowThreadProcessId(front,nullptr);
+            GUITHREADINFO input={sizeof(input)};
+            ensure(GetGUIThreadInfo(thread,&input)!=FALSE && input.hwndFocus!=nullptr &&
+                   GetAncestor(input.hwndFocus,GA_ROOT)==front && IsWindowEnabled(input.hwndFocus),
+                   "original client keyboard focus enabled after explicit user open");
             quit_app(old_pid);close_other();
             ensure(!interrupted,"background startup preserved independent fullscreen foreground throughout twelve seconds");
             return 0;
