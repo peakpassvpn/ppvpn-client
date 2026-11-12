@@ -4,6 +4,13 @@ run-name: iOS unsigned archives for frozen product source
 on:
   workflow_dispatch:
     inputs:
+      private_build_number:
+        description: Explicit new private diagnostic build counter, separate from verified ordinary control
+        required: false
+      ios256_reuse_control355:
+        description: Authenticate existing ordinary355 control and compile only the new diagnostic Main and NE
+        type: boolean
+        default: false
       private_dispatch_nonce:
         description: One-use public nonce bound to the pre-dispatch private build envelope
         required: false
@@ -480,9 +487,11 @@ jobs:
       CANDIDATE_ONLY: '1'
       GOTOOLCHAIN: go1.25.8
       SDK2A9_PLATFORM: ${{ matrix.platform }}
+      PPVPN_PRIVATE_BUILD_NUMBER: ${{ inputs.private_build_number }}
+      PPVPN_REUSE_ORDINARY_355: ${{ inputs.ios256_reuse_control355 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Preload reviewed ordinary source
+      - name: Preload reviewed frozen source
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/apple/preload_sdk2a9_source.py
@@ -525,7 +534,13 @@ jobs:
           path: ${{ runner.temp }}/sdk2a9-output/macos-peer-worker-checks
           if-no-files-found: warn
           retention-days: 7
+      - name: Authenticate existing ordinary355 control
+        if: matrix.platform == 'ios' && inputs.ios256_variant == 'diagnostic' && inputs.ios256_reuse_control355
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/apple/reuse_ordinary_ios355_control.py
       - name: Build exact ordinary package
+        if: ${{ !(matrix.platform == 'ios' && inputs.ios256_variant == 'diagnostic' && inputs.ios256_reuse_control355) }}
         env:
           PPVPN_SKIP_ANALYZE: '1'
         run: python3 tools/apple/build_sdk2a9_platform.py
@@ -541,7 +556,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PPVPN_PRIVATE_DISPATCH_NONCE: ${{ inputs.private_dispatch_nonce }}
-          PPVPN_IOS256_PRIVATE_BUNDLE: ${{ secrets.PPVPN_IOS256_F997_B15423FC }}
+          PPVPN_IOS256_PRIVATE_BUNDLE: ${{ secrets.PPVPN_IOS256_F997_7AB1F9C0 }}
         run: python3 tools/apple/private_ios256_build.py
       - name: Reclaim private hosted scratch after any result
         if: always() && matrix.platform == 'ios' && inputs.ios256_variant == 'diagnostic'

@@ -8,7 +8,7 @@ def validate_domain_capability(raw,policy,policy_sha):
     assert set(value)==expected
     assert type(value['schema']) is int and value['schema']==1
     assert value['kind']=='CAPACITY_V3_MAIN_DOMAIN_BUILD_INPUT'
-    assert value['campaign_contract']=='CAPACITY_V3_TCP_UDP_CANCEL'
+    assert value['campaign_contract']=='CAPACITY_V3_TCP64_8K_UDP_CANCEL'
     assert value['package']=='com.peakpassvpn.ppvpn' and value['protocol']=='udp'
     assert value['ordinary_enabled'] is False and value['public_authority']=='UNBOUND_BUILD_INPUT_ONLY'
     assert isinstance(value['runtime_target_manifest'],str) and value['runtime_target_manifest']

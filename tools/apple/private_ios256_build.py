@@ -16,7 +16,7 @@ def execute():
     assert set(bundle)=={'schema','source','controller','dispatch_nonce','build','policy_base64','policy_sha256','domain_capability_base64','domain_capability_sha256','recipient','expires_unix'}
     assert bundle['schema']==3 and bundle['source']==env['SOURCE_REF'] and bundle['controller']==env['GITHUB_SHA']
     assert re.fullmatch(r'[0-9a-f]{64}',bundle['dispatch_nonce']) and bundle['dispatch_nonce']==env['PPVPN_PRIVATE_DISPATCH_NONCE']
-    assert env['GITHUB_RUN_ATTEMPT']=='1' and bundle['build']==int(env['PPVPN_BUILD_NUMBER'])+1
+    assert env['GITHUB_RUN_ATTEMPT']=='1' and bundle['build']==int(env.get('PPVPN_PRIVATE_BUILD_NUMBER') or int(env['PPVPN_BUILD_NUMBER'])+1)
     assert time.time()<bundle['expires_unix']<time.time()+8*3600
     assert re.fullmatch(r'age1[a-z0-9]{50,200}',bundle['recipient'])
     policy=base64.b64decode(bundle['policy_base64'],validate=True)
@@ -37,12 +37,12 @@ def execute():
     output=private/'apple-output'
     policy_path=private/'udp-policy.txt'
     capacity_manifest_path=private/'capacity-source-manifest.json'
-    result=private/'private-build-manifest.json';records=[];failure=None;archive=None
+    result=private/'private-build-manifest.json';records=[];failure=None;archive=None;capacity_manifest={}
     child=child_environment(env)
     product_version=workspace_version(source,child)
     for k in ['PPVPN_IOS256_PRIVATE_BUNDLE','GH_TOKEN','GITHUB_TOKEN','IOS_TEAM_ID','IOS_APP_PROFILE','IOS_TUNNEL_PROFILE','IOS_EXPORT_OPTIONS','PPVPN_API_BASE','PPVPN_FLUTTER_HOME','PPVPN_FLUTTER_SAMPLE','PPVPN_FLUTTER_SYNTHETIC_TRAFFIC']:
         child.pop(k,None)
-    child.update(CARGO_TARGET_DIR=str(private/'target'),RUNNER_TEMP=str(private),GITHUB_WORKSPACE=env['SDK2A9_GIT'],PPVPN_BUILD_NUMBER=str(bundle['build']),CANDIDATE_ONLY='1',REUSE_BASELINE_RUN='',PAIRED_CANDIDATE_JSON='',PPVPN_INTERNAL_DIAGNOSTICS='1',PPVPN_INTERNAL_IOS_CAP256_CANDIDATE='1',PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS='1',PPVPN_INTERNAL_CAPACITY_CAMPAIGN='1',PPVPN_INTERNAL_CAPACITY_UDP_CANCEL='1',PPVPN_CAPACITY_SOURCE_MANIFEST_FILE=str(capacity_manifest_path),PPVPN_PRIVATE_UDP_POLICY_FILE=str(policy_path),PPVPN_PRIVATE_UDP_POLICY_SHA256=bundle['policy_sha256'],PPVPN_SKIP_ANALYZE='1')
+    child.update(CARGO_TARGET_DIR=str(private/'target'),RUNNER_TEMP=str(private),GITHUB_WORKSPACE=env['SDK2A9_GIT'],PPVPN_BUILD_NUMBER=str(bundle['build']),CANDIDATE_ONLY='1',REUSE_BASELINE_RUN='',PAIRED_CANDIDATE_JSON='',PPVPN_INTERNAL_DIAGNOSTICS='1',PPVPN_INTERNAL_IOS_CAP256_CANDIDATE='1',PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS='1',PPVPN_INTERNAL_CAPACITY_CAMPAIGN='1',PPVPN_INTERNAL_CAPACITY_UDP_CANCEL='1',PPVPN_INTERNAL_CAPACITY_MEMORY357='1',PPVPN_CAPACITY_SOURCE_MANIFEST_FILE=str(capacity_manifest_path),PPVPN_PRIVATE_UDP_POLICY_FILE=str(policy_path),PPVPN_PRIVATE_UDP_POLICY_SHA256=bundle['policy_sha256'],PPVPN_SKIP_ANALYZE='1')
     def run(stage,args,cwd=source,structured=False):
         print(json.dumps(dict(stage=stage,event='begin')),flush=True);started=time.monotonic()
         with (private/(stage+'.log')).open('wb') as log, ((private/(stage+'.stderr.log')).open('wb') if structured else contextlib.nullcontext(subprocess.STDOUT)) as errors:
@@ -76,6 +76,9 @@ def execute():
     def interrupted(signum,frame):raise InterruptedError('Private build interrupted')
     for signum in [signal.SIGINT,signal.SIGTERM]:old_handlers[signum]=signal.signal(signum,interrupted)
     try:
+        assert env.get('PPVPN_REUSE_ORDINARY_355')=='true' and bundle['build']==357
+        control=json.loads((temp/'sdk2a9-output/ordinary355-control-reuse.json').read_bytes())
+        assert control['control_source']=='40674d1866708c8e1a767be7592e6f4a8bca34b5'and control['requested_diagnostic_source']==bundle['source']
         output.mkdir()
         policy_path.write_bytes(policy);policy_path.chmod(0o600)
         tracked=subprocess.check_output(['git','ls-files'],cwd=source,text=True).splitlines()
@@ -83,10 +86,13 @@ def execute():
         inventory_raw=(json.dumps(inventory,sort_keys=True,indent=2)+'\n').encode()
         (private/'source-files-inventory.json').write_bytes(inventory_raw)
         inventory_sha=hashlib.sha256(inventory_raw).hexdigest()
-        capacity_manifest=dict(kind='CAPACITY_V3_SOURCE_MANIFEST',campaign_contract='CAPACITY_V3_TCP_UDP_CANCEL',reservation_total_bytes=4169728,client_commit=bundle['source'],client_tree=frozen_manifest['tree'],sdk_commit='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=frozen_manifest['cargo_lock_sha256'],same_private_policy_sha256=bundle['policy_sha256'],ordinary_default_cap=128,private_capacity_cap=256,policy_consumers={key:bundle['policy_sha256'] for key in ['SDK','NE_observer','Main_probe']},source_files_inventory_sha256=inventory_sha,capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),scope='Unsigned compiler/control evidence; complete256/UDP/cancel acceptance is not implied')
+        capacity_manifest=dict(kind='CAPACITY_V3_SOURCE_MANIFEST',campaign_contract='CAPACITY_V3_TCP64_8K_UDP_CANCEL',reservation_total_bytes=9084928,client_commit=bundle['source'],client_tree=frozen_manifest['tree'],sdk_commit='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=frozen_manifest['cargo_lock_sha256'],same_private_policy_sha256=bundle['policy_sha256'],ordinary_default_cap=128,private_capacity_cap=256,policy_consumers={key:bundle['policy_sha256'] for key in ['SDK','NE_observer','Main_probe']},source_files_inventory_sha256=inventory_sha,capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),ordinary_control_source=control['control_source'],relay_max_kib=32,stage64_payload_bytes=8192,scope='Unsigned compiler evidence; ordinary128 reference retained under its real source; complete256/UDP/cancel/memory acceptance is not implied')
+        memory_profile=json.loads((source/'tools/apple/MEMORY357-STAGE-PROFILES.json').read_bytes())
+        assert memory_profile['campaign_contract']==capacity_manifest['campaign_contract'] and memory_profile['reservation_total_bytes']==capacity_manifest['reservation_total_bytes']
+        for key in ['capacity_stage_profiles','capacity_stage_profile_sha256','relay_buffer_initial_bytes','relay_buffer_max_bytes']:capacity_manifest[key]=memory_profile[key]
         (private/'main-domain-build-input.json').write_bytes(domain_raw)
         capacity_manifest_path.write_text(json.dumps(capacity_manifest,sort_keys=True,indent=2)+'\n');capacity_manifest_path.chmod(0o600)
-        run('map-main-domain-capability',[sys.executable,str(source/'tools/apple/prepare_main_domain_capability.py'),'--build-input',str(private/'main-domain-build-input.json'),'--build-input-sha256',bundle['domain_capability_sha256'],'--source-manifest',str(capacity_manifest_path)])
+        run('map-main-domain-capability',[sys.executable,str(source/'tools/apple/prepare_main_domain_capability.py'),'--build-input',str(private/'main-domain-build-input.json'),'--build-input-sha256',bundle['domain_capability_sha256'],'--source-manifest',str(capacity_manifest_path),'--memory357'])
         capacity_manifest=json.loads(capacity_manifest_path.read_text())
         assert set(capacity_manifest['main_udp_domain_capability'])=={'schema','contract','domain','ipv4','port','tuple_policy_sha256'}
         assert capacity_manifest['main_udp_domain_build_input_sha256']==bundle['domain_capability_sha256']
@@ -100,7 +106,7 @@ def execute():
         (private/'ne-policy-seed-proof.json').write_text(json.dumps(dict(profile='mobile',preexisting_configured_policy_count=0,unconfigured_files=len(seeded_policy_files)),indent=2)+'\n')
         (private/'isolation.json').write_text(json.dumps(dict(seed=seed,private_cargo_target=str(private_target),ordinary_target_read_only=True,go_cache_variables_changed=False),indent=2)+'\n')
         config=private/'private-build.xcconfig'
-        config.write_text('\n'.join([f'SYMROOT = {private}/apple-products',f'OBJROOT = {private}/apple-intermediates',f'CLANG_MODULE_CACHE_PATH = {private}/apple-module-cache',f'SWIFT_MODULE_CACHE_PATH = {private}/apple-swift-module-cache',f'SHARED_PRECOMPS_DIR = {private}/apple-precompiled','COMPILER_INDEX_STORE_ENABLE = NO','INDEX_ENABLE_DATA_STORE = NO'])+'\n');config.chmod(0o600)
+        config.write_text('\n'.join([f'CLANG_MODULE_CACHE_PATH = {private}/apple-module-cache',f'SWIFT_MODULE_CACHE_PATH = {private}/apple-swift-module-cache',f'SHARED_PRECOMPS_DIR = {private}/apple-precompiled','COMPILER_INDEX_STORE_ENABLE = NO','INDEX_ENABLE_DATA_STORE = NO'])+'\n');config.chmod(0o600)
         child['XCODE_XCCONFIG_FILE']=str(config)
         run('main-rust-features',['cargo','tree','--locked','--target','aarch64-apple-ios','-e','features,no-dev','-p','ppvpn-flutter'])
         run('ne-explicit-features',['cargo','tree','--locked','--target','aarch64-apple-ios','-e','features,no-dev','--prefix','none','-i','ppvpn-tunnel-host','-p','ppvpn-tunnel-host','--features','internal-ios-cap256-candidate,internal-udp-target-diagnostics'])
@@ -117,7 +123,8 @@ def execute():
         for plist in [archive_app/'Info.plist',archive_app/'PlugIns/PacketTunnel.appex/Info.plist']:
             info=plistlib.loads(plist.read_bytes())
             assert info['PPVPNCapacitySourceManifestSHA256']==hashlib.sha256(capacity_manifest_path.read_bytes()).hexdigest()
-            assert info['PPVPNInternalDiagnosticsEnabled'] is True and info['PPVPNInternalCapacityCampaignEnabled'] is True and info['PPVPNInternalCapacityUDPCancelEnabled'] is True
+            assert info['PPVPNInternalDiagnosticsEnabled'] is True and info['PPVPNInternalCapacityCampaignEnabled'] is True and info['PPVPNInternalCapacityUDPCancelEnabled'] is True and info['PPVPNInternalCapacityMemory357Enabled'] is True
+            assert info['PPVPNCapacityStageProfileSHA256']==capacity_manifest['capacity_stage_profile_sha256']
             if info['CFBundleIdentifier']=='com.peakpassvpn.ppvpn':
                 assert info['PPVPNCapacitySourceManifestData']==capacity_manifest_path.read_bytes()
                 assert info['PPVPNCapacityMainUDPDomainCapability']==capacity_manifest['main_udp_domain_capability']
@@ -135,11 +142,46 @@ def execute():
             rows=[r['buildSettings'] for r in settings if r.get('target')==name];assert len(rows)==1
             actual=rows[0];flags=actual['SWIFT_ACTIVE_COMPILATION_CONDITIONS']
             if isinstance(flags,str):flags=flags.split()
-            assert all(flag in flags for flag in ['PPVPN_INTERNAL_DIAGNOSTICS','PPVPN_INTERNAL_IOS_CAP256_CANDIDATE','PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS','PPVPN_INTERNAL_CAPACITY_CAMPAIGN','PPVPN_INTERNAL_CAPACITY_UDP_CANCEL'])
-            for key in ['SYMROOT','OBJROOT','CLANG_MODULE_CACHE_PATH','SHARED_PRECOMPS_DIR']:
+            assert all(flag in flags for flag in ['PPVPN_INTERNAL_DIAGNOSTICS','PPVPN_INTERNAL_IOS_CAP256_CANDIDATE','PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS','PPVPN_INTERNAL_CAPACITY_CAMPAIGN','PPVPN_INTERNAL_CAPACITY_UDP_CANCEL','PPVPN_INTERNAL_CAPACITY_MEMORY357'])
+            for key in ['CLANG_MODULE_CACHE_PATH','SHARED_PRECOMPS_DIR']:
                 assert pathlib.Path(actual[key]).resolve().is_relative_to(private.resolve()),key
-            checked.append(dict(target=name,swift_conditions=flags,private_output_settings=True))
+            checked.append(dict(target=name,swift_conditions=flags,private_module_cache_and_precompiled_settings=True,archive_object_product_roots='Standard Xcode archive layout under explicit private derivedDataPath; no SYMROOT/OBJROOT override'))
         (private/'actual-main-ne-conditions.json').write_text(json.dumps(checked,indent=2)+'\n')
+        archive_recipe=(controller/'tools/apple/archive_ios_variants.sh').read_text()
+        assert '-derivedDataPath "$RUNNER_TEMP/apple-derived-$side" archive' in archive_recipe
+        raw_archive=(candidate/'archive.log').read_text(errors='replace')
+        compiler_outputs=[]
+        for quoted,plain in re.findall(r'(?:^|\s)-o\s+(?:"([^"]+)"|([^\s]+))',raw_archive):
+            value=quoted or plain
+            if value in ['-',os.devnull]:continue
+            path=pathlib.Path(value)
+            if not path.is_absolute():path=project/path
+            assert path.resolve().is_relative_to(private.resolve()),'Archive compiler output escaped private scratch'
+            compiler_outputs.append(str(path))
+        assert compiler_outputs,'No actual archive compiler output paths observed'
+        (private/'actual-archive-output-isolation.json').write_text(json.dumps(dict(explicit_private_derived_data=True,private_checkout=True,SYMROOT_OBJROOT_overrides=False,actual_compiler_output_paths=sorted(set(compiler_outputs)),private_module_caches=True,ordinary_target_alias_rejected=True),indent=2)+'\n')
+        # Compile once on this same Apple worker/checkout/target, then run only
+        # the settings selectors and actual running SDK snapshot selector. No TUN or traffic workload.
+        core_before=hashlib.sha256((project.parent.parent/'crates/core/src/engine.rs').read_bytes()).hexdigest()
+        cargo_root=project.parent.parent
+        run('relay32-core-libtest-compile',['cargo','test','--locked','-p','ppvpn-core','--lib','--features','internal-diagnostics','--no-run','--message-format=json'],cwd=cargo_root,structured=True)
+        artifacts=[json.loads(line)for line in (private/'relay32-core-libtest-compile.log').read_text().splitlines()if line.startswith('{')]
+        binaries={r['executable']for r in artifacts if r.get('reason')=='compiler-artifact'and r.get('target',{}).get('name')=='ppvpn_core'and r.get('profile',{}).get('test')and r.get('executable')}
+        assert len(binaries)==1
+        binary=pathlib.Path(binaries.pop());binary_before=hashlib.sha256(binary.read_bytes()).hexdigest();settings_results=[]
+        for index,selector in enumerate(['engine::tests::relay32_is_only_for_ios_tun_with_an_explicit_256_cap','engine::tests::mobile_runs_sails_mobile_profile_and_the_hosts_cap','engine::tests::cap256_settings_reach_actual_running_sail_snapshot']):
+            stage='relay32-core-settings-'+str(index+1)
+            run(stage,[str(binary),'--exact',selector,'--test-threads=1','--nocapture'],cwd=cargo_root)
+            raw=(private/(stage+'.log')).read_text()
+            assert re.search(r'test result: ok\. 1 passed; 0 failed; 0 ignored;',raw)
+            settings_results.append(dict(selector=selector,passed=1,failed=0,ignored=0))
+        assert hashlib.sha256(binary.read_bytes()).hexdigest()==binary_before
+        assert hashlib.sha256((cargo_root/'crates/core/src/engine.rs').read_bytes()).hexdigest()==core_before
+        assert hashlib.sha256((cargo_root/'Cargo.lock').read_bytes()).hexdigest()==frozen_manifest['cargo_lock_sha256']
+        (private/'relay32-actual-sdk-settings-validation.json').write_text(json.dumps(dict(source=bundle['source'],sdk='f99761138b23f267ebc7621057afe02018ab7c18',core_source_sha256=core_before,binary_sha256=binary_before,same_binary_pre_post_verified=True,selectors=settings_results,actual_SDK_StartSettings_parse_and_resolve_cases=105,ordinary128_resolved_initial_kib=8,ordinary128_resolved_max_kib=64,ios_tun256_resolved_initial_kib=8,ios_tun256_resolved_max_kib=32,actual_runtime_network_or_capacity_workload=False),indent=2)+'\n')
+        control['ordinary128_equivalence_actual_SDK_resolve_pending']=False
+        control['settings_validation']='relay32-actual-sdk-settings-validation.json'
+        (private/'ordinary355-control-reuse.json').write_text(json.dumps(control,indent=2)+'\n')
         generated=private/'apple-candidate/apps/flutter/ios/Runner'
         swift_proof=json.loads((generated/'PrivateUDPBuildPolicy.provenance.json').read_text())
         assert swift_proof['configured'] is True and swift_proof['input_sha256']==bundle['policy_sha256']
@@ -171,7 +213,7 @@ def execute():
         failure=type(error).__name__
     finally:
         # No raw exception/input text reaches the public console or upload path.
-        context=dict(schema=1,source=bundle['source'],controller=bundle['controller'],run_id=int(env['GITHUB_RUN_ID']),dispatch_nonce=bundle['dispatch_nonce'],build=bundle['build'],product_version=product_version,sdk='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=hashlib.sha256((source/'Cargo.lock').read_bytes()).hexdigest(),base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,capacity_campaign=True,capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),capacity_source_manifest_sha256=hashlib.sha256(capacity_manifest_path.read_bytes()).hexdigest() if capacity_manifest_path.exists() else None,domain_capability_input_sha256=bundle['domain_capability_sha256'],policy_input_sha256=bundle['policy_sha256'],policy_after_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest() if policy_path.exists() else None,main_app_engine=False,steps=records,failure_class=failure,age=age_proof,scope='Unsigned internal build only; no install, network workload, capacity acceptance, signing credentials or release')
+        context=dict(schema=1,source=bundle['source'],controller=bundle['controller'],run_id=int(env['GITHUB_RUN_ID']),dispatch_nonce=bundle['dispatch_nonce'],build=bundle['build'],product_version=product_version,sdk='f99761138b23f267ebc7621057afe02018ab7c18',cargo_lock_sha256=hashlib.sha256((source/'Cargo.lock').read_bytes()).hexdigest(),base_diagnostics=True,explicit_ios256_candidate=True,udp_target_diagnostics=True,capacity_campaign=True,memory357=True,capacity_stage_profile_sha256=capacity_manifest.get('capacity_stage_profile_sha256') if capacity_manifest_path.exists() else None,capacity_campaign_complete=frozen_manifest.get('capacity_campaign_complete',False),capacity_source_manifest_sha256=hashlib.sha256(capacity_manifest_path.read_bytes()).hexdigest() if capacity_manifest_path.exists() else None,domain_capability_input_sha256=bundle['domain_capability_sha256'],policy_input_sha256=bundle['policy_sha256'],policy_after_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest() if policy_path.exists() else None,main_app_engine=False,steps=records,failure_class=failure,age=age_proof,scope='Unsigned internal build only; no install, network workload, capacity acceptance, signing credentials or release')
         payload=private/'private-ios256-payload.tar.gz'
         try:
             result.write_text(json.dumps(context,indent=2)+'\n');result.chmod(0o600)
