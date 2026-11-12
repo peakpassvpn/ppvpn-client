@@ -5,16 +5,16 @@ temp=pathlib.Path(os.environ['RUNNER_TEMP']);out=temp/'sdk2a9-output';out.mkdir(
 slug=os.environ['GITHUB_REPOSITORY'];release=json.loads(subprocess.check_output(['gh','api',f'repos/{slug}/releases/442941010']))
 assert release['draft'] is True
 assets={a['name']:a for a in release['assets']}
-expected={'transport-cap128.json':'b14326bc1742be736d66e5dd26a15a958c4a20139d1a2e4353716abaa06dc34a','client-cap128.pack':'824c7476aa44a8ca174bb571e802482eaa60beb8c421d84bc8d366da2a93af0e'}
+expected={'transport-f1d7b7d0.json':'4918d3c32133bc721666f1fb8c40cd4c06cf69624edf2de33e509ab9531443ef','client-f1d7b7d0.pack':'b8f667ca1213187ef6ba687c6b7f410bbf6e08b14db0b9965b22e02dcdc88ce1'}
 def download(name):
  a=assets[name];assert a['digest']=='sha256:'+expected[name]
  raw=subprocess.check_output(['gh','api','-H','Accept: application/octet-stream',f"repos/{slug}/releases/assets/{a['id']}"])
  assert len(raw)==a['size'] and hashlib.sha256(raw).hexdigest()==expected[name];return raw
-manifest=json.loads(download('transport-cap128.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
+manifest=json.loads(download('transport-f1d7b7d0.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
 assert manifest['internal_diagnostics'] is False and manifest['private_policy_present'] is False
 assert manifest['ios_default_cap']==128 and manifest['mobile_local_proxy'] is False
 bare=temp/'sdk2a9-source.git';subprocess.run(['git','init','--bare',str(bare)],check=True)
-subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-cap128.pack'),check=True)
+subprocess.run(['git','-C',str(bare),'unpack-objects','-q'],input=download('client-f1d7b7d0.pack'),check=True)
 (bare/'shallow').write_text(manifest['source']+'\n')
 subprocess.run(['git','-C',str(bare),'update-ref','refs/heads/frozen',manifest['source']],check=True)
 subprocess.run(['git','-C',str(bare),'symbolic-ref','HEAD','refs/heads/frozen'],check=True)

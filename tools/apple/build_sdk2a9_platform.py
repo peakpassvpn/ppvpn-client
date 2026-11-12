@@ -5,9 +5,13 @@ assert env['PPVPN_INTERNAL_DIAGNOSTICS']==env['PPVPN_INTERNAL_UDP_TARGET_DIAGNOS
 assert not env.get('PPVPN_PRIVATE_UDP_POLICY_FILE') and not env.get('PPVPN_PRIVATE_UDP_POLICY_SHA256')
 for key in ['IOS_TEAM_ID','IOS_APP_PROFILE','IOS_TUNNEL_PROFILE','IOS_EXPORT_OPTIONS','PPVPN_API_BASE','PPVPN_FLUTTER_HOME','PPVPN_FLUTTER_SAMPLE','PPVPN_FLUTTER_SYNTHETIC_TRAFFIC']:env.pop(key,None)
 start=time.monotonic()
+stages=[]
 def run(name,args,where=root,extra=None):
  e=env.copy();e.update(extra or {})
+ before=time.monotonic()
  with (out/(name+'.log')).open('wb') as log:r=subprocess.run(args,cwd=where,env=e,stdout=log,stderr=subprocess.STDOUT)
+ stages.append(dict(name=name,command=args,exit=r.returncode,seconds=time.monotonic()-before))
+ (out/'stage-results.json').write_text(json.dumps(stages,indent=2)+'\n')
  if r.returncode:raise SystemExit(r.returncode)
 triples={'ios':['aarch64-apple-ios'],'macos':['aarch64-apple-darwin'],'android':['aarch64-linux-android','x86_64-linux-android']}[platform]
 packages=['ppvpn-flutter','ppvpn-tunnel-host'] if platform!='macos' else ['ppvpn-flutter','ppvpn-desktop','ppvpn-service']
@@ -30,6 +34,8 @@ else:
   run('android-package',['bash','tools/android/build-size-artifact.sh',str(root),str(out/'candidate'),'all'])
  else:
   env.update(PPVPN_MACOS_SINGLE_RUNTIME='1',MACOS_ARCHS='arm64',PPVPN_APPLE_TARGETS='aarch64-apple-darwin')
+  from sdk2a9_mac_checks import execute
+  execute(root,out,env)
   run('flutter-build',['bash','apps/flutter/scripts/ci-build.sh'])
   run('helper-build',['bash','tools/desktop/build-service.sh','macos-arm64'])
   run('ffi-build',['bash','apps/macos/scripts/bootstrap.sh','--release'])
