@@ -53,6 +53,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      update_macos_client_qa:
+        description: "Run the normal macOS client build and fullscreen QA only"
+        type: boolean
+        default: false
       update_startup_run:
         description: "Reuse an existing Windows QA installer run for startup focus diagnosis (no client build)"
         type: string
@@ -88,14 +92,14 @@ env:
 
 jobs:
   update-notification-qa:
-    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/codex/update-fullscreen-')
+    if: github.event_name == 'workflow_dispatch' && !inputs.update_macos_client_qa && startsWith(github.ref, 'refs/heads/codex/update-fullscreen-')
     uses: ./.github/workflows/update-notification-qa.yml
     with:
       full_client: ${{ inputs.update_client_upgrade || false }}
       startup_run: ${{ inputs.update_startup_run || '' }}
 
   lint:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -192,7 +196,7 @@ jobs:
   # and is a warning on the others, so that it shows without blocking
   # unrelated work. The binary is cargo-deny's release, checked by hash.
   advisories:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: advisories
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -226,7 +230,7 @@ jobs:
 
   # L1 on Linux.
   unit:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: unit
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -262,7 +266,7 @@ jobs:
   # keyring, in a D-Bus session of its own with an unlocked login keyring
   # (no desktop session).
   integration:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: integration
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -312,7 +316,7 @@ jobs:
   #                   the policy rules and routing table, traffic through the
   #                   node, the cleanup after a disconnect and after kill -9
   linux:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: linux
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -458,7 +462,7 @@ jobs:
   #   - Swift bindings, then the AppLogic tests of the macOS push agent (no
   #     AppKit), with the Swift it is developed with.
   desktop:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: desktop
     # Pinned to the image the Swift toolchain is built for (ubuntu24.04):
     # newer images ship libxml2 with a different soname and swift-test
@@ -569,7 +573,7 @@ jobs:
   # Not the native app's build (#459): the Flutter app replaced it, and the
   # upgrade from it is tested with its last release (0.6.4).
   macos:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: macos
     runs-on: macos-15
     timeout-minutes: 90
@@ -700,7 +704,7 @@ jobs:
   # Not the native app's build (#459, #522): the Flutter app replaced it,
   # and the upgrade from it is tested with its last release (0.6.4).
   windows:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     name: windows
     runs-on: windows-latest
     timeout-minutes: 90
@@ -829,7 +833,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
+        os: ${{ fromJSON(inputs.update_macos_client_qa && '["macos-15"]' || '["ubuntu-latest","macos-15","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -1172,7 +1176,7 @@ jobs:
           if-no-files-found: ignore
 
   android:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     # The Flutter app's Android target (#448 step 3): the bridge and the
     # tunnel host for arm64 and x86_64 (the NDK's clang), the APK (signed
     # with the debug key until the Play upload key exists: the artifact
@@ -1312,7 +1316,7 @@ jobs:
           retention-days: 14
 
   ios:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     # The Flutter app's iOS target (#448): the bridge as a static library
     # for Apple silicon's simulator (BoringSSL built from source: btls has
     # no iOS prebuilts), the app (debug, unsigned), and the app started on
@@ -1374,7 +1378,7 @@ jobs:
         run: apps/flutter/e2e/ios_smoke.sh
 
   tunnel:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     # The mobile tunnel host for the iOS packet tunnel extension (#448):
     # crates/tunnel-host/scripts/build-xcframework.sh, the device slice only
     # (a network extension never runs in the simulator; the full
@@ -1426,7 +1430,7 @@ jobs:
           retention-days: 14
 
   tunnel-android:
-    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run }}
+    if: ${{ !inputs.update_client_upgrade && !inputs.update_startup_run && !inputs.update_macos_client_qa }}
     # The mobile tunnel host for Android's VpnService (#448):
     # crates/tunnel-host/scripts/build-android.sh, arm64-v8a only (the
     # emulator's x86_64 builds the same code), with clippy for Android: its
