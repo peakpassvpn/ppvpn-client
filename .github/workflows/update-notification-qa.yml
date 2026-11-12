@@ -3,14 +3,18 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      startup_run:
+        type: string
+        default: ""
       full_client:
         type: boolean
         default: false
 permissions:
   contents: read
+  actions: read
 jobs:
   windows-updater:
-    if: ${{ !inputs.full_client }}
+    if: ${{ !inputs.full_client && !inputs.startup_run }}
     runs-on: windows-latest
     timeout-minutes: 55
     steps:
@@ -76,7 +80,7 @@ jobs:
           path: build/update-qa/
 
   macos-updater:
-    if: ${{ !inputs.full_client }}
+    if: ${{ !inputs.full_client && !inputs.startup_run }}
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -94,7 +98,7 @@ jobs:
             build/macos-update-qa/feed.*
 
   windows-client-upgrade:
-    if: inputs.full_client
+    if: inputs.full_client && !inputs.startup_run
     runs-on: windows-latest
     timeout-minutes: 120
     env:
@@ -179,3 +183,36 @@ jobs:
             build/client-upgrade-qa/
             build/update-installers/
             build/update-qa/
+
+  windows-startup-diagnostic:
+    if: inputs.startup_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: actual-client-update-fallback-qa
+          run-id: ${{ inputs.startup_run }}
+          github-token: ${{ github.token }}
+          path: build/reused
+      - name: Compile observer only (reuse actual normal client)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build/startup-focus-qa|Out-Null
+          $vswhere="${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs=& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if(-not $vs){throw 'MSVC unavailable'}
+          $vars=Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\startup-focus-qa\client-upgrade-qa.exe"
+          if($LASTEXITCODE){throw 'Observer compile failed'}
+      - name: Actual hidden startup and foreground diagnosis
+        shell: powershell
+        env:
+          PPVPN_SOURCE_RUN: ${{ inputs.startup_run }}
+        run: tools/desktop/windows/run-startup-focus-qa.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: windows-startup-focus-diagnostic
+          path: build/startup-focus-qa/

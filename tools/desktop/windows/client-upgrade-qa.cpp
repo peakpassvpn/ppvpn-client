@@ -47,8 +47,11 @@ static void sample(const char* phase,DWORD old_pid,DWORD new_pid,HWND expected_f
     auto old_update=visible(old_pid),new_update=new_pid?visible(new_pid):nullptr;
     auto new_window=new_pid?visible(new_pid,false):nullptr;
     FILE* file=nullptr;fopen_s(&file,"window-samples.csv","a");
-    if(file){std::fprintf(file,"%s,%llu,%lu,%lu,%lu,%p,%p,%p\n",phase,GetTickCount64(),foreground_pid,old_pid,new_pid,old_update,new_update,new_window);fclose(file);}
-    if(expected_fullscreen && foreground!=expected_fullscreen) throw std::runtime_error("foreground changed during fullscreen installation transition");
+    wchar_t class_name[256]={};GetClassNameW(foreground,class_name,256);
+    char class_utf8[768]={};WideCharToMultiByte(CP_UTF8,0,class_name,-1,class_utf8,sizeof(class_utf8),nullptr,nullptr);
+    RECT frame={};GetWindowRect(foreground,&frame);
+    if(file){std::fprintf(file,"%s,%llu,%lu,%lu,%lu,%p,%p,%p,%p,%s,%d,%ld,%ld,%ld,%ld\n",phase,GetTickCount64(),foreground_pid,old_pid,new_pid,old_update,new_update,new_window,foreground,class_utf8,IsWindowVisible(foreground),frame.left,frame.top,frame.right,frame.bottom);fclose(file);}
+    if(expected_fullscreen && foreground!=expected_fullscreen) throw std::runtime_error(std::string("foreground changed during ")+phase);
     if(expected_fullscreen && new_window) throw std::runtime_error("new B window appeared during fullscreen installation transition");
 }
 static HWND install_button=nullptr;
@@ -101,7 +104,8 @@ static void snapshot(const wchar_t* file) {
 int wmain(int argc,wchar_t** argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     try {
-        ensure(argc==5,"arguments: installed client, existing helper, A version, B version");
+        const bool startup_only=argc==6 && wcscmp(argv[5],L"--startup-only")==0;
+        ensure(argc==5 || startup_only,"arguments: installed client, existing helper, A version, B version [--startup-only]");
         capture_helper=argv[2];
         DWORD session=0;ProcessIdToSessionId(GetCurrentProcessId(),&session);
         ensure(session>0 && session==WTSGetActiveConsoleSessionId(),"actual active console session");
@@ -112,9 +116,28 @@ int wmain(int argc,wchar_t** argv) {
         ensure(foreground!=nullptr,"independent foreground app created");AllowSetForegroundWindow(other.dwProcessId);
         SendMessageW(foreground,WM_APP+1,1,0);Sleep(500);
         ensure(GetForegroundWindow()==foreground && ppvpn_update::foreground_fullscreen(),"other app actually fullscreen before client scheduled check");
+        if(startup_only){
+            wchar_t timing[MAX_PATH]={};GetFullPathNameW(L"startup-timing.txt",MAX_PATH,timing,nullptr);
+            SetEnvironmentVariableW(L"PPVPN_FLUTTER_TIMING",timing);
+            FILETIME time={};GetSystemTimeAsFileTime(&time);ULARGE_INTEGER value={};value.LowPart=time.dwLowDateTime;value.HighPart=time.dwHighDateTime;
+            auto epoch=std::to_wstring(value.QuadPart/10000ULL-11644473600000ULL);
+            SetEnvironmentVariableW(L"PPVPN_FLUTTER_T0_MS",epoch.c_str());
+        }
         app=launch(argv[1],L"--background");
         DWORD old_pid=app.dwProcessId;role("A",old_pid);
         const auto full_start=GetTickCount64();ULONGLONG response_tick=0;
+        if(startup_only){
+            std::printf("DIAGNOSTIC startup-only actual client pid=%lu launch_argument=--background tick=%llu; no appcast/install acceptance\n",old_pid,full_start);std::fflush(stdout);
+            bool interrupted=false,captured=false;
+            while(GetTickCount64()<full_start+12000){
+                sample("A-startup-diagnostic",old_pid,0);
+                if(GetForegroundWindow()!=foreground){interrupted=true;if(!captured){snapshot(L"startup-focus-change.txt");captured=true;}}
+                Sleep(20);
+            }
+            snapshot(L"startup-final.txt");quit_app(old_pid);close_other();
+            ensure(!interrupted,"background startup preserved independent fullscreen foreground throughout twelve seconds");
+            return 0;
+        }
         while(GetTickCount64()<full_start+30000){
             sample("A-initial-fullscreen",old_pid,0,foreground);
             if(visible(old_pid))throw std::runtime_error("client A prompted during fullscreen");
