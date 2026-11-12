@@ -17,7 +17,8 @@ def main():
  def save():
   (work/'state.json').write_text(json.dumps(state,indent=2)+'\n')
  def gh(args,body=None):
-  r=subprocess.run(['gh',*args],input=body,capture_output=True)
+  try:r=subprocess.run(['gh',*args],input=body,capture_output=True,timeout=60)
+  except subprocess.TimeoutExpired:raise RuntimeError('GitHub operation timed out; sensitive diagnostics withheld') from None
   if r.returncode:raise RuntimeError('GitHub operation failed; sensitive diagnostics withheld')
   return r.stdout
  def api(path):return json.loads(gh(['api',f'repos/{repo}/'+path]))

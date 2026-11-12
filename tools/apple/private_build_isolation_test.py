@@ -14,5 +14,5 @@ class IsolationTests(unittest.TestCase):
  def test_external_compiler_caches_removed_go_unchanged(self):
   env=dict(RUSTC_WRAPPER='sccache',RUSTC_WORKSPACE_WRAPPER='other',SCCACHE_DIR='/external',SCCACHE_BUCKET='external',CCACHE_DIR='/external',GOCACHE='/configured',GOMODCACHE='/modules',GOTMPDIR='/go-temp',GOBIN='/go-bin')
   actual=child_environment(env)
-  self.assertEqual(actual,{k:v for k,v in env.items() if k.startswith('GO')})
+  self.assertEqual(actual,{**{k:v for k,v in env.items() if k.startswith('GO')},'RUSTC_WRAPPER':'','RUSTC_WORKSPACE_WRAPPER':''})
 if __name__=='__main__':unittest.main()

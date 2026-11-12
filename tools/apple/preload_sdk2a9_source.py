@@ -11,6 +11,9 @@ def download(name):
  raw=subprocess.check_output(['gh','api','-H','Accept: application/octet-stream',f"repos/{slug}/releases/assets/{a['id']}"])
  assert len(raw)==a['size'] and hashlib.sha256(raw).hexdigest()==expected[name];return raw
 manifest=json.loads(download('transport-f1d7b7d0.json'));assert manifest['source']==os.environ['SOURCE_REF'];assert manifest['build']==os.environ['PPVPN_BUILD_NUMBER']
+# This controller must never dispatch a superseded SDK/Client lock by accident.
+assert manifest['sail']=='f99761138b23f267ebc7621057afe02018ab7c18'
+assert manifest['cargo_lock_sha256']=='364b3b2be036cb8805eadd898446c3ad5a8cb25a4c6e6b0fca7eea7ec5f16ca7'
 assert manifest['internal_diagnostics'] is False and manifest['private_policy_present'] is False
 assert manifest['ios_default_cap']==128 and manifest['mobile_local_proxy'] is False
 bare=temp/'sdk2a9-source.git';subprocess.run(['git','init','--bare',str(bare)],check=True)

@@ -23,4 +23,6 @@ def child_environment(env):
     for key in list(child):
         if key in {'RUSTC_WRAPPER','RUSTC_WORKSPACE_WRAPPER'} or key.startswith(('SCCACHE_','CCACHE_')):
             child.pop(key,None)
+    # Empty values also override any Cargo config file wrapper.
+    child.update(RUSTC_WRAPPER="",RUSTC_WORKSPACE_WRAPPER="")
     return child
