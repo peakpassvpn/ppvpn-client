@@ -7,7 +7,7 @@ digest='04839fc9f0ed270a866ab86ba0e858558324ba5804a2fe3813f2c63be1f56e6e'
 source='40674d1866708c8e1a767be7592e6f4a8bca34b5'
 assert os.environ['GITHUB_REPOSITORY']==repo and os.environ['SOURCE_REF']==source
 def gh(path,binary=False):
- raw=subprocess.check_output(['gh','api',*(['-H','Accept: application/octet-stream']if binary else[]),f'repos/{repo}/actions/'+path],timeout=60)
+ raw=subprocess.check_output(['gh','api',f'repos/{repo}/actions/'+path],timeout=60)
  return raw if binary else json.loads(raw)
 run=gh(f'runs/{run_id}');job=gh(f'jobs/{job_id}');meta=gh(f'artifacts/{artifact_id}')
 assert run['head_sha']==controller and run['conclusion']=='failure'
