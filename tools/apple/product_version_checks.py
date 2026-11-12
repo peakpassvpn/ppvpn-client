@@ -11,11 +11,13 @@ def workspace_version(source,env):
 def apple_versions(app,version,build,ios=False):
     paths=[app/'Info.plist'] if ios else [app/'Contents/Info.plist']
     if ios:paths.append(app/'PlugIns/PacketTunnel.appex/Info.plist')
+    elif (app/'Contents/Library/LoginItems/PPVPN Agent.app/Contents/Info.plist').is_file():paths.append(app/'Contents/Library/LoginItems/PPVPN Agent.app/Contents/Info.plist')
+    expected_build=str(build) if ios else version+'.'+str(build)
     result=[]
     for path in paths:
         info=plistlib.loads(path.read_bytes())
         assert info['CFBundleShortVersionString']==version,'Actual Apple product version differs'
-        assert str(info['CFBundleVersion'])==str(build),'Actual Apple build differs'
+        assert str(info['CFBundleVersion'])==expected_build,f'Actual Apple build differs at {path}: {info["CFBundleVersion"]} expected {expected_build}'
         result.append(dict(bundle=info['CFBundleIdentifier'],version=info['CFBundleShortVersionString'],build=str(info['CFBundleVersion'])))
     return result
 
