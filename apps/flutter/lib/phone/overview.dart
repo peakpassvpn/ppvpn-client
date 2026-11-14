@@ -145,8 +145,12 @@ class _ConnectionCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Flexible(child: _StatusPill(snapshot: snapshot, tone: tone)),
-                    const Spacer(),
+                    Expanded(
+                      child: Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: _StatusPill(snapshot: snapshot, tone: tone),
+                      ),
+                    ),
                     Swap(
                       id: connected,
                       alignment: AlignmentDirectional.centerEnd,
