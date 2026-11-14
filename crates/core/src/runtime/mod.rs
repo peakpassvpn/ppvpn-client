@@ -29,7 +29,7 @@ use crate::translate;
 pub(crate) mod fake;
 pub(crate) mod sail;
 
-/// Where a runtime is in its life (`sail::embed::State`).
+/// Where a runtime is in its life (`::sail::embed::State`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeState {
     Idle,
@@ -346,6 +346,59 @@ pub(crate) struct NetworkChange {
 /// implementation serialises what sail needs serialised.
 #[async_trait]
 pub(crate) trait Runtime: Send + Sync + 'static {
+    fn observation(&self) -> crate::capture::RuntimeObservation;
+    fn has_dynamic_capture(&self) -> bool {
+        false
+    }
+    fn capture_interface_name(&self) -> Option<String> {
+        None
+    }
+
+    fn stage_capture_device(
+        &self,
+        _resource: Option<std::sync::Arc<dyn crate::capture_host::CaptureAttachment>>,
+    ) -> Result<(), RuntimeError> {
+        Err(RuntimeError::new(
+            "unsupported",
+            "dynamic capture unavailable",
+        ))
+    }
+
+    fn native_capture_state(&self) -> Result<::sail::embed::TunState, RuntimeError> {
+        Err(RuntimeError::new(
+            "unsupported",
+            "dynamic capture unavailable",
+        ))
+    }
+    async fn prepare_capture_packets(
+        &self,
+        _inbound: &str,
+        _capacity: usize,
+    ) -> Result<(::sail::embed::PreparedTun, ::sail::embed::TunPacketFlow), RuntimeError> {
+        Err(RuntimeError::new(
+            "unsupported",
+            "dynamic capture unavailable",
+        ))
+    }
+    #[cfg(unix)]
+    async fn prepare_capture_device(
+        &self,
+        _inbound: &str,
+    ) -> Result<::sail::embed::PreparedTun, RuntimeError> {
+        Err(RuntimeError::new(
+            "unsupported",
+            "dynamic capture unavailable",
+        ))
+    }
+    async fn detach_native_capture(
+        &self,
+    ) -> Result<::sail::runtime::scope::StopReport, RuntimeError> {
+        Err(RuntimeError::new(
+            "unsupported",
+            "dynamic capture unavailable",
+        ))
+    }
+
     /// Runs `config` (sing-box JSON, the translation's output). An error
     /// leaves it not running.
     async fn start(&self, config: &str) -> Result<(), RuntimeError>;
@@ -506,6 +559,14 @@ mod netns_tests;
 mod windows_helper;
 #[cfg(all(test, windows, feature = "fault-injection"))]
 mod windows_tests;
+
+/// Random per-object identity; unlike a process ID or native registry ID it
+/// cannot alias another Engine after that Engine has been destroyed.
+fn owner_nonce() -> Result<String, RuntimeError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| RuntimeError::new("io", e.to_string()))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
 
 #[cfg(test)]
 mod tests {

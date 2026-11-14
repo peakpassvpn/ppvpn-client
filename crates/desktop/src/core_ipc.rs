@@ -553,6 +553,7 @@ impl CoreTraffic {
     }
 
     /// `(upload_bytes, download_bytes)`.
+    #[cfg(test)]
     pub(crate) fn totals(&self) -> (u64, u64) {
         (self.upload_bytes, self.download_bytes)
     }

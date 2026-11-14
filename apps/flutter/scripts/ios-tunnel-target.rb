@@ -35,6 +35,10 @@ group = project.main_group.find_subpath("PacketTunnel", true)
 group.set_source_tree("<group>")
 group.set_path("PacketTunnel")
 sources = %w[PacketTunnelProvider.swift TunnelHost.swift].map { |name| group.new_reference(name) }
+shared = project.main_group.find_subpath("Shared", true)
+shared.set_source_tree("<group>")
+shared.set_path("Shared")
+sources << shared.new_reference("NetworkState.swift")
 tunnel.add_file_references(sources)
 %w[Info.plist PacketTunnel.entitlements].each { |name| group.new_reference(name) }
 tunnel.add_system_framework("NetworkExtension")
@@ -66,6 +70,8 @@ tunnel.build_configurations.each do |config|
   settings["SWIFT_VERSION"] = "5.0"
   settings["SKIP_INSTALL"] = "YES"
   settings["APPLICATION_EXTENSION_API_ONLY"] = "YES"
+  settings["DEAD_CODE_STRIPPING"] = "YES"
+  settings["EXPORTED_SYMBOLS_FILE"] = "$(PROJECT_DIR)/PacketTunnel/Tunnel.exports"
   # The system limits the extension to 50 MiB (#388): no debug dylib.
   settings["ENABLE_DEBUG_DYLIB"] = "NO"
   # Apple silicon's simulator only: the XCFramework's simulator slice is

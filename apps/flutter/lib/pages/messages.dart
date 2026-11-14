@@ -12,11 +12,12 @@
 // not have it (MessagesState.requestOpen). Not in the prototype: the row's
 // context menu.
 
+import '../icons.dart';
+
 import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:forui/forui.dart';
 
 import '../app_state.dart';
 import '../messages_state.dart';
@@ -231,7 +232,7 @@ class _List extends StatelessWidget {
                 kind: ButtonKind.secondary,
                 height: 28,
                 fontSize: 12,
-                icon: FLucideIcons.checkCheck,
+                icon: AppIcons.checkCheck,
                 label: s('markAllRead'),
                 onPress: unread > 0 && view.loaded ? () => unawaited(messages.markAllRead()) : null,
               ),
@@ -279,13 +280,13 @@ String _typeLabel(rust.UiMessageCategory category) => S.current(switch (category
 });
 
 IconData _typeIcon(rust.UiMessageCategory category) => switch (category) {
-  rust.UiMessageCategory.subscriptionExpiring => FLucideIcons.calendarClock,
-  rust.UiMessageCategory.subscriptionExpired => FLucideIcons.calendarX,
-  rust.UiMessageCategory.billing => FLucideIcons.receipt,
-  rust.UiMessageCategory.order => FLucideIcons.shoppingBag,
-  rust.UiMessageCategory.route => FLucideIcons.route,
-  rust.UiMessageCategory.announcement => FLucideIcons.megaphone,
-  rust.UiMessageCategory.other => FLucideIcons.info,
+  rust.UiMessageCategory.subscriptionExpiring => AppIcons.calendarClock,
+  rust.UiMessageCategory.subscriptionExpired => AppIcons.calendarX,
+  rust.UiMessageCategory.billing => AppIcons.receipt,
+  rust.UiMessageCategory.order => AppIcons.shoppingBag,
+  rust.UiMessageCategory.route => AppIcons.route,
+  rust.UiMessageCategory.announcement => AppIcons.megaphone,
+  rust.UiMessageCategory.other => AppIcons.info,
 };
 
 /// The 32 round type icon, in the severity's colour on its soft fill.
@@ -446,12 +447,12 @@ class _Row extends StatelessWidget {
                                   kind: ButtonKind.text,
                                   height: Tokens.smallButtonHeight,
                                   fontSize: 12,
-                                  icon: FLucideIcons.check,
+                                  icon: AppIcons.check,
                                   label: s('markRead'),
                                   onPress: onMarkRead,
                                 ),
                               const SizedBox(width: 4),
-                              Icon(FLucideIcons.chevronRight, size: 16, color: t.t3),
+                              Icon(AppIcons.chevronRight, size: 16, color: t.t3),
                             ],
                           ),
                         ),
@@ -520,7 +521,7 @@ class _ErrorBanner extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(FLucideIcons.circleAlert, size: 16, color: t.bad),
+            Icon(AppIcons.circleAlert, size: 16, color: t.bad),
             const SizedBox(width: 8),
             Text(s('msgErrT'), style: t.note.copyWith(fontWeight: FontWeight.w600, color: t.t1)),
             const SizedBox(width: 8),
@@ -638,7 +639,7 @@ class _Empty extends StatelessWidget {
               width: Tokens.emptyIconSize,
               height: Tokens.emptyIconSize,
               decoration: BoxDecoration(color: t.sunk, shape: BoxShape.circle),
-              child: Icon(FLucideIcons.inbox, size: 30, color: t.t2),
+              child: Icon(AppIcons.inbox, size: 30, color: t.t2),
             ),
             const SizedBox(height: 14),
             Semantics(
@@ -724,7 +725,7 @@ class _Detail extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(FLucideIcons.chevronLeft, size: 18, color: t.t2),
+                            Icon(AppIcons.chevronLeft, size: 18, color: t.t2),
                             const SizedBox(width: 2),
                             Text(s('msgCenter'), style: t.control.copyWith(color: t.t1)),
                           ],
@@ -738,14 +739,14 @@ class _Detail extends StatelessWidget {
                       Button(
                         kind: ButtonKind.icon,
                         height: 26,
-                        icon: FLucideIcons.chevronUp,
+                        icon: AppIcons.chevronUp,
                         semanticsLabel: s('prevMsg'),
                         onPress: onPrevious,
                       ),
                       Button(
                         kind: ButtonKind.icon,
                         height: 26,
-                        icon: FLucideIcons.chevronDown,
+                        icon: AppIcons.chevronDown,
                         semanticsLabel: s('nextMsg'),
                         onPress: onNext,
                       ),
@@ -813,7 +814,7 @@ class _Detail extends StatelessWidget {
                         kind: ButtonKind.secondary,
                         height: 26,
                         fontSize: 12,
-                        icon: message.read ? FLucideIcons.mail : FLucideIcons.mailOpen,
+                        icon: message.read ? AppIcons.mail : AppIcons.mailOpen,
                         label: message.read ? s('markUnread') : s('markRead'),
                         onPress: onToggleRead,
                       ),

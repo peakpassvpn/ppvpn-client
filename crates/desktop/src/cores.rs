@@ -26,6 +26,7 @@ pub(crate) const PHONE: bool = cfg!(any(target_os = "android", target_os = "ios"
 /// State guarded by [`Client::cores`].
 #[derive(Default)]
 pub(crate) struct CoreSync {
+    foreground_suspended: bool,
     /// Team whose profile the standard core runs; a different team restarts
     /// the core instead of hot-applying.
     applied_team: Option<String>,
@@ -276,6 +277,34 @@ impl Client {
         self.sync_cores(Trigger::SessionEnded).await;
     }
 
+    /// The native mobile host supplies the real physical network; sail's
+    /// desktop monitor cannot discover it inside the iOS sandbox.
+    pub fn set_mobile_network(&self, json: String) -> Result<(), ClientError> {
+        let state = serde_json::from_str::<ppvpn_core::NetworkState>(&json).map_err(|error| {
+            ClientErrorInfo::new(
+                ErrorCode::StandardCoreFailed,
+                format!("MOBILE_NETWORK_INVALID: {error}"),
+            )
+        })?;
+        self.standard.network_changed(state).map_err(Into::into)
+    }
+
+    /// iOS suspends its UI process while the packet-tunnel extension keeps
+    /// running. Release the in-process engine's file lock before suspension;
+    /// profile refreshes must not restart it until the app returns.
+    pub async fn set_app_foreground(&self, active: bool) {
+        {
+            let mut sync = self.cores.lock().await;
+            sync.foreground_suspended = !active;
+            if !active {
+                self.standard.stop().await;
+            }
+        }
+        if active {
+            self.sync_cores(Trigger::ProfileChanged).await;
+        }
+    }
+
     /// Brings both cores in line with the current session and profile.
     async fn sync_cores(&self, trigger: Trigger) {
         let mut sync = self.cores.lock().await;
@@ -284,7 +313,7 @@ impl Client {
             self.standard.stop().await;
             sync.applied_team = None;
         }
-        if self.shut_down.load(Ordering::SeqCst) {
+        if sync.foreground_suspended || self.shut_down.load(Ordering::SeqCst) {
             return;
         }
         let Some(current) = self.current_profile() else {
@@ -1963,6 +1992,28 @@ mod tests {
             count,
             "stops at sign-out"
         );
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn suspension_stops_ui_engine_and_profile_refresh_cannot_restart_it() {
+        let (client, _, launcher, data_dir) = signed_in_client();
+        wait_for(&client, |s| {
+            matches!(s.standard, StandardState::Ready { .. })
+        });
+        block_on(client.set_app_foreground(false));
+        assert!(matches!(client.snapshot().standard, StandardState::Stopped));
+        assert_eq!(launcher.calls("/v1/stop"), 1);
+        block_on(client.sync_cores(super::Trigger::ProfileChanged));
+        assert_eq!(*launcher.launches.lock().unwrap(), 1);
+        assert!(matches!(client.snapshot().auth, AuthState::SignedIn));
+        block_on(client.set_app_foreground(true));
+        wait_for(&client, |s| {
+            matches!(s.standard, StandardState::Ready { .. })
+        });
+        assert_eq!(*launcher.launches.lock().unwrap(), 2);
+        assert!(matches!(client.snapshot().auth, AuthState::SignedIn));
         client.shutdown();
         let _ = std::fs::remove_dir_all(data_dir);
     }

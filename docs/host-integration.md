@@ -51,7 +51,7 @@ pub struct EngineConfig {
     pub tun: Option<TunConfig>,             // 仅 Tun：local_dns_servers 覆盖（等同 --local-dns-servers）；Windows 上 wintun_dll 路径；移动端 fd（宿主打开的 TUN，第 11 节）
     pub log: LogConfig,                     // 级别（info/debug）和日志行的接收端，见第 10 节
     pub max_connections: Option<u32>,       // Sail 的并发会话上限（inbound.max_connections）；None 用 profile 的，0 不限（第 11 节）
-    pub socket_protect: Option<SocketProtect>, // 仅移动端的 Tun：出站 socket 的保护回调，不序列化（第 11 节）
+    pub socket_protect: Option<SocketProtect>, // 仅移动端：出站 socket 的保护回调，不序列化（第 11 节）
 }
 
 impl Engine {
@@ -504,7 +504,7 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 - **socket 保护（Android）**：用 `EngineConfig::with_socket_protect(SocketProtect::new(|fd| ...))` 设置，宿主在回调里调 `VpnService.protect(fd)`。
   - **覆盖范围**：引擎的每个出站 socket 连接前都先经过它：Sail 的出站（节点、直连、DNS 上游、规则集下载），以及入口探测的 TCP 和 ICMP。不保护的话，探测会进隧道，TUN 会自己应答 TCP 握手。
   - **失败与线程**：回调返回错误时，这次拨号或探测失败。回调在 Sail 或探测的线程上执行，里面不能再调用实例。
-  - **适用平台**：iOS 不需要，因为扩展自己的流量本来就不进隧道。只有移动端的 Tun 实例接受，其他情况 `new` 返回 `CORE_OPERATION_FAILED`（field=`socket_protect`）。
+  - **适用平台**：iOS 扩展自己的流量本来就不进隧道，但 App 内 Standard 实例的测速必须绑定物理接口，避免流量进入自身 VPN。移动端的 Tun 和 Standard 实例均接受，桌面平台 `new` 返回 `CORE_OPERATION_FAILED`（field=`socket_protect`）。
   - **不序列化**：它是 `#[serde(skip)]` 字段，由 FFI 层直接设置。
 - **网络状态**：宿主监听 `ConnectivityManager` 或 `NWPathMonitor`，在 `start` 之前和每次变化时调 `Engine::set_network_state(NetworkState)`；断网时传 `NetworkState::offline()`。
   - **格式**：`NetworkState` 的字段是 `interface`、`type`（wifi、cellular、ethernet、other）、`addresses`、`gateway`、`expensive`、`constrained`，序列化后就是 Sail 的网络状态 JSON。`interface` 为空表示断网。
@@ -515,6 +515,7 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 - **内存**：
   - 移动端的实例用 Sail 的 mobile profile：单线程，小缓冲和小窗口，`inbound.max_connections` 为 512。`sail::embed` 默认是 desktop profile，所以由引擎按 `platform` 设置。
   - `EngineConfig::with_max_connections(n)` 替换 profile 的上限，0 表示不限。**iOS 网络扩展设 128**：系统在 50 MiB 时结束扩展进程，#388 在这组参数下测得各场景峰值 28.8 MiB。Android 用 profile 的 512。
+  - iOS 的 TUN 实例把 `udp.session_check_interval` 设为 `1s`：已应答的 DNS UDP 会话虽已标记过期，仍要等清理才释放并发名额；默认 `10s` 会让短时 DNS 请求占满 128 个名额。只加快过期回收，不改变会话上限或空闲超时。其他平台及 Standard 实例保持默认清理周期。
   - 没有内存告警接口，因为 Sail 没有收缩缓存的手段。内存上限靠 profile 加并发上限保证。
 - **休眠**：iOS 的 `sleep()` / `wake()` 照转 `Engine::sleep` / `Engine::wake`（第 4.7 节）。
 - **Profile**：经 `apply` 传入，只放在内存里（`docs/mobile.md`）。
@@ -677,3 +678,113 @@ iOS 和 Android 上，引擎运行在系统要求的隧道进程里：Android �
 
 - 老版本的服务不认识这个命令，不回答就关闭连接。应用把这种情况和 `UPDATE_UNSUPPORTED`、服务没装或没运行一样处理：回到原来的 Sparkle、WinSparkle 提示。
 - 新版本的应用遇到老服务时照旧在首次增强连接时替换服务（要管理员授权），之后的更新才是静默的。
+
+
+## Shared forwarding and optional capture protocol
+
+The separately versioned capture v1 contract, DTOs, ownership, transaction and
+platform boundaries are in [shared-core-capture.md](shared-core-capture.md).
+`Engine::capture_capabilities()` and `/v1/get-capture-capabilities` distinguish
+live attachment from the legacy `Role::Tun` startup configuration. The current
+Sail adapter advertises unsupported; attach/detach/status calls explicitly fail
+with `CAPTURE_UNSUPPORTED` and do not stop, reload or restart the engine. A new
+host must negotiate this capability before choosing the shared-core path.
+The wire format never transfers a raw OS descriptor. Existing legacy hosts and
+their startup behavior are unchanged by introducing this contract.
+
+
+### Lightweight mobile app control (no forwarding engine)
+
+For the iOS App and Android UI library, use
+`ppvpn-core = { path = ".../crates/core", default-features = false }`. This omits
+Sail, BoringSSL, QUIC, tunnel/routing mutation, the Engine implementation and its
+listeners. The extension/VpnService links the default `forwarder` feature and
+owns the sole active Engine. Cargo features unify within a build graph: linking
+another crate that enables core's defaults in the same app reintroduces the
+forwarder; compile the app and VPN host as distinct targets and audit their
+normal dependency graph.
+
+Exact App API in `ppvpn_core::control`:
+
+- `ProfileSession::prepare(ApplyRequest) -> Result<(ProfileSession, ApplyResult), Error>`
+  validates profile expiry, schemas, routing/rule-set references, allowed hosts
+  and pins. Missing selections/pins reconcile with the same outcomes as Engine
+  apply. No rule set is downloaded; the extension performs its normal verified
+  rule-set loading before forwarding.
+- `nodes() -> Vec<NodeInfo>`, `selected_node() -> NodeInfo`,
+  `select_node(&mut self, &str) -> Result<NodeInfo, Error>`,
+  `set_routing_mode(&mut self, RoutingMode)`, `pins() -> &[Pin]`,
+  `pin_ingress(&mut self, node_id, endpoint_key) -> Result<(), Error>`,
+  `unpin_ingress(&mut self, node_id) -> Result<(), Error>` and `revision() -> &str` work without VPN.
+- `apply_request() -> ApplyRequest` returns the canonical selected node, valid
+  pins, mode, allowed hosts and original raw profile/rules for private host
+  persistence and the next extension start. It includes credentials: never log
+  it or send it through unauthenticated IPC. Selection while VPN is active must
+  also be applied to the owning extension and acknowledged before the host
+  presents it as live; this memory-only session is not an IPC queue.
+- `probe_entrances(&self, ProbeEntrancesRequest, ProbeNetwork, &ProbeCancellation)`
+  is async and returns `Result<Vec<EntranceResult>, Error>`. `ProbeNetwork` is
+  unknown/online/offline, supplied by the platform network monitor; offline fails
+  immediately. `ProbeCancellation::default()` starts active; `cancel()` aborts
+  pending probes. TCP/ICMP samples, stagger, concurrency and result codes reuse
+  the existing entrance-probe implementation. ICMP can return ICMP_UNSUPPORTED
+  on a restricted platform; hosts may explicitly request TCP instead. This is
+  entrance latency/reachability, not authenticated proxy availability, throughput
+  or traffic. Proxied availability requires the active VPN owner; it must not
+  spawn an app forwarding runtime when VPN is off.
+- Android can call `session.with_socket_protect(SocketProtect)` to protect each
+  direct probe socket before connect/send. Protection failure fails that probe;
+  it never falls back through the VPN. Existing VPN owner protection and network
+  notifications remain enabled.
+
+These controls do not own accounts, logs or historical counters. Mobile hosts
+retain login/account state, persist desired controls privately, and retrieve
+live rules/status/traffic/log streams from the extension while connected.
+Disconnected views retain explicitly marked last observations; zero/new live
+traffic is not synthesized by this API. Removing mobile proxy UI and listener
+configuration is a target-specific host change and does not affect desktop
+mixed authentication, HTTP/SOCKS TCP or SOCKS UDP support.
+
+Shared macOS runtime observation is available through
+`Engine::runtime_observation()` and `/v1/get-runtime-observation`. See
+[shared-core-capture.md](shared-core-capture.md) for process-local observation,
+identity/generation scopes and the native capture dependency.
+
+
+Mobile `Role::Tun` owners may call `Engine::probe_availability` without a mixed
+listener: it dials the existing node outbound and reuses that Engine's runtime.
+Before start or after stop it returns `CORE_NOT_RUNNING`, after profile validation;
+it never starts the Engine itself. Legacy desktop Tun refusal remains unchanged.
+
+
+`tools/check-lightweight-core.sh` checks the production no-default build and
+rejects Sail, BoringSSL, QUIC or TUN packages in its normal dependency graph. The
+core's dev-dependency intentionally enables full testing, so the default unit
+test graph is not evidence of a lightweight production dependency graph.
+
+
+### Native Shared capture host integration
+
+The signed macOS user agent configures `EngineConfig::with_capture_host` using
+`ppvpn_core::capture_host::{CaptureHost, CaptureHostApi, CaptureAttachment}` and
+pushes a physical `NetworkState` before start. Attach/detach/status use the exact
+`ppvpn_core::capture` DTOs through `Engine::{attach_capture, detach_capture,
+capture_status, capture_capabilities}` or the matching engine-host Core API
+paths. The broker's service/session generation, expiring resource lease, capture
+epoch and forwarder successful-start generation have separate scopes; do not
+substitute one for another. No raw FD is serialized. See
+[shared-core-capture.md](shared-core-capture.md#native-host-hooks-and-physical-network)
+for callback ordering, deadline/cancellation requirements, FD validation,
+physical-network filtering, cleanup/recovery and the remaining platform gate.
+
+
+For a public iOS packet-flow owner, construct `EngineConfig::new(Role::Tun,
+Platform::Ios, state_dir).with_capture_host(...)`, push the physical network,
+apply the profile and start the Engine. It initially has no inbound listener.
+Call `attach_capture` with a host-private HostLease token; the registered
+attachment must declare Packets transport and connect the queues to public
+NEPacketTunnelFlow APIs. Startup `tun.fd` and Device transport are refused in
+this mode. Android can opt in with the same sequence while keeping SocketProtect,
+or retain its static VpnService FD mode. `stop` detaches the current lease and
+stops that unique VPN forwarding owner. This is an explicit host migration,
+not automatic iOS descriptor extraction or a second App runtime.

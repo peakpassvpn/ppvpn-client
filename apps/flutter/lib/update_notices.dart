@@ -10,10 +10,11 @@
 //   to the service (section 16.1), before the client starts; no button, the
 //   app quits once the service accepts or carries on as usual.
 
+import 'icons.dart';
+
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
-import 'package:forui/forui.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'strings.dart';
@@ -97,12 +98,12 @@ class _UpdatedState extends State<_Updated> {
         ),
         child: Row(
           children: [
-            Icon(FLucideIcons.circleCheck, size: 16, color: t.ok),
+            Icon(AppIcons.circleCheck, size: 16, color: t.ok),
             const SizedBox(width: 10),
             Expanded(child: Text(s('updatedTo', {'v': widget.version}), style: t.sectionTitle)),
             Button(
               kind: ButtonKind.icon,
-              icon: FLucideIcons.x,
+              icon: AppIcons.x,
               semanticsLabel: s('close'),
               onPress: _close,
             ),
@@ -150,7 +151,7 @@ class _InstallingNoticeState extends State<InstallingNotice> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(FLucideIcons.download, size: 28, color: t.accent),
+              Icon(AppIcons.download, size: 28, color: t.accent),
               const SizedBox(height: 14),
               Text(s('updInstalling'), textAlign: TextAlign.center, style: t.sectionTitle),
               const SizedBox(height: 18),

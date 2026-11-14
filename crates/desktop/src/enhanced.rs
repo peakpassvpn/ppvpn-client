@@ -344,29 +344,72 @@ impl Machine {
 /// Turns cumulative counters into rates (bytes per second).
 #[derive(Debug, Default)]
 pub(crate) struct TrafficMeter {
-    last: Option<(u64, u64, Instant)>,
+    last: Option<(CoreTraffic, Instant)>,
+    rate: (u64, u64),
 }
 
 impl TrafficMeter {
-    pub(crate) fn sample(&mut self, up_total: u64, down_total: u64, now: Instant) -> TrafficSample {
-        let (up_bps, down_bps) = match self.last {
-            // Counters reset when the core restarts: report 0 for that tick.
-            Some((up, down, at)) if up_total >= up && down_total >= down && now > at => {
-                let seconds = now.duration_since(at).as_secs_f64();
-                (
-                    ((up_total - up) as f64 / seconds).round() as u64,
-                    ((down_total - down) as f64 / seconds).round() as u64,
-                )
+    pub(crate) fn sample_core(&mut self, traffic: CoreTraffic, now: Instant) -> TrafficSample {
+        let rates = match self.last {
+            Some((last, at))
+                if traffic.upload_bytes >= last.upload_bytes
+                    && traffic.download_bytes >= last.download_bytes =>
+            {
+                if traffic.measured_at.is_some() && traffic.measured_at == last.measured_at {
+                    // Independent one-second timers can read the same cached
+                    // counters twice. Keep the rate without advancing the
+                    // baseline; a genuinely stalled source eventually reads 0.
+                    let rate = if now.duration_since(at) <= Duration::from_secs(3) {
+                        self.rate
+                    } else {
+                        (0, 0)
+                    };
+                    return TrafficSample {
+                        up_bps: rate.0,
+                        down_bps: rate.1,
+                        up_total: traffic.upload_bytes,
+                        down_total: traffic.download_bytes,
+                    };
+                }
+                let elapsed = match (traffic.measured_at, last.measured_at) {
+                    (Some(current), Some(previous)) => current.duration_since(previous).ok(),
+                    _ => now.checked_duration_since(at),
+                };
+                match elapsed.filter(|d| !d.is_zero()) {
+                    Some(elapsed) => {
+                        let seconds = elapsed.as_secs_f64();
+                        (
+                            ((traffic.upload_bytes - last.upload_bytes) as f64 / seconds).round()
+                                as u64,
+                            ((traffic.download_bytes - last.download_bytes) as f64 / seconds)
+                                .round() as u64,
+                        )
+                    }
+                    None => (0, 0),
+                }
             }
             _ => (0, 0),
         };
-        self.last = Some((up_total, down_total, now));
+        self.last = Some((traffic, now));
+        self.rate = rates;
         TrafficSample {
-            up_bps,
-            down_bps,
-            up_total,
-            down_total,
+            up_bps: rates.0,
+            down_bps: rates.1,
+            up_total: traffic.upload_bytes,
+            down_total: traffic.download_bytes,
         }
+    }
+
+    #[cfg(test)]
+    fn sample(&mut self, up: u64, down: u64, now: Instant) -> TrafficSample {
+        self.sample_core(
+            CoreTraffic {
+                upload_bytes: up,
+                download_bytes: down,
+                measured_at: None,
+            },
+            now,
+        )
     }
 }
 
@@ -1131,7 +1174,7 @@ impl Enhanced {
 
     /// Cumulative `(upload, download)` bytes of the enhanced-mode core while
     /// it is on; `None` otherwise or when the service does not answer.
-    pub(crate) async fn traffic_totals(&self) -> Option<(u64, u64)> {
+    pub(crate) async fn traffic_sample(&self) -> Option<CoreTraffic> {
         let machine = self.inner.with_data(|data| data.machine.clone());
         if machine.phase != ConnectionPhase::On {
             return None;
@@ -1140,10 +1183,7 @@ impl Enhanced {
             service: self.inner.service.clone(),
             session: machine.session()?,
         };
-        core_ipc::get_traffic(&core)
-            .await
-            .ok()
-            .map(|traffic| traffic.totals())
+        core_ipc::get_traffic(&core).await.ok()
     }
 
     /// Releases the service session and stops background loops; call before
@@ -2983,6 +3023,37 @@ mod tests {
             machine.begin_connect("r").unwrap_err().code,
             ErrorCode::Internal
         );
+    }
+
+    #[test]
+    fn traffic_meter_uses_measurement_time_and_deduplicates_cached_reads() {
+        let start = Instant::now();
+        let source = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let traffic = |bytes, seconds| CoreTraffic {
+            upload_bytes: bytes,
+            download_bytes: bytes * 2,
+            measured_at: Some(source + Duration::from_secs(seconds)),
+        };
+        let mut meter = TrafficMeter::default();
+        meter.sample_core(traffic(100, 0), start);
+        // Host timing differs from the actual one-second measurement interval.
+        let rate = meter.sample_core(traffic(200, 1), start + Duration::from_millis(1200));
+        assert_eq!((rate.up_bps, rate.down_bps), (100, 200));
+        let cached = meter.sample_core(traffic(200, 1), start + Duration::from_millis(2200));
+        assert_eq!(cached.up_bps, 100);
+        // The repeated read must not create a zero followed by a 2x spike.
+        let next = meter.sample_core(traffic(400, 3), start + Duration::from_millis(3200));
+        assert_eq!(next.up_bps, 100);
+        let idle = meter.sample_core(traffic(400, 4), start + Duration::from_millis(4200));
+        assert_eq!(idle.up_bps, 0);
+        let active = meter.sample_core(traffic(500, 5), start + Duration::from_millis(5200));
+        assert_eq!(active.up_bps, 100);
+        let stale = meter.sample_core(traffic(500, 5), start + Duration::from_secs(9));
+        assert_eq!(stale.up_bps, 0);
+        let reset = meter.sample_core(traffic(10, 6), start + Duration::from_secs(10));
+        assert_eq!(reset.up_bps, 0);
+        let clock_back = meter.sample_core(traffic(20, 1), start + Duration::from_secs(11));
+        assert_eq!(clock_back.up_bps, 0);
     }
 
     #[test]

@@ -5,17 +5,30 @@
 //! Entry point: [`Engine`]. Values are serialisable (serde) for the future
 //! FFI; enums and structs are `non_exhaustive` and only grow.
 
+/// Separately versioned capture DTOs; no platform handle crosses this wire.
+pub use ppvpn_core_wire as capture;
+
+#[cfg(feature = "forwarder")]
+pub mod capture_host;
 pub mod config;
+pub mod control;
+#[cfg(feature = "forwarder")]
 mod engine;
 pub mod error;
 pub mod event;
+#[cfg(feature = "forwarder")]
 mod fdlimit;
+#[cfg(feature = "forwarder")]
 mod hostipv6;
 // dns-local is wired up by the runtime; until then only its tests use it.
 #[allow(dead_code, unused_imports)]
+#[cfg(feature = "forwarder")]
 pub(crate) mod localdns;
+#[cfg(feature = "forwarder")]
 mod localproxy;
+#[cfg(feature = "forwarder")]
 mod logfmt;
+#[cfg(feature = "forwarder")]
 pub mod mobile;
 #[allow(dead_code, unused_imports)] // until the Engine calls it (engine.rs)
 mod probe;
@@ -23,14 +36,20 @@ pub(crate) mod profile;
 pub mod request;
 // Rule sets are wired up by the engine; until then only their tests use them.
 #[allow(dead_code, unused_imports)]
+#[cfg(feature = "forwarder")]
 mod rulesets;
+#[cfg(feature = "forwarder")]
 mod runtime;
+#[cfg(feature = "forwarder")]
 mod state_dir;
 pub mod status;
+#[cfg(feature = "forwarder")]
 mod tls;
+#[cfg(feature = "forwarder")]
 mod translate;
 // The Engine starts it with the TUN; until then only its tests use it.
 #[allow(dead_code, unused_imports)]
+#[cfg(feature = "forwarder")]
 mod tunrules;
 pub mod types;
 
@@ -38,9 +57,13 @@ pub use config::{
     EngineConfig, LocalProxyConfig, LogConfig, LogLevel, LogSink, Platform, Role, SocketProtect,
     TunConfig,
 };
+#[cfg(feature = "forwarder")]
 pub use engine::{tracing_layer, Engine, LOCAL_PROXY_CONTRACT_VERSION};
 pub use error::{codes, Error};
-pub use event::{Event, EventItem, EventKind, EventReceiver, LogReceiver};
+#[cfg(feature = "forwarder")]
+pub use event::EventReceiver;
+pub use event::{Event, EventItem, EventKind, LogReceiver};
+#[cfg(feature = "forwarder")]
 pub use mobile::{tun_settings, NetworkKind, NetworkState, TunSettings};
 pub use request::{
     ApplyRequest, ApplyResult, ClearedPin, Pin, PinClearReason, RoutingMode, SwitchKind,
@@ -85,21 +108,22 @@ pub mod internal {
 
 /// Whether a sail runtime with this id runs in this process. Here so that
 /// the shell links sail (and CI builds and caches it, BoringSSL included).
+#[cfg(feature = "forwarder")]
 pub fn sail_runtime_running(id: sail::RuntimeId) -> bool {
     sail::is_running(id)
 }
 
 // Linux: as golden_routing_tests, whose helpers they share.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, feature = "forwarder", target_os = "linux"))]
 mod parity_sail_tests;
 
 // Linux: the outbounds bound to loopback fail their dials at once.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, feature = "forwarder", target_os = "linux"))]
 mod golden_routing_tests;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, feature = "forwarder", target_os = "linux"))]
 mod local_proxy_routing_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "forwarder"))]
 mod tests {
     #[test]
     fn no_sail_runtime_runs_by_itself() {
