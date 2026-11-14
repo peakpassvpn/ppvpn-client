@@ -329,19 +329,15 @@ impl Worker {
             Ok((still_rules, still_routes))
                 if still_rules.is_empty() && still_routes.is_empty() =>
             {
-                // Named after the putting back: it reads all of /proc.
-                let by = request.sender.map_or("unknown".into(), sender_name);
-                tracing::warn!(
-                    missing = %missing_names.join(", "),
-                    by = %by,
-                    reason = %request.reason,
-                    "tun routing rules restored"
-                );
                 self.flapped();
                 self.broken = false;
                 status.send_replace(TunRoutingStatus::Restored {
-                    missing: missing_names,
+                    missing: missing_names.clone(),
                 });
+                // The routing is settled. Naming the sender scans /proc;
+                // neither stop() nor a runtime worker should wait for it.
+                drop(stopped);
+                let _diagnostic = log_restored(request.clone(), missing_names, sender_name);
             }
             Ok((still_rules, still_routes)) => {
                 let error = added
@@ -402,6 +398,23 @@ impl Worker {
         }
         first.map_or(Ok(()), Err)
     }
+}
+
+/// Diagnostics may finish after stop; they never touch routing or its lock.
+fn log_restored(
+    request: Request,
+    missing: Vec<String>,
+    name: impl FnOnce(u32) -> String + Send + 'static,
+) -> JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        let by = request.sender.map_or("unknown".into(), name);
+        tracing::warn!(
+            missing = %missing.join(", "),
+            by = %by,
+            reason = %request.reason,
+            "tun routing rules restored"
+        );
+    })
 }
 
 async fn sleep_until(deadline: Option<tokio::time::Instant>) {
@@ -476,4 +489,43 @@ fn netlink_inode(port: u32) -> Option<String> {
         let fields: Vec<&str> = line.split_whitespace().collect();
         (fields.len() >= 10 && fields[1] == "0" && fields[2] == port).then(|| fields[9].to_owned())
     })
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+
+    /// No netlink or privileges: a stalled /proc lookup cannot occupy the
+    /// runtime's only worker or prevent the guard from stopping.
+    #[tokio::test]
+    async fn stop_does_not_wait_for_a_sender_lookup() {
+        let stopped = Arc::new(Mutex::new(false));
+        let guard = Guard {
+            requests: None,
+            stopped: stopped.clone(),
+            task: None,
+        };
+        let (started, wait_started) = tokio::sync::oneshot::channel();
+        let (release, wait_release) = std::sync::mpsc::channel();
+        let lookup = log_restored(
+            Request {
+                reason: "test".into(),
+                sender: Some(1),
+                settle: false,
+            },
+            Vec::new(),
+            move |_| {
+                started.send(()).unwrap();
+                wait_release
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("runtime worker blocked by lookup");
+                "test sender".into()
+            },
+        );
+        wait_started.await.unwrap();
+        guard.stop();
+        assert!(*stopped.lock().unwrap());
+        release.send(()).unwrap();
+        lookup.await.unwrap();
+    }
 }
