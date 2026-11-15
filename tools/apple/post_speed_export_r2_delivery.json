@@ -1,0 +1,30 @@
+{
+  "archive": "export-only-r2-3e33c490.tar.gz",
+  "archive_sha256": "3e33c490b6efcfbfb43648e382e18799e285ed8d54f8a6e8cca28f3f2d2c38b1",
+  "archive_bytes": 24831,
+  "manifest": "FREEZE-R2.json",
+  "manifest_sha256": "08fa269d6d00d0e7f375ea00aec99dd2f168db58e9215859897b662545f7d1b2",
+  "native_composite_sha256": "95efb9a86202daf887ded456a71b419a7b3f68debd36a46877b0fcf251f00a5c",
+  "file_sha256": {
+    "export_only.py": "485ac4fc609d61df6341e097dcac14edc391a863be8f087c2fdeeb2544594794",
+    "native_contract.py": "9ed352d586d228a5fdd16b984da495073f2e61a8d5f4749a26f023782a4a892c",
+    "test_export_only.py": "1ff8befb578825d29da7ca9fea2f189e15620363623ec1edfbdf23773f278073",
+    "frozen_device_clock.py": "ae5a496487426508caa192ee64212b5690af4a5fce1101da032339021f5e8967",
+    "FREEZE-R2.json": "08fa269d6d00d0e7f375ea00aec99dd2f168db58e9215859897b662545f7d1b2",
+    "host-tests.receipt.json": "f32f6d70086b7eaba5c85bbdf80606614e85bd013e30ef4f8ef62b87e1e37695",
+    "host-tests.stdout.raw": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "host-tests.stderr.raw": "e91fe1dd2231ca41ac01cf1245a24ffedbf10512ffb4f9c3a4ae60cded9ce333",
+    "native-prepared/main.swift": "95efb9a86202daf887ded456a71b419a7b3f68debd36a46877b0fcf251f00a5c",
+    "native-prepared/receipt.json": "fd7a0995bb9060987c3e0dba82513f65510b55c58731bb64748028d1494bf175"
+  },
+  "status": "PREPARED_NOT_NATIVE_EXECUTED_NO_DEVICE_ACTION",
+  "managed_commands": [
+    "python3 -B -m unittest discover -s \"$EXPORT_ONLY_PACKAGE\" -p test_export_only.py -v",
+    "python3 -B \"$EXPORT_ONLY_PACKAGE/native_contract.py\" --repo \"$SOURCE833_REPO\" --output \"$RUNNER_TEMP/ppvpn-export-only-native-r2\""
+  ],
+  "alternative_exact_prepared_compile": [
+    "swiftc -module-cache-path \"$RUNNER_TEMP/ppvpn-export-only-modules-r2\" -swift-version 5 -D PPVPN_INTERNAL_DIAGNOSTICS -D PPVPN_INTERNAL_CAPACITY_CAMPAIGN -D PPVPN_INTERNAL_CAPACITY_MEMORY357 \"$EXPORT_ONLY_PACKAGE/native-prepared/main.swift\" -o \"$RUNNER_TEMP/ppvpn-export-only-native-contract-r2\"",
+    "\"$RUNNER_TEMP/ppvpn-export-only-native-contract-r2\""
+  ],
+  "variables": "EXPORT_ONLY_PACKAGE=verified archive extraction directory; SOURCE833_REPO=managed repository containing exact833. RUNNER_TEMP=managed runtime temp. Never run compiler on userMac."
+}

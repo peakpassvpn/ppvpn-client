@@ -1,13 +1,13 @@
 name: Apple archive acceptance
-run-name: iOS packet provider A/B aca7d482
+run-name: iOS post-speed export R2 contract exact833
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  packet_provider_bench:
+  post_speed_export_contract_r2:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -21,15 +21,15 @@ jobs:
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
           swiftc --version
-      - name: Exact source controlled provider A/B
+      - name: Verify frozen R2 and execute exact contract commands
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/apple/run_ios_packet_bench.py
-      - name: Preserve original benchmark and compiler evidence
+        run: python3 -B tools/apple/run_export_only_contract_r2.py
+      - name: Preserve original preparation compiler and test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ios-packet-provider-ab-aca7d482
-          path: ${{ runner.temp }}/packet-bench-output
+          name: ios-post-speed-export-r2-contract
+          path: ${{ runner.temp }}/post-speed-export-r2-evidence
           if-no-files-found: error
           retention-days: 7
