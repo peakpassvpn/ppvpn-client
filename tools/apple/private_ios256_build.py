@@ -76,7 +76,7 @@ def execute():
     def interrupted(signum,frame):raise InterruptedError('Private build interrupted')
     for signum in [signal.SIGINT,signal.SIGTERM]:old_handlers[signum]=signal.signal(signum,interrupted)
     try:
-        assert env.get('PPVPN_REUSE_ORDINARY_355')=='true' and bundle['build']==357
+        assert env.get('PPVPN_REUSE_ORDINARY_355')=='true' and bundle['build']==358
         control=json.loads((temp/'sdk2a9-output/ordinary355-control-reuse.json').read_bytes())
         assert control['control_source']=='40674d1866708c8e1a767be7592e6f4a8bca34b5'and control['requested_diagnostic_source']==bundle['source']
         output.mkdir()
@@ -108,6 +108,9 @@ def execute():
         config=private/'private-build.xcconfig'
         config.write_text('\n'.join([f'CLANG_MODULE_CACHE_PATH = {private}/apple-module-cache',f'SWIFT_MODULE_CACHE_PATH = {private}/apple-swift-module-cache',f'SHARED_PRECOMPS_DIR = {private}/apple-precompiled','COMPILER_INDEX_STORE_ENABLE = NO','INDEX_ENABLE_DATA_STORE = NO'])+'\n');config.chmod(0o600)
         child['XCODE_XCCONFIG_FILE']=str(config)
+        # First actual compile of the frozen throughput delta. Private logs remain encrypted.
+        run('throughput-swift-provider-checks',[sys.executable,'apps/flutter/checks/ios_packet_test.py'])
+        run('throughput-rust-packet-tests',['cargo','test','--locked','-p','ppvpn-tunnel-host','--lib','packets::tests::packet_','--features','internal-diagnostics,internal-udp-target-diagnostics,internal-ios-cap256-candidate','--','--test-threads=1','--nocapture'])
         run('main-rust-features',['cargo','tree','--locked','--target','aarch64-apple-ios','-e','features,no-dev','-p','ppvpn-flutter'])
         run('ne-explicit-features',['cargo','tree','--locked','--target','aarch64-apple-ios','-e','features,no-dev','--prefix','none','-i','ppvpn-tunnel-host','-p','ppvpn-tunnel-host','--features','internal-ios-cap256-candidate,internal-udp-target-diagnostics'])
         graph=(private/'ne-explicit-features.log').read_text()
@@ -160,28 +163,8 @@ def execute():
             compiler_outputs.append(str(path))
         assert compiler_outputs,'No actual archive compiler output paths observed'
         (private/'actual-archive-output-isolation.json').write_text(json.dumps(dict(explicit_private_derived_data=True,private_checkout=True,SYMROOT_OBJROOT_overrides=False,actual_compiler_output_paths=sorted(set(compiler_outputs)),private_module_caches=True,ordinary_target_alias_rejected=True),indent=2)+'\n')
-        # Compile once on this same Apple worker/checkout/target, then run only
-        # the settings selectors and actual running SDK snapshot selector. No TUN or traffic workload.
-        core_before=hashlib.sha256((project.parent.parent/'crates/core/src/engine.rs').read_bytes()).hexdigest()
-        cargo_root=project.parent.parent
-        run('relay32-core-libtest-compile',['cargo','test','--locked','-p','ppvpn-core','--lib','--features','internal-diagnostics','--no-run','--message-format=json'],cwd=cargo_root,structured=True)
-        artifacts=[json.loads(line)for line in (private/'relay32-core-libtest-compile.log').read_text().splitlines()if line.startswith('{')]
-        binaries={r['executable']for r in artifacts if r.get('reason')=='compiler-artifact'and r.get('target',{}).get('name')=='ppvpn_core'and r.get('profile',{}).get('test')and r.get('executable')}
-        assert len(binaries)==1
-        binary=pathlib.Path(binaries.pop());binary_before=hashlib.sha256(binary.read_bytes()).hexdigest();settings_results=[]
-        for index,selector in enumerate(['engine::tests::relay32_is_only_for_ios_tun_with_an_explicit_256_cap','engine::tests::mobile_runs_sails_mobile_profile_and_the_hosts_cap','engine::tests::cap256_settings_reach_actual_running_sail_snapshot']):
-            stage='relay32-core-settings-'+str(index+1)
-            run(stage,[str(binary),'--exact',selector,'--test-threads=1','--nocapture'],cwd=cargo_root)
-            raw=(private/(stage+'.log')).read_text()
-            assert re.search(r'test result: ok\. 1 passed; 0 failed; 0 ignored;',raw)
-            settings_results.append(dict(selector=selector,passed=1,failed=0,ignored=0))
-        assert hashlib.sha256(binary.read_bytes()).hexdigest()==binary_before
-        assert hashlib.sha256((cargo_root/'crates/core/src/engine.rs').read_bytes()).hexdigest()==core_before
-        assert hashlib.sha256((cargo_root/'Cargo.lock').read_bytes()).hexdigest()==frozen_manifest['cargo_lock_sha256']
-        (private/'relay32-actual-sdk-settings-validation.json').write_text(json.dumps(dict(source=bundle['source'],sdk='f99761138b23f267ebc7621057afe02018ab7c18',core_source_sha256=core_before,binary_sha256=binary_before,same_binary_pre_post_verified=True,selectors=settings_results,actual_SDK_StartSettings_parse_and_resolve_cases=105,ordinary128_resolved_initial_kib=8,ordinary128_resolved_max_kib=64,ios_tun256_resolved_initial_kib=8,ios_tun256_resolved_max_kib=32,actual_runtime_network_or_capacity_workload=False),indent=2)+'\n')
-        control['ordinary128_equivalence_actual_SDK_resolve_pending']=False
-        control['settings_validation']='relay32-actual-sdk-settings-validation.json'
-        (private/'ordinary355-control-reuse.json').write_text(json.dumps(control,indent=2)+'\n')
+        # Existing relay32 SDK validation is retained under its exact source receipt;
+        # throughput358 does not re-run unrelated Core tests or256 stress.
         generated=private/'apple-candidate/apps/flutter/ios/Runner'
         swift_proof=json.loads((generated/'PrivateUDPBuildPolicy.provenance.json').read_text())
         assert swift_proof['configured'] is True and swift_proof['input_sha256']==bundle['policy_sha256']

@@ -10,7 +10,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--controller',required=True);p.add_argument('--branch',required=True);p.add_argument('--secret-name',required=True);p.add_argument('--policy',type=pathlib.Path,required=True);p.add_argument('--policy-sha256',required=True);p.add_argument('--domain-capability',type=pathlib.Path,required=True);p.add_argument('--domain-capability-sha256',required=True);p.add_argument('--private-directory',type=pathlib.Path,required=True);p.add_argument('--origin',required=True);p.add_argument('--platforms',choices=['all','ios'],default='ios');p.add_argument('--ordinary-build',type=int,default=355);p.add_argument('--diagnostic-build',type=int);p.add_argument('--reuse-ordinary-355',action='store_true');a=p.parse_args()
  diagnostic_build=a.diagnostic_build or a.ordinary_build+1
  assert diagnostic_build>a.ordinary_build
- if a.reuse_ordinary_355:assert a.platforms=='ios'and a.ordinary_build==355 and diagnostic_build==357
+ if a.reuse_ordinary_355:assert a.platforms=='ios'and a.ordinary_build==355 and diagnostic_build==358
  assert all(re.fullmatch('[0-9a-f]{40}',v) for v in [a.source,a.controller])
  assert re.fullmatch('codex/[a-z0-9-]+',a.branch) and re.fullmatch('PPVPN_IOS256_F997_[0-9A-F]{8}',a.secret_name)
  assert re.fullmatch('[0-9a-f]{64}',a.policy_sha256)

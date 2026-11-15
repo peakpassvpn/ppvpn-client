@@ -9,7 +9,7 @@ def save():f.write_text(json.dumps(s))
 if a[:2]==['secret','list']:print(json.dumps([{'name':s['name']}] if s['exists'] else []))
 elif a[:2]==['secret','set']:
  b=json.load(sys.stdin);assert set(b)=={'schema','source','controller','dispatch_nonce','build','policy_base64','policy_sha256','domain_capability_base64','domain_capability_sha256','recipient','expires_unix'};assert 'AGE-SECRET-KEY-' not in json.dumps(b)
- assert b['schema']==3 and b['build']==357 and len(b['dispatch_nonce'])==64
+ assert b['schema']==3 and b['build']==358 and len(b['dispatch_nonce'])==64
  s['nonce']=b['dispatch_nonce'];s['exists']=True;s['puts']+=1;save()
  if s['mode']=='cancel-set' and s['puts']==1:(p/'ready').touch();time.sleep(60)
 elif a[:2]==['secret','delete']:
@@ -37,7 +37,7 @@ class OwnerTests(unittest.TestCase):
    policy=p/'policy.txt';policy.write_bytes(b'127.0.0.1:9001\n');sha=hashlib.sha256(policy.read_bytes()).hexdigest();out=p/'private'
    domain=p/'domain.json';domain.write_text(json.dumps(dict(schema=1,kind='CAPACITY_V3_MAIN_DOMAIN_BUILD_INPUT',campaign_contract='CAPACITY_V3_TCP64_8K_UDP_CANCEL',package='com.peakpassvpn.ppvpn',protocol='udp',ordinary_enabled=False,public_authority='UNBOUND_BUILD_INPUT_ONLY',runtime_target_manifest='Requires new runtime grant',same_private_policy_sha256=sha,exact_domain='probe.fixture.invalid',port=9001,target_ipv4='127.0.0.1')));domain_sha=hashlib.sha256(domain.read_bytes()).hexdigest()
    env=dict(os.environ,PATH=str(binary)+':'+os.environ['PATH'],FAKE_GH_ROOT=str(p))
-   args=[sys.executable,str(ROOT/'tools/apple/run_private_platforms.py'),'--source','a'*40,'--controller','b'*40,'--branch','codex/transport-fixture','--secret-name',name,'--policy',str(policy),'--policy-sha256',sha,'--domain-capability',str(domain),'--domain-capability-sha256',domain_sha,'--private-directory',str(out),'--origin','https://example.invalid','--diagnostic-build','357','--reuse-ordinary-355']
+   args=[sys.executable,str(ROOT/'tools/apple/run_private_platforms.py'),'--source','a'*40,'--controller','b'*40,'--branch','codex/transport-fixture','--secret-name',name,'--policy',str(policy),'--policy-sha256',sha,'--domain-capability',str(domain),'--domain-capability-sha256',domain_sha,'--private-directory',str(out),'--origin','https://example.invalid','--diagnostic-build','358','--reuse-ordinary-355']
    if mode.startswith('cancel-'):
     process=subprocess.Popen(args,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     deadline=time.monotonic()+10

@@ -6,7 +6,7 @@ source='40674d1866708c8e1a767be7592e6f4a8bca34b5'
 digest='4cc62f267efc01e9db6181fe4235aee57447ba5845e3bfce8e5947268f1f7574'
 assert os.environ['GITHUB_REPOSITORY']==repo and os.environ['SDK2A9_PLATFORM']=='ios'
 assert os.environ['PPVPN_REUSE_ORDINARY_355']=='true'and os.environ['PPVPN_BUILD_NUMBER']=='355'
-assert os.environ['PPVPN_PRIVATE_BUILD_NUMBER']=='357'
+assert os.environ['PPVPN_PRIVATE_BUILD_NUMBER']=='358'
 out=pathlib.Path(os.environ['RUNNER_TEMP'])/'sdk2a9-output'
 current=json.loads((out/'source-provenance.json').read_bytes())['manifest']
 assert current['ios256_native_inputs_frozen']is True

@@ -556,7 +556,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PPVPN_PRIVATE_DISPATCH_NONCE: ${{ inputs.private_dispatch_nonce }}
-          PPVPN_IOS256_PRIVATE_BUNDLE: ${{ secrets.PPVPN_IOS256_F997_7AB1F9C0 }}
+          PPVPN_IOS256_PRIVATE_BUNDLE: ${{ secrets.PPVPN_IOS256_F997_4F1793D9 }}
         run: python3 tools/apple/private_ios256_build.py
       - name: Reclaim private hosted scratch after any result
         if: always() && matrix.platform == 'ios' && inputs.ios256_variant == 'diagnostic'
