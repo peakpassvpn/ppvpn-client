@@ -109,7 +109,8 @@ def execute():
         config.write_text('\n'.join([f'CLANG_MODULE_CACHE_PATH = {private}/apple-module-cache',f'SWIFT_MODULE_CACHE_PATH = {private}/apple-swift-module-cache',f'SHARED_PRECOMPS_DIR = {private}/apple-precompiled','COMPILER_INDEX_STORE_ENABLE = NO','INDEX_ENABLE_DATA_STORE = NO'])+'\n');config.chmod(0o600)
         child['XCODE_XCCONFIG_FILE']=str(config)
         # First actual compile of the frozen throughput delta. Private logs remain encrypted.
-        run('throughput-swift-provider-checks',[sys.executable,'apps/flutter/checks/ios_packet_test.py'])
+        run('throughput-tunnel-header-export-contract',[sys.executable,str(controller/'tools/apple/check_frozen_tunnel_header.py'),str(source)])
+        run('throughput-swift-provider-inheritance-check',[sys.executable,str(controller/'tools/apple/reuse_swift_provider43765734368.py'),str(source)])
         run('throughput-rust-packet-tests',['cargo','test','--locked','-p','ppvpn-tunnel-host','--lib','packets::tests::packet_','--features','internal-diagnostics,internal-udp-target-diagnostics,internal-ios-cap256-candidate','--','--test-threads=1','--nocapture'])
         run('main-rust-features',['cargo','tree','--locked','--target','aarch64-apple-ios','-e','features,no-dev','-p','ppvpn-flutter'])
         run('ne-explicit-features',['cargo','tree','--locked','--target','aarch64-apple-ios','-e','features,no-dev','--prefix','none','-i','ppvpn-tunnel-host','-p','ppvpn-tunnel-host','--features','internal-ios-cap256-candidate,internal-udp-target-diagnostics'])

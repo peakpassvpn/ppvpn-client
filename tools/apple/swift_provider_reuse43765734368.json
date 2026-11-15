@@ -1,0 +1,15 @@
+{
+  "source": "4f1793d9537259160b4f28448e01b9fec91fd5af",
+  "run": 43765734368,
+  "controller": "7b0fc81a0a0a954c625416ad5a0a6d5b2e24ca0f",
+  "actual_swift_exit": 0,
+  "actual_swift_seconds": 9.417957666999996,
+  "original_public_joblog_sha256": "faf4f819d67238ac30c6d993e5084baf371a81ee5a16105c29c411c66e9c93fd",
+  "exact_inputs": {
+    "apps/flutter/checks/ios_packet_test.py": "6300dd571d633eb717bb2710ad7c2fd4b42fb6bc1371769a410c58df6bed739b",
+    "apps/flutter/checks/ios_packet_fixture.swift": "fb7eb4791d4558bd8758717879a6233f46589c440f1173b1722133239a64b8cd",
+    "apps/flutter/checks/ios_packet_cases.swift": "40daddc5aec3f3481a8cd20add6f5ce27ddf19f83bc8436beae65f0519304a4a",
+    "apps/flutter/runner/ios/PacketTunnel/PacketTunnelProvider.swift": "487ddedf78395fce6886731098129b8d6de73b36945deabc4e04f89cd95d1502"
+  },
+  "limit": "Old run source-extracted Swift provider fixtures; no new-source actual SDK/FFI claim. New source differs onlyexport whitelist and actual archive will compile SDK/FFI."
+}
