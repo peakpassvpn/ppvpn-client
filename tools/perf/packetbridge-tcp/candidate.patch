@@ -1,0 +1,609 @@
+--- a/sail/src/embed/tun.rs
++++ b/sail/src/embed/tun.rs
+@@ -96,6 +96,7 @@
+     rx: mpsc::Receiver<Vec<u8>>,
+     tx: mpsc::Sender<Vec<u8>>,
+     next: u64,
++    max_batch: usize,
+     ended: tokio::sync::watch::Sender<bool>,
+ }
+ impl PacketBridge {
+@@ -114,6 +115,7 @@
+                 rx,
+                 tx,
+                 next: 0,
++                max_batch: capacity.min(64),
+                 ended,
+             },
+             TunPacketFlow {
+@@ -139,35 +141,66 @@
+                 "full receive batch",
+             ));
+         }
+-        let packet = self.rx.recv().await.ok_or_else(closed)?;
+-        out.push(Packet::from_payload(
+-            PacketToken::new(self.next),
+-            0,
+-            &packet,
+-        ))
+-        .map_err(|_| io::Error::other("full receive batch"))?;
+-        self.next = self.next.wrapping_add(1);
+-        Ok(1)
++        let limit = (out.limit() - out.len()).min(self.max_batch);
++        let mut packet = self.rx.recv().await.ok_or_else(closed)?;
++        let mut received = 0;
++        loop {
++            // No await after taking the first packet: cancellation cannot lose
++            // an already consumed prefix or skip its return tokens.
++            out.push(Packet::from_payload(
++                PacketToken::new(self.next),
++                0,
++                &packet,
++            ))
++            .map_err(|_| io::Error::other("full receive batch"))?;
++            self.next = self.next.wrapping_add(1);
++            received += 1;
++            if received == limit {
++                break;
++            }
++            match self.rx.try_recv() {
++                Ok(next) => packet = next,
++                Err(_) => break,
++            }
++        }
++        Ok(received)
+     }
+     async fn send(&mut self, packets: &PacketBatch) -> io::Result<usize> {
+-        let Some(packet) = packets.iter().next() else {
++        let limit = packets.len().min(self.max_batch);
++        // Validate the entire eligible prefix before accepting anything. An
++        // invalid later packet must not turn an accepted prefix into an error.
++        for packet in packets.iter().take(limit) {
++            if packet.payload().is_empty() || packet.payload().len() > MAX_PACKET {
++                return Err(io::Error::new(
++                    io::ErrorKind::InvalidData,
++                    "invalid output IP packet length",
++                ));
++            }
++        }
++        let mut packets = packets.iter().take(limit);
++        let Some(first) = packets.next() else {
+             return Ok(0);
+         };
+-        if packet.payload().is_empty() || packet.payload().len() > MAX_PACKET {
+-            return Err(io::Error::new(
+-                io::ErrorKind::InvalidData,
+-                "invalid output IP packet length",
+-            ));
+-        }
+-        // Reserve before accepting anything. Never await after enqueue: a
+-        // cancelled send cannot cause an already accepted packet to be retried.
++        // Only the first slot may await. Once accepted, even receiver closure
++        // must report the accepted count so the caller retries only the suffix.
+         let permit = self.tx.reserve().await.map_err(|_| closed())?;
+-        permit.send(packet.payload().to_vec());
+-        Ok(1)
++        permit.send(first.payload().to_vec());
++        let mut sent = 1;
++        for packet in packets {
++            match self.tx.try_reserve() {
++                Ok(permit) => {
++                    permit.send(packet.payload().to_vec());
++                    sent += 1;
++                }
++                Err(mpsc::error::TrySendError::Full(()))
++                | Err(mpsc::error::TrySendError::Closed(())) => break,
++            }
++        }
++        Ok(sent)
+     }
+     fn capabilities(&self) -> PacketCapabilities {
+         PacketCapabilities {
+-            max_batch: 1,
++            max_batch: self.max_batch,
+             queue_count: 1,
+             headroom: 0,
+             vectored: false,
+@@ -289,4 +322,501 @@
+             "ended output is not delivered to a later generation"
+         );
+     }
+-}
++
++    fn packets(values: &[u8]) -> PacketBatch {
++        let mut batch = PacketBatch::with_limit(values.len().max(1));
++        for &value in values {
++            batch
++                .push(Packet::from_payload(
++                    PacketToken::new(u64::from(value)),
++                    0,
++                    &[value],
++                ))
++                .unwrap();
++        }
++        batch
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_ready_receive_preserves_prefix_room_and_tokens() {
++        let (mut bridge, flow) = PacketBridge::pair(64).unwrap();
++        for value in 0..64 {
++            flow.uplink.send(vec![value]).await.unwrap();
++        }
++        let mut out = packets(&[99]);
++        // An existing prefix remains intact; only newly appended packets count.
++        assert_eq!(
++            bridge.recv(&mut out).await.unwrap_err().kind(),
++            io::ErrorKind::InvalidInput
++        );
++        let mut out = PacketBatch::with_limit(4);
++        out.push(Packet::from_payload(PacketToken::new(999), 0, &[99]))
++            .unwrap();
++        assert_eq!(bridge.recv(&mut out).await.unwrap(), 3);
++        assert_eq!(out.pop_front().unwrap().token().get(), 999);
++        for value in 0..3 {
++            let packet = out.pop_front().unwrap();
++            assert_eq!(packet.token().get(), value);
++            assert_eq!(packet.payload(), &[value as u8]);
++        }
++        let mut rest = PacketBatch::with_limit(128);
++        assert_eq!(bridge.recv(&mut rest).await.unwrap(), 61);
++        for value in 3..64 {
++            assert_eq!(rest.pop_front().unwrap().token().get(), value);
++        }
++        assert!(rest.is_empty());
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_cancel_empty_receive_does_not_consume_or_skip_tokens() {
++        let (mut bridge, flow) = PacketBridge::pair(64).unwrap();
++        let mut out = PacketBatch::with_limit(64);
++        {
++            let pending = bridge.recv(&mut out);
++            tokio::pin!(pending);
++            assert!(futures::poll!(&mut pending).is_pending());
++        }
++        assert!(out.is_empty());
++        flow.uplink.send(vec![7]).await.unwrap();
++        assert_eq!(bridge.recv(&mut out).await.unwrap(), 1);
++        let packet = out.pop_front().unwrap();
++        assert_eq!(packet.token().get(), 0);
++        assert_eq!(packet.payload(), &[7]);
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_cancel_full_send_accepts_nothing() {
++        let (mut bridge, mut flow) = PacketBridge::pair(1).unwrap();
++        bridge.send(&packets(&[1])).await.unwrap();
++        let batch = packets(&[2]);
++        {
++            let pending = bridge.send(&batch);
++            tokio::pin!(pending);
++            assert!(futures::poll!(&mut pending).is_pending());
++        }
++        assert_eq!(flow.downlink.recv().await.unwrap(), [1]);
++        assert!(matches!(
++            flow.downlink.rx.try_recv(),
++            Err(mpsc::error::TryRecvError::Empty)
++        ));
++        assert_eq!(bridge.send(&batch).await.unwrap(), 1);
++        assert_eq!(flow.downlink.recv().await.unwrap(), [2]);
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_partial_retry_preserves_order_without_duplicates() {
++        let (mut bridge, mut flow) = PacketBridge::pair(4).unwrap();
++        bridge.send(&packets(&[0, 1, 2])).await.unwrap();
++        let mut batch = packets(&[3, 4, 5]);
++        assert_eq!(bridge.send(&batch).await.unwrap(), 1);
++        batch.acknowledge_sent(1).unwrap();
++        for value in 0..4 {
++            assert_eq!(flow.downlink.recv().await.unwrap(), [value]);
++        }
++        assert_eq!(bridge.send(&batch).await.unwrap(), 2);
++        batch.acknowledge_sent(2).unwrap();
++        assert!(batch.is_empty());
++        for value in 4..6 {
++            assert_eq!(flow.downlink.recv().await.unwrap(), [value]);
++        }
++        assert!(matches!(
++            flow.downlink.rx.try_recv(),
++            Err(mpsc::error::TryRecvError::Empty)
++        ));
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_invalid_candidate_prefix_has_no_partial_side_effect() {
++        let (mut bridge, mut flow) = PacketBridge::pair(4).unwrap();
++        for invalid in [Vec::new(), vec![0; MAX_PACKET + 1]] {
++            let mut batch = packets(&[1]);
++            // Create a batch with room for a valid packet followed by bad data.
++            let mut candidate = PacketBatch::with_limit(2);
++            candidate.push(batch.pop_front().unwrap()).unwrap();
++            candidate
++                .push(Packet::from_payload(PacketToken::new(2), 0, &invalid))
++                .unwrap();
++            assert_eq!(
++                bridge.send(&candidate).await.unwrap_err().kind(),
++                io::ErrorKind::InvalidData
++            );
++            assert_eq!(bridge.tx.capacity(), 4);
++            assert!(matches!(
++                flow.downlink.rx.try_recv(),
++                Err(mpsc::error::TryRecvError::Empty)
++            ));
++        }
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_validation_stops_at_the_eligible_prefix() {
++        let (mut bridge, mut flow) = PacketBridge::pair(1).unwrap();
++        let mut batch = PacketBatch::with_limit(2);
++        batch
++            .push(Packet::from_payload(PacketToken::new(0), 0, &[1]))
++            .unwrap();
++        batch
++            .push(Packet::from_payload(PacketToken::new(1), 0, &[]))
++            .unwrap();
++        assert_eq!(bridge.send(&batch).await.unwrap(), 1);
++        batch.acknowledge_sent(1).unwrap();
++        assert_eq!(flow.downlink.recv().await.unwrap(), [1]);
++        assert_eq!(
++            bridge.send(&batch).await.unwrap_err().kind(),
++            io::ErrorKind::InvalidData
++        );
++        assert!(flow.downlink.rx.is_empty());
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_closed_and_dropped_generations_release_queued_packets() {
++        let (mut bridge, mut flow) = PacketBridge::pair(4).unwrap();
++        for value in 0..4 {
++            flow.uplink.send(vec![value]).await.unwrap();
++        }
++        bridge.send(&packets(&[0, 1, 2, 3])).await.unwrap();
++        drop(bridge);
++        assert!(flow.uplink.tx.is_closed());
++        assert_eq!(flow.uplink.tx.capacity(), 4);
++        assert!(flow.downlink.recv().await.is_none());
++        assert!(flow.downlink.rx.is_empty());
++
++        let (mut bridge, flow) = PacketBridge::pair(4).unwrap();
++        drop(flow);
++        assert_eq!(
++            bridge.send(&packets(&[1])).await.unwrap_err().kind(),
++            io::ErrorKind::BrokenPipe
++        );
++        let mut out = PacketBatch::with_limit(4);
++        assert_eq!(
++            bridge.recv(&mut out).await.unwrap_err().kind(),
++            io::ErrorKind::BrokenPipe
++        );
++        assert!(out.is_empty());
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_capacity_and_batch_bounds() {
++        for capacity in [1, 64, 65] {
++            let (mut bridge, mut flow) = PacketBridge::pair(capacity).unwrap();
++            let limit = capacity.min(64);
++            assert_eq!(bridge.capabilities().max_batch, limit);
++            for value in 0..capacity {
++                flow.uplink.send(vec![value as u8]).await.unwrap();
++            }
++            let mut out = PacketBatch::with_limit(128);
++            assert_eq!(bridge.recv(&mut out).await.unwrap(), limit);
++            assert_eq!(bridge.send(&out).await.unwrap(), limit);
++            assert_eq!(bridge.tx.capacity(), capacity - limit);
++            for value in 0..limit {
++                assert_eq!(flow.downlink.recv().await.unwrap(), [value as u8]);
++            }
++        }
++    }
++
++    /// Port this identical test body onto old/new production implementations;
++    /// it intentionally makes no assumptions about the advertised batch size.
++    /// Queue capacity, payloads, and host's one-packet API are identical.
++    #[tokio::test]
++    #[ignore = "managed PacketBridge old/new throughput measurement; no device required"]
++    async fn packet_bridge_loopbench() {
++        let rounds = std::env::var("SAIL_PACKET_BRIDGE_BENCH_ROUNDS")
++            .ok()
++            .map(|value| value.parse::<usize>().expect("positive round count"))
++            .unwrap_or(2048);
++        assert!(rounds > 0);
++        let (mut bridge, mut flow) = PacketBridge::pair(64).unwrap();
++        let mut recv_calls = 0_u64;
++        let mut send_calls = 0_u64;
++        let mut recv_hist = [0_u64; 65];
++        let mut send_hist = [0_u64; 65];
++        let mut payload_bytes = 0_u64;
++        let mut checksum = 0_u64;
++        let started = std::time::Instant::now();
++        for round in 0..rounds {
++            for index in 0..64 {
++                let value = ((round * 64 + index) % 251) as u8;
++                flow.uplink.send(vec![value; 1400]).await.unwrap();
++            }
++            let mut batch = PacketBatch::with_limit(64);
++            while batch.len() < 64 {
++                let count = bridge.recv(&mut batch).await.unwrap();
++                assert!(count > 0 && count <= 64);
++                recv_hist[count] += 1;
++                recv_calls += 1;
++            }
++            // Drain the real host receiver, including the old implementation's
++            // one-packet sends; the input batch retains the unaccepted suffix.
++            let mut expected = 0;
++            while !batch.is_empty() {
++                let count = bridge.send(&batch).await.unwrap();
++                assert!(count > 0 && count <= batch.len());
++                send_hist[count] += 1;
++                send_calls += 1;
++                batch.acknowledge_sent(count).unwrap();
++                for _ in 0..count {
++                    let packet = flow.downlink.recv().await.expect("host output ended early");
++                    let value = ((round * 64 + expected) % 251) as u8;
++                    assert_eq!(packet.len(), 1400);
++                    assert!(packet.iter().all(|&byte| byte == value));
++                    checksum += packet.iter().map(|&byte| u64::from(byte)).sum::<u64>();
++                    payload_bytes += packet.len() as u64;
++                    expected += 1;
++                }
++            }
++            assert_eq!(expected, 64);
++        }
++        assert_eq!(payload_bytes, rounds as u64 * 64 * 1400);
++        assert!(flow.downlink.rx.is_empty());
++        assert!(bridge.rx.is_empty());
++        println!("PACKET_BRIDGE_BENCH rounds={rounds} packets={} payload_bytes={payload_bytes} checksum={checksum} recv_calls={recv_calls} send_calls={send_calls} recv_batches={recv_hist:?} send_batches={send_hist:?} elapsed_ns={} max_batch={}",
++            rounds * 64, started.elapsed().as_nanos(), bridge.capabilities().max_batch);
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_partial_prefix_remains_acknowledged_when_host_closes() {
++        let (mut bridge, flow) = PacketBridge::pair(2).unwrap();
++        bridge.send(&packets(&[0])).await.unwrap();
++        let mut batch = packets(&[1, 2]);
++        let accepted = bridge.send(&batch).await.unwrap();
++        assert_eq!(accepted, 1);
++        batch.acknowledge_sent(accepted).unwrap();
++        assert_eq!(batch.iter().next().unwrap().payload(), &[2]);
++        drop(flow);
++        assert_eq!(
++            bridge.send(&batch).await.unwrap_err().kind(),
++            io::ErrorKind::BrokenPipe
++        );
++        assert_eq!(batch.len(), 1);
++    }
++
++    #[tokio::test]
++    async fn packet_bridge_runner_resumes_after_cooperative_budget_exhaustion() {
++        use sail_netstack::{
++            emit_udp_packet, BudgetProfile, ResourceLedger, RunnerConfig, SingleShardRunner,
++        };
++        use std::net::{Ipv4Addr, SocketAddr};
++        use std::sync::Arc;
++        use std::time::Duration;
++
++        let (bridge, mut flow) = PacketBridge::pair(64).unwrap();
++        let ledger = ResourceLedger::new(BudgetProfile::Mobile.budget()).unwrap();
++        let mut runner =
++            SingleShardRunner::new(bridge, Arc::clone(&ledger), RunnerConfig::default()).unwrap();
++        let source = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 1), 40000));
++        let destination = SocketAddr::from((Ipv4Addr::new(198, 51, 100, 2), 9000));
++        flow.uplink
++            .send(emit_udp_packet(source, destination, b"budget", 64, 0).unwrap())
++            .await
++            .unwrap();
++        let input = tokio::time::timeout(Duration::from_secs(2), runner.step(0))
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(input.datagrams.len(), 1);
++        let datagram = &input.datagrams[0];
++        runner
++            .queue_udp_reply(datagram.token, datagram.destination, b"budget", 0)
++            .unwrap();
++        drop(input);
++        {
++            let exhaust = async {
++                for _ in 0..1024 {
++                    tokio::task::consume_budget().await;
++                }
++            };
++            tokio::pin!(exhaust);
++            assert!(futures::poll!(&mut exhaust).is_pending());
++        }
++        {
++            let step = runner.step(0);
++            tokio::pin!(step);
++            assert!(futures::poll!(&mut step).is_pending());
++        }
++        assert_eq!(runner.pending_tx(), 1);
++        assert_eq!(runner.stats_snapshot().tx_packets, 0);
++        assert!(flow.downlink.rx.is_empty());
++        // The removed bench loop would retry immediately here forever.
++        // This bounded retry returns control to the executor before polling.
++        for _ in 0..8 {
++            tokio::task::yield_now().await;
++            {
++                let step = runner.step(0);
++                tokio::pin!(step);
++                if let std::task::Poll::Ready(result) = futures::poll!(&mut step) {
++                    result.unwrap();
++                }
++            }
++            if runner.pending_tx() == 0 {
++                break;
++            }
++        }
++        assert_eq!(runner.pending_tx(), 0);
++        assert_eq!(runner.stats_snapshot().tx_packets, 1);
++        assert!(flow.downlink.recv().await.is_some());
++        assert!(flow.downlink.rx.is_empty());
++        runner.abort();
++        drop(runner);
++        assert_eq!(ledger.snapshot().total_bytes, 0);
++    }
++
++    /// The real runner consumes PacketBridge packets and emits UDP replies.
++    /// This exercises runner RX batching and accepted-prefix TX, not the
++    /// dispatcher, TCP congestion control, relay, or an iOS packetFlow device.
++    #[tokio::test]
++    #[ignore = "managed real PacketBridge/SingleShardRunner old/new measurement"]
++    async fn packet_bridge_runner_loopbench() {
++        use sail_netstack::{
++            emit_udp_packet, parse_ip_packet, parse_udp_datagram, BudgetProfile, ResourceLedger,
++            RunnerConfig, SingleShardRunner,
++        };
++        use std::net::{Ipv4Addr, SocketAddr};
++        use std::sync::Arc;
++        use std::time::Duration;
++
++        let rounds = std::env::var("SAIL_PACKET_BRIDGE_BENCH_ROUNDS")
++            .ok()
++            .map(|value| value.parse::<usize>().expect("positive round count"))
++            .unwrap_or(2048);
++        assert!(rounds > 0);
++        let (bridge, mut flow) = PacketBridge::pair(64).unwrap();
++        let ledger = ResourceLedger::new(BudgetProfile::Mobile.budget()).unwrap();
++        let mut config = RunnerConfig::default();
++        config.packets_per_step = 16; // The real TUN adapter's existing setting.
++        let mut runner = SingleShardRunner::new(bridge, Arc::clone(&ledger), config).unwrap();
++        let source = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 1), 40000));
++        let destination = SocketAddr::from((Ipv4Addr::new(198, 51, 100, 2), 9000));
++        let mut payload_bytes = 0_u64;
++        let mut checksum = 0_u64;
++        let mut steps = 0_u64;
++        let mut peak_ledger_bytes = 0;
++        let started = std::time::Instant::now();
++        let run_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
++        for round in 0..rounds {
++            let now = round as u64;
++            for index in 0..64 {
++                let value = ((round * 64 + index) % 251) as u8;
++                let wire =
++                    emit_udp_packet(source, destination, &vec![value; 1400], 64, index as u16)
++                        .unwrap();
++                flow.uplink.send(wire).await.unwrap();
++            }
++            let mut received = 0;
++            let mut output = Vec::with_capacity(64);
++            let deadline =
++                (tokio::time::Instant::now() + Duration::from_secs(10)).min(run_deadline);
++            let mut round_steps = 0;
++            if round == 0 {
++                eprintln!(
++                    "PACKET_BRIDGE_RUNNER_PHASE first_rx_start stats={:?}",
++                    runner.stats_snapshot()
++                );
++            }
++            while received < 64 {
++                assert!(round_steps < 512 && tokio::time::Instant::now() < deadline,
++                    "RX progress bound: round={round} received={received} pending_rx={} pending_tx={} stats={:?}",
++                    runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++                let outcome = tokio::time::timeout_at(deadline, runner.step(now))
++                    .await.unwrap_or_else(|_| panic!(
++                        "RX deadline: round={round} received={received} pending_rx={} pending_tx={} stats={:?}",
++                        runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot()))
++                    .unwrap();
++                round_steps += 1;
++                if round == 0 && round_steps == 1 {
++                    eprintln!("PACKET_BRIDGE_RUNNER_PHASE first_rx_done received={} processed={} datagrams={} pending_rx={} pending_tx={} stats={:?}",
++                        outcome.received_packets, outcome.processed_packets, outcome.datagrams.len(),
++                        runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++                }
++                steps += 1;
++                received += outcome.datagrams.len();
++                for datagram in outcome.datagrams {
++                    runner
++                        .queue_udp_reply(
++                            datagram.token,
++                            datagram.destination,
++                            &datagram.payload.to_vec(),
++                            now,
++                        )
++                        .unwrap();
++                }
++                peak_ledger_bytes = peak_ledger_bytes.max(ledger.snapshot().total_bytes);
++                while let Ok(wire) = flow.downlink.rx.try_recv() {
++                    assert!(output.len() < 64, "unexpected extra runner output");
++                    output.push(wire);
++                }
++                // A ready empty outcome must not turn into a cooperative
++                // budget-starving loop; the step/wall bounds retain failures.
++                tokio::task::yield_now().await;
++            }
++            assert_eq!(received, 64);
++            if round == 0 {
++                eprintln!("PACKET_BRIDGE_RUNNER_PHASE first_tx_start elapsed_ns={} ledger_bytes={} host_packets={} pending_rx={} pending_tx={} stats={:?}",
++                    started.elapsed().as_nanos(), ledger.snapshot().total_bytes,
++                    output.len(), runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++            }
++            while runner.pending_tx() > 0 {
++                assert!(round_steps < 512 && tokio::time::Instant::now() < deadline,
++                    "TX progress bound: round={round} received={received} host_packets={} pending_rx={} pending_tx={} stats={:?}",
++                    output.len(), runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++
++                // step can finish flushing then await a new ingress packet.
++                // Cancelling that await is the adapter's real timer/command
++                // contract; accepted output is accounted in runner counters.
++                {
++                    let step = runner.step(now);
++                    tokio::pin!(step);
++                    if let std::task::Poll::Ready(result) = futures::poll!(&mut step) {
++                        result.unwrap();
++                    }
++                }
++                steps += 1;
++                round_steps += 1;
++                while let Ok(wire) = flow.downlink.rx.try_recv() {
++                    assert!(output.len() < 64, "unexpected extra runner output");
++                    output.push(wire);
++                }
++                // A reserve can be Pending with capacity available because
++                // Tokio's task budget is exhausted. Dropping and repolling
++                // without yielding cannot replenish that budget.
++                tokio::task::yield_now().await;
++            }
++            peak_ledger_bytes = peak_ledger_bytes.max(ledger.snapshot().total_bytes);
++            while output.len() < 64 {
++                let wire = tokio::time::timeout_at(deadline, flow.downlink.recv())
++                    .await
++                    .expect("runner output deadline")
++                    .expect("host output ended early");
++                output.push(wire);
++            }
++            for (index, wire) in output.iter().enumerate() {
++                let ip = parse_ip_packet(&wire, true).unwrap();
++                let datagram = parse_udp_datagram(ip, true).unwrap();
++                let value = ((round * 64 + index) % 251) as u8;
++                assert_eq!(datagram.payload.len(), 1400);
++                assert!(datagram.payload.iter().all(|&byte| byte == value));
++                payload_bytes += datagram.payload.len() as u64;
++                checksum += datagram
++                    .payload
++                    .iter()
++                    .map(|&byte| u64::from(byte))
++                    .sum::<u64>();
++            }
++            assert!(flow.downlink.rx.is_empty());
++            if round == 0 {
++                eprintln!("PACKET_BRIDGE_RUNNER_PHASE first_round_done round_steps={round_steps} pending_rx={} pending_tx={} stats={:?}",
++                    runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++            }
++        }
++        let stats = runner.stats_snapshot();
++        assert_eq!(stats.rx_packets, rounds as u64 * 64);
++        assert_eq!(stats.tx_packets, rounds as u64 * 64);
++        assert_eq!(stats.dropped_packets, 0);
++        assert_eq!(stats.runner_failures, 0);
++        assert_eq!(payload_bytes, rounds as u64 * 64 * 1400);
++        println!("PACKET_BRIDGE_RUNNER_BENCH rounds={rounds} payload_bytes={payload_bytes} checksum={checksum} steps={steps} elapsed_ns={} ledger_peak_sampled_bytes={peak_ledger_bytes} stats={stats:?}", started.elapsed().as_nanos());
++        runner.abort();
++        drop(runner);
++        assert_eq!(ledger.snapshot().total_bytes, 0);
++        assert!(flow.downlink.recv().await.is_none());
++    }
++}

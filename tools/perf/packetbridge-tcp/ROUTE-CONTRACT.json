@@ -1,0 +1,63 @@
+{
+  "ownership": "Existing managed CLIENT_NS/SERVER_NS only; acquire same run.py namespace locks; example runs inside CLIENT_NS. No new namespaces, native SDK TUN adapter, setns, host routes/firewall, or production VPN changes.",
+  "device": "Example opens unique HOST_TUN in CLIENT_NS, address172.19.0.1/30, MTU9000, PI/offload disabled. Dynamic SDK TUN configured same address/MTU but receives packets only via TunPacketFlow; no device fd passes to SDK.",
+  "preconditions": [
+    "existing Trojan server+netgen serve in SERVER_NS ready; original client-to-SERVER_ADDR veth route preserved",
+    "no preexisting exact FAR_ADDR/32 route; HOST_TUN name absent before example start",
+    "all ready/stop/stats file paths unique/absent; config has only mixed startup inbounds, exactly one Trojan outbound to SERVER_ADDR, no native tun or recursive direct-FAR outbound"
+  ],
+  "before": [
+    "ip -n CLIENT_NS -j route get SERVER_ADDR > ART/server-route-before.json",
+    "ip -n CLIENT_NS -j route show exact FAR_ADDR/32 > ART/far-route-before.json",
+    "ip -n CLIENT_NS -j link show > ART/client-links-before.json"
+  ],
+  "host_argv": [
+    "ip",
+    "netns",
+    "exec",
+    "CLIENT_NS",
+    "HOST_EXAMPLE",
+    "--config",
+    "EXISTING_TROJAN_MIXED_CONFIG",
+    "--tunname",
+    "HOST_TUN",
+    "--readyfile",
+    "READY",
+    "--stopfile",
+    "STOP",
+    "--statsfile",
+    "STATS"
+  ],
+  "after_ready": [
+    "verify ready JSON pid/queue64/mtu9000/profile/mobile/session256/relay8,32 and host still alive",
+    "ip -n CLIENT_NS route add FAR_ADDR/32 dev HOST_TUN src 172.19.0.1",
+    "ip -n CLIENT_NS -j route get FAR_ADDR > ART/far-route-capture.json",
+    "ip -n CLIENT_NS -j route get SERVER_ADDR > ART/server-route-after.json",
+    "assert FAR route dev==HOST_TUN; assert SERVER route dev/gateway/prefsrc same as before and dev!=HOST_TUN"
+  ],
+  "load_argv": [
+    "ip",
+    "netns",
+    "exec",
+    "CLIENT_NS",
+    "NETGEN",
+    "bulk",
+    "-target",
+    "FAR_ADDR:9000",
+    "-streams",
+    "1",
+    "-bytes",
+    "67108864",
+    "-dir",
+    "down"
+  ],
+  "load_gate": "Netgen process exit0 and JSON failed==0/corrupt==0/expected bytes required. Host success alone is NOT throughput or integrity PASS. Preserve stdout/stderr/time/RSS/CPU for OLD/NEW under same2GiB cap.",
+  "stop": [
+    "after netgen finishes, create unique STOP file; wait host exit0 and stats.success true, both nonzero raw directions and detach_clean/stop_ok true",
+    "stop command always attempted in finally even if load fails; host has180s lifecycle cap, wrapper enforces total startup/load/cleanup deadline and kills process group only after graceful stop timeout",
+    "host cancel watch -> both pump joins each<=5s(abort+join on timeout) -> detach<=10s(clean required) -> stop<=10s -> close host device; early startup failures guarded by wrapper total timeout",
+    "verify HOST_TUN no longer exists and exact owned FAR route absent; if still present delete only FAR_ADDR/32 dev HOST_TUN recorded as added by this run; never flush or restore arbitrary routes",
+    "record SERVER_ADDR route after cleanup unchanged; cleanup existing namespace resources only via their registered owner/wrapper"
+  ],
+  "integration_request": "run.py owner needs only example-client launch/ready+FAR32 guard+single netgen download+stop/status collection as alternative client command. This source does not modify run.py, server/netgen setup, build wrapper, or authorization registry."
+}

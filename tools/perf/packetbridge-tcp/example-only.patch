@@ -1,0 +1,346 @@
+--- /dev/null
++++ b/sail/examples/packet_bridge_tcp_bench.rs
+@@ -0,0 +1,343 @@
++//! Managed Linux host for kernel TCP -> host TUN -> TunPacketFlow -> Trojan.
++//! No routing commands are executed here. The wrapper owns namespaces/routes,
++//! netgen and the 2GiB limit. This example never gives a TUN fd to Sail.
++#[cfg(all(target_os = "linux", feature = "inbound-tun"))]
++mod bench {
++    use sail::embed::{Config, Instance, Options, Runtime};
++    use serde::Serialize;
++    use std::{collections::HashMap, io, path::PathBuf, sync::Arc, time::Duration};
++    use tokio::{sync::watch, task::JoinHandle};
++
++    type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
++    const MAX_PACKET: usize = 65_535;
++    const SETTINGS: &str = r#"{"profile":"mobile","set":["inbound.max_connections=256","relay.buffer_size=8","relay.buffer_max_size=32"]}"#;
++    const TUN: &str =
++        r#"{"type":"tun","tag":"packetbridge-bench","address":["172.19.0.1/30"],"mtu":9000}"#;
++
++    #[derive(Default, Serialize)]
++    struct Counts {
++        // Uplink packets/bytes mean host reads, not accepted SDK input.
++        // Downlink packets/bytes mean successful complete host writes.
++        packets: u64,
++        bytes: u64,
++        accepted_packets: u64,
++        accepted_bytes: u64,
++        // Raw IP checksum, NOT an application-data hash. RX/TX differ.
++        hash: u64,
++        io_wait_ns: u128,
++        bridge_wait_ns: u128,
++        max_packet_bytes: usize,
++    }
++    impl Counts {
++        fn add(&mut self, packet: &[u8]) {
++            self.packets += 1;
++            self.bytes += packet.len() as u64;
++            self.max_packet_bytes = self.max_packet_bytes.max(packet.len());
++            for byte in packet {
++                self.hash = self.hash.wrapping_mul(16_777_619) ^ u64::from(*byte);
++            }
++        }
++    }
++    fn fail(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
++        io::Error::other(message).into()
++    }
++    // Only these allow-listed stage/reason literals and ErrorKind are emitted.
++    // Never format an unknown SDK, task panic, config, or I/O error message.
++    #[derive(Clone, Debug, Serialize)]
++    struct Diagnostic {
++        stage: &'static str,
++        reason: &'static str,
++        io_kind: Option<String>,
++    }
++    impl std::fmt::Display for Diagnostic {
++        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            write!(f, "{}:{}", self.stage, self.reason)
++        }
++    }
++    impl std::error::Error for Diagnostic {}
++    fn coded(
++        stage: &'static str,
++        reason: &'static str,
++    ) -> Box<dyn std::error::Error + Send + Sync> {
++        Box::new(Diagnostic {
++            stage,
++            reason,
++            io_kind: None,
++        })
++    }
++    fn io_failure(
++        stage: &'static str,
++        reason: &'static str,
++        error: io::Error,
++    ) -> Box<dyn std::error::Error + Send + Sync> {
++        Box::new(Diagnostic {
++            stage,
++            reason,
++            io_kind: Some(format!("{:?}", error.kind())),
++        })
++    }
++    fn diagnostic<T>(result: &Result<T>) -> Option<Diagnostic> {
++        result.as_ref().err().map(|error| {
++            error
++                .downcast_ref::<Diagnostic>()
++                .cloned()
++                .unwrap_or(Diagnostic {
++                    stage: "unknown",
++                    reason: "unclassified_error",
++                    io_kind: None,
++                })
++        })
++    }
++    fn args() -> Result<HashMap<String, String>> {
++        let mut result = HashMap::new();
++        let mut args = std::env::args().skip(1);
++        while let Some(key) = args.next() {
++            if ![
++                "--config",
++                "--tunname",
++                "--readyfile",
++                "--stopfile",
++                "--statsfile",
++            ]
++            .contains(&key.as_str())
++            {
++                return Err(fail(
++                    "expected --config/--tunname/--readyfile/--stopfile/--statsfile",
++                ));
++            }
++            let value = args.next().ok_or_else(|| fail("missing argument value"))?;
++            if result.insert(key, value).is_some() {
++                return Err(fail("duplicate argument"));
++            }
++        }
++        if result.len() != 5 {
++            return Err(fail("all five arguments are required"));
++        }
++        Ok(result)
++    }
++    async fn join(mut task: JoinHandle<Result<Counts>>, stage: &'static str) -> Result<Counts> {
++        match tokio::time::timeout(Duration::from_secs(5), &mut task).await {
++            Ok(Ok(value)) => value,
++            Ok(Err(error)) => Err(coded(
++                stage,
++                if error.is_cancelled() {
++                    "cancelled"
++                } else if error.is_panic() {
++                    "panic"
++                } else {
++                    "join_error"
++                },
++            )),
++            Err(_) => {
++                task.abort();
++                let _ = task.await;
++                Err(coded(stage, "timeout"))
++            }
++        }
++    }
++    pub async fn run() -> Result<()> {
++        let args = args()?;
++        let ready = PathBuf::from(&args["--readyfile"]);
++        let stop = PathBuf::from(&args["--stopfile"]);
++        let stats_path = PathBuf::from(&args["--statsfile"]);
++        if ready.exists() || stop.exists() || stats_path.exists() {
++            return Err(fail("lifecycle files must be unique and absent"));
++        }
++        let name = &args["--tunname"];
++        if name.is_empty()
++            || name.len() > 15
++            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
++        {
++            return Err(fail("invalid unique host TUN name"));
++        }
++        if PathBuf::from(format!("/sys/class/net/{name}")).exists() {
++            return Err(fail("host TUN name already exists"));
++        }
++        let config = std::fs::read_to_string(&args["--config"])?;
++        let parsed: serde_json::Value = serde_json::from_str(&config)?;
++        let inbounds = parsed["inbounds"]
++            .as_array()
++            .ok_or_else(|| fail("mixed inbound required"))?;
++        if inbounds.is_empty() || inbounds.iter().any(|i| i["type"] != "mixed") {
++            return Err(fail(
++                "only mixed startup inbounds allowed; no Sail native TUN",
++            ));
++        }
++        let outbounds = parsed["outbounds"]
++            .as_array()
++            .ok_or_else(|| fail("Trojan outbound required"))?;
++        if outbounds.len() != 1 || outbounds[0]["type"] != "trojan" {
++            return Err(fail("exactly one existing Trojan outbound required"));
++        }
++        // This is the HOST's capture device, not TunRsPacketIo or OwnedHostIo.
++        // No offload/PI/GSO headers: recv/send exchange complete IP packets.
++        let device = Arc::new(
++            tun_rs::DeviceBuilder::new()
++                .name(name)
++                .ipv4("172.19.0.1", 30, None)
++                .mtu(9000)
++                .packet_information(false)
++                .offload(false)
++                .enable(true)
++                .build_async()?,
++        );
++        let instance = Instance::new(
++            Options::new()
++                .dynamic_tun(true)
++                .settings_json(SETTINGS)?
++                .runtime(Runtime::Host(tokio::runtime::Handle::current())),
++        )?;
++        instance.start(Config::Json(config)).await?;
++        let prepared = instance.prepare_tun_packets(TUN, 64).await;
++        let (prepared, flow) = match prepared {
++            Ok(value) => value,
++            Err(error) => {
++                let _ = instance.stop().await;
++                return Err(error.into());
++            }
++        };
++        if let Err(error) = prepared.commit().await {
++            let _ = instance.detach_tun().await;
++            let _ = instance.stop().await;
++            return Err(error.into());
++        }
++        let (cancel, mut rx_cancel) = watch::channel(false);
++        let mut tx_cancel = cancel.subscribe();
++        let (rx_ready, rx_started) = tokio::sync::oneshot::channel();
++        let (tx_ready, tx_started) = tokio::sync::oneshot::channel();
++        let uplink = flow.uplink;
++        let mut downlink = flow.downlink;
++        let rx_device = Arc::clone(&device);
++        let tx_device = Arc::clone(&device);
++        let rx = tokio::spawn(async move {
++            let mut counts = Counts::default();
++            let _ = rx_ready.send(());
++            loop {
++                // One owned Vec in flight: it moves into the existing bounded
++                // uplink queue before the next receive Vec is allocated.
++                let mut packet = vec![0; MAX_PACKET];
++                let started = std::time::Instant::now();
++                let size = tokio::select! {
++                    biased;
++                    _ = rx_cancel.changed() => break,
++                    result = rx_device.recv(&mut packet) => result.map_err(|error| io_failure("rx_io", "read_failed", error))?,
++                };
++                counts.io_wait_ns += started.elapsed().as_nanos();
++                if size == 0 || size > MAX_PACKET {
++                    return Err(coded(
++                        "rx_io",
++                        if size == 0 { "eof" } else { "invalid_length" },
++                    ));
++                }
++                packet.truncate(size);
++                counts.add(&packet);
++                let started = std::time::Instant::now();
++                tokio::select! {
++                    biased;
++                    _ = rx_cancel.changed() => break,
++                    result = uplink.send(packet) => result.map_err(|error| io_failure("rx_bridge", "send_failed", error))?,
++                }
++                counts.bridge_wait_ns += started.elapsed().as_nanos();
++                counts.accepted_packets += 1;
++                counts.accepted_bytes += size as u64;
++            }
++            Ok(counts)
++        });
++        let tx = tokio::spawn(async move {
++            let mut counts = Counts::default();
++            let _ = tx_ready.send(());
++            loop {
++                let started = std::time::Instant::now();
++                let packet = tokio::select! {
++                    biased;
++                    _ = tx_cancel.changed() => break,
++                    packet = downlink.recv() => packet.ok_or_else(|| coded("tx_bridge", "closed_before_stop"))?,
++                };
++                counts.bridge_wait_ns += started.elapsed().as_nanos();
++                if packet.is_empty() || packet.len() > MAX_PACKET {
++                    return Err(coded("tx_bridge", "invalid_length"));
++                }
++                let started = std::time::Instant::now();
++                let size = tokio::select! {
++                    biased;
++                    _ = tx_cancel.changed() => break,
++                    result = tx_device.send(&packet) => result.map_err(|error| io_failure("tx_io", "write_failed", error))?,
++                };
++                counts.io_wait_ns += started.elapsed().as_nanos();
++                if size != packet.len() {
++                    return Err(coded("tx_io", "short_write"));
++                }
++                counts.add(&packet);
++                counts.accepted_packets += 1;
++                counts.accepted_bytes += size as u64;
++            }
++            Ok(counts)
++        });
++        let started = std::time::Instant::now();
++        let phase: Result<()> = async {
++            tokio::time::timeout(Duration::from_secs(5), async {
++                rx_started.await.map_err(|_| coded("phase_ready", "rx_ready_closed"))?;
++                tx_started.await.map_err(|_| coded("phase_ready", "tx_ready_closed"))?;
++                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
++            }).await.map_err(|_| coded("phase_ready", "timeout"))??;
++            // Wrapper adds only FAR/32 after this file, then starts netgen.
++            std::fs::write(&ready, serde_json::to_vec(&serde_json::json!({"pid":std::process::id(),"ready":true,"workers":2,"queue_capacity":64,"mtu":9000,"profile":"mobile","session_cap":256,"relay_kib":[8,32],"tun":name})).map_err(|_| coded("phase_ready", "encode_failed"))?)
++                .map_err(|error| io_failure("phase_ready", "write_failed", error))?;
++            loop {
++                if rx.is_finished() || tx.is_finished() { return Err(coded("phase", "early_pump_exit")); }
++                if stop.exists() { return Ok(()); }
++                if started.elapsed() > Duration::from_secs(180) { return Err(coded("phase", "deadline")); }
++                tokio::time::sleep(Duration::from_millis(20)).await;
++            }
++        }.await;
++        let _ = cancel.send(true);
++        // Cancellation closes both flow endpoints when pump futures end.
++        let (rx, tx) = tokio::join!(join(rx, "rx_join"), join(tx, "tx_join"));
++        let detach = tokio::time::timeout(Duration::from_secs(10), instance.detach_tun()).await;
++        let detach_status: Result<()> = match detach {
++            Err(_) => Err(coded("detach", "timeout")),
++            Ok(Err(_)) => Err(coded("detach", "sdk_error")),
++            Ok(Ok(report)) if !report.clean() => Err(coded("detach", "unclean")),
++            Ok(Ok(_)) => Ok(()),
++        };
++        let detached = detach_status.is_ok();
++        let stop_status: Result<()> =
++            match tokio::time::timeout(Duration::from_secs(10), instance.stop()).await {
++                Err(_) => Err(coded("stop", "timeout")),
++                Ok(Err(_)) => Err(coded("stop", "sdk_error")),
++                Ok(Ok(())) => Ok(()),
++            };
++        let stopped = stop_status.is_ok();
++        drop(device); // Host owns/closes the capture fd; wrapper removes its route.
++        let traffic = matches!(&rx, Ok(counts) if counts.packets > 0)
++            && matches!(&tx, Ok(counts) if counts.packets > 0);
++        let success = phase.is_ok() && rx.is_ok() && tx.is_ok() && traffic && detached && stopped;
++        let report = serde_json::json!({"success":success,"pid":std::process::id(),"wall_ns":started.elapsed().as_nanos(),"uplink":rx.as_ref().ok(),"downlink":tx.as_ref().ok(),"pump_rx_ok":rx.is_ok(),"pump_tx_ok":tx.is_ok(),"detach_clean":detached,"stop_ok":stopped,"diagnostics":{"phase":diagnostic(&phase),"rx":diagnostic(&rx),"tx":diagnostic(&tx),"detach":diagnostic(&detach_status),"stop":diagnostic(&stop_status)},"payload_validation":"external netgen result/status required; raw RX/TX hashes are not comparable","native_ledger":null,"native_perflow_metrics":"unavailable through public API","limits":{"queue_packets_each":64,"max_packet_bytes":MAX_PACKET,"pump_owned_packets_each":1}});
++        std::fs::write(stats_path, serde_json::to_vec_pretty(&report)?)?;
++        let _ = std::fs::remove_file(ready);
++        if !success {
++            return Err(fail("capture lifecycle failed; see bounded stats"));
++        }
++        Ok(())
++    }
++}
++
++#[cfg(all(target_os = "linux", feature = "inbound-tun"))]
++fn main() {
++    let result = tokio::runtime::Builder::new_multi_thread()
++        .worker_threads(2)
++        .thread_name("packetbridge-host")
++        .enable_all()
++        .build()
++        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
++        .and_then(|runtime| runtime.block_on(bench::run()));
++    if result.is_err() {
++        eprintln!("packet_bridge_tcp_bench failed (configuration/credentials are not printed)");
++        std::process::exit(1);
++    }
++}
++#[cfg(not(all(target_os = "linux", feature = "inbound-tun")))]
++fn main() {
++    eprintln!("requires Linux and feature inbound-tun");
++    std::process::exit(1);
++}

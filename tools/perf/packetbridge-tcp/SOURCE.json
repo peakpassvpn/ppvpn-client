@@ -1,0 +1,58 @@
+{
+  "base": "f99761138b23f267ebc7621057afe02018ab7c18",
+  "tree": "c7306832afbbdf77d78d21907756c95207136b94",
+  "Cargo_lock_sha256": "dfeaf3c14bcf23fb02157e2e103352eeb27a3c738fbc6124678f8e2d4b58c68a",
+  "patches": {
+    "candidate.patch": "af6f328337003b826e5c6dc83872c05cfb3ad953dfcfefaee85cfe070c3ac75c",
+    "old-bench.patch": "0733c2a1955c3b6a4eb2826ad8836d596bb74576a78f070b84b8d70d40a2ccf6"
+  },
+  "patched_source": {
+    "old": "e72d7645a97816e19d2b7c92669c86fe3ef4f8ea3ae88087bce513dcb66666cf",
+    "new": "4d22fa0e5d034ad05846dc445e87d0551147f93870e1b5dde5d033e96b204fad"
+  },
+  "profile": "dist-mobile",
+  "profile_difference": "Existing test-only dist-mobile opt3/ltooff/codegen16/debugfalse/cargo1, identical OLD/NEW; not shipping iOS performance. Production cfgtest83 source identities and identical final7f8 example pinned separately.",
+  "runtime": "Real kernelTCP->hostTUN->public TunPacketFlow/NativeRuntimeGroup->Trojan relay; no Sail NativeTun fd adapter",
+  "build": {
+    "CPUs": 4,
+    "memory": 8589934592,
+    "swap": 0,
+    "tasks": 512,
+    "max_seconds": 1800,
+    "cargo_jobs": 1
+  },
+  "measure": {
+    "CPUs": 4,
+    "memory": 2147483648,
+    "swap": 0,
+    "tasks": 256,
+    "max_seconds": 1200
+  },
+  "source_delivery_sha256": "1cda2a5546e754f38f4ca46f7616bff6ad6147faf2234c36660a7b2f314820ae",
+  "cargo_profile_config": [
+    "profile.dist-mobile.lto=\"off\"",
+    "profile.dist-mobile.codegen-units=16",
+    "profile.dist-mobile.debug=false"
+  ],
+  "production_prefix_sha256_unchanged": "ef46730a5248938fe98d87804eb9be1b8fba11e5b961ccb8e291fb7e784bc540",
+  "source_revision_scope": "Same final example added independently to exact old e72d/new4d22 production arms; no edits to their embed/tun.rs beyond frozen arm patches; no tests/bench driver changes to original run.py/NativeTun.",
+  "example_file": "sail/examples/packet_bridge_tcp_bench.rs",
+  "example_sha256": "7f8be3e8ba1b07a38ee6edf01faa904b42dd5a1f7397dc831e0556e55d6c262e",
+  "example_patch_sha256": "101fd048c474b11a547925879cf830e5585d9e6ef9af70f573cd70f7c58e0c13",
+  "example_delivery_sha256": "42a292318eea423fd72cc41049b1b57a0493eab0a7746a88cd97a49ac04daab5",
+  "example_source_QA_sha256": "bed6c2df6632a0c0cc1c6832f57baba1cf9b03a6367b62ccad5d001ea64d6c59",
+  "workload": {
+    "direction": "down",
+    "streams": 1,
+    "bytes": 67108864,
+    "queue_each": 64,
+    "MTU": 9000,
+    "offload": false,
+    "host_workers": 2,
+    "sessions": 256,
+    "relay_KiB": [
+      8,
+      32
+    ]
+  }
+}

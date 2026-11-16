@@ -1,16 +1,16 @@
-name: PacketBridge actual native comparison
-run-name: F997 old and bounded-batch real Tokio bridge and SingleShard UDP
+name: PacketBridge public-host actual TCP comparison
+run-name: F997 old and bounded batch public API host; two64MiB TCP downloads
 on:
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: packetbridge-native-f997
+  group: packetbridge-public-host-tcp-f997
   cancel-in-progress: false
 jobs:
   build:
-    name: Compile exact old and new native test binaries
+    name: Build exact PacketBridge TCP host arms
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
@@ -33,10 +33,14 @@ jobs:
           path: sail-source
           persist-credentials: false
       - name: Verify unchanged proven resource infrastructure and frozen bridge inputs
-        run: python3 tools/perf/packetbridge/verify.py
+        run: python3 tools/perf/packetbridge-tcp/verify.py
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
         with:
           toolchain: 1.98.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: 1.25.8
+          cache-dependency-path: sail-source/scripts/netem/netgen/go.mod
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         continue-on-error: true
         timeout-minutes: 5
@@ -49,9 +53,11 @@ jobs:
         with:
           lockfile: sail-source/Cargo.lock
           targets: x86_64-unknown-linux-gnu
+      - name: Fetch exact existing nonproduction peer archive
+        run: curl --fail --location --retry 2 --output "$RUNNER_TEMP/sing-box-1.14.2-linux-amd64.tar.gz" https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-linux-amd64.tar.gz
       - name: Actual two-arm build under original bounded Lease
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH,GOCACHE,GOMODCACHE,GOTMPDIR,GOBIN,CARGO_HOME,RUSTUP_HOME,BORING_BSSL_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_INCLUDE_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_ASSUME_PATCHED_x86_64_unknown_linux_gnu env PATH="$PATH" python3 tools/perf/packetbridge/manager.py build --source "$GITHUB_WORKSPACE/sail-source" --output "$RUNNER_TEMP/packetbridge-build-output" --resource "$RUNNER_TEMP/f997-build-resource" --job-start "$PERF_JOB_START_MONOTONIC"
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH,GOCACHE,GOMODCACHE,GOTMPDIR,GOBIN,GOTOOLCHAIN,CARGO_HOME,RUSTUP_HOME,BORING_BSSL_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_INCLUDE_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_ASSUME_PATCHED_x86_64_unknown_linux_gnu env PATH="$PATH" python3 tools/perf/packetbridge-tcp/build_manager.py build --source "$GITHUB_WORKSPACE/sail-source" --output "$RUNNER_TEMP/tcp-build-output" --resource "$RUNNER_TEMP/f997-build-resource" --job-start "$PERF_JOB_START_MONOTONIC" --singbox-archive "$RUNNER_TEMP/sing-box-1.14.2-linux-amd64.tar.gz"
       - name: Independent fresh cleanup recheck
         if: always()
         run: |
@@ -64,24 +70,24 @@ jobs:
           fi
       - name: Export exact compiled binary manifest
         id: manifest
-        run: python3 tools/perf/packetbridge/artifact.py export
+        run: python3 tools/perf/packetbridge-tcp/artifact.py export
       - name: Stage original build evidence
         if: always()
         run: |
-          mkdir -p "$RUNNER_TEMP/packetbridge-front-artifact"
-          for name in packetbridge-build-output f997-collected-build; do
-            if test -d "$RUNNER_TEMP/$name"; then cp -R "$RUNNER_TEMP/$name" "$RUNNER_TEMP/packetbridge-front-artifact/"; fi
+          mkdir -p "$RUNNER_TEMP/tcp-front-artifact"
+          for name in tcp-build-output f997-collected-build; do
+            if test -d "$RUNNER_TEMP/$name"; then cp -R "$RUNNER_TEMP/$name" "$RUNNER_TEMP/tcp-front-artifact/"; fi
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         id: artifact
         with:
-          name: packetbridge-exact-native-binaries
-          path: ${{ runner.temp }}/packetbridge-front-artifact
+          name: packetbridge-exact-tcp-host-binaries
+          path: ${{ runner.temp }}/tcp-front-artifact
           if-no-files-found: warn
           retention-days: 7
   measure:
-    name: Actual compiler-free native bridge measurements
+    name: Public PacketBridge single-stream kernel TCP downloads
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -99,14 +105,14 @@ jobs:
           PYCODE
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify unchanged proven resource infrastructure and frozen bridge inputs
-        run: python3 tools/perf/packetbridge/verify.py
+        run: python3 tools/perf/packetbridge-tcp/verify.py
       - name: Authenticate exact same-run old and new binaries
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/perf/packetbridge/artifact.py fetch
-      - name: Actual eleven ordinary tests, two focused regressions and four native benches
+        run: python3 tools/perf/packetbridge-tcp/artifact.py fetch
+      - name: Actual owner canary then only OLD and NEW single-stream TCP cases
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH env PATH="$PATH" python3 tools/perf/packetbridge/manager.py measure --source "$PB_BINARY_BUNDLE" --output "$RUNNER_TEMP/packetbridge-measure-output" --resource "$RUNNER_TEMP/f997-runtime-output" --job-start "$PERF_JOB_START_MONOTONIC"
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH env PATH="$PATH" python3 tools/perf/packetbridge-tcp/runtime_manager.py --bundle "$PB_TCP_BUNDLE" --manifest-sha256 "$FRONT_MANIFEST_SHA256" --out "$RUNNER_TEMP/f997-runtime-output" --job-start "$PERF_JOB_START_MONOTONIC"
       - name: Independent fresh cleanup recheck
         if: always()
         run: |
@@ -121,10 +127,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: packetbridge-native-measurements
+          name: packetbridge-public-host-tcp-originals
           path: |
-            ${{ runner.temp }}/packetbridge-measure-output
             ${{ runner.temp }}/f997-collected-runtime
-            ${{ runner.temp }}/packetbridge-front-authentication.json
+            ${{ runner.temp }}/tcp-front-authentication.json
           if-no-files-found: warn
           retention-days: 7
