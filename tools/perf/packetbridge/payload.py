@@ -1,5 +1,5 @@
 """Exact two-arm native build, or compiler-free execution of those test binaries."""
-import hashlib,json,os,pathlib,shutil,subprocess,time
+import hashlib,json,os,pathlib,re,shutil,subprocess,time
 HERE=pathlib.Path(__file__).resolve().parent;pin=json.loads((HERE/'SOURCE.json').read_text());root=pathlib.Path(os.environ['PB_SOURCE']);out=pathlib.Path(os.environ['PB_OUTPUT']);out.mkdir(parents=True,exist_ok=False);phase=os.environ['PB_PHASE']
 def sha(p):return hashlib.file_digest(p.open('rb'),'sha256').hexdigest()
 def git(*args):return subprocess.check_output(['git',*args],cwd=root,text=True).strip()
@@ -16,6 +16,33 @@ def run(name,args,cwd=root,env=None,measured=False):
  row={'name':name,'command':command,'exit':r.returncode,'wall_seconds':time.monotonic()-start,'measurement_includes_compilation':False if measured else None};stages.append(row);(out/'stages.json').write_text(json.dumps(stages,indent=2)+'\n');assert r.returncode==0
  return out/(name+'.stdout.raw')
 
+def cargo_test_artifact(text,checkout,cargo_exit):
+ assert type(cargo_exit) is int and cargo_exit==0,'Actual cargo exit must be zero'
+ checkout=pathlib.Path(checkout)
+ package='path+'+(checkout/'sail').as_uri()+'#0.24.0'
+ expected_profile={'opt_level':'3','debuginfo':0,'debug_assertions':False,'overflow_checks':False,'test':True}
+ # Cargo -vv interleaves bracket-prefixed build-script text with JSON records.
+ # Keep the original stream; accept only that known non-JSON envelope.
+ executables=[];finished=[];verbose_lines=0;json_records=0
+ for number,line in enumerate(text.splitlines(),1):
+  try:obj=json.loads(line)
+  except json.JSONDecodeError:
+   if re.fullmatch(r'\[[^\]\r\n]+\](?: .*)?',line):verbose_lines+=1;continue
+   raise ValueError('Unrecognized Cargo stdout record at line '+str(number))
+  assert isinstance(obj,dict);json_records+=1
+  if obj.get('reason')=='build-finished':finished.append(obj.get('success'))
+  assert not (obj.get('reason')=='compiler-message' and obj.get('message',{}).get('level')=='error'),'Cargo reported a compiler error'
+  target=obj.get('target',{});profile=obj.get('profile',{})
+  profile_ok=isinstance(profile,dict) and set(profile)==set(expected_profile) and all(type(profile[k]) is type(v) and profile[k]==v for k,v in expected_profile.items())
+  if obj.get('reason')=='compiler-artifact' and obj.get('package_id')==package and obj.get('manifest_path')==str(checkout/'sail/Cargo.toml') and target.get('name')=='sail' and target.get('kind')==['lib'] and target.get('crate_types')==['lib'] and target.get('src_path')==str(checkout/'sail/src/lib.rs') and profile_ok and obj.get('executable'):
+   executable=obj['executable'];assert isinstance(executable,str)
+   path=pathlib.Path(executable)
+   assert path.is_absolute() and path.parent==checkout/'target/dist-mobile/deps' and re.fullmatch(r'sail-[0-9a-f]+',path.name) and executable in obj.get('filenames',[]),'Unexpected native libtest executable path'
+   executables.append(executable)
+ assert len(finished)==1 and finished[0] is True,'Require exactly one successful Cargo build-finished record'
+ assert len(executables)==1,'Require exactly one actual sail libtest executable'
+ return executables[0],{'verbose_build_script_lines':verbose_lines,'JSON_records':json_records,'build_finished_success':True,'actual_cargo_exit':cargo_exit,'executable':executables[0]}
+
 if phase=='build':
  assert git('rev-parse','HEAD')==pin['base'] and git('rev-parse','HEAD^{tree}')==pin['tree'] and not git('status','--porcelain','--untracked-files=all')
  assert sha(root/'Cargo.lock')==pin['Cargo_lock_sha256']
@@ -29,12 +56,10 @@ if phase=='build':
   shutil.copy2(root/'sail/src/embed/tun.rs',out/(arm+'.tun.rs'))
   config_args=[item for value in pin['cargo_profile_config'] for item in ['--config',value]]
   log=run(arm+'-compile',['cargo','test','-vv','--locked','--profile',pin['profile'],*config_args,'-p','sail','--lib','--no-run','--message-format=json'],env=env)
-  executables=[]
-  for line in log.read_text().splitlines():
-   obj=json.loads(line)
-   if obj.get('reason')=='compiler-artifact' and obj.get('executable') and obj.get('target',{}).get('name')=='sail':executables.append(obj['executable'])
-  assert len(executables)==1
-  target=pathlib.Path(executables[0]);binary=out/'bin'/('sail-'+arm+'-tests');shutil.copy2(target,binary);binary.chmod(0o755)
+  executable,selection=cargo_test_artifact(log.read_text(),root,stages[-1]['exit'])
+  (out/(arm+'-cargo-artifact-selection.json')).write_text(json.dumps(selection,indent=2)+'\n')
+  target=pathlib.Path(executable);assert target.is_file() and not target.is_symlink() and target.resolve().is_relative_to((root/'target').resolve())
+  binary=out/'bin'/('sail-'+arm+'-tests');shutil.copy2(target,binary);binary.chmod(0o755)
   arms[arm]={'source_sha256':pin['patched_source'][arm],'patch_sha256':pin['patches'][patch],'binary':str(binary.relative_to(out)),'binary_sha256':sha(binary),'binary_bytes':binary.stat().st_size,'profile':pin['profile'],'cargo_profile_config':pin['cargo_profile_config'],'cargo_jobs':pin['build']['cargo_jobs']}
   run(arm+'-restore',['git','restore','--source=HEAD','--','sail/src/embed/tun.rs']);assert not git('status','--porcelain','--untracked-files=all')
  manifest={'base':pin['base'],'tree':pin['tree'],'lock_sha256':sha(root/'Cargo.lock'),'profile':pin['profile'],'profile_difference':pin['profile_difference'],'cargo_profile_config':pin['cargo_profile_config'],'cargo_jobs':pin['build']['cargo_jobs'],'arms':arms,'build_run':os.environ['GITHUB_RUN_ID'],'source_pre_post_clean':True,'stages':stages}

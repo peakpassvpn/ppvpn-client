@@ -7,7 +7,7 @@
   "tools/perf/packetbridge/artifact.py": "de3eeb5dd9d0dbe78f7cf952d5a5232684f42fabe1f730de2591078c9e22a519",
   "tools/perf/packetbridge/candidate.patch": "b05e98e82a997f16df68b00ae81238b62553203eb26a5a0dbc665c5175d24598",
   "tools/perf/packetbridge/SOURCE.json": "f3493fdc78cf6f66095a3c692e47058e631fdbcc902114034ba5781d2d88b8e6",
-  "tools/perf/packetbridge/payload.py": "9ac5e161b527b902d8b5f9981e572881775f1fe90b97105fd903763a991d04b0",
+  "tools/perf/packetbridge/payload.py": "75a4a49b3fb3039d2762b75affaa10712976026edce3325ae51f1d2d6a7d118e",
   "tools/perf/packetbridge/old-bench.patch": "f0c17ed6e3a89e1330f233f1a75b39b312af3601a61627733de75096a07c45c2",
   "tools/perf/packetbridge/manager.py": "906bfee236a2ac78f1473ac08c1488bd599c40319c91ff6c30a5eead5ea672b1",
   ".github/workflows/apple-archive-acceptance.yml": "f09ff40e1d41258aca40e143239d9c9a46f63689dd1534017fbe3da7f2558b87"
