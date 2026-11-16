@@ -1,0 +1,74 @@
+{
+  "scope": "PREPARED_EXACT_F997_BUILD_THEN_CONDITIONAL_REAL_FOUR_CASE_BASELINE_NOT_DISPATCHED",
+  "source": "f99761138b23f267ebc7621057afe02018ab7c18",
+  "tree": "c7306832afbbdf77d78d21907756c95207136b94",
+  "source_lock_sha256": "dfeaf3c14bcf23fb02157e2e103352eeb27a3c738fbc6124678f8e2d4b58c68a",
+  "reused_source_preparation_index_sha256": "f9362c8be4d2cb7fdb89e9b8b2c681a340e5e0319b25ba0668f44dc3967d328d",
+  "actual_R3_index_sha256": "9986c981e695309d923b2061f61ea067e372a794e1b095d295b4d372a3c4c1a4",
+  "actual_R3_QA_sha256": "2d3584fe028271b656dd5c65ed8428a659326b18fe6141bcb947f7de1b322061",
+  "build_budget": {
+    "CPU": 4,
+    "memory_max_GiB": 8,
+    "swap": 0,
+    "TasksMax": 512,
+    "job_seconds": 1800,
+    "Rust": "1.98.1",
+    "Go": "1.25.8",
+    "cargo_jobs": 2
+  },
+  "runtime_budget": {
+    "CPU": 4,
+    "memory_max_GiB": 2,
+    "swap": 0,
+    "TasksMax": 256,
+    "job_seconds": 1200,
+    "case_seconds": 240
+  },
+  "cases": [
+    {
+      "inbound": "tun",
+      "streams": 1,
+      "total_bytes": 67108864,
+      "direction": "down",
+      "same_FAR": true
+    },
+    {
+      "inbound": "tun",
+      "streams": 4,
+      "total_bytes": 67108864,
+      "direction": "down",
+      "same_FAR": true
+    },
+    {
+      "inbound": "socks",
+      "streams": 1,
+      "total_bytes": 67108864,
+      "direction": "down",
+      "same_FAR": true
+    },
+    {
+      "inbound": "socks",
+      "streams": 4,
+      "total_bytes": 67108864,
+      "direction": "down",
+      "same_FAR": true
+    }
+  ],
+  "effective_profile": {
+    "mobile": true,
+    "initial_KiB": 8,
+    "max_KiB": 32,
+    "inbound_max_connections": 256
+  },
+  "connection_changes": [
+    "sudo explicit original PATH for actual pinned tools, no broad-E or Go cache path overrides",
+    "R3 tested full detailed inventory and ownership envelopes retained byte-exact",
+    "explicit state/temp/run arguments to cleanup; independent always collector copies only root-owned current-job evidence to new0700 runner folder",
+    "StageA user-owned binary bundle and copied root resource evidence staged together; raw failure evidence retained",
+    "needs.build success plus official same-run artifact ID/digest/CRC/manifest/inputs required before runtime",
+    "runtime re-runs own real canary and fresh complete preflight lease cleanup before new traffic lease",
+    "no compiler memory mixed into runtime metrics; metadata smoke not throughput"
+  ],
+  "automatic_retry": false,
+  "full_dispatch_authorized": false
+}
