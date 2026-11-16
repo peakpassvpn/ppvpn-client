@@ -30,7 +30,7 @@ try:
   for i,arm in enumerate(['old','new']):
    assert time.monotonic()-a.job_start+240<1170,'insufficient case budget'
    capture=lease.out/(arm+'-netgen');capture.mkdir(mode=0o700)
-   env={**lease.env,'PPVPN_REAL_NETGEN':str(bundle/'bin/netgen'),'PPVPN_NETGEN_SHA256':m['files']['bin/netgen']['sha256'],'PPVPN_PERF_CAPTURE_DIR':str(capture),'PPVPN_EXPECTED_STREAMS':'1'}
+   env={**lease.env,**{k:os.environ[k]for k in ['GITHUB_ACTIONS','RUNNER_ENVIRONMENT','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB']},'PPVPN_REAL_NETGEN':str(bundle/'bin/netgen'),'PPVPN_NETGEN_SHA256':m['files']['bin/netgen']['sha256'],'PPVPN_PERF_CAPTURE_DIR':str(capture),'PPVPN_EXPECTED_STREAMS':'1'}
    argv=[sys.executable,str(HERE/'case.py'),'--bundle',str(bundle),'--arm',arm,'--work',str(lease.out/arm),'--cpus',','.join(map(str,cpus[:2])),'--server-cpus',','.join(map(str,cpus[2:]))]
    command=['systemd-run','--wait','--pipe','--unit',lease.units[i],'--slice',lease.d['slice'],'--property=RuntimeMaxSec=240s','--property=MemoryMax=2147483648','--property=MemorySwapMax=0','--property=CPUQuota=400%','--property=AllowedCPUs='+','.join(map(str,cpus)),'--property=TasksMax=256','--property=KillMode=control-group','--property=TimeoutStopSec=5s','--property=Environment=PPVPN_PERF_OWNER='+lease.owner]
    for k,v in env.items():command+=['--setenv='+k+'='+v]
