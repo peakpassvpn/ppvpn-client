@@ -26,7 +26,7 @@ def capture():
  for args,name in [(['git','diff','--binary'],'source-post.diff'),(['git','status','--porcelain','--untracked-files=all'],'source-post.status'),(['git','diff','--name-only'],'source-post.changed')]:
   (out/name).write_bytes(subprocess.check_output(args,cwd=root))
 try:
- run('actual-toolchain',['bash','-c','rustc -vV; cargo --version; flutter --version --machine; dart --version; flutter_rust_bridge_codegen --version; cargo expand --version; xcodebuild -version; xcrun --sdk macosx --show-sdk-version; sw_vers; go version'])
+ run('actual-toolchain',['bash','-c','rustc -vV; cargo --version; flutter --version --machine; dart --version; flutter_rust_bridge_codegen --version; cargo expand --version; xcodebuild -version; xcrun --sdk macosx --show-sdk-version; sw_vers; if command -v go >/dev/null; then go version; else echo "parent_PATH_go=unavailable"; fi'])
  for tool in ['flutter_rust_bridge_codegen','cargo-expand']:
   p=pathlib.Path(shutil.which(tool));(out/(tool+'-binary-sha256.txt')).write_text(digest(p)+'\n')
  run('controlled-frb-dart-flutter-build',['bash',str(ctl/'tools/apple/auto359_compile.sh')])
