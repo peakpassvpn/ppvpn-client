@@ -1,72 +1,64 @@
-name: Controlled Auto359 Mac build
-run-name: Controlled Auto359 exact047 managed build
+name: ABC actual native contracts
+run-name: a4e54 actual Rust C ABI Swift A8 then history B and SDK26.2 C
 on:
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: controlled-auto359-macos
+  group: ios-abc-native-a4e54
   cancel-in-progress: false
 jobs:
-  auto359:
+  native:
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 45
     permissions:
       contents: write
       actions: read
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: never
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      SOURCE_REF: 04789dbccafd245fda71de26a575a7b31d15cfcf
-      PPVPN_BUILD_NUMBER: '359'
-      PPVPN_ACCEPTANCE_FIXTURE_ID: auto359-04789dbc-20261116
-      PPVPN_API_BASE_DEFAULT: http://127.0.0.1:10580
-      PPVPN_MACOS_SINGLE_RUNTIME: '1'
-      PPVPN_APPLE_PUSH_ENABLED: '0'
-      PPVPN_MACOS_APNS_MIGRATION_READY: '0'
-      PPVPN_INTERNAL_DIAGNOSTICS: '0'
-      PPVPN_INTERNAL_UDP_TARGET_DIAGNOSTICS: '0'
-      PPVPN_INTERNAL_IOS_CAP256_CANDIDATE: '0'
-      MACOS_ARCHS: arm64
-      PPVPN_APPLE_TARGETS: aarch64-apple-darwin
-      GOTOOLCHAIN: go1.25.8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Preload exact controlled source
+      - name: Authenticate exact three source snapshots
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/apple/preload_auto359_source.py
-      - name: Select Xcode
+        run: python3 tools/apple/preload_abc.py
+      - name: Select existing managed Xcode and record resources
         run: |
           xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
           sudo xcode-select -s "$xcode/Contents/Developer"
-          command -v xcodegen >/dev/null || brew install xcodegen
-          xcodebuild -version
+          xcodebuild -version > "$RUNNER_TEMP/abc-output/xcode.original.txt"
+          sysctl hw.ncpu hw.memsize > "$RUNNER_TEMP/abc-output/resources.original.txt"
+          swiftc --version > "$RUNNER_TEMP/abc-output/swift.original.txt" 2>&1
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
         with:
           toolchain: 1.98.1
-          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 5
         with:
           prefix-key: v1-rust
           shared-key: macos
           save-if: false
       - uses: ./.github/actions/prebuilt-boringssl
         with:
-          lockfile: ${{ env.SDK2A9_CLIENT }}/Cargo.lock
+          lockfile: ${{ env.ABC_SOURCE }}/Cargo.lock
           targets: aarch64-apple-darwin x86_64-apple-darwin
-      - uses: ./.github/actions/flutter-toolchain
-      - name: Actual FRB Dart App and helper build
-        run: python3 tools/apple/build_auto359.py
-      - name: Preserve original logs and artifacts
+      - name: Exact A then B then C actual native commands
+        run: python3 tools/apple/run_abc.py
+      - name: Preserve complete available original evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: controlled-auto359-macos
-          path: ${{ runner.temp }}/auto359-output
-          if-no-files-found: error
+          name: abc-a4e54-native-originals
+          path: |
+            ${{ runner.temp }}/abc-output
+            !${{ runner.temp }}/abc-output/A/*/cargo-target/**
+            !${{ runner.temp }}/abc-output/A/*/repo/**
+            !${{ runner.temp }}/abc-output/A/*/swift-modules/**
+            !${{ runner.temp }}/abc-output/B/modules/**
+            !${{ runner.temp }}/abc-output/C/modules/**
+            !${{ runner.temp }}/abc-output/C/ios-modules/**
+          if-no-files-found: warn
           retention-days: 7
