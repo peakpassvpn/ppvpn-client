@@ -1,7 +1,7 @@
-"""Exact source-owned three commands, serial A first; bounded owned process groups."""
+"""Exact source-owned failed A/B commands; C original actual evidence retained; bounded owned process groups."""
 import hashlib,json,os,pathlib,signal,subprocess,sys,time,shutil
 root=pathlib.Path(os.environ['ABC_SOURCE']);out=pathlib.Path(os.environ['RUNNER_TEMP'])/'abc-output';begin=time.monotonic();rows=[]
-commands=[('A',['python3','-B','apps/flutter/checks/ios_packet_ffi_bench.py','--output',str(out/'A')],2160),('B',['python3','-B','apps/flutter/checks/ios_history_export_test.py','--output',str(out/'B')],180),('C',['python3','-B','apps/flutter/checks/ios_cpu_sample_test.py','--expected-iphoneos-sdk','26.2','--output',str(out/'C')],180)]
+commands=[('A',['python3','-B','apps/flutter/checks/ios_packet_ffi_bench.py','--legacy-original-zip',os.environ['LEGACY_ORIGINAL_ZIP'],'--output',str(out/'A')],2160),('B',['python3','-B','apps/flutter/checks/ios_history_export_test.py','--output',str(out/'B')],180)]
 for name,argv,cap in commands:
  remaining=2580-(time.monotonic()-begin);limit=min(cap,remaining)
  if limit<=0:rows.append({'component':name,'status':'INCOMPLETE_JOB_BUDGET'});break
@@ -20,5 +20,5 @@ for name,argv,cap in commands:
   for mode in ['legacy','event']:
    a=out/'A'/mode;lib=a/'cargo-target/mobile/libppvpn_tunnel.a'
    if lib.is_file():shutil.copy2(lib,a/'actual-libppvpn_tunnel.a')
-(out/'final-results.json').write_text(json.dumps({'components':rows,'all_three_commands_passed':len(rows)==3 and all(r.get('exit')==0 and not r.get('timed_out') for r in rows),'App_archive':False,'device_actions':0},indent=2)+'\n')
-raise SystemExit(0 if len(rows)==3 and all(r.get('exit')==0 and not r.get('timed_out') for r in rows) else 1)
+(out/'final-results.json').write_text(json.dumps({'components':rows,'all_AB_commands_passed':len(rows)==2 and all(r.get('exit')==0 and not r.get('timed_out') for r in rows),'C_reused_actual_QA_sha256':'76f532ee9133e0d35b023707de39b6a4cacd4fc144599d112ed33342e6ca751c','App_archive':False,'device_actions':0},indent=2)+'\n')
+raise SystemExit(0 if len(rows)==2 and all(r.get('exit')==0 and not r.get('timed_out') for r in rows) else 1)

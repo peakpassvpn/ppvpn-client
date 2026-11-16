@@ -1,12 +1,12 @@
-name: ABC actual native contracts
-run-name: a4e54 actual Rust C ABI Swift A8 then history B and SDK26.2 C
+name: AB actual native contracts
+run-name: cf2 actual Rust C ABI Swift A8 and history B; accepted C reused
 on:
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: ios-abc-native-a4e54
+  group: ios-ab-native-cf2
   cancel-in-progress: false
 jobs:
   native:
@@ -45,13 +45,13 @@ jobs:
         with:
           lockfile: ${{ env.ABC_SOURCE }}/Cargo.lock
           targets: aarch64-apple-darwin x86_64-apple-darwin
-      - name: Exact A then B then C actual native commands
+      - name: Exact failed A and B native commands
         run: python3 tools/apple/run_abc.py
       - name: Preserve complete available original evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: abc-a4e54-native-originals
+          name: ab-cf2-native-originals
           path: |
             ${{ runner.temp }}/abc-output
             !${{ runner.temp }}/abc-output/A/*/cargo-target/**
