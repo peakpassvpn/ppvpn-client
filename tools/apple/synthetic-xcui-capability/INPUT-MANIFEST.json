@@ -1,0 +1,10 @@
+{
+  "App/main.swift": "65d971d114533ac316da60e593c4917df919106e382607340016f80d5e3a7603",
+  "UITests/WindowRoundTripTests.swift": "bbfae709df6516e48401368ae456b890b34b8a7c0a44a0ab6578e91f9e5cc96d",
+  "WindowServerPreflight.swift": "0cb9afe9a169eab4d2f2dff78b2738fc97e54a660e0b10dd2d0db84e29f646d8",
+  "Auto359SyntheticCapability.xcodeproj/project.pbxproj": "fb27b562a0f49609d6adeb5cf12c3f5e915360e2580a572c773572cd7b057d0f",
+  "Auto359SyntheticCapability.xcodeproj/xcshareddata/xcschemes/SyntheticWindowRoundTrip.xcscheme": "77f770d639dccd7fcf34d92d4c003e0924a92cfd310cdf3e5880c3992311113d",
+  "watchdog.py": "b288f785f427594f7f01ec8b8592482dafe555ca35a2c6eae3ea772d32be3a8c",
+  "run_probe.py": "6bfa47d479689442750892d3612cb95c3cfd0b03d5ad9b1e8090219c34819590",
+  "README.md": "187e33255881ec34356cb597f44d1e23033220aab6d1465c4e1b0ba436526f7f"
+}

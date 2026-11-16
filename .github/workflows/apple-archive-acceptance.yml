@@ -1,64 +1,76 @@
-name: ABC actual native contracts
-run-name: a4e54 actual Rust C ABI Swift A8 then history B and SDK26.2 C
+name: Synthetic managed Mac XCUI capability
+run-name: One native window and two real clicks; no App359 runtime
 on:
   workflow_dispatch:
 permissions:
   contents: read
-  actions: read
 concurrency:
-  group: ios-abc-native-a4e54
+  group: auto359-synthetic-xcui-capability
   cancel-in-progress: false
 jobs:
-  native:
+  capability:
     runs-on: macos-15
-    timeout-minutes: 45
-    permissions:
-      contents: write
-      actions: read
-    env:
-      CARGO_BUILD_JOBS: '2'
-      CARGO_TERM_COLOR: never
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Authenticate exact three source snapshots
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 tools/apple/preload_abc.py
-      - name: Select existing managed Xcode and record resources
+      - name: Authenticate exact fixed probe inputs without compiling
+        working-directory: tools/apple/synthetic-xcui-capability
+        run: python3 -B run_probe.py
+      - name: Select existing managed Xcode26 without changing host settings
         run: |
-          xcode=$(printf '%s\n' /Applications/Xcode_26*.app | sort -V | tail -n 1)
-          sudo xcode-select -s "$xcode/Contents/Developer"
-          xcodebuild -version > "$RUNNER_TEMP/abc-output/xcode.original.txt"
-          sysctl hw.ncpu hw.memsize > "$RUNNER_TEMP/abc-output/resources.original.txt"
-          swiftc --version > "$RUNNER_TEMP/abc-output/swift.original.txt" 2>&1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
-        with:
-          toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        continue-on-error: true
-        timeout-minutes: 5
-        with:
-          prefix-key: v1-rust
-          shared-key: macos
-          save-if: false
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          lockfile: ${{ env.ABC_SOURCE }}/Cargo.lock
-          targets: aarch64-apple-darwin x86_64-apple-darwin
-      - name: Exact A then B then C actual native commands
-        run: python3 tools/apple/run_abc.py
-      - name: Preserve complete available original evidence
+          python3 - <<'PYCODE'
+          import pathlib,os,re,json
+          os.umask(0o077)
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'auto359-synthetic-xcui-metadata';out.mkdir(mode=0o700)
+          choices=[p for p in pathlib.Path('/Applications').glob('Xcode_26*.app') if (p/'Contents/Developer').is_dir()]
+          assert choices,'Existing Xcode26 is required; no tool installation'
+          selected=max(choices,key=lambda p:tuple(map(int,re.findall(r'\d+',p.name))))/'Contents/Developer'
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('DEVELOPER_DIR='+str(selected)+'\n')
+          (out/'xcode-selection.json').write_text(json.dumps({'DEVELOPER_DIR':str(selected),'selection_only_no_xcode_select_or_sudo':True},indent=2)+'\n')
+          PYCODE
+      - name: Preserve actual managed resource and toolchain metadata
+        run: |
+          umask 077
+          xcodebuild -version > "$RUNNER_TEMP/auto359-synthetic-xcui-metadata/xcode.stdout.raw" 2> "$RUNNER_TEMP/auto359-synthetic-xcui-metadata/xcode.stderr.raw"
+          xcrun --sdk macosx --show-sdk-version > "$RUNNER_TEMP/auto359-synthetic-xcui-metadata/sdk.stdout.raw" 2> "$RUNNER_TEMP/auto359-synthetic-xcui-metadata/sdk.stderr.raw"
+          sysctl hw.ncpu hw.memsize > "$RUNNER_TEMP/auto359-synthetic-xcui-metadata/resources.stdout.raw" 2> "$RUNNER_TEMP/auto359-synthetic-xcui-metadata/resources.stderr.raw"
+          python3 - <<'PYCODE'
+          import os,platform,pathlib,json
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'auto359-synthetic-xcui-metadata'
+          (out/'host.json').write_text(json.dumps({'machine':platform.machine(),'system':platform.system(),'uid':os.getuid(),'Python':platform.python_version(),'GITHUB_RUN_ID':os.environ['GITHUB_RUN_ID'],'GITHUB_SHA':os.environ['GITHUB_SHA'],'RUNNER_ENVIRONMENT':os.environ.get('RUNNER_ENVIRONMENT')},indent=2)+'\n')
+          PYCODE
+      - name: Actual bounded synthetic standard XCTest UI roundtrip
+        working-directory: tools/apple/synthetic-xcui-capability
+        run: python3 -B run_probe.py --execute --approved-manifest-sha256 77ce624a044a5eb7449b27e6f4dbd03f0908e4eec51e84eea22b7384fe1c18be --out "$RUNNER_TEMP/auto359-synthetic-xcui-capability"
+      - name: Fresh exact-owned synthetic image cleanup recheck
+        if: always()
+        run: |
+          python3 -B - <<'PYCODE'
+          import hashlib,importlib.util,json,os,pathlib
+          os.umask(0o077)
+          temp=pathlib.Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+          metadata=temp/'auto359-synthetic-xcui-metadata';metadata.mkdir(mode=0o700,exist_ok=True)
+          derived=temp/'auto359-synthetic-xcui-capability/derived'
+          source=pathlib.Path('tools/apple/synthetic-xcui-capability/watchdog.py')
+          assert hashlib.sha256(source.read_bytes()).hexdigest()=='b288f785f427594f7f01ec8b8592482dafe555ca35a2c6eae3ea772d32be3a8c'
+          if derived.exists():
+              assert not derived.is_symlink() and derived.resolve().is_relative_to(temp)
+              spec=importlib.util.spec_from_file_location('frozen_synthetic_watchdog',source);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+              result=module.cleanup(derived)
+              result['stage']='independent_always_exact_uid_and_derived_image_recheck'
+          else:
+              result={'stage':'NO_DERIVED_CREATED_NOT_A_GUI_PASS','remaining':[]}
+          (metadata/'always-owned-cleanup.json').write_text(json.dumps(result,indent=2)+'\n')
+          assert not result['remaining'],'Owned synthetic image cleanup incomplete'
+          PYCODE
+      - name: Preserve all available original evidence including complete XCResult
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: abc-a4e54-native-originals
+          name: synthetic-managed-xcui-originals
           path: |
-            ${{ runner.temp }}/abc-output
-            !${{ runner.temp }}/abc-output/A/*/cargo-target/**
-            !${{ runner.temp }}/abc-output/A/*/repo/**
-            !${{ runner.temp }}/abc-output/A/*/swift-modules/**
-            !${{ runner.temp }}/abc-output/B/modules/**
-            !${{ runner.temp }}/abc-output/C/modules/**
-            !${{ runner.temp }}/abc-output/C/ios-modules/**
+            ${{ runner.temp }}/auto359-synthetic-xcui-capability
+            ${{ runner.temp }}/auto359-synthetic-xcui-metadata
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
