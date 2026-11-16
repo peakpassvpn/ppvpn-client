@@ -1,0 +1,36 @@
+{
+  "base": "f99761138b23f267ebc7621057afe02018ab7c18",
+  "tree": "c7306832afbbdf77d78d21907756c95207136b94",
+  "Cargo_lock_sha256": "dfeaf3c14bcf23fb02157e2e103352eeb27a3c738fbc6124678f8e2d4b58c68a",
+  "patches": {
+    "candidate.patch": "b05e98e82a997f16df68b00ae81238b62553203eb26a5a0dbc665c5175d24598",
+    "old-bench.patch": "f0c17ed6e3a89e1330f233f1a75b39b312af3601a61627733de75096a07c45c2"
+  },
+  "patched_source": {
+    "old": "a395cb24e58441116054d0d933fba610efd81eaa3e7c3e81b8a8799594d91f5d",
+    "new": "59910330559b29b2fb469e0d2e4d9bab388a5fe3d8af4ad5b540887fd906e85f"
+  },
+  "benchmark_body_sha256": "8dd7b81d31b8c641228e078998a4b275c9c873dffc215cbe1a959c1a44862cae",
+  "profile": "dist-mobile",
+  "profile_difference": "Both arms and ordinary tests use existing unmodified dist-mobile instead of source handoff release/default; thin LTO/codegen1 and unwind. No duplicate debug/release build. Actual cargo test binary reused for runtime tests/benches.",
+  "rounds": 2048,
+  "capacity": 64,
+  "packet_bytes": 1400,
+  "runtime": "real Tokio PacketBridge and SingleShard UDP; not TCP, NE or iPhone",
+  "build": {
+    "CPUs": 4,
+    "memory": 8589934592,
+    "swap": 0,
+    "tasks": 512,
+    "max_seconds": 1800,
+    "cargo_jobs": 2
+  },
+  "measure": {
+    "CPUs": 4,
+    "memory": 2147483648,
+    "swap": 0,
+    "tasks": 256,
+    "max_seconds": 1200
+  },
+  "source_delivery_sha256": "e1a063c65d97380a545a65ce1c6d98ecca467f05e0548cc65e7b0421c285106c"
+}
