@@ -22,24 +22,25 @@ if phase=='build':
  for name,digest in pin['patches'].items():assert sha(HERE/name)==digest
  run('toolchain',['bash','-ec','rustc -vV; cargo --version; uname -a'])
  assert subprocess.check_output(['rustc','--version'],text=True).startswith('rustc 1.98.1 ')
- (out/'bin').mkdir();arms={};env=dict(os.environ,CARGO_BUILD_JOBS='2')
+ (out/'bin').mkdir();arms={};env=dict(os.environ,CARGO_BUILD_JOBS=str(pin['build']['cargo_jobs']))
  for arm,patch in [('old','old-bench.patch'),('new','candidate.patch')]:
   run(arm+'-apply-check',['git','apply','--check',str(HERE/patch)]);run(arm+'-apply',['git','apply',str(HERE/patch)])
   assert git('diff','--name-only')=='sail/src/embed/tun.rs';assert sha(root/'sail/src/embed/tun.rs')==pin['patched_source'][arm]
   shutil.copy2(root/'sail/src/embed/tun.rs',out/(arm+'.tun.rs'))
-  log=run(arm+'-compile',['cargo','test','--locked','--profile',pin['profile'],'-p','sail','--lib','--no-run','--message-format=json'],env=env)
+  config_args=[item for value in pin['cargo_profile_config'] for item in ['--config',value]]
+  log=run(arm+'-compile',['cargo','test','-vv','--locked','--profile',pin['profile'],*config_args,'-p','sail','--lib','--no-run','--message-format=json'],env=env)
   executables=[]
   for line in log.read_text().splitlines():
    obj=json.loads(line)
    if obj.get('reason')=='compiler-artifact' and obj.get('executable') and obj.get('target',{}).get('name')=='sail':executables.append(obj['executable'])
   assert len(executables)==1
   target=pathlib.Path(executables[0]);binary=out/'bin'/('sail-'+arm+'-tests');shutil.copy2(target,binary);binary.chmod(0o755)
-  arms[arm]={'source_sha256':pin['patched_source'][arm],'patch_sha256':pin['patches'][patch],'binary':str(binary.relative_to(out)),'binary_sha256':sha(binary),'binary_bytes':binary.stat().st_size,'profile':pin['profile']}
+  arms[arm]={'source_sha256':pin['patched_source'][arm],'patch_sha256':pin['patches'][patch],'binary':str(binary.relative_to(out)),'binary_sha256':sha(binary),'binary_bytes':binary.stat().st_size,'profile':pin['profile'],'cargo_profile_config':pin['cargo_profile_config'],'cargo_jobs':pin['build']['cargo_jobs']}
   run(arm+'-restore',['git','restore','--source=HEAD','--','sail/src/embed/tun.rs']);assert not git('status','--porcelain','--untracked-files=all')
- manifest={'base':pin['base'],'tree':pin['tree'],'lock_sha256':sha(root/'Cargo.lock'),'profile':pin['profile'],'profile_difference':pin['profile_difference'],'arms':arms,'build_run':os.environ['GITHUB_RUN_ID'],'source_pre_post_clean':True,'stages':stages}
+ manifest={'base':pin['base'],'tree':pin['tree'],'lock_sha256':sha(root/'Cargo.lock'),'profile':pin['profile'],'profile_difference':pin['profile_difference'],'cargo_profile_config':pin['cargo_profile_config'],'cargo_jobs':pin['build']['cargo_jobs'],'arms':arms,'build_run':os.environ['GITHUB_RUN_ID'],'source_pre_post_clean':True,'stages':stages}
  (out/'BINARY-MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n')
 else:
- manifest=json.loads((root/'BINARY-MANIFEST.json').read_text());assert manifest['base']==pin['base'] and manifest['profile']==pin['profile'] and manifest['build_run']==os.environ['GITHUB_RUN_ID']
+ manifest=json.loads((root/'BINARY-MANIFEST.json').read_text());assert manifest['base']==pin['base'] and manifest['profile']==pin['profile'] and manifest['cargo_profile_config']==pin['cargo_profile_config'] and manifest['cargo_jobs']==pin['build']['cargo_jobs'] and manifest['build_run']==os.environ['GITHUB_RUN_ID']
  for arm,row in manifest['arms'].items():assert sha(root/row['binary'])==row['binary_sha256']
  env=dict(os.environ,SAIL_PACKET_BRIDGE_BENCH_ROUNDS=str(pin['rounds']))
  ordinary=run('new-ordinary',[str(root/manifest['arms']['new']['binary']),'embed::tun::tests','--nocapture'],env=env,measured=True)

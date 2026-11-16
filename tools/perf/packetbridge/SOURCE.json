@@ -12,7 +12,7 @@
   },
   "benchmark_body_sha256": "8dd7b81d31b8c641228e078998a4b275c9c873dffc215cbe1a959c1a44862cae",
   "profile": "dist-mobile",
-  "profile_difference": "Both arms and ordinary tests use existing unmodified dist-mobile instead of source handoff release/default; thin LTO/codegen1 and unwind. No duplicate debug/release build. Actual cargo test binary reused for runtime tests/benches.",
+  "profile_difference": "Test-only CLI overrides on existing dist-mobile: opt-level3/panic unwind retained; LTO explicitly off, codegen-units16, debugfalse; cargo_jobs1. Both arms identical. Production Cargo.toml and shipping settings unchanged. These measurements are only this test configuration, not iOS release-profile performance or200Mbps acceptance.",
   "rounds": 2048,
   "capacity": 64,
   "packet_bytes": 1400,
@@ -23,7 +23,7 @@
     "swap": 0,
     "tasks": 512,
     "max_seconds": 1800,
-    "cargo_jobs": 2
+    "cargo_jobs": 1
   },
   "measure": {
     "CPUs": 4,
@@ -32,5 +32,10 @@
     "tasks": 256,
     "max_seconds": 1200
   },
-  "source_delivery_sha256": "e1a063c65d97380a545a65ce1c6d98ecca467f05e0548cc65e7b0421c285106c"
+  "source_delivery_sha256": "e1a063c65d97380a545a65ce1c6d98ecca467f05e0548cc65e7b0421c285106c",
+  "cargo_profile_config": [
+    "profile.dist-mobile.lto=\"off\"",
+    "profile.dist-mobile.codegen-units=16",
+    "profile.dist-mobile.debug=false"
+  ]
 }
