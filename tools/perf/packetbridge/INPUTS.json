@@ -5,10 +5,10 @@
   "tools/perf/f997-baseline/collect_owned.py": "550995e4636a65ff560a67149514bd2f7084b7795c56e74fbd941add8220b4d7",
   "tools/perf/f997-baseline/linux_inventory.py": "c4518f7160fe1385fec64fe76b010c4113414ac7cc8546b7fe78ab657c87d57e",
   "tools/perf/packetbridge/artifact.py": "de3eeb5dd9d0dbe78f7cf952d5a5232684f42fabe1f730de2591078c9e22a519",
-  "tools/perf/packetbridge/candidate.patch": "b05e98e82a997f16df68b00ae81238b62553203eb26a5a0dbc665c5175d24598",
-  "tools/perf/packetbridge/SOURCE.json": "f3493fdc78cf6f66095a3c692e47058e631fdbcc902114034ba5781d2d88b8e6",
-  "tools/perf/packetbridge/payload.py": "75a4a49b3fb3039d2762b75affaa10712976026edce3325ae51f1d2d6a7d118e",
-  "tools/perf/packetbridge/old-bench.patch": "f0c17ed6e3a89e1330f233f1a75b39b312af3601a61627733de75096a07c45c2",
+  "tools/perf/packetbridge/candidate.patch": "af6f328337003b826e5c6dc83872c05cfb3ad953dfcfefaee85cfe070c3ac75c",
+  "tools/perf/packetbridge/SOURCE.json": "e70f90a2c1768b221ef20ff85189315d2f89f262df2a6a93dbdeeaeca8eea7c0",
+  "tools/perf/packetbridge/payload.py": "b8c911b25725ed70fdff48cd418613e305742b5b7e7c54790d342e77704200c0",
+  "tools/perf/packetbridge/old-bench.patch": "0733c2a1955c3b6a4eb2826ad8836d596bb74576a78f070b84b8d70d40a2ccf6",
   "tools/perf/packetbridge/manager.py": "906bfee236a2ac78f1473ac08c1488bd599c40319c91ff6c30a5eead5ea672b1",
-  ".github/workflows/apple-archive-acceptance.yml": "f09ff40e1d41258aca40e143239d9c9a46f63689dd1534017fbe3da7f2558b87"
+  ".github/workflows/apple-archive-acceptance.yml": "5e3dae355f77bae07b9150a49783ae39e322a1e9d7f20930729507e89f29dc1e"
 }

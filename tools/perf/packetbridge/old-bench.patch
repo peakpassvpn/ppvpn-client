@@ -1,6 +1,6 @@
 --- a/sail/src/embed/tun.rs
 +++ b/sail/src/embed/tun.rs
-@@ -289,4 +289,167 @@
+@@ -289,4 +289,292 @@
              "ended output is not delivered to a later generation"
          );
      }
@@ -64,6 +64,76 @@
 +            rounds * 64, started.elapsed().as_nanos(), bridge.capabilities().max_batch);
 +    }
 +
++    #[tokio::test]
++    async fn packet_bridge_runner_resumes_after_cooperative_budget_exhaustion() {
++        use sail_netstack::{
++            emit_udp_packet, BudgetProfile, ResourceLedger, RunnerConfig, SingleShardRunner,
++        };
++        use std::net::{Ipv4Addr, SocketAddr};
++        use std::sync::Arc;
++        use std::time::Duration;
++
++        let (bridge, mut flow) = PacketBridge::pair(64).unwrap();
++        let ledger = ResourceLedger::new(BudgetProfile::Mobile.budget()).unwrap();
++        let mut runner =
++            SingleShardRunner::new(bridge, Arc::clone(&ledger), RunnerConfig::default()).unwrap();
++        let source = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 1), 40000));
++        let destination = SocketAddr::from((Ipv4Addr::new(198, 51, 100, 2), 9000));
++        flow.uplink
++            .send(emit_udp_packet(source, destination, b"budget", 64, 0).unwrap())
++            .await
++            .unwrap();
++        let input = tokio::time::timeout(Duration::from_secs(2), runner.step(0))
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(input.datagrams.len(), 1);
++        let datagram = &input.datagrams[0];
++        runner
++            .queue_udp_reply(datagram.token, datagram.destination, b"budget", 0)
++            .unwrap();
++        drop(input);
++        {
++            let exhaust = async {
++                for _ in 0..1024 {
++                    tokio::task::consume_budget().await;
++                }
++            };
++            tokio::pin!(exhaust);
++            assert!(futures::poll!(&mut exhaust).is_pending());
++        }
++        {
++            let step = runner.step(0);
++            tokio::pin!(step);
++            assert!(futures::poll!(&mut step).is_pending());
++        }
++        assert_eq!(runner.pending_tx(), 1);
++        assert_eq!(runner.stats_snapshot().tx_packets, 0);
++        assert!(flow.downlink.rx.is_empty());
++        // The removed bench loop would retry immediately here forever.
++        // This bounded retry returns control to the executor before polling.
++        for _ in 0..8 {
++            tokio::task::yield_now().await;
++            {
++                let step = runner.step(0);
++                tokio::pin!(step);
++                if let std::task::Poll::Ready(result) = futures::poll!(&mut step) {
++                    result.unwrap();
++                }
++            }
++            if runner.pending_tx() == 0 {
++                break;
++            }
++        }
++        assert_eq!(runner.pending_tx(), 0);
++        assert_eq!(runner.stats_snapshot().tx_packets, 1);
++        assert!(flow.downlink.recv().await.is_some());
++        assert!(flow.downlink.rx.is_empty());
++        runner.abort();
++        drop(runner);
++        assert_eq!(ledger.snapshot().total_bytes, 0);
++    }
++
 +    /// The real runner consumes PacketBridge packets and emits UDP replies.
 +    /// This exercises runner RX batching and accepted-prefix TX, not the
 +    /// dispatcher, TCP congestion control, relay, or an iOS packetFlow device.
@@ -95,6 +165,7 @@
 +        let mut steps = 0_u64;
 +        let mut peak_ledger_bytes = 0;
 +        let started = std::time::Instant::now();
++        let run_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
 +        for round in 0..rounds {
 +            let now = round as u64;
 +            for index in 0..64 {
@@ -105,11 +176,31 @@
 +                flow.uplink.send(wire).await.unwrap();
 +            }
 +            let mut received = 0;
++            let mut output = Vec::with_capacity(64);
++            let deadline =
++                (tokio::time::Instant::now() + Duration::from_secs(10)).min(run_deadline);
++            let mut round_steps = 0;
++            if round == 0 {
++                eprintln!(
++                    "PACKET_BRIDGE_RUNNER_PHASE first_rx_start stats={:?}",
++                    runner.stats_snapshot()
++                );
++            }
 +            while received < 64 {
-+                let outcome = tokio::time::timeout(Duration::from_secs(10), runner.step(now))
-+                    .await
-+                    .expect("runner receive stalled")
++                assert!(round_steps < 512 && tokio::time::Instant::now() < deadline,
++                    "RX progress bound: round={round} received={received} pending_rx={} pending_tx={} stats={:?}",
++                    runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++                let outcome = tokio::time::timeout_at(deadline, runner.step(now))
++                    .await.unwrap_or_else(|_| panic!(
++                        "RX deadline: round={round} received={received} pending_rx={} pending_tx={} stats={:?}",
++                        runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot()))
 +                    .unwrap();
++                round_steps += 1;
++                if round == 0 && round_steps == 1 {
++                    eprintln!("PACKET_BRIDGE_RUNNER_PHASE first_rx_done received={} processed={} datagrams={} pending_rx={} pending_tx={} stats={:?}",
++                        outcome.received_packets, outcome.processed_packets, outcome.datagrams.len(),
++                        runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++                }
 +                steps += 1;
 +                received += outcome.datagrams.len();
 +                for datagram in outcome.datagrams {
@@ -123,25 +214,55 @@
 +                        .unwrap();
 +                }
 +                peak_ledger_bytes = peak_ledger_bytes.max(ledger.snapshot().total_bytes);
++                while let Ok(wire) = flow.downlink.rx.try_recv() {
++                    assert!(output.len() < 64, "unexpected extra runner output");
++                    output.push(wire);
++                }
++                // A ready empty outcome must not turn into a cooperative
++                // budget-starving loop; the step/wall bounds retain failures.
++                tokio::task::yield_now().await;
 +            }
 +            assert_eq!(received, 64);
++            if round == 0 {
++                eprintln!("PACKET_BRIDGE_RUNNER_PHASE first_tx_start elapsed_ns={} ledger_bytes={} host_packets={} pending_rx={} pending_tx={} stats={:?}",
++                    started.elapsed().as_nanos(), ledger.snapshot().total_bytes,
++                    output.len(), runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++            }
 +            while runner.pending_tx() > 0 {
++                assert!(round_steps < 512 && tokio::time::Instant::now() < deadline,
++                    "TX progress bound: round={round} received={received} host_packets={} pending_rx={} pending_tx={} stats={:?}",
++                    output.len(), runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++
 +                // step can finish flushing then await a new ingress packet.
 +                // Cancelling that await is the adapter's real timer/command
 +                // contract; accepted output is accounted in runner counters.
-+                let step = runner.step(now);
-+                tokio::pin!(step);
-+                if let std::task::Poll::Ready(result) = futures::poll!(&mut step) {
-+                    result.unwrap();
++                {
++                    let step = runner.step(now);
++                    tokio::pin!(step);
++                    if let std::task::Poll::Ready(result) = futures::poll!(&mut step) {
++                        result.unwrap();
++                    }
 +                }
 +                steps += 1;
++                round_steps += 1;
++                while let Ok(wire) = flow.downlink.rx.try_recv() {
++                    assert!(output.len() < 64, "unexpected extra runner output");
++                    output.push(wire);
++                }
++                // A reserve can be Pending with capacity available because
++                // Tokio's task budget is exhausted. Dropping and repolling
++                // without yielding cannot replenish that budget.
++                tokio::task::yield_now().await;
 +            }
 +            peak_ledger_bytes = peak_ledger_bytes.max(ledger.snapshot().total_bytes);
-+            for index in 0..64 {
-+                let wire = tokio::time::timeout(Duration::from_secs(10), flow.downlink.recv())
++            while output.len() < 64 {
++                let wire = tokio::time::timeout_at(deadline, flow.downlink.recv())
 +                    .await
-+                    .expect("runner output stalled")
++                    .expect("runner output deadline")
 +                    .expect("host output ended early");
++                output.push(wire);
++            }
++            for (index, wire) in output.iter().enumerate() {
 +                let ip = parse_ip_packet(&wire, true).unwrap();
 +                let datagram = parse_udp_datagram(ip, true).unwrap();
 +                let value = ((round * 64 + index) % 251) as u8;
@@ -155,6 +276,10 @@
 +                    .sum::<u64>();
 +            }
 +            assert!(flow.downlink.rx.is_empty());
++            if round == 0 {
++                eprintln!("PACKET_BRIDGE_RUNNER_PHASE first_round_done round_steps={round_steps} pending_rx={} pending_tx={} stats={:?}",
++                    runner.pending_rx(), runner.pending_tx(), runner.stats_snapshot());
++            }
 +        }
 +        let stats = runner.stats_snapshot();
 +        assert_eq!(stats.rx_packets, rounds as u64 * 64);

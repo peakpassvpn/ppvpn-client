@@ -3,14 +3,13 @@
   "tree": "c7306832afbbdf77d78d21907756c95207136b94",
   "Cargo_lock_sha256": "dfeaf3c14bcf23fb02157e2e103352eeb27a3c738fbc6124678f8e2d4b58c68a",
   "patches": {
-    "candidate.patch": "b05e98e82a997f16df68b00ae81238b62553203eb26a5a0dbc665c5175d24598",
-    "old-bench.patch": "f0c17ed6e3a89e1330f233f1a75b39b312af3601a61627733de75096a07c45c2"
+    "candidate.patch": "af6f328337003b826e5c6dc83872c05cfb3ad953dfcfefaee85cfe070c3ac75c",
+    "old-bench.patch": "0733c2a1955c3b6a4eb2826ad8836d596bb74576a78f070b84b8d70d40a2ccf6"
   },
   "patched_source": {
-    "old": "a395cb24e58441116054d0d933fba610efd81eaa3e7c3e81b8a8799594d91f5d",
-    "new": "59910330559b29b2fb469e0d2e4d9bab388a5fe3d8af4ad5b540887fd906e85f"
+    "old": "e72d7645a97816e19d2b7c92669c86fe3ef4f8ea3ae88087bce513dcb66666cf",
+    "new": "4d22fa0e5d034ad05846dc445e87d0551147f93870e1b5dde5d033e96b204fad"
   },
-  "benchmark_body_sha256": "8dd7b81d31b8c641228e078998a4b275c9c873dffc215cbe1a959c1a44862cae",
   "profile": "dist-mobile",
   "profile_difference": "Test-only CLI overrides on existing dist-mobile: opt-level3/panic unwind retained; LTO explicitly off, codegen-units16, debugfalse; cargo_jobs1. Both arms identical. Production Cargo.toml and shipping settings unchanged. These measurements are only this test configuration, not iOS release-profile performance or200Mbps acceptance.",
   "rounds": 2048,
@@ -32,10 +31,15 @@
     "tasks": 256,
     "max_seconds": 1200
   },
-  "source_delivery_sha256": "e1a063c65d97380a545a65ce1c6d98ecca467f05e0548cc65e7b0421c285106c",
+  "source_delivery_sha256": "1cda2a5546e754f38f4ca46f7616bff6ad6147faf2234c36660a7b2f314820ae",
   "cargo_profile_config": [
     "profile.dist-mobile.lto=\"off\"",
     "profile.dist-mobile.codegen-units=16",
     "profile.dist-mobile.debug=false"
-  ]
+  ],
+  "benchmark_and_regression_body_sha256": "73b4a07685a84b724a90e77319cb1c4889b14bbe9df1bf38e464279233081e8e",
+  "direct_benchmark_body_sha256": "6c12e9a3e23a2047d6e57f8d8a7d1b681b33bec9db6c655f5b1edd69a5ffc4cd",
+  "production_prefix_sha256_unchanged": "ef46730a5248938fe98d87804eb9be1b8fba11e5b961ccb8e291fb7e784bc540",
+  "source_revision_scope": "Bench-only bounded RX/TX polling, host-drain/yield, snapshots/deadlines and cooperative-budget regression; production batching prefix unchanged from prior candidate. Corrected old/new must compare against each other.",
+  "ordinary_test_count": 11
 }

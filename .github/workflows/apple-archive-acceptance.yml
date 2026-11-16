@@ -104,7 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/perf/packetbridge/artifact.py fetch
-      - name: Actual ten ordinary tests and four measured native benches
+      - name: Actual eleven ordinary tests, two focused regressions and four native benches
         run: |
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH env PATH="$PATH" python3 tools/perf/packetbridge/manager.py measure --source "$PB_BINARY_BUNDLE" --output "$RUNNER_TEMP/packetbridge-measure-output" --resource "$RUNNER_TEMP/f997-runtime-output" --job-start "$PERF_JOB_START_MONOTONIC"
       - name: Independent fresh cleanup recheck

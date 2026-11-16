@@ -69,7 +69,10 @@ else:
  for arm,row in manifest['arms'].items():assert sha(root/row['binary'])==row['binary_sha256']
  env=dict(os.environ,SAIL_PACKET_BRIDGE_BENCH_ROUNDS=str(pin['rounds']))
  ordinary=run('new-ordinary',[str(root/manifest['arms']['new']['binary']),'embed::tun::tests','--nocapture'],env=env,measured=True)
- assert 'test result: ok. 10 passed; 0 failed; 2 ignored;' in ordinary.read_text()
+ assert 'test result: ok. 11 passed; 0 failed; 2 ignored;' in ordinary.read_text()
+ for arm in ['old','new']:
+  coop=run(arm+'-cooperative-budget-regression',[str(root/manifest['arms'][arm]['binary']),'embed::tun::tests::packet_bridge_runner_resumes_after_cooperative_budget_exhaustion','--exact','--nocapture'],env=env,measured=True)
+  assert 'test result: ok. 1 passed; 0 failed; 0 ignored;' in coop.read_text()
  for arm in ['old','new']:
   for bench in ['packet_bridge_loopbench','packet_bridge_runner_loopbench']:
    run(arm+'-'+bench,[str(root/manifest['arms'][arm]['binary']),'embed::tun::tests::'+bench,'--exact','--ignored','--nocapture'],env=env,measured=True)
