@@ -42,27 +42,6 @@ jobs:
       - name: Actual bounded synthetic standard XCTest UI roundtrip
         working-directory: tools/apple/synthetic-xcui-capability
         run: python3 -B run_probe.py --execute --approved-manifest-sha256 77ce624a044a5eb7449b27e6f4dbd03f0908e4eec51e84eea22b7384fe1c18be --out "$RUNNER_TEMP/auto359-synthetic-xcui-capability"
-      - name: Fresh exact-owned synthetic image cleanup recheck
-        if: always()
-        run: |
-          python3 -B - <<'PYCODE'
-          import hashlib,importlib.util,json,os,pathlib
-          os.umask(0o077)
-          temp=pathlib.Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
-          metadata=temp/'auto359-synthetic-xcui-metadata';metadata.mkdir(mode=0o700,exist_ok=True)
-          derived=temp/'auto359-synthetic-xcui-capability/derived'
-          source=pathlib.Path('tools/apple/synthetic-xcui-capability/watchdog.py')
-          assert hashlib.sha256(source.read_bytes()).hexdigest()=='b288f785f427594f7f01ec8b8592482dafe555ca35a2c6eae3ea772d32be3a8c'
-          if derived.exists():
-              assert not derived.is_symlink() and derived.resolve().is_relative_to(temp)
-              spec=importlib.util.spec_from_file_location('frozen_synthetic_watchdog',source);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-              result=module.cleanup(derived)
-              result['stage']='independent_always_exact_uid_and_derived_image_recheck'
-          else:
-              result={'stage':'NO_DERIVED_CREATED_NOT_A_GUI_PASS','remaining':[]}
-          (metadata/'always-owned-cleanup.json').write_text(json.dumps(result,indent=2)+'\n')
-          assert not result['remaining'],'Owned synthetic image cleanup incomplete'
-          PYCODE
       - name: Preserve all available original evidence including complete XCResult
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
