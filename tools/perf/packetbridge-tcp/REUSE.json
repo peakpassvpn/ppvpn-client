@@ -1,0 +1,71 @@
+{
+  "run": 43818107375,
+  "head": "c95e0f193172495423772a3a26e9b1435f983000",
+  "artifact_id": 14203956679,
+  "artifact_bytes": 88777606,
+  "artifact_sha256": "083f003daecdfc06876f8ab5ab77d806762663be0963db5c0ac6fa91bf8bf79c",
+  "manifest_sha256": "48fb40ed7f6cdd654f3c0b60a316716f1e4f0c0f4ab4e0017374684a4b266962",
+  "build_job": 133134696103,
+  "build_job_name": "Build exact PacketBridge TCP host arms",
+  "manifest_identity": {
+    "base": "f99761138b23f267ebc7621057afe02018ab7c18",
+    "tree": "c7306832afbbdf77d78d21907756c95207136b94",
+    "lock_sha256": "dfeaf3c14bcf23fb02157e2e103352eeb27a3c738fbc6124678f8e2d4b58c68a",
+    "profile": "dist-mobile",
+    "profile_difference": "Existing test-only dist-mobile opt3/ltooff/codegen16/debugfalse/cargo1, identical OLD/NEW; not shipping iOS performance. Production cfgtest83 source identities and identical final7f8 example pinned separately.",
+    "cargo_profile_config": [
+      "profile.dist-mobile.lto=\"off\"",
+      "profile.dist-mobile.codegen-units=16",
+      "profile.dist-mobile.debug=false"
+    ],
+    "cargo_jobs": 1,
+    "arms": {
+      "old": {
+        "derived_source_tree": "9711eab9a54866364309ef812c4406aed1da6a8e",
+        "source_sha256": "e72d7645a97816e19d2b7c92669c86fe3ef4f8ea3ae88087bce513dcb66666cf",
+        "patch_sha256": "0733c2a1955c3b6a4eb2826ad8836d596bb74576a78f070b84b8d70d40a2ccf6",
+        "example_sha256": "7f8be3e8ba1b07a38ee6edf01faa904b42dd5a1f7397dc831e0556e55d6c262e",
+        "binary": "bin/packetbridge-old",
+        "binary_sha256": "0fe64ca02d5111c8e5e3cebc3aed8891a4ab5e8b71d28b3380ef9188e24ad54c",
+        "binary_bytes": 88476576
+      },
+      "new": {
+        "derived_source_tree": "35844e2e5bec1cdca519cfc2a7654ce538a83645",
+        "source_sha256": "4d22fa0e5d034ad05846dc445e87d0551147f93870e1b5dde5d033e96b204fad",
+        "patch_sha256": "af6f328337003b826e5c6dc83872c05cfb3ad953dfcfefaee85cfe070c3ac75c",
+        "example_sha256": "7f8be3e8ba1b07a38ee6edf01faa904b42dd5a1f7397dc831e0556e55d6c262e",
+        "binary": "bin/packetbridge-new",
+        "binary_sha256": "4d9d34505b5cfc8e2c04c0c368c378620765d95ab4a265ece112608c4e6261b2",
+        "binary_bytes": 88369448
+      }
+    },
+    "build_run": "43818107375",
+    "source_pre_post_clean": true,
+    "files": {
+      "bin/netgen": {
+        "sha256": "22cf027e7a3fb4ec0bd147c3c1d1afcba7d67e097b352330b23f4bea979458e4",
+        "bytes": 3882819
+      },
+      "bin/packetbridge-new": {
+        "sha256": "4d9d34505b5cfc8e2c04c0c368c378620765d95ab4a265ece112608c4e6261b2",
+        "bytes": 88369448
+      },
+      "bin/sing-box": {
+        "sha256": "fc9c6e6ab345f045b16a0ed10d1ff28d68e8e56e7749fca30738d1406e98d7b8",
+        "bytes": 81297637
+      },
+      "bin/packetbridge-old": {
+        "sha256": "0fe64ca02d5111c8e5e3cebc3aed8891a4ab5e8b71d28b3380ef9188e24ad54c",
+        "bytes": 88476576
+      },
+      "harness/run.py": {
+        "sha256": "54aff15a8dbfc6eac6fe4c1ba7f153d449d5d16a0a1d40bda6ba2186ebb2aa20",
+        "bytes": 89124
+      },
+      "harness/netns.sh": {
+        "sha256": "09cd154e0e2ef2918584199e8a3d3ce2deb1bcaa0fb6b1e8ac0530966347b7ed",
+        "bytes": 9096
+      }
+    }
+  }
+}

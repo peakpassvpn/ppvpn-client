@@ -10,7 +10,7 @@ assert os.geteuid()==0 and sys.platform=='linux' and os.environ['GITHUB_ACTIONS'
 run=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT'];out=pathlib.Path(a.out).resolve();out.mkdir(mode=0o700);atomic(out/'JOB-OWNER.json',{'run_id':run,'attempt':attempt,'owner':'gh'+run+'a'+attempt+'-tcp-job-'+secrets.token_hex(6)})
 bundle=pathlib.Path(a.bundle).resolve();raw=(bundle/'BINARY-MANIFEST.json').read_bytes();assert hashlib.sha256(raw).hexdigest()==a.manifest_sha256;m=json.loads(raw);pin=json.loads((HERE/'SOURCE.json').read_text())
 assert m['base']==pin['base'] and m['tree']==pin['tree'] and m['lock_sha256']==pin['Cargo_lock_sha256'] and m['source_pre_post_clean']is True
-assert m['cargo_profile_config']==pin['cargo_profile_config'] and m['profile']==pin['profile'] and m['cargo_jobs']==1 and m['build_run']==run
+assert m['cargo_profile_config']==pin['cargo_profile_config'] and m['profile']==pin['profile'] and m['cargo_jobs']==1 and m['build_run']==str(json.loads((HERE/'REUSE.json').read_text())['run'])
 for arm,row in m['arms'].items():assert row['source_sha256']==pin['patched_source'][arm] and row['example_sha256']==pin['example_sha256']
 for rel,row in m['files'].items():
  p=bundle/rel;assert p.resolve().is_relative_to(bundle) and not p.is_symlink() and p.stat().st_size==row['bytes'] and hashlib.file_digest(p.open('rb'),'sha256').hexdigest()==row['sha256']
@@ -30,7 +30,7 @@ try:
   for i,arm in enumerate(['old','new']):
    assert time.monotonic()-a.job_start+240<1170,'insufficient case budget'
    capture=lease.out/(arm+'-netgen');capture.mkdir(mode=0o700)
-   env={**lease.env,**{k:os.environ[k]for k in ['GITHUB_ACTIONS','RUNNER_ENVIRONMENT','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB']},'PPVPN_REAL_NETGEN':str(bundle/'bin/netgen'),'PPVPN_NETGEN_SHA256':m['files']['bin/netgen']['sha256'],'PPVPN_PERF_CAPTURE_DIR':str(capture),'PPVPN_EXPECTED_STREAMS':'1'}
+   env={**lease.env,**{k:os.environ[k]for k in ['GITHUB_ACTIONS','RUNNER_ENVIRONMENT']},'PPVPN_REAL_NETGEN':str(bundle/'bin/netgen'),'PPVPN_NETGEN_SHA256':m['files']['bin/netgen']['sha256'],'PPVPN_PERF_CAPTURE_DIR':str(capture),'PPVPN_EXPECTED_STREAMS':'1'}
    argv=[sys.executable,str(HERE/'case.py'),'--bundle',str(bundle),'--arm',arm,'--work',str(lease.out/arm),'--cpus',','.join(map(str,cpus[:2])),'--server-cpus',','.join(map(str,cpus[2:]))]
    command=['systemd-run','--wait','--pipe','--unit',lease.units[i],'--slice',lease.d['slice'],'--property=RuntimeMaxSec=240s','--property=MemoryMax=2147483648','--property=MemorySwapMax=0','--property=CPUQuota=400%','--property=AllowedCPUs='+','.join(map(str,cpus)),'--property=TasksMax=256','--property=KillMode=control-group','--property=TimeoutStopSec=5s','--property=Environment=PPVPN_PERF_OWNER='+lease.owner]
    for k,v in env.items():command+=['--setenv='+k+'='+v]
@@ -45,5 +45,5 @@ try:
    assert case['netgen']==business;row.update({'strict_netgen':business,'host_stats':case['host_stats'],'workload_host_measurement':case['load'],'routes_and_host_fd_freshly_clean':True});(out/'actual-case-exits.json').write_text(json.dumps(rows,indent=2)+'\n')
  passed=True
 finally:
- (out/'MANAGED-RESULT.json').write_text(json.dumps({'passed':passed,'actual_linux_preflight_passed':preflight_passed,'cases':rows,'mode':'PUBLIC_PACKET_BRIDGE_TCP_HOST_ONLY_NOT_NATIVE_TUN','shipping_iOS_or_200Mbps_acceptance':False},indent=2)+'\n')
+ (out/'MANAGED-RESULT.json').write_text(json.dumps({'passed':passed,'actual_linux_preflight_passed':preflight_passed,'cases':rows,'mode':'PUBLIC_PACKET_BRIDGE_TCP_HOST_ONLY_NOT_NATIVE_TUN','authenticated_original_build_run':m['build_run'],'binary_origin':'authenticated_reuse_not_recompiled','new_compiler_invocations':0,'shipping_iOS_or_200Mbps_acceptance':False},indent=2)+'\n')
 if not passed:raise SystemExit(1)

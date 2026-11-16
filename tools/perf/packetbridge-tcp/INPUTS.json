@@ -19,6 +19,8 @@
   "tools/perf/packetbridge-tcp/case.py": "575d08a2f2c6d8c359a2f4768333bd984882baef7e6093f37bd8ccd039a1a478",
   "tools/perf/packetbridge-tcp/example-only.patch": "101fd048c474b11a547925879cf830e5585d9e6ef9af70f573cd70f7c58e0c13",
   "tools/perf/packetbridge-tcp/old-bench.patch": "0733c2a1955c3b6a4eb2826ad8836d596bb74576a78f070b84b8d70d40a2ccf6",
-  "tools/perf/packetbridge-tcp/runtime_manager.py": "d8ddeac3ba91ae7d7ea28c27e705afc1948bd08dd74ceb9926ef7bb376fb65c2",
-  ".github/workflows/apple-archive-acceptance.yml": "0a4cb7ee2f3b623311923c62c581a40167136169a4f616a2b6a64ae0c54c8b10"
+  "tools/perf/packetbridge-tcp/runtime_manager.py": "25629c158af675eec07b7bbdfe94e836cb83c4d26f04eb5458ecd95acb6e4033",
+  ".github/workflows/apple-archive-acceptance.yml": "e7eb05c0c0ebcdc328cc6eb8017bbaefde5f34834970bb1249817d6f18eee343",
+  "tools/perf/packetbridge-tcp/REUSE.json": "dbd0ab50f6e305a7d285925c2610db1ecf0fae99c92e8cf2a0eb50155c6a7146",
+  "tools/perf/packetbridge-tcp/reuse_original.py": "44e093b830e5dd531df6f25a796f96971b2c657fbc1dbce8e7b1518a4cbf08cf"
 }

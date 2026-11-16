@@ -1,5 +1,5 @@
 name: PacketBridge public-host actual TCP comparison
-run-name: F997 old and bounded batch public API host; two64MiB TCP downloads
+run-name: Authenticated exact original host binaries; corrected managed env; two64MiB TCP downloads
 on:
   workflow_dispatch:
 permissions:
@@ -9,92 +9,10 @@ concurrency:
   group: packetbridge-public-host-tcp-f997
   cancel-in-progress: false
 jobs:
-  build:
-    name: Build exact PacketBridge TCP host arms
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    outputs:
-      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
-      artifact_sha256: ${{ steps.artifact.outputs.artifact-digest }}
-      manifest_sha256: ${{ steps.manifest.outputs.manifest_sha256 }}
-    steps:
-      - name: Start bounded job budget
-        run: |
-          python3 - <<'PYCODE'
-          import os,time
-          assert len(os.sched_getaffinity(0))>=4
-          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PERF_JOB_START_MONOTONIC='+str(time.monotonic())+'\n')
-          PYCODE
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: peakpassvpn/sail
-          ref: f99761138b23f267ebc7621057afe02018ab7c18
-          path: sail-source
-          persist-credentials: false
-      - name: Verify unchanged proven resource infrastructure and frozen bridge inputs
-        run: python3 tools/perf/packetbridge-tcp/verify.py
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
-        with:
-          toolchain: 1.98.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: 1.25.8
-          cache-dependency-path: sail-source/scripts/netem/netgen/go.mod
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        continue-on-error: true
-        timeout-minutes: 5
-        with:
-          prefix-key: v1-rust
-          shared-key: f997-linux-cli
-          workspaces: sail-source -> target
-          save-if: false
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          lockfile: sail-source/Cargo.lock
-          targets: x86_64-unknown-linux-gnu
-      - name: Fetch exact existing nonproduction peer archive
-        run: curl --fail --location --retry 2 --output "$RUNNER_TEMP/sing-box-1.14.2-linux-amd64.tar.gz" https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-linux-amd64.tar.gz
-      - name: Actual two-arm build under original bounded Lease
-        run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH,GOCACHE,GOMODCACHE,GOTMPDIR,GOBIN,GOTOOLCHAIN,CARGO_HOME,RUSTUP_HOME,BORING_BSSL_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_INCLUDE_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_ASSUME_PATCHED_x86_64_unknown_linux_gnu env PATH="$PATH" python3 tools/perf/packetbridge-tcp/build_manager.py build --source "$GITHUB_WORKSPACE/sail-source" --output "$RUNNER_TEMP/tcp-build-output" --resource "$RUNNER_TEMP/f997-build-resource" --job-start "$PERF_JOB_START_MONOTONIC" --singbox-archive "$RUNNER_TEMP/sing-box-1.14.2-linux-amd64.tar.gz"
-      - name: Independent fresh cleanup recheck
-        if: always()
-        run: |
-          sudo python3 tools/perf/f997-baseline/cleanup_stage.py --temp-root "$RUNNER_TEMP" --state-root "$RUNNER_TEMP/f997-build-resource" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
-      - name: Collect only owned original build resource evidence
-        if: always()
-        run: |
-          if test -d "$RUNNER_TEMP/f997-build-resource"; then
-            sudo python3 tools/perf/f997-baseline/collect_owned.py --temp-root "$RUNNER_TEMP" --source-root "$RUNNER_TEMP/f997-build-resource" --destination-root "$RUNNER_TEMP/f997-collected-build" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
-          fi
-      - name: Export exact compiled binary manifest
-        id: manifest
-        run: python3 tools/perf/packetbridge-tcp/artifact.py export
-      - name: Stage original build evidence
-        if: always()
-        run: |
-          mkdir -p "$RUNNER_TEMP/tcp-front-artifact"
-          for name in tcp-build-output f997-collected-build; do
-            if test -d "$RUNNER_TEMP/$name"; then cp -R "$RUNNER_TEMP/$name" "$RUNNER_TEMP/tcp-front-artifact/"; fi
-          done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
-        id: artifact
-        with:
-          name: packetbridge-exact-tcp-host-binaries
-          path: ${{ runner.temp }}/tcp-front-artifact
-          if-no-files-found: warn
-          retention-days: 7
   measure:
     name: Public PacketBridge single-stream kernel TCP downloads
-    needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      FRONT_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
-      FRONT_ARTIFACT_SHA256: ${{ needs.build.outputs.artifact_sha256 }}
-      FRONT_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
     steps:
       - name: Start independent measurement job budget
         run: |
@@ -106,10 +24,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Verify unchanged proven resource infrastructure and frozen bridge inputs
         run: python3 tools/perf/packetbridge-tcp/verify.py
-      - name: Authenticate exact same-run old and new binaries
+      - name: Authenticate exact successful original build and every binary input
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/perf/packetbridge-tcp/artifact.py fetch
+        run: python3 tools/perf/packetbridge-tcp/reuse_original.py
       - name: Actual owner canary then only OLD and NEW single-stream TCP cases
         run: |
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH env PATH="$PATH" python3 tools/perf/packetbridge-tcp/runtime_manager.py --bundle "$PB_TCP_BUNDLE" --manifest-sha256 "$FRONT_MANIFEST_SHA256" --out "$RUNNER_TEMP/f997-runtime-output" --job-start "$PERF_JOB_START_MONOTONIC"
