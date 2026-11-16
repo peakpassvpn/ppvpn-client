@@ -1,24 +1,20 @@
-name: F997 guarded Linux baseline
-run-name: Exact F997 artifact gate then conditional four-case baseline
+name: F997 R3 Linux bootstrap smoke
+run-name: R3 no-compile no-throughput platform and collector smoke
 on:
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: f997-linux-baseline-${{ github.ref }}
+  group: f997-linux-bootstrap-smoke-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  build:
-    name: Exact F997 artifact gate
+  smoke:
+    name: R3 owned Linux metadata resource and collector smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    outputs:
-      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
-      artifact_sha256: ${{ steps.artifact.outputs.artifact-digest }}
-      manifest_sha256: ${{ steps.manifest.outputs.manifest_sha256 }}
+    timeout-minutes: 4
     steps:
-      - name: Start monotonic job budget and verify dedicated capacity
+      - name: Start monotonic smoke budget and verify capacity
         run: |
           python3 - <<'PY'
           import os,time
@@ -26,110 +22,38 @@ jobs:
           with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PERF_JOB_START_MONOTONIC='+str(time.monotonic())+'\n')
           PY
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: peakpassvpn/sail
-          ref: f99761138b23f267ebc7621057afe02018ab7c18
-          path: sail-source
-          persist-credentials: false
-      - name: Verify reviewed wrapper and Linux tools
+      - name: Verify frozen smoke sources and platform commands
         run: |
-          python3 tools/perf/f997-baseline/ci_handoff.py verify
-          for x in systemctl systemd-run ip tc ethtool openssl; do command -v "$x"; done
-          test -f /sys/fs/cgroup/cgroup.controllers
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
-        with:
-          toolchain: 1.98.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: 1.25.8
-          cache-dependency-path: sail-source/scripts/netem/netgen/go.mod
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        continue-on-error: true
-        timeout-minutes: 5
-        with:
-          prefix-key: v1-rust
-          shared-key: f997-linux-cli
-          workspaces: sail-source -> target
-          save-if: false
-      - uses: ./.github/actions/prebuilt-boringssl
-        with:
-          lockfile: sail-source/Cargo.lock
-          targets: x86_64-unknown-linux-gnu
-      - name: Fetch the exact existing nonproduction peer archive
-        run: |
-          curl --fail --location --retry 2 --output "$RUNNER_TEMP/sing-box-1.14.2-linux-amd64.tar.gz" https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-linux-amd64.tar.gz
-          python3 - <<'PY'
-          import os,pathlib,hashlib
-          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'sing-box-1.14.2-linux-amd64.tar.gz'
-          assert p.stat().st_size==31680686 and hashlib.sha256(p.read_bytes()).hexdigest()=='a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6'
-          PY
-      - name: Actual exact-source build under the approved hard limits
-        run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_JOB,PATH,GOCACHE,GOMODCACHE,GOTMPDIR,GOBIN,GOTOOLCHAIN,CARGO_HOME,RUSTUP_HOME,BORING_BSSL_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_INCLUDE_PATH_x86_64_unknown_linux_gnu,BORING_BSSL_ASSUME_PATCHED_x86_64_unknown_linux_gnu python3 tools/perf/f997-baseline/build_gate_manager.py --source "$GITHUB_WORKSPACE/sail-source" --artifact-output "$RUNNER_TEMP/f997-build-output" --resource-output "$RUNNER_TEMP/f997-build-resource" --job-start "$PERF_JOB_START_MONOTONIC" --singbox-archive "$RUNNER_TEMP/sing-box-1.14.2-linux-amd64.tar.gz" --reviewed-harness "$GITHUB_WORKSPACE/tools/perf/f997-baseline/harness/run.py"
-      - name: Independent final owner and fresh-empty recheck
-        if: always()
-        run: sudo --preserve-env=GITHUB_RUN_ID python3 tools/perf/f997-baseline/ci_handoff.py cleanup
-      - name: Export successful frozen binary manifest
-        id: manifest
-        run: python3 tools/perf/f997-baseline/ci_handoff.py export-front
-      - name: Stage original front records and outputs
-        if: always()
-        run: |
-          mkdir -p "$RUNNER_TEMP/f997-front-artifact"
-          for name in f997-build-output f997-build-resource; do
-            if test -d "$RUNNER_TEMP/$name"; then cp -R "$RUNNER_TEMP/$name" "$RUNNER_TEMP/f997-front-artifact/"; fi
-          done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
-        id: artifact
-        with:
-          name: exact-f997-linux-binary-gate
-          path: ${{ runner.temp }}/f997-front-artifact
-          if-no-files-found: warn
-          retention-days: 7
-  baseline:
-    name: Real four-case baseline guarded by Linux preflight
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      FRONT_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
-      FRONT_ARTIFACT_SHA256: ${{ needs.build.outputs.artifact_sha256 }}
-      FRONT_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
-    steps:
-      - name: Start independent monotonic runtime budget and verify capacity
-        run: |
-          python3 - <<'PY'
-          import os,time
-          assert len(os.sched_getaffinity(0)) >= 4
-          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PERF_JOB_START_MONOTONIC='+str(time.monotonic())+'\n')
-          PY
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Verify reviewed wrapper and actual Linux capabilities
-        run: |
-          python3 tools/perf/f997-baseline/ci_handoff.py verify
+          python3 tools/perf/f997-baseline/verify_inputs.py
           for x in systemctl systemd-run ip tc ethtool openssl; do command -v "$x"; done
           test -f /sys/fs/cgroup/cgroup.controllers
           test -c /dev/net/tun
-      - name: Authenticate same-run actual front artifact and every input
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 tools/perf/f997-baseline/ci_handoff.py fetch-front
-      - name: Actual own-canary gate then only the conditional four cases
+      - name: Actual no-compile no-load platform smoke
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT python3 tools/perf/f997-baseline/managed_wrapper.py --bundle "$F997_RUNTIME_BUNDLE" --manifest-sha256 "$FRONT_MANIFEST_SHA256" --out "$RUNNER_TEMP/f997-runtime-output" --job-start "$PERF_JOB_START_MONOTONIC"
-      - name: Independent final owner and fresh-empty recheck
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GOCACHE,GOMODCACHE,GOTMPDIR,GOBIN,GOTOOLCHAIN,CARGO_HOME,RUSTUP_HOME env PATH="$PATH" python3 tools/perf/f997-baseline/linux_smoke.py --out "$RUNNER_TEMP/f997-smoke-root" --job-start "$PERF_JOB_START_MONOTONIC" --runner-path "$PATH"
+      - name: Always recheck only this job's owned resources
         if: always()
-        run: sudo --preserve-env=GITHUB_RUN_ID python3 tools/perf/f997-baseline/ci_handoff.py cleanup
-      - name: Preserve actual authentication and original runtime evidence
+        run: |
+          sudo python3 tools/perf/f997-baseline/cleanup_stage.py --temp-root "$RUNNER_TEMP" --state-root "$RUNNER_TEMP/f997-smoke-root" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Always copy scoped root evidence into a new runner-owned private directory
+        if: always()
+        run: |
+          if test -d "$RUNNER_TEMP/f997-smoke-root"; then
+            sudo python3 tools/perf/f997-baseline/collect_owned.py --temp-root "$RUNNER_TEMP" --source-root "$RUNNER_TEMP/f997-smoke-root" --destination-root "$RUNNER_TEMP/f997-collected-smoke" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          else
+            mkdir -m 700 "$RUNNER_TEMP/f997-collected-smoke"
+            python3 - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'f997-collected-smoke/NO-RESOURCE-ROOT.json'
+          p.write_text(json.dumps({'run_id':os.environ['GITHUB_RUN_ID'],'status':'NO_RESOURCE_ROOT_CREATED_NOT_A_CLEANUP_PASS'})+'\n')
+          p.chmod(0o600)
+          PY
+          fi
+      - name: Preserve original smoke evidence even on failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: f997-real-four-case-baseline
-          path: |
-            ${{ runner.temp }}/f997-runtime-output
-            ${{ runner.temp }}/front-artifact-authentication.json
-            !${{ runner.temp }}/f997-runtime-output/**/key.pem
+          name: f997-r3-owned-linux-bootstrap-smoke
+          path: ${{ runner.temp }}/f997-collected-smoke
           if-no-files-found: warn
           retention-days: 7

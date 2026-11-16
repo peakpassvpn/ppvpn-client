@@ -9,12 +9,12 @@ class CachedCleanupFreshQuery(unittest.TestCase):
    def backend(args,**kwargs):
     calls.append(args)
     if args[:3]==['ip','netns','list']:s='nc777 (id: 1)\n' if residue else ''
-    elif args[:3]==['ip','-j','link']:s='[]'
+    elif args==['ip','-j','-d','link','show']:s='[{"ifname":"lo"}]'
     elif args[0]=='systemctl':s=''
     else:raise AssertionError(args)
     return subprocess.CompletedProcess(args,0,s,'')
    with patch.object(cleanup.subprocess,'run',side_effect=backend):r=cleanup.cleanup(registry,'stub-owner')
-   self.assertEqual(cache.read_bytes(),before);self.assertGreaterEqual(len(calls),4);self.assertEqual(r['fresh_final_empty_proof']['run_id'],'123');return r
+   self.assertEqual(cache.read_bytes(),before);self.assertIn(['ip','netns','list'],calls);self.assertIn(['ip','-j','-d','link','show'],calls);self.assertIn(['systemctl','list-units','--all','--no-legend','--plain','--no-pager'],calls);self.assertEqual(r['fresh_final_empty_proof']['run_id'],'123');return r
  def test_cached_success_requires_fresh_positive_queries(self):self.assertTrue(self.execute(False)['fresh_final_empty_proof']['passed'])
  def test_new_namespace_residue_invalidates_cached_green(self):
   r=self.execute(True);self.assertFalse(r['all_owned_namespaces_interfaces_pids_locks_gone']);self.assertIn('fresh-empty-proof-failed',r['errors'])

@@ -1,6 +1,7 @@
 """Linux-only, owner-checked no-traffic resource/setsid cleanup preflight."""
 import json,os,pathlib,sys,time
 from cleanup import cmd
+from linux_inventory import read_links,ifb_names
 
 def one_canary(bundle,out,registry,env,mode):
  d=json.loads(registry.read_text());owner=d['owner'];unit=d['canary_units'][mode];ns=d['namespaces'][0];record=out/('canary-'+mode+'-pids.json')
@@ -42,7 +43,7 @@ def one_canary(bundle,out,registry,env,mode):
  assert not set(d['namespaces']).intersection(x.split()[0] for x in cmd(['ip','netns','list'],True).stdout.splitlines())
  links={x['ifname'] for x in json.loads(cmd(['ip','-j','link'],True).stdout)};assert not links.intersection(d['host_interfaces'])
  assert all(not (pathlib.Path(d['netem_lock_dir'])/('netns-'+name)).exists() for name in d['namespaces'])
- assert sorted(x['ifname'] for x in json.loads(cmd(['ip','-j','link','show','type','ifb'],True).stdout))==d['initial_host_ifb']
+ assert ifb_names(read_links(cmd,out/('canary-'+mode+'-after-host-links.original.json')))==d['initial_host_ifb']
  receipt={'scope':'OWN_CANARY_NO_TRAFFIC_ONLY','mode':mode,'systemd_result':result,'owner':owner,'unit':unit,'actual_detached_child_and_grandchild':pids,'actual_cgroup':cgroup,'namespace_before_deletion':before,'descendants_proved_gone':True,'owned_namespace_interfaces_qdisc_and_inner_locks_gone':True,'outer_lifetime_claims_retained_for_four_cases':True,'host_IFB_unchanged':True,'down_exit':r.returncode}
  (out/('canary-'+mode+'-preflight.actual.json')).write_text(json.dumps(receipt,indent=2)+'\n')
  return receipt
@@ -51,5 +52,5 @@ def run_canary(bundle,out,registry,env):
  import hashlib
  receipts=[one_canary(bundle,out,registry,env,mode) for mode in ['cancel','timeout']]
  d=json.loads(registry.read_text())
- r={'scope':'OWN_CANARY_CANCEL_AND_ACTUAL_TIMEOUT_NO_TRAFFIC','run_id':d['run_id'],'attempt':d['attempt'],'owner':d['owner'],'passed':True,'modes':receipts,'code_hashes':{n:hashlib.sha256(pathlib.Path(__file__).with_name(n).read_bytes()).hexdigest() for n in ['canary_payload.py','canary_preflight.py','lease.py','cleanup.py','managed_wrapper.py']}}
+ r={'scope':'OWN_CANARY_CANCEL_AND_ACTUAL_TIMEOUT_NO_TRAFFIC','run_id':d['run_id'],'attempt':d['attempt'],'owner':d['owner'],'passed':True,'modes':receipts,'code_hashes':{n:hashlib.sha256(pathlib.Path(__file__).with_name(n).read_bytes()).hexdigest() for n in ['canary_payload.py','canary_preflight.py','lease.py','cleanup.py','managed_wrapper.py','linux_inventory.py']}}
  (out/'canary-modes.actual.json').write_text(json.dumps(r,indent=2)+'\n');return r

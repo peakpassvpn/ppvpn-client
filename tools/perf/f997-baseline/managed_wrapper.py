@@ -12,6 +12,8 @@ def main():
  assert pathlib.Path('/sys/fs/cgroup/cgroup.controllers').is_file()
  run=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT'];assert run.isdecimal() and attempt.isdecimal()
  out=pathlib.Path(a.out).resolve();out.mkdir(parents=True,exist_ok=False);os.chmod(out,0o700)
+ from lease import atomic
+ atomic(out/'JOB-OWNER.json',{'run_id':run,'attempt':attempt,'owner':'gh'+run+'a'+attempt+'-baseline-job-'+secrets.token_hex(6),'scope':'BASELINE_EVIDENCE_ROOT'})
  bundle=pathlib.Path(a.bundle).resolve();manifest=bundle/'BINARY-MANIFEST.json';raw=manifest.read_bytes();assert hashlib.sha256(raw).hexdigest()==a.manifest_sha256
  m=json.loads(raw);assert m['source']==SOURCE and m['tree']=='c7306832afbbdf77d78d21907756c95207136b94'
  assert type(m['build_provenance_actual_exit']) is int and m['build_provenance_actual_exit']==0 and m['netgen_source']==SOURCE and m['sail_source']==SOURCE

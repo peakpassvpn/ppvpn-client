@@ -1,0 +1,59 @@
+name: F997 R3 Linux bootstrap smoke
+run-name: R3 no-compile no-throughput platform and collector smoke
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: f997-linux-bootstrap-smoke-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  smoke:
+    name: R3 owned Linux metadata resource and collector smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Start monotonic smoke budget and verify capacity
+        run: |
+          python3 - <<'PY'
+          import os,time
+          assert len(os.sched_getaffinity(0)) >= 4
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PERF_JOB_START_MONOTONIC='+str(time.monotonic())+'\n')
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify frozen smoke sources and platform commands
+        run: |
+          python3 tools/perf/f997-baseline/verify_inputs.py
+          for x in systemctl systemd-run ip tc ethtool openssl; do command -v "$x"; done
+          test -f /sys/fs/cgroup/cgroup.controllers
+          test -c /dev/net/tun
+      - name: Actual no-compile no-load platform smoke
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GOCACHE,GOMODCACHE,GOTMPDIR,GOBIN,GOTOOLCHAIN,CARGO_HOME,RUSTUP_HOME env PATH="$PATH" python3 tools/perf/f997-baseline/linux_smoke.py --out "$RUNNER_TEMP/f997-smoke-root" --job-start "$PERF_JOB_START_MONOTONIC" --runner-path "$PATH"
+      - name: Always recheck only this job's owned resources
+        if: always()
+        run: |
+          sudo python3 tools/perf/f997-baseline/cleanup_stage.py --temp-root "$RUNNER_TEMP" --state-root "$RUNNER_TEMP/f997-smoke-root" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Always copy scoped root evidence into a new runner-owned private directory
+        if: always()
+        run: |
+          if test -d "$RUNNER_TEMP/f997-smoke-root"; then
+            sudo python3 tools/perf/f997-baseline/collect_owned.py --temp-root "$RUNNER_TEMP" --source-root "$RUNNER_TEMP/f997-smoke-root" --destination-root "$RUNNER_TEMP/f997-collected-smoke" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          else
+            mkdir -m 700 "$RUNNER_TEMP/f997-collected-smoke"
+            python3 - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'f997-collected-smoke/NO-RESOURCE-ROOT.json'
+          p.write_text(json.dumps({'run_id':os.environ['GITHUB_RUN_ID'],'status':'NO_RESOURCE_ROOT_CREATED_NOT_A_CLEANUP_PASS'})+'\n')
+          p.chmod(0o600)
+          PY
+          fi
+      - name: Preserve original smoke evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: f997-r3-owned-linux-bootstrap-smoke
+          path: ${{ runner.temp }}/f997-collected-smoke
+          if-no-files-found: warn
+          retention-days: 7

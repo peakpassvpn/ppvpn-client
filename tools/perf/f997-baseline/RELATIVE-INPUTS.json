@@ -1,32 +1,8 @@
 {
-  "source": "f99761138b23f267ebc7621057afe02018ab7c18",
-  "tree": "c7306832afbbdf77d78d21907756c95207136b94",
-  "status": "PREPARED_SOURCE_ONLY_NOT_EXECUTED",
+  "scope": "R3_SMOKE_SOURCE_ONLY_NO_SDK_COMPILE_NO_GENERATED_BENCHMARK_LOAD",
+  "source_f997": "f99761138b23f267ebc7621057afe02018ab7c18",
+  "source_tree": "c7306832afbbdf77d78d21907756c95207136b94",
   "relative_files": {
-    "managed_wrapper.py": {
-      "bytes": 9198,
-      "sha256": "453c5667d7f366b38559c6ecfce1056ad9950a5ed4c543647c4fef3f07652fd4"
-    },
-    "lease.py": {
-      "bytes": 5139,
-      "sha256": "0f0ff1bd60d0f03ed801326ad885224cec3340ca4877554aacf529ecbd92a7ed"
-    },
-    "cleanup.py": {
-      "bytes": 6810,
-      "sha256": "c8657a19ec156f65f3d54055997ed0de904b673663dd448ce473c8adf07e12a5"
-    },
-    "canary_payload.py": {
-      "bytes": 695,
-      "sha256": "c77891c6eb2b932d16c668e601411b801464423a4d67badb8e55bbcc4437cf59"
-    },
-    "canary_preflight.py": {
-      "bytes": 5103,
-      "sha256": "f5f215cd90a7c0bd78f3175c1106bd815e552643a48f853eb37214de74721d49"
-    },
-    "netgen_capture.py": {
-      "bytes": 3122,
-      "sha256": "b1ec7fa5f982d0e1213441e730f87e416672bd005477adb22813a8476f080d2a"
-    },
     "build_exact_f997.py": {
       "bytes": 4782,
       "sha256": "7d0e74b02aa6a93e616c5bae467343b9ab64ef32bad826a2719c60242b1c7e38"
@@ -35,44 +11,81 @@
       "bytes": 3732,
       "sha256": "1c6ddf29e0a7bbc1119c20815d2df0a3434484dc61307d604a698aae5a2f2250"
     },
-    "test_strict_netgen.py": {
-      "bytes": 3367,
-      "sha256": "70e44c80314758a59e4d8a4b1b896c09d90533c819abc953fe79b4fb7f7184cd"
+    "canary_payload.py": {
+      "bytes": 695,
+      "sha256": "c77891c6eb2b932d16c668e601411b801464423a4d67badb8e55bbcc4437cf59"
     },
-    "test_fresh_cleanup.py": {
-      "bytes": 1847,
-      "sha256": "03803940f780e92ed79074ce2d16a6bf78d8bbb4f203f638ef81698db6cd2a19"
+    "canary_preflight.py": {
+      "bytes": 5158,
+      "sha256": "06a64f2e51579236d9c4f4497040ee885c5fabcf78aedefa5e1a727a342ff71f"
+    },
+    "cleanup.py": {
+      "bytes": 6847,
+      "sha256": "b37ae9401d3bf0d083e1263ec02e931bba5f8db17e9df7a0b5b662f502ed2816"
+    },
+    "cleanup_stage.py": {
+      "bytes": 2145,
+      "sha256": "82b0be1cbc5ebc66a05b005248c926f158b93a04eeef67ecf06fceb787c913dd"
+    },
+    "collect_owned.py": {
+      "bytes": 3199,
+      "sha256": "550995e4636a65ff560a67149514bd2f7084b7795c56e74fbd941add8220b4d7"
     },
     "harness/run.py": {
       "bytes": 89124,
       "sha256": "54aff15a8dbfc6eac6fe4c1ba7f153d449d5d16a0a1d40bda6ba2186ebb2aa20"
     },
+    "lease.py": {
+      "bytes": 5353,
+      "sha256": "05d54b0e1c7a394163dd4a6035a603ad421e3c2be0ef7bf8b3efb9b1f09de639"
+    },
+    "linux_inventory.py": {
+      "bytes": 1548,
+      "sha256": "c4518f7160fe1385fec64fe76b010c4113414ac7cc8546b7fe78ab657c87d57e"
+    },
+    "linux_smoke.py": {
+      "bytes": 4112,
+      "sha256": "769b0c37d051f5da1838a135f4b5687826fd0ec1f41a2d84e30b4930adc26f22"
+    },
+    "managed_wrapper.py": {
+      "bytes": 9387,
+      "sha256": "c2758c229a782edd3487d73f8d6255efe046dfffbebfa1e8596c5e35afcf7fb9"
+    },
+    "metadata_probe.py": {
+      "bytes": 911,
+      "sha256": "be432c4e50fb9ec0e57d7ce7c8e148429b072452368ed3e5dbec2f5f6ac72b26"
+    },
+    "netgen_capture.py": {
+      "bytes": 3122,
+      "sha256": "b1ec7fa5f982d0e1213441e730f87e416672bd005477adb22813a8476f080d2a"
+    },
+    "test_fresh_cleanup.py": {
+      "bytes": 2020,
+      "sha256": "7a16c15e771b0be6c63cf527697be89f41aa2c66d710d078bff2bcd0067fb0c8"
+    },
+    "test_linux_inventory.py": {
+      "bytes": 1471,
+      "sha256": "944e88d3c8d2c04c027a1088cc05292600f9d2401c10378d1fc399ade32cd728"
+    },
+    "test_owned_collection.py": {
+      "bytes": 1105,
+      "sha256": "5f26cf177a0f4121a22cf665eae14effa3495f7eb82961f2192980bc9e719d37"
+    },
+    "test_strict_netgen.py": {
+      "bytes": 3367,
+      "sha256": "70e44c80314758a59e4d8a4b1b896c09d90533c819abc953fe79b4fb7f7184cd"
+    },
+    "verify_inputs.py": {
+      "bytes": 548,
+      "sha256": "890c404ad533689d9240a4a7f6953326ddcae49bdff503bab0f03108716be85c"
+    },
     "harness/netns.sh": {
       "bytes": 9096,
       "sha256": "09cd154e0e2ef2918584199e8a3d3ce2deb1bcaa0fb6b1e8ac0530966347b7ed"
-    }
-  },
-  "budgets": {
-    "front_build": {
-      "CPU": 4,
-      "memory_max_GiB": 8,
-      "swap": 0,
-      "job_seconds": 1800,
-      "cargo_jobs": 2
     },
-    "runtime": {
-      "CPU": 4,
-      "memory_max_GiB": 2,
-      "swap": 0,
-      "case_seconds": 240,
-      "job_seconds": 1200
+    "smoke-workflow.yml": {
+      "bytes": 3005,
+      "sha256": "9b722f2706efb8280a08668821a6a56e67fca6a01b3c4b8f41fa66e6b74fa476"
     }
-  },
-  "effective_mobile": {
-    "initial_KiB": 8,
-    "max_KiB": 32,
-    "inbound_max_connections": 256
-  },
-  "actual_binary_manifest_required_before_runtime": true,
-  "dispatch_authorized": false
+  }
 }

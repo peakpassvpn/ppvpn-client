@@ -1,5 +1,6 @@
 """Independent owner-checked cleanup with bounded fresh official empty proof."""
 import argparse,fcntl,hashlib,json,os,pathlib,subprocess,time
+from linux_inventory import read_links,ifb_names
 
 def cmd(args,check=False):
  p=subprocess.run(args,capture_output=True,text=True,timeout=15)
@@ -8,8 +9,8 @@ def cmd(args,check=False):
 
 def fresh_empty(d,run):
  namespaces=run(['ip','netns','list'],True).stdout
- links=json.loads(run(['ip','-j','link'],True).stdout)
- ifb=json.loads(run(['ip','-j','link','show','type','ifb'],True).stdout)
+ links=read_links(run,pathlib.Path(d['netem_lock_dir']).parent/('fresh-host-links-'+str(time.time_ns())+'.original.json'))
+ ifb=ifb_names(links)
  claims={p:pathlib.Path(p).exists() for p in d['claims']}
  ns_clear=not {x.split()[0] for x in namespaces.splitlines()}.intersection(d['namespaces'])
  links_clear=not {x['ifname'] for x in links}.intersection(d['host_interfaces'])
@@ -19,7 +20,7 @@ def fresh_empty(d,run):
  states={u:rows.get(u,'unloaded') for u in d['case_units']}
  units_clear=all(s in ['inactive','failed','unloaded'] for s in states.values())
  inner={n:(pathlib.Path(d['netem_lock_dir'])/('netns-'+n)).exists() for n in d['namespaces']}
- unchanged=sorted(x['ifname'] for x in ifb)==d['initial_host_ifb']
+ unchanged=ifb==d['initial_host_ifb']
  return {'queried_unix_ns':time.time_ns(),'owner':d['owner'],'run_id':d['run_id'],'namespace_inventory_original':namespaces,'host_link_inventory_original':links,'host_ifb_inventory_original':ifb,'claim_exists_current':claims,'inner_lock_exists_current':inner,'unit_inventory_original':inventory,'unit_states_current':states,'cgroup_absent_current':cg_absent,'passed':ns_clear and links_clear and units_clear and cg_absent and unchanged and not any(claims.values()) and not any(inner.values())}
 
 def cleanup(registry,owner):
