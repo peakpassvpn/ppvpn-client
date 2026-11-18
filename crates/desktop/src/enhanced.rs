@@ -18,6 +18,12 @@
 //! the phase is `Contended` (`TUN_ROUTING_TAKEN_OVER`) until the user
 //! retries.
 
+//! Periodic health probes snapshot the live configuration without holding the
+//! operation lock across network I/O. Live profile/routing, node or pin changes
+//! invalidate both successful and failed old results. Queued health recovery
+//! rechecks that snapshot under the operation lock; discarding it leaves the
+//! same generation's monitor alive. User disconnect can still cancel probes.
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -623,6 +629,9 @@ struct Data {
     /// An outdated service was seen while connected (logged once); it is
     /// replaced before the next connect.
     stale_service_noted: bool,
+    /// Identity of the live configuration measured by periodic health checks.
+    /// Replaced before a live mutation, including one with the same revision.
+    health_config: Arc<()>,
     recovery: RecoveryEpisode,
     routing_reconnects: RoutingReconnects,
     loops_generation: Option<u64>,
@@ -912,7 +921,10 @@ impl Enhanced {
             return Ok(());
         };
         let generation = machine.generation;
-        inner.with_data(|data| data.recovery.reset());
+        inner.with_data(|data| {
+            data.recovery.reset();
+            data.health_config = Arc::new(());
+        });
         // Stays On: the core (0.5.18+) applies a profile without dropping
         // open connections. Going through Reconnecting here also stopped the
         // health loop for good when it woke in that window.
@@ -1075,6 +1087,7 @@ impl Enhanced {
             service: inner.service.clone(),
             session,
         };
+        inner.with_data(|data| data.health_config = Arc::new(()));
         core_ipc::select_node(&core, node_id)
             .await
             .map_err(|error| error.into_client_error(ErrorCode::ConnectFailed))
@@ -1102,7 +1115,12 @@ impl Enhanced {
 
     /// Pins (or unpins) one node on the enhanced-mode core while it is on.
     pub(crate) async fn pin_ingress_live(&self, node_id: &str, endpoint_key: Option<&str>) {
-        let machine = self.inner.with_data(|data| data.machine.clone());
+        let inner = &self.inner;
+        if inner.off_while_uninstalling() {
+            return;
+        }
+        let _operation = inner.operation.lock().await;
+        let machine = inner.with_data(|data| data.machine.clone());
         if machine.phase != ConnectionPhase::On {
             return;
         }
@@ -1113,6 +1131,7 @@ impl Enhanced {
             service: self.inner.service.clone(),
             session,
         };
+        inner.with_data(|data| data.health_config = Arc::new(()));
         crate::ingress::pin_one(&core, node_id, endpoint_key, "enhanced core").await;
     }
 
@@ -2054,13 +2073,13 @@ impl Inner {
         generation: u64,
         result: Result<(), ClientErrorInfo>,
     ) -> bool {
-        let (current, on) = self.with_data(|data| {
+        let (current, on, config) = self.with_data(|data| {
             let current = data.machine.generation == generation;
             let on = current && data.machine.phase == ConnectionPhase::On;
             if on && result.is_ok() {
                 data.recovery.note_health_success();
             }
-            (current, on)
+            (current, on, data.health_config.clone())
         });
         if !on {
             tracing::debug!(
@@ -2075,8 +2094,14 @@ impl Inner {
             Ok(()) => true,
             Err(error) => {
                 tracing::warn!(?error, "enhanced health check failed");
-                tokio::spawn(self.clone().recover(generation, error));
-                false
+                tokio::spawn(
+                    self.clone()
+                        .recover_for_health(generation, error, Some(config)),
+                );
+                // Keep this monitor alive until recovery really replaces the
+                // session and aborts its loops. A live update may invalidate
+                // the queued recovery while keeping this generation On.
+                true
             }
         }
     }
@@ -2092,21 +2117,37 @@ impl Inner {
     /// ends in `Error` with the actual reason, so the apps do not claim
     /// another app took the network over.
     fn recover(self: Arc<Self>, generation: u64, cause: ClientErrorInfo) -> BoxFuture<'static, ()> {
+        self.recover_for_health(generation, cause, None)
+    }
+
+    /// A queued health recovery must still describe the live configuration
+    /// after it acquires the operation lock. Lease/watch failures have no
+    /// configuration snapshot and keep their existing recovery behavior.
+    fn recover_for_health(
+        self: Arc<Self>,
+        generation: u64,
+        cause: ClientErrorInfo,
+        config: Option<Arc<()>>,
+    ) -> BoxFuture<'static, ()> {
         Box::pin(async move {
             let _operation = self.operation.lock().await;
-            let (machine, claimed, has_profile) = self.with_data(|data| {
-                if !data.machine.is(generation, ConnectionPhase::On) {
-                    return (data.machine.clone(), false, false);
+            let recovery = self.with_data(|data| {
+                if !data.machine.is(generation, ConnectionPhase::On)
+                    || config
+                        .as_ref()
+                        .is_some_and(|expected| !Arc::ptr_eq(expected, &data.health_config))
+                {
+                    return None;
                 }
-                (
+                Some((
                     data.machine.clone(),
                     data.recovery.claim(),
                     data.profile.is_some(),
-                )
+                ))
             });
-            if !machine.is(generation, ConnectionPhase::On) {
+            let Some((machine, claimed, has_profile)) = recovery else {
                 return;
-            }
+            };
             let path = is_path_cause(&cause);
             let service_down = is_service_down(&cause);
             let routing_broken = is_tun_routing_broken(&cause);
@@ -2771,6 +2812,7 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
     };
     let mut awaiting_verdict = false;
     let mut health = Health::new(health_timing());
+    let mut measured_config: Option<Arc<()>> = None;
     loop {
         let base = *inner
             .health_interval
@@ -2788,15 +2830,30 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
         if !inner.is_current(generation, ConnectionPhase::On) {
             break;
         }
-        // A profile or routing-mode update holds the operation lock while the
-        // core switches engines: skip this round rather than judge the path
-        // mid-switch.
-        if inner.operation.try_lock().is_err() {
-            continue;
-        }
-        let Some(revision) = inner.with_data(|data| data.machine.revision.clone()) else {
+        // Snapshot only while no live mutation owns the operation lock.
+        // Do not keep it across probes: user disconnect must remain immediate.
+        let snapshot = {
+            let Ok(_operation) = inner.operation.try_lock() else {
+                continue;
+            };
+            inner.with_data(|data| {
+                data.machine
+                    .revision
+                    .clone()
+                    .map(|revision| (revision, data.health_config.clone()))
+            })
+        };
+        let Some((revision, config)) = snapshot else {
             break;
         };
+        if measured_config
+            .as_ref()
+            .is_some_and(|previous| !Arc::ptr_eq(previous, &config))
+        {
+            health = Health::new(health_timing());
+            awaiting_verdict = false;
+        }
+        measured_config = Some(config.clone());
         let checked_at = Instant::now().into_std();
         let timeout = if health.settling(checked_at) {
             SETTLING_ENTRANCE_PROBE_TIMEOUT_MS
@@ -2805,6 +2862,38 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
         };
         let result = inner.run_health(&core, &revision, false, timeout).await;
         let round = health_round(&result);
+        // Fetch the optional pin verdict without holding the operation lock.
+        let pin = match &result {
+            Err(error)
+                if !health.settling(checked_at)
+                    && is_path_cause(error)
+                    && !is_tun_routing_broken(error) =>
+            {
+                Some(pinned_ingress(&core, &inner.config.ingress_pins.get()).await)
+            }
+            _ => None,
+        };
+        // A live update can finish while probes run, without changing the
+        // session generation (or even the profile revision). Judge nothing
+        // from that old configuration, including successes and path strikes.
+        let Ok(_operation) = inner.operation.try_lock() else {
+            health = Health::new(health_timing());
+            awaiting_verdict = false;
+            continue;
+        };
+        let current = inner.with_data(|data| {
+            data.machine.is(generation, ConnectionPhase::On)
+                && Arc::ptr_eq(&config, &data.health_config)
+        });
+        if !current {
+            health = Health::new(health_timing());
+            awaiting_verdict = false;
+            tracing::debug!(
+                generation,
+                "enhanced health result across a live update discarded"
+            );
+            continue;
+        }
         // Traffic that bypasses the TUN (its routing rules gone, e.g.
         // systemd-networkd dropping foreign rules on a link change) is a
         // leak, not the network settling: no grace, recover now.
@@ -2827,7 +2916,7 @@ async fn health_loop(inner: Arc<Inner>, session: SessionRef) {
         // Broken TUN routing is no line's doing.
         if let Err(error) = &result {
             if is_path_cause(error) && !is_tun_routing_broken(error) {
-                match pinned_ingress(&core, &inner.config.ingress_pins.get()).await {
+                match pin.unwrap_or(PinnedIngress::None) {
                     PinnedIngress::Down => {
                         tracing::info!(
                             generation,
@@ -3292,6 +3381,28 @@ mod tests {
     // --- controller with fakes --------------------------------------------
 
     #[derive(Default)]
+    struct StatusGate {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        /// Preserve the old status for a stale success, or read the new
+        /// revision after release for the stale-mismatch failure.
+        after_snapshot: bool,
+    }
+
+    impl StatusGate {
+        async fn wait(&self) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+
+        async fn entered(&self) {
+            tokio::time::timeout(Duration::from_secs(2), self.entered.notified())
+                .await
+                .expect("health check reached the status barrier");
+        }
+    }
+
+    #[derive(Default)]
     struct FakeService {
         /// A real loopback-only forwarder in the control-health regression.
         /// Releasing its session really closes established traffic.
@@ -3325,6 +3436,8 @@ mod tests {
         choices: Mutex<Vec<core_ipc::ApplyChoices>>,
         /// Every core API call first waits this long (a slow health check).
         core_api_delay: Mutex<Option<Duration>>,
+        /// One status RPC can be suspended across a live configuration change.
+        status_gate: Mutex<Option<Arc<StatusGate>>>,
         /// This many entrance probes fail before they succeed again.
         entrance_failures: AtomicUsize,
         /// `GetStatus.nodes`, once set (core 0.5.7+).
@@ -3574,7 +3687,18 @@ mod tests {
                 if let Some(delay) = delay {
                     tokio::time::sleep(delay).await;
                 }
+                let gate = if path == "/v1/get-status" {
+                    self.status_gate.lock().unwrap().take()
+                } else {
+                    None
+                };
+                if let Some(gate) = gate.as_ref().filter(|gate| !gate.after_snapshot) {
+                    gate.wait().await;
+                }
                 let owner = self.owner.lock().unwrap().clone();
+                if let Some(gate) = gate.as_ref().filter(|gate| gate.after_snapshot) {
+                    gate.wait().await;
+                }
                 let Some((owned, revision)) = owner.filter(|(owned, _)| owned == session) else {
                     return Err(ServiceError::Failed("STALE_OR_FOREIGN_SESSION".into()));
                 };
@@ -4490,6 +4614,181 @@ mod tests {
         assert_eq!((state.phase, state.reason), (ConnectionPhase::On, None));
         assert_eq!(h.enhanced.inner.with_data(|d| d.machine.generation), 2);
         assert_eq!(h.service.connects.load(Ordering::SeqCst), 2, "no recovery");
+    }
+
+    #[tokio::test]
+    async fn a_health_check_spanning_a_live_profile_update_cannot_reconnect_it() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        h.enhanced.enable().await.unwrap();
+        let old = Arc::new(StatusGate::default());
+        *h.service.status_gate.lock().unwrap() = Some(old.clone());
+        old.entered().await;
+
+        // The in-flight check expects r1, but its status RPC will now see r2.
+        // Live apply keeps the same session and generation, and stays On.
+        h.enhanced.set_profile(PROFILE_R2, "r2").await.unwrap();
+        let next = Arc::new(StatusGate::default());
+        *h.service.status_gate.lock().unwrap() = Some(next.clone());
+        old.release.notify_one();
+        // Stop the following check before it judges anything. If the stale
+        // mismatch caused recovery, this is the new connection's first check.
+        next.entered().await;
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(h.service.disconnects.load(Ordering::SeqCst), 0);
+        let state = h.enhanced.state();
+        assert_eq!((state.phase, state.reason), (ConnectionPhase::On, None));
+        assert_eq!(h.enhanced.inner.with_data(|d| d.machine.generation), 1);
+        assert_eq!(
+            h.enhanced
+                .inner
+                .with_data(|d| d.machine.revision.clone())
+                .as_deref(),
+            Some("r2")
+        );
+        h.enhanced.disable().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stale_success_after_same_revision_reapply_cannot_clear_new_recovery_strikes() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        h.enhanced.enable().await.unwrap();
+        let old = Arc::new(StatusGate {
+            after_snapshot: true,
+            ..StatusGate::default()
+        });
+        *h.service.status_gate.lock().unwrap() = Some(old.clone());
+        old.entered().await;
+        h.enhanced.reapply().await.unwrap();
+        let episode = h.enhanced.inner.with_data(|data| {
+            assert!(data.recovery.claim());
+            data.recovery.note_health_success();
+            data.recovery
+        });
+        let next = Arc::new(StatusGate::default());
+        *h.service.status_gate.lock().unwrap() = Some(next.clone());
+        old.release.notify_one();
+        next.entered().await;
+        assert_eq!(h.enhanced.inner.with_data(|d| d.recovery), episode);
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+        h.enhanced.disable().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn disconnect_cancels_a_status_barrier_without_waiting_for_the_probe() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        h.enhanced.enable().await.unwrap();
+        let gate = Arc::new(StatusGate::default());
+        *h.service.status_gate.lock().unwrap() = Some(gate.clone());
+        gate.entered().await;
+        // Never release the RPC: disable must cancel the health task rather
+        // than wait for a network timeout while holding the operation lock.
+        tokio::time::timeout(Duration::from_secs(1), h.enhanced.disable())
+            .await
+            .expect("disconnect did not wait for the probe")
+            .unwrap();
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::Off);
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+        assert!(h.enhanced.inner.with_data(|d| d.loops.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn a_queued_health_recovery_is_discarded_after_a_live_update() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        let config = h.enhanced.inner.with_data(|d| d.health_config.clone());
+        let recovery = h.enhanced.inner.clone().recover_for_health(
+            1,
+            health_error("HEALTH_PROFILE_REVISION_MISMATCH"),
+            Some(config),
+        );
+        h.enhanced.set_profile(PROFILE_R2, "r2").await.unwrap();
+        recovery.await;
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(h.service.disconnects.load(Ordering::SeqCst), 0);
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+        h.enhanced.disable().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn discarding_a_queued_recovery_keeps_the_same_generations_health_monitor() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        // Set the period before the loop can schedule its first sleep.
+        h.enhanced.set_health_interval(Duration::from_millis(20));
+        h.enhanced.enable().await.unwrap();
+        // This operation wins the lock before the queued health recovery.
+        // The production profile updater holds it in exactly the same way.
+        let operation = h.enhanced.inner.operation.lock().await;
+        assert!(
+            h.enhanced
+                .inner
+                .on_health_result(1, Err(health_error("HEALTH_PROFILE_REVISION_MISMATCH"))),
+            "the monitor must continue while recovery is merely queued"
+        );
+        let machine = h.enhanced.inner.with_data(|data| data.machine.clone());
+        let profile = Arc::new(Profile {
+            value: serde_json::from_slice(PROFILE_R2).unwrap(),
+            revision: "r2".into(),
+        });
+        Enhanced::push_profile(&h.enhanced.inner, &machine, &profile)
+            .await
+            .unwrap();
+        let next = Arc::new(StatusGate::default());
+        *h.service.status_gate.lock().unwrap() = Some(next.clone());
+        drop(operation);
+        next.entered().await;
+        // The fresh probe itself holds no operation lock. Wait through any
+        // pending recovery and verify it did not stop the monitor or session.
+        let operation = h.enhanced.inner.operation.lock().await;
+        assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(h.service.disconnects.load(Ordering::SeqCst), 0);
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+        assert_eq!(h.enhanced.inner.with_data(|d| d.machine.generation), 1);
+        drop(operation);
+        h.enhanced.disable().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn live_profile_routing_selection_and_pin_changes_invalidate_health_snapshots() {
+        let h = harness(true);
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        for change in 0..4 {
+            let before = h
+                .enhanced
+                .inner
+                .with_data(|data| data.health_config.clone());
+            match change {
+                0 => h.enhanced.set_profile(PROFILE_R2, "r2").await.unwrap(),
+                1 => h.enhanced.reapply().await.unwrap(),
+                2 => h.enhanced.select_node("n2").await.unwrap(),
+                _ => h.enhanced.pin_ingress_live("n1", Some("k1")).await,
+            }
+            let after = h
+                .enhanced
+                .inner
+                .with_data(|data| data.health_config.clone());
+            assert!(
+                !Arc::ptr_eq(&before, &after),
+                "unchanged health snapshot for mutation {change}"
+            );
+            assert_eq!(
+                h.enhanced.inner.with_data(|data| data.machine.generation),
+                1
+            );
+        }
+        h.enhanced.disable().await.unwrap();
     }
 
     // --- uninstall, service stop ------------------------------------------
