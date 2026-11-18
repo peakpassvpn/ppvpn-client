@@ -1,5 +1,7 @@
 # 贡献须知
 
+需求、设计、缺陷和待办在 GitHub Issue 里管理，标签和从开工到关闭的流程见 [`docs/issue-workflow.md`](docs/issue-workflow.md)。
+
 ## 敏感信息检查
 
 本仓库公开。以下内容不得进入文件、提交信息或作者信息：
