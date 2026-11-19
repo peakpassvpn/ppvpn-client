@@ -16,6 +16,11 @@ ignore = [
   # askama's derive, through uniffi_bindgen: build time only; the newest
   # askama_derive still depends on it.
   { id = "RUSTSEC-2026-0374", reason = "basic-toml, through uniffi_bindgen's askama, build time only (#423)" },
+  # Unmaintained, no known vulnerability (#644): pinned through sail v0.22.0,
+  # ppvpn-core, ppvpn-push-agent, and log4rs (ppvpn-service). Remove once a new
+  # tagged sail release (migrated to `time`) lands and the workspace crates and
+  # log4rs path replace `chrono`.
+  { id = "RUSTSEC-2026-0543", reason = "chrono, through sail v0.22.0, ppvpn-core, ppvpn-push-agent, and log4rs; remove after sail release tag and workspace chrono migration (#644)" },
 ]
 
 [sources]
