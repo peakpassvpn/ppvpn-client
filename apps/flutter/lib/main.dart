@@ -191,6 +191,28 @@ Future<void> main() async {
   if (samplePage == null) startE2e(app, quit);
   runApp(PrototypeApp(app: app, tray: shown));
   if (samplePage == null) {
+    if (Platform.isMacOS) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final push = MobilePush(
+          onToken: (token, bundleId, {environment}) => rust.setPushToken(
+            token: token,
+            bundleId: bundleId,
+            environment: environment,
+          ),
+          onOpen: (messageId, {deliveryId}) async {
+            await app.openMobileMessage(messageId, deliveryId: deliveryId);
+            if (!Updates.ignoreShows) await open();
+          },
+          onForeground: (foreground) => rust.setNotificationForeground(foreground: foreground),
+        );
+        unawaited(push.start());
+        void signedIn() {
+          if (app.snapshot.value.auth == rust.UiAuth.signedIn) unawaited(push.requestPermission());
+        }
+        app.snapshot.addListener(signedIn);
+        signedIn();
+      });
+    }
     listenForActivations(
       // Not while the service may be opening the app again (#548).
       onShow: () {

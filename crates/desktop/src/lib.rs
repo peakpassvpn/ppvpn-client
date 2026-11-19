@@ -1026,6 +1026,9 @@ impl Client {
             .expect("tokio runtime");
         testmode::log_startup(&config.api_base);
         storage::migrate(&config.data_dir);
+        if config.platform == "macos" {
+            device::remove_agent_files(&config.data_dir);
+        }
         let auth = auth::client_auth(
             Arc::new(api::client_api(&config.api_base)),
             platform.clone(),

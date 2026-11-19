@@ -436,3 +436,40 @@ fn unconfigured_apple_backend_defers_without_error() {
 
     finish(app, &dir);
 }
+
+#[test]
+fn macos_startup_removes_local_legacy_agent_files_without_deleting_old_backend_device() {
+    let backend = Backend::new();
+    let base = serve(backend.clone());
+    let dir = temp_dir("ppvpn-macos-legacy-cleanup");
+    let legacy_install = installation_id(&dir).unwrap();
+    let agent = AgentFile {
+        api_base: base.clone(),
+        device_id: 42,
+        push_token: crate::test_backend::PUSH_TOKEN.into(),
+        installation_id: legacy_install.clone(),
+    };
+    write_private(&agent_file_path(&dir), &serde_json::to_vec(&agent).unwrap()).unwrap();
+    std::fs::write(Path::new(&dir).join(AGENT_CURSOR_FILE), "{}").unwrap();
+    std::fs::write(Path::new(&dir).join(crate::push_shown::SHOWN_FILE), "{}").unwrap();
+
+    let app = client(&base, &dir, "macos");
+    assert!(!agent_file_path(&dir).exists());
+    assert!(!Path::new(&dir).join(AGENT_CURSOR_FILE).exists());
+    assert!(!Path::new(&dir).join(crate::push_shown::SHOWN_FILE).exists());
+    assert_eq!(installation_id(&dir).unwrap(), legacy_install);
+
+    wait_until(|| app.snapshot().auth == AuthState::SignedIn);
+    app.set_push_token_with_environment(
+        TOKEN_1.into(),
+        Some("com.peakpassvpn.ppvpn.desktop".into()),
+        Some("production".into()),
+    );
+    wait_until(|| app.session_state().device == DeviceState::Registered);
+
+    // Same-account legacy devices are taken over directly on the backend:
+    // no `DELETE /api/v1/devices/42` request is made.
+    assert!(backend.requests_matching("/devices/42").is_empty());
+
+    finish(app, &dir);
+}
