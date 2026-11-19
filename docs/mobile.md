@@ -72,8 +72,32 @@
 - 持久化选中节点、ingress pin 和 `routing_mode`，每次 apply 一起传入；
 - Profile 里有节点凭据。隧道进程只经 socket 随 `apply` 拿到它，自己不落盘。界面进程把核心最后接受的一份写在自己数据目录的 `saved-profile.json` 里（Android 的 `filesDir`，iOS 的 App Group 容器；Unix 权限 0600），用于启动时新 Profile 拿不到或被拒绝的情况（#532，见 host-integration.md 第 9 节）。
 - 后端地址编译进应用：`scripts/ci-build.sh` 要求 `PPVPN_API_BASE_DEFAULT`，CI 和发布从 GitHub 的 `PPVPN_API_BASE` 传入（#517，见 [构建与发布](release.md#后端地址)）。手机上没有环境变量可以改它，「我的」里打开的网页也从这个地址推出。
-- 推送走官方通道（#539）：iOS 用 APNs，Android 用 FCM。原生层申请通知权限、向系统注册，拿到 APNs device token 或 FCM registration token 后调用 `set_push_token(token, bundle_id)`（Flutter 桥接；Rust 侧是 `Client::set_push_token`）。每次启动和令牌轮换时都要调用。
-  - 已登录时 UI 进程把设备注册到后端（`POST /api/v1/devices/register`，`platform` 为 `ios` / `android`，带 `token` 和可选的 `bundle_id`）。登录、每次启动和令牌变化时都会注册；令牌变了先注销旧的。
-  - 退出登录时按令牌注销（`POST /api/v1/devices/unregister`，尽力而为）。令牌属于设备，保存在 UI 进程数据目录的 `push-token.json`（0600），退出登录后保留，下次登录直接再注册。
-  - 通知内容是 `title` + `body`，`extra` 里带 `message_id` 和 `deep_link`。展示和点击跳转由原生层处理，点开后按 `message_id` 拉正文。
-  - 桌面平台不使用这个调用：Windows、Linux 和目前的 macOS 仍走自建推送代理。
+- 推送走官方通道（#539）：iOS 用 APNs，Android 用 FCM。原生层申请通知权限、向系统注册，拿到 APNs device token 或 FCM registration token 后调用 `set_push_token(token, bundle_id, environment)`（Flutter 桥接）。每次启动和令牌轮换时都要调用，令牌保存在 UI 进程数据目录的 `push-token.json`（0600），退出登录后保留供下次登录使用。
+  - **iOS（Apple 按安装绑定）**：先查询 `GET /api/v1/devices/apple/config` 确认服务端能力、topic 与环境，再用本地私有的 32 字节 base64url 安装证明（`apple-push-installation.json`，0600）调用 `POST /api/v1/devices/apple/installations`、`POST …/{id}/bindings` 绑定当前登录会话，并经 `POST …/{id}/registrations` 登记或轮换十六进制 APNs token；不再通过旧 `POST /api/v1/devices` 接口登记 `ios`。同账号旧登记（含旧接口或重装留下的旧安装）及已登出会话的登记由服务端直接接管，无需先注销；退出登录时调用 `DELETE …/bindings/{binding_id}` 解绑。五类 409 按契约分类处理：`DEVICE_TOKEN_OWNERSHIP_CONFLICT` 记日志、当次不重试且不提示用户重登，等下次启动或系统回调新 token 再按正常流程登记；`DEVICE_BINDING_CONFLICT` / `DEVICE_REGISTRATION_CONFLICT` 重查安装拿到最新 ID 后重试一次；`DEVICE_REQUEST_CONFLICT` 换新 `request_id` 重发；`DEVICE_INSTALLATION_SCOPE_CONFLICT` 新建 `installation_id` 重试一次。通知载荷带 `delivery_id=push:<id>`，点击后用当前登录会话请求 `GET /api/v1/messages/deliveries/{delivery_id}` 换出当前用户的站内信，绝不信任载荷中的账号、正文或链接，404 时也不回退使用载荷中的 `message_id`。
+  - **Android（FCM）**：沿用 `POST /api/v1/devices/register`（`platform=android`）登记 FCM registration token，轮换与退出登录时调用 `POST /api/v1/devices/unregister` 注销。
+  - Windows 与 Linux 桌面端仍走自建推送代理。
+
+### iOS APNs 宿主（#539）
+
+`apps/flutter/scripts/install-ios-plugin.py` 在生成的 AppDelegate 的 `didFinishLaunching` 返回前安装
+`PPVPNPush` 通知代理；Flutter 隐式引擎创建后再注册 `PPVPNPlugin`，接收 APNs token、解析签名描述文件中的
+APNs 环境（`development` 映射为 `sandbox`，正式包为 `production`）并建立方法通道。每次启动注册 APNs；
+首次登录后才申请通知显示权限，已拒绝的权限不反复弹窗。通知在前台可显示 banner，点击冷启动应用时，
+`PushInbox` 暂存点击，等 Dart 初始化客户端及第一帧之后交付。token 轮换通过 `com.peakpassvpn.ppvpn/push`
+交给 `set_push_token` 在同一安装绑定下更新，退出登录在撤销会话前调用 `DELETE …/bindings/{binding_id}` 解绑。
+
+点击通知后按 `delivery_id` 请求 `GET /api/v1/messages/deliveries/{delivery_id}` 加载当前账号的正文及正文链接；
+不直接打开推送载荷提供的 URL，也不根据载荷判断账号归属。找不到对应站内信（404）时打开消息中心列表，
+未登录时保留登录页面；已经打开消息中心时复用该页面。退出登录或切换账号、团队时清空消息缓存和待打开请求，
+旧的异步结果不再更新页面。未读数轮询随 Flutter 生命周期暂停、恢复，不需要后台常驻。
+
+发布前需在 Apple 开发者账号为 `com.peakpassvpn.ppvpn` 开启 Push Notifications，并更新 App Store
+描述文件，使其含 `aps-environment=production`（`Runner.entitlements` 的值）。APNs p8、key ID 和 team ID
+只配置在后端，不随客户端发布。没有这项能力的旧描述文件不能用于签署此版本；重新生成后再发布。
+本地开发签名使用对应开发描述文件和 `development` entitlement。
+
+验收：真机分别测试允许／拒绝通知、前台／后台／应用退出后的送达、点击冷启动、token 轮换、同账号覆盖旧登记、
+跨账号活跃会话冲突不误弹窗、退出登录后不再送达；模拟器及无签名构建不作为 APNs 真实送达验收。
+`apps/flutter/checks/` 下的 `mobile_push_test.dart` 检查方法通道与生命周期，`messages_push_test.dart`
+检查 `delivery_id` 解析、404 防回退、重复点击及账号缓存隔离，`ios_push_test.py` 编译运行原生缓存与环境解析逻辑并检查启动注入；
+另有核心按安装绑定与 409 分类单测，以及 CI 的 iOS 编译和启动检查。
