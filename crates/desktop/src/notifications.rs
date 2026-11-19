@@ -7,6 +7,7 @@
 //! (network, a token that still lacks the message scopes) are logged, never
 //! shown.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::api::ApiErrorExt;
@@ -107,6 +108,35 @@ fn is_forbidden(error: &ClientError) -> bool {
     )
 }
 
+#[uniffi::export]
+impl Client {
+    /// Official-push hosts: stop background unread polling and refresh on resume.
+    pub fn set_notification_foreground(&self, foreground: bool) {
+        if !ppvpn_account::device::official_push(&self.config.platform) {
+            return;
+        }
+        {
+            // Serialize the flag and cancellation with sign-in's task install.
+            let mut state = self.session_state();
+            if self
+                .notification_foreground
+                .swap(foreground, Ordering::SeqCst)
+                == foreground
+            {
+                return;
+            }
+            if !foreground {
+                state.notifications.reset();
+            }
+        }
+        if foreground {
+            if let Ok(session) = self.current_session() {
+                self.spawn_notification_loop(session);
+            }
+        }
+    }
+}
+
 impl Client {
     /// Starts the unread-count poll of `session` (replacing any previous one).
     pub(crate) fn spawn_notification_loop(&self, session: u64) {
@@ -119,7 +149,10 @@ impl Client {
                 let Some(client) = ClientRef::upgrade(&weak) else {
                     return;
                 };
-                if !client.session_is(session) || client.is_shut_down() {
+                if !client.session_is(session)
+                    || client.is_shut_down()
+                    || !client.notification_foreground.load(Ordering::SeqCst)
+                {
                     return;
                 }
                 match client.refresh_unread(session).await {
@@ -133,7 +166,7 @@ impl Client {
             }
         });
         let mut state = self.session_state();
-        if state.is_session(session) {
+        if state.is_session(session) && self.notification_foreground.load(Ordering::SeqCst) {
             if let Some(previous) = state.notifications.task.replace(task) {
                 previous.abort();
             }
@@ -238,6 +271,34 @@ impl Client {
         let _ = self.refresh_unread(session).await;
         Ok(())
     }
+
+    pub(crate) async fn get_notification_by_delivery(
+        &self,
+        delivery_id: &str,
+    ) -> Result<Option<InboxMessage>, ClientError> {
+        let delivery_id = delivery_id.trim();
+        if !ppvpn_account::device::valid_apple_delivery_id(delivery_id) {
+            return Ok(None);
+        }
+        let session = self.current_session()?;
+        let epoch = self.session_state().team_epoch;
+        let found = self
+            .bearer(
+                session,
+                |token| async move {
+                    self.auth
+                        .api()
+                        .message_by_delivery(&token, delivery_id)
+                        .await
+                },
+                ApiError::into_client_error,
+            )
+            .await?;
+        if !self.session_is(session) || self.session_state().team_epoch != epoch {
+            return Err(ClientError::Cancelled);
+        }
+        Ok(found.map(|message| to_notification(message, &self.config.api_base)))
+    }
 }
 
 #[cfg(test)]
@@ -263,12 +324,16 @@ mod tests {
     }
 
     fn client(base: &str, data_dir: &str) -> Arc<Client> {
+        client_for_platform(base, data_dir, "macos")
+    }
+
+    fn client_for_platform(base: &str, data_dir: &str, platform: &str) -> Arc<Client> {
         Client::with_parts(
             ClientConfig {
                 api_base: base.to_string(),
                 data_dir: data_dir.to_string(),
                 log_dir: data_dir.to_string(),
-                platform: "macos".into(),
+                platform: platform.into(),
                 app_version: "0.0.0-test".into(),
             },
             MemoryPlatform::with_blob(r#"{"version":1,"active_refresh":"jyr_old"}"#),
@@ -285,6 +350,100 @@ mod tests {
             .build()
             .unwrap()
             .block_on(future)
+    }
+
+    #[test]
+    fn phone_badge_poll_stops_in_background_and_refreshes_on_resume() {
+        for platform in ["ios", "android", "macos"] {
+            let backend = Backend::new();
+            *backend.unread.lock().unwrap() = 3;
+            let base = serve(backend.clone());
+            let dir = temp_dir("ppvpn-phone-badge-test");
+            let client = client_for_platform(&base, &dir, platform);
+            wait_until(|| client.snapshot().unread_notifications == 3);
+
+            client.set_notification_foreground(false);
+            assert!(client.session_state().notifications.task.is_none());
+            std::thread::sleep(POLL_INTERVAL * 2);
+            let polls = backend.requests_matching("/messages/unread-count").len();
+            *backend.unread.lock().unwrap() = 7;
+            std::thread::sleep(POLL_INTERVAL * 3);
+            assert_eq!(
+                backend.requests_matching("/messages/unread-count").len(),
+                polls
+            );
+            assert_eq!(client.snapshot().unread_notifications, 3);
+            // Sign-in cannot restart a background app's poll either.
+            client.spawn_notification_loop(client.current_session().unwrap());
+            assert!(client.session_state().notifications.task.is_none());
+            client.set_notification_foreground(true);
+            wait_until(|| client.snapshot().unread_notifications == 7);
+            block_on(client.logout()).unwrap();
+            client.set_notification_foreground(false);
+            client.set_notification_foreground(true);
+            assert!(client.session_state().notifications.task.is_none());
+            client.shutdown();
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    #[test]
+    fn desktop_badge_poll_does_not_follow_mobile_lifecycle() {
+        for platform in ["windows", "linux"] {
+            let backend = Backend::new();
+            let base = serve(backend.clone());
+            let dir = temp_dir("ppvpn-desktop-badge-test");
+            let client = client_for_platform(&base, &dir, platform);
+            wait_until(|| matches!(client.snapshot().auth, AuthState::SignedIn));
+            client.set_notification_foreground(false);
+            *backend.unread.lock().unwrap() = 9;
+            wait_until(|| client.snapshot().unread_notifications == 9);
+            client.shutdown();
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    #[test]
+    fn delivery_lookup_resolves_authorized_message_and_ignores_missing_or_invalid_ids() {
+        let backend = Backend::new();
+        backend.add_message(42);
+        backend
+            .deliveries
+            .lock()
+            .unwrap()
+            .insert("push:77".into(), 42);
+        let base = serve(backend.clone());
+        let dir = temp_dir("ppvpn-delivery-test");
+        let client = client_for_platform(&base, &dir, "ios");
+        wait_until(|| matches!(client.snapshot().auth, AuthState::SignedIn));
+
+        let resolved = block_on(client.notification_by_delivery("push:77".into()))
+            .unwrap()
+            .expect("authorized message");
+        assert_eq!(resolved.id, 42);
+        assert_eq!(resolved.title, "t42");
+        assert_eq!(
+            backend.requests_matching("/messages/deliveries/"),
+            vec!["GET /api/v1/messages/deliveries/push:77"]
+        );
+
+        assert!(block_on(client.notification_by_delivery("push:999".into()))
+            .unwrap()
+            .is_none());
+        // Invalid delivery IDs are rejected locally without network calls.
+        let count_before = backend.requests_matching("/messages/deliveries/").len();
+        assert!(
+            block_on(client.notification_by_delivery("push:1/../../users/me".into()))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            backend.requests_matching("/messages/deliveries/").len(),
+            count_before
+        );
+
+        client.shutdown();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

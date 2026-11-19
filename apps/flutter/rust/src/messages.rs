@@ -13,7 +13,7 @@ pub(crate) fn ui_page(page: InboxPage) -> UiMessagePage {
     }
 }
 
-fn ui_message(message: InboxMessage) -> UiMessage {
+pub(crate) fn ui_message(message: InboxMessage) -> UiMessage {
     UiMessage {
         // Backend ids stay far below 2^63; one above would wrap negative
         // and fail in `backend_id` instead of naming another message.
