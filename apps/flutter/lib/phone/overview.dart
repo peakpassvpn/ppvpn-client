@@ -656,7 +656,7 @@ class _NodeCard extends StatelessWidget {
             countryCode: node?.exitCountryCode,
             size: Tokens.phoneFlagSize,
           ),
-          title: node == null ? '—' : nodeTitle(node),
+          title: node == null ? '—' : trayNodeTitle(node),
           identity: node == null
               ? null
               : NodeIdentity(node: node, phone: true, strong: true, tag: true),
