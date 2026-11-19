@@ -7,6 +7,9 @@
 
 use serde::Deserialize;
 
+#[cfg(feature = "controlled-auto")]
+pub mod auto_selection;
+
 /// The only proxy-profile schema this view accepts (no negotiation).
 pub const PROFILE_SCHEMA_VERSION: u64 = 1;
 
@@ -30,6 +33,9 @@ pub struct NodeView {
     pub exit_region: Option<String>,
     pub exit_country_code: Option<String>,
     pub udp: bool,
+    /// Optional automatic-selection facts; never inferred from the node id.
+    #[cfg(feature = "controlled-auto")]
+    pub auto_selection: auto_selection::NodeFacts,
     /// Sorted by `replica_ordinal`.
     pub replicas: Vec<ReplicaView>,
 }
@@ -42,6 +48,9 @@ pub struct ReplicaView {
     pub protocol: String,
     /// Optional display name of the replica (≤ 32 chars).
     pub label: Option<String>,
+    /// Invalid or absent optional facts disable automatic choice only.
+    #[cfg(feature = "controlled-auto")]
+    pub auto_selection: auto_selection::IngressFacts,
 }
 
 /// Why a document is not a usable profile.
@@ -93,6 +102,12 @@ struct ProfileNode {
     entry_key: String,
     #[serde(default)]
     entry_label: Option<String>,
+    #[cfg(feature = "controlled-auto")]
+    #[serde(default)]
+    instance_id: serde_json::Value,
+    #[cfg(feature = "controlled-auto")]
+    #[serde(default)]
+    exit_mode: serde_json::Value,
     #[serde(default)]
     exit: ProfileExit,
     #[serde(default)]
@@ -103,6 +118,9 @@ struct ProfileNode {
 
 #[derive(Deserialize, Default)]
 struct ProfileExit {
+    #[cfg(feature = "controlled-auto")]
+    #[serde(default)]
+    ip: serde_json::Value,
     #[serde(default)]
     region: Option<String>,
     #[serde(default)]
@@ -125,6 +143,18 @@ struct ProfileIngress {
     protocol: String,
     #[serde(default)]
     label: Option<String>,
+    #[cfg(feature = "controlled-auto")]
+    #[serde(default)]
+    tier_rank: serde_json::Value,
+    #[cfg(feature = "controlled-auto")]
+    #[serde(default)]
+    exit_ip: serde_json::Value,
+    #[cfg(feature = "controlled-auto")]
+    #[serde(default)]
+    auto_selection_metadata: serde_json::Value,
+    #[cfg(feature = "controlled-auto")]
+    #[serde(default)]
+    auto_selection_unavailable_reason: serde_json::Value,
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
@@ -176,14 +206,29 @@ pub fn parse_profile(raw: &[u8]) -> Result<ProfileView, ProfileError> {
         .nodes
         .into_iter()
         .map(|node| {
+            #[cfg(feature = "controlled-auto")]
+            let auto_selection =
+                auto_selection::node_facts(&node.instance_id, &node.exit_mode, &node.exit.ip);
             let mut replicas: Vec<ReplicaView> = node
                 .ingresses
                 .into_iter()
-                .map(|ingress| ReplicaView {
-                    endpoint_key: ingress.endpoint_key,
-                    replica_ordinal: ingress.replica_ordinal,
-                    protocol: ingress.protocol,
-                    label: non_empty(ingress.label),
+                .map(|ingress| {
+                    #[cfg(feature = "controlled-auto")]
+                    let facts = auto_selection::ingress_facts(
+                        &auto_selection,
+                        &ingress.tier_rank,
+                        &ingress.exit_ip,
+                        &ingress.auto_selection_metadata,
+                        &ingress.auto_selection_unavailable_reason,
+                    );
+                    ReplicaView {
+                        endpoint_key: ingress.endpoint_key,
+                        replica_ordinal: ingress.replica_ordinal,
+                        protocol: ingress.protocol,
+                        label: non_empty(ingress.label),
+                        #[cfg(feature = "controlled-auto")]
+                        auto_selection: facts,
+                    }
                 })
                 .collect();
             replicas.sort_by_key(|replica| replica.replica_ordinal);
@@ -195,6 +240,8 @@ pub fn parse_profile(raw: &[u8]) -> Result<ProfileView, ProfileError> {
                 exit_region: non_empty(node.exit.region),
                 exit_country_code: non_empty(node.exit.country_code),
                 udp: node.capabilities.udp,
+                #[cfg(feature = "controlled-auto")]
+                auto_selection,
                 replicas,
             }
         })

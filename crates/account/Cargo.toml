@@ -8,6 +8,10 @@ repository.workspace = true
 publish = false
 description = "PPVPN backend account client: device-code login, credential rotation and the account API"
 
+[features]
+# Controlled automatic selection metadata; default-off and refused by release builds.
+controlled-auto = []
+
 [dependencies]
 tokio = { version = "1", features = ["sync", "time", "net", "rt", "macros"] }
 # Reachability diagnostics (src/reachability.rs, #521): DoH messages, and TLS
