@@ -24,11 +24,14 @@ pub const PATH_PROXY_PROFILE: &str = "/api/v1/me/proxy-profile";
 pub const PATH_TEAMS: &str = "/api/v1/me/teams";
 pub const PATH_SWITCH_TEAM: &str = "/api/v1/me/switch-team";
 pub const PATH_MESSAGES: &str = "/api/v1/messages";
+pub const PATH_MESSAGES_DELIVERIES: &str = "/api/v1/messages/deliveries";
 pub const PATH_MESSAGES_UNREAD: &str = "/api/v1/messages/unread-count";
 pub const PATH_MESSAGES_READ_ALL: &str = "/api/v1/messages/read-all";
 pub const PATH_DEVICES: &str = "/api/v1/devices";
 pub const PATH_DEVICES_REGISTER: &str = "/api/v1/devices/register";
 pub const PATH_DEVICES_UNREGISTER: &str = "/api/v1/devices/unregister";
+pub const PATH_APPLE_CONFIG: &str = "/api/v1/devices/apple/config";
+pub const PATH_APPLE_INSTALLATIONS: &str = "/api/v1/devices/apple/installations";
 
 /// Longest backend problem code copied into an error detail.
 const MAX_PROBLEM_CODE_LEN: usize = 64;
@@ -125,6 +128,20 @@ impl ApiError {
 
     pub fn is_rate_limited(&self) -> bool {
         matches!(self, Self::Status { status, .. } if *status == StatusCode::TOO_MANY_REQUESTS)
+    }
+
+    pub fn status(&self) -> Option<StatusCode> {
+        match self {
+            Self::Status { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    pub fn problem_code(&self) -> Option<&str> {
+        match self {
+            Self::Status { code, .. } => code.as_deref(),
+            _ => None,
+        }
     }
 
     /// See [`subscription_problem`].
@@ -558,6 +575,127 @@ impl Api {
         match check_status("DELETE", response).await {
             Ok(_) => Ok(()),
             Err(ApiError::Status { status, .. }) if status == StatusCode::NOT_FOUND => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// `GET /devices/apple/config`: topic and environment availability (#539).
+    pub async fn apple_push_config(
+        &self,
+        token: &str,
+    ) -> Result<crate::device::ApplePushConfig, ApiError> {
+        self.get_bearer(PATH_APPLE_CONFIG, token).await
+    }
+
+    /// `POST /devices/apple/installations`: resolve or create an installation proof.
+    pub async fn resolve_apple_installation(
+        &self,
+        token: &str,
+        body: &crate::device::AppleInstallationRequest,
+    ) -> Result<crate::device::AppleInstallationResponse, ApiError> {
+        if !crate::device::valid_non_nil_uuid(&body.installation_id) {
+            return Err(ApiError::Config("invalid Apple installation id"));
+        }
+        let request = self
+            .http
+            .post(self.endpoint(PATH_APPLE_INSTALLATIONS)?)
+            .bearer_auth(token)
+            .json(body);
+        decode("POST", self.send(request).await).await
+    }
+
+    /// `POST /devices/apple/installations/{id}/bindings`: bind the active login session.
+    pub async fn bind_apple_installation(
+        &self,
+        token: &str,
+        installation_id: &str,
+        body: &crate::device::AppleBindingRequest,
+    ) -> Result<crate::device::AppleInstallationResponse, ApiError> {
+        if !crate::device::valid_non_nil_uuid(installation_id)
+            || !crate::device::valid_non_nil_uuid(&body.request_id)
+            || body
+                .expected_binding_id
+                .as_deref()
+                .is_some_and(|id| !crate::device::valid_non_nil_uuid(id))
+        {
+            return Err(ApiError::Config("invalid Apple binding request"));
+        }
+        let path = format!("{PATH_APPLE_INSTALLATIONS}/{installation_id}/bindings");
+        let request = self
+            .http
+            .post(self.endpoint(&path)?)
+            .bearer_auth(token)
+            .json(body);
+        decode("POST", self.send(request).await).await
+    }
+
+    /// `POST /devices/apple/installations/{id}/registrations`: register or rotate an APNs token.
+    pub async fn register_apple_device(
+        &self,
+        token: &str,
+        installation_id: &str,
+        body: &crate::device::AppleRegistrationRequest,
+    ) -> Result<crate::device::AppleRegistrationResponse, ApiError> {
+        if !crate::device::valid_non_nil_uuid(installation_id)
+            || !crate::device::valid_non_nil_uuid(&body.binding_id)
+            || !crate::device::valid_non_nil_uuid(&body.request_id)
+            || body
+                .expected_registration_id
+                .as_deref()
+                .is_some_and(|id| !crate::device::valid_non_nil_uuid(id))
+        {
+            return Err(ApiError::Config("invalid Apple registration request"));
+        }
+        let path = format!("{PATH_APPLE_INSTALLATIONS}/{installation_id}/registrations");
+        let request = self
+            .http
+            .post(self.endpoint(&path)?)
+            .bearer_auth(token)
+            .json(body);
+        decode("POST", self.send(request).await).await
+    }
+
+    /// `DELETE /devices/apple/installations/{id}/bindings/{binding_id}` on sign-out.
+    pub async fn unbind_apple_installation(
+        &self,
+        token: &str,
+        installation_id: &str,
+        binding_id: &str,
+        installation_secret: &str,
+    ) -> Result<(), ApiError> {
+        if !crate::device::valid_non_nil_uuid(installation_id)
+            || !crate::device::valid_non_nil_uuid(binding_id)
+        {
+            return Err(ApiError::Config("invalid Apple unbind identifier"));
+        }
+        let path = format!("{PATH_APPLE_INSTALLATIONS}/{installation_id}/bindings/{binding_id}");
+        let request = self
+            .http
+            .delete(self.endpoint(&path)?)
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "installation_secret": installation_secret }));
+        let response = self.send(request).await.map_err(ApiError::Transport)?;
+        match check_status("DELETE", response).await {
+            Ok(_) => Ok(()),
+            Err(ApiError::Status { status, .. }) if status == StatusCode::NOT_FOUND => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// `GET /messages/deliveries/{delivery_id}`: exchange a push `delivery_id`
+    /// (`push:<id>`) for the current user's authorized inbox message (#539).
+    pub async fn message_by_delivery(
+        &self,
+        token: &str,
+        delivery_id: &str,
+    ) -> Result<Option<Message>, ApiError> {
+        if !crate::device::valid_apple_delivery_id(delivery_id) {
+            return Err(ApiError::Config("invalid push delivery id"));
+        }
+        let path = format!("{PATH_MESSAGES_DELIVERIES}/{delivery_id}");
+        match self.get_bearer::<Message>(&path, token).await {
+            Ok(message) => Ok(Some(message)),
+            Err(ApiError::Status { status, .. }) if status == StatusCode::NOT_FOUND => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -1057,5 +1195,26 @@ mod tests {
         assert!(api("http://127.0.0.1:8080", true)
             .endpoint(PATH_USERS_ME)
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn apple_push_and_delivery_reject_malformed_identifiers_before_network() {
+        let client = api("https://api.example.com", false);
+        assert!(matches!(
+            client
+                .message_by_delivery("tok", "push:1/../../users/me")
+                .await,
+            Err(ApiError::Config(_))
+        ));
+        assert!(matches!(
+            client.message_by_delivery("tok", "push:0").await,
+            Err(ApiError::Config(_))
+        ));
+        assert!(matches!(
+            client
+                .unbind_apple_installation("tok", "../bad", "not-uuid", "secret")
+                .await,
+            Err(ApiError::Config(_))
+        ));
     }
 }

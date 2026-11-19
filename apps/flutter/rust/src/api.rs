@@ -313,13 +313,27 @@ pub fn open_url(url: String) -> bool {
     crate::hooks::open_url(&url)
 }
 
-/// Phones: hands over the APNs device token (iOS) or FCM registration
-/// token (Android) and the app's bundle id / package name. Call it whenever
-/// the OS gives one (every launch and on rotation); the core registers the
-/// device while signed in and unregisters it at sign-out (#539).
+/// Hands over the APNs device token (iOS/macOS) or FCM registration
+/// token (Android), the app's bundle id / package name, and on Apple
+/// platforms the signed APNs environment (`sandbox` / `production`) (#539).
 #[frb(sync)]
-pub fn set_push_token(token: String, bundle_id: Option<String>) -> Result<(), String> {
-    bridge::get()?.client.set_push_token(token, bundle_id);
+pub fn set_push_token(
+    token: String,
+    bundle_id: Option<String>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    bridge::get()?
+        .client
+        .set_push_token_with_environment(token, bundle_id, environment);
+    Ok(())
+}
+
+/// Official-push hosts: poll the unread badge only while the app is in the foreground.
+#[frb(sync)]
+pub fn set_notification_foreground(foreground: bool) -> Result<(), String> {
+    bridge::get()?
+        .client
+        .set_notification_foreground(foreground);
     Ok(())
 }
 
@@ -487,6 +501,15 @@ pub async fn mark_all_notifications_read() -> Result<(), String> {
     bridge::get()?
         .call(|client| async move { client.mark_all_notifications_read().await })
         .await
+}
+
+/// Resolves an Apple push `delivery_id` (`push:<id>`) to the current
+/// signed-in account's authorized inbox message (#539).
+pub async fn notification_by_delivery(delivery_id: String) -> Result<Option<UiMessage>, String> {
+    let found = bridge::get()?
+        .fetch(move |client| async move { client.notification_by_delivery(delivery_id).await })
+        .await?;
+    Ok(found.map(crate::messages::ui_message))
 }
 
 // --- notification clicks, one instance ---
