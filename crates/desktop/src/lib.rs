@@ -16,6 +16,12 @@ mod auth;
 mod auto_route;
 #[cfg(feature = "controlled-auto")]
 #[allow(dead_code)]
+mod auto_route_control;
+#[cfg(feature = "controlled-auto")]
+#[allow(dead_code)]
+mod auto_route_gate;
+#[cfg(feature = "controlled-auto")]
+#[allow(dead_code)]
 mod auto_route_profile;
 mod compat;
 mod connection;
