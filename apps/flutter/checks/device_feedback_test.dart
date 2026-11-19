@@ -79,6 +79,11 @@ void main() {
       nodeDisplayName(node('Los Angeles Native IP 203.0.113.12')),
       'Los Angeles',
     );
+    expect(
+      nodeDisplayName(node('Los Angeles Dual ISP CN Optimized 203.0.113.7')),
+      'Los Angeles CN Optimized',
+    );
+    expect(nodeDisplayName(node('🇺🇸洛杉矶 双 ISP 三网优化 203.0.113.7')), '洛杉矶 三网优化');
   });
   test(
     'route names preserve backend labels and never expose endpoint keys',
@@ -304,6 +309,159 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets(
+    'phone node rows and home current-node card show class and entry tags for same-IP nodes in Chinese and English',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      for (final (
+            lang,
+            rawName,
+            city,
+            kind,
+            optLabel,
+            ecoLabel,
+            fallbackRawName,
+          )
+          in [
+            (
+              rust.UiLanguage.chinese,
+              '🇺🇸洛杉矶 双 ISP 203.0.113.7',
+              '洛杉矶',
+              '双 ISP',
+              '三网优化',
+              '经济',
+              '🇯🇵东京 原生 IP 经济 198.51.100.9',
+            ),
+            (
+              rust.UiLanguage.english,
+              '🇺🇸Los Angeles Dual ISP 203.0.113.7',
+              'Los Angeles',
+              'Dual ISP',
+              'CN Optimized',
+              'Economy',
+              '🇯🇵Tokyo Native IP Economy 198.51.100.9',
+            ),
+          ]) {
+        Settings.language.value = lang;
+        final app = sampleState();
+        final optNode = rust.UiNode(
+          id: 'same-ip-opt',
+          name: rawName,
+          exitRegion: 'US',
+          exitCountryCode: 'US',
+          entryKey: 'cn-optimized',
+          entryLabel: optLabel,
+          udp: true,
+          lines: const [rust.UiLine(key: 'l1', label: 'LAX-OPT')],
+        );
+        final ecoNode = rust.UiNode(
+          id: 'same-ip-eco',
+          name: rawName,
+          exitRegion: 'US',
+          exitCountryCode: 'US',
+          entryKey: 'lite',
+          entryLabel: ecoLabel,
+          udp: true,
+          lines: const [rust.UiLine(key: 'l2', label: 'LAX-ECO')],
+        );
+        final fallbackNode = rust.UiNode(
+          id: 'fallback-name',
+          name: fallbackRawName,
+          exitRegion: 'JP',
+          exitCountryCode: 'JP',
+          entryKey: 'standard',
+          udp: true,
+          lines: const [rust.UiLine(key: 'l3', label: 'TYO-ECO')],
+        );
+        app.nodes.value = [optNode, ecoNode, fallbackNode];
+        app.snapshot.value = rust.UiSnapshot(
+          auth: app.snapshot.value.auth,
+          deviceCode: app.snapshot.value.deviceCode,
+          accountName: app.snapshot.value.accountName,
+          teamName: app.snapshot.value.teamName,
+          teamId: app.snapshot.value.teamId,
+          profile: app.snapshot.value.profile,
+          profilePrevious: app.snapshot.value.profilePrevious,
+          profileRevision: app.snapshot.value.profileRevision,
+          expiresAt: app.snapshot.value.expiresAt,
+          phase: app.snapshot.value.phase,
+          lineKey: app.snapshot.value.lineKey,
+          latencyMs: app.snapshot.value.latencyMs,
+          standardReady: app.snapshot.value.standardReady,
+          selectedNodeId: 'same-ip-opt',
+          error: app.snapshot.value.error,
+          unread: app.snapshot.value.unread,
+          routingMode: app.snapshot.value.routingMode,
+          connectionMode: app.snapshot.value.connectionMode,
+          serviceInstalled: app.snapshot.value.serviceInstalled,
+          canTakeOver: app.snapshot.value.canTakeOver,
+          suggestCompatible: app.snapshot.value.suggestCompatible,
+          apiUnreachable: app.snapshot.value.apiUnreachable,
+        );
+
+        expect(trayNodeTitle(optNode), isNot(trayNodeTitle(ecoNode)));
+        expect(trayNodeTitle(optNode), contains(optLabel));
+        expect(trayNodeTitle(ecoNode), contains(ecoLabel));
+
+        // 1. Phone node list rows: both same-IP nodes show class + entry tags.
+        samplePage = null;
+        await tester.pumpWidget(host(PhoneNodes(app: app)));
+        await tester.pump();
+        final optRow = find.byKey(const ValueKey('node-same-ip-opt'));
+        final ecoRow = find.byKey(const ValueKey('node-same-ip-eco'));
+        final fbRow = find.byKey(const ValueKey('node-fallback-name'));
+        expect(
+          find.descendant(of: optRow, matching: find.text(city)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: optRow, matching: find.text(kind)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: optRow, matching: find.text(optLabel)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: ecoRow, matching: find.text(kind)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: ecoRow, matching: find.text(ecoLabel)),
+          findsOneWidget,
+        );
+        // Fallback node without entry_label still extracts entry tag from name.
+        expect(
+          find.descendant(of: fbRow, matching: find.text(ecoLabel)),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+
+        // 2. Home-screen current node card: shows both class + entry tags.
+        samplePage = 'overview';
+        await tester.pumpWidget(host(PhoneShell(app: app)));
+        await tester.pump();
+        final currentCard = find.byKey(const ValueKey('current-node'));
+        expect(
+          find.descendant(of: currentCard, matching: find.text(city)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: currentCard, matching: find.text(kind)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: currentCard, matching: find.text(optLabel)),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      }
+    },
+  );
   testWidgets(
     'a read-only push never mutates an inbox message with the same id',
     (tester) async {

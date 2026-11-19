@@ -123,6 +123,9 @@ class _PhoneNodesState extends State<PhoneNodes> {
             if ((_region == null || node.exitRegion == _region) &&
                 (query.isEmpty ||
                     nodeTitle(node).toLowerCase().contains(query) ||
+                    (nodeEntryLabel(node) ?? '').toLowerCase().contains(
+                      query,
+                    ) ||
                     (node.exitRegion ?? '').toLowerCase().contains(query)))
               node,
         ];
@@ -513,7 +516,7 @@ class _NodeRow extends StatelessWidget {
       radius: 0,
       selected: current,
       onLongPress: onLongPress,
-      label: nodeTitle(node),
+      label: trayNodeTitle(node),
       onPress: onPress,
       builder: (context, pressed) => AnimatedContainer(
         duration: Tokens.motion(
