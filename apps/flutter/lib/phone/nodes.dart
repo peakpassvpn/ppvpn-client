@@ -478,20 +478,28 @@ class _NodeRow extends StatelessWidget {
                   ),
                   if (tier || lines.isNotEmpty) ...[
                     const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        if (tier) TierTag(label: node.entryLabel, entryKey: node.entryKey),
-                        if (tier && lines.isNotEmpty) const SizedBox(width: 6),
-                        if (lines.isNotEmpty)
-                          Flexible(
-                            child: Text(
+                    LayoutBuilder(
+                      builder: (context, box) => Wrap(
+                        spacing: 6,
+                        runSpacing: 3,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (tier)
+                            ConstrainedBox(
+                              constraints: BoxConstraints(maxWidth: box.maxWidth),
+                              // TierTag's Align must shrink to its label so
+                              // short metadata can still share a line.
+                              child: IntrinsicWidth(child: TierTag(label: node.entryLabel, entryKey: node.entryKey)),
+                            ),
+                          if (lines.isNotEmpty)
+                            Text(
                               lines,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: t.monoText(12, color: t.t3, height: 16),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
                   ],
                 ],

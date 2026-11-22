@@ -312,6 +312,12 @@ grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> ru
 # others set PPVPN_SKIP_ANALYZE=1 (#459).
 if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   flutter analyze --no-fatal-infos
+  # Phone constraints and text scaling need no emulator or system VPN.
+  # Run once on Linux, after the bridge types have been generated.
+  if [ "$os" = linux ]; then
+    PPVPN_UI_TEST_CJK_FONT="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}" \
+      flutter test checks/mobile_layout_test.dart --no-pub
+  fi
 fi
 
 lib="$root/target/release"
