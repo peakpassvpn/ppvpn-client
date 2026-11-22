@@ -617,6 +617,11 @@ pub struct Client {
     cores: tokio::sync::Mutex<cores::CoreSync>,
     /// Set by `shutdown`; no core is started afterwards.
     shut_down: AtomicBool,
+    /// Official-push hosts pause the unread poll while their UI is in the background.
+    notification_foreground: AtomicBool,
+    /// Serialises push device registration, token rotation and logout unbinding.
+    device_registration: tokio::sync::Mutex<()>,
+    push_generation: std::sync::atomic::AtomicU64,
     /// Background re-read of a credential store that failed at launch.
     credential_retry: session::CredentialRetry,
 }
@@ -679,6 +684,16 @@ impl Client {
     /// refreshes the unread count.
     pub async fn mark_all_notifications_read(&self) -> Result<(), ClientError> {
         self.read_all_notifications().await
+    }
+
+    /// Resolve a push notification's `delivery_id` (`push:<id>`) to the
+    /// current signed-in user's authorized inbox message (#539), or `None`
+    /// when there is no matching message for this account.
+    pub async fn notification_by_delivery(
+        &self,
+        delivery_id: String,
+    ) -> Result<Option<InboxMessage>, ClientError> {
+        self.get_notification_by_delivery(&delivery_id).await
     }
 
     /// The push the push agent showed as OS notification `push_id` (the
@@ -1011,6 +1026,9 @@ impl Client {
             .expect("tokio runtime");
         testmode::log_startup(&config.api_base);
         storage::migrate(&config.data_dir);
+        if config.platform == "macos" {
+            device::remove_agent_files(&config.data_dir);
+        }
         let auth = auth::client_auth(
             Arc::new(api::client_api(&config.api_base)),
             platform.clone(),
@@ -1061,6 +1079,9 @@ impl Client {
                 mode_switch: tokio::sync::Mutex::new(()),
                 cores: tokio::sync::Mutex::new(cores::CoreSync::default()),
                 shut_down: AtomicBool::new(false),
+                notification_foreground: AtomicBool::new(true),
+                device_registration: tokio::sync::Mutex::new(()),
+                push_generation: std::sync::atomic::AtomicU64::new(0),
                 credential_retry: session::CredentialRetry::default(),
             }
         });
