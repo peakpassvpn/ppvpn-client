@@ -5,9 +5,10 @@
 // Shared by several test modules; not every helper is used by each.
 #![allow(dead_code)]
 
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -16,9 +17,24 @@ use crate::auth::test_support::token_set;
 
 pub(crate) const PUSH_TOKEN: &str = "ppd_test_token";
 
+#[derive(Clone, Debug)]
+pub(crate) struct MockAppleInstallation {
+    pub(crate) secret: String,
+    pub(crate) platform: String,
+    pub(crate) bundle_id: String,
+    pub(crate) environment: String,
+    pub(crate) binding_id: Option<String>,
+    pub(crate) registration_id: Option<String>,
+    pub(crate) user_id: Option<String>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) closed: bool,
+    pub(crate) token: Option<String>,
+}
+
 #[derive(Default)]
 pub(crate) struct Backend {
     pub(crate) messages: Mutex<Vec<Value>>,
+    pub(crate) deliveries: Mutex<HashMap<String, u64>>,
     /// Answer every message endpoint with 403 (old token scope).
     pub(crate) forbidden: Mutex<bool>,
     pub(crate) requests: Mutex<Vec<String>>,
@@ -32,6 +48,18 @@ pub(crate) struct Backend {
     pub(crate) register_status: Mutex<Option<&'static str>>,
     /// Bodies of `POST /devices/register` and `/devices/unregister`.
     pub(crate) device_bodies: Mutex<Vec<Value>>,
+    /// Answer of `GET /devices/apple/config`.
+    pub(crate) apple_config: Mutex<Value>,
+    /// Stateful per-installation CAS records for `/devices/apple/*`.
+    pub(crate) apple_installations: Mutex<HashMap<String, MockAppleInstallation>>,
+    /// Recorded `("<METHOD> <path>", body)` of `/devices/apple/*` mutations.
+    pub(crate) apple_bodies: Mutex<Vec<(String, Value)>>,
+    /// One-shot `(path_fragment, status_line, problem_code)` overrides.
+    pub(crate) apple_next_errors: Mutex<VecDeque<(&'static str, &'static str, &'static str)>>,
+    /// Pause one Apple registration for `token` after recording its body.
+    pub(crate) apple_register_gates: Mutex<HashMap<String, Arc<Barrier>>>,
+    pub(crate) apple_user_id: Mutex<String>,
+    pub(crate) apple_session_id: Mutex<String>,
     /// Request heads (lower-cased) of `GET /api/v1/health`.
     pub(crate) health_heads: Mutex<Vec<String>>,
     /// Body of `GET /api/v1/me/proxy-profile`; none answers 404
@@ -43,7 +71,24 @@ impl Backend {
     pub(crate) fn new() -> Arc<Self> {
         let backend = Self::default();
         *backend.push_token.lock().unwrap() = PUSH_TOKEN.to_string();
+        *backend.apple_config.lock().unwrap() = json!({
+            "configured": true,
+            "bundle_id_ios": "com.peakpassvpn.ppvpn",
+            "bundle_id_macos": "com.peakpassvpn.ppvpn.desktop",
+            "environments": ["sandbox", "production"],
+        });
+        *backend.apple_user_id.lock().unwrap() = "u7".to_string();
+        *backend.apple_session_id.lock().unwrap() = "sid-1".to_string();
         Arc::new(backend)
+    }
+
+    fn take_apple_error(&self, path: &str) -> Option<(&'static str, String)> {
+        let mut queue = self.apple_next_errors.lock().unwrap();
+        let index = queue
+            .iter()
+            .position(|(needle, _, _)| path.contains(needle))?;
+        let (_, status, code) = queue.remove(index)?;
+        Some((status, json!({ "code": code }).to_string()))
     }
 
     pub(crate) fn add_message(&self, id: u64) {
@@ -170,6 +215,274 @@ impl Backend {
             }
             ("PUT", path) if path.starts_with("/api/v1/messages/") => {
                 ("200 OK", r#"{"updated":true}"#.into())
+            }
+            ("GET", path) if path.starts_with("/api/v1/messages/deliveries/") => {
+                let delivery_id = path.trim_start_matches("/api/v1/messages/deliveries/");
+                let target_id = self.deliveries.lock().unwrap().get(delivery_id).copied();
+                let found = target_id.and_then(|id| {
+                    self.messages
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find(|message| message["id"].as_u64() == Some(id))
+                        .cloned()
+                });
+                match found {
+                    Some(message) => ("200 OK", message.to_string()),
+                    None => ("404 Not Found", r#"{"code":"NOT_FOUND"}"#.into()),
+                }
+            }
+            ("GET", "/api/v1/devices/apple/config") => {
+                if let Some(error) = self.take_apple_error(path) {
+                    return error;
+                }
+                ("200 OK", self.apple_config.lock().unwrap().to_string())
+            }
+            ("POST", "/api/v1/devices/apple/installations") => {
+                let request: Value = serde_json::from_str(body).unwrap_or_default();
+                self.apple_bodies
+                    .lock()
+                    .unwrap()
+                    .push((format!("{method} {path}"), request.clone()));
+                if let Some(error) = self.take_apple_error(path) {
+                    return error;
+                }
+                let id = request["installation_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let secret = request["installation_secret"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let platform = request["platform"].as_str().unwrap_or_default().to_string();
+                let bundle_id = request["bundle_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let environment = request["environment"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let user = self.apple_user_id.lock().unwrap().clone();
+                let sid = self.apple_session_id.lock().unwrap().clone();
+                let mut map = self.apple_installations.lock().unwrap();
+                let entry = map
+                    .entry(id.clone())
+                    .or_insert_with(|| MockAppleInstallation {
+                        secret: secret.clone(),
+                        platform: platform.clone(),
+                        bundle_id: bundle_id.clone(),
+                        environment: environment.clone(),
+                        binding_id: None,
+                        registration_id: None,
+                        user_id: None,
+                        session_id: None,
+                        closed: false,
+                        token: None,
+                    });
+                if entry.secret != secret {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_INSTALLATION_PROOF_INVALID"}"#.into(),
+                    );
+                }
+                if entry.platform != platform
+                    || entry.bundle_id != bundle_id
+                    || entry.environment != environment
+                {
+                    return (
+                        "409 Conflict",
+                        r#"{"code":"DEVICE_INSTALLATION_SCOPE_CONFLICT"}"#.into(),
+                    );
+                }
+                let bound_user = entry.user_id.as_deref() == Some(user.as_str());
+                let bound_session = bound_user
+                    && entry.session_id.as_deref() == Some(sid.as_str())
+                    && !entry.closed;
+                let registration_id = if bound_session {
+                    entry.registration_id.clone()
+                } else {
+                    None
+                };
+                (
+                    "200 OK",
+                    json!({
+                        "installation_id": id,
+                        "binding_id": entry.binding_id,
+                        "registration_id": registration_id,
+                        "bound_to_current_user": bound_user,
+                        "bound_to_current_session": bound_session,
+                    })
+                    .to_string(),
+                )
+            }
+            ("POST", path)
+                if path.starts_with("/api/v1/devices/apple/installations/")
+                    && path.ends_with("/bindings") =>
+            {
+                let request: Value = serde_json::from_str(body).unwrap_or_default();
+                self.apple_bodies
+                    .lock()
+                    .unwrap()
+                    .push((format!("{method} {path}"), request.clone()));
+                if let Some(error) = self.take_apple_error(path) {
+                    return error;
+                }
+                let id = path
+                    .trim_start_matches("/api/v1/devices/apple/installations/")
+                    .trim_end_matches("/bindings");
+                let secret = request["installation_secret"].as_str().unwrap_or_default();
+                let expected = request.get("expected_binding_id").and_then(Value::as_str);
+                let user = self.apple_user_id.lock().unwrap().clone();
+                let sid = self.apple_session_id.lock().unwrap().clone();
+                let mut map = self.apple_installations.lock().unwrap();
+                let Some(entry) = map.get_mut(id) else {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_INSTALLATION_PROOF_INVALID"}"#.into(),
+                    );
+                };
+                if entry.secret != secret {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_INSTALLATION_PROOF_INVALID"}"#.into(),
+                    );
+                }
+                if entry.binding_id.as_deref() != expected {
+                    return (
+                        "409 Conflict",
+                        r#"{"code":"DEVICE_BINDING_CONFLICT"}"#.into(),
+                    );
+                }
+                let binding_id = uuid::Uuid::new_v4().to_string();
+                entry.binding_id = Some(binding_id.clone());
+                entry.registration_id = None;
+                entry.user_id = Some(user);
+                entry.session_id = Some(sid);
+                entry.closed = false;
+                (
+                    "200 OK",
+                    json!({
+                        "installation_id": id,
+                        "binding_id": binding_id,
+                        "registration_id": Value::Null,
+                        "bound_to_current_user": true,
+                        "bound_to_current_session": true,
+                    })
+                    .to_string(),
+                )
+            }
+            ("POST", path)
+                if path.starts_with("/api/v1/devices/apple/installations/")
+                    && path.ends_with("/registrations") =>
+            {
+                let request: Value = serde_json::from_str(body).unwrap_or_default();
+                self.apple_bodies
+                    .lock()
+                    .unwrap()
+                    .push((format!("{method} {path}"), request.clone()));
+                let token_str = request["token"].as_str().unwrap_or_default().to_string();
+                let gate = self.apple_register_gates.lock().unwrap().remove(&token_str);
+                if let Some(gate) = gate {
+                    gate.wait();
+                }
+                if let Some(error) = self.take_apple_error(path) {
+                    return error;
+                }
+                let id = path
+                    .trim_start_matches("/api/v1/devices/apple/installations/")
+                    .trim_end_matches("/registrations");
+                let secret = request["installation_secret"].as_str().unwrap_or_default();
+                let binding = request["binding_id"].as_str().unwrap_or_default();
+                let expected = request
+                    .get("expected_registration_id")
+                    .and_then(Value::as_str);
+                let user = self.apple_user_id.lock().unwrap().clone();
+                let sid = self.apple_session_id.lock().unwrap().clone();
+                let mut map = self.apple_installations.lock().unwrap();
+                let Some(entry) = map.get_mut(id) else {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_INSTALLATION_PROOF_INVALID"}"#.into(),
+                    );
+                };
+                if entry.secret != secret {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_INSTALLATION_PROOF_INVALID"}"#.into(),
+                    );
+                }
+                if entry.binding_id.as_deref() != Some(binding)
+                    || entry.user_id.as_deref() != Some(user.as_str())
+                    || entry.session_id.as_deref() != Some(sid.as_str())
+                {
+                    return (
+                        "409 Conflict",
+                        r#"{"code":"DEVICE_BINDING_CONFLICT"}"#.into(),
+                    );
+                }
+                if entry.closed {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_BINDING_CLOSED"}"#.into(),
+                    );
+                }
+                if entry.registration_id.as_deref() != expected {
+                    return (
+                        "409 Conflict",
+                        r#"{"code":"DEVICE_REGISTRATION_CONFLICT"}"#.into(),
+                    );
+                }
+                let registration_id = uuid::Uuid::new_v4().to_string();
+                entry.registration_id = Some(registration_id.clone());
+                entry.token = Some(token_str);
+                (
+                    "200 OK",
+                    json!({
+                        "id": 77,
+                        "registration_id": registration_id,
+                        "token_hash_prefix": "01234567",
+                    })
+                    .to_string(),
+                )
+            }
+            ("DELETE", path)
+                if path.starts_with("/api/v1/devices/apple/installations/")
+                    && path.contains("/bindings/") =>
+            {
+                let request: Value = serde_json::from_str(body).unwrap_or_default();
+                self.apple_bodies
+                    .lock()
+                    .unwrap()
+                    .push((format!("{method} {path}"), request.clone()));
+                if let Some(error) = self.take_apple_error(path) {
+                    return error;
+                }
+                let rest = path.trim_start_matches("/api/v1/devices/apple/installations/");
+                let Some((id, binding_id)) = rest.split_once("/bindings/") else {
+                    return ("404 Not Found", r#"{"code":"NOT_FOUND"}"#.into());
+                };
+                let secret = request["installation_secret"].as_str().unwrap_or_default();
+                let mut map = self.apple_installations.lock().unwrap();
+                let Some(entry) = map.get_mut(id) else {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_INSTALLATION_PROOF_INVALID"}"#.into(),
+                    );
+                };
+                if entry.secret != secret {
+                    return (
+                        "403 Forbidden",
+                        r#"{"code":"DEVICE_INSTALLATION_PROOF_INVALID"}"#.into(),
+                    );
+                }
+                if entry.binding_id.as_deref() == Some(binding_id) && !entry.closed {
+                    entry.binding_id = Some(uuid::Uuid::new_v4().to_string());
+                    entry.registration_id = None;
+                    entry.closed = true;
+                }
+                ("204 No Content", String::new())
             }
             ("POST", "/api/v1/devices/register") => {
                 if let Some(status) = *self.register_status.lock().unwrap() {

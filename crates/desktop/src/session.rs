@@ -24,6 +24,12 @@ use crate::{
     AuthState, Client, ClientSnapshot, DeviceCode, Node, ProfileStatus, StandardState, Team,
 };
 
+#[derive(Debug)]
+pub(crate) enum BearerApiError {
+    Session(ClientError),
+    Api(ApiError),
+}
+
 /// Profile refresh period while signed in.
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Retry period after a failed background refresh, e.g. offline at launch.
@@ -106,7 +112,7 @@ pub(crate) struct SessionState {
     account_loaded: bool,
     access: Option<AccessToken>,
     /// Bumped on team switch; profile downloads for an older team are dropped.
-    team_epoch: u64,
+    pub(crate) team_epoch: u64,
     profile_raw: Option<Arc<Vec<u8>>>,
     nodes: Vec<Node>,
     /// Last team list from `/me/teams`, served when the current team is
@@ -881,8 +887,13 @@ impl Client {
         tracing::info!("logout");
         self.auth.cancel();
         // While the session can still authenticate.
-        self.unregister_device().await;
-        self.drop_session(None, None);
+        {
+            // A pending push registration must finish before unbinding, and no
+            // queued registration can run before session invalidation.
+            let _registration = self.device_registration.lock().await;
+            self.unregister_device().await;
+            self.drop_session(None, None);
+        }
         self.stop_cores().await;
         let result = {
             let _guard = self.auth.lock().await;
@@ -968,6 +979,35 @@ impl Client {
                 self.ensure_access(session).await
             },
             map,
+        )
+        .await
+    }
+
+    /// Like [`Self::bearer`], keeping structured [`ApiError`] statuses and
+    /// problem codes for endpoints that branch on 409 conflict codes (#539).
+    pub(crate) async fn bearer_api<T, F, Fut>(
+        &self,
+        session: u64,
+        call: F,
+    ) -> Result<T, BearerApiError>
+    where
+        F: Fn(String) -> Fut,
+        Fut: Future<Output = Result<T, ApiError>>,
+    {
+        let token = self
+            .ensure_access(session)
+            .await
+            .map_err(BearerApiError::Session)?;
+        with_bearer(
+            token,
+            call,
+            |refused| async move {
+                self.invalidate_access(session, &refused);
+                self.ensure_access(session)
+                    .await
+                    .map_err(BearerApiError::Session)
+            },
+            BearerApiError::Api,
         )
         .await
     }

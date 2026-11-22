@@ -40,6 +40,7 @@ enum WindowPage { messages, settings }
 
 class AppState {
   AppState(rust.UiSnapshot initial) : fixed = false, snapshot = ValueNotifier(initial) {
+    _listenForAccountChanges();
     _refreshNodes(initial);
     if (mobile) SystemVpn.listen();
     unawaited(_pump());
@@ -49,6 +50,7 @@ class AppState {
   /// screenshots): nothing is read from Rust, actions fail quietly.
   AppState.fixed(rust.UiSnapshot initial) : fixed = true, snapshot = ValueNotifier(initial) {
     _stopped = true;
+    _listenForAccountChanges();
   }
 
   /// Made by [AppState.fixed]: sample data, no client.
@@ -77,6 +79,24 @@ class AppState {
 
   /// The message center's list.
   late final MessagesState messages = MessagesState(fixed: fixed, onError: (error) => actionError.value = error);
+  // Session changes invalidate inbox loads as well as cached bodies. Observe
+  // snapshots here so the same boundary applies to fixed/sample state.
+  void _listenForAccountChanges() {
+    var previous = snapshot.value;
+    snapshot.addListener(() {
+      final next = snapshot.value;
+      // Restoration publishes SignedIn before loading the account and team.
+      // Initial metadata keeps the same session and any cold-launch tap;
+      // auth changes or leaving an established account/team still clear it.
+      final accountChanged = previous.auth != next.auth ||
+          (previous.accountName != null && previous.accountName != next.accountName);
+      final teamChanged = previous.teamId != null && previous.teamId != next.teamId;
+      if (accountChanged || teamChanged) {
+        messages.clear();
+      }
+      previous = next;
+    });
+  }
   /// Bumped when the tray turns enhanced mode on before the service is
   /// installed: the window shows the install explanation first (shell.dart).
   final ValueNotifier<int> enhancedRequests = ValueNotifier(0);
@@ -121,6 +141,35 @@ class AppState {
       showPage(WindowPage.messages);
     }
     return true;
+  }
+
+  /// APNs / FCM taps resolve through the current signed-in account's inbox:
+  /// Apple taps exchange `deliveryId` via `GET /messages/deliveries/{id}`
+  /// (never falling back to untrusted payload fields on 404), while Android
+  /// taps locate `messageId` in the current account's inbox (#539).
+  Future<void> openMobileMessage(int? messageId, {String? deliveryId}) async {
+    if (fixed) return;
+    if (snapshot.value.auth == rust.UiAuth.restoring) {
+      await _restored();
+    }
+    if (snapshot.value.auth != rust.UiAuth.signedIn) return;
+    final account = messages.accountGeneration;
+    if (deliveryId != null) {
+      rust.UiMessage? resolved;
+      try {
+        resolved = await rust.notificationByDelivery(deliveryId: deliveryId);
+      } catch (error) {
+        debugPrint('notification_by_delivery: $error');
+      }
+      if (snapshot.value.auth != rust.UiAuth.signedIn || messages.accountGeneration != account) {
+        return;
+      }
+      messages.requestOpen((messageId: resolved?.id, push: resolved));
+      showPage(WindowPage.messages);
+      return;
+    }
+    messages.requestOpen((messageId: messageId, push: null));
+    showPage(WindowPage.messages);
   }
 
   /// Until the saved sign-in has been read: a click can start the app.
