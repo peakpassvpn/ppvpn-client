@@ -63,10 +63,13 @@ async fn request(peer: &mut UnixStream) -> Request {
 
 async fn closed(peer: &mut (impl tokio::io::AsyncRead + Unpin)) -> bool {
     let mut byte = [0];
-    matches!(
-        tokio::time::timeout(CLOSED, peer.read(&mut byte)).await,
-        Ok(Ok(0))
-    )
+    match tokio::time::timeout(CLOSED, peer.read(&mut byte)).await {
+        Ok(Ok(0)) => true,
+        // Linux AF_UNIX sets ECONNRESET on the peer when a socket closes while
+        // unread bytes from the continuous writer are still queued.
+        Ok(Err(error)) => error.kind() == std::io::ErrorKind::ConnectionReset,
+        _ => false,
+    }
 }
 
 fn assert_timeout(result: Result<Response, ServiceError>) {
