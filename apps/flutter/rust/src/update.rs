@@ -30,6 +30,78 @@
 
 use crate::api::UiUpdater;
 
+/// Windows installation notices use the same foreground detector as the
+/// existing WinSparkle display gate. Loading it does not start an update check.
+pub(crate) fn prompt_deferred() -> bool {
+    #[cfg(windows)]
+    {
+        platform::prompt_deferred()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct CheckPolicy {
+    state: std::sync::Mutex<CheckPolicyState>,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct CheckPolicyState {
+    initialised: bool,
+    installing: bool,
+}
+
+#[cfg(any(windows, test))]
+impl CheckPolicy {
+    const fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(CheckPolicyState {
+                initialised: false,
+                installing: false,
+            }),
+        }
+    }
+
+    // The native DLL write belongs INSIDE the lock, not after an atomic read.
+    fn configure(&self, enabled: Option<bool>, apply: impl FnOnce(bool, bool)) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if enabled.is_none() && state.initialised {
+            return;
+        }
+        apply(
+            enabled.unwrap_or(false) && !state.installing,
+            !state.initialised,
+        );
+        state.initialised = true;
+    }
+
+    fn installation_started(&self, disable: impl FnOnce()) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.installing = true;
+        disable();
+    }
+
+    fn manual_check(&self, check: impl FnOnce()) {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.installing {
+            check();
+        }
+    }
+
+    #[cfg(test)]
+    fn installing(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .installing
+    }
+}
+
 /// A baked-in value, None when unset or blank.
 pub(crate) fn baked(value: Option<&'static str>) -> Option<&'static str> {
     value.map(str::trim).filter(|value| !value.is_empty())
@@ -108,6 +180,8 @@ mod platform {
     /// WinSparkle's functions (winsparkle.h), as AppUpdater.cs declares them.
     struct WinSparkle {
         init: unsafe extern "C" fn(),
+        prompt_deferred: unsafe extern "C" fn() -> c_int,
+        cancel_pending_ui: unsafe extern "C" fn(),
         set_lang: unsafe extern "C" fn(*const c_char),
         set_appcast_url: unsafe extern "C" fn(*const c_char),
         set_eddsa_public_key: unsafe extern "C" fn(*const c_char) -> c_int,
@@ -122,7 +196,9 @@ mod platform {
     }
 
     /// Set once WinSparkle runs.
-    static STARTED: OnceLock<WinSparkle> = OnceLock::new();
+    static LOADED: OnceLock<Result<WinSparkle, String>> = OnceLock::new();
+    static STARTED: OnceLock<&'static WinSparkle> = OnceLock::new();
+    static POLICY: super::CheckPolicy = super::CheckPolicy::new();
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(Some(0)).collect()
@@ -177,6 +253,8 @@ mod platform {
         }
         Ok(WinSparkle {
             init: symbol!("win_sparkle_init"),
+            prompt_deferred: symbol!("win_sparkle_ppvpn_update_prompt_deferred"),
+            cancel_pending_ui: symbol!("win_sparkle_ppvpn_cancel_pending_ui"),
             set_lang: symbol!("win_sparkle_set_lang"),
             set_appcast_url: symbol!("win_sparkle_set_appcast_url"),
             set_eddsa_public_key: symbol!("win_sparkle_set_eddsa_public_key"),
@@ -188,6 +266,18 @@ mod platform {
             set_shutdown_request_callback: symbol!("win_sparkle_set_shutdown_request_callback"),
             set_error_callback: symbol!("win_sparkle_set_error_callback"),
             check_update_with_ui: symbol!("win_sparkle_check_update_with_ui"),
+        })
+    }
+
+    fn loaded() -> Result<&'static WinSparkle, String> {
+        LOADED.get_or_init(load).as_ref().map_err(Clone::clone)
+    }
+
+    pub(super) fn prompt_deferred() -> bool {
+        // Missing/incompatible DLL: keep an installation notice in the
+        // background rather than bringing it in front of an unknown desktop.
+        loaded().map_or(true, |winsparkle| unsafe {
+            (winsparkle.prompt_deferred)() != 0
         })
     }
 
@@ -208,6 +298,16 @@ mod platform {
     /// (Dart), and quits after [`QUIT_FALLBACK`] if the installer has not
     /// asked it to by then.
     extern "C" fn shutdown_requested() {
+        POLICY.installation_started(|| {
+            if let Some(winsparkle) = STARTED.get() {
+                // Serialised with every enabling DLL write.
+                unsafe {
+                    (winsparkle.set_automatic_check_for_updates)(0);
+                    (winsparkle.cancel_pending_ui)();
+                };
+            }
+        });
+        crate::silent::mark_update_relaunch();
         tracing::info!("update: installer launched; hiding until it asks the app to quit");
         crate::instance::deliver(UiActivation {
             push_id: None,
@@ -253,7 +353,7 @@ mod platform {
             tracing::info!("updates off: no feed or no public key in this build");
             return off;
         };
-        let winsparkle = match load() {
+        let winsparkle = match loaded() {
             Ok(winsparkle) => winsparkle,
             Err(error) => {
                 tracing::warn!("updates off: {error}");
@@ -296,13 +396,15 @@ mod platform {
             );
             (winsparkle.set_app_build_version)(wide(&build).as_ptr());
             (winsparkle.set_registry_path)(registry.as_ptr());
-            (winsparkle.set_automatic_check_for_updates)(auto_check.into());
             (winsparkle.set_can_shutdown_callback)(can_shutdown);
             (winsparkle.set_shutdown_request_callback)(shutdown_requested);
             (winsparkle.set_error_callback)(failed);
-            (winsparkle.init)();
         }
-        tracing::info!(%feed, %build, english, "updates on");
+        // Do not start WinSparkle here. Dart first chooses between silent
+        // updates and the native fallback. Initialising with the old saved
+        // true value can start an irreversible in-flight check before that
+        // decision arrives. Keep returning the original preference to Dart.
+        tracing::info!(%feed, %build, english, "updater loaded; awaiting initial check policy");
         let _ = STARTED.set(winsparkle);
         UiUpdater {
             installs: true,
@@ -312,16 +414,28 @@ mod platform {
 
     pub(super) fn check() {
         if let Some(winsparkle) = STARTED.get() {
-            tracing::info!("update: manual check");
-            // SAFETY: WinSparkle runs (init above).
-            unsafe { (winsparkle.check_update_with_ui)() };
+            initialise_checks(winsparkle, None);
+            POLICY.manual_check(|| {
+                tracing::info!("update: manual check");
+                // The native call is serialized with installation_started,
+                // not just preceded by an unlocked installing() observation.
+                unsafe { (winsparkle.check_update_with_ui)() };
+            });
         }
+    }
+
+    fn initialise_checks(winsparkle: &WinSparkle, enabled: Option<bool>) {
+        POLICY.configure(enabled, |enabled, initialise| unsafe {
+            (winsparkle.set_automatic_check_for_updates)(enabled.into());
+            if initialise {
+                (winsparkle.init)();
+            }
+        });
     }
 
     pub(super) fn set_auto_check(enabled: bool) {
         if let Some(winsparkle) = STARTED.get() {
-            // SAFETY: as above.
-            unsafe { (winsparkle.set_automatic_check_for_updates)(enabled.into()) };
+            initialise_checks(winsparkle, Some(enabled));
             tracing::info!(enabled, "update: automatic checks");
         }
     }
@@ -411,5 +525,71 @@ mod tests {
             super::site_feed(Some("https://pkg.example"), None, "{channel}"),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::CheckPolicy;
+    use std::sync::{mpsc, Arc, Mutex};
+
+    #[test]
+    fn installation_cannot_be_overtaken_by_a_precomputed_enable_write() {
+        let policy = Arc::new(CheckPolicy::new());
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let (computed, ready) = mpsc::channel();
+        let (resume, release) = mpsc::channel();
+        let setter = {
+            let (policy, writes) = (policy.clone(), writes.clone());
+            std::thread::spawn(move || {
+                policy.configure(Some(true), |enabled, initialise| {
+                    assert!(initialise);
+                    computed.send(()).unwrap();
+                    release
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    writes.lock().unwrap().push(enabled);
+                })
+            })
+        };
+        ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (attempting, attempted) = mpsc::channel();
+        let installer = {
+            let (policy, writes) = (policy.clone(), writes.clone());
+            std::thread::spawn(move || {
+                attempting.send(()).unwrap();
+                policy.installation_started(|| writes.lock().unwrap().push(false));
+            })
+        };
+        attempted
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        resume.send(()).unwrap();
+        setter.join().unwrap();
+        installer.join().unwrap();
+        assert_eq!(*writes.lock().unwrap(), vec![true, false]);
+        assert!(policy.installing());
+        policy.configure(Some(true), |enabled, initialise| {
+            assert!(!enabled);
+            assert!(!initialise);
+        });
+    }
+
+    #[test]
+    fn manual_check_preserves_the_already_configured_automatic_policy() {
+        let policy = CheckPolicy::new();
+        policy.configure(Some(true), |enabled, initialise| {
+            assert!(enabled);
+            assert!(initialise);
+        });
+        policy.configure(None, |_, _| panic!("manual check changed scheduled policy"));
+    }
+    #[test]
+    fn manual_check_is_rejected_after_installation_starts() {
+        let policy = CheckPolicy::new();
+        policy.installation_started(|| {});
+        policy.manual_check(|| panic!("manual DLL call after installation started"));
     }
 }

@@ -20,7 +20,146 @@ import FlutterMacOS
 import ServiceManagement
 import os
 
+// BEGIN shared update presentation policy (also compiled by native QA).
+@MainActor
+private enum UpdatePromptPolicy {
+  /// Read only the front application's on-screen geometry, not titles/content.
+  /// CG display bounds and CG window bounds share the same coordinate system.
+  static var shouldDeferPrompt: Bool {
+    guard let front = NSWorkspace.shared.frontmostApplication,
+      let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]] else { return true }
+    let displays = NSScreen.screens.compactMap { screen -> CGRect? in
+      guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+      return CGDisplayBounds(number.uint32Value)
+    }
+    guard !displays.isEmpty else { return true }
+    var foundWindow = false
+    for window in windows {
+      guard (window[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
+        (window[kCGWindowLayer as String] as? Int) == 0,
+        let bounds = window[kCGWindowBounds as String] as? [String: Any],
+        let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+      foundWindow = true
+      if displays.contains(where: { rect.contains($0) }) { return true }
+    }
+    // Finder's bare desktop is a known non-fullscreen state.
+    return !foundWindow && front.bundleIdentifier != "com.apple.finder"
+  }
+
+  private static let relaunchKey = "PPVPNUpdateRelaunch"
+
+  static func markRelaunch() {
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    UserDefaults.standard.set(["build": build, "at": Date().timeIntervalSince1970], forKey: relaunchKey)
+    if !UserDefaults.standard.synchronize() {
+      updateLog.warning("update relaunch provenance could not be saved")
+    }
+  }
+
+  static func takeRelaunch() -> Bool {
+    if ProcessInfo.processInfo.arguments.contains("--ppvpn-after-update") {
+      UserDefaults.standard.removeObject(forKey: relaunchKey)
+      return true
+    }
+    guard let saved = UserDefaults.standard.dictionary(forKey: relaunchKey),
+      let from = saved["build"] as? String, let at = saved["at"] as? Double,
+      let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String else { return false }
+    let elapsed = Date().timeIntervalSince1970 - at
+    let fresh = elapsed >= 0 && elapsed < 15 * 60
+    let pending = fresh && build.compare(from, options: .numeric) == .orderedDescending
+    if pending || !fresh {
+      UserDefaults.standard.removeObject(forKey: relaunchKey)
+      if !UserDefaults.standard.synchronize() {
+        updateLog.warning("update relaunch provenance could not be cleared")
+      }
+    }
+    return pending
+  }
+}
+// END shared update presentation policy.
+
 class MainFlutterWindow: NSWindow {
+  // Nib visibility can precede Dart's ready callback. Reject an update-origin
+  // first order before AppKit can display/activate it; Dart resumes it later.
+  private let updateRelaunch = UpdatePromptPolicy.takeRelaunch()
+  private var protectUpdateLaunch: Bool?
+  private var deferredFirstOrder: Timer?
+
+  private func mayPresentUpdateLaunch() -> Bool {
+    if protectUpdateLaunch == nil { protectUpdateLaunch = updateRelaunch }
+    guard protectUpdateLaunch == true else { return true }
+    if UpdatePromptPolicy.shouldDeferPrompt {
+      // Flutter/window_manager can await the native first frame. Remember
+      // the rejected nib order and resume it natively when safe, so that
+      // recovering the window does not depend on that Dart callback.
+      if deferredFirstOrder == nil && !ProcessInfo.processInfo.arguments.contains("--background") {
+        updateLog.info("update launch: native first order deferred")
+        deferredFirstOrder = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+          MainActor.assumeIsolated {
+            guard let self else { timer.invalidate(); return }
+            self.resumeDeferredFirstOrder()
+          }
+        }
+      }
+      return false
+    }
+    protectUpdateLaunch = false
+    deferredFirstOrder?.invalidate()
+    deferredFirstOrder = nil
+    return true
+  }
+
+  private func resumeDeferredFirstOrder() {
+    guard protectUpdateLaunch == true, !UpdatePromptPolicy.shouldDeferPrompt else { return }
+    protectUpdateLaunch = false
+    deferredFirstOrder?.invalidate()
+    deferredFirstOrder = nil
+    // This is the original update-origin startup request, before any
+    // Flutter first frame. No shown window is hidden to suppress a prompt.
+    super.orderFront(nil)
+    if !UpdatePromptPolicy.shouldDeferPrompt {
+      super.makeKeyAndOrderFront(nil)
+      if !NSApp.isActive && !UpdatePromptPolicy.shouldDeferPrompt {
+        // A process launched explicitly without activation may have its own
+        // activation request declined on macOS 14+. Reopen this running bundle
+        // through the original workspace activation path, only once and when
+        // safe, instead of relying on the deprecated ignoringOtherApps flag.
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = false
+        configuration.promptsUserIfNeeded = false
+        configuration.appleEvent = Activation.updateResumeEvent()
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+          if error != nil { updateLog.error("update launch: workspace activation failed") }
+        }
+        updateLog.info("update launch: workspace activation requested")
+      }
+    }
+    updateLog.info("update launch: native first order resumed")
+  }
+
+  override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+    guard place == .out || mayPresentUpdateLaunch() else { return }
+    super.order(place, relativeTo: otherWin)
+  }
+
+  override func orderFront(_ sender: Any?) {
+    guard mayPresentUpdateLaunch() else { return }
+    super.orderFront(sender)
+  }
+
+  override func orderFrontRegardless() {
+    guard mayPresentUpdateLaunch() else { return }
+    super.orderFrontRegardless()
+  }
+
+  override func makeKeyAndOrderFront(_ sender: Any?) {
+    guard mayPresentUpdateLaunch() else { return }
+    super.makeKeyAndOrderFront(sender)
+  }
+
   private var activation: Activation?
   private var pushAgent: PushAgentService?
   private var updater: Updater?
@@ -37,7 +176,7 @@ class MainFlutterWindow: NSWindow {
     let pushAgent = PushAgentService()
     pushAgent.start()
     self.pushAgent = pushAgent
-    updater = Updater(messenger: flutterViewController.engine.binaryMessenger) { [weak pushAgent] in
+    updater = Updater(messenger: flutterViewController.engine.binaryMessenger, updateRelaunch: updateRelaunch) { [weak pushAgent] in
       pushAgent?.prepareForUpdate()
     }
     loginItem = LoginItem(messenger: flutterViewController.engine.binaryMessenger)
@@ -120,7 +259,24 @@ private final class Activation: NSObject {
     }
   }
 
+  // The one native update recovery already ordered the original window and
+  // requested activation. Its own reopen must not become a second Dart show.
+  private static let updateResumeKeyword = AEKeyword(0x70707675) // 'ppvu'
+
+  static func updateResumeEvent() -> NSAppleEventDescriptor {
+    let event = NSAppleEventDescriptor(
+      eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEReopenApplication),
+      targetDescriptor: NSAppleEventDescriptor(processIdentifier: ProcessInfo.processInfo.processIdentifier),
+      returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+    event.setParam(NSAppleEventDescriptor(boolean: true), forKeyword: updateResumeKeyword)
+    return event
+  }
+
   @objc private func reopen(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+    if event.paramDescriptor(forKeyword: Self.updateResumeKeyword)?.booleanValue == true {
+      updateLog.info("update launch: internal reopen consumed without a second show")
+      return
+    }
     send("show")
   }
 
@@ -448,8 +604,34 @@ private final class Updater: NSObject {
   private let feedURL: String?
   private let beforeInstall: @MainActor () -> Void
   private var controller: SparkleUpdaterController?
+  private var deferredCheck: Timer?
+  private var deferredManual = false
+  private var deferredScheduled = false
 
-  init(messenger: FlutterBinaryMessenger, beforeInstall: @escaping @MainActor () -> Void) {
+  private static var shouldDeferPrompt: Bool { UpdatePromptPolicy.shouldDeferPrompt }
+
+  private func deferCheck(manual: Bool) {
+    deferredManual = deferredManual || manual
+    deferredScheduled = deferredScheduled || !manual
+    guard deferredCheck == nil else { return }
+    deferredCheck = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated { self?.resumeDeferredCheck() }
+    }
+  }
+
+  private func resumeDeferredCheck() {
+    guard !Self.shouldDeferPrompt else { return }
+    let show = deferredManual || (deferredScheduled && controller?.updater.automaticallyChecksForUpdates == true)
+    deferredCheck?.invalidate()
+    deferredCheck = nil
+    deferredManual = false
+    deferredScheduled = false
+    // Sparkle's documented way to reveal its already prepared update alert.
+    if show { controller?.checkForUpdates(nil) }
+  }
+
+
+  init(messenger: FlutterBinaryMessenger, updateRelaunch: Bool, beforeInstall: @escaping @MainActor () -> Void) {
     channel = FlutterMethodChannel(name: "ppvpn/update", binaryMessenger: messenger)
     let info = Bundle.main.infoDictionary ?? [:]
     let feed = (info["PPVPNUpdateFeedURL"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -469,11 +651,27 @@ private final class Updater: NSObject {
         result(["available": self.controller != nil,
                 "autoCheck": self.controller?.updater.automaticallyChecksForUpdates ?? false])
       case "check":
-        self.controller?.checkForUpdates(nil)
+        if Self.shouldDeferPrompt { self.deferCheck(manual: true) }
+        else { self.controller?.checkForUpdates(nil) }
         result(nil)
+      case "promptDeferred":
+        result(Self.shouldDeferPrompt)
+      case "takeUpdateRelaunch":
+        result(updateRelaunch)
       case "setAutoCheck":
         if let enabled = call.arguments as? Bool {
           self.controller?.updater.automaticallyChecksForUpdates = enabled
+          if !enabled {
+            // Keep the existing Sparkle session pending, but never show it
+            // while automatic checks are off. A later fallback enable can
+            // resume that same alert without creating another update UI.
+            if !self.deferredManual {
+              self.deferredCheck?.invalidate()
+              self.deferredCheck = nil
+            }
+          } else if self.deferredScheduled {
+            self.deferCheck(manual: false)
+          }
         }
         result(nil)
       default:
@@ -487,9 +685,11 @@ private final class Updater: NSObject {
     guard let url = Bundle.main.privateFrameworksURL?.appendingPathComponent("Sparkle.framework"),
       let bundle = Bundle(url: url), bundle.load(),
       let controllerClass = NSClassFromString("SPUStandardUpdaterController"),
-      let updaterClass = NSClassFromString("SPUUpdater")
+      let updaterClass = NSClassFromString("SPUUpdater"),
+      let driverClass = NSClassFromString("SPUStandardUserDriver"),
+      class_getClassMethod(driverClass, NSSelectorFromString("ppvpnHasPreShowGate")) != nil
     else {
-      updateLog.info("updates off: no Sparkle.framework in this build")
+      updateLog.info("updates off: no patched Sparkle.framework in this build")
       return nil
     }
     // Sparkle's classes have these methods (SPUStandardUpdaterController.h,
@@ -497,12 +697,44 @@ private final class Updater: NSObject {
     class_addProtocol(controllerClass, SparkleUpdaterController.self)
     class_addProtocol(updaterClass, SparkleUpdater.self)
     guard let type = controllerClass as? SparkleUpdaterController.Type else { return nil }
-    let controller = type.init(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: nil)
+    let controller = type.init(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: delegate)
     updateLog.info("updates on")
     return controller
   }
 
   // SPUUpdaterDelegate, which Sparkle asks with respondsToSelector:.
+
+  // Pinned standard Sparkle driver's actual pre-show hook covers manual
+  // delayed results as well as permissions, errors and status windows.
+  @objc nonisolated func ppvpnShouldDeferUpdatePrompt() -> Bool {
+    MainActor.assumeIsolated { Self.shouldDeferPrompt }
+  }
+
+  // Official SPUStandardUserDriverDelegate hooks. Non-fullscreen returns the
+  // native default. No replacement user driver, window or in-app message.
+  @objc nonisolated var supportsGentleScheduledUpdateReminders: Bool { true }
+
+  @objc(standardUserDriverShouldHandleShowingScheduledUpdate:andInImmediateFocus:)
+  nonisolated func shouldShowScheduledUpdate(_ update: AnyObject, immediateFocus: Bool) -> Bool {
+    MainActor.assumeIsolated { !Self.shouldDeferPrompt }
+  }
+
+  @objc(standardUserDriverWillHandleShowingUpdate:forUpdate:state:)
+  nonisolated func willShowUpdate(_ handleShowingUpdate: Bool, update: AnyObject, state: AnyObject) {
+    MainActor.assumeIsolated {
+      if !handleShowingUpdate { deferCheck(manual: false) }
+    }
+  }
+
+  @objc(standardUserDriverWillFinishUpdateSession)
+  nonisolated func finishUpdateSession() {
+    MainActor.assumeIsolated {
+      deferredCheck?.invalidate()
+      deferredCheck = nil
+      deferredScheduled = false
+      deferredManual = false
+    }
+  }
 
   @objc(feedURLStringForUpdater:)
   nonisolated func feedURLString(for updater: AnyObject) -> String? {
@@ -513,6 +745,7 @@ private final class Updater: NSObject {
   nonisolated func updater(_ updater: AnyObject, willInstallUpdate item: AnyObject) {
     MainActor.assumeIsolated {
       updateLog.info("update: installing")
+      UpdatePromptPolicy.markRelaunch()
       beforeInstall()
     }
   }

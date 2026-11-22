@@ -264,8 +264,8 @@ $winSparklePackage = Join-Path $work "winsparkle.$winSparkleVersion.zip"
 Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/winsparkle/$winSparkleVersion/winsparkle.$winSparkleVersion.nupkg" -OutFile $winSparklePackage
 $winSparkleDir = Join-Path $work "winsparkle"
 Expand-Archive -LiteralPath $winSparklePackage -DestinationPath $winSparkleDir -Force
-$winSparkleDll = Join-Path $winSparkleDir "runtimes\win-x64\native\WinSparkle.dll"
-if (-not (Test-Path -LiteralPath $winSparkleDll)) { throw "WinSparkle.dll (win-x64) not found in WinSparkle $winSparkleVersion" }
+$winSparkleDll = Join-Path $work "winsparkle-patched\WinSparkle.dll"
+& (Join-Path $repo "tools\desktop\windows\build-winsparkle.ps1") -Work $work -Output $winSparkleDll
 Copy-Item -LiteralPath $winSparkleDll -Destination (Join-Path $stage "WinSparkle.dll")
 Write-Host "WinSparkle.dll $winSparkleVersion staged"
 

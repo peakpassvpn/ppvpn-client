@@ -1,0 +1,454 @@
+name: Desktop update notification QA
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      full_client_run:
+        type: string
+        default: ""
+      macos_activation_trace:
+        type: boolean
+        default: false
+      layout_trace:
+        type: boolean
+        default: false
+      layout_probe:
+        type: boolean
+        default: false
+      macos_client_run:
+        type: string
+        default: ""
+      startup_run:
+        type: string
+        default: ""
+      full_client:
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows-updater:
+    if: ${{ !inputs.full_client_run && !inputs.full_client && !inputs.startup_run && !inputs.macos_client_run }}
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+      - name: Build pinned WinSparkle with native pre-show gate
+        shell: powershell
+        run: tools/desktop/windows/build-winsparkle.ps1 -Work "$env:RUNNER_TEMP/update-qa" -Output "$env:GITHUB_WORKSPACE/build/update-qa/WinSparkle.dll"
+      - name: Build actual UI fixture
+        shell: powershell
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC tool installation not found' }
+          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe"
+          if ($LASTEXITCODE) { throw 'UI fixture compilation failed' }
+      - name: Actual console UI and installed-build observation
+        shell: powershell
+        run: |
+          Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class PpvpnQaExitCode{[DllImport("kernel32.dll",SetLastError=true)]public static extern bool GetExitCodeProcess(IntPtr process,out uint code);}'
+          $server = Start-Process python -ArgumentList 'tools/desktop/windows/update-feed-fixture.py' -PassThru -RedirectStandardOutput 'build/update-qa/feed.stdout.txt' -RedirectStandardError 'build/update-qa/feed.stderr.txt'
+          $root=(Resolve-Path build/update-qa).Path
+          $binary=Join-Path $root 'update-prompt-qa.exe'
+          $library=Join-Path $root 'WinSparkle.dll'
+          $results=@()
+          try {
+            foreach($case in @(@{name='fullscreen-and-fallback';arg='0.7.5.1'},@{name='permission';arg='permission'},@{name='permission-cancel';arg='permission-cancel'},@{name='exclusive-d3d';arg='d3d'},@{name='installed-15min';arg='0.7.5.2'})){
+              $dir=Join-Path $root $case.name
+              New-Item -ItemType Directory -Force $dir | Out-Null
+              Push-Location $dir
+              try {
+                $started=[DateTime]::UtcNow.ToString('o')
+                $test=Start-Process $binary -ArgumentList ('"'+$library+'" http://127.0.0.1:18763/feed.xml '+$case.arg) -PassThru -RedirectStandardOutput 'raw.txt' -RedirectStandardError 'errors.txt'
+                $processHandle=$test.Handle
+                $seconds=if($case.name -eq 'installed-15min'){20*60}else{120}
+                if(-not $test.WaitForExit($seconds*1000)){
+                  $capture=Start-Process $binary -ArgumentList '--capture timeout-desktop.bmp' -PassThru
+                  if(-not $capture.WaitForExit(10000)){Stop-Process -Id $capture.Id -Force}
+                  Get-CimInstance Win32_Process -Filter "ParentProcessId=$($test.Id)"|Where-Object {$_.ExecutablePath -eq $binary}|ForEach-Object {Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue}
+                  Stop-Process -Id $test.Id -Force
+                  $results+=@{case=$case.name;status='TIMEOUT_UNKNOWN_FAIL';pid=$test.Id;started_utc=$started;finished_utc=[DateTime]::UtcNow.ToString('o')}
+                  throw 'Owned UI fixture timed out; not acceptance'
+                }
+                [uint32]$code=259
+                if(-not [PpvpnQaExitCode]::GetExitCodeProcess($processHandle,[ref]$code) -or $code -eq 259){throw 'Fixture exit status is unknown/still active; not accepted'}
+                Get-Content 'raw.txt'
+                if(Test-Path 'errors.txt'){Get-Content 'errors.txt'}
+                $results+=@{case=$case.name;exitcode=$code;started_utc=$started;finished_utc=[DateTime]::UtcNow.ToString('o')}
+                if($code -eq 77){throw 'BLOCKED: no usable interactive desktop; not accepted'}
+                if($code -eq 78 -and $case.name -eq 'exclusive-d3d'){Write-Host 'Exclusive D3D coverage BLOCKED on this adapter/session; not accepted'}
+                elseif($code){throw 'Actual existing updater UI case failed'}
+              }finally{Pop-Location}
+            }
+          } finally {
+            Stop-Process -Id $server.Id
+            @{source=$env:GITHUB_SHA;os=(Get-CimInstance Win32_OperatingSystem|Select-Object Caption,Version,BuildNumber);dll_sha256=(Get-FileHash $library -Algorithm SHA256).Hash;binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash;cases=$results;scope='existing updater component UI; not a client A-to-B installation'}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $root 'result.json')
+          }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: windows-update-notification-qa
+          path: build/update-qa/
+
+  macos-updater:
+    if: ${{ !inputs.full_client_run && !inputs.full_client && !inputs.startup_run }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.macos_client_run != ''
+        with:
+          name: normal-macos-client-for-update-qa
+          run-id: ${{ inputs.macos_client_run }}
+          github-token: ${{ github.token }}
+          path: build/reused-macos-client
+      - id: reused
+        name: Verify the original normal client and unchanged product inputs
+        if: inputs.macos_client_run != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/desktop/macos/client-qa-inputs.py > build/current-client-inputs.txt
+          cmp build/reused-macos-client/product-inputs.txt build/current-client-inputs.txt
+          (cd build/reused-macos-client && shasum -a 256 -c archive-sha256.txt)
+          ditto -x -k build/reused-macos-client/normal-client.zip build/reused-macos-client/unpacked
+          python3 - <<'PYCODE'
+          import hashlib,os,re
+          from pathlib import Path
+          root=Path('build/reused-macos-client')
+          source=(root/'source.txt').read_text().strip()
+          if not re.fullmatch(r'[0-9a-f]{40}',source):raise SystemExit('Original source identity missing')
+          apps=list((root/'unpacked').glob('*.app'))
+          if len(apps)!=1:raise SystemExit('Expected exactly one original application bundle')
+          exe=apps[0]/'Contents/MacOS/PPVPN'
+          expected=(root/'client-exe-sha256.txt').read_text().split()[0]
+          if hashlib.sha256(exe.read_bytes()).hexdigest()!=expected:raise SystemExit('Original executable hash mismatch')
+          out=Path('build/macos-update-qa');out.mkdir(parents=True,exist_ok=True)
+          (out/'reused-client-source.txt').write_text(source+'\n')
+          (out/'reused-client-inputs.txt').write_bytes((root/'product-inputs.txt').read_bytes())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('bundle='+str(apps[0].resolve())+'\n')
+          PYCODE
+      - name: Actual standard Sparkle manual result during fullscreen
+        env:
+          REUSED_CLIENT_BUNDLE: ${{ steps.reused.outputs.bundle }}
+          PPVPN_QA_TRACE_ACTIVATION: ${{ inputs.macos_activation_trace && '1' || '' }}
+          PPVPN_QA_CAPTURE_CALLBACK_GEOMETRY: '1'
+        run: |
+          if [ -n "$REUSED_CLIENT_BUNDLE" ]; then
+            tools/desktop/macos/run-update-prompt-qa.sh "$REUSED_CLIENT_BUNDLE"
+          else
+            tools/desktop/macos/run-update-prompt-qa.sh
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: macos-update-notification-qa
+          retention-days: 7
+          path: |
+            build/macos-update-qa/*.txt
+            build/macos-update-qa/*.png
+            build/macos-update-qa/feed.*
+
+  windows-client-upgrade:
+    if: inputs.full_client && !inputs.startup_run && !inputs.macos_client_run
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_SERVICE_LTO: 'false'
+      CARGO_PROFILE_SERVICE_CODEGEN_UNITS: '16'
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust
+          shared-key: windows
+          save-if: false
+      - uses: ./.github/actions/prebuilt-boringssl
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/flutter-toolchain
+      - uses: ./.github/actions/nsis
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce
+      - name: Ephemeral test feed identities
+        timeout-minutes: 3
+        shell: powershell
+        run: tools/desktop/windows/prepare-client-upgrade-qa.ps1
+      - name: Build observers for the actual existing client
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build/update-qa | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\update-qa\client-upgrade-qa.exe"
+          if ($LASTEXITCODE) { throw 'Client upgrade observers failed to compile' }
+      - name: Normal A and B client and installer builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in A:60000 B:60001; do
+            name=${pair%:*}
+            export PPVPN_BUILD_NUMBER=${pair#*:}
+            if [ "$name" = B ]; then
+              [ -z "$(git ls-files apps/flutter/windows)" ] || { echo 'Refusing to replace tracked platform sources'; exit 1; }
+              rm -rf apps/flutter/windows
+            fi
+            apps/flutter/scripts/ci-build.sh
+            mkdir -p "build/client-upgrade-qa/generated-runner/$name"
+            cp apps/flutter/windows/runner/{main.cpp,win32_window.cpp,win32_window.h,flutter_window.cpp,flutter_window.h} "build/client-upgrade-qa/generated-runner/$name/"
+            (cd "build/client-upgrade-qa/generated-runner/$name" && sha256sum *.cpp *.h > sha256.txt)
+            git rev-parse HEAD > "build/client-upgrade-qa/generated-runner/$name/source.txt"
+            mkdir -p "build/update-bundles/$name"
+            cp -a apps/flutter/build/windows/x64/ppvpn_window_manager "build/client-upgrade-qa/generated-runner/$name/"
+            cp -a apps/flutter/build/windows/x64/runner/Release/. "build/update-bundles/$name/"
+            powershell -NoProfile -ExecutionPolicy Bypass -File apps/flutter/scripts/package-windows.ps1 -OutDir "build/update-installers/$name" -FastCompression
+          done
+      - name: Actual A-to-B fallback install, fifteen minutes and process restart
+        shell: powershell
+        run: tools/desktop/windows/run-client-upgrade-qa.ps1
+      - name: Remove only the ephemeral CI identities
+        if: always()
+        shell: powershell
+        run: |
+          $private=Join-Path $env:RUNNER_TEMP 'update-client-private'
+          $mark=Join-Path $private 'tls-thumb.txt'
+          if(Test-Path $mark){
+            $thumb=(Get-Content $mark -Raw).Trim()
+            if($thumb -match '^[A-Fa-f0-9]{40}$'){
+              foreach($store in @('CurrentUser/My','CurrentUser/Root','LocalMachine/Root')){
+                $path="Cert:/$store/$thumb"
+                if(Test-Path $path){Remove-Item $path -Force}
+              }
+            }
+          }
+          if(Test-Path $private){Remove-Item $private -Recurse -Force}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: actual-client-update-fallback-qa
+          retention-days: 7
+          path: |
+            build/client-upgrade-qa/
+            build/update-installers/
+            build/update-qa/
+
+  windows-client-upgrade-reuse:
+    if: inputs.full_client_run != '' && !inputs.full_client && !inputs.startup_run && !inputs.macos_client_run
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: actual-client-update-fallback-qa
+          run-id: ${{ inputs.full_client_run }}
+          github-token: ${{ github.token }}
+          path: build/reused
+      - name: Verify unchanged normal clients and original signed packages
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PPVPN_QA_REUSE_CLIENT_RUN: ${{ inputs.full_client_run }}
+        run: tools/desktop/windows/validate-client-upgrade-reuse.ps1
+      - name: Ephemeral loopback TLS identity (original update signatures retained)
+        timeout-minutes: 3
+        shell: powershell
+        run: tools/desktop/windows/prepare-client-upgrade-qa.ps1
+      - name: Compile only observers with normalized native image path comparison
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build/update-qa | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\update-prompt-qa.cpp /Fe:build\update-qa\update-prompt-qa.exe && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\update-qa\client-upgrade-qa.exe"
+          if ($LASTEXITCODE) { throw 'Client upgrade observers failed to compile' }
+      - name: Actual unchanged A-to-B fallback install, fifteen minutes and process restart
+        shell: powershell
+        env:
+          PPVPN_QA_REUSE_CLIENT_RUN: ${{ inputs.full_client_run }}
+        run: tools/desktop/windows/run-client-upgrade-qa.ps1
+      - name: Remove only the ephemeral CI identities
+        if: always()
+        shell: powershell
+        run: |
+          $private=Join-Path $env:RUNNER_TEMP 'update-client-private'
+          $mark=Join-Path $private 'tls-thumb.txt'
+          if(Test-Path $mark){
+            $thumb=(Get-Content $mark -Raw).Trim()
+            if($thumb -match '^[A-Fa-f0-9]{40}$'){
+              foreach($store in @('CurrentUser/My','CurrentUser/Root','LocalMachine/Root')){
+                $path="Cert:/$store/$thumb"
+                if(Test-Path $path){Remove-Item $path -Force}
+              }
+            }
+          }
+          if(Test-Path $private){Remove-Item $private -Recurse -Force}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: actual-client-update-fallback-qa
+          retention-days: 7
+          path: |
+            build/client-upgrade-qa/
+            build/update-installers/
+            build/update-qa/
+
+  windows-startup-diagnostic:
+    if: inputs.startup_run != '' && !inputs.macos_client_run
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: actual-client-update-fallback-qa
+          run-id: ${{ inputs.startup_run }}
+          github-token: ${{ github.token }}
+          path: build/reused
+      - name: Compile observer only (reuse actual normal client)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build/startup-focus-qa|Out-Null
+          $vswhere="${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs=& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if(-not $vs){throw 'MSVC unavailable'}
+          $vars=Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          cmd /c "`"$vars`" && cl /nologo /std:c++17 /EHsc /W4 /utf-8 tools\desktop\windows\client-upgrade-qa.cpp /Fe:build\startup-focus-qa\client-upgrade-qa.exe"
+          if($LASTEXITCODE){throw 'Observer compile failed'}
+      - name: Compile only the candidate native plugin with the pinned Flutter toolchain
+        if: inputs.layout_probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          apps/flutter/scripts/install-flutter.sh "$RUNNER_TEMP/layout-flutter-sdk"
+          flutter_cli="$RUNNER_TEMP/layout-flutter-sdk/flutter/bin/flutter"
+          compile_dir="$RUNNER_TEMP/window-manager-native-compile"
+          "$flutter_cli" create --platforms=windows --project-name ppvpn_native_compile --no-pub "$compile_dir"
+          python3 - "$compile_dir/pubspec.yaml" <<'PYCODE'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]);s=p.read_text()
+          assert '\ndependencies:\n' in s
+          p.write_text(s.replace('\ndependencies:\n','\ndependencies:\n  window_manager: 0.5.2\n',1))
+          PYCODE
+          cp tools/desktop/windows/window-manager-hidden-layout.cmake "$compile_dir/windows/ppvpn-hidden-layout.cmake"
+          if [ '${{ inputs.layout_trace }}' = true ]; then
+            cat > "$compile_dir/windows/ppvpn-layout-trace.h" <<'CPPTRACE'
+          #include <Windows.h>
+          #include <cstdio>
+          #include <cstring>
+          #include <dbghelp.h>
+          #include <new>
+          #pragma comment(lib,"dbghelp.lib")
+          struct PpvpnUiStack { void* frames[16];USHORT count;ULONGLONG tick;DWORD thread;DWORD callbackThread;HWND target; };
+          [[maybe_unused]] static DWORD WINAPI PpvpnSymbolize(void* context) {
+            auto* stack=static_cast<PpvpnUiStack*>(context);
+            static LONG busy=0;
+            while(InterlockedCompareExchange(&busy,1,0)!=0)Sleep(1);
+            char symbols_path[2048]={};GetEnvironmentVariableA("PPVPN_QA_NATIVE_SYMBOL_PATH",symbols_path,2048);
+            SymSetOptions(SYMOPT_DEFERRED_LOADS|SYMOPT_UNDNAME|SYMOPT_FAIL_CRITICAL_ERRORS|SYMOPT_NO_PROMPTS);
+            static const bool symbols=SymInitialize(GetCurrentProcess(),symbols_path,TRUE)!=FALSE;
+            wchar_t path[1024]={};GetEnvironmentVariableW(L"PPVPN_QA_LAYOUT_TRACE",path,1024);
+            FILE* file=nullptr;
+            if(_wfopen_s(&file,path,L"a")==0 && file){
+              std::fprintf(file,"FOREGROUND_STACK tick=%llu pid=%lu thread=%lu callback_thread=%lu target=%p frames=%u\n",stack->tick,GetCurrentProcessId(),stack->thread,stack->callbackThread,static_cast<void*>(stack->target),static_cast<unsigned>(stack->count));
+              for(USHORT i=0;i<stack->count;++i){
+                MEMORY_BASIC_INFORMATION memory={};VirtualQuery(stack->frames[i],&memory,sizeof(memory));
+                char module[1024]={};GetModuleFileNameA(static_cast<HMODULE>(memory.AllocationBase),module,1023);
+                const char* name=std::strrchr(module,'\\');name=name?name+1:module;
+                alignas(SYMBOL_INFO) char storage[sizeof(SYMBOL_INFO)+256]={};auto* symbol=reinterpret_cast<SYMBOL_INFO*>(storage);
+                symbol->SizeOfStruct=static_cast<ULONG>(sizeof(SYMBOL_INFO));symbol->MaxNameLen=255;DWORD64 displacement=0;
+                const bool named=symbols && SymFromAddr(GetCurrentProcess(),reinterpret_cast<DWORD64>(stack->frames[i]),&displacement,symbol)!=FALSE;
+                auto offset=reinterpret_cast<ULONG_PTR>(stack->frames[i])-reinterpret_cast<ULONG_PTR>(memory.AllocationBase);
+                std::fprintf(file,"UI_NATIVE_STACK index=%u module=%s module_offset=%llx symbol=%s displacement=%llu address=%p\n",static_cast<unsigned>(i),name,static_cast<unsigned long long>(offset),named?symbol->Name:"unresolved",static_cast<unsigned long long>(displacement),stack->frames[i]);
+              }
+              fclose(file);
+            }
+            InterlockedExchange(&busy,0);delete stack;return 0;
+          }
+          [[maybe_unused]] static void CALLBACK PpvpnForegroundEvent(HWINEVENTHOOK,DWORD,HWND target,LONG,LONG,DWORD thread,DWORD) {
+            auto* stack=new(std::nothrow) PpvpnUiStack{};if(!stack)return;
+            stack->tick=GetTickCount64();stack->thread=thread;stack->callbackThread=GetCurrentThreadId();stack->target=target;stack->count=CaptureStackBackTrace(0,16,stack->frames,nullptr);
+            if(!QueueUserWorkItem(PpvpnSymbolize,stack,WT_EXECUTEDEFAULT))delete stack;
+          }
+          [[maybe_unused]] static void PpvpnLayoutLog(const char* site,int line,const char* operation,HWND target,UINT flags) {
+            static HWINEVENTHOOK hook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_FOREGROUND,GetModuleHandleW(L"window_manager_plugin.dll"),PpvpnForegroundEvent,GetCurrentProcessId(),0,WINEVENT_INCONTEXT);
+            (void)hook;
+            wchar_t path[1024]={};
+            if(!GetEnvironmentVariableW(L"PPVPN_QA_LAYOUT_TRACE",path,1024))return;
+            auto foreground=GetForegroundWindow();DWORD pid=0;GetWindowThreadProcessId(foreground,&pid);
+            char name[256]={};GetClassNameA(target,name,256);RECT frame={};GetWindowRect(target,&frame);
+            FILE* file=nullptr;if(_wfopen_s(&file,path,L"a") || !file)return;
+            std::fprintf(file,"tick=%llu site=%s:%d operation=%s target=%p class=%s visible=%d root=%p flags=%u foreground=%p foreground_pid=%lu frame=%ld,%ld,%ld,%ld\n",GetTickCount64(),site,line,operation,static_cast<void*>(target),name,IsWindowVisible(target),static_cast<void*>(GetAncestor(target,GA_ROOT)),flags,static_cast<void*>(foreground),pid,frame.left,frame.top,frame.right,frame.bottom);
+            fclose(file);
+          }
+          [[maybe_unused]] static BOOL PpvpnSetPos(const char* site,int line,HWND h,HWND after,int x,int y,int w,int height,UINT flags) {
+            PpvpnLayoutLog(site,line,"SetWindowPos-before",h,flags);auto result=::SetWindowPos(h,after,x,y,w,height,flags);PpvpnLayoutLog(site,line,"SetWindowPos-after",h,flags);return result;
+          }
+          [[maybe_unused]] static HWND PpvpnSetFocus(const char* site,int line,HWND h) {
+            PpvpnLayoutLog(site,line,"SetFocus-before",h,0);auto result=::SetFocus(h);PpvpnLayoutLog(site,line,"SetFocus-after",h,0);return result;
+          }
+          [[maybe_unused]] static BOOL PpvpnSetForeground(const char* site,int line,HWND h) {
+            PpvpnLayoutLog(site,line,"SetForegroundWindow-before",h,0);auto result=::SetForegroundWindow(h);PpvpnLayoutLog(site,line,"SetForegroundWindow-after",h,0);return result;
+          }
+          [[maybe_unused]] static BOOL PpvpnShow(const char* site,int line,HWND h,int command) {
+            PpvpnLayoutLog(site,line,"ShowWindow-before",h,static_cast<UINT>(command));auto result=::ShowWindow(h,command);PpvpnLayoutLog(site,line,"ShowWindow-after",h,static_cast<UINT>(command));return result;
+          }
+          [[maybe_unused]] static BOOL PpvpnShowAsync(const char* site,int line,HWND h,int command) {
+            PpvpnLayoutLog(site,line,"ShowWindowAsync-before",h,static_cast<UINT>(command));auto result=::ShowWindowAsync(h,command);PpvpnLayoutLog(site,line,"ShowWindowAsync-after",h,static_cast<UINT>(command));return result;
+          }
+          #define SetWindowPos(...) PpvpnSetPos(__func__,__LINE__,__VA_ARGS__)
+          #define SetFocus(...) PpvpnSetFocus(__func__,__LINE__,__VA_ARGS__)
+          #define SetForegroundWindow(...) PpvpnSetForeground(__func__,__LINE__,__VA_ARGS__)
+          #define ShowWindow(...) PpvpnShow(__func__,__LINE__,__VA_ARGS__)
+          #define ShowWindowAsync(...) PpvpnShowAsync(__func__,__LINE__,__VA_ARGS__)
+          CPPTRACE
+            python3 - "$compile_dir/windows/ppvpn-hidden-layout.cmake" <<'PYTRACE'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]);s=p.read_text()
+          needle='  file(WRITE "${output_dir}/window_manager.cpp" "${code}")'
+          if needle not in s:raise SystemExit('Diagnostic materializer insertion mismatch')
+          prefix='  file(READ "${CMAKE_CURRENT_LIST_DIR}/ppvpn-layout-trace.h" trace)\n  string(FIND "${code}" "\nnamespace {\n" trace_at)\n  if(trace_at LESS 0)\n    message(FATAL_ERROR "Diagnostic native namespace insertion mismatch")\n  endif()\n  string(REPLACE "\nnamespace {\n" "\n${trace}\nnamespace {\n" code "${code}")\n'
+          p.write_text(s.replace(needle,prefix+needle,1))
+          PYTRACE
+          fi
+          printf '\n%s\n' 'include("${CMAKE_CURRENT_LIST_DIR}/ppvpn-hidden-layout.cmake")' >> "$compile_dir/windows/CMakeLists.txt"
+          (cd "$compile_dir" && "$flutter_cli" pub get && "$flutter_cli" build windows --release)
+          out="$GITHUB_WORKSPACE/build/startup-focus-qa/candidate-plugin"
+          mkdir -p "$out"
+          cp "$compile_dir/build/windows/x64/runner/Release/window_manager_plugin.dll" "$out/"
+          cp -a "$compile_dir/build/windows/x64/ppvpn_window_manager/." "$out/"
+          cp "$compile_dir/build/windows/x64/plugins/window_manager/window_manager_plugin.vcxproj" "$out/"
+          git rev-parse HEAD > "$out/candidate-source.txt"
+          (cd "$out" && sha256sum window_manager_plugin.dll > dll-sha256.txt)
+      - name: Actual hidden startup and foreground diagnosis
+        shell: powershell
+        env:
+          PPVPN_SOURCE_RUN: ${{ inputs.startup_run }}
+          PPVPN_QA_RESTORE_GAME_ONCE: '1'
+        run: |
+          if('${{ inputs.layout_probe }}' -eq 'true'){$env:PPVPN_QA_LAYOUT_PLUGIN=Join-Path $env:GITHUB_WORKSPACE 'build/startup-focus-qa/candidate-plugin/window_manager_plugin.dll'}
+          if('${{ inputs.layout_trace }}' -eq 'true'){$env:PPVPN_QA_LAYOUT_TRACE=Join-Path $env:GITHUB_WORKSPACE 'build/startup-focus-qa/native-layout-trace.txt'}
+          if('${{ inputs.layout_trace }}' -eq 'true'){$env:PPVPN_QA_NATIVE_SYMBOL_PATH=Join-Path $env:RUNNER_TEMP 'layout-flutter-sdk/flutter/bin/cache/artifacts/engine/windows-x64-release'}
+          tools/desktop/windows/run-startup-focus-qa.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: windows-startup-focus-diagnostic
+          path: build/startup-focus-qa/

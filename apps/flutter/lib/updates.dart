@@ -99,6 +99,19 @@ class Updates {
   static String _build = '';
   static String _command = '';
 
+  /// Identifies an actual newer-build relaunch from the existing updater.
+  static Future<bool> takeUpdateRelaunch() async {
+    if (Platform.isMacOS) {
+      try {
+        return await _channel.invokeMethod<bool>('takeUpdateRelaunch') ?? false;
+      } catch (error) {
+        debugPrint('update relaunch: $error');
+        return false;
+      }
+    }
+    return rust.takeUpdateRelaunch();
+  }
+
   /// The service is installing an update now: the app shows
   /// InstallingNotice and quits. Asked once, before the window.
   static Future<bool> installingNow() async {
@@ -116,6 +129,16 @@ class Updates {
       _service = null;
     }
     if (_service?.updatedTo case final version?) updatedTo.value = version;
+  }
+
+  /// The existing native updater owns the foreground-window query on macOS;
+  /// Windows shares its detector with WinSparkle through the Rust bridge.
+  static Future<bool> promptDeferred() async {
+    if (Platform.isMacOS) {
+      try { return await _channel.invokeMethod<bool>('promptDeferred') ?? true; }
+      catch (error) { debugPrint('update prompt state: $error'); return true; }
+    }
+    return rust.updatePromptDeferred();
   }
 
   /// Starts the platform's updater, once the window exists. [idle] tells
