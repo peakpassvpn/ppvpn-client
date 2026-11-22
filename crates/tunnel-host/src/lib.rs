@@ -14,10 +14,14 @@
 
 #[cfg(target_os = "android")]
 mod android;
+mod exit;
 mod health;
 mod host;
 mod log;
 mod server;
+
+#[cfg(test)]
+mod callback_stop_tests;
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};

@@ -52,6 +52,8 @@ class TunnelService : VpnService() {
     private val worker = Executors.newSingleThreadExecutor()
     private var tun: ParcelFileDescriptor? = null
     private var network: NetworkWatch? = null
+    // Worker-owned. A queued native exit must not stop a newer tunnel.
+    private var generation = 0L
 
     private val query = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = publish()
@@ -106,6 +108,7 @@ class TunnelService : VpnService() {
             publish()
             return
         }
+        generation += 1
         set(STATE_CONNECTING)
         val failure = try {
             open()
@@ -141,25 +144,27 @@ class TunnelService : VpnService() {
         val fd = builder.establish() ?: return error("the VPN is not allowed (establish)")
         tun = fd
         network = NetworkWatch(this).also { it.start() }
-        val listener = object : TunnelHost.Listener {
-            override fun protect(fd: Int): Boolean = this@TunnelService.protect(fd)
-
-            override fun onExit(reason: String) {
-                Log.e(TAG, "host exit: $reason")
-                stop(lastStartId)
-            }
-        }
         return TunnelHost.start(
             fd.fd,
             File(filesDir, SOCKET_FILE).path,
             File(filesDir, STATE_DIR).path,
             null,
-            listener,
+            listener(generation),
         )
     }
 
+    private fun listener(hostGeneration: Long) = object : TunnelHost.Listener {
+        override fun protect(fd: Int): Boolean = this@TunnelService.protect(fd)
+
+        override fun onExit(reason: String) {
+            Log.e(TAG, "host exit: $reason")
+            stop(lastStartId, hostGeneration)
+        }
+    }
+
     /** Ends the service unless a start newer than [startId] came. */
-    private fun stop(startId: Int) = run {
+    private fun stop(startId: Int, hostGeneration: Long? = null) = run {
+        if (hostGeneration != null && hostGeneration != generation) return@run
         if (state != STATE_OFF) {
             set(STATE_DISCONNECTING)
             shutDown()
@@ -175,6 +180,7 @@ class TunnelService : VpnService() {
      * is taken out before it stops.
      */
     private fun shutDown() {
+        generation += 1
         network?.stop()
         network = null
         TunnelHost.stop()
