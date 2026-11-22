@@ -18,6 +18,8 @@ path = "uniffi-bindgen.rs"
 # Compiles the Linux enhanced-mode end-to-end test (src/e2e_linux.rs; CI job
 # linux). Test-only: no code outside #[cfg(test)].
 linux-e2e = []
+# Controlled automatic route selection policy; default-off and refused by release builds.
+controlled-auto = ["ppvpn-account/controlled-auto"]
 
 [build-dependencies]
 sha2 = "0.10"

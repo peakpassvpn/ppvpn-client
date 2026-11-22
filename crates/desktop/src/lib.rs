@@ -11,6 +11,12 @@ use std::sync::{Arc, Mutex, Weak};
 
 mod api;
 mod auth;
+#[cfg(feature = "controlled-auto")]
+#[allow(dead_code)]
+mod auto_route;
+#[cfg(feature = "controlled-auto")]
+#[allow(dead_code)]
+mod auto_route_profile;
 mod compat;
 mod connection;
 mod core_ipc;

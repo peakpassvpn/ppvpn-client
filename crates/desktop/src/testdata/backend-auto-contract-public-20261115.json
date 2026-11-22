@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "revision": "6500aac1749c0b34623004f1d32758f79d0fc66cbc87e11db3d05ec88a089a0a",
+  "expires_at": "2099-01-01T00:00:00Z",
+  "selection": {
+    "mode": "manual",
+    "default_node_id": "5b0e9c1a-2f47-4d83-a6b1-c3e8d0f71101"
+  },
+  "nodes": [
+    {
+      "id": "5b0e9c1a-2f47-4d83-a6b1-c3e8d0f71101",
+      "name": "🇺🇸洛杉矶家宽 IP 203.0.113.10 cn-optimized",
+      "entry_key": "cn-optimized",
+      "entry_label": "三网优化",
+      "instance_id": "5b0e9c1a-2f47-4d83-a6b1-c3e8d0f71101",
+      "exit_mode": "primary",
+      "exit": {
+        "ip": "203.0.113.10",
+        "region": "洛杉矶",
+        "country_code": "US"
+      },
+      "capabilities": {
+        "tcp": true,
+        "udp": true
+      },
+      "ingresses": [
+        {
+          "endpoint_key": "11",
+          "replica_ordinal": 0,
+          "protocol": "shadowsocks",
+          "label": "广州移动",
+          "tier_rank": 1,
+          "auto_selection_metadata": {
+            "entry_tier_id": "1",
+            "entry_tier_key": "tier-1",
+            "quota_multiplier": "0.75",
+            "entry_latency_threshold_ms": 175
+          }
+        },
+        {
+          "endpoint_key": "12",
+          "replica_ordinal": 1,
+          "protocol": "vless",
+          "label": "上海电信",
+          "tier_rank": 2,
+          "auto_selection_metadata": {
+            "entry_tier_id": "2",
+            "entry_tier_key": "tier-2",
+            "quota_multiplier": "0.75",
+            "entry_latency_threshold_ms": 175
+          }
+        }
+      ]
+    },
+    {
+      "id": "5b0e9c1a-2f47-4d83-a6b1-c3e8d0f71101-fe6d3468cf5c",
+      "name": "🇺🇸洛杉矶家宽 IP 203.0.113.10 standard",
+      "entry_key": "standard",
+      "instance_id": "5b0e9c1a-2f47-4d83-a6b1-c3e8d0f71101",
+      "exit_mode": "primary",
+      "exit": {
+        "ip": "203.0.113.10",
+        "region": "洛杉矶",
+        "country_code": "US"
+      },
+      "capabilities": {
+        "tcp": true,
+        "udp": true
+      },
+      "ingresses": [
+        {
+          "endpoint_key": "13",
+          "replica_ordinal": 0,
+          "protocol": "anytls",
+          "tier_rank": 1,
+          "auto_selection_metadata": {
+            "entry_tier_id": "1",
+            "entry_tier_key": "tier-1",
+            "quota_multiplier": "0.75",
+            "entry_latency_threshold_ms": 175
+          }
+        },
+        {
+          "endpoint_key": "14",
+          "replica_ordinal": 1,
+          "protocol": "shadowsocks",
+          "tier_rank": 2,
+          "auto_selection_metadata": {
+            "entry_tier_id": "2",
+            "entry_tier_key": "tier-2",
+            "quota_multiplier": "0.75",
+            "entry_latency_threshold_ms": 175
+          }
+        }
+      ]
+    },
+    {
+      "id": "e4a83d27-6c10-4b9f-8e25-7f1a2b9c0102",
+      "name": "🇯🇵东京双 ISP 203.0.113.20",
+      "entry_key": "cn-optimized",
+      "entry_label": "三网优化",
+      "instance_id": "e4a83d27-6c10-4b9f-8e25-7f1a2b9c0102",
+      "exit_mode": "primary",
+      "exit": {
+        "ip": "203.0.113.20",
+        "region": "东京",
+        "country_code": "JP"
+      },
+      "capabilities": {
+        "tcp": true,
+        "udp": true
+      },
+      "ingresses": [
+        {
+          "endpoint_key": "21",
+          "replica_ordinal": 0,
+          "protocol": "shadowsocks",
+          "label": "香港直连",
+          "tier_rank": 1,
+          "auto_selection_metadata": {
+            "entry_tier_id": "1",
+            "entry_tier_key": "tier-1",
+            "quota_multiplier": "0.75",
+            "entry_latency_threshold_ms": 175
+          }
+        },
+        {
+          "endpoint_key": "22",
+          "replica_ordinal": 1,
+          "protocol": "anytls",
+          "tier_rank": 2,
+          "auto_selection_metadata": {
+            "entry_tier_id": "2",
+            "entry_tier_key": "tier-2",
+            "quota_multiplier": "0.75",
+            "entry_latency_threshold_ms": 175
+          }
+        }
+      ]
+    }
+  ]
+}
