@@ -19,8 +19,12 @@ struct TunnelError: LocalizedError {
 }
 struct FileManager {
   static let `default` = FileManager()
+  static var createdDirectories: [String] = []
   func containerURL(forSecurityApplicationGroupIdentifier: String) -> URL? {
     URL(fileURLWithPath: "/app-group")
+  }
+  func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws {
+    Self.createdDirectories.append(url.path)
   }
 }
 struct NEProviderStopReason { let rawValue = 1 }
@@ -74,6 +78,8 @@ class TunnelHost {
   static var starts = 0
   static var stops = 0
   static var networks = 0
+  static var lastSocketPath: String?
+  static var lastStateDir: String?
   static var exits: [(String) -> Void] = []
   static var failStart = false
   static func tunSettings() throws -> TunSettings { TunSettings() }
@@ -82,6 +88,8 @@ class TunnelHost {
                     exit: @escaping (String) -> Void) throws -> TunnelHost {
     if failStart { throw TunnelError("start failed") }
     starts += 1
+    lastSocketPath = socketPath
+    lastStateDir = stateDir
     exits.append(exit)
     return TunnelHost()
   }
@@ -115,10 +123,13 @@ func monitor() -> NWPathMonitor {
   return NWPathMonitor.instances.last!
 }
 func reset() {
+  FileManager.createdDirectories = []
   NWPathMonitor.instances = []
   TunnelHost.starts = 0
   TunnelHost.stops = 0
   TunnelHost.networks = 0
+  TunnelHost.lastSocketPath = nil
+  TunnelHost.lastStateDir = nil
   TunnelHost.exits = []
   TunnelHost.failStart = false
 }
