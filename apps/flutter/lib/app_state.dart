@@ -39,20 +39,27 @@ class LatencyFailed extends Latency {
 enum WindowPage { messages, settings }
 
 class AppState {
-  AppState(rust.UiSnapshot initial) : fixed = false, snapshot = ValueNotifier(initial) {
+  AppState(rust.UiSnapshot initial, {bool? useSystemVpn})
+      : fixed = false, _useSystemVpn = useSystemVpn ?? mobile, snapshot = ValueNotifier(initial) {
+    _listenForTeamChanges();
     _refreshNodes(initial);
-    if (mobile) SystemVpn.listen();
+    if (_useSystemVpn) SystemVpn.listen();
     unawaited(_pump());
   }
 
   /// Fixed state with no client behind it (sample.dart, for CI
   /// screenshots): nothing is read from Rust, actions fail quietly.
-  AppState.fixed(rust.UiSnapshot initial) : fixed = true, snapshot = ValueNotifier(initial) {
+  AppState.fixed(rust.UiSnapshot initial, {bool? useSystemVpn})
+      : fixed = true, _useSystemVpn = useSystemVpn ?? mobile, snapshot = ValueNotifier(initial) {
     _stopped = true;
+    _listenForTeamChanges();
   }
 
   /// Made by [AppState.fixed]: sample data, no client.
   final bool fixed;
+
+  /// Native VPN actions; injectable so their ordering can be tested on a host.
+  final bool _useSystemVpn;
 
   final ValueNotifier<rust.UiSnapshot> snapshot;
   final ValueNotifier<List<rust.UiNode>> nodes = ValueNotifier(const []);
@@ -75,8 +82,31 @@ class AppState {
   /// opens ([refreshTeams]).
   final ValueNotifier<List<rust.UiTeam>> teams = ValueNotifier(const []);
 
+  // Team choices belong to the signed-in account. Invalidate both the cached
+  // list and pending reads before listeners can open another account's picker.
+  int _teamsRequest = 0;
+
+  void _clearTeams() {
+    _teamsRequest++;
+    teams.value = const [];
+  }
+
+  void _listenForTeamChanges() {
+    var previous = snapshot.value;
+    snapshot.addListener(() {
+      final before = previous;
+      final next = snapshot.value;
+      previous = next;
+      // Initial account metadata and switching teams keep the same choices.
+      if (before.auth != next.auth || (before.accountName != null && before.accountName != next.accountName)) {
+        _clearTeams();
+      }
+    });
+  }
+
   /// The message center's list.
   late final MessagesState messages = MessagesState(fixed: fixed, onError: (error) => actionError.value = error);
+
   /// Bumped when the tray turns enhanced mode on before the service is
   /// installed: the window shows the install explanation first (shell.dart).
   final ValueNotifier<int> enhancedRequests = ValueNotifier(0);
@@ -140,7 +170,7 @@ class AppState {
   /// Set once [stop] runs: the event loop ends.
   bool _stopped = false;
   String? _revision;
-  bool _standardReady = false;
+  int? _proxyGeneration;
 
   Future<void> _pump() async {
     while (!_stopped) {
@@ -152,6 +182,7 @@ class AppState {
         await Future<void>.delayed(const Duration(seconds: 1));
         continue;
       }
+      if (_stopped) return;
       final next = events.snapshot;
       if (next != null) {
         _followVpn(snapshot.value.phase, next.phase);
@@ -200,19 +231,14 @@ class AppState {
   /// host not coming up or stopping): the system VPN goes too, so that no
   /// tunnel is left up with no engine behind it. Retry starts it again.
   void _followVpn(rust.UiPhase before, rust.UiPhase after) {
-    if (!mobile || before == after) return;
+    if (!_useSystemVpn || before == after) return;
     if (after == rust.UiPhase.off || after == rust.UiPhase.error) unawaited(_stopVpn());
   }
 
-  /// Phone: the permission (the system asks the first time), then the
-  /// system VPN; false when the user declined and the client should not
-  /// connect. Elsewhere true.
-  Future<bool> _startVpn() async {
-    if (!mobile) return true;
-    if (!await SystemVpn.prepare()) return false;
-    await SystemVpn.start();
-    return true;
-  }
+  /// Phone: permission, native start and client connection share one attempt,
+  /// so early failures roll back even without a phase change.
+  Future<void> _withVpn(Future<void> Function() connectClient) =>
+      _useSystemVpn ? SystemVpn.connect(connectClient) : connectClient();
 
   Future<void> _stopVpn() async {
     try {
@@ -231,13 +257,18 @@ class AppState {
         debugPrint('nodes: $error');
       }
     }
-    if (next.standardReady && !_standardReady) unawaited(_loadProxies());
-    _standardReady = next.standardReady;
+    final generation = next.localProxyGeneration;
+    if (generation != _proxyGeneration) {
+      _proxyGeneration = generation;
+      proxies.value = const {};
+      if (generation != null) unawaited(_loadProxies(generation));
+    }
   }
 
-  Future<void> _loadProxies() async {
+  Future<void> _loadProxies(int generation) async {
     try {
-      final list = await rust.localProxies();
+      final list = await rust.localProxies(generation: generation);
+      if (_stopped || generation != _proxyGeneration) return;
       proxies.value = {for (final proxy in list) proxy.nodeId: proxy};
     } catch (error) {
       debugPrint('local_proxies: $error');
@@ -261,23 +292,26 @@ class AppState {
 
   Future<void> signIn() => _run(rust.signIn);
   void cancelSignIn() => rust.cancelSignIn();
-  Future<void> signOut() => _run(rust.signOut);
-  Future<void> connect() => _run(() async {
-    if (await _startVpn()) await rust.connect();
-  });
+  Future<void> signOut() {
+    // The event pump can coalesce logout and a same-name login. Discard the old
+    // account's choices synchronously, before waiting for Rust or the network.
+    _clearTeams();
+    return _run(rust.signOut);
+  }
+
+  Future<void> connect() => _run(() => _withVpn(rust.connect));
 
   /// Phone: the client first (it stops the tunnel host), then the system VPN.
   Future<void> disconnect() => _run(() async {
+    if (_useSystemVpn) SystemVpn.cancelPending();
     try {
       await rust.disconnect();
     } finally {
-      if (mobile) await _stopVpn();
+      if (_useSystemVpn) await _stopVpn();
     }
   });
 
-  Future<void> retry() => _run(() async {
-    if (await _startVpn()) await rust.retry();
-  });
+  Future<void> retry() => _run(() => _withVpn(rust.retry));
 
   /// Turns the connection on in [mode] (the overview's switches, the tray,
   /// "use the system proxy"). From the other mode while it is not off, the
@@ -285,7 +319,7 @@ class AppState {
   Future<void> connectIn(rust.UiConnectionMode mode) => _run(() async {
     final before = snapshot.value;
     await rust.setConnectionMode(mode: mode);
-    if ((before.connectionMode == mode || before.phase == rust.UiPhase.off) && await _startVpn()) await rust.connect();
+    if (before.connectionMode == mode || before.phase == rust.UiPhase.off) await _withVpn(rust.connect);
   });
 
   /// "Use on this device" while enhanced mode is contended.
@@ -295,19 +329,44 @@ class AppState {
   Future<void> installService() => _run(rust.serviceInstall);
   Future<void> refreshNodes() => _run(rust.refreshNodes);
   Future<void> selectNode(String id) => _run(() => rust.selectNode(nodeId: id));
-  Future<void> refreshTeams() => _run(() async => teams.value = await rust.teams());
+  Future<void> refreshTeams() async {
+    if (fixed || _stopped || snapshot.value.auth != rust.UiAuth.signedIn) return;
+    final request = ++_teamsRequest;
+    try {
+      final list = await rust.teams();
+      if (!_stopped && request == _teamsRequest) teams.value = list;
+    } catch (error) {
+      if (!_stopped && request == _teamsRequest) actionError.value = '$error';
+    }
+  }
+
   Future<void> switchTeam(String id) => _run(() => rust.switchTeam(teamId: id));
   Future<void> setRoutingMode(rust.UiRoutingMode mode) => _run(() => rust.setRoutingMode(mode: mode));
 
   Future<void> testAll(rust.UiProbeMethod method) async {
-    latency.value = {for (final node in nodes.value) node.id: const LatencyTesting()};
-    await _run(() => rust.probeAll(method: method));
+    // Each batch owns only its pending markers; results and later batches
+    // must survive a late failure of this request.
+    final pending = LatencyTesting();
+    latency.value = {for (final node in nodes.value) node.id: pending};
+    await _run(() async {
+      try {
+        await rust.probeAll(method: method);
+      } catch (_) {
+        latency.value = {
+          for (final entry in latency.value.entries)
+            entry.key: identical(entry.value, pending) ? const LatencyFailed() : entry.value,
+        };
+        rethrow;
+      }
+    });
   }
 
   /// Puts the system proxy back and stops the core; before the app quits.
   void stop() {
     if (_stopped) return;
     _stopped = true;
+    _proxyGeneration = null;
+    proxies.value = const {};
     rust.shutdown();
   }
 }

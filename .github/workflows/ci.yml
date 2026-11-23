@@ -556,6 +556,7 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: |
           cargo test --locked -p ppvpn-push-agent
+          cargo test --locked -p ppvpn-flutter
           cargo clippy --locked -p ppvpn-flutter -p ppvpn-push-agent --all-targets -- -D warnings
           cargo test --locked -p ppvpn-flutter --lib -- silent::tests update::policy_tests --nocapture
       # The mobile tunnel host (#448) on Linux: its C functions, socket and
