@@ -100,6 +100,7 @@ while IFS= read -r f; do
     apps/macos/scripts/* | apps/macos/PPVPNAgent/* | apps/macos/AppLogic/* | \
     apps/macos/LaunchAgents/* | apps/macos/packaging/* | apps/macos/project.yml)
       flutter=true code=true ;;
+    tools/desktop/macos/*) flutter=true code=true ;;
     apps/* | tools/desktop/*) code=true ;;
     *) code=true ;;
   esac
