@@ -21,6 +21,7 @@ import '../strings.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'phone.dart';
+import 'native_chrome.dart';
 
 class PhoneNodes extends StatefulWidget {
   const PhoneNodes({super.key, required this.app});
@@ -47,23 +48,32 @@ class _PhoneNodesState extends State<PhoneNodes> {
     if (mounted) setState(() => _testing = false);
   }
 
+  void _nextMethod() => setState(() => _method = switch (_method) {
+    rust.UiProbeMethod.icmp => rust.UiProbeMethod.tcp,
+    rust.UiProbeMethod.tcp => rust.UiProbeMethod.connect,
+    rust.UiProbeMethod.connect => rust.UiProbeMethod.icmp,
+  });
+
+  String get _methodName => switch (_method) {
+    rust.UiProbeMethod.icmp => 'Ping', rust.UiProbeMethod.tcp => 'TCP', rust.UiProbeMethod.connect => 'Connect',
+  };
+
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
     valueListenable: app.snapshot,
     builder: (context, snapshot, _) => PhoneScaffold(
       title: S.current('nodes'),
+      nativeActions: [
+        NativeChromeAction(id: 'probe-method', label: _methodName, onPress: _nextMethod),
+        NativeChromeAction(id: 'test-all', label: S.current('testAll'),
+          enabled: !_testing && snapshot.standardReady, onPress: () => unawaited(_testAll())),
+      ],
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           _MethodButton(
             method: _method,
-            onPress: () => setState(
-              () => _method = switch (_method) {
-                rust.UiProbeMethod.icmp => rust.UiProbeMethod.tcp,
-                rust.UiProbeMethod.tcp => rust.UiProbeMethod.connect,
-                rust.UiProbeMethod.connect => rust.UiProbeMethod.icmp,
-              },
-            ),
+            onPress: _nextMethod,
           ),
           const SizedBox(width: 8),
           _TestAllButton(testing: _testing, onPress: _testing || !snapshot.standardReady ? null : _testAll),
