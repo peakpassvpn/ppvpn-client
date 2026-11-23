@@ -224,8 +224,8 @@ const _zh = <String, String>{
   'apiHintNext': '仅供开发调试。留空则使用默认地址。下次启动时生效。',
   'diagnostics': '网络诊断',
   'diagnosticsSub': '按下后才向阿里 DNS 和 DNSPod 查询本服务的地址，用来对比',
-  'diagnosticsIntro': '检查本服务和各节点的域名解析，以及每个地址能否连通、能否完成 TLS。按下“开始诊断”后，除了系统解析，还会向阿里 DNS 和 DNSPod 查询这些域名，用来对比。诊断不改变任何设置；结果可以复制后附在工单里。',
-  'diagnosticsRun': '开始诊断',
+  'diagnosticsIntro': '检查本服务和各节点的域名解析，以及每个地址能否连通、能否完成 TLS。开始后会向系统、阿里 DNS 和 DNSPod 查询这些域名。若 VPN 未连接、系统解析不可用而备用地址通过证书校验，会为本次客户端会话启用备用解析，帮助恢复登录和配置获取。不会修改系统 DNS；结果可以复制后附在工单里。',
+  'diagnosticsRun': '诊断并尝试恢复',
   'diagnosticsRunning': '正在诊断…',
   'apiInvalid': '请输入以 http:// 或 https:// 开头的地址。',
   'apiSaved': '已保存，下次启动时生效。',
@@ -262,6 +262,13 @@ const _zh = <String, String>{
   'fr_install': '系统服务安装失败。',
   'fr_service': '系统服务没有响应，请稍后重试。',
   'fr_contended': '其他 VPN 或代理软件正在接管系统网络。',
+  'fr_connect': '增强模式未能启动。请重试，或暂时使用普通模式；仍失败时可复制诊断信息联系支持。',
+  'fr_health': '隧道启动后未能通过网络检查。请检查本机网络及其他 VPN 是否冲突，重试或暂时使用普通模式。',
+  'fr_clientRejected': '系统服务拒绝了此客户端。请从正式安装位置启动客户端，或重新安装后再试。',
+  'fr_driver': 'Windows 隧道驱动不可用，请重新安装最新版客户端后重试。',
+  'fr_permission': '系统拒绝了隧道启动权限，请重新授权安装系统服务后重试。',
+  'fr_tunBusy': '隧道资源正被占用，请断开现有 VPN 连接后重试。',
+  'copyDiagnostics': '复制诊断信息',
   // The tray (#401 step 3), from the handoff, and its own line for access
   // limited, which has no handoff string (marked).
   'noUnread': '没有未读消息',
@@ -490,8 +497,8 @@ const _en = <String, String>{
   'apiHintNext': 'For development only. Leave empty to use the default. Takes effect on next launch.',
   'diagnostics': 'Network Diagnostics',
   'diagnosticsSub': 'Asks AliDNS and DNSPod for this service\'s addresses only when you press it, to compare',
-  'diagnosticsIntro': 'Checks how this service\'s and the nodes\' host names resolve, and whether each address connects and completes TLS. Pressing Run asks AliDNS and DNSPod for these names as well as the system resolver, to compare. It changes no settings; copy the result into a ticket.',
-  'diagnosticsRun': 'Run',
+  'diagnosticsIntro': 'Checks the service and node names using system DNS, AliDNS and DNSPod, then tests TCP and TLS. With the VPN off, if system answers fail and an alternate address verifies its certificate, alternate API resolution is enabled for this app session to help restore sign-in and profile retrieval. System DNS settings stay unchanged. Copy the result into a ticket.',
+  'diagnosticsRun': 'Try recovery',
   'diagnosticsRunning': 'Running…',
   'apiInvalid': 'Enter an address starting with http:// or https://.',
   'apiSaved': 'Saved. Takes effect on next launch.',
@@ -526,6 +533,13 @@ const _en = <String, String>{
   'fr_install': 'The system service couldn’t be installed.',
   'fr_service': 'The system service isn’t responding. Try again later.',
   'fr_contended': 'Another VPN or proxy app is taking over the system network.',
+  'fr_connect': 'Enhanced mode could not start. Retry or use Compatible mode for now. Copy the diagnostics for support if it keeps failing.',
+  'fr_health': 'The tunnel started, but its network check failed. Check your network and other VPN apps, then retry or use Compatible mode for now.',
+  'fr_clientRejected': 'The system service rejected this client. Open the app from its installed location, or reinstall it and retry.',
+  'fr_driver': 'The Windows tunnel driver is unavailable. Reinstall the latest app and try again.',
+  'fr_permission': 'The system denied permission to start the tunnel. Authorize the system service installation again, then retry.',
+  'fr_tunBusy': 'Tunnel resources are in use. Disconnect the existing VPN connection, then retry.',
+  'copyDiagnostics': 'Copy diagnostics',
   // The tray (#401 step 3), from the handoff, and its own line for access
   // limited, which has no handoff string (marked).
   'noUnread': 'No unread messages',
@@ -565,4 +579,3 @@ const _en = <String, String>{
   'phoneStep3': 'The page closes and you are signed in',
   'reopenAuth': 'Open the Authorization Page Again',
 };
-

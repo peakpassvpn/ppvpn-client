@@ -298,7 +298,8 @@ impl Inner {
                 });
             }
         }
-        self.activate_rule_sets(rule_sets, request.allowed_rule_set_hosts);
+        self.activate_rule_sets(rule_sets, request.allowed_rule_set_hosts)
+            .await;
         // A pin the request added, or one it cleared.
         self.sync_pinned_checks();
         if running.is_some() {

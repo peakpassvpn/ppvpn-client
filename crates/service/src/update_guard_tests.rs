@@ -70,6 +70,11 @@ mod guard_tests {
         }
     }
 
+    fn release_lock(lock: std::fs::File) {
+        lock.unlock().unwrap();
+        drop(lock);
+    }
+
     fn assert_blocked(staging: &Staging) {
         let mut called = false;
         let result = guard_connect_in(Some(staging), || {
@@ -116,7 +121,7 @@ mod guard_tests {
         write_job(&fixture.0, &fixture.job(Phase::Finished)).unwrap();
         assert_blocked(&fixture.0);
 
-        drop(lock);
+        release_lock(lock);
         assert_eq!(
             guard_connect_in(Some(&fixture.0), || Ok("connected")).unwrap(),
             "connected"
@@ -146,7 +151,7 @@ mod guard_tests {
         assert!(read_result(&fixture.0).is_none());
         assert!(ACTIVE.lock().is_none());
 
-        drop(lock);
+        release_lock(lock);
         assert!(guard_connect_in(Some(&fixture.0), || Ok(())).is_ok());
         assert!(!legacy_job.exists());
         assert_eq!(
@@ -167,7 +172,7 @@ mod guard_tests {
         assert_blocked(&fixture.0);
         let (_, last) = status_in(&fixture.0);
         assert_eq!(last.unwrap().outcome, "installed");
-        drop(lock);
+        release_lock(lock);
         assert!(guard_connect_in(Some(&fixture.0), || Ok(())).is_ok());
         assert_eq!(read_result(&fixture.0).unwrap().outcome, "installed");
     }
@@ -192,6 +197,7 @@ mod guard_tests {
         .unwrap();
         lock.try_lock().unwrap();
         assert!(!fixture.0.current().join("job.json").exists());
+        release_lock(lock);
     }
 
     // Unix permits deleting and recreating current/ while the old lock's
@@ -217,7 +223,7 @@ mod guard_tests {
                 .kind(),
             std::io::ErrorKind::NotFound
         );
-        drop(lock);
+        release_lock(lock);
         assert_eq!(
             claim_runner(&fixture.0, &replacement.id).unwrap().1,
             replacement
@@ -238,7 +244,7 @@ mod guard_tests {
         let reopened = fixture.open_legacy_lock();
         reopened.try_lock().unwrap();
         assert!(!fixture.0.current().join("job.json").exists());
-        drop(reopened);
+        release_lock(reopened);
         assert_eq!(
             claim_runner(&fixture.0, &replacement.id).unwrap().1,
             replacement
