@@ -321,22 +321,26 @@ grep -q '^mod frb_generated;' rust/src/lib.rs || echo 'mod frb_generated;' >> ru
 # Analysis and Dart checks once per pull request, in ci.yml's Linux flutter job: the
 # others set PPVPN_SKIP_ANALYZE=1 (#459).
 if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
-  flutter test checks/vpn_connection_test.dart --no-pub
-  flutter test checks/team_cache_test.dart --no-pub
-  flutter test checks/probe_batch_test.dart --no-pub
-  flutter test checks/phone_region_test.dart --no-pub
-  flutter test checks/messages_read_test.dart --no-pub
   if [ "$os" = linux ]; then
+    flutter test checks/vpn_connection_test.dart --no-pub
+    flutter test checks/team_cache_test.dart --no-pub
+    flutter test checks/probe_batch_test.dart --no-pub
+    flutter test checks/phone_region_test.dart --no-pub
+    flutter test checks/messages_read_test.dart --no-pub
     # Loopback update-feed checks need neither native bindings nor a GUI.
     flutter test checks/update_feed_test.dart --no-pub
+    flutter test checks/local_proxies_test.dart --no-pub
   fi
-  flutter test checks/local_proxies_test.dart --no-pub
   flutter analyze --no-fatal-infos
   # Phone constraints and text scaling need no emulator or system VPN.
   # Run once on Linux, after the bridge types have been generated.
   if [ "$os" = linux ]; then
-    PPVPN_UI_TEST_CJK_FONT="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}" \
-      flutter test checks/mobile_layout_test.dart checks/native_chrome_test.dart checks/logs_layout_test.dart --no-pub
+    flutter test checks/native_chrome_test.dart --no-pub
+    cjk_font="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}"
+    if [ -n "${PPVPN_UI_TEST_CJK_FONT:-}" ] || [ -f "$cjk_font" ]; then
+      PPVPN_UI_TEST_CJK_FONT="$cjk_font" \
+        flutter test checks/mobile_layout_test.dart checks/logs_layout_test.dart --no-pub
+    fi
   fi
 fi
 
