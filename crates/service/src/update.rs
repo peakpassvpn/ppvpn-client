@@ -312,12 +312,23 @@ fn record(staging: &Staging, job: &Job, outcome: Result<(), String>) {
     }
 }
 
-/// Keep both generations of runner excluded until the operation ends. Fields
-/// drop in declaration order, releasing the legacy lock before the root lock.
+/// Keep both generations of runner excluded until the operation ends. Unlock
+/// explicitly before closing handles so concurrent subprocess spawns that
+/// transiently duplicate the descriptor table before `exec` cannot retain a
+/// BSD `flock` past `Drop`, releasing the legacy lock before the root lock.
 #[derive(Debug)]
 struct Reservation {
-    _legacy: Option<std::fs::File>,
-    _root: std::fs::File,
+    legacy: Option<std::fs::File>,
+    root: std::fs::File,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if let Some(legacy) = &self.legacy {
+            let _ = legacy.unlock();
+        }
+        let _ = self.root.unlock();
+    }
 }
 
 fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
@@ -368,10 +379,7 @@ fn reservation(staging: &Staging) -> std::io::Result<Option<Reservation>> {
             Some(lock_file(&staging.legacy_lock_path())?)
         }
     };
-    Ok(Some(Reservation {
-        _legacy: legacy,
-        _root: root,
-    }))
+    Ok(Some(Reservation { legacy, root }))
 }
 
 /// Both paths take ACTIVE before the disk reservation before CORE. A service
