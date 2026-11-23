@@ -24,6 +24,8 @@ use crate::core_ipc::{ApplyChoices, BoxFuture, CoreCallError, CoreTransport};
 use crate::errors::{ClientErrorInfo, ErrorCode};
 use crate::RoutingMode;
 
+#[cfg(any(windows, test))]
+mod async_pipe;
 #[cfg(unix)]
 mod unix_request;
 #[cfg(all(unix, test))]
@@ -850,18 +852,27 @@ impl ServiceClient {
     ) -> Result<Response, ServiceError> {
         let body = serde_json::to_vec(&request)
             .map_err(|error| ServiceError::Protocol(format!("encode request: {error}")))?;
-        let endpoint = self.endpoint.clone();
-        let task = tokio::task::spawn_blocking(move || {
-            blocking_transact(&endpoint, &body, timeout, handshake)
-        });
-        let bytes = match tokio::time::timeout(timeout + Duration::from_secs(1), task).await {
-            Err(_) => {
-                return Err(ServiceError::Unavailable(
-                    "service call timed out".to_string(),
-                ))
+        // A Windows pipe must be owned by the timed future: timing out a
+        // spawn_blocking task cannot cancel its synchronous reads or writes.
+        #[cfg(windows)]
+        let bytes = async_pipe::transact(&self.endpoint, &body, timeout, handshake).await?;
+        #[cfg(not(windows))]
+        let bytes = {
+            let endpoint = self.endpoint.clone();
+            let task = tokio::task::spawn_blocking(move || {
+                blocking_transact(&endpoint, &body, timeout, handshake)
+            });
+            match tokio::time::timeout(timeout + Duration::from_secs(1), task).await {
+                Err(_) => {
+                    return Err(ServiceError::Unavailable(
+                        "service call timed out".to_string(),
+                    ))
+                }
+                Ok(Err(error)) => {
+                    return Err(ServiceError::Protocol(format!("service task: {error}")))
+                }
+                Ok(Ok(result)) => result?,
             }
-            Ok(Err(error)) => return Err(ServiceError::Protocol(format!("service task: {error}"))),
-            Ok(Ok(result)) => result?,
         };
         serde_json::from_slice(&bytes)
             .map_err(|error| ServiceError::Protocol(format!("parse response: {error}")))
@@ -956,7 +967,7 @@ fn verify_response(
 
 /// Writes `[u32 BE length]` and the body as two writes (what the service
 /// expects), then reads the framed response.
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn exchange<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     body: &[u8],
@@ -977,7 +988,7 @@ fn exchange<S: std::io::Read + std::io::Write>(
 /// A close before any byte of the handshake answer is how the service
 /// rejects an app it does not trust ([`ServiceError::Rejected`]); any other
 /// short read is a protocol failure.
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn read_frame<R: std::io::Read>(reader: &mut R, handshake: bool) -> Result<Vec<u8>, ServiceError> {
     let mut length = [0u8; 4];
     let mut filled = 0;
@@ -1021,17 +1032,6 @@ fn read_frame<R: std::io::Read>(reader: &mut R, handshake: bool) -> Result<Vec<u
         }
     })?;
     Ok(body)
-}
-
-#[cfg(windows)]
-fn blocking_transact(
-    endpoint: &str,
-    body: &[u8],
-    _timeout: Duration,
-    handshake: bool,
-) -> Result<Vec<u8>, ServiceError> {
-    let mut pipe = open_pipe(endpoint).map_err(ServiceError::Unavailable)?;
-    exchange(&mut pipe, body, handshake)
 }
 
 #[cfg(not(any(unix, windows)))]
