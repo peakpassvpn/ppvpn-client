@@ -36,11 +36,12 @@ import 'package:tray_manager/tray_manager.dart';
 
 import 'app_state.dart';
 import 'bench.dart';
+import 'node_identity.dart' show trayNodeTitle;
 import 'pages/overview.dart';
 import 'settings.dart';
 import 'src/rust/api.dart' as rust;
 import 'strings.dart';
-import 'widgets.dart' show SwitchState, nodeTitle;
+import 'widgets.dart' show SwitchState;
 
 /// The icon's four states: not connected, in progress, connected, error.
 enum _Icon { off, busy, on, error }
@@ -127,7 +128,7 @@ class Tray {
     final detail = [
       if (snapshot.phase != rust.UiPhase.off)
         s(snapshot.connectionMode == rust.UiConnectionMode.enhanced ? 'tunMode' : 'stdMode'),
-      node == null ? '—' : nodeTitle(node),
+      node == null ? '—' : trayNodeTitle(node),
       if (snapshot.latencyMs case final ms?) '$ms ms' else '—',
     ].join(' · ');
     final latency = app.latency.value;
@@ -140,7 +141,7 @@ class Tray {
         snapshot.phase,
         snapshot.connectionMode,
         snapshot.selectedNodeId,
-        for (final row in nodes) '${row.node.id}:${row.node.name}:${_latencyText(row.latency)}',
+        for (final row in nodes) '${row.node.id}:${trayNodeTitle(row.node)}:${_latencyText(row.latency)}',
       ],
       if (signedIn) snapshot.unread,
     ].join('|');
@@ -152,7 +153,7 @@ class Tray {
         [
           'PPVPN',
           ?status,
-          if (ready && node != null) nodeTitle(node),
+          if (ready && node != null) trayNodeTitle(node),
           if (trayBench) '$_benchTick',
         ].join(' · '),
       );
@@ -176,14 +177,14 @@ class Tray {
       menu.addItem(_mode(snapshot, s('stdMode'), rust.UiConnectionMode.compatible));
       menu.addItem(_mode(snapshot, s('tunMode'), rust.UiConnectionMode.enhanced));
       final parent = MenuItem.createWithLabelAndType(
-        '${s('currentNode')}: ${node == null ? '—' : nodeTitle(node)}',
+        '${s('currentNode')}: ${node == null ? '—' : trayNodeTitle(node)}',
         MenuItemType.submenu,
       );
       final submenu = Menu.create();
       if (parent != null && submenu != null) {
         for (final row in nodes) {
           final item = MenuItem.createWithLabelAndType(
-            _withLatency(nodeTitle(row.node), _latencyText(row.latency)),
+            _withLatency(trayNodeTitle(row.node), _latencyText(row.latency)),
             MenuItemType.radio,
           );
           if (item == null) continue;

@@ -70,8 +70,8 @@ impl TunState {
 }
 
 /// What `Engine::new` refuses in a configuration: a TUN instance's bad
-/// dns-local servers, and what only a mobile TUN host gives (its TUN, its
-/// socket protection) anywhere else.
+/// dns-local servers, a mobile TUN descriptor elsewhere, and mobile socket
+/// protection on a desktop platform. Standard mobile probes need protection too.
 pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
     let fd = config.tun.as_ref().and_then(|tun| tun.fd);
     let mobile_tun = config.role == Role::Tun && crate::mobile::mobile(config.platform);
@@ -89,11 +89,11 @@ pub(super) fn check(config: &EngineConfig) -> Result<(), Error> {
             "not a file descriptor",
         ));
     }
-    if config.socket_protect.is_some() && !mobile_tun {
+    if config.socket_protect.is_some() && !crate::mobile::mobile(config.platform) {
         return Err(Error::invalid(
             codes::CORE_OPERATION_FAILED,
             "socket_protect",
-            "only a TUN instance on iOS or Android protects its sockets",
+            "only iOS or Android instances protect their sockets",
         ));
     }
     if config.role == Role::Tun {
@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_mobile_tun_takes_the_hosts_tun_and_protection() {
+    fn mobile_instances_take_protection_but_only_tun_takes_the_hosts_tun() {
         let protect = || crate::SocketProtect::new(|_| Ok(()));
         let field = |config: EngineConfig| check(&config).unwrap_err().field;
         for platform in [Platform::Ios, Platform::Android] {
@@ -601,10 +601,7 @@ mod tests {
                 field(standard.clone().with_tun(TunConfig::new().with_fd(3))).as_deref(),
                 Some("tun.fd")
             );
-            assert_eq!(
-                field(standard.with_socket_protect(protect())).as_deref(),
-                Some("socket_protect")
-            );
+            check(&standard.with_socket_protect(protect())).unwrap();
         }
         let desktop = EngineConfig::new(Role::Tun, Platform::Linux, "/x");
         assert_eq!(

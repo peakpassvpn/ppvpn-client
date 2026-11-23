@@ -28,7 +28,10 @@ class S {
   static S get current => switch (Settings.language.value) {
     rust.UiLanguage.chinese => _chinese,
     rust.UiLanguage.english => _english,
-    rust.UiLanguage.system => PlatformDispatcher.instance.locale.languageCode == 'zh' ? _chinese : _english,
+    rust.UiLanguage.system =>
+      PlatformDispatcher.instance.locale.languageCode == 'zh'
+          ? _chinese
+          : _english,
   };
 
   /// Chinese is shown (dates are written the Chinese way).
@@ -42,6 +45,9 @@ class S {
 }
 
 const _zh = <String, String>{
+  'restoringSession': '正在恢复登录状态…',
+  'nodeDetails': '节点详情',
+  'nodeAddress': '出口 IP',
   'app': 'PPVPN',
   'overview': '概览',
   'nodes': '节点',
@@ -90,9 +96,17 @@ const _zh = <String, String>{
   'cfgD': '最新的节点配置无法解析，正在继续使用之前的配置。',
   'colName': '节点',
   'colTier': '入口',
+  'entryCnOptimized': '三网优化',
+  'entryEconomy': '经济',
   'colRegion': '地区',
   'colRoutes': '线路',
   'colLatency': '延迟',
+  'primaryLine': '首选线路',
+  'backupLineN': '备用线路 {n}',
+  'lineNameMissing': '部分线路尚未配置显示名称，暂按首选、备用顺序显示。',
+  'chooseLine': '选择实际线路',
+  'autoLine': '自动选择（故障切换）',
+  'lineN': '线路 {n}',
   'probe': '测速方式',
   'testAll': '全部测速',
   'refreshNodes': '刷新节点',
@@ -307,14 +321,17 @@ const _zh = <String, String>{
   'validUntil': '有效期至 {d}',
   // The phone's sign-in (#535): the page opens in a sheet, no code to
   // compare.
-  'phoneSignInLine': '用 PPVPN 账户登录。授权页面在应用内弹出，确认一次就回到这里，无需输入密码。',
+  'phoneSignInLine': '在授权页面登录你的 PPVPN 账户并确认授权，完成后会自动返回应用。',
   'phoneStep1': '点“登录”，授权页面从下方弹出',
-  'phoneStep2': '在授权页面里点“授权”',
+  'phoneStep2': '登录账户后点“授权”',
   'phoneStep3': '页面自动关闭，完成登录',
   'reopenAuth': '重新打开授权页面',
 };
 
 const _en = <String, String>{
+  'restoringSession': 'Restoring your session…',
+  'nodeDetails': 'Node details',
+  'nodeAddress': 'Exit IP',
   'app': 'PPVPN',
   'overview': 'Overview',
   'nodes': 'Nodes',
@@ -355,7 +372,8 @@ const _en = <String, String>{
   'buy': 'Buy Subscription',
   'refresh': 'Refresh',
   'teamOffT': 'Team Disabled',
-  'teamOffD': '“{team}” was disabled by its admin. Switch to another team to continue.',
+  'teamOffD':
+      '“{team}” was disabled by its admin. Switch to another team to continue.',
   'switchTeam': 'Switch Team',
   'personal': 'Personal',
   'teamDisabled': 'Disabled',
@@ -363,9 +381,17 @@ const _en = <String, String>{
   'cfgD': 'The latest node configuration couldn’t be parsed. Still using the previous configuration.',
   'colName': 'Node',
   'colTier': 'Entry',
+  'entryCnOptimized': 'CN Optimized',
+  'entryEconomy': 'Economy',
   'colRegion': 'Region',
   'colRoutes': 'Routes',
   'colLatency': 'Latency',
+  'primaryLine': 'Preferred route',
+  'backupLineN': 'Backup route {n}',
+  'lineNameMissing': 'Some routes have no display name configured. Preferred and backup order is shown instead.',
+  'chooseLine': 'Choose connection route',
+  'autoLine': 'Automatic (failover)',
+  'lineN': 'Route {n}',
   'probe': 'Test Method',
   'testAll': 'Test All',
   'refreshNodes': 'Refresh Nodes',
@@ -391,7 +417,8 @@ const _en = <String, String>{
   'h_stdStarting': 'Applying System Proxy',
   'h_stdFail': 'System Proxy Failed',
   'd_idle': 'Local proxy is still available',
-  'fr_port': 'Couldn’t apply system proxy settings. Another app may be managing them.',
+  'fr_port':
+      'Couldn’t apply system proxy settings. Another app may be managing them.',
   'fr_profile': 'The current node configuration can’t be used, so the app can’t connect right now. Tap "Refresh Nodes". If it still can’t connect, please contact support.',
   'cfgExpiredT': 'Node Configuration Expired',
   'fr_profileExpired': 'The node configuration has expired. The app will get a new one automatically. If this doesn’t clear up after a while, please check that your subscription is active.',
@@ -422,7 +449,8 @@ const _en = <String, String>{
   'unreadShort': '{n} unread',
   'allRead': 'All read',
   'msgEmptyT': 'No Messages',
-  'msgEmptyD': 'Notices about your subscription, billing and routes will appear here.',
+  'msgEmptyD':
+      'Notices about your subscription, billing and routes will appear here.',
   'msgErrT': 'Couldn’t load messages',
   'msgErrD': 'Check your network connection and try again.',
   'loadingMore': 'Loading…',
@@ -476,12 +504,14 @@ const _en = <String, String>{
   'launchAtLogin': 'Launch at Login',
   'launchApprove': 'Allow PPVPN in System Settings › General › Login Items.',
   'openSysSettings': 'Allow in System Settings',
-  'winLaunchApprove': 'Turned off in Settings › Apps › Startup. Turn it back on there.',
+  'winLaunchApprove':
+      'Turned off in Settings › Apps › Startup. Turn it back on there.',
   'openWinStartup': 'Open Startup Settings',
   'autoUpdate': 'Update Automatically',
   'autoUpdateD': 'Installs new versions in the background. When off, you’ll be asked first.',
   'updatedTo': 'Updated to PPVPN {v}',
-  'updInstalling': 'An update is being installed. Open PPVPN again in a moment.',
+  'updInstalling':
+      'An update is being installed. Open PPVPN again in a moment.',
   'updUpdating': 'Updating PPVPN',
   'updUpdatingD': 'PPVPN will reopen when the update is done.',
   'user': 'User',
@@ -516,7 +546,8 @@ const _en = <String, String>{
   'd_preparing': 'Checking system service',
   'd_authorizing': 'First-time setup installs a system service. Enter your administrator password in the system dialog.',
   'd_disconnecting': 'Restoring system network settings',
-  'd_occupied': 'Another PPVPN session on this computer is using Enhanced Mode.',
+  'd_occupied':
+      'Another PPVPN session on this computer is using Enhanced Mode.',
   'd_occupiedUser': 'Another user on this computer is using Enhanced Mode.',
   'h_networkTaken': 'Network Taken Over',
   'd_routesTaken': 'Another VPN keeps changing this computer’s routes, so Enhanced Mode has paused. Turn it off, then try again.',
@@ -573,9 +604,9 @@ const _en = <String, String>{
   'accountHelp': 'Account and Help',
   'openInWeb': 'Opens on the web',
   'validUntil': 'Valid until {d}',
-  'phoneSignInLine': 'Sign in with your PPVPN account. The authorization page opens in the app; confirm once and you are back here, no password needed.',
+  'phoneSignInLine': 'Sign in to your PPVPN account on the authorization page, then authorize this device to return to the app.',
   'phoneStep1': 'Tap Sign In: the authorization page slides up',
-  'phoneStep2': 'Tap Authorize on that page',
+  'phoneStep2': 'Sign in, then tap Authorize',
   'phoneStep3': 'The page closes and you are signed in',
   'reopenAuth': 'Open the Authorization Page Again',
 };

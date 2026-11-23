@@ -17,6 +17,12 @@ import 'package:ppvpn_flutter/theme.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
+    await (FontLoader(
+      'PPVPN Material',
+    )..addFont(rootBundle.load('assets/fonts/MaterialSymbols.ttf'))).load();
+    await (FontLoader('PPVPN Material Filled')
+          ..addFont(rootBundle.load('assets/fonts/MaterialSymbolsFilled.ttf')))
+        .load();
     final inter = FontLoader('packages/forui/Inter')
       ..addFont(rootBundle.load('packages/forui/assets/fonts/inter/Inter.ttf'));
     final mono = FontLoader('JetBrains Mono')

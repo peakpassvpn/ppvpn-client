@@ -24,17 +24,32 @@ project = Xcodeproj::Project.open(project_path)
 runner = project.targets.find { |target| target.name == "Runner" } or abort "#{project_path}: no Runner target"
 abort "#{project_path}: PacketTunnel exists already" if project.targets.any? { |target| target.name == "PacketTunnel" }
 
+# Generic simulator destinations also select x86_64 on ARM hosts. Both Rust
+# archives contain only arm64, so both targets must use the delivered slice.
+def arm64_simulator(target)
+  target.build_configurations.each do |config|
+    config.build_settings["ARCHS[sdk=iphonesimulator*]"] = "arm64"
+    config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "i386 x86_64"
+  end
+end
+arm64_simulator(runner)
+
 tunnel = project.new_target(:app_extension, "PacketTunnel", :ios, "15.0", nil, :swift)
 # Every configuration the project has (flutter's Debug, Release, Profile).
 project.build_configurations.each do |config|
   next if tunnel.build_configurations.any? { |own| own.name == config.name }
   tunnel.add_build_configuration(config.name, config.name == "Debug" ? :debug : :release)
 end
+arm64_simulator(tunnel)
 
 group = project.main_group.find_subpath("PacketTunnel", true)
 group.set_source_tree("<group>")
 group.set_path("PacketTunnel")
 sources = %w[PacketTunnelProvider.swift TunnelHost.swift].map { |name| group.new_reference(name) }
+shared = project.main_group.find_subpath("Shared", true)
+shared.set_source_tree("<group>")
+shared.set_path("Shared")
+sources << shared.new_reference("NetworkState.swift")
 tunnel.add_file_references(sources)
 %w[Info.plist PacketTunnel.entitlements].each { |name| group.new_reference(name) }
 tunnel.add_system_framework("NetworkExtension")
@@ -66,13 +81,10 @@ tunnel.build_configurations.each do |config|
   settings["SWIFT_VERSION"] = "5.0"
   settings["SKIP_INSTALL"] = "YES"
   settings["APPLICATION_EXTENSION_API_ONLY"] = "YES"
+  settings["DEAD_CODE_STRIPPING"] = "YES"
+  settings["EXPORTED_SYMBOLS_FILE"] = "$(PROJECT_DIR)/PacketTunnel/Tunnel.exports"
   # The system limits the extension to 50 MiB (#388): no debug dylib.
   settings["ENABLE_DEBUG_DYLIB"] = "NO"
-  # Apple silicon's simulator only: the XCFramework's simulator slice is
-  # arm64, and a simulator build for x86_64 too would link without it
-  # (the Runner's architectures come from flutter's xcconfig, which this
-  # target does not have).
-  settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "i386 x86_64"
   libs = ENV["PPVPN_TUNNEL_LIBS"].to_s.split
   settings["OTHER_LDFLAGS"] = ["$(inherited)", *libs] unless libs.empty?
   next if team.empty?

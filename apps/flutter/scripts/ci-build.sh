@@ -230,7 +230,7 @@ open(path, "w").write(text)
 
 delegate = "ios/Runner/AppDelegate.swift"
 code = open(delegate).read()
-plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["PPVPNPlugin.swift", "NativeChrome.swift"])
+plugin = "\n".join(open("runner/ios/Runner/" + name).read() for name in ["../Shared/NetworkState.swift", "PPVPNPlugin.swift", "NativeChrome.swift"])
 imports = [line for line in plugin.splitlines() if line.startswith("import ")]
 body = "\n".join(line for line in plugin.splitlines() if not line.startswith("import "))
 code, registered = re.subn(
@@ -335,11 +335,11 @@ if [ "${PPVPN_SKIP_ANALYZE:-}" != 1 ]; then
   # Phone constraints and text scaling need no emulator or system VPN.
   # Run once on Linux, after the bridge types have been generated.
   if [ "$os" = linux ]; then
-    flutter test checks/native_chrome_test.dart --no-pub
+    flutter test checks/authentication_browser_test.dart checks/native_chrome_test.dart --no-pub
     cjk_font="${PPVPN_UI_TEST_CJK_FONT:-/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc}"
     if [ -n "${PPVPN_UI_TEST_CJK_FONT:-}" ] || [ -f "$cjk_font" ]; then
       PPVPN_UI_TEST_CJK_FONT="$cjk_font" \
-        flutter test checks/mobile_layout_test.dart checks/logs_layout_test.dart --no-pub
+        flutter test checks/mobile_layout_test.dart checks/logs_layout_test.dart checks/device_feedback_test.dart --no-pub
     fi
   fi
 fi
@@ -380,8 +380,9 @@ if [ "$os" = android ]; then
     cp "$tunnel/$abi/"*.so "android/app/src/main/jniLibs/$abi/"
   done
 elif [ "$os" = ios ]; then
+  python3 scripts/check-ios-exports.py
   # iOS takes no loose dynamic library: the bridge is a static library the
-  # Runner links whole (-force_load), its symbols exported for the Dart
+  # Runner loads (-force_load), exporting only the bridge entry points for Dart
   # side's lookup (ExternalLibrary.process), with the system libraries it
   # needs as rustc prints them (the lib is touched so that it prints).
   case ${IOS_SDK:-device} in
@@ -401,11 +402,12 @@ elif [ "$os" = ios ]; then
   echo "native-static-libs: $native"
   mkdir -p ios/rust
   cp "$root/target/$triple/release/libppvpn_flutter.a" ios/rust/
+  python3 scripts/check-ios-staticlib.py ios/rust/libppvpn_flutter.a runner/ios/Runner/Bridge.exports
   NATIVE="$native" python3 - <<'PY'
 import json, os
 path = "ios/Runner.xcodeproj/project.pbxproj"
 text = open(path).read()
-flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a", "-Wl,-export_dynamic"]
+flags = ["$(inherited)", "-force_load", "$(PROJECT_DIR)/rust/libppvpn_flutter.a"]
 flags += os.environ["NATIVE"].split()
 setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flags) + ");"
 # The Dart side finds the bridge's functions by name (dlsym): an archive
@@ -413,6 +415,8 @@ setting = "OTHER_LDFLAGS = (" + "".join(json.dumps(flag) + ", " for flag in flag
 # the TestFlight build of 0.7.2 stayed white. An archive strips locals
 # only.
 setting += "\n\t\t\t\tSTRIP_STYLE = \"non-global\";"
+setting += '\n\t\t\t\tEXPORTED_SYMBOLS_FILE = "$(PROJECT_DIR)/Runner/Bridge.exports";'
+setting += '\n\t\t\t\tDEAD_CODE_STRIPPING = YES;'
 bundle = "PRODUCT_BUNDLE_IDENTIFIER = com.peakpassvpn.ppvpn;"
 if text.count(bundle) != 3:
     raise SystemExit(f"{path}: not the three Runner configurations")
@@ -571,15 +575,19 @@ case $os in
         { echo "$bundle: R8 renamed or dropped ${kept//\//.}" >&2; exit 1; }
     done ;;
   ios)
+    tunnel_binary=
     if [ "${IOS_SDK:-device}" = simulator ]; then
       bundle=build/ios/iphonesimulator/Runner.app
       test -x "$bundle/Runner"
+      runner=$bundle/Runner
     elif [ -n "${IOS_EXPORT_OPTIONS:-}" ]; then
       bundle=$(ls build/ios/ipa/*.ipa)
       test -f "$bundle"
       # The Runner that ships, after the export's own processing.
       runner=build/ios/Runner.shipped
       unzip -p "$bundle" Payload/Runner.app/Runner >"$runner"
+      tunnel_binary=build/ios/PacketTunnel.shipped
+      unzip -p "$bundle" Payload/Runner.app/PlugIns/PacketTunnel.appex/PacketTunnel >"$tunnel_binary"
     else
       bundle=build/ios/iphoneos/Runner.app
       test -x "$bundle/Runner"
@@ -593,10 +601,16 @@ case $os in
     if [ -n "${runner:-}" ]; then
       test -s "$runner"
       exports=$(xcrun dyld_info -exports "$runner")
-      for name in frb_pde_ffi_dispatcher_primary frb_pde_ffi_dispatcher_sync frb_get_rust_content_hash \
-          frb_dart_fn_deliver_output frb_init_frb_dart_api_dl frb_create_shutdown_callback; do
-        grep -qw "_$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
-      done
+      while IFS= read -r name; do
+        grep -qw "$name" <<<"$exports" || { echo "$runner does not export the bridge's $name" >&2; exit 1; }
+      done < runner/ios/Runner/Bridge.exports
+      tunnel_binary="${tunnel_binary:-$(dirname "$runner")/PlugIns/PacketTunnel.appex/PacketTunnel}"
+      test -s "$tunnel_binary"
+      tunnel_exports=$(xcrun dyld_info -exports "$tunnel_binary")
+      while IFS= read -r name; do
+        grep -qw "$name" <<<"$tunnel_exports" || { echo "$tunnel_binary does not export $name" >&2; exit 1; }
+      done < runner/ios/PacketTunnel/Tunnel.exports
+      python3 scripts/check-ios-exports.py "$runner" "$tunnel_binary"
       echo "$runner: $(grep -c '_frb_' <<<"$exports") bridge functions exported"
     fi ;;
   linux)
