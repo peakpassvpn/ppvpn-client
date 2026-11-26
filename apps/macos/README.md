@@ -53,9 +53,10 @@ and runs `packaging/postinstall`, which hands the bundle to the console user
 so that Sparkle updates it without an administrator prompt
 (docs/security.md). `SPARKLE_PRIVATE_KEY_FILE` fills `ed_signature` and
 `install_ed_signature`: the privileged service checks the package with the
-same key before it installs it silently (#548). CI
-(`tools/desktop/ci/build-macos-native.sh`) builds both architectures on an
-Apple silicon runner into one artifact.
+same key before it installs it silently (#548). For stable
+releases, `release.yml` compiles the app and service before approval. Its `macos`
+job then calls `tools/desktop/ci/build-macos-native.sh` with those artifacts to
+sign and package each architecture after approval.
 
 ## Signing and installing
 
