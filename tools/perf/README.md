@@ -1,6 +1,6 @@
 # Performance checks, tiers A and B
 
-By hand on the test host (no workflow runs it since the Go core left main; see `docs/testing.md`), these scripts measure the numbers that barely depend on the machine:
+The tier A and B comparisons run by hand on the test host (see `docs/testing.md`). The separate Network Extension memory check also runs in CI, as described below. These scripts measure:
 
 - release binary sizes;
 - the engine process's RSS, both idle and under a fixed load;
@@ -18,6 +18,20 @@ By hand on the test host (no workflow runs it since the Go core left main; see `
 | `../../test/perf/fakenode` | The stand-in node, on loopback: Shadowsocks 2022, AnyTLS (with a certificate generated at start, trusted through `SSL_CERT_FILE`) and an echo sink. |
 | `../../test/perf/loadgen` | The fixed loads through the local proxy. |
 | `internal/runtime/perf_alloc_test.go` at tag v0.5.21 | The Go engine's allocation counts (the Go core is no longer on main). They compare only with the same engine. |
+
+## Network Extension memory (#388)
+
+`ne_mem.py --variant ios` combines Sail's mobile profile with `inbound.max_connections=128`, matching the iOS host. The Linux and macOS CI jobs use two workers and compare `default`, `cap`, `ios` and `budget`; `default` is the mobile profile without the host's cap. Both jobs build `ne-mem` with `--profile mobile --features ppvpn-core/lab`, matching the shipped mobile build profile. The Python acceptance tests and Go load-generator/DoT fixture tests run before the measurements.
+
+A failed load in `default` exits nonzero; with `--no-default`, the first selected variant takes its place. The `ios` variant is always checked too. Its connection scenarios require complete echoes from every requested stream up to 128. Above the cap, exactly 128 streams must complete without write errors or stalls; refused excess streams remain marked ✗ in the report. TCP handshakes alone do not count as completed loads. The existing `--dhat` exception only permits a failed DNS load, which remains visible.
+
+The default DNS load sends 2,000 distinct queries at 400 queries/s through the real TUN, Sail DNS client, selected proxy node and verified TLS. The fake node redirects only TCP port 853 at `1.1.1.1`, `8.8.8.8` and `9.9.9.9` to a local pipelined DoT responder. Each response is NXDOMAIN after 100 ms, creating repeatable concurrent DNS work without public resolver rate limits. Other destinations and rule-set HTTPS downloads keep their normal path. The response validator still checks unique IDs, matching questions, opcode, truncation and successful resolution status; it waits up to 11 seconds after the last query and fails below 95%. Per-run fixture query/reply counters must also cover the validated replies, so bypassing the fixture cannot pass.
+
+Before measurement, a separate `ne-mem --export-trust-bundle` process loads roots using Sail's native certificate loader, adds the generated fixture CA and writes a temporary bundle. This preserves macOS/Linux native trust and inherited `SSL_CERT_FILE`/`SSL_CERT_DIR` configuration. Only the measured child receives the bundle; no system trust settings change, and export allocations are outside that process. Empty or invalid native/fixture bundles fail clearly. TLS certificate verification remains enabled.
+
+Use `--dns-source public` for a separate public-path diagnostic. It omits the redirect and fixture CA, labels the output as public, and keeps the same response acceptance threshold. Its resolver latency and availability are uncontrolled, so its memory numbers are not interchangeable with the fixed-delay load. A passing local load does not establish that the public path is fixed. The default local load models a 100 ms resolver, not every possible upstream delay or timeout.
+
+The 35 MiB core budget is reported with ⚠ when exceeded, not enforced by the load-success check. A passing load check is not proof that the memory budget is met. This harness excludes the Swift host; iPhone Network Extension acceptance still needs the real extension and its total process footprint.
 
 ## Metrics
 

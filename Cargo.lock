@@ -2895,6 +2895,7 @@ name = "ppvpn-core-lab"
 version = "0.7.6"
 dependencies = [
  "base64",
+ "btls",
  "bytes",
  "dhat",
  "futures-core",
@@ -2904,6 +2905,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "ppvpn-core",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "tokio",
