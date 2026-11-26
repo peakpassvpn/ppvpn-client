@@ -1117,6 +1117,10 @@ impl Client {
             return Err(ClientError::NotSignedIn);
         }
         tracing::info!("team switch: switched to team {team_id}");
+        // The old team's profile is no longer usable. Stop its cores before
+        // awaiting the new download: transport and parse failures do not
+        // publish a profile change that would otherwise stop them.
+        self.stop_cores().await;
         self.fetch_profile(session, true).await
     }
 
