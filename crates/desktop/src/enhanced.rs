@@ -53,6 +53,14 @@ const LEASE_RENEW_INTERVAL: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(15)
 };
+/// Pause between short-interval retries of a transient `RenewLease` failure
+/// within the service's 45 s lease window.
+const LEASE_RETRY_DELAY: Duration = if cfg!(test) {
+    Duration::from_millis(10)
+} else {
+    Duration::from_secs(2)
+};
+const LEASE_RENEW_RETRIES: usize = 2;
 const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 /// How long to wait for a freshly installed service to answer `GetVersion`.
 const SERVICE_START_TIMEOUT: Duration = if cfg!(test) {
@@ -689,6 +697,10 @@ struct Inner {
     on_state: StateSink,
     on_error: ErrorSink,
     detector: Mutex<Detector>,
+    /// Pause between lease renewals ([`LEASE_RENEW_INTERVAL`]).
+    lease_interval: Mutex<Duration>,
+    /// Pause between transient lease renewal retries ([`LEASE_RETRY_DELAY`]).
+    lease_retry_delay: Mutex<Duration>,
     /// Pause between data-plane health checks ([`HEALTH_INTERVAL`]).
     health_interval: Mutex<Duration>,
     /// Replaces the official host's direct and proxied steps (tests).
@@ -699,6 +711,8 @@ struct Inner {
     /// Woken by [`Enhanced::network_changed`]: brings the next health check
     /// forward, and cuts a reconnect pause short.
     network_changed: tokio::sync::Notify,
+    /// Wakes background loops when `stop_loops` cancels the current generation.
+    loops_cancelled: tokio::sync::Notify,
     /// Serialises enable / disable / retry / update / recovery.
     operation: tokio::sync::Mutex<()>,
     /// An uninstall holds `operation` through the admin prompt and the
@@ -733,16 +747,39 @@ impl Enhanced {
                 on_state,
                 on_error,
                 detector: Mutex::new(default_detector()),
+                lease_interval: Mutex::new(LEASE_RENEW_INTERVAL),
+                lease_retry_delay: Mutex::new(LEASE_RETRY_DELAY),
                 health_interval: Mutex::new(HEALTH_INTERVAL),
                 #[cfg(test)]
                 official_steps: Mutex::new(None),
                 clock: Mutex::new(system_clock()),
                 network_changed: tokio::sync::Notify::new(),
+                loops_cancelled: tokio::sync::Notify::new(),
                 operation: tokio::sync::Mutex::new(()),
                 uninstalling: AtomicBool::new(false),
                 data: Mutex::new(Data::default()),
             }),
         }
+    }
+
+    /// Replaces the pause between lease renewals (tests).
+    #[cfg(test)]
+    pub(crate) fn set_lease_interval(&self, interval: Duration) {
+        *self
+            .inner
+            .lease_interval
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = interval;
+    }
+
+    /// Replaces the pause between transient lease renewal retries (tests).
+    #[cfg(test)]
+    pub(crate) fn set_lease_retry_delay(&self, delay: Duration) {
+        *self
+            .inner
+            .lease_retry_delay
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = delay;
     }
 
     /// Replaces the pre-connect conflict detector (tests).
@@ -1403,19 +1440,52 @@ impl Inner {
         }
     }
 
-    /// Best-effort release of the service session held by `machine`.
-    async fn release_session(&self, machine: &Machine) {
-        if machine.phase == ConnectionPhase::Off {
-            return;
+    /// Best-effort release of the service session held by `machine`. Returns
+    /// whether the service confirmed that `machine`'s session no longer owns a
+    /// running core.
+    async fn release_session(&self, machine: &Machine) -> bool {
+        if machine.phase == ConnectionPhase::Off
+            || (machine.phase == ConnectionPhase::Contended
+                && machine.reason.as_ref().is_some_and(|reason| {
+                    matches!(
+                        reason.code,
+                        ErrorCode::ServiceBusy | ErrorCode::ServiceOwnedByAnotherUser
+                    )
+                }))
+        {
+            return true;
         }
-        if let Some(session) = machine.session() {
-            match tokio::time::timeout(RELEASE_BUDGET, self.service.disconnect(&session)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::debug!(?error, "release enhanced session"),
-                Err(_) => tracing::info!(
+        let Some(session) = machine.session() else {
+            return true;
+        };
+        self.disconnect_confirmed(&session, RELEASE_BUDGET).await
+    }
+
+    async fn disconnect_confirmed(&self, session: &SessionRef, budget: Duration) -> bool {
+        match tokio::time::timeout(budget, self.service.disconnect(session)).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error @ ServiceError::Failed(_))) => {
+                tracing::debug!(?error, "release enhanced session");
+                matches!(
+                    error.reason_code(),
+                    Some(
+                        "CONNECTION_NOT_ACTIVE"
+                            | "CONNECTION_LEASE_EXPIRED"
+                            | "STALE_OR_FOREIGN_SESSION"
+                            | "CONNECTION_OWNED_BY_ANOTHER_USER"
+                    )
+                )
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(?error, "release enhanced session");
+                false
+            }
+            Err(_) => {
+                tracing::info!(
                     "release enhanced session: no answer within {} ms; going on",
-                    RELEASE_BUDGET.as_millis()
-                ),
+                    budget.as_millis()
+                );
+                false
             }
         }
     }
@@ -1457,7 +1527,9 @@ impl Inner {
                         return Err(info);
                     }
                 }
-                _ => self.release_session(&machine).await,
+                _ => {
+                    self.release_session(&machine).await;
+                }
             }
         }
         self.finish(machine.generation).await;
@@ -1751,8 +1823,28 @@ impl Inner {
         retrying: bool,
     ) -> BoxFuture<'static, Result<(), ClientError>> {
         Box::pin(async move {
+            self.connect_with_replace(allow_install, take_over, retrying, None)
+                .await
+                .0
+        })
+    }
+
+    /// [`Self::connect`] carrying `replace_session` for automatic recovery, and
+    /// returning whatever session of this client remains unconfirmed on the
+    /// service after a failed attempt.
+    fn connect_with_replace(
+        self: Arc<Self>,
+        allow_install: bool,
+        take_over: bool,
+        retrying: bool,
+        replace_session: Option<SessionRef>,
+    ) -> BoxFuture<'static, (Result<(), ClientError>, Option<SessionRef>)> {
+        Box::pin(async move {
             let Some(profile) = self.with_data(|data| data.profile.clone()) else {
-                return Err(ClientError::failed(ErrorCode::Internal, "PROFILE_REQUIRED"));
+                return (
+                    Err(ClientError::failed(ErrorCode::Internal, "PROFILE_REQUIRED")),
+                    replace_session,
+                );
             };
             // The previous generation's loops end here; recovery runs in its
             // own task, so this never cancels the caller.
@@ -1762,7 +1854,10 @@ impl Inner {
                     .begin_connect(&profile.revision)
                     .map(|session| (session, Persisted::of(&data.machine)))
             });
-            let (session, persisted) = begun?;
+            let (session, persisted) = match begun {
+                Ok(begun) => begun,
+                Err(error) => return (Err(error.into()), replace_session),
+            };
             let generation = session.generation;
             let mut steps = Steps::new("enhanced connect", generation, true);
             self.persist(persisted).await;
@@ -1796,7 +1891,7 @@ impl Inner {
                 if applied {
                     self.emit();
                 }
-                return Err(info.into());
+                return (Err(info.into()), replace_session);
             }
 
             let ensured = self.ensure_service(generation, allow_install).await;
@@ -1821,12 +1916,15 @@ impl Inner {
                         self.persist(persisted).await;
                     }
                 }
-                return Err(info.into());
+                return (Err(info.into()), replace_session);
             }
 
             self.transition(generation, ConnectionPhase::Connecting, None, false);
             let started = steps.started;
-            let failed = |info: ClientErrorInfo, retryable: bool| {
+            let failed = |info: ClientErrorInfo,
+                          retryable: bool,
+                          service_accepted: bool,
+                          previous: Option<SessionRef>| {
                 let inner = self.clone();
                 let session = session.clone();
                 async move {
@@ -1836,7 +1934,23 @@ impl Inner {
                         started.elapsed().as_millis(),
                         info.code
                     );
-                    let _ = inner.service.disconnect(&session).await;
+                    // When Connect was refused because another session or OS
+                    // user owns the service, `session` never acquired the
+                    // core; disconnecting it would only fail with
+                    // STALE_OR_FOREIGN_SESSION / CONNECTION_OWNED_BY_ANOTHER_USER.
+                    let unconfirmed = if matches!(
+                        info.code,
+                        ErrorCode::ServiceBusy | ErrorCode::ServiceOwnedByAnotherUser
+                    ) {
+                        None
+                    } else {
+                        let released = inner.disconnect_confirmed(&session, RELEASE_BUDGET).await;
+                        if service_accepted {
+                            (!released).then_some(session)
+                        } else {
+                            previous
+                        }
+                    };
                     // Owned by someone else: "occupied", not a failure.
                     let phase = match info.code {
                         ErrorCode::ServiceBusy | ErrorCode::ServiceOwnedByAnotherUser => {
@@ -1850,7 +1964,7 @@ impl Inner {
                         _ => ConnectionPhase::Error,
                     };
                     inner.transition(generation, phase, Some(info.clone()), retryable);
-                    Err::<(), ClientError>(info.into())
+                    (Err::<(), ClientError>(info.into()), unconfirmed)
                 }
             };
 
@@ -1862,6 +1976,7 @@ impl Inner {
                     &session,
                     &profile.value,
                     take_over,
+                    replace_session.as_ref(),
                     self.config.routing.get(),
                     &self.choices(),
                 )
@@ -1869,7 +1984,7 @@ impl Inner {
             steps.done("service Connect (core spawn, profile, TUN start)");
             if let Err(error) = connected {
                 let (info, retryable) = connect_failure(&error);
-                return failed(info, retryable).await;
+                return failed(info, retryable, false, replace_session).await;
             }
             let status = self.service.get_status().await;
             steps.done("service status");
@@ -1882,6 +1997,8 @@ impl Inner {
                     return failed(
                         ClientErrorInfo::new(ErrorCode::ConnectFailed, "CORE_NOT_RUNNING"),
                         true,
+                        true,
+                        None,
                     )
                     .await
                 }
@@ -1890,7 +2007,7 @@ impl Inner {
                         ErrorCode::ServiceUnavailable,
                         format!("SERVICE_STATUS_UNAVAILABLE: {}", error.detail()),
                     );
-                    return failed(info, true).await;
+                    return failed(info, true, true, None).await;
                 }
             }
 
@@ -1924,13 +2041,13 @@ impl Inner {
             }
             steps.done("health check");
             if let Err(info) = healthy {
-                return failed(info, true).await;
+                return failed(info, true, true, None).await;
             }
             steps.finish("on");
             self.with_data(|data| data.recovery.note_health_success());
             self.start_loops(generation);
             self.transition(generation, ConnectionPhase::On, None, false);
-            Ok(())
+            (Ok(()), None)
         })
     }
 
@@ -2098,6 +2215,7 @@ impl Inner {
             data.loops_generation = None;
             std::mem::take(&mut data.loops)
         });
+        self.loops_cancelled.notify_waiters();
         for task in loops {
             task.abort();
         }
@@ -2231,7 +2349,11 @@ impl Inner {
                 },
                 true,
             );
-            self.release_session(&machine).await;
+            let mut replace_session = if self.release_session(&machine).await {
+                None
+            } else {
+                machine.session()
+            };
             let mut attempt = 0;
             // The first reconnect is immediate, unless the service itself
             // is going away (stopping, restarting, gone): then, as after
@@ -2288,9 +2410,14 @@ impl Inner {
                 // Attempts left after this one: a service-down failure then
                 // stays `Reconnecting` instead of flashing `Error`.
                 let retrying = service_backoff(attempt).is_some();
-                if self.clone().connect(false, false, retrying).await.is_ok() {
+                let (outcome, unconfirmed) = self
+                    .clone()
+                    .connect_with_replace(false, false, retrying, replace_session)
+                    .await;
+                if outcome.is_ok() {
                     return;
                 }
+                replace_session = unconfirmed;
                 // The reconnect ended with its own reason. The service being
                 // down is retried after a longer pause (the attempt left the
                 // phase `Reconnecting`); someone else owning the connection
@@ -2701,34 +2828,87 @@ fn rfc3339(at: SystemTime) -> String {
     )
 }
 
+fn is_retryable_lease_error(error: &ServiceError) -> bool {
+    matches!(error, ServiceError::Unavailable(detail) if !detail.contains("SERVICE_STOPPING"))
+}
+
+async fn sleep_while_on(inner: &Inner, generation: u64, duration: Duration) -> bool {
+    let cancelled = inner.loops_cancelled.notified();
+    tokio::pin!(cancelled);
+    if !inner.is_current(generation, ConnectionPhase::On) {
+        return false;
+    }
+    tokio::select! {
+        () = tokio::time::sleep(duration) => inner.is_current(generation, ConnectionPhase::On),
+        () = &mut cancelled => false,
+    }
+}
+
 async fn lease_loop(inner: Arc<Inner>, session: SessionRef) {
     let generation = session.generation;
     loop {
-        tokio::time::sleep(LEASE_RENEW_INTERVAL).await;
-        if !inner.is_current(generation, ConnectionPhase::On) {
+        let interval = *inner
+            .lease_interval
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !sleep_while_on(&inner, generation, interval).await {
             break;
         }
-        let renewed = inner.service.renew_lease(&session).await;
-        if inner.with_data(|data| data.machine.generation != generation) {
-            tracing::debug!(generation, "lease renewal for a stale session discarded");
-            break;
-        }
-        if let Ok(status) = &renewed {
-            inner.note_service_build(status);
-        }
-        if let Err(error) = renewed {
-            if let Some((info, retryable)) = ownership_lost(&error) {
-                // Taken over: no reconnect attempt, just "in use elsewhere".
-                tracing::info!("enhanced mode: connection taken over ({:?})", info.code);
-                inner.transition(
-                    generation,
-                    ConnectionPhase::Contended,
-                    Some(info),
-                    retryable,
-                );
-                break;
+        let mut attempt = 0usize;
+        let failure = loop {
+            let renewed = inner.service.renew_lease(&session).await;
+            if inner.with_data(|data| data.machine.generation != generation) {
+                tracing::debug!(generation, "lease renewal for a stale session discarded");
+                return;
             }
-            tracing::warn!(?error, "lease renewal failed");
+            if !inner.is_current(generation, ConnectionPhase::On) {
+                return;
+            }
+            match renewed {
+                Ok(status) => {
+                    if attempt > 0 {
+                        tracing::info!(generation, attempt, "lease renewal succeeded on retry");
+                    }
+                    inner.note_service_build(&status);
+                    break None;
+                }
+                Err(error) => {
+                    if let Some((info, retryable)) = ownership_lost(&error) {
+                        // Taken over: no reconnect attempt, just "in use elsewhere".
+                        tracing::info!("enhanced mode: connection taken over ({:?})", info.code);
+                        inner.transition(
+                            generation,
+                            ConnectionPhase::Contended,
+                            Some(info),
+                            retryable,
+                        );
+                        return;
+                    }
+                    if attempt < LEASE_RENEW_RETRIES && is_retryable_lease_error(&error) {
+                        attempt += 1;
+                        let retry_delay = *inner
+                            .lease_retry_delay
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        tracing::info!(
+                            generation,
+                            attempt,
+                            retries = LEASE_RENEW_RETRIES,
+                            delay_ms = retry_delay.as_millis() as u64,
+                            ?error,
+                            "lease renewal failed transiently; retrying"
+                        );
+                        if !sleep_while_on(&inner, generation, retry_delay).await {
+                            return;
+                        }
+                        continue;
+                    }
+                    break Some((error, attempt + 1));
+                }
+            }
+        };
+        if let Some((error, attempts)) = failure {
+            tracing::warn!(?error, attempts, "lease renewal failed");
             // Own task: the reconnect stops this loop.
             tokio::spawn(inner.clone().recover(generation, error.info()));
             break;
@@ -3526,6 +3706,13 @@ mod tests {
         disconnect_delay: Mutex<Option<Duration>>,
         /// `RenewLease` fails with this service error.
         renew_error: Mutex<Option<String>>,
+        /// This many `RenewLease` calls fail with transient `Unavailable`
+        /// ("service call timed out") before succeeding again.
+        renew_transient_failures: AtomicUsize,
+        /// Total `RenewLease` calls observed.
+        renew_calls: AtomicUsize,
+        /// `replace_session` of every `connect` call, in order.
+        replace_sessions: Mutex<Vec<Option<SessionRef>>>,
         /// When each `connect` call arrived.
         connect_times: Mutex<Vec<Instant>>,
         /// The service answers `Watch` (a service that predates it does not).
@@ -3627,31 +3814,45 @@ mod tests {
             session: &'a SessionRef,
             profile: &'a Value,
             take_over: bool,
+            replace_session: Option<&'a SessionRef>,
             routing_mode: RoutingMode,
             choices: &'a core_ipc::ApplyChoices,
         ) -> BoxFuture<'a, Result<u32, ServiceError>> {
             Box::pin(async move {
                 self.connects.fetch_add(1, Ordering::SeqCst);
                 self.routing_modes.lock().unwrap().push(routing_mode);
+                self.replace_sessions
+                    .lock()
+                    .unwrap()
+                    .push(replace_session.cloned());
                 self.connect_times.lock().unwrap().push(Instant::now());
                 self.check()?;
                 if let Some(error) = self.connect_error.lock().unwrap().clone() {
                     return Err(ServiceError::Failed(error));
                 }
-                // Mirrors service/src/core.rs `ownership`.
+                // Mirrors service/src/core.rs `ownership` across both foreign
+                // owners and our own still-active session.
                 let foreign = self.foreign.lock().unwrap().clone();
-                if foreign.is_some_and(|owner| &owner != session) {
+                if let Some(foreign_owner) = foreign.as_ref().filter(|owner| *owner != session) {
                     if self.foreign_other_user.load(Ordering::SeqCst) {
                         return Err(ServiceError::Failed(
                             "CONNECTION_OWNED_BY_ANOTHER_USER".into(),
                         ));
                     }
-                    if !take_over {
+                    if !take_over && replace_session != Some(foreign_owner) {
                         return Err(ServiceError::Failed(
                             "CONNECTION_OWNED_BY_ANOTHER_SESSION".into(),
                         ));
                     }
                     *self.foreign.lock().unwrap() = None;
+                }
+                let existing = self.owner.lock().unwrap().clone();
+                if let Some((owned, _)) = existing.as_ref().filter(|(owned, _)| owned != session) {
+                    if !take_over && replace_session != Some(owned) {
+                        return Err(ServiceError::Failed(
+                            "CONNECTION_OWNED_BY_ANOTHER_SESSION".into(),
+                        ));
+                    }
                 }
                 let revision = profile["revision"].as_str().unwrap_or_default().to_string();
                 *self.owner.lock().unwrap() = Some((session.clone(), revision));
@@ -3695,6 +3896,21 @@ mod tests {
             session: &'a SessionRef,
         ) -> BoxFuture<'a, Result<ServiceStatus, ServiceError>> {
             Box::pin(async move {
+                self.renew_calls.fetch_add(1, Ordering::SeqCst);
+                let mut left = self.renew_transient_failures.load(Ordering::SeqCst);
+                while left > 0 {
+                    match self.renew_transient_failures.compare_exchange(
+                        left,
+                        left - 1,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
+                        Ok(_) => {
+                            return Err(ServiceError::Unavailable("service call timed out".into()))
+                        }
+                        Err(now) => left = now,
+                    }
+                }
                 self.check()?;
                 if let Some(error) = self.renew_error.lock().unwrap().clone() {
                     return Err(ServiceError::Failed(error));
@@ -6066,7 +6282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn busy_service_reports_service_busy_and_releases_the_session() {
+    async fn busy_service_reports_service_busy_without_disconnecting_unowned_session() {
         let h = harness(true);
         *h.service.connect_error.lock().unwrap() =
             Some("CONNECTION_OWNED_BY_ANOTHER_SESSION".into());
@@ -6077,13 +6293,162 @@ mod tests {
         assert_eq!(state.reason.unwrap().code, ErrorCode::ServiceBusy);
         assert!(state.retryable);
         assert!(state.can_take_over, "same user, another session");
-        assert_eq!(h.service.disconnects.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            h.service.disconnects.load(Ordering::SeqCst),
+            0,
+            "unowned session must not send Disconnect"
+        );
 
-        // Retry with the contention gone uses a new generation.
+        // Retry with the contention gone uses a new generation without
+        // disconnecting the unowned Contended attempt either.
         *h.service.connect_error.lock().unwrap() = None;
         h.enhanced.retry().await.unwrap();
+        assert_eq!(h.service.disconnects.load(Ordering::SeqCst), 0);
         assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
         assert_eq!(h.enhanced.inner.with_data(|d| d.machine.generation), 2);
+    }
+
+    #[tokio::test]
+    async fn transient_lease_timeouts_retry_in_place_and_sustained_timeouts_recover() {
+        let h = harness(true);
+        h.enhanced.set_lease_interval(Duration::from_millis(15));
+        h.enhanced.set_lease_retry_delay(Duration::from_millis(5));
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        let phases_after_on = h.phases.lock().unwrap().len();
+
+        // Single and double transient timeouts succeed within the retry budget
+        // without tearing down or reconnecting the healthy TUN session.
+        for failures in [1usize, 2usize] {
+            let before = h.service.renew_calls.load(Ordering::SeqCst);
+            h.service
+                .renew_transient_failures
+                .store(failures, Ordering::SeqCst);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while h.service.renew_calls.load(Ordering::SeqCst) <= before + failures {
+                assert!(Instant::now() < deadline, "lease retries did not complete");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert_eq!(h.enhanced.state().phase, ConnectionPhase::On);
+            assert_eq!(h.service.connects.load(Ordering::SeqCst), 1);
+            assert_eq!(h.phases.lock().unwrap().len(), phases_after_on);
+        }
+
+        // Three consecutive timeouts (initial + 2 retries) trigger recovery.
+        h.service
+            .renew_transient_failures
+            .store(3, Ordering::SeqCst);
+        wait_connects_above(&h, 1, "sustained lease timeout triggered recovery").await;
+        wait_phase(&h, ConnectionPhase::On).await;
+        assert_eq!(h.enhanced.inner.with_data(|d| d.machine.generation), 2);
+        h.enhanced.disable().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn lease_retry_exits_immediately_on_disconnect_and_does_not_retry_deterministic_errors() {
+        let h = harness(true);
+        h.enhanced.set_lease_interval(Duration::from_millis(10));
+        // A long retry delay proves both immediate cancellation on manual
+        // disconnect and zero retry delay on deterministic errors.
+        h.enhanced.set_lease_retry_delay(Duration::from_secs(30));
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+
+        h.service
+            .renew_transient_failures
+            .store(2, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while h.service.renew_calls.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "first renewal never ran");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        // Now parked inside the 30 s retry sleep: manual disconnect cancels at once.
+        let started = Instant::now();
+        h.enhanced.disable().await.unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(h.enhanced.state().phase, ConnectionPhase::Off);
+        assert!(h.enhanced.inner.with_data(|d| d.loops.is_empty()));
+
+        // Deterministic SERVICE_STOPPING enters Reconnecting without waiting on
+        // lease_retry_delay.
+        h.service
+            .renew_transient_failures
+            .store(0, Ordering::SeqCst);
+        h.enhanced.enable().await.unwrap();
+        let before = h.service.renew_calls.load(Ordering::SeqCst);
+        let failed_at = Instant::now();
+        *h.service.connect_error.lock().unwrap() = Some("SERVICE_STOPPING".into());
+        *h.service.renew_error.lock().unwrap() = Some("SERVICE_STOPPING".into());
+        wait_phase(&h, ConnectionPhase::Reconnecting).await;
+        assert!(failed_at.elapsed() < Duration::from_millis(500));
+        assert_eq!(h.service.renew_calls.load(Ordering::SeqCst), before + 1);
+        *h.service.connect_error.lock().unwrap() = None;
+        *h.service.renew_error.lock().unwrap() = None;
+        h.enhanced.disable().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_release_during_recovery_replaces_own_session_without_contended_self_lock()
+    {
+        let h = harness(true);
+        h.enhanced.set_lease_interval(Duration::from_millis(15));
+        h.enhanced.set_lease_retry_delay(Duration::from_millis(5));
+        h.enhanced.set_profile(PROFILE_R1, "r1").await.unwrap();
+        h.enhanced.enable().await.unwrap();
+        let first_session = h.enhanced.inner.with_data(|d| d.machine.session()).unwrap();
+
+        // Simulate high-load IPC saturation: `release_session`'s Disconnect
+        // times out without clearing `owner` on the service, and all 3 lease
+        // renewal attempts time out.
+        *h.service.disconnect_times_out.lock().unwrap() = Some(false);
+        h.service
+            .renew_transient_failures
+            .store(3, Ordering::SeqCst);
+
+        wait_connects_above(&h, 1, "recovery reconnected with replace_session").await;
+        let state = wait_phase(&h, ConnectionPhase::On).await;
+        assert_eq!(state.reason, None);
+        let second_session = h.enhanced.inner.with_data(|d| d.machine.session()).unwrap();
+        assert_eq!(second_session.generation, 2);
+        assert_eq!(
+            *h.service.replace_sessions.lock().unwrap(),
+            vec![None, Some(first_session)],
+            "recovery passed the unconfirmed session as replace_session"
+        );
+        assert!(
+            !h.phases
+                .lock()
+                .unwrap()
+                .contains(&ConnectionPhase::Contended),
+            "must never self-lock into Contended: {:?}",
+            *h.phases.lock().unwrap()
+        );
+
+        // If another session genuinely took over while our release timed out,
+        // `replace_session` does not match the foreign owner: the service
+        // refuses with ServiceBusy and no extra Disconnect is sent.
+        let disconnects_before = h.service.disconnects.load(Ordering::SeqCst);
+        let intruder = foreign_session();
+        h.service
+            .renew_transient_failures
+            .store(3, Ordering::SeqCst);
+        *h.service.owner.lock().unwrap() = None;
+        *h.service.foreign.lock().unwrap() = Some(intruder.clone());
+        let state = wait_phase(&h, ConnectionPhase::Contended).await;
+        assert_eq!(state.reason.unwrap().code, ErrorCode::ServiceBusy);
+        assert!(state.can_take_over);
+        assert_eq!(
+            h.service.replace_sessions.lock().unwrap().last(),
+            Some(&Some(second_session))
+        );
+        assert_eq!(
+            h.service.disconnects.load(Ordering::SeqCst),
+            disconnects_before + 1,
+            "only release_session called Disconnect; failed ServiceBusy connect did not"
+        );
+        assert_eq!(*h.service.foreign.lock().unwrap(), Some(intruder));
+        *h.service.disconnect_times_out.lock().unwrap() = None;
+        h.enhanced.disable().await.unwrap();
     }
 
     fn foreign_session() -> SessionRef {
@@ -6140,6 +6505,7 @@ mod tests {
         );
         assert!(!state.retryable);
         assert!(!state.can_take_over);
+        assert_eq!(h.service.disconnects.load(Ordering::SeqCst), 0);
         assert!(h.enhanced.take_over().await.is_err());
         assert!(h.service.foreign.lock().unwrap().is_some());
     }

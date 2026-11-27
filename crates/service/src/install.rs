@@ -196,7 +196,9 @@ const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 "#;
 
-#[cfg(target_os = "macos")]
+/// `Interactive` keeps the daemon out of Darwin's background QoS throttle:
+/// this process hosts the TUN packet engine, IPC server, and lease watchdog.
+#[cfg(any(target_os = "macos", test))]
 const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -212,7 +214,7 @@ const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <key>KeepAlive</key>
     <true/>
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Interactive</string>
     <key>ThrottleInterval</key>
     <integer>5</integer>
     <key>ExitTimeOut</key>
@@ -573,6 +575,13 @@ fn replace_file(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn launchd_plist_uses_interactive_process_type() {
+        assert!(super::LAUNCHD_PLIST
+            .contains("<key>ProcessType</key>\n    <string>Interactive</string>"));
+        assert!(!super::LAUNCHD_PLIST.contains("<string>Background</string>"));
+    }
+
     #[test]
     fn launchd_job_pid_reads_the_running_pid() {
         let running = "system/com.peakpassvpn.ppvpn.service = {\n\tactive count = 1\n\tpath = /Library/LaunchDaemons/x.plist\n\tstate = running\n\n\tprogram = /x\n\tpid = 4321\n\timmediate reason = speculative\n}";

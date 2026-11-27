@@ -122,10 +122,18 @@ fn allow_unsigned_windows_client() -> bool {
     parse_allow_unsigned_client(option_env!("PPVPN_WINDOWS_ALLOW_UNSIGNED_CLIENT"))
 }
 
+/// Peer process and OS user identity established by the transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Caller {
+    pid: u32,
+    user: Option<String>,
+}
+
 #[derive(Clone)]
 struct AuthSession {
     key: [u8; 32],
     client_pid: u32,
+    client_user: Option<String>,
     expires_at: u64,
 }
 
@@ -148,7 +156,8 @@ impl ReplayWindow {
     }
 }
 
-fn handle(req: Request, client_pid: u32) -> Result<Response> {
+fn handle(req: Request, caller: &Caller) -> Result<Response> {
+    let client_pid = caller.pid;
     let command = req.command.clone();
     // Connection changes are logged when they arrive and when answered;
     // the frequent calls only when slow (a stalled request shows either way).
@@ -160,7 +169,7 @@ fn handle(req: Request, client_pid: u32) -> Result<Response> {
         log::info!("{command:?} from pid {client_pid}");
     }
     let started = std::time::Instant::now();
-    let handled = handle_with(req, client_pid, STOPPING.load(Ordering::SeqCst));
+    let handled = handle_with(req, caller, STOPPING.load(Ordering::SeqCst));
     let took = started.elapsed();
     let outcome = match &handled {
         Ok(response) if response.success => "ok".to_string(),
@@ -188,15 +197,15 @@ const SLOW_REQUEST: std::time::Duration = std::time::Duration::from_secs(2);
 enum Admission {
     /// A fresh, never-seen handshake.
     Handshake,
-    /// Authenticated and signed by `client_pid`'s session key.
+    /// Authenticated and signed by `caller`'s session key.
     Authorized(AuthSession),
     /// Refused with this response.
     Refused(Response),
 }
 
-/// Freshness, replay, the PID-bound auth session, the signature, and the
-/// stopping state (see [`refused_while_stopping`]).
-fn admit(req: &Request, client_pid: u32, stopping: bool) -> Result<Admission> {
+/// Freshness, replay, the PID- and user-bound auth session, the signature, and
+/// the stopping state (see [`refused_while_stopping`]).
+fn admit(req: &Request, caller: &Caller, stopping: bool) -> Result<Admission> {
     let refuse = |error: &str| {
         Admission::Refused(Response::unsigned(
             req.id.clone(),
@@ -226,7 +235,9 @@ fn admit(req: &Request, client_pid: u32, stopping: bool) -> Result<Admission> {
         sessions.retain(|_, session| session.expires_at > now);
         sessions.get(token).cloned()
     };
-    let Some(auth) = auth.filter(|session| session.client_pid == client_pid) else {
+    let Some(auth) = auth
+        .filter(|session| session.client_pid == caller.pid && session.client_user == caller.user)
+    else {
         return Ok(refuse("AUTH_SESSION_INVALID"));
     };
     if !req.verify_with(&auth.key).unwrap_or(false) {
@@ -247,12 +258,13 @@ fn admit(req: &Request, client_pid: u32, stopping: bool) -> Result<Admission> {
 }
 
 /// [`handle`] with the stopping state given (tests).
-fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response> {
-    let auth = match admit(&req, client_pid, stopping)? {
-        Admission::Handshake => return handshake(req, client_pid),
+fn handle_with(req: Request, caller: &Caller, stopping: bool) -> Result<Response> {
+    let auth = match admit(&req, caller, stopping)? {
+        Admission::Handshake => return handshake(req, caller),
         Admission::Refused(response) => return Ok(response),
         Admission::Authorized(auth) => auth,
     };
+    let caller_user = caller.user.as_deref();
 
     match req.command {
         Command::Handshake => unreachable!(),
@@ -269,7 +281,7 @@ fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response
             signed_ok(req.id, serde_json::to_value(info)?, &auth.key)
         }
         Command::GetStatus => {
-            let status = CORE.lock().status(client_pid);
+            let status = CORE.lock().status(caller_user);
             signed_ok(req.id, serde_json::to_value(status)?, &auth.key)
         }
         Command::Connect => {
@@ -277,7 +289,7 @@ fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response
                 Ok(p) => p,
                 Err(e) => return signed_error(req.id, format!("bad payload: {e}"), &auth.key),
             };
-            match crate::update::guard_connect(|| CORE.lock().connect(payload, client_pid)) {
+            match crate::update::guard_connect(|| CORE.lock().connect(payload, caller_user)) {
                 Ok(pid) => signed_ok(req.id, serde_json::json!({ "pid": pid }), &auth.key),
                 Err(e) => signed_error(req.id, e.to_string(), &auth.key),
             }
@@ -289,7 +301,7 @@ fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response
                     return signed_error(req.id, format!("bad payload: {error}"), &auth.key)
                 }
             };
-            match crate::core::update_profile(&CORE, payload, client_pid) {
+            match crate::core::update_profile(&CORE, payload, caller_user) {
                 Ok(status) => signed_ok(req.id, serde_json::to_value(status)?, &auth.key),
                 Err(error) => signed_error(req.id, error.to_string(), &auth.key),
             }
@@ -301,7 +313,7 @@ fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response
                     return signed_error(req.id, format!("bad payload: {error}"), &auth.key)
                 }
             };
-            match CORE.lock().renew_lease(&session, client_pid) {
+            match CORE.lock().renew_lease(&session, caller_user) {
                 Ok(status) => signed_ok(req.id, serde_json::to_value(status)?, &auth.key),
                 Err(error) => signed_error(req.id, error.to_string(), &auth.key),
             }
@@ -313,7 +325,7 @@ fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response
                     return signed_error(req.id, format!("bad payload: {error}"), &auth.key)
                 }
             };
-            match CORE.lock().disconnect(&session, client_pid) {
+            match CORE.lock().disconnect(&session, caller_user) {
                 Ok(()) => signed_ok(req.id, serde_json::json!({}), &auth.key),
                 Err(error) => signed_error(req.id, error.to_string(), &auth.key),
             }
@@ -330,7 +342,7 @@ fn handle_with(req: Request, client_pid: u32, stopping: bool) -> Result<Response
                 &payload.session,
                 &payload.path,
                 payload.body,
-                client_pid,
+                caller_user,
             ) {
                 Ok(data) => signed_ok(req.id, data, &auth.key),
                 Err(e) => signed_error(req.id, e.to_string(), &auth.key),
@@ -458,7 +470,11 @@ const WATCH_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// except `Watch`, which keeps the connection open (see [`serve_watch`]),
 /// and `InstallUpdate`, which needs it (see [`serve_install_update`]).
 /// Uses only `read_exact`, so it works however the client split its writes.
-fn serve_connection<S: Connection>(stream: &mut S, client_pid: u32) -> Result<()> {
+fn serve_connection<S: Connection>(
+    stream: &mut S,
+    caller: &Caller,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+) -> Result<()> {
     use anyhow::Context;
     let mut len_buf = [0u8; 4];
     stream
@@ -477,16 +493,17 @@ fn serve_connection<S: Connection>(stream: &mut S, client_pid: u32) -> Result<()
         return serve_watch(
             stream,
             req,
-            client_pid,
+            caller,
             &CORE,
             STOPPING.load(Ordering::SeqCst),
             crate::watch::KEEPALIVE,
+            permit,
         );
     }
     if req.command == Command::InstallUpdate {
-        return serve_install_update(stream, req, client_pid, STOPPING.load(Ordering::SeqCst));
+        return serve_install_update(stream, req, caller, STOPPING.load(Ordering::SeqCst));
     }
-    let resp = handle(req, client_pid)?;
+    let resp = handle(req, caller)?;
     write_frame(stream, &resp)
 }
 
@@ -509,15 +526,17 @@ fn write_frame<S: std::io::Write>(stream: &mut S, response: &Response) -> Result
 fn serve_watch<S: Connection>(
     stream: &mut S,
     req: Request,
-    client_pid: u32,
+    caller: &Caller,
     core: &Mutex<crate::core::CoreManager>,
     stopping: bool,
     keepalive: std::time::Duration,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<()> {
     use crate::watch::Event;
     use std::sync::mpsc::RecvTimeoutError;
 
-    let auth = match admit(&req, client_pid, stopping)? {
+    let client_pid = caller.pid;
+    let auth = match admit(&req, caller, stopping)? {
         Admission::Authorized(auth) => auth,
         Admission::Refused(response) => return write_frame(stream, &response),
         Admission::Handshake => unreachable!("a Watch request"),
@@ -530,7 +549,7 @@ fn serve_watch<S: Connection>(
         }
     };
     let closer = stream.watch_closer();
-    let registration = core.lock().watch(&session, client_pid, closer);
+    let registration = core.lock().watch(&session, caller.user.as_deref(), closer);
     let registration = match registration {
         Ok(registration) => registration,
         Err(error) => {
@@ -538,6 +557,9 @@ fn serve_watch<S: Connection>(
             return write_frame(stream, &response);
         }
     };
+    // Registered watchers are bounded separately by `watch::HUB` (`MAX_WATCHERS`);
+    // release the short-lived connection slot so active watches never starve RPCs.
+    drop(permit);
     let watching = serde_json::json!({
         "event": "watching",
         "keepalive_ms": keepalive.as_millis() as u64,
@@ -582,10 +604,11 @@ fn serve_watch<S: Connection>(
 fn serve_install_update<S: Connection>(
     stream: &mut S,
     req: Request,
-    client_pid: u32,
+    caller: &Caller,
     stopping: bool,
 ) -> Result<()> {
-    let auth = match admit(&req, client_pid, stopping)? {
+    let client_pid = caller.pid;
+    let auth = match admit(&req, caller, stopping)? {
         Admission::Authorized(auth) => auth,
         Admission::Refused(response) => return write_frame(stream, &response),
         Admission::Handshake => unreachable!("an InstallUpdate request"),
@@ -630,7 +653,7 @@ fn core_running() -> bool {
     CORE.lock().has_core()
 }
 
-fn handshake(req: Request, client_pid: u32) -> Result<Response> {
+fn handshake(req: Request, caller: &Caller) -> Result<Response> {
     if req.auth_token.is_some() || !req.signature.is_empty() {
         return Ok(Response::unsigned(
             req.id,
@@ -663,7 +686,7 @@ fn handshake(req: Request, client_pid: u32) -> Result<Response> {
     hasher.update(uuid::Uuid::new_v4().as_bytes());
     hasher.update(uuid::Uuid::new_v4().as_bytes());
     hasher.update(payload.client_nonce.as_bytes());
-    hasher.update(client_pid.to_le_bytes());
+    hasher.update(caller.pid.to_le_bytes());
     hasher.update(crate::protocol::now_epoch().to_le_bytes());
     let key: [u8; 32] = hasher.finalize().into();
     let expires_at = crate::protocol::now_epoch().saturating_add(AUTH_SESSION_SECONDS);
@@ -671,7 +694,8 @@ fn handshake(req: Request, client_pid: u32) -> Result<Response> {
         token.clone(),
         AuthSession {
             key,
-            client_pid,
+            client_pid: caller.pid,
+            client_user: caller.user.clone(),
             expires_at,
         },
     );
@@ -853,8 +877,8 @@ pub async fn run_ipc_server() -> Result<()> {
             continue;
         }
 
-        let client_pid = match validate_windows_client(pipe_handle) {
-            Ok(client_pid) => client_pid,
+        let caller = match validate_windows_client(pipe_handle) {
+            Ok(caller) => caller,
             Err(error) => {
                 error!("reject named-pipe client: {error}");
                 unsafe { CloseHandle(pipe_handle) };
@@ -865,15 +889,18 @@ pub async fn run_ipc_server() -> Result<()> {
         let mut pipe = unsafe { File::from_raw_handle(pipe_handle as _) };
 
         spawn_blocking(move || {
-            if let Err(error) = serve_connection(&mut pipe, client_pid) {
-                error!("IPC request from pid {client_pid} failed (protocol): {error:#}");
+            if let Err(error) = serve_connection(&mut pipe, &caller, None) {
+                error!(
+                    "IPC request from pid {} failed (protocol): {error:#}",
+                    caller.pid
+                );
             }
         });
     }
 }
 
 #[cfg(windows)]
-fn validate_windows_client(pipe_handle: winapi::shared::ntdef::HANDLE) -> Result<u32> {
+fn validate_windows_client(pipe_handle: winapi::shared::ntdef::HANDLE) -> Result<Caller> {
     use anyhow::{anyhow, Context};
     use std::path::PathBuf;
     use winapi::um::handleapi::CloseHandle;
@@ -896,6 +923,7 @@ fn validate_windows_client(pipe_handle: winapi::shared::ntdef::HANDLE) -> Result
     let mut length = buffer.len() as u32;
     let query_ok =
         unsafe { QueryFullProcessImageNameW(process, 0, buffer.as_mut_ptr(), &mut length) } != 0;
+    let user = windows_process_user(process);
     unsafe { CloseHandle(process) };
     if !session_ok || !query_ok || length == 0 {
         return Err(anyhow!("CLIENT_IDENTITY_UNAVAILABLE"));
@@ -940,7 +968,67 @@ fn validate_windows_client(pipe_handle: winapi::shared::ntdef::HANDLE) -> Result
         verify_authenticode(&image)?;
     }
     log::debug!("accepted named-pipe client pid={process_id} session={session_id}");
-    Ok(process_id)
+    Ok(Caller {
+        pid: process_id,
+        user,
+    })
+}
+
+/// User SID (`S-1-5-...`) of an open Windows client process handle.
+#[cfg(windows)]
+fn windows_process_user(process: winapi::shared::ntdef::HANDLE) -> Option<String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::ptr;
+    use winapi::shared::sddl::ConvertSidToStringSidW;
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::processthreadsapi::OpenProcessToken;
+    use winapi::um::securitybaseapi::GetTokenInformation;
+    use winapi::um::winbase::LocalFree;
+    use winapi::um::winnt::{TokenUser, HANDLE, TOKEN_QUERY, TOKEN_USER};
+
+    // SAFETY: `process` is a valid process handle opened with
+    // `PROCESS_QUERY_LIMITED_INFORMATION`; the token and string SID are freed
+    // before returning.
+    unsafe {
+        let mut token: HANDLE = ptr::null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 || token.is_null() {
+            return None;
+        }
+        let mut needed = 0u32;
+        GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut needed);
+        if needed == 0 {
+            CloseHandle(token);
+            return None;
+        }
+        let words = (needed as usize).div_ceil(std::mem::size_of::<usize>());
+        let mut storage = vec![0usize; words];
+        let ok = GetTokenInformation(
+            token,
+            TokenUser,
+            storage.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        );
+        CloseHandle(token);
+        if ok == 0 {
+            return None;
+        }
+        let token_user = &*(storage.as_ptr().cast::<TOKEN_USER>());
+        let mut wide_sid: *mut u16 = ptr::null_mut();
+        if ConvertSidToStringSidW(token_user.User.Sid, &mut wide_sid) == 0 || wide_sid.is_null() {
+            return None;
+        }
+        let mut len = 0usize;
+        while *wide_sid.add(len) != 0 {
+            len += 1;
+        }
+        let sid = OsString::from_wide(std::slice::from_raw_parts(wide_sid, len))
+            .to_string_lossy()
+            .into_owned();
+        LocalFree(wide_sid.cast());
+        Some(sid)
+    }
 }
 
 /// WinVerifyTrust and the publisher pin; also used on update packages
@@ -1227,13 +1315,58 @@ unsafe fn certificate_ekus(
     Ok(ekus)
 }
 
+/// Concurrent Unix IPC connections in validation or request handling. Watch
+/// connections drop their admission permit once registered in `watch::HUB`
+/// (capped separately by `MAX_WATCHERS`), keeping slots free for short RPCs.
+#[cfg(unix)]
+const MAX_INFLIGHT_CONNECTIONS: usize = 64;
+
+/// Bounds how long an accepted Unix socket may stall reading its request frame
+/// or writing its response, preventing idle peers from pinning worker threads.
+#[cfg(unix)]
+const REQUEST_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+#[cfg(unix)]
+fn spawn_unix_connection<P, V>(
+    mut stream: std::os::unix::net::UnixStream,
+    peer: P,
+    inflight: &std::sync::Arc<tokio::sync::Semaphore>,
+    validate: V,
+) where
+    P: Send + 'static,
+    V: FnOnce(&P) -> Result<Caller> + Send + 'static,
+{
+    let Ok(permit) = inflight.clone().try_acquire_owned() else {
+        log::warn!("reject unix-socket client: IPC_TOO_MANY_CONNECTIONS");
+        return;
+    };
+    stream.set_read_timeout(Some(REQUEST_IO_TIMEOUT)).ok();
+    stream.set_write_timeout(Some(REQUEST_IO_TIMEOUT)).ok();
+    tokio::task::spawn_blocking(move || {
+        let caller = match validate(&peer) {
+            Ok(caller) => caller,
+            Err(error) => {
+                log::error!("reject unix-socket client: {error}");
+                return;
+            }
+        };
+        if let Err(error) = serve_connection(&mut stream, &caller, Some(permit)) {
+            log::error!(
+                "IPC request from pid {} failed (protocol): {error:#}",
+                caller.pid
+            );
+        }
+    });
+}
+
 #[cfg(unix)]
 pub async fn run_ipc_server() -> Result<()> {
     use crate::protocol::IPC_SOCKET_PATH;
     use anyhow::Context;
     use log::{error, info};
     use std::os::unix::net::UnixListener;
-    use tokio::task::spawn_blocking;
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
 
     #[cfg(target_os = "macos")]
     prepare_macos_socket_directory()?;
@@ -1246,39 +1379,44 @@ pub async fn run_ipc_server() -> Result<()> {
         UnixListener::bind(IPC_SOCKET_PATH).with_context(|| format!("bind {IPC_SOCKET_PATH}"))?;
 
     // The socket is connectable by local users, but every accepted connection
-    // is bound to the peer PID and must come from a process signed as PPVPN.app
-    // with our Developer ID (macsign.rs) before it can obtain a
-    // short-lived HMAC session.
+    // immediately captures the kernel peer credentials and validates the
+    // calling executable on a bounded worker pool before serving any request.
     set_socket_permissions(IPC_SOCKET_PATH);
 
     info!("IPC server listening on {IPC_SOCKET_PATH}");
+    let inflight = Arc::new(Semaphore::new(MAX_INFLIGHT_CONNECTIONS));
 
     for incoming in listener.incoming() {
         match incoming {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 #[cfg(target_os = "macos")]
-                let client_pid = match validate_macos_client(&stream) {
-                    Ok(pid) => pid,
-                    Err(error) => {
-                        error!("reject unix-socket client: {error}");
-                        continue;
-                    }
-                };
+                {
+                    let peer = match peer_macos_credentials(&stream) {
+                        Ok(peer) => peer,
+                        Err(error) => {
+                            error!("reject unix-socket client: {error}");
+                            continue;
+                        }
+                    };
+                    spawn_unix_connection(stream, peer, &inflight, validate_macos_peer);
+                }
                 #[cfg(target_os = "linux")]
-                let client_pid = match validate_linux_client(&stream) {
-                    Ok(pid) => pid,
-                    Err(error) => {
-                        error!("reject unix-socket client: {error}");
-                        continue;
-                    }
-                };
+                {
+                    let peer = match peer_linux_credentials(&stream) {
+                        Ok(peer) => peer,
+                        Err(error) => {
+                            error!("reject unix-socket client: {error}");
+                            continue;
+                        }
+                    };
+                    spawn_unix_connection(stream, peer, &inflight, validate_linux_peer);
+                }
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-                let client_pid = 0;
-                spawn_blocking(move || {
-                    if let Err(error) = serve_connection(&mut stream, client_pid) {
-                        error!("IPC request from pid {client_pid} failed (protocol): {error:#}");
-                    }
-                });
+                {
+                    spawn_unix_connection(stream, (), &inflight, |()| {
+                        Ok(Caller { pid: 0, user: None })
+                    });
+                }
             }
             Err(e) => {
                 error!("accept failed: {e}");
@@ -1335,22 +1473,51 @@ pub(crate) fn peer_audit_token(stream: &std::os::unix::net::UnixStream) -> Optio
             &mut length,
         )
     };
-    let valid = result == 0 && length as usize == std::mem::size_of_val(&token) && token[5] > 0;
+    let valid = result == 0
+        && length as usize == std::mem::size_of_val(&token)
+        && (token[5] as libc::pid_t) > 0;
     valid.then_some(token)
 }
 
 #[cfg(target_os = "macos")]
-fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32> {
+struct MacosPeer {
+    pid: libc::pid_t,
+    euid: u32,
+    audit_token: [u32; 8],
+}
+
+#[cfg(target_os = "macos")]
+fn peer_macos_credentials(stream: &std::os::unix::net::UnixStream) -> Result<MacosPeer> {
     use anyhow::anyhow;
 
-    // The audit token names the peer process itself (pid and pid version),
-    // so the signature checked is the one of the process that connected.
-    let token = peer_audit_token(stream).ok_or_else(|| anyhow!("CLIENT_PID_UNAVAILABLE"))?;
-    let pid = token[5] as libc::pid_t;
-    let bytes: Vec<u8> = token.iter().flat_map(|word| word.to_ne_bytes()).collect();
+    let audit_token = peer_audit_token(stream).ok_or_else(|| anyhow!("CLIENT_PID_UNAVAILABLE"))?;
+    Ok(MacosPeer {
+        pid: audit_token[5] as libc::pid_t,
+        euid: audit_token[1],
+        audit_token,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn validate_macos_peer(peer: &MacosPeer) -> Result<Caller> {
+    use anyhow::anyhow;
+
+    // The audit token names the peer process itself (pid, pid version, and
+    // euid), so both signature verification and OS-user ownership bind to the
+    // kernel-authenticated peer captured at accept time.
+    let pid = peer.pid;
+    let caller = Caller {
+        pid: pid as u32,
+        user: Some(peer.euid.to_string()),
+    };
+    let bytes: Vec<u8> = peer
+        .audit_token
+        .iter()
+        .flat_map(|word| word.to_ne_bytes())
+        .collect();
     let requirement = crate::macsign::client_requirement(crate::macsign::team_id())?;
     match crate::macsign::check_process(&bytes, &requirement) {
-        Ok(()) => Ok(pid as u32),
+        Ok(()) => Ok(caller),
         // A debug service also takes an ad-hoc signed debug app, from the
         // fixed paths only (macos_client_path_allowed).
         Err(error) if cfg!(debug_assertions) => {
@@ -1359,7 +1526,7 @@ fn validate_macos_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
                 return Err(anyhow!("{error}; CLIENT_IMAGE_NOT_ALLOWED:{path}"));
             }
             log::warn!("debug build: accepting {path} without the release signature ({error})");
-            Ok(pid as u32)
+            Ok(caller)
         }
         Err(error) => Err(match macos_process_path(pid) {
             Ok(path) => anyhow!("{error}:{path}"),
@@ -1425,13 +1592,16 @@ fn prepare_linux_socket_directory() -> Result<()> {
     Ok(())
 }
 
-/// Same policy as macOS: the peer PID must be running the installed PPVPN
-/// executable, which only root can replace.
 #[cfg(target_os = "linux")]
-fn validate_linux_client(stream: &std::os::unix::net::UnixStream) -> Result<u32> {
+struct LinuxPeer {
+    pid: libc::pid_t,
+    uid: libc::uid_t,
+}
+
+#[cfg(target_os = "linux")]
+fn peer_linux_credentials(stream: &std::os::unix::net::UnixStream) -> Result<LinuxPeer> {
     use anyhow::anyhow;
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::MetadataExt;
 
     let mut credentials = libc::ucred {
         pid: 0,
@@ -1448,10 +1618,24 @@ fn validate_linux_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
             &mut length,
         )
     };
-    if result != 0 || credentials.pid <= 0 {
+    if result != 0 || length as usize != std::mem::size_of::<libc::ucred>() || credentials.pid <= 0
+    {
         return Err(anyhow!("CLIENT_PID_UNAVAILABLE"));
     }
-    let pid = credentials.pid;
+    Ok(LinuxPeer {
+        pid: credentials.pid,
+        uid: credentials.uid,
+    })
+}
+
+/// Same policy as macOS: the peer PID must be running the installed PPVPN
+/// executable, which only root can replace.
+#[cfg(target_os = "linux")]
+fn validate_linux_peer(peer: &LinuxPeer) -> Result<Caller> {
+    use anyhow::anyhow;
+    use std::os::unix::fs::MetadataExt;
+
+    let pid = peer.pid;
     let exe = format!("/proc/{pid}/exe");
     let link = std::fs::read_link(&exe).map_err(|_| anyhow!("CLIENT_PROCESS_PATH_UNAVAILABLE"))?;
     // After a package upgrade the running app still executes the replaced
@@ -1469,7 +1653,10 @@ fn validate_linux_client(stream: &std::os::unix::net::UnixStream) -> Result<u32>
             return Err(anyhow!("CLIENT_IMAGE_NOT_ROOT_OWNED:{}", path.display()));
         }
     }
-    Ok(pid as u32)
+    Ok(Caller {
+        pid: pid as u32,
+        user: Some(peer.uid.to_string()),
+    })
 }
 
 /// The path a client was started from: `/proc/<pid>/exe` of a binary that was
@@ -1504,10 +1691,17 @@ fn set_socket_permissions(path: &str) {
 mod tests {
     use super::{
         check_publisher, decode_publisher_ekus, handle, handle_with, linux_client_image,
-        linux_client_path_allowed, macos_client_path_allowed, parse_allow_unsigned_client,
+        linux_client_path_allowed, macos_client_path_allowed, parse_allow_unsigned_client, Caller,
         ReplayWindow, SERVICE_STOPPING,
     };
     use crate::protocol::{Command, HandshakeResponse, Request, VersionInfo};
+
+    fn test_caller(pid: u32) -> Caller {
+        Caller {
+            pid,
+            user: Some("501".to_string()),
+        }
+    }
 
     /// In-memory connection: hands the request out `chunk` bytes per read
     /// (like a byte-mode pipe or socket returning partial data) and records
@@ -1568,7 +1762,7 @@ mod tests {
                 chunk,
                 output: Vec::new(),
             };
-            super::serve_connection(&mut stream, 4242).unwrap();
+            super::serve_connection(&mut stream, &test_caller(4242), None).unwrap();
             let length = u32::from_be_bytes(stream.output[..4].try_into().unwrap()) as usize;
             assert_eq!(stream.output.len(), 4 + length, "chunk {chunk}");
             let response: crate::protocol::Response =
@@ -1587,7 +1781,7 @@ mod tests {
                 chunk: usize::MAX,
                 output: Vec::new(),
             };
-            let error = super::serve_connection(&mut stream, 4242).unwrap_err();
+            let error = super::serve_connection(&mut stream, &test_caller(4242), None).unwrap_err();
             assert!(
                 format!("{error:#}").contains("read request"),
                 "cut {cut}: {error:#}"
@@ -1600,10 +1794,11 @@ mod tests {
             chunk: usize::MAX,
             output: Vec::new(),
         };
-        assert!(
-            format!("{:#}", super::serve_connection(&mut huge, 1).unwrap_err())
-                .contains("too large")
-        );
+        assert!(format!(
+            "{:#}",
+            super::serve_connection(&mut huge, &test_caller(1), None).unwrap_err()
+        )
+        .contains("too large"));
     }
 
     #[test]
@@ -1696,6 +1891,7 @@ mod tests {
 
     #[test]
     fn handshake_issues_pid_bound_short_lived_key() {
+        let caller = test_caller(4242);
         let handshake_id = uuid::Uuid::new_v4().to_string();
         let handshake = Request {
             id: handshake_id.clone(),
@@ -1707,7 +1903,7 @@ mod tests {
             auth_token: None,
             signature: String::new(),
         };
-        let response = handle(handshake, 4242).unwrap();
+        let response = handle(handshake, &caller).unwrap();
         assert!(response.success);
         assert!(response.signature.is_empty());
         assert_eq!(response.id, handshake_id);
@@ -1724,7 +1920,7 @@ mod tests {
             &key,
         )
         .unwrap();
-        let accepted = handle(authenticated, 4242).unwrap();
+        let accepted = handle(authenticated, &caller).unwrap();
         assert!(accepted.success);
         assert!(accepted.verify_with(&key).unwrap());
         let version: VersionInfo = serde_json::from_value(accepted.data.clone().unwrap()).unwrap();
@@ -1735,18 +1931,38 @@ mod tests {
             uuid::Uuid::new_v4().to_string(),
             Command::GetVersion,
             serde_json::json!({}),
+            Some(auth.auth_token.clone()),
+            &key,
+        )
+        .unwrap();
+        let rejected = handle(wrong_process, &test_caller(7777)).unwrap();
+        assert!(!rejected.success);
+        assert_eq!(rejected.error.as_deref(), Some("AUTH_SESSION_INVALID"));
+        assert!(rejected.signature.is_empty());
+
+        // Same PID recycled under a different OS user cannot reuse the session.
+        let wrong_user = Request::signed(
+            uuid::Uuid::new_v4().to_string(),
+            Command::GetVersion,
+            serde_json::json!({}),
             Some(auth.auth_token),
             &key,
         )
         .unwrap();
-        let rejected = handle(wrong_process, 7777).unwrap();
+        let rejected = handle(
+            wrong_user,
+            &Caller {
+                pid: 4242,
+                user: Some("502".to_string()),
+            },
+        )
+        .unwrap();
         assert!(!rejected.success);
         assert_eq!(rejected.error.as_deref(), Some("AUTH_SESSION_INVALID"));
-        assert!(rejected.signature.is_empty());
     }
 
-    /// Handshake for `pid`; returns (token, key).
-    fn authenticate(pid: u32) -> (String, Vec<u8>) {
+    /// Handshake for `caller`; returns (token, key).
+    fn authenticate(caller: &Caller) -> (String, Vec<u8>) {
         let handshake = Request {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: crate::protocol::now_epoch(),
@@ -1757,15 +1973,15 @@ mod tests {
             auth_token: None,
             signature: String::new(),
         };
-        let response = handle(handshake, pid).unwrap();
+        let response = handle(handshake, caller).unwrap();
         let auth: HandshakeResponse = serde_json::from_value(response.data.unwrap()).unwrap();
         (auth.auth_token, hex::decode(auth.auth_key).unwrap())
     }
 
     #[test]
     fn a_stopping_service_refuses_connect_and_session_calls() {
-        let pid = 5151;
-        let (token, key) = authenticate(pid);
+        let caller = test_caller(5151);
+        let (token, key) = authenticate(&caller);
         let session = serde_json::json!({"session_id": "s-stopping", "generation": 1});
         let connect = serde_json::json!({
             "session_id": "s-stopping", "generation": 1,
@@ -1788,7 +2004,7 @@ mod tests {
                 &key,
             )
             .unwrap();
-            let response = handle_with(request, pid, true).unwrap();
+            let response = handle_with(request, &caller, true).unwrap();
             assert!(!response.success, "{command:?}");
             assert_eq!(
                 response.error.as_deref(),
@@ -1811,7 +2027,7 @@ mod tests {
                 &key,
             )
             .unwrap();
-            let response = handle_with(request, pid, true).unwrap();
+            let response = handle_with(request, &caller, true).unwrap();
             assert_ne!(
                 response.error.as_deref(),
                 Some(SERVICE_STOPPING),
@@ -1829,7 +2045,8 @@ mod tests {
         payload: serde_json::Value,
         stopping: bool,
     ) -> crate::protocol::Response {
-        let (token, key) = authenticate(pid);
+        let caller = test_caller(pid);
+        let (token, key) = authenticate(&caller);
         let request = Request::signed(
             uuid::Uuid::new_v4().to_string(),
             command,
@@ -1845,12 +2062,12 @@ mod tests {
             output: Vec::new(),
         };
         if stopping {
-            super::serve_install_update(&mut stream, request, pid, true).unwrap();
+            super::serve_install_update(&mut stream, request, &caller, true).unwrap();
         } else {
             let body = serde_json::to_vec(&request).unwrap();
             stream.input = (body.len() as u32).to_be_bytes().to_vec();
             stream.input.extend_from_slice(&body);
-            super::serve_connection(&mut stream, pid).unwrap();
+            super::serve_connection(&mut stream, &caller, None).unwrap();
         }
         let length = u32::from_be_bytes(stream.output[..4].try_into().unwrap()) as usize;
         assert_eq!(stream.output.len(), 4 + length);
@@ -1916,8 +2133,8 @@ mod tests {
 
     /// A signed `Watch` for `session` and the key its answers are signed with.
     #[cfg(unix)]
-    fn watch_request(pid: u32, session: &crate::protocol::SessionRef) -> (Request, Vec<u8>) {
-        let (token, key) = authenticate(pid);
+    fn watch_request(caller: &Caller, session: &crate::protocol::SessionRef) -> (Request, Vec<u8>) {
+        let (token, key) = authenticate(caller);
         let request = Request::signed(
             uuid::Uuid::new_v4().to_string(),
             Command::Watch,
@@ -1935,15 +2152,15 @@ mod tests {
     fn open_watch<'scope>(
         scope: &'scope std::thread::Scope<'scope, '_>,
         core: &'scope parking_lot::Mutex<crate::core::CoreManager>,
+        caller: &'scope Caller,
         request: Request,
         key: &[u8],
         keepalive: std::time::Duration,
     ) -> std::os::unix::net::UnixStream {
         let (mut server, mut client) = std::os::unix::net::UnixStream::pair().unwrap();
         let id = request.id.clone();
-        let pid = std::process::id();
         scope.spawn(move || {
-            super::serve_watch(&mut server, request, pid, core, false, keepalive).unwrap();
+            super::serve_watch(&mut server, request, caller, core, false, keepalive, None).unwrap();
         });
         client
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -1967,13 +2184,16 @@ mod tests {
         let (manager, engines) = fake_manager(vec![]);
         let hub = manager.watchers();
         let core = parking_lot::Mutex::new(manager);
-        let me = std::process::id();
+        let me = test_caller(std::process::id());
         let session = new_session(1);
-        core.lock().connect(connect_payload(&session), me).unwrap();
-        let (request, key) = watch_request(me, &session);
+        core.lock()
+            .connect(connect_payload(&session), me.user.as_deref())
+            .unwrap();
+        let (request, key) = watch_request(&me, &session);
 
         std::thread::scope(|scope| {
-            let mut client = open_watch(scope, &core, request, &key, Duration::from_millis(40));
+            let mut client =
+                open_watch(scope, &core, &me, request, &key, Duration::from_millis(40));
             // Idle: keepalives, numbered.
             for seq in 1..=2u64 {
                 let frame = read_frame(&mut client).unwrap();
@@ -2035,14 +2255,16 @@ mod tests {
 
         let (manager, engines) = fake_manager(vec![]);
         let core = parking_lot::Mutex::new(manager);
-        let me = std::process::id();
+        let me = test_caller(std::process::id());
         let session = new_session(1);
-        core.lock().connect(connect_payload(&session), me).unwrap();
-        let (request, key) = watch_request(me, &session);
+        core.lock()
+            .connect(connect_payload(&session), me.user.as_deref())
+            .unwrap();
+        let (request, key) = watch_request(&me, &session);
         let done = std::sync::atomic::AtomicBool::new(false);
 
         std::thread::scope(|scope| {
-            let mut client = open_watch(scope, &core, request, &key, Duration::from_secs(5));
+            let mut client = open_watch(scope, &core, &me, request, &key, Duration::from_secs(5));
             // The lease watchdog, at a test pace.
             let (core, done_ref) = (&core, &done);
             scope.spawn(move || {
@@ -2073,18 +2295,21 @@ mod tests {
 
         let (manager, _engines) = fake_manager(vec![]);
         let core = parking_lot::Mutex::new(manager);
-        let me = std::process::id();
+        let me = test_caller(std::process::id());
         let session = new_session(2);
-        core.lock().connect(connect_payload(&session), me).unwrap();
+        core.lock()
+            .connect(connect_payload(&session), me.user.as_deref())
+            .unwrap();
         let answer = |request: Request, stopping: bool| {
             let (mut server, mut client) = std::os::unix::net::UnixStream::pair().unwrap();
             super::serve_watch(
                 &mut server,
                 request,
-                me,
+                &me,
                 &core,
                 stopping,
                 Duration::from_secs(5),
+                None,
             )
             .unwrap();
             drop(server);
@@ -2099,16 +2324,134 @@ mod tests {
             generation: 1,
             ..session.clone()
         };
-        let (request, key) = watch_request(me, &stale);
+        let (request, key) = watch_request(&me, &stale);
         let refused = answer(request, false);
         assert_eq!(refused.error.as_deref(), Some("STALE_OR_FOREIGN_SESSION"));
         assert!(refused.verify_with(&key).unwrap());
-        let (request, _) = watch_request(me, &session);
+        let (request, _) = watch_request(&me, &session);
         assert_eq!(
             answer(request, true).error.as_deref(),
             Some(SERVICE_STOPPING)
         );
         core.lock().stop().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_client_validation_does_not_block_concurrent_requests_and_respects_limit() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        use std::sync::{Arc, Condvar, Mutex as StdMutex};
+        use std::time::{Duration, Instant};
+        use tokio::sync::Semaphore;
+
+        let inflight = Arc::new(Semaphore::new(2));
+        let gate = Arc::new((StdMutex::new((false, false)), Condvar::new()));
+
+        // Connection 1 blocks inside client validation.
+        let (server1, mut client1) = UnixStream::pair().unwrap();
+        let gate1 = gate.clone();
+        super::spawn_unix_connection(server1, 9001u32, &inflight, move |pid| {
+            let (lock, cvar) = &*gate1;
+            let mut state = lock.lock().unwrap();
+            state.0 = true;
+            cvar.notify_all();
+            while !state.1 {
+                state = cvar.wait(state).unwrap();
+            }
+            Ok(test_caller(*pid))
+        });
+        {
+            let (lock, cvar) = &*gate;
+            let mut state = lock.lock().unwrap();
+            while !state.0 {
+                state = cvar.wait(state).unwrap();
+            }
+        }
+
+        // Connection 2 validates and completes Handshake immediately while
+        // Connection 1 is still parked in validation.
+        let (server2, mut client2) = UnixStream::pair().unwrap();
+        client2
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        super::spawn_unix_connection(server2, 9002u32, &inflight, |pid| Ok(test_caller(*pid)));
+        let started = Instant::now();
+        client2.write_all(&handshake_frame()).unwrap();
+        let reply2 = read_frame(&mut client2).expect("fast connection answered");
+        assert!(reply2.success);
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        // Fill the second slot too, then verify a third concurrent connection
+        // is shed without blocking.
+        let gate2 = Arc::new((StdMutex::new((false, false)), Condvar::new()));
+        let (server_hold, mut client_hold) = UnixStream::pair().unwrap();
+        let gate2_worker = gate2.clone();
+        super::spawn_unix_connection(server_hold, 9003u32, &inflight, move |pid| {
+            let (lock, cvar) = &*gate2_worker;
+            let mut state = lock.lock().unwrap();
+            state.0 = true;
+            cvar.notify_all();
+            while !state.1 {
+                state = cvar.wait(state).unwrap();
+            }
+            Ok(test_caller(*pid))
+        });
+        {
+            let (lock, cvar) = &*gate2;
+            let mut state = lock.lock().unwrap();
+            while !state.0 {
+                state = cvar.wait(state).unwrap();
+            }
+        }
+
+        let (server_excess, mut client_excess) = UnixStream::pair().unwrap();
+        client_excess
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        super::spawn_unix_connection(server_excess, 9004u32, &inflight, |pid| {
+            Ok(test_caller(*pid))
+        });
+        assert!(
+            read_frame(&mut client_excess).is_none(),
+            "excess connection closed at once"
+        );
+
+        // Release both blocked validations; they answer cleanly and restore capacity.
+        for (held_gate, client) in [(&gate, &mut client1), (&gate2, &mut client_hold)] {
+            client
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            client.write_all(&handshake_frame()).unwrap();
+            let (lock, cvar) = &**held_gate;
+            lock.lock().unwrap().1 = true;
+            cvar.notify_all();
+            let reply = read_frame(client).expect("released connection answered");
+            assert!(reply.success);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while inflight.available_permits() < 2 {
+            assert!(Instant::now() < deadline, "permits not returned");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn peer_linux_credentials_extracts_current_pid_and_uid() {
+        let (server, _client) = std::os::unix::net::UnixStream::pair().unwrap();
+        let peer = super::peer_linux_credentials(&server).unwrap();
+        assert_eq!(peer.pid as u32, std::process::id());
+        assert_eq!(peer.uid, unsafe { libc::geteuid() });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn peer_macos_credentials_extracts_current_pid_and_euid() {
+        let (server, _client) = std::os::unix::net::UnixStream::pair().unwrap();
+        let peer = super::peer_macos_credentials(&server).unwrap();
+        assert_eq!(peer.pid as u32, std::process::id());
+        assert_eq!(peer.euid, unsafe { libc::geteuid() });
     }
 
     #[test]

@@ -245,6 +245,10 @@ pub struct ConnectPayload {
     pub profile: serde_json::Value,
     /// Replace a core owned by another session of the same OS user.
     pub take_over: bool,
+    /// Replace a core still owned by this exact previous session of the same
+    /// OS user when automatic recovery proceeds after an unconfirmed release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_session: Option<SessionRef>,
     /// Authority of the API the profile came from; forwarded to the core's
     /// `apply-profile` when the core accepts it (0.5.0+). Optional: absent
     /// from older clients, whose profiles then apply without rule-set

@@ -804,6 +804,7 @@ pub(crate) mod test_support {
             _: &'a SessionRef,
             _: &'a Value,
             _: bool,
+            _: Option<&'a SessionRef>,
             _: crate::RoutingMode,
             _: &'a crate::core_ipc::ApplyChoices,
         ) -> BoxFuture<'a, Result<u32, ServiceError>> {

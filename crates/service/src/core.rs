@@ -34,7 +34,6 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 pub static CORE: Lazy<Mutex<CoreManager>> = Lazy::new(|| {
     Mutex::new(CoreManager {
@@ -369,12 +368,11 @@ impl CoreManager {
         self.state.is_some()
     }
 
-    /// Service status for `client_pid`. Session details (id, generation,
+    /// Service status for `caller_user`. Session details (id, generation,
     /// revision, lease) are shown only to the owner's OS user; anyone else
     /// learns only that the connection is in use.
-    pub fn status(&mut self, client_pid: u32) -> Status {
-        let caller_user = process_user(client_pid);
-        self.status_for(caller_user.as_deref())
+    pub fn status(&mut self, caller_user: Option<&str>) -> Status {
+        self.status_for(caller_user)
     }
 
     fn status_for(&mut self, caller_user: Option<&str>) -> Status {
@@ -394,12 +392,11 @@ impl CoreManager {
         describe(view, caller_user)
     }
 
-    /// Start (or keep) the TUN instance for `body.session`. `client_pid` is
-    /// the authenticated caller, used for the same-user takeover check.
-    /// Returns the service's pid (the instance runs inside it).
-    pub fn connect(&mut self, body: ConnectPayload, client_pid: u32) -> Result<u32> {
+    /// Start (or keep) the TUN instance for `body.session`. `caller_user` is
+    /// the authenticated OS user identity from the IPC transport, used for
+    /// same-user ownership and takeover checks. Returns the service's pid.
+    pub fn connect(&mut self, body: ConnectPayload, caller_user: Option<&str>) -> Result<u32> {
         validate_session(&body.session)?;
-        let caller_user = process_user(client_pid);
         let decision = match self.state.as_ref() {
             None => Ownership::Free,
             Some(current) => {
@@ -412,11 +409,12 @@ impl CoreManager {
                     },
                     &body.session,
                     body.take_over,
-                    caller_user.as_deref(),
+                    body.replace_session.as_ref(),
+                    caller_user,
                 )
             }
         };
-        let taking_over = decision == Ownership::TakeOver;
+        let replacing_live = matches!(decision, Ownership::TakeOver | Ownership::Replaced);
         match decision {
             Ownership::Free => {}
             Ownership::Expired => {
@@ -427,6 +425,15 @@ impl CoreManager {
                     current.lease_deadline = Instant::now() + LEASE_DURATION;
                     return Ok(std::process::id());
                 }
+            }
+            Ownership::Replaced => {
+                if let Some(current) = self.state.as_ref() {
+                    info!(
+                        "generation {} replaces generation {}",
+                        body.session.generation, current.session.generation
+                    );
+                }
+                self.stop_because(stop_reason::REPLACED).ok();
             }
             Ownership::TakeOver => {
                 if let Some(current) = self.state.as_ref() {
@@ -440,13 +447,13 @@ impl CoreManager {
             }
             Ownership::Refused(code) => return Err(anyhow!(code)),
         }
-        let started = self.start_core(body, caller_user);
+        let started = self.start_core(body, caller_user.map(str::to_string));
         if let Err(error) = &started {
-            if taking_over {
+            if replacing_live {
                 // Two TUN instances cannot coexist, so the previous session
                 // was stopped first; now nobody is connected.
                 log::error!(
-                    "takeover: the new session's instance failed after the previous session was stopped: {error:#}"
+                    "the new session's instance failed after the previous session was stopped: {error:#}"
                 );
             }
         }
@@ -544,16 +551,18 @@ impl CoreManager {
         }
     }
 
-    pub fn renew_lease(&mut self, session: &SessionRef, client_pid: u32) -> Result<Status> {
-        let caller_user = process_user(client_pid);
-        let core = self.authorize(session, caller_user.as_deref())?;
+    pub fn renew_lease(
+        &mut self,
+        session: &SessionRef,
+        caller_user: Option<&str>,
+    ) -> Result<Status> {
+        let core = self.authorize(session, caller_user)?;
         core.lease_deadline = Instant::now() + LEASE_DURATION;
-        Ok(self.status_for(caller_user.as_deref()))
+        Ok(self.status_for(caller_user))
     }
 
-    pub fn disconnect(&mut self, session: &SessionRef, client_pid: u32) -> Result<()> {
-        let caller_user = process_user(client_pid);
-        self.authorize(session, caller_user.as_deref())?;
+    pub fn disconnect(&mut self, session: &SessionRef, caller_user: Option<&str>) -> Result<()> {
+        self.authorize(session, caller_user)?;
         self.stop_because(stop_reason::DISCONNECTED)
     }
 
@@ -563,11 +572,10 @@ impl CoreManager {
     pub fn watch(
         &mut self,
         session: &SessionRef,
-        client_pid: u32,
+        caller_user: Option<&str>,
         closer: Option<crate::watch::Closer>,
     ) -> Result<crate::watch::Registration> {
-        let caller_user = process_user(client_pid);
-        self.authorize(session, caller_user.as_deref())?;
+        self.authorize(session, caller_user)?;
         self.watchers
             .register(session.clone(), closer)
             .map_err(|code| anyhow!(code))
@@ -609,9 +617,9 @@ impl CoreManager {
         session: &SessionRef,
         path: &str,
         body: Value,
-        client_pid: u32,
+        caller_user: Option<&str>,
     ) -> Result<Value> {
-        let instance = self.prepare_call(session, path, client_pid)?;
+        let instance = self.prepare_call(session, path, caller_user)?;
         let timeout = call_timeout(path, &body);
         instance.call(path, body, timeout)
     }
@@ -622,13 +630,12 @@ impl CoreManager {
         &mut self,
         session: &SessionRef,
         path: &str,
-        client_pid: u32,
+        caller_user: Option<&str>,
     ) -> Result<Arc<dyn Instance>> {
         if !ALLOWED_PATHS.contains(&path) {
             return Err(anyhow!("Core API path is not allowed"));
         }
-        let caller_user = process_user(client_pid);
-        let core = self.authorize(session, caller_user.as_deref())?;
+        let core = self.authorize(session, caller_user)?;
         core.lease_deadline = Instant::now() + LEASE_DURATION;
         Ok(core.instance.clone())
     }
@@ -844,9 +851,9 @@ pub fn call_api(
     session: &SessionRef,
     path: &str,
     body: Value,
-    client_pid: u32,
+    caller_user: Option<&str>,
 ) -> Result<Value> {
-    let instance = core.lock().prepare_call(session, path, client_pid)?;
+    let instance = core.lock().prepare_call(session, path, caller_user)?;
     let timeout = call_timeout(path, &body);
     instance.call(path, body, timeout)
 }
@@ -857,9 +864,8 @@ pub fn call_api(
 pub fn update_profile(
     core: &Mutex<CoreManager>,
     body: UpdateProfilePayload,
-    client_pid: u32,
+    caller_user: Option<&str>,
 ) -> Result<Status> {
-    let caller_user = process_user(client_pid);
     let revision = body
         .profile
         .get("revision")
@@ -875,7 +881,7 @@ pub fn update_profile(
     check_routing_mode(body.routing_mode.as_deref())?;
     let (id, instance, previous, previous_hosts, previous_mode) = {
         let mut manager = core.lock();
-        let current = manager.authorize(&body.session, caller_user.as_deref())?;
+        let current = manager.authorize(&body.session, caller_user)?;
         (
             current.id,
             current.instance.clone(),
@@ -930,7 +936,7 @@ pub fn update_profile(
         };
     }
     let mut manager = core.lock();
-    let current = manager.authorize(&body.session, caller_user.as_deref())?;
+    let current = manager.authorize(&body.session, caller_user)?;
     if current.id != id {
         return Err(anyhow!("CONNECTION_NOT_ACTIVE"));
     }
@@ -939,7 +945,7 @@ pub fn update_profile(
     current.routing_mode = body.routing_mode;
     current.profile_revision = revision;
     current.lease_deadline = Instant::now() + LEASE_DURATION;
-    Ok(manager.status_for(caller_user.as_deref()))
+    Ok(manager.status_for(caller_user))
 }
 
 /// Rejects a `routing_mode` other than `rules` / `global` before anything
@@ -1055,6 +1061,8 @@ enum Ownership {
     Expired,
     /// The caller already owns the core: renew and reuse it.
     Same,
+    /// Same OS user replaces its own previous session after an unconfirmed release.
+    Replaced,
     /// Same OS user asked to take over: stop the other session's instance.
     TakeOver,
     Refused(&'static str),
@@ -1135,6 +1143,7 @@ fn ownership(
     current: &Owner<'_>,
     requested: &SessionRef,
     take_over: bool,
+    replace_session: Option<&SessionRef>,
     caller_user: Option<&str>,
 ) -> Ownership {
     if !current.live {
@@ -1148,26 +1157,12 @@ fn ownership(
         return Ownership::Same;
     }
     if take_over {
-        Ownership::TakeOver
-    } else {
-        Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_SESSION")
+        return Ownership::TakeOver;
     }
-}
-
-/// OS user of `pid`: uid on Unix, user SID on Windows.
-fn process_user(pid: u32) -> Option<String> {
-    if pid == 0 {
-        return None;
+    if replace_session == Some(current.session) {
+        return Ownership::Replaced;
     }
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
-        true,
-        ProcessRefreshKind::new().with_user(sysinfo::UpdateKind::Always),
-    );
-    sys.process(Pid::from_u32(pid))
-        .and_then(|process| process.user_id())
-        .map(|user| user.to_string())
+    Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_SESSION")
 }
 
 #[cfg(test)]
@@ -1198,6 +1193,7 @@ pub(crate) mod tests {
                 &owner(&current, Some("501"), true),
                 &caller,
                 true,
+                None,
                 Some("501")
             ),
             Ownership::TakeOver
@@ -1208,6 +1204,7 @@ pub(crate) mod tests {
                 &owner(&current, Some("501"), true),
                 &caller,
                 false,
+                None,
                 Some("501")
             ),
             Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_SESSION")
@@ -1217,10 +1214,54 @@ pub(crate) mod tests {
                 &owner(&current, Some("501"), true),
                 &current,
                 false,
+                None,
                 Some("501")
             ),
             Ownership::Same
         );
+    }
+
+    #[test]
+    fn replace_session_allows_cas_replacement_only_for_matching_same_user_owner() {
+        let current = session("a", 1);
+        let caller = session("b", 2);
+        let wrong_id = session("c", 1);
+        let wrong_generation = session("a", 2);
+        assert_eq!(
+            ownership(
+                &owner(&current, Some("501"), true),
+                &caller,
+                false,
+                Some(&current),
+                Some("501")
+            ),
+            Ownership::Replaced
+        );
+        for wrong in [&wrong_id, &wrong_generation] {
+            assert_eq!(
+                ownership(
+                    &owner(&current, Some("501"), true),
+                    &caller,
+                    false,
+                    Some(wrong),
+                    Some("501")
+                ),
+                Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_SESSION")
+            );
+        }
+        // Cross-user callers are refused even when presenting the exact active session.
+        for other_user in [Some("502"), None] {
+            assert_eq!(
+                ownership(
+                    &owner(&current, Some("501"), true),
+                    &caller,
+                    false,
+                    Some(&current),
+                    other_user
+                ),
+                Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_USER")
+            );
+        }
     }
 
     #[test]
@@ -1233,6 +1274,7 @@ pub(crate) mod tests {
                     &owner(&current, Some("501"), true),
                     &caller,
                     take_over,
+                    None,
                     Some("502")
                 ),
                 Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_USER")
@@ -1244,17 +1286,30 @@ pub(crate) mod tests {
                 &owner(&current, Some("501"), true),
                 &current,
                 false,
+                None,
                 Some("502")
             ),
             Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_USER")
         );
         // Unresolvable identities match nobody.
         assert_eq!(
-            ownership(&owner(&current, None, true), &caller, true, Some("501")),
+            ownership(
+                &owner(&current, None, true),
+                &caller,
+                true,
+                None,
+                Some("501")
+            ),
             Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_USER")
         );
         assert_eq!(
-            ownership(&owner(&current, Some("501"), true), &caller, true, None),
+            ownership(
+                &owner(&current, Some("501"), true),
+                &caller,
+                true,
+                None,
+                None
+            ),
             Ownership::Refused("CONNECTION_OWNED_BY_ANOTHER_USER")
         );
         // An expired owner is replaced whoever asks.
@@ -1263,6 +1318,7 @@ pub(crate) mod tests {
                 &owner(&current, Some("501"), false),
                 &caller,
                 false,
+                None,
                 Some("502")
             ),
             Ownership::Expired
@@ -1615,6 +1671,7 @@ pub(crate) mod tests {
             session: session.clone(),
             profile: serde_json::json!({ "revision": "r1", "schema_version": 1 }),
             take_over: false,
+            replace_session: None,
             allowed_rule_set_hosts: vec!["api.example.com".into()],
             routing_mode: Some("rules".into()),
             choices: ApplyChoices::default(),
@@ -1623,6 +1680,75 @@ pub(crate) mod tests {
 
     pub(crate) fn new_session(generation: u64) -> SessionRef {
         session(&uuid::Uuid::new_v4().to_string(), generation)
+    }
+
+    #[test]
+    fn connect_replaces_matching_session_and_rejects_mismatched_or_foreign_callers() {
+        let (mut manager, engines) = fake_manager(vec![]);
+        let user = Some("501");
+        let first = new_session(1);
+        manager.connect(connect_payload(&first), user).unwrap();
+        let watcher = manager.watch(&first, user, None).unwrap();
+
+        // Non-matching replace_session under the same user is refused and leaves
+        // the active instance untouched.
+        let second = new_session(2);
+        let mut wrong = connect_payload(&second);
+        wrong.replace_session = Some(new_session(1));
+        assert_eq!(
+            manager.connect(wrong, user).unwrap_err().to_string(),
+            "CONNECTION_OWNED_BY_ANOTHER_SESSION"
+        );
+        assert!(!engines.events().contains(&"1 shutdown".to_string()));
+
+        // Cross-user caller presenting the exact active session is refused.
+        let mut cross_user = connect_payload(&second);
+        cross_user.replace_session = Some(first.clone());
+        assert_eq!(
+            manager
+                .connect(cross_user, Some("502"))
+                .unwrap_err()
+                .to_string(),
+            "CONNECTION_OWNED_BY_ANOTHER_USER"
+        );
+        assert!(!engines.events().contains(&"1 shutdown".to_string()));
+
+        // Matching replace_session under the same OS user stops instance 1
+        // with `replaced` (not `taken_over`) and brings up instance 2.
+        let mut replace = connect_payload(&second);
+        replace.replace_session = Some(first.clone());
+        manager.connect(replace, user).unwrap();
+        assert_eq!(
+            watcher.events.recv().unwrap(),
+            crate::watch::Event::CoreStopped(stop_reason::REPLACED.into())
+        );
+        assert!(engines.events().contains(&"1 shutdown".to_string()));
+        let status = manager.status(user);
+        assert!(status.running);
+        assert_eq!(
+            status.session_id.as_deref(),
+            Some(second.session_id.as_str())
+        );
+        assert_eq!(status.generation, 2);
+
+        // Serde compatibility: older payloads omit replace_session, newer ones
+        // serialize it only when Some.
+        let plain = serde_json::to_value(connect_payload(&first)).unwrap();
+        assert!(plain.get("replace_session").is_none());
+        let decoded: ConnectPayload = serde_json::from_value(plain).unwrap();
+        assert_eq!(decoded.replace_session, None);
+
+        let mut with_replace = connect_payload(&second);
+        with_replace.replace_session = Some(first.clone());
+        let encoded = serde_json::to_value(&with_replace).unwrap();
+        assert_eq!(
+            encoded["replace_session"],
+            serde_json::to_value(&first).unwrap()
+        );
+        let round_trip: ConnectPayload = serde_json::from_value(encoded).unwrap();
+        assert_eq!(round_trip.replace_session, Some(first));
+
+        manager.stop().unwrap();
     }
 
     #[test]
@@ -1638,7 +1764,7 @@ pub(crate) mod tests {
                 ..Default::default()
             }]);
             let error = manager
-                .connect(connect_payload(&new_session(1)), std::process::id())
+                .connect(connect_payload(&new_session(1)), Some("501"))
                 .unwrap_err()
                 .to_string();
             let code = if stage == "create" {
@@ -1669,10 +1795,7 @@ pub(crate) mod tests {
             }]);
             let mut body = connect_payload(&new_session(1));
             body.profile["schema_version"] = serde_json::json!(2);
-            let error = manager
-                .connect(body, std::process::id())
-                .unwrap_err()
-                .to_string();
+            let error = manager.connect(body, Some("501")).unwrap_err().to_string();
             let (code, stage) = if missing {
                 ("CORE_SCHEMA_CAPABILITY_MISSING", "version")
             } else {
@@ -1696,7 +1819,7 @@ pub(crate) mod tests {
             ..FakePlan::default()
         };
         let (mut manager, engines) = fake_manager(vec![failing]);
-        let me = std::process::id();
+        let me = Some("501");
         let first = new_session(1);
         let error = manager
             .connect(connect_payload(&first), me)
@@ -1744,7 +1867,7 @@ pub(crate) mod tests {
     #[test]
     fn a_failed_instance_reads_as_expired_and_is_replaced() {
         let (mut manager, engines) = fake_manager(vec![]);
-        let me = std::process::id();
+        let me = Some("501");
         let first = new_session(1);
         manager.connect(connect_payload(&first), me).unwrap();
         engines.fail_last();
@@ -1771,7 +1894,7 @@ pub(crate) mod tests {
         };
         let (manager, engines) = fake_manager(vec![slow]);
         let core = Mutex::new(manager);
-        let me = std::process::id();
+        let me = Some("501");
         let session = new_session(1);
         core.lock().connect(connect_payload(&session), me).unwrap();
 
@@ -1814,7 +1937,7 @@ pub(crate) mod tests {
     fn a_profile_update_reaches_only_the_instance_it_was_authorized_for() {
         let (manager, engines) = fake_manager(vec![]);
         let core = Mutex::new(manager);
-        let me = std::process::id();
+        let me = Some("501");
         let session = new_session(1);
         core.lock().connect(connect_payload(&session), me).unwrap();
         let update = UpdateProfilePayload {

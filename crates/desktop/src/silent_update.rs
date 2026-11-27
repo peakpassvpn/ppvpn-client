@@ -668,6 +668,7 @@ mod tests {
                 _: &'a SessionRef,
                 _: &'a Value,
                 _: bool,
+                _: Option<&'a SessionRef>,
                 _: RoutingMode,
                 _: &'a ApplyChoices,
             ) -> BoxFuture<'a, Result<u32, ServiceError>> {
