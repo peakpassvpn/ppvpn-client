@@ -24,8 +24,12 @@ with open(os.environ["APK_TEST_CALLS"], "a") as log:
 if sys.argv[1] == "verify":
     if config.get("signature_error"):
         sys.exit("APK signature invalid")
-    for i, signer in enumerate(config["signers"], 1):
-        print(f"Signer #{i} certificate SHA-256 digest: {signer}")
+    if "verify_lines" in config:
+        for line in config["verify_lines"]:
+            print(line)
+    else:
+        for i, signer in enumerate(config["signers"], 1):
+            print(f"Signer #{i} certificate SHA-256 digest: {signer}")
 elif sys.argv[1] == "manifest":
     print(config[sys.argv[2]])
 else:
@@ -79,10 +83,18 @@ class AndroidRelease(unittest.TestCase):
         self.assertEqual([json.loads(line)[:-1] for line in self.calls.read_text().splitlines()],
                          [["verify", "--print-certs"], ["manifest", "application-id"],
                           ["manifest", "version-name"], ["manifest", "version-code"]])
+        for prefix in ("V3.0 Signer:", "V3.1 Signer:", "V2 Signer:", "JAR Signer:"):
+            with self.subTest(prefix=prefix):
+                shutil.rmtree(self.out)
+                self.config["verify_lines"] = [f"{prefix} certificate SHA-256 digest: {SIGNER.upper()}"]
+                self.package()
+                self.assertEqual(self.metadata()["signer_sha256"], SIGNER)
+                self.config.pop("verify_lines", None)
 
     def test_invalid_signature_or_pin_publishes_nothing(self):
         for changes in ({"signature_error": True}, {"signers": []}, {"signers": ["cd" * 32]},
-                        {"signers": [SIGNER, "cd" * 32]}):
+                        {"signers": [SIGNER, "cd" * 32]},
+                        {"verify_lines": [f"Source Stamp Signer: certificate SHA-256 digest: {SIGNER}"]}):
             with self.subTest(changes=changes):
                 before = dict(self.config)
                 self.config.update(changes)

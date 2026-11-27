@@ -40,7 +40,15 @@ def package(apk, out, version, code, signer, apksigner, apkanalyzer):
     def run(*args):
         return subprocess.check_output(args, text=True).strip()
     report = run(apksigner, "verify", "--print-certs", str(apk))
-    certificates = re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)$", report, re.M)
+    # Build-tools <=36 prints "Signer #1 ..."; >=37 prefixes the scheme ("V3.0 Signer:", "V2 Signer:").
+    certificates = [
+        found.lower()
+        for found in re.findall(
+            r"^(?:(?:V\d+(?:\.\d+)?|JAR) )?Signer(?: #\d+)?:? certificate SHA-256 digest: ([0-9a-fA-F]+)$",
+            report,
+            re.M,
+        )
+    ]
     signer = signer.lower().replace(":", "")
     if certificates != [signer]:
         raise ValueError("APK signer does not match ANDROID_APK_SIGNER_SHA256")

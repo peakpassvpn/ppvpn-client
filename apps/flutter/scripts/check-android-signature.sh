@@ -11,10 +11,11 @@ case "$format" in
     ;;
   apk)
     sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:?the Android SDK is needed}}
-    apksigner=$(find "$sdk/build-tools" -name apksigner -type f | sort -V | tail -1)
+    apksigner=$(find "$sdk/build-tools" -name apksigner \( -type f -o -type l \) | sort -V | tail -1)
     [ -n "$apksigner" ] || { echo "no apksigner in $sdk/build-tools" >&2; exit 1; }
     signer=$("$apksigner" verify --print-certs "$artifact")
-    grep -q 'Signer #1 certificate DN:' <<<"$signer" || { echo "$artifact has no signer" >&2; exit 1; }
+    # Build-tools <=36 prints "Signer #1 certificate DN:"; >=37 prefixes the verified scheme ("V3.0 Signer:", "V2 Signer:").
+    grep -Eq '^((V[0-9]+(\.[0-9]+)?|JAR) )?Signer( #[0-9]+)?:? certificate DN:' <<<"$signer" || { echo "$artifact has no signer" >&2; exit 1; }
     ;;
   *) echo "unknown Android format: $format" >&2; exit 1 ;;
 esac
