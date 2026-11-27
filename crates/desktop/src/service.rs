@@ -119,6 +119,10 @@ struct ProfilePayload<'a> {
     session: &'a SessionRef,
     profile: &'a Value,
     take_over: bool,
+    /// Previous session of this client instance when automatic recovery
+    /// proceeds after an unconfirmed release; older services ignore the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replace_session: Option<&'a SessionRef>,
     /// Authority of the API the profile came from. The service passes it to
     /// the core's `apply-profile` when the core accepts it (0.5.0+); older
     /// services ignore the field.
@@ -685,12 +689,15 @@ pub(crate) trait ServiceApi: Send + Sync {
     fn get_status(&self) -> BoxFuture<'_, Result<ServiceStatus, ServiceError>>;
     /// Start the TUN core for `session` with `profile` (applied with
     /// `choices`); returns its pid. `take_over` replaces a core owned by
-    /// another session of the same OS user (service capability `take_over`).
+    /// another session of the same OS user (service capability `take_over`);
+    /// `replace_session` replaces a core still owned by that exact previous
+    /// session of the same OS user.
     fn connect<'a>(
         &'a self,
         session: &'a SessionRef,
         profile: &'a Value,
         take_over: bool,
+        replace_session: Option<&'a SessionRef>,
         routing_mode: RoutingMode,
         choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<u32, ServiceError>>;
@@ -1080,6 +1087,7 @@ impl ServiceApi for ServiceClient {
         session: &'a SessionRef,
         profile: &'a Value,
         take_over: bool,
+        replace_session: Option<&'a SessionRef>,
         routing_mode: RoutingMode,
         choices: &'a ApplyChoices,
     ) -> BoxFuture<'a, Result<u32, ServiceError>> {
@@ -1088,6 +1096,7 @@ impl ServiceApi for ServiceClient {
                 session,
                 profile,
                 take_over,
+                replace_session,
                 allowed_rule_set_hosts: &self.rule_set_hosts,
                 routing_mode: crate::routing::wire_name(routing_mode),
                 choices,
@@ -1112,6 +1121,7 @@ impl ServiceApi for ServiceClient {
                 session,
                 profile,
                 take_over: false,
+                replace_session: None,
                 allowed_rule_set_hosts: &self.rule_set_hosts,
                 routing_mode: crate::routing::wire_name(routing_mode),
                 choices,
@@ -1422,6 +1432,7 @@ mod tests {
             session: &session,
             profile: &profile,
             take_over: false,
+            replace_session: None,
             allowed_rule_set_hosts: &[],
             routing_mode: "rules",
             choices: &none,
@@ -1435,17 +1446,37 @@ mod tests {
             session: &session,
             profile: &profile,
             take_over: true,
+            replace_session: None,
             allowed_rule_set_hosts: &[],
             routing_mode: "rules",
             choices: &none,
         })
         .unwrap();
         assert_eq!(value["take_over"], true);
+        let previous = SessionRef {
+            session_id: "prev".into(),
+            generation: 2,
+        };
+        let value = encode(ProfilePayload {
+            session: &session,
+            profile: &profile,
+            take_over: false,
+            replace_session: Some(&previous),
+            allowed_rule_set_hosts: &[],
+            routing_mode: "rules",
+            choices: &none,
+        })
+        .unwrap();
+        assert_eq!(
+            value["replace_session"],
+            serde_json::json!({"session_id":"prev","generation":2})
+        );
         let hosts = crate::core_ipc::rule_set_hosts("https://api.example.com:8443/api");
         let value = encode(ProfilePayload {
             session: &session,
             profile: &profile,
             take_over: false,
+            replace_session: None,
             allowed_rule_set_hosts: &hosts,
             routing_mode: "global",
             choices: &none,
@@ -1466,6 +1497,7 @@ mod tests {
             session: &session,
             profile: &profile,
             take_over: false,
+            replace_session: None,
             allowed_rule_set_hosts: &[],
             routing_mode: "rules",
             choices: &choices,
