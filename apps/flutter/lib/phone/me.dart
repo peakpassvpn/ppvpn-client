@@ -9,13 +9,13 @@
 import '../icons.dart';
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:forui/forui.dart';
 
 import '../app_state.dart';
+import '../distribution.dart';
 import '../links.dart';
 import '../pages/diagnostics.dart';
 import '../pages/logs.dart';
@@ -24,6 +24,7 @@ import '../settings.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
 import '../theme.dart';
+import '../updates.dart';
 import '../widgets.dart';
 import 'phone.dart';
 
@@ -139,7 +140,7 @@ class PhoneMe extends StatelessWidget {
               // device page. Not on iOS: a way to buy a plan outside in-app
               // purchase is refused by App Review (guideline 3.1.1, #473); a
               // plan bought elsewhere still works in the app.
-              if (!Platform.isIOS)
+              if (externalPurchases)
                 _Row(
                   icon: AppIcons.creditCard,
                   title: s('planWeb'),
@@ -161,7 +162,23 @@ class PhoneMe extends StatelessWidget {
                 web: true,
                 onPress: () => _open('/account/delete'),
               ),
-              _Row(icon: AppIcons.info, title: s('about'), web: true, onPress: () => _open('')),
+              if (!playDistribution)
+                _Row(icon: AppIcons.info, title: s('about'), web: true, onPress: () => _open('')),
+              if (Updates.installs)
+                _Row(
+                  icon: AppIcons.download,
+                  title: s('checkUpdates'),
+                  onPress: () => unawaited(
+                    pushPhonePage<void>(
+                      context,
+                      PhoneScaffold(
+                        title: s('checkUpdates'),
+                        back: true,
+                        child: const Padding(padding: EdgeInsets.all(16), child: VersionSettings()),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 18),

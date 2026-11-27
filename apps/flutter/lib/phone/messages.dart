@@ -7,6 +7,7 @@ import 'package:flutter/material.dart' show SelectableText;
 
 import '../app_state.dart';
 import '../icons.dart';
+import '../links.dart';
 import '../messages_state.dart';
 import '../pages/messages.dart' show relativeTime, absoluteTime;
 import '../src/rust/api.dart' as rust;
@@ -291,7 +292,7 @@ class _MessageDetail extends StatelessWidget {
             style: t.phoneBody.copyWith(height: 1.6),
           ),
           const SizedBox(height: 28),
-          if (message.deepLink != null)
+          if (message.deepLink != null && canOpenUrl(message.deepLink!))
             Button(
               kind: ButtonKind.primary,
               label: s('viewDetails'),

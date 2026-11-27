@@ -146,7 +146,7 @@ pub(crate) fn build_cores(
 }
 
 /// The phones' tunnel mode, with the host's socket in the data directory
-/// (Android's `filesDir`, the App Group container on iOS); `None` elsewhere.
+/// (`filesDir/data` on Android, `<App Group>/data` on iOS); `None` elsewhere.
 pub(crate) fn build_tunnel(
     config: &ClientConfig,
     routing: crate::routing::RoutingModeCell,

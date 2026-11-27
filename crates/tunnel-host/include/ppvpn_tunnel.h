@@ -52,8 +52,8 @@ typedef void (*ppvpn_tunnel_exit_fn)(void *context, const char *reason);
  * - tun_fd: the tunnel's fd (iOS: the utun fd of the packet flow). The
  *   host dup()s it for each engine start and never closes it: the caller
  *   closes it after ppvpn_tunnel_stop returns, if it owns it.
- * - socket_path: <App Group container>/tunnel.sock (Android:
- *   <filesDir>/tunnel.sock). Longer than 104 bytes: the host binds it
+ * - socket_path: <App Group container>/data/tunnel.sock (Android:
+ *   <filesDir>/data/tunnel.sock). Longer than 104 bytes: the host binds it
  *   relative to its directory. A stale file there is replaced.
  * - state_dir: a directory the host may write (rule-set cache, logs);
  *   created if missing. iOS: inside the App Group container.

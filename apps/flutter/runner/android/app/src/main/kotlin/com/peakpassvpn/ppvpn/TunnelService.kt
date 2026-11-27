@@ -17,6 +17,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.peakpassvpn.ppvpn.tunnel.TunnelHost
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -30,8 +31,9 @@ import org.json.JSONObject
 //
 // On start: the TUN as the tunnel host's settings say (docs/mobile.md), the
 // network pushed to the host (the first one before it starts, as on iOS),
-// then the host on the TUN's fd, serving tunnel.sock in filesDir, which the
-// app's client connects to (crates/desktop tunnel.rs). "on" once it serves.
+// then the host on the TUN's fd, serving tunnel.sock in filesDir/data
+// (Flutter's ClientConfig.data_dir), which the app's client connects to
+// (crates/desktop tunnel.rs). "on" once it serves.
 // The host's own sockets leave outside the tunnel through protect. A start
 // from the system (always-on, no action) is not served yet.
 //
@@ -129,6 +131,7 @@ class TunnelService : VpnService() {
     /** The TUN, the network, the host: null once the host serves, else its error as JSON. */
     private fun open(): String? {
         val settings = JSONObject(TunnelHost.settings() ?: return error("no tun settings"))
+        val socket = socketFile()
         val builder = Builder().setSession(SESSION).setMtu(settings.getInt("mtu"))
         cidr(settings.getString("ipv4_address")).let { (address, prefix) -> builder.addAddress(address, prefix) }
         for (route in settings.getJSONArray("ipv4_routes").strings()) {
@@ -142,11 +145,23 @@ class TunnelService : VpnService() {
         }
         settings.getJSONArray("dns_servers").strings().forEach { builder.addDnsServer(it) }
         val fd = builder.establish() ?: return error("the VPN is not allowed (establish)")
+        return startHost(fd, socket)
+    }
+
+    /**
+     * The Flutter bridge puts ClientConfig.data_dir under APP_DIR/data;
+     * TunnelTransport::in_dir connects to tunnel.sock inside that directory.
+     * Create it here too so a system-started service can start first.
+     */
+    private fun socketFile(): File =
+        Files.createDirectories(File(filesDir, DATA_DIR).toPath()).resolve(SOCKET_FILE).toFile()
+
+    private fun startHost(fd: ParcelFileDescriptor, socket: File): String? {
         tun = fd
         network = NetworkWatch(this).also { it.start() }
         return TunnelHost.start(
             fd.fd,
-            File(filesDir, SOCKET_FILE).path,
+            socket.path,
             File(filesDir, STATE_DIR).path,
             null,
             listener(generation),
@@ -210,7 +225,9 @@ class TunnelService : VpnService() {
 
         /** The VPN's name in the system's settings and notification. */
         private const val SESSION = "PPVPN"
-        /** In filesDir, where the app's client connects (crates/desktop tunnel.rs SOCKET_FILE). */
+        /** Matches apps/flutter/rust/src/dirs.rs (`ClientConfig.data_dir`). */
+        private const val DATA_DIR = "data"
+        /** In `filesDir/data`, where the app's client connects (crates/desktop tunnel.rs SOCKET_FILE). */
         private const val SOCKET_FILE = "tunnel.sock"
         private const val STATE_DIR = "tunnel-state"
         private const val SHUTDOWN_WAIT_S = 10L

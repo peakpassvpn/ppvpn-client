@@ -6,8 +6,8 @@
 // and by e2e/ios_smoke.sh on an iPhone simulator.
 //
 // On Android also the system VPN: TunnelService builds the TUN and starts
-// the tunnel host from the APK, which then answers on tunnel.sock in the
-// app's directory, and stops again. android_smoke.sh allows the VPN
+// the tunnel host from the APK, which then answers on data/tunnel.sock in
+// the app's directory, and stops again. android_smoke.sh allows the VPN
 // beforehand (appops), so no consent dialog shows. No profile: the engine
 // stays stopped, nothing is routed.
 
@@ -49,7 +49,7 @@ void main() {
       await SystemVpn.start();
       await _until(VpnState.on);
       final dir = await const MethodChannel('com.peakpassvpn.ppvpn/app').invokeMethod<String>('filesDir');
-      final reply = await _call('$dir/tunnel.sock', '/v1/get-version');
+      final reply = await _call('$dir/data/tunnel.sock', '/v1/get-version');
       expect(reply['ok'], isTrue, reason: '$reply');
       debugPrint('tunnel host: ${reply['data']}');
       await SystemVpn.stop();

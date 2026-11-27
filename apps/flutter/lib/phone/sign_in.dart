@@ -17,10 +17,13 @@ import '../app_state.dart';
 import '../links.dart';
 import '../pages/sign_in.dart' show SignInError, signInError;
 import '../pages/diagnostics.dart';
+import '../pages/settings.dart' show VersionSettings;
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../updates.dart';
+import 'phone.dart';
 
 class PhoneSignIn extends StatelessWidget {
   const PhoneSignIn({super.key, required this.app});
@@ -235,6 +238,27 @@ class _Panel extends StatelessWidget {
         Swap(id: (snapshot.auth, error), child: action),
         const Spacer(),
         const SizedBox(height: 24),
+        if (Updates.installs)
+          Pressable(
+            label: s('checkUpdates'),
+            radius: Tokens.phoneControlRadius,
+            onPress: () => unawaited(
+              pushPhonePage<void>(
+                context,
+                PhoneScaffold(
+                  title: s('checkUpdates'),
+                  back: true,
+                  child: const Padding(padding: EdgeInsets.all(16), child: VersionSettings()),
+                ),
+              ),
+            ),
+            builder: (context, _) => SizedBox(
+              height: Tokens.phoneControl,
+              child: Center(
+                child: Text(s('checkUpdates'), style: t.phoneNote.copyWith(color: t.accent)),
+              ),
+            ),
+          ),
         Text(
           '© PeakPass Labs LLC',
           textAlign: TextAlign.center,
