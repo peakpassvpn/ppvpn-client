@@ -25,8 +25,8 @@ type Stream = tokio::net::UnixStream;
 #[cfg(not(unix))]
 type Stream = tokio::io::DuplexStream;
 
-/// The socket's file name in the app's directory: Android's `filesDir`, the
-/// App Group container on iOS.
+/// The socket's file name in the client's data directory: Android's
+/// `filesDir/data`, `data` under the App Group container on iOS.
 pub(crate) const SOCKET_FILE: &str = "tunnel.sock";
 
 /// The largest frame either side sends.
