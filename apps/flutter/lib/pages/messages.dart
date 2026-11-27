@@ -20,6 +20,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../app_state.dart';
+import '../links.dart';
 import '../messages_state.dart';
 import '../src/rust/api.dart' as rust;
 import '../strings.dart';
@@ -433,7 +434,7 @@ class _Row extends StatelessWidget {
                           height: Tokens.smallButtonHeight,
                           child: Row(
                             children: [
-                              if (message.deepLink != null)
+                              if (message.deepLink != null && canOpenUrl(message.deepLink!))
                                 Button(
                                   kind: ButtonKind.secondary,
                                   height: Tokens.smallButtonHeight,
@@ -786,7 +787,7 @@ class _Detail extends StatelessWidget {
                           ],
                         ),
                       ),
-                      if (message.deepLink != null && onLink != null) ...[
+                      if (message.deepLink != null && canOpenUrl(message.deepLink!) && onLink != null) ...[
                         const SizedBox(height: 16),
                         Align(
                           alignment: Alignment.centerLeft,

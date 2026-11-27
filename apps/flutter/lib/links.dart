@@ -8,12 +8,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'mobile.dart';
+import 'distribution.dart';
 import 'src/rust/api.dart' as rust;
 
 const _app = MethodChannel('com.peakpassvpn.ppvpn/app');
 
 /// Opens [url]; false when nothing could show it.
 Future<bool> openUrl(String url) async {
+  if (!canOpenUrl(url)) return false;
   if (!mobile) return rust.openUrl(url: url);
   try {
     return await _app.invokeMethod<bool>('openUrl', url) ?? false;
@@ -22,6 +24,8 @@ Future<bool> openUrl(String url) async {
     return false;
   }
 }
+
+bool canOpenUrl(String url) => !playDistribution || permittedPlayLink(url, rust.siteUrl(path: ''));
 
 /// Device authorization must not inherit another account's browser cookies.
 /// iOS uses a private system authentication session; ordinary links retain
